@@ -1124,6 +1124,23 @@ have_compose_runtime() {
   return 1
 }
 
+nextcloud_runtime_available() {
+  if [[ "${ARCLINK_CONTAINER_RUNTIME:-}" == "docker" || "${ARCLINK_DOCKER_MODE:-0}" == "1" ]]; then
+    have_compose_runtime
+    return $?
+  fi
+
+  if command -v podman >/dev/null 2>&1; then
+    return 0
+  fi
+
+  have_compose_runtime
+}
+
+nextcloud_effectively_enabled() {
+  [[ "${ENABLE_NEXTCLOUD:-0}" == "1" ]] && nextcloud_runtime_available
+}
+
 compose_runtime_label() {
   ensure_uv
 

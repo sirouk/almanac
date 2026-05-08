@@ -9,8 +9,8 @@ require_real_layout "qmd daemon startup"
 ensure_nvm
 mkdir -p "$(dirname "$QMD_INDEX_DB_PATH")"
 
-loopback_port="${QMD_MCP_LOOPBACK_PORT:-18181}"
-container_port="${QMD_MCP_CONTAINER_PORT:-8181}"
+loopback_port="${QMD_MCP_LOOPBACK_PORT:-${QMD_MCP_PORT:-8181}}"
+container_port="${QMD_MCP_CONTAINER_PORT:-$loopback_port}"
 
 if [[ "$loopback_port" == "$container_port" ]]; then
   exec qmd --index "$QMD_INDEX_NAME" mcp --http --port "$loopback_port"

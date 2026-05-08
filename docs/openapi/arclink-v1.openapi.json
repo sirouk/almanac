@@ -16,6 +16,18 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/adapter-mode": {
+      "get": {
+        "operationId": "adapter_mode",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "summary": "Adapter Mode",
+        "tags": []
+      }
+    },
     "/api/v1/admin/actions": {
       "get": {
         "operationId": "admin_queued_actions",
@@ -727,6 +739,40 @@
         ]
       }
     },
+    "/api/v1/onboarding/cancel": {
+      "post": {
+        "operationId": "onboarding_cancel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session cancelled or already final"
+          },
+          "404": {
+            "description": "Session not found"
+          }
+        },
+        "summary": "Cancel an onboarding session",
+        "tags": [
+          "onboarding"
+        ]
+      }
+    },
     "/api/v1/onboarding/checkout": {
       "post": {
         "operationId": "public_onboarding_checkout",
@@ -764,6 +810,43 @@
           }
         },
         "summary": "Open Stripe checkout for onboarding session",
+        "tags": [
+          "onboarding"
+        ]
+      }
+    },
+    "/api/v1/onboarding/claim-session": {
+      "post": {
+        "operationId": "onboarding_claim_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User session created with Set-Cookie"
+          },
+          "402": {
+            "description": "Entitlement not yet paid"
+          },
+          "404": {
+            "description": "Onboarding session not found"
+          }
+        },
+        "summary": "Claim user session after paid onboarding",
         "tags": [
           "onboarding"
         ]
@@ -822,6 +905,18 @@
         "tags": [
           "onboarding"
         ]
+      }
+    },
+    "/api/v1/onboarding/status": {
+      "get": {
+        "operationId": "onboarding_status",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "summary": "Onboarding Status",
+        "tags": []
       }
     },
     "/api/v1/openapi.json": {

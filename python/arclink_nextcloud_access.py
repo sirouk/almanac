@@ -21,7 +21,13 @@ def _nextcloud_enabled() -> bool:
 
 
 def _nextcloud_app_container_name() -> str:
+    explicit = os.environ.get("ARCLINK_NEXTCLOUD_CONTAINER_NAME", "").strip()
+    if explicit:
+        return explicit
     arclink_name = config_env_value("ARCLINK_NAME", "arclink").strip() or "arclink"
+    docker_mode = os.environ.get("ARCLINK_DOCKER_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    if docker_mode:
+        return f"{arclink_name}-nextcloud-1"
     return f"{arclink_name}-nextcloud-app"
 
 
@@ -31,26 +37,53 @@ def _compose_command(compose_file: Path) -> list[str] | None:
         return [podman_compose, "-f", str(compose_file)]
 
     podman_bin = shutil.which("podman")
-    if not podman_bin:
-        return None
+    if podman_bin:
+        result = subprocess.run(
+            [podman_bin, "compose", "version"],
+            env=_safe_nextcloud_host_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return [podman_bin, "compose", "-f", str(compose_file)]
 
-    result = subprocess.run(
-        [podman_bin, "compose", "version"],
-        env=_safe_nextcloud_host_env(),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return [podman_bin, "compose", "-f", str(compose_file)]
+    docker_bin = shutil.which("docker")
+    if docker_bin:
+        result = subprocess.run(
+            [docker_bin, "compose", "version"],
+            env=_safe_nextcloud_host_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return [docker_bin, "compose", "-f", str(compose_file)]
+
     return None
 
 
 def _runtime_exec_base(cfg: Config, *, extra_env: dict[str, str] | None = None) -> list[str]:
     env_items = extra_env or {}
+    docker_mode = os.environ.get("ARCLINK_DOCKER_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    docker_bin = shutil.which("docker")
+    if docker_mode and docker_bin:
+        cmd = [docker_bin, "exec"]
+        for key, value in env_items.items():
+            cmd.extend(["-e", f"{key}={value}"])
+        cmd.extend(["-u", "33:33", _nextcloud_app_container_name()])
+        return cmd
+
     podman_bin = shutil.which("podman")
-    if podman_bin:
+    if podman_bin and not docker_mode:
         cmd = ["runuser", "-u", cfg.arclink_user, "--", podman_bin, "exec"]
+        for key, value in env_items.items():
+            cmd.extend(["-e", f"{key}={value}"])
+        cmd.extend(["-u", "33:33", _nextcloud_app_container_name()])
+        return cmd
+
+    if docker_bin:
+        cmd = [docker_bin, "exec"]
         for key, value in env_items.items():
             cmd.extend(["-e", f"{key}={value}"])
         cmd.extend(["-u", "33:33", _nextcloud_app_container_name()])
@@ -59,7 +92,7 @@ def _runtime_exec_base(cfg: Config, *, extra_env: dict[str, str] | None = None) 
     compose_file = cfg.repo_dir / "compose" / "nextcloud-compose.yml"
     compose_cmd = _compose_command(compose_file)
     if compose_cmd is None:
-        raise RuntimeError("Nextcloud runtime is unavailable: no podman or compose runtime found")
+        raise RuntimeError("Nextcloud runtime is unavailable: no podman, docker, or compose runtime found")
 
     cmd = ["runuser", "-u", cfg.arclink_user, "--", *compose_cmd, "exec", "-T"]
     for key, value in env_items.items():

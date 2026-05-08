@@ -81,6 +81,7 @@ fi
 
 TARGET_UID="$(id -u "$UNIX_USER")"
 TARGET_HERMES_HOME="${HERMES_HOME_ARG:-$HOME_DIR/.local/share/arclink-agent/hermes-home}"
+TARGET_WORKSPACE_DIR="${ARCLINK_AGENT_WORKSPACE_DIR:-$TARGET_HERMES_HOME/workspace}"
 SOURCE_REPO_DIR="${REPO_DIR_ARG:-$ARCLINK_REPO_DIR}"
 RUNTIME_PYTHON="$(require_runtime_python)"
 RUNTIME_HERMES="$(require_runtime_hermes)"
@@ -93,6 +94,10 @@ TARGET_LOCAL_BIN_DIR="$HOME_DIR/.local/bin"
 TARGET_USER_SYSTEMD_DIR="$HOME_DIR/.config/systemd/user"
 TARGET_VAULT_LINK_PATH="${ARCLINK_USER_VAULT_LINK_PATH:-}"
 TARGET_ARCLINK_LINK_PATH="${ARCLINK_USER_ARCLINK_LINK_PATH:-$HOME_DIR/ArcLink}"
+mkdir -p "$TARGET_WORKSPACE_DIR"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown "$UNIX_USER:$UNIX_USER" "$TARGET_WORKSPACE_DIR"
+fi
 
 run_as_target() {
   local -a cmd=("$@")
@@ -397,13 +402,19 @@ key = env_line.split("=", 2)[1] if env_line.startswith("Environment=") else ""
 lines = path.read_text(encoding="utf-8").splitlines()
 
 changed = False
+old_value = ""
 for idx, line in enumerate(lines):
     if line == env_line:
         raise SystemExit(0)
     if key and line.startswith(f"Environment={key}="):
+        old_value = line
         lines[idx] = env_line
         changed = True
         break
+
+if old_value:
+    import sys as _sys
+    print(f"note: {path.name}: overwriting {key}: was {old_value!r}, now {env_line!r}", file=_sys.stderr)
 
 if not changed:
     insert_at = None
@@ -455,6 +466,18 @@ ensure_systemd_bundled_skills_env() {
   if [[ "$SYSTEMD_ENV_UPDATED" == "1" ]]; then
     RESTART_GATEWAY="1"
     SERVICE_NOTES+=("    - systemd env: added Hermes bundled skills source")
+  fi
+}
+
+ensure_systemd_workspace_env() {
+  local unit="$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-dashboard.service"
+  local before="$SYSTEMD_ENV_UPDATED"
+  ensure_unit_environment_line "$unit" "Environment=DRIVE_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
+  ensure_unit_environment_line "$unit" "Environment=CODE_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
+  ensure_unit_environment_line "$unit" "Environment=TERMINAL_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
+
+  if [[ "$before" != "1" && "$SYSTEMD_ENV_UPDATED" == "1" ]]; then
+    SERVICE_NOTES+=("    - systemd env: repaired dashboard workspace roots")
   fi
 }
 
@@ -530,6 +553,7 @@ ensure_agent_mcp_auth
 run_user_systemctl disable --now arclink-user-agent-backup.timer >/dev/null 2>&1 || true
 remove_legacy_backup_timer_unit
 ensure_systemd_bundled_skills_env
+ensure_systemd_workspace_env
 try_user_systemctl "user manager daemon-reload" daemon-reload
 try_user_systemctl "plugin-managed context refresh service" start arclink-user-agent-refresh.service
 ensure_gateway_running_without_interrupting_active_turns

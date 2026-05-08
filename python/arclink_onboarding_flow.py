@@ -1142,7 +1142,15 @@ def _begin_org_provider_provisioning(conn, cfg: Config, incoming: IncomingMessag
     updated = save_onboarding_session(
         conn,
         session_id=str(session["session_id"]),
-        answers={"pending_provider_secret_path": provider_secret_path},
+        answers={
+            "pending_provider_secret_path": provider_secret_path,
+            "provider_credential_validation": {
+                "status": "runtime_pending",
+                "checked": "present",
+                "provider_id": provider_setup.provider_id,
+                "source": "org-provided",
+            },
+        },
     )
     updated = begin_onboarding_provisioning(conn, cfg, updated, provider_secret_path=provider_secret_path)
     return _provisioning_started_reply(incoming, updated)
@@ -2048,7 +2056,14 @@ def process_onboarding_message(
                 updated = save_onboarding_session(
                     conn,
                     session_id=str(session["session_id"]),
-                    answers={"pending_provider_secret_path": provider_secret_path},
+                    answers={
+                        "pending_provider_secret_path": provider_secret_path,
+                        "provider_credential_validation": {
+                            "status": "runtime_pending",
+                            "checked": "present",
+                            "provider_id": provider_setup.provider_id,
+                        },
+                    },
                 )
                 updated = begin_onboarding_provisioning(conn, cfg, updated, provider_secret_path=provider_secret_path)
             except Exception as exc:  # noqa: BLE001
@@ -2057,8 +2072,8 @@ def process_onboarding_message(
             bot_label = str(updated.get("answers", {}).get("bot_username") or updated.get("answers", {}).get("bot_display_name") or _preferred_bot_name(updated))
             unix_user = str(updated.get("answers", {}).get("unix_user") or incoming.sender_id)
             if _bot_platform_name(updated) == "discord":
-                return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when the lane is ready.")]
-            return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when the lane is ready.")]
+                return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I accepted the provider credential format; live provider validation is pending during provisioning. I’m provisioning `{unix_user}` now and wiring `{bot_label}`. I’ll tell you when the lane is ready.")]
+            return [OutboundMessage(incoming.chat_id, f"Good. I have what I need. I accepted the provider credential format; live provider validation is pending during provisioning. I’m provisioning `{unix_user}` now and wiring @{bot_label}. I’ll tell you when the lane is ready.")]
 
         if state == "awaiting-provider-browser-auth":
             provider_setup = _provider_setup(session)

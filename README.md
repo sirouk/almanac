@@ -217,11 +217,11 @@ docker compose version
 
 ### 2. Clone ArcLink
 
-Until the dedicated ArcLink repository exists, the working branch is
-`arclink` in this repository.
+Production deployments track the `main` branch. Use a feature branch for
+local development, but production config should always track `main`.
 
 ```bash
-git clone -b arclink https://github.com/sirouk/arclink.git arclink
+git clone https://github.com/sirouk/arclink.git arclink
 cd arclink
 ```
 
@@ -299,11 +299,36 @@ validation:
 python3 -m pip install -r requirements-dev.txt
 ```
 
+The Python tests in this repo are executable scripts; `pytest` is not required
+for the documented focused path. Web and browser validation use the separate
+Node lane:
+
+```bash
+cd web
+npm ci
+npm run lint
+npm test
+npm run build
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+Credentialed live proof is intentionally separate. Stripe live checks require
+the `stripe` Python package when `STRIPE_SECRET_KEY` is set, and workspace
+browser proof requires the Playwright setup above:
+
+```bash
+python3 -m pip install stripe
+bin/arclink-live-proof --live --json
+bin/arclink-live-proof --journey workspace --live --json
+```
+
 ArcLink foundation behavior and runbook notes live in:
 
 ```text
 docs/arclink/foundation.md
 docs/arclink/foundation-runbook.md
+docs/arclink/local-validation.md
 docs/arclink/live-e2e-secrets-needed.md
 ```
 
@@ -1164,7 +1189,7 @@ qmd, vault, memory, Notion, and service-health paths.
 ArcLink owns:
 
 - Product identity and `ARCLINK_*` configuration (`python/arclink_product.py`).
-- 22 `arclink_*` database tables in `python/arclink_control.py`.
+- `arclink_*` database tables in `python/arclink_control.py`.
 - Stripe entitlement interpretation (`python/arclink_entitlements.py`).
 - Hostname, DNS drift, and Traefik intent (`python/arclink_ingress.py`).
 - Nextcloud isolation and SSH access strategy (`python/arclink_access.py`).
@@ -1208,6 +1233,10 @@ docs/arclink/architecture.md         # module map and data flow
 docs/arclink/operations-runbook.md   # host operations, health, scale ops
 docs/arclink/brand-system.md         # visual identity and voice
 docs/arclink/sovereign-control-node.md # control-node deploy and logic trace
+docs/arclink/control-node-production-runbook.md # proof-gated production checklist
+docs/arclink/first-day-user-guide.md # first-day customer/user workflow
+docs/arclink/notion-human-guide.md   # shared SSOT, indexed Notion, personal Notion
+docs/DOC_STATUS.md                   # canonical/proof-gated/historical map
 docs/arclink/live-e2e-secrets-needed.md  # credential checklist for live testing
 ```
 

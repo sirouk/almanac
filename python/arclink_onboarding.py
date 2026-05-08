@@ -48,6 +48,7 @@ ARCLINK_ONBOARDING_EVENT_TYPES = frozenset(
         "payment_failure",
         "payment_cancelled",
         "payment_expired",
+        "abandoned",
         "provisioning_requested",
         "first_agent_contact",
         "channel_handoff",
@@ -499,6 +500,37 @@ def mark_arclink_onboarding_checkout_cancelled(
         event_type="payment_cancelled",
         metadata={"reason": reason},
     )
+
+
+def cancel_arclink_onboarding_session(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    session = _session_row(conn, session_id)
+    status = str(session["status"] or "")
+    if status in ARCLINK_ONBOARDING_TERMINAL_STATUSES:
+        return dict(session)
+    if str(session["checkout_state"] or "") == "open":
+        return mark_arclink_onboarding_checkout_cancelled(conn, session_id=session_id, reason=reason or "user cancelled")
+    updated = _update_session(
+        conn,
+        session_id=session_id,
+        status="abandoned",
+        current_step="cancelled",
+        checkout_state="cancelled",
+        commit=False,
+    )
+    record_arclink_onboarding_event(
+        conn,
+        session_id=session_id,
+        event_type="abandoned",
+        metadata={"reason": reason or "user cancelled"},
+        commit=False,
+    )
+    conn.commit()
+    return updated
 
 
 def mark_arclink_onboarding_checkout_expired(conn: sqlite3.Connection, *, session_id: str) -> dict[str, Any]:

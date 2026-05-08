@@ -342,6 +342,37 @@ def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
             os.environ.update(old_env)
 
 
+def test_nextcloud_docker_mode_prefers_docker_exec() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_nextcloud_docker_exec_test")
+    nextcloud_access = load_module(NEXTCLOUD_ACCESS_PY, "arclink_nextcloud_docker_exec_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root, enable_nextcloud="1"))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_DOCKER_MODE"] = "1"
+        os.environ["ARCLINK_NAME"] = "customlink"
+        try:
+            cfg = control.Config.from_env()
+            original_which = nextcloud_access.shutil.which
+            nextcloud_access.shutil.which = lambda name: f"/usr/bin/{name}" if name in {"docker", "podman"} else None
+            try:
+                cmd = nextcloud_access._runtime_exec_base(cfg, extra_env={"OC_PASS": "secret"})
+            finally:
+                nextcloud_access.shutil.which = original_which
+            expect(cmd[:2] == ["/usr/bin/docker", "exec"], str(cmd))
+            expect("podman" not in cmd, str(cmd))
+            expect("-e" in cmd and "OC_PASS=secret" in cmd, str(cmd))
+            expect(cmd[-2:] == ["33:33", "customlink-nextcloud-1"], str(cmd))
+            print("PASS test_nextcloud_docker_mode_prefers_docker_exec")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_sync_nextcloud_user_access_skips_when_disabled()
     test_sync_nextcloud_user_access_creates_missing_user()
@@ -350,7 +381,8 @@ def main() -> int:
     test_delete_nextcloud_user_access_deletes_existing_user()
     test_nextcloud_occ_scrubs_ambient_env()
     test_nextcloud_occ_uses_service_user_safe_cwd()
-    print("PASS all 7 nextcloud access regression tests")
+    test_nextcloud_docker_mode_prefers_docker_exec()
+    print("PASS all 8 nextcloud access regression tests")
     return 0
 
 

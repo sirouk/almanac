@@ -10,7 +10,7 @@ import re
 import shlex
 from pathlib import Path
 
-DEFAULT_REMOTE_SETUP_URL = "https://raw.githubusercontent.com/example/arclink/main/bin/setup-remote-hermes-client.sh"
+DEFAULT_REMOTE_SETUP_URL = ""
 HUMAN_SHARED_RESOURCE_SKIP_PREFIXES = (
     "hermes dashboard:",
     "dashboard username:",
@@ -109,7 +109,7 @@ def remote_lines(access: dict[str, object], identity: dict[str, object]) -> list
     wrapper_name = f"hermes-{wrapper_org}-remote-{wrapper_user}" if wrapper_user and wrapper_org else "hermes-<org>-remote-<user>"
     return [
         f"Run: `curl -fsSL {setup_url} | bash -s -- --host {shlex.quote(remote_host)} --user {shlex.quote(remote_user)}{org_arg}`",
-        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; Raven will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
+        "That helper creates a local SSH key and wrapper. When it prints the key, reply with `/ssh-key <public key>`; ArcLink will bind it to your Unix user and install it with Tailscale-only SSH restrictions.",
         f"Use the generated `{wrapper_name}` wrapper, not your local `hermes` command.",
         f"Remote SSH target after key install: {remote_user}@{remote_host}",
     ]

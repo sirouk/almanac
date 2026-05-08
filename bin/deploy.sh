@@ -215,7 +215,7 @@ __arclink_upstream_branch_default=""
 if command -v git >/dev/null 2>&1; then
   __arclink_upstream_branch_default="$(git -C "$BOOTSTRAP_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 fi
-ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-${__arclink_upstream_branch_default:-arclink}}"
+ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-${__arclink_upstream_branch_default:-main}}"
 unset __arclink_upstream_branch_default
 ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
@@ -2301,7 +2301,7 @@ emit_runtime_config() {
     write_kv ARCLINK_EXTRA_MCP_LABEL "${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
     write_kv ARCLINK_EXTRA_MCP_URL "${ARCLINK_EXTRA_MCP_URL:-}"
     write_kv ARCLINK_UPSTREAM_REPO_URL "${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
-    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-main}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_USER "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_PATH "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
@@ -2632,9 +2632,15 @@ write_release_state() {
   local source_branch="${4:-}"
   local source_path="${5:-}"
   local target="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
+  local dirty_flag="false"
+  if [[ -n "${source_path:-}" ]] && command -v git >/dev/null 2>&1; then
+    local _dirty
+    _dirty="$(git -C "$source_path" status --porcelain 2>/dev/null | head -1 || true)"
+    [[ -n "$_dirty" ]] && dirty_flag="true"
+  fi
 
   mkdir -p "$(dirname "$target")"
-  python3 - "$target" "$source_kind" "$deployed_commit" "$source_repo_url" "$source_branch" "$source_path" "${ARCLINK_UPSTREAM_REPO_URL:-}" "${ARCLINK_UPSTREAM_BRANCH:-}" <<'PY'
+  python3 - "$target" "$source_kind" "$deployed_commit" "$source_repo_url" "$source_branch" "$source_path" "${ARCLINK_UPSTREAM_REPO_URL:-}" "${ARCLINK_UPSTREAM_BRANCH:-}" "$dirty_flag" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
@@ -2650,6 +2656,7 @@ payload = {
     "deployed_source_path": sys.argv[6],
     "tracked_upstream_repo_url": sys.argv[7],
     "tracked_upstream_branch": sys.argv[8],
+    "dirty": sys.argv[9] == "true",
 }
 target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -3149,7 +3156,7 @@ print_post_install_guide() {
 
   echo "ArcLink software updates"
   echo "  Tracked upstream:"
-  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-main}"
   echo "  Release state:"
   echo "    ${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   echo "  Upgrade command:"
@@ -4610,7 +4617,7 @@ EOF
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   collect_upstream_git_answers
   ARCLINK_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
   collect_backup_git_answers
@@ -4785,7 +4792,7 @@ collect_remove_answers() {
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
   BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
   BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-$ARCLINK_USER@localhost}"
@@ -4839,7 +4846,7 @@ prepare_deployed_context() {
   ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
@@ -5341,7 +5348,7 @@ restart_shared_user_services_root() {
       run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-quarto-render.timer"
     fi
 
-    if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+    if nextcloud_effectively_enabled; then
       run_as_user_systemd "$ARCLINK_USER" "$uid" "ARCLINK_CONFIG_FILE='$CONFIG_TARGET' systemctl --user restart arclink-nextcloud.service"
     fi
     if [[ "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
@@ -5426,11 +5433,11 @@ run_root_install() {
   restart_shared_user_services_root
   uid="$(id -u "$ARCLINK_USER")"
 
-  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]] || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
+  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { { nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; } || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
     tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
   fi
 
-  if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+  if nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
     ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
   fi
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
@@ -5442,7 +5449,7 @@ run_root_install() {
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
   wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT" 20 1
   wait_for_port 127.0.0.1 "$ARCLINK_NOTION_WEBHOOK_PORT" 20 1
-  if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+  if nextcloud_effectively_enabled; then
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
   maybe_offer_notion_ssot_setup_root
@@ -5562,11 +5569,11 @@ run_root_upgrade() {
   restart_shared_user_services_root
   uid="$(id -u "$ARCLINK_USER")"
 
-  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]] || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
+  if [[ -n "${TAILSCALE_OPERATOR_USER:-}" ]] && command -v tailscale >/dev/null 2>&1 && { { nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; } || [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; }; then
     tailscale set --operator="$TAILSCALE_OPERATOR_USER" >/dev/null 2>&1 || true
   fi
 
-  if [[ "$ENABLE_NEXTCLOUD" == "1" && "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
+  if nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
     ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/tailscale-nextcloud-serve.sh"
   fi
   if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
@@ -5578,7 +5585,7 @@ run_root_upgrade() {
   wait_for_port 127.0.0.1 "$QMD_MCP_PORT" 20 1
   wait_for_port 127.0.0.1 "$ARCLINK_MCP_PORT" 20 1
   wait_for_port 127.0.0.1 "$ARCLINK_NOTION_WEBHOOK_PORT" 20 1
-  if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+  if nextcloud_effectively_enabled; then
     wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT" 45 2
   fi
   refresh_active_agent_context_root
@@ -6765,7 +6772,7 @@ _run_component_apply() {
   load_detected_config || true
   exec env \
     ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
-    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
@@ -6906,6 +6913,10 @@ run_rotate_nextcloud_secrets() {
 
   if [[ "${ENABLE_NEXTCLOUD:-0}" != "1" ]]; then
     echo "Nextcloud is disabled in $CONFIG_TARGET; nothing to rotate." >&2
+    exit 1
+  fi
+  if ! nextcloud_effectively_enabled; then
+    echo "Nextcloud is enabled in $CONFIG_TARGET, but no Nextcloud runtime is available; install podman or docker compose before rotating credentials." >&2
     exit 1
   fi
 
@@ -8032,7 +8043,7 @@ run_curator_setup_flow() {
       if [[ "$ENABLE_QUARTO" == "1" ]]; then
         systemctl --user restart arclink-quarto-render.timer
       fi
-      if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+      if nextcloud_effectively_enabled; then
         systemctl --user restart arclink-nextcloud.service
       fi
       if [[ "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-0}" == "1" ]]; then
@@ -8102,7 +8113,7 @@ run_upgrade_flow() {
   echo "ArcLink deploy: upgrade from configured upstream"
   echo
   echo "Config:   $CONFIG_TARGET"
-  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-main}"
   echo "Target:   $ARCLINK_REPO_DIR"
 
   require_main_upstream_branch_for_upgrade
@@ -8371,7 +8382,7 @@ EOF
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
   collect_upstream_git_answers
 
   BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-ed25519}"

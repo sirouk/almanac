@@ -79,6 +79,15 @@ _TEXT_EXTENSIONS = {
     ".yml",
 }
 _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", ".next"}
+_SENSITIVE_DIR_NAMES = {".ssh"}
+_SENSITIVE_FILE_NAMES = {
+    ".env",
+    "arclink-bootstrap-token",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
 _MAX_TEXT_BYTES = 1_000_000
 _MAX_DIFF_BYTES = 400_000
 _MAX_SEARCH_FILE_BYTES = 400_000
@@ -147,11 +156,41 @@ def _env_first(*keys: str) -> str:
     return ""
 
 
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_sensitive_path(path: Path) -> bool:
+    lowered_parts = {part.lower() for part in path.parts}
+    if lowered_parts & _SENSITIVE_DIR_NAMES:
+        return True
+    name = path.name.lower()
+    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env."):
+        return True
+    if "bootstrap-token" in name:
+        return True
+    resolved = path.expanduser().resolve(strict=False)
+    hermes = _hermes_home().expanduser().resolve(strict=False)
+    for private_root in (hermes / "secrets", hermes / "state"):
+        if resolved == private_root or _is_relative_to(resolved, private_root):
+            return True
+    return False
+
+
+def _assert_not_sensitive(path: Path) -> None:
+    if _is_sensitive_path(path):
+        raise HTTPException(status_code=403, detail="Secret or private runtime paths are not available in Code")
+
+
 def _workspace_root() -> Path:
-    explicit = _env_first("CODE_WORKSPACE_ROOT")
+    explicit = _env_first("CODE_WORKSPACE_ROOT", "DRIVE_WORKSPACE_ROOT")
     if explicit:
         return Path(explicit).expanduser().resolve(strict=False)
-    return Path(os.environ.get("HOME") or str(Path.home())).expanduser().resolve(strict=False)
+    return (_hermes_home() / "workspace").expanduser().resolve(strict=False)
 
 
 def _candidate_vault_roots() -> list[Path]:
@@ -172,7 +211,7 @@ def _candidate_vault_roots() -> list[Path]:
 def _first_existing_dir(candidates: list[Path]) -> Path | None:
     for candidate in candidates:
         try:
-            if candidate.is_dir():
+            if candidate.is_dir() and not _is_sensitive_path(candidate):
                 return candidate.resolve(strict=False)
         except OSError:
             continue
@@ -186,8 +225,9 @@ def _vault_root() -> Path | None:
 def _root_descriptors() -> list[dict[str, Any]]:
     workspace = _workspace_root()
     vault = _vault_root()
+    workspace_available = workspace.is_dir() and not _is_sensitive_path(workspace)
     return [
-        {"id": "workspace", "label": "Workspace", "path": str(workspace), "display_path": "/", "available": workspace.is_dir()},
+        {"id": "workspace", "label": "Workspace", "path": str(workspace), "display_path": "/", "available": workspace_available},
         {"id": "vault", "label": "Vault", "path": str(vault or ""), "display_path": "/", "available": bool(vault and vault.is_dir())},
     ]
 
@@ -235,6 +275,8 @@ def _resolve(raw_path: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, 
     target = (root / relative).resolve(strict=False)
     if target != root and root not in target.parents:
         raise HTTPException(status_code=403, detail="Path is outside Code")
+    if relative:
+        _assert_not_sensitive(target)
     return target, relative, root_ctx
 
 
@@ -310,12 +352,14 @@ def _trash_payload() -> dict[str, Any]:
 
 
 def _copy_confined(source: Path, destination: Path) -> None:
+    _assert_not_sensitive(source)
+    _assert_not_sensitive(destination)
     if source.is_symlink():
         raise HTTPException(status_code=400, detail="Symlink copy is not supported")
     if source.is_dir():
         destination.mkdir(parents=True, exist_ok=False)
         for child in source.iterdir():
-            if child.name in _SKIP_DIR_NAMES or child.is_symlink():
+            if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
                 continue
             _copy_confined(child, destination / child.name)
         shutil.copystat(source, destination, follow_symlinks=False)
@@ -411,7 +455,7 @@ def _tree_for(path: Path, relative: str, depth: int, root_ctx: dict[str, Any]) -
             if len(children) >= _MAX_TREE_CHILDREN:
                 node["truncated"] = True
                 break
-            if child.name in _SKIP_DIR_NAMES or child.is_symlink():
+            if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
                 continue
             root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
             child_relative = child.relative_to(root).as_posix()
@@ -583,7 +627,7 @@ def _discover_repos(root: Path, root_id: str = "workspace", root_label: str = "W
         except ValueError:
             continue
         depth = 0 if str(relative) == "." else len(relative.parts)
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIR_NAMES]
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIR_NAMES and not _is_sensitive_path(current / name)]
         if (current / ".git").exists():
             repos.append(_repo_item(root, current, root_id, root_label))
             if len(repos) >= _MAX_REPOS:
@@ -891,7 +935,7 @@ async def items(path: str = "/", root: str = "workspace") -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Workspace path is not a folder")
     entries: list[dict[str, Any]] = []
     for child in sorted(target.iterdir(), key=_entry_sort_key):
-        if child.name in _SKIP_DIR_NAMES or child.is_symlink():
+        if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
             continue
         entries.append(_item_for(child, child.relative_to(root_path).as_posix(), str(root_ctx["id"])))
     return {"root": str(root_ctx["id"]), "root_label": str(root_ctx["label"]), "path": _display_path(relative), "items": entries}
@@ -938,11 +982,11 @@ async def search(q: str = "", path: str = "/", root: str = "") -> dict[str, Any]
                 continue
             dirnames[:] = [
                 name for name in dirnames
-                if name not in _SKIP_DIR_NAMES and not (current / name).is_symlink()
+                if name not in _SKIP_DIR_NAMES and not (current / name).is_symlink() and not _is_sensitive_path(current / name)
             ]
             candidates = sorted(
                 [current / name for name in dirnames if (current / name).is_dir()]
-                + [current / name for name in filenames],
+                + [current / name for name in filenames if not _is_sensitive_path(current / name)],
                 key=_entry_sort_key,
             )
             for child in candidates:

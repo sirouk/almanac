@@ -233,27 +233,34 @@ def provider_credential_prompt(spec: ProviderSetupSpec, *, shared_credential_ava
             "After you authorize, Claude will show a callback code string. Paste that whole string back here and I’ll store the refreshable Claude Code credentials privately for this agent."
         )
     if spec.auth_flow == "api-key":
+        runtime_note = (
+            "I can only validate that the credential is present here; live provider validation happens during provisioning."
+        )
         if shared_credential_available:
             if spec.provider_id == "chutes":
                 return (
                     "Your team already provided a Chutes API key for this lane.\n\n"
                     "Reply `default` to use it.\n"
                     "Or paste a different Chutes API key if you prefer.\n\n"
-                    f"I’ll use model `{spec.model_id}`."
+                    f"I’ll use model `{spec.model_id}`.\n\n"
+                    f"{runtime_note}"
                 )
             return (
                 f"Your team already provided a {spec.display_name} API key for this lane.\n\n"
-                "Reply `default` to use it, or paste a different key if you prefer."
+                "Reply `default` to use it, or paste a different key if you prefer.\n\n"
+                f"{runtime_note}"
             )
         if spec.provider_id == "chutes":
             return (
                 "One more thing for Chutes: send the Chutes API key for this agent lane.\n\n"
-                "I’ll store it privately and wire it into Hermes.\n\n"
+                "I’ll store it privately and wire it into Hermes. "
+                "Runtime validation is pending until provisioning reaches the provider.\n\n"
                 f"Model: `{spec.model_id}`"
             )
         return (
             f"One more thing for {spec.display_name}: send the API key for this agent lane.\n\n"
-            "I’ll store it privately and wire it into Hermes."
+            "I’ll store it privately and wire it into Hermes. "
+            "Runtime validation is pending until provisioning reaches the provider."
         )
     if spec.auth_flow == "codex-device":
         return "One more thing for OpenAI Codex: I’m creating a sign-in code for you now."

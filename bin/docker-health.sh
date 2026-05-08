@@ -130,6 +130,128 @@ check_http_with_host "http://nextcloud/status.php" "localhost" "Nextcloud"
 check_optional_tcp_with_fallback "qmd-mcp" "${QMD_MCP_CONTAINER_PORT:-8181}" "host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}" "qmd MCP runtime port"
 check_tcp "postgres" "5432" "Postgres"
 check_tcp "redis" "6379" "Redis"
+check_tcp "control-ingress" "80" "Traefik ingress (HTTP)"
+check_optional_tcp "control-ingress" "443" "Traefik ingress (HTTPS)"
+
+check_docker_refresh_jobs() {
+  local output=""
+  if output="$(PYTHONPATH="$SCRIPT_DIR/../python${PYTHONPATH:+:$PYTHONPATH}" python3 - <<'PY'
+import datetime as dt
+from arclink_control import Config, connect_db, parse_utc_iso
+
+cfg = Config.from_env()
+now = dt.datetime.now(dt.timezone.utc)
+failures = 0
+with connect_db(cfg) as conn:
+    conn.row_factory = __import__("sqlite3").Row
+    jobs = conn.execute(
+        "SELECT job_name, last_run_at, last_status FROM refresh_jobs ORDER BY job_name"
+    ).fetchall()
+    if not jobs:
+        print("OK no refresh jobs recorded yet")
+        raise SystemExit(0)
+    for job in jobs:
+        name = str(job["job_name"] or "")
+        status = str(job["last_status"] or "unknown")
+        last_run = parse_utc_iso(str(job["last_run_at"] or ""))
+        if last_run is None:
+            print(f"WARN {name}: no valid last_run_at")
+            continue
+        age_h = (now - last_run).total_seconds() / 3600
+        if status not in ("ok", "skipped"):
+            print(f"FAIL {name}: last_status={status}")
+            failures += 1
+        elif age_h > 8:
+            print(f"WARN {name}: stale ({age_h:.1f}h since last run)")
+        else:
+            print(f"OK {name}: {status} ({age_h:.1f}h ago)")
+raise SystemExit(1 if failures else 0)
+PY
+  )"; then
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        OK\ *) pass "${line#OK }" ;;
+        WARN\ *) warn "${line#WARN }" ;;
+        *) pass "$line" ;;
+      esac
+    done <<<"$output"
+  else
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      case "$line" in
+        FAIL\ *) fail "${line#FAIL }" ;;
+        WARN\ *) warn "${line#WARN }" ;;
+        OK\ *) pass "${line#OK }" ;;
+        *) fail "$line" ;;
+      esac
+    done <<<"$output"
+  fi
+}
+
+check_docker_refresh_jobs
+
+check_docker_job_status_files() {
+  local job_status_dir="${ARCLINK_DOCKER_JOB_STATUS_DIR:-$STATE_DIR/docker/jobs}"
+  if [[ ! -d "$job_status_dir" ]]; then
+    fail "Docker job status directory not found at $job_status_dir"
+    return
+  fi
+  local required_jobs=(
+    control-provisioner
+    ssot-batcher
+    notification-delivery
+    health-watch
+    curator-refresh
+    qmd-refresh
+    pdf-ingest
+    memory-synth
+    hermes-docs-sync
+  )
+  local job_name="" status="" last_exit="" finished_at=""
+  for job_name in "${required_jobs[@]}"; do
+    local status_file="$job_status_dir/$job_name.json"
+    if [[ ! -f "$status_file" ]]; then
+      fail "Docker recurring job $job_name has no status file"
+      continue
+    fi
+    local fields=""
+    if ! fields="$(python3 - "$status_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("unknown\terror\t1\t")
+    raise SystemExit(0)
+job_name = str(data.get("job_name") or data.get("job") or path.stem)
+status = str(data.get("status") or "unknown")
+last_exit = str(data.get("exit_code") if "exit_code" in data else data.get("returncode", 0))
+finished_at = str(data.get("finished_at") or data.get("last_run_at") or "")
+print("\t".join((job_name, status, last_exit, finished_at)))
+PY
+    )"; then
+      fail "Docker job $job_name status file could not be parsed"
+      continue
+    fi
+    IFS=$'\t' read -r job_name status last_exit finished_at <<<"$fields"
+    case "$status" in
+      ok|success)
+        pass "Docker job $job_name: $status${finished_at:+ at $finished_at}" ;;
+      skipped)
+        pass "Docker job $job_name: skipped${finished_at:+ at $finished_at}" ;;
+      error|failed|fail)
+        fail "Docker job $job_name: $status (exit $last_exit)" ;;
+      *)
+        warn "Docker job $job_name: $status" ;;
+    esac
+  done
+}
+
+check_docker_job_status_files
 
 if [[ -f "$ARCLINK_MEMORY_SYNTH_STATUS_FILE" ]]; then
   pass "memory synthesis status file exists"

@@ -14,10 +14,10 @@
   with confirmation-gated discard.
 - **Terminal**: `plugins/hermes-agent/terminal/` now exposes a
   managed-pty persistent-session backend with stable session IDs, persisted
-  metadata, bounded scrollback, polling output, input, reload reconnect,
-  rename/folder/reorder controls, confirmation-gated close, and an
-  unrestricted-root startup guard. True streaming and tmux-backed persistence
-  remain future work.
+  metadata, bounded scrollback, same-origin SSE output streaming, bounded
+  polling fallback, input, reload reconnect, rename/folder/reorder controls,
+  confirmation-gated close, and an unrestricted-root startup guard.
+  tmux-backed persistence remains future work.
 - **Workspace proof**: `bin/arclink-live-proof --journey workspace --live`
   now runs Docker upgrade/reconcile, Docker health, and TLS desktop/mobile
   browser proof for Drive, Code, and Terminal through the native Hermes
@@ -71,8 +71,9 @@ All work is no-secret testable; no live provider credentials are required.
 - **arclink_api_auth.py**: Hashed user/admin sessions, CSRF tokens, rate-limit
   hooks, MFA-ready admin gates, safe error shaping.
 - **arclink_hosted_api.py**: Production WSGI app with `/api/v1` route dispatch,
-  cookie/header session transport, CORS, request-ID propagation, Stripe webhook
-  skip for no-secret environments.
+  cookie/header session transport, CORS, request-ID propagation, and
+  fail-closed Stripe webhook handling that returns 503 when
+  `STRIPE_WEBHOOK_SECRET` is unset.
 - **arclink_product_surface.py**: Local stdlib WSGI prototype with onboarding
   workflow, user/admin dashboards, JSON API routes, ArcLink brand styling.
 - **arclink_public_bots.py**: Telegram and Discord public onboarding bot
@@ -97,7 +98,7 @@ Next.js 15 + Tailwind 4 web app landed in `web/` (~1,375 lines, 8 source files):
 
 ### Schema
 
-22 `arclink_*` tables are owned by `arclink_control.py`:
+ArcLink-owned `arclink_*` tables are managed by `arclink_control.py`:
 
 - `arclink_users`, `arclink_webhook_events`, `arclink_deployments`,
   `arclink_subscriptions`

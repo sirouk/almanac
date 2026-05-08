@@ -2967,16 +2967,25 @@ def test_install_system_services_units_pass_systemd_analyze_verify() -> None:
     claim_service = extract_heredoc(text, 'cat >"$TARGET_DIR/arclink-notion-claim-poll.service" <<EOF')
     claim_timer = extract_heredoc(text, 'cat >"$TARGET_DIR/arclink-notion-claim-poll.timer" <<EOF')
 
+    def systemd_quote(value: str, *, exec_arg: bool = False) -> str:
+        value = value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+        if exec_arg:
+            value = value.replace("$", "$$")
+        return f'"{value}"'
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        repo_dir = root / "repo"
+        repo_dir = root / "repo with %specifier"
         (repo_dir / "bin").mkdir(parents=True, exist_ok=True)
         provision_script = repo_dir / "bin" / "arclink-enrollment-provision.sh"
         provision_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         provision_script.chmod(0o755)
+        config_path = root / "config with %specifier" / "arclink.env"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text("ARCLINK_USER=arclink\n", encoding="utf-8")
         replacements = {
-            "$CONFIG_PATH": str(root / "arclink.env"),
-            "$ARCLINK_REPO_DIR": str(repo_dir),
+            "$SYSTEMD_CONFIG_ENV": systemd_quote(f"ARCLINK_CONFIG_FILE={config_path}"),
+            "$SYSTEMD_PROVISION_EXEC": systemd_quote(str(provision_script), exec_arg=True),
         }
 
         def materialize(content: str) -> str:
@@ -3045,6 +3054,78 @@ def test_health_checks_failed_systemd_units_and_stale_podman_transients() -> Non
     expect("check_service_user_failed_units" in text and "systemctl --user --failed --no-legend --plain" in text, text)
     expect("failed_units_are_stale_podman_healthchecks" in text and "systemctl --user reset-failed" in text, text)
     print("PASS test_health_checks_failed_systemd_units_and_stale_podman_transients")
+
+
+def test_upstream_branch_defaults_to_main_everywhere() -> None:
+    """All deploy.sh branch fallbacks must default to main, not arclink."""
+    text = DEPLOY_SH.read_text()
+    # Every ${ARCLINK_UPSTREAM_BRANCH:-<value>} fallback must use main
+    import re as _re
+    fallbacks = _re.findall(r'ARCLINK_UPSTREAM_BRANCH:-(\w+)', text)
+    for fb in fallbacks:
+        expect(fb == "main", f"ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'main'")
+    # common.sh must also default to main
+    common_text = (REPO / "bin" / "common.sh").read_text()
+    common_fallbacks = _re.findall(r'ARCLINK_UPSTREAM_BRANCH:-(\w+)', common_text)
+    for fb in common_fallbacks:
+        expect(fb == "main", f"common.sh ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'main'")
+    # README must not say clone -b arclink
+    readme_text = (REPO / "README.md").read_text()
+    expect("clone -b arclink" not in readme_text, "README still says 'clone -b arclink'")
+    print("PASS test_upstream_branch_defaults_to_main_everywhere")
+
+
+def test_bootstrap_system_includes_jq_and_iproute2() -> None:
+    """Bare-metal bootstrap must install jq and iproute2."""
+    text = BOOTSTRAP_SYSTEM_SH.read_text()
+    expect("jq" in text and "iproute2" in text,
+           "bootstrap-system.sh must install jq and iproute2 as base dependencies")
+    print("PASS test_bootstrap_system_includes_jq_and_iproute2")
+
+
+def test_health_db_probe_failures_cause_fail() -> None:
+    """When the Python DB probe command itself fails (non-warning), health must fail, not just warn."""
+    text = HEALTH_SH.read_text()
+    vault_probe = extract(text, "check_vault_definition_health() {", "check_curator_state() {")
+    # The non-warning failure path (case *) must use fail, not warn_or_fail
+    expect('fail "could not reload .vault definitions"' in vault_probe,
+           "vault definition probe command failure must use fail(), not warn_or_fail()")
+    print("PASS test_health_db_probe_failures_cause_fail")
+
+
+def test_systemd_unit_paths_are_quoted() -> None:
+    """Generated root systemd values must be quoted and specifier-safe."""
+    system_text = INSTALL_SYSTEM_SERVICES_SH.read_text()
+    expect("systemd_quote_value()" in system_text, "install-system-services.sh must quote systemd values")
+    expect("systemd_quote_exec_arg()" in system_text, "install-system-services.sh must quote ExecStart args")
+    expect('value="${value//%/%%}"' in system_text, "systemd values must escape percent specifiers")
+    expect("reject_systemd_unit_value" in system_text, "systemd unit values must reject control characters")
+    expect("dollar-sign substitution" in system_text, "systemd unit values must reject dollar substitution")
+    expect("Environment=$SYSTEMD_CONFIG_ENV" in system_text, "config env assignment must use quoted value")
+    expect("ExecStart=$SYSTEMD_PROVISION_EXEC" in system_text,
+           "install-system-services.sh ExecStart paths must use quoted values")
+    # User units: ExecStart must also use quoted paths
+    user_text = (REPO / "bin" / "install-agent-user-services.sh").read_text()
+    import re as _re_local
+    exec_lines = [l.strip() for l in user_text.splitlines() if l.strip().startswith("ExecStart=")]
+    for line in exec_lines:
+        first_token = line.split("=", 1)[1].split()[0]
+        expect(first_token.startswith('"') or first_token.startswith("'"),
+               f"install-agent-user-services.sh ExecStart path must be quoted: {line}")
+    print("PASS test_systemd_unit_paths_are_quoted")
+
+
+def test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions() -> None:
+    text = DEPLOY_SH.read_text()
+    expect("if nextcloud_effectively_enabled; then\n      run_as_user_systemd" in text,
+           "shared service restart must use effective Nextcloud enablement")
+    expect('if nextcloud_effectively_enabled; then\n    wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT"' in text,
+           "install/upgrade port waits must use effective Nextcloud enablement")
+    expect('if nextcloud_effectively_enabled && [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then' in text,
+           "Tailscale Nextcloud publication must use effective Nextcloud enablement")
+    expect("no Nextcloud runtime is available; install podman or docker compose before rotating credentials" in text,
+           "credential rotation must fail before starting a missing Nextcloud runtime")
+    print("PASS test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions")
 
 
 def main() -> int:
@@ -3140,6 +3221,11 @@ def main() -> int:
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,
         test_install_system_services_includes_independent_notion_claim_poller,
         test_install_system_services_units_pass_systemd_analyze_verify,
+        test_upstream_branch_defaults_to_main_everywhere,
+        test_bootstrap_system_includes_jq_and_iproute2,
+        test_health_db_probe_failures_cause_fail,
+        test_systemd_unit_paths_are_quoted,
+        test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions,
     ]
     for test in tests:
         test()

@@ -601,6 +601,17 @@ def test_component_upgrade_requires_deploy_key_before_writing_pin() -> None:
     print("PASS test_component_upgrade_requires_deploy_key_before_writing_pin")
 
 
+def test_component_upgrade_reexec_discovers_operator_config_artifact() -> None:
+    body = COMPONENT_UPGRADE.read_text(encoding="utf-8")
+    reexec = body[body.index("reexec_upgrade() {"):body.index("do_apply() {")]
+    expect('local discovered_config="${ARCLINK_CONFIG_FILE:-}"' in reexec, reexec)
+    expect('local artifact="${REPO_DIR}/.arclink-operator.env"' in reexec, reexec)
+    expect("ARCLINK_OPERATOR_DEPLOYED_CONFIG" in reexec, reexec)
+    expect('ARCLINK_CONFIG_FILE="$discovered_config"' in reexec, reexec)
+    expect('/home/arclink/arclink/arclink-priv/config/arclink.env' in reexec, reexec)
+    print("PASS test_component_upgrade_reexec_discovers_operator_config_artifact")
+
+
 def main() -> int:
     test_pins_json_parses_and_has_required_components()
     test_pins_json_kind_required_fields_present()
@@ -615,7 +626,8 @@ def main() -> int:
     test_component_upgrade_commits_pending_pin_bump_without_git_identity()
     test_component_upgrade_rebases_pin_commit_when_remote_main_advances()
     test_component_upgrade_requires_deploy_key_before_writing_pin()
-    print("PASS all 13 pins regression tests")
+    test_component_upgrade_reexec_discovers_operator_config_artifact()
+    print("PASS all 14 pins regression tests")
     return 0
 
 

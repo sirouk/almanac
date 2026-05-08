@@ -498,6 +498,101 @@ def test_notion_search_fetch_and_query_use_shared_index_and_live_reads() -> None
             os.environ.update(old_env)
 
 
+def test_notion_fetch_and_query_refuse_out_of_root_live_reads() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_notion_live_scope_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            insert_agent(mod, conn, agent_id="agent-test", unix_user="alex")
+
+            root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            outside_page_id = "99999999-9999-9999-9999-999999999999"
+            outside_database_id = "88888888-8888-8888-8888-888888888888"
+            mod._resolve_notion_index_roots = lambda **kwargs: [
+                {
+                    "root_ref": "root-page",
+                    "root_kind": "page",
+                    "root_id": root_page_id,
+                    "root_url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_title": "Workspace Root",
+                    "root_page_id": root_page_id,
+                    "root_page_url": "https://www.notion.so/workspace-root-aaaaaaaaaaaabbbbbbbbbbbbbbbb",
+                    "root_page_title": "Workspace Root",
+                }
+            ]
+            mod.resolve_notion_target = lambda **kwargs: (
+                {"kind": "database", "id": outside_database_id, "url": "", "title": "Outside DB"}
+                if kwargs["target_id"] == outside_database_id
+                else {"kind": "page", "id": outside_page_id, "url": "", "title": "Outside Page"}
+            )
+            mod.retrieve_notion_page = lambda **kwargs: {
+                "id": kwargs["page_id"],
+                "parent": {"type": "workspace", "workspace": True},
+                "properties": _title_property("Outside Page"),
+            }
+            mod.retrieve_notion_database = lambda **kwargs: {
+                "id": kwargs["database_id"],
+                "parent": {"type": "workspace", "workspace": True},
+                "title": [{"plain_text": "Outside DB"}],
+                "properties": {"Name": {"type": "title"}},
+            }
+
+            def fail_live_body_read(**kwargs):
+                raise AssertionError(f"out-of-root live body/query should not run: {kwargs}")
+
+            mod.retrieve_notion_page_markdown = fail_live_body_read
+            mod.query_notion_collection = fail_live_body_read
+
+            try:
+                mod.notion_fetch(
+                    conn,
+                    cfg,
+                    agent_id="agent-test",
+                    target_id=outside_page_id,
+                    requested_by_actor="test",
+                )
+            except PermissionError as exc:
+                expect("outside configured shared Notion index roots" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected notion.fetch to refuse an out-of-root page")
+
+            try:
+                mod.notion_query(
+                    conn,
+                    cfg,
+                    agent_id="agent-test",
+                    target_id=outside_database_id,
+                    query={"filter": {}},
+                    limit=25,
+                    requested_by_actor="test",
+                )
+            except PermissionError as exc:
+                expect("outside configured shared Notion index roots" in str(exc), str(exc))
+            else:
+                raise AssertionError("expected notion.query to refuse an out-of-root database")
+
+            audit_rows = conn.execute(
+                "SELECT operation, decision, target_id FROM notion_retrieval_audit ORDER BY id ASC"
+            ).fetchall()
+            expect(
+                [(str(row["operation"]), str(row["decision"])) for row in audit_rows] == [
+                    ("fetch", "deny"),
+                    ("query", "deny"),
+                ],
+                str([dict(row) for row in audit_rows]),
+            )
+            print("PASS test_notion_fetch_and_query_refuse_out_of_root_live_reads")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_delivered() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_notion_reindex_queue_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -855,6 +950,50 @@ def test_incremental_reindex_removes_trashed_page_docs() -> None:
             os.environ.update(old_env)
 
 
+def test_notion_index_cleanup_refuses_db_paths_outside_markdown_root() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_notion_index_cleanup_guard_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            markdown_root = mod._notion_index_markdown_dir(cfg)
+            inside = markdown_root / "root" / "inside.md"
+            outside = root / "outside.md"
+            inside.parent.mkdir(parents=True, exist_ok=True)
+            inside.write_text("inside\n", encoding="utf-8")
+            outside.write_text("outside\n", encoding="utf-8")
+            now = mod.utc_now_iso()
+            for doc_key, file_path in (("inside", inside), ("outside", outside)):
+                conn.execute(
+                    """
+                    INSERT INTO notion_index_documents (
+                      doc_key, root_id, source_page_id, source_page_url, source_kind, file_path,
+                      page_title, section_heading, section_ordinal, breadcrumb_json,
+                      owners_json, last_edited_time, content_hash, indexed_at, state
+                    ) VALUES (?, 'root', ?, '', 'page', ?, 'Note', 'Overview', 0, '[]', '[]', ?, ?, ?, 'active')
+                    """,
+                    (doc_key, f"page-{doc_key}", str(file_path), now, doc_key, now),
+                )
+            conn.commit()
+
+            mod._delete_notion_index_doc(conn, cfg, doc_key="inside")
+            mod._delete_notion_index_doc(conn, cfg, doc_key="outside")
+
+            expect(not inside.exists(), "inside generated index document should be unlinked")
+            expect(outside.exists(), "outside DB path must not be unlinked")
+            remaining = conn.execute("SELECT COUNT(*) AS c FROM notion_index_documents").fetchone()
+            expect(int(remaining["c"]) == 0, "cleanup should still remove stale DB rows")
+            print("PASS test_notion_index_cleanup_refuses_db_paths_outside_markdown_root")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def _people_property(name: str, *user_ids: str) -> dict[str, object]:
     return {
         name: {
@@ -1125,14 +1264,16 @@ def test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message() -> 
 def main() -> int:
     test_sync_shared_notion_index_indexes_page_tree_into_qmd_markdown_docs()
     test_notion_search_fetch_and_query_use_shared_index_and_live_reads()
+    test_notion_fetch_and_query_refuse_out_of_root_live_reads()
     test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_delivered()
     test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload()
     test_incremental_reindex_parent_walks_brand_new_page_under_known_root()
     test_notion_reindex_queue_retries_unresolved_brand_new_page()
     test_incremental_reindex_removes_trashed_page_docs()
+    test_notion_index_cleanup_refuses_db_paths_outside_markdown_root()
     test_today_plate_discovers_child_task_databases_and_filters_owner_items()
     test_today_plate_page_scoped_without_task_db_falls_back_to_qmd_message()
-    print("PASS all 9 shared notion knowledge regression tests")
+    print("PASS all 11 shared notion knowledge regression tests")
     return 0
 
 

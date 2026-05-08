@@ -147,7 +147,9 @@ install_base_linux_packages() {
     dbus-user-session \
     espeak-ng \
     inotify-tools \
+    iproute2 \
     git \
+    jq \
     python3 \
     python3-jsonschema \
     python3-yaml \

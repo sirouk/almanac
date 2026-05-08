@@ -147,5 +147,88 @@ class TestLedgerFromJourney(unittest.TestCase):
         self.assertEqual(len(ledger.records), 0)
 
 
+class TestEvidenceDBStorage(unittest.TestCase):
+    """Tests for evidence DB store/retrieve functions."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.control = load_module("arclink_control.py", "control_ev_db_test")
+
+    def _db(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        self.control.ensure_schema(conn)
+        return conn
+
+    def _sample_ledger(self, *, run_id="run_abc", status="passed"):
+        records = [
+            evidence.EvidenceRecord(step_name="step1", status=status, timestamp=100.0),
+            evidence.EvidenceRecord(step_name="step2", status=status, timestamp=101.0),
+        ]
+        ledger = evidence.EvidenceLedger(
+            run_id=run_id, started_at=100.0, finished_at=101.0, commit_hash="abc123",
+        )
+        for r in records:
+            ledger.add(r)
+        return ledger
+
+    def test_store_and_retrieve(self):
+        conn = self._db()
+        ledger = self._sample_ledger()
+        stored = evidence.store_evidence_run(conn, ledger=ledger, deployment_id="dep_1")
+        self.assertEqual(stored["run_id"], "run_abc")
+        self.assertEqual(stored["deployment_id"], "dep_1")
+        self.assertEqual(stored["status"], "passed")
+
+        retrieved = evidence.get_evidence_run(conn, run_id="run_abc")
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved["status"], "passed")
+
+    def test_status_derivation_failed(self):
+        conn = self._db()
+        ledger = self._sample_ledger(run_id="run_fail", status="failed")
+        stored = evidence.store_evidence_run(conn, ledger=ledger)
+        self.assertEqual(stored["status"], "failed")
+
+    def test_status_derivation_skipped(self):
+        conn = self._db()
+        ledger = self._sample_ledger(run_id="run_skip", status="skipped")
+        stored = evidence.store_evidence_run(conn, ledger=ledger)
+        self.assertEqual(stored["status"], "skipped")
+
+    def test_status_derivation_pending(self):
+        conn = self._db()
+        ledger = evidence.EvidenceLedger(run_id="run_empty", commit_hash="x")
+        stored = evidence.store_evidence_run(conn, ledger=ledger)
+        self.assertEqual(stored["status"], "pending")
+
+    def test_list_evidence_runs(self):
+        conn = self._db()
+        for i in range(3):
+            ledger = self._sample_ledger(run_id=f"run_{i}")
+            evidence.store_evidence_run(conn, ledger=ledger, deployment_id="dep_1")
+        runs = evidence.list_evidence_runs(conn, deployment_id="dep_1")
+        self.assertEqual(len(runs), 3)
+
+    def test_latest_evidence_status_no_runs(self):
+        conn = self._db()
+        result = evidence.latest_evidence_status(conn)
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["note"], "no evidence runs recorded")
+
+    def test_latest_evidence_status_with_runs(self):
+        conn = self._db()
+        ledger = self._sample_ledger()
+        evidence.store_evidence_run(conn, ledger=ledger, deployment_id="dep_1")
+        result = evidence.latest_evidence_status(conn, deployment_id="dep_1")
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["run_id"], "run_abc")
+
+    def test_get_nonexistent_returns_none(self):
+        conn = self._db()
+        self.assertIsNone(evidence.get_evidence_run(conn, run_id="nonexistent"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

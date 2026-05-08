@@ -12,7 +12,8 @@ Operational assumptions, ownership boundaries, and validation steps live in
 
 New product configuration uses `python/arclink_product.py`.
 
-- Non-empty `ARCLINK_*` values override legacy `ARCLINK_*` aliases.
+- Non-empty `ARCLINK_*` values override an explicit legacy alias such as
+  `ARC_*` when a helper call or future alias map provides one.
 - Blank `ARCLINK_*` values are ignored, so partially rendered env files do not
   erase working legacy config.
 - Conflict diagnostics name only the variables involved and do not print the
@@ -237,7 +238,10 @@ extraction, rate-limit hooks, MFA-ready admin gates, and safe error shapes.
 `python/arclink_hosted_api.py` wraps the existing ArcLink helper contracts into
 a production-oriented WSGI application with route dispatch under `/api/v1`,
 cookie/header session transport, CORS, request-ID propagation, structured
-logging, safe error shaping, and Stripe webhook skip for no-secret environments.
+logging, safe error shaping, and fail-closed Stripe webhook handling. If
+`STRIPE_WEBHOOK_SECRET` is unset, the hosted API returns
+`stripe_webhook_secret_unset` with status 503 so Stripe retries instead of
+silently accepting or skipping an unverifiable event.
 `HostedApiConfig` resolves runtime settings from `ARCLINK_BASE_DOMAIN`,
 `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`, `ARCLINK_COOKIE_SECURE`,
 `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, `ARCLINK_DEFAULT_PRICE_ID`,
@@ -257,12 +261,16 @@ DNS drift events, provisioning jobs, queued action intents, audit rows, and
 recent failures. Filters are SQLite-compatible and limited to channel, status,
 deployment id, user id, and a lower-bound timestamp.
 
-Admin actions are queued intent, not live side effects. Supported action types
-include restart, reprovision, suspend/unsuspend, force resynthesis, bot or
-Chutes key rotation, DNS repair, refund/comp/cancel, and rollout. Each request
-must include an admin id, target, reason, and idempotency key; the helper writes
-an audit row and stores safe metadata only. Plaintext-looking secret material is
-rejected before the action intent is persisted.
+Admin actions are queued intent first, then action-worker execution when an
+operator path claims them. Supported fake/executor-backed worker actions
+currently include restart, DNS repair, Chutes key rotation, refund, and cancel.
+Comp, reprovision, rollout, suspend/unsuspend, force resynthesis, and bot-key
+rotation remain accepted admin intents but finish as pending-not-implemented
+worker failures rather than no-op applied successes. Each request must include
+an admin id, target, reason, and idempotency key; the helper writes an audit row
+and stores safe metadata only. Plaintext-looking secret material is rejected
+before the action intent is persisted, and live side effects still require a
+deliberately live-enabled executor plus live adapters.
 
 `python/arclink_public_bots.py` defines Telegram and Discord public onboarding
 bot adapter skeletons. They share the same onboarding session rows and fake
@@ -285,10 +293,10 @@ ArcLink installs native Hermes dashboard plugins for the agent workspace:
   status, stage, unstage, confirmed discard, and commit helpers.
 - `terminal` provides the `Terminal` tab and a sanitized status
   contract. The shipped backend is ArcLink-managed pty with stable session ids,
-  persisted metadata, bounded scrollback, polling output, input, reload
-  reconnect, rename/folder/reorder controls, confirmation-gated close, and an
-  unrestricted-root startup guard. It is not tmux-backed and does not claim
-  true streaming transport.
+  persisted metadata, bounded scrollback, same-origin SSE output streaming,
+  bounded polling fallback, input, reload reconnect, rename/folder/reorder
+  controls, confirmation-gated close, and an unrestricted-root startup guard.
+  It is not tmux-backed.
 
 `bin/install-arclink-plugins.sh` owns default plugin installation for refreshed
 agents. When no explicit plugin list is passed it installs Drive, Code,

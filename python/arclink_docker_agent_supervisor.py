@@ -6,6 +6,7 @@ import os
 import pwd
 import re
 import signal
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -53,6 +54,76 @@ def docker_mode_env(cfg: Config) -> dict[str, str]:
 def docker_name(value: str, *, fallback: str = "agent") -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
     return name or fallback
+
+
+def docker_dashboard_network_name(agent_id: str) -> str:
+    return f"arclink-agent-dashboard-{docker_name(agent_id)}"
+
+
+def supervisor_container_name() -> str:
+    return str(
+        os.environ.get("ARCLINK_DOCKER_AGENT_SUPERVISOR_CONTAINER")
+        or os.environ.get("HOSTNAME")
+        or socket.gethostname()
+    ).strip()
+
+
+def _docker_json(command: list[str]) -> Any:
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout or "null")
+    except json.JSONDecodeError:
+        return None
+
+
+def _network_container_ip(network_name: str, container_name: str) -> str:
+    payload = _docker_json(["docker", "network", "inspect", network_name])
+    if not isinstance(payload, list) or not payload:
+        return ""
+    containers = payload[0].get("Containers") if isinstance(payload[0], dict) else None
+    if not isinstance(containers, dict):
+        return ""
+    container_name = container_name.strip()
+    for container_id, info in containers.items():
+        if not isinstance(info, dict):
+            continue
+        names = {
+            str(container_id or "").strip(),
+            str(info.get("Name") or "").strip(),
+            str(info.get("Name") or "").strip().lstrip("/"),
+        }
+        if container_name not in names and not str(container_id or "").startswith(container_name):
+            continue
+        raw_addr = str(info.get("IPv4Address") or "").strip()
+        return raw_addr.split("/", 1)[0].strip()
+    return ""
+
+
+def ensure_dashboard_backend_network(agent_id: str) -> tuple[str, str]:
+    network_name = docker_dashboard_network_name(agent_id)
+    container_name = supervisor_container_name()
+    if not container_name:
+        raise RuntimeError("cannot determine Docker agent supervisor container for dashboard backend isolation")
+
+    inspect = subprocess.run(["docker", "network", "inspect", network_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if inspect.returncode != 0:
+        subprocess.run(["docker", "network", "create", "--internal", network_name], check=True)
+
+    backend_host = _network_container_ip(network_name, container_name)
+    if not backend_host:
+        subprocess.run(
+            ["docker", "network", "connect", "--alias", f"dashboard-backend-{docker_name(agent_id)}", network_name, container_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        backend_host = _network_container_ip(network_name, container_name)
+
+    if not backend_host:
+        raise RuntimeError(f"could not attach supervisor container to isolated dashboard network {network_name}")
+    return network_name, backend_host
 
 
 def docker_host_priv_dir(cfg: Config) -> str:
@@ -112,12 +183,22 @@ def ensure_container_user(unix_user: str, home: Path) -> tuple[int, int]:
 def user_env(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: Path) -> dict[str, str]:
     env = docker_mode_env(cfg)
     unix_user = str(agent["unix_user"])
+    workspace_root = hermes_home / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    try:
+        info = pwd.getpwnam(unix_user)
+        os.chown(workspace_root, info.pw_uid, info.pw_gid)
+    except (KeyError, PermissionError, OSError):
+        pass
     env.update(
         {
             "HOME": str(home),
             "USER": unix_user,
             "LOGNAME": unix_user,
             "HERMES_HOME": str(hermes_home),
+            "DRIVE_WORKSPACE_ROOT": str(workspace_root),
+            "CODE_WORKSPACE_ROOT": str(workspace_root),
+            "TERMINAL_WORKSPACE_ROOT": str(workspace_root),
             "ARCLINK_AGENT_ID": str(agent["agent_id"]),
         }
     )
@@ -229,6 +310,10 @@ def desired_specs(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: P
     if access:
         dashboard_backend_port = str(access.get("dashboard_backend_port") or "")
         dashboard_proxy_port = str(access.get("dashboard_proxy_port") or "")
+        dashboard_network = ""
+        dashboard_backend_host = ""
+        if dashboard_backend_port:
+            dashboard_network, dashboard_backend_host = ensure_dashboard_backend_network(str(agent["agent_id"]))
         if dashboard_backend_port:
             specs[f"{agent['agent_id']}:dashboard"] = (
                 runuser_cmd(
@@ -238,7 +323,7 @@ def desired_specs(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: P
                         str(cfg.repo_dir / "bin" / "hermes-shell.sh"),
                         "dashboard",
                         "--host",
-                        "0.0.0.0",
+                        dashboard_backend_host,
                         "--port",
                         dashboard_backend_port,
                         "--no-open",
@@ -266,7 +351,7 @@ def desired_specs(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: P
                     "--pull",
                     "never",
                     "--network",
-                    str(root_env["ARCLINK_DOCKER_NETWORK"]),
+                    dashboard_network,
                     "-p",
                     f"127.0.0.1:{dashboard_proxy_port}:{dashboard_proxy_port}",
                     "-v",
@@ -279,7 +364,7 @@ def desired_specs(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: P
                     "--listen-port",
                     dashboard_proxy_port,
                     "--target",
-                    f"http://{os.environ.get('ARCLINK_DOCKER_AGENT_SUPERVISOR_HOST') or 'agent-supervisor'}:{dashboard_backend_port}",
+                    f"http://{dashboard_backend_host}:{dashboard_backend_port}",
                     "--access-file",
                     str(hermes_home / "state" / "arclink-web-access.json"),
                     "--realm",
@@ -305,10 +390,15 @@ def start_process(cfg: Config, key: str, cmd: list[str], env: dict[str, str], cw
 def run_refresh(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: Path, *, cron_tick: bool) -> None:
     unix_user = str(agent["unix_user"])
     env = user_env(cfg, agent, home, hermes_home)
-    commands = [[str(cfg.repo_dir / "bin" / "user-agent-refresh.sh")]]
     if cron_tick:
-        commands.append([str(cfg.repo_dir / "bin" / "hermes-shell.sh"), "cron", "tick"])
-    with log_handle(cfg, f"{agent['agent_id']}-refresh") as log:
+        commands = [[str(cfg.repo_dir / "bin" / "hermes-shell.sh"), "cron", "tick"]]
+        log_name = f"{agent['agent_id']}-cron"
+        timeout = 300
+    else:
+        commands = [[str(cfg.repo_dir / "bin" / "user-agent-refresh.sh")]]
+        log_name = f"{agent['agent_id']}-refresh"
+        timeout = 1800
+    with log_handle(cfg, log_name) as log:
         for command in commands:
             try:
                 subprocess.run(
@@ -318,7 +408,7 @@ def run_refresh(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: Pat
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     check=False,
-                    timeout=1800,
+                    timeout=timeout,
                 )
             except subprocess.TimeoutExpired:
                 log.write(f"\nrefresh command timed out: {' '.join(command)}\n")

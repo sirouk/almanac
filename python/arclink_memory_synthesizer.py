@@ -286,6 +286,30 @@ def _read_file_snippet(path: Path, *, max_chars: int) -> str:
     return _clean_space(raw, limit=max_chars)
 
 
+def _file_content_hash(path: Path) -> str:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return ""
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+
+
+def _file_fingerprint(prefix: str, path: Path, root: Path, stat: os.stat_result | None = None) -> str:
+    stat = stat or _safe_stat(path)
+    rel_path = _path_rel(path, root)
+    content_hash = _file_content_hash(path)
+    return (
+        f"{prefix}:{rel_path}:"
+        f"{stat.st_size if stat else 0}:"
+        f"{content_hash or 'unreadable'}"
+    )
+
+
 def _source_text_budget(parts: Sequence[str], max_chars: int) -> list[str]:
     result: list[str] = []
     used = 0
@@ -450,9 +474,7 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
             continue
         if child.is_file() and child.suffix.casefold() in SIGNATURE_SUFFIXES:
             stat = _safe_stat(child)
-            root_fingerprints.append(
-                f"root:{child.name}:{stat.st_size if stat else 0}:{int(stat.st_mtime) if stat else 0}"
-            )
+            root_fingerprints.append(_file_fingerprint("root", child, vault_root, stat))
             root_item = _asset_summary_for_path(child, vault_root, max_rel_len=140)
             root_item["snippet"] = _read_file_snippet(child, max_chars=600) if child.suffix.casefold() in TEXT_SUFFIXES else ""
             root_files.append(root_item)
@@ -493,7 +515,7 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
             if not nested.is_file():
                 continue
             suffix = nested.suffix.casefold()
-            fingerprints.append(f"f:{nested.name}:{stat.st_size if stat else 0}:{int(stat.st_mtime) if stat else 0}")
+            fingerprints.append(_file_fingerprint("f", nested, child, stat))
             if suffix == ".pdf":
                 pdfs.append(nested.name)
             elif suffix in TEXT_SUFFIXES:
@@ -537,7 +559,7 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
                 rel_path = _path_rel(path, child)
                 stat = _safe_stat(path)
                 suffix = path.suffix.casefold()
-                fingerprints.append(f"deep:{rel_path}:{stat.st_size if stat else 0}:{int(stat.st_mtime) if stat else 0}")
+                fingerprints.append(_file_fingerprint("deep", path, child, stat))
                 if suffix in ASSET_SUFFIXES:
                     kind = _asset_kind_for_suffix(suffix)
                     if rel_path not in asset_seen:

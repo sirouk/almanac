@@ -179,14 +179,30 @@ def _execute_action(
             metadata=metadata,
         )
         _reject_secrets(result, path="$.result")
-        _finish_attempt(conn, attempt_id=attempt_id, status="succeeded", result=result)
-        _update_intent_status(conn, action_id=action_id, status="succeeded")
+
+        # Honest status: if dispatch says pending_not_implemented, reflect that
+        dispatch_status = str(result.get("status", ""))
+        if dispatch_status == "pending_not_implemented":
+            intent_status = "failed"
+            attempt_status = "failed"
+            event_type = f"action_pending_not_implemented:{action_type}"
+            outcome_status = "pending_not_implemented"
+            error = str(result.get("note", "action type not yet wired to executor"))
+        else:
+            intent_status = "succeeded"
+            attempt_status = "succeeded"
+            event_type = f"action_executed:{action_type}"
+            outcome_status = "succeeded"
+            error = ""
+
+        _finish_attempt(conn, attempt_id=attempt_id, status=attempt_status, result=result, error=error)
+        _update_intent_status(conn, action_id=action_id, status=intent_status)
         append_arclink_event(
             conn,
             subject_kind=target_kind,
             subject_id=target_id,
-            event_type=f"action_executed:{action_type}",
-            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": "succeeded"},
+            event_type=event_type,
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": outcome_status},
             commit=False,
         )
         append_arclink_audit(
@@ -195,15 +211,15 @@ def _execute_action(
             actor_id="system:action_worker",
             target_kind=target_kind,
             target_id=target_id,
-            reason=f"executed queued action {action_id}",
-            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": "succeeded"},
+            reason=f"executed queued action {action_id}" if outcome_status == "succeeded" else f"action {action_id} not yet implemented: {action_type}",
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": outcome_status},
             commit=False,
         )
         conn.commit()
         return {
             "action_id": action_id,
             "attempt_id": attempt_id,
-            "status": "succeeded",
+            "status": outcome_status,
             "action_type": action_type,
             "result": result,
         }
@@ -277,12 +293,20 @@ def _dispatch_action(
         return {"live": result.live, "status": result.status, "action": result.action}
 
     if action_type == "comp":
-        # Comp is a local entitlement operation, not an executor call
-        return {"status": "applied", "action": "comp", "note": "entitlement_updated_locally"}
+        # Comp requires entitlement module wiring — not yet connected to executor
+        return {"status": "pending_not_implemented", "action": "comp", "note": "entitlement operation not yet wired to executor"}
 
-    if action_type in ("suspend", "unsuspend", "force_resynth", "rotate_bot_key", "reprovision", "rollout"):
-        # Local state transitions / no-op safe in fake mode
-        return {"status": "applied", "action": action_type, "note": "local_state_transition"}
+    if action_type in ("suspend", "unsuspend"):
+        return {"status": "pending_not_implemented", "action": action_type, "note": "deployment lifecycle state transition not yet implemented"}
+
+    if action_type == "reprovision":
+        return {"status": "pending_not_implemented", "action": action_type, "note": "reprovisioning requires sovereign worker dispatch — not yet wired"}
+
+    if action_type == "rollout":
+        return {"status": "pending_not_implemented", "action": action_type, "note": "rollout action requires rollout module dispatch — not yet wired"}
+
+    if action_type in ("force_resynth", "rotate_bot_key"):
+        return {"status": "pending_not_implemented", "action": action_type, "note": f"{action_type} requires agent-side integration — not yet wired"}
 
     raise ArcLinkActionWorkerError(f"unsupported action type: {action_type}")
 

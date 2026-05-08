@@ -738,6 +738,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
         "HERMES_TUI_DIR": "/opt/arclink/runtime/hermes-agent-src/ui-tui",
         "QMD_STATE_DIR": CONTAINER_QMD_STATE_DIR,
+        "QMD_MCP_CONTAINER_PORT": "8181",
+        "QMD_MCP_LOOPBACK_PORT": "18181",
         "QMD_INDEX_NAME": f"vault-{deployment_id}",
         "QMD_COLLECTION_NAME": f"vault-{deployment_id}",
         "ARCLINK_MEMORY_SYNTH_ENABLED": "auto",
@@ -858,8 +860,8 @@ def _record_health_placeholders(conn: sqlite3.Connection, *, deployment_id: str)
             conn,
             deployment_id=deployment_id,
             service_name=service_name,
-            status="planned",
-            detail={"source": "arclink_provisioning_dry_run"},
+            status="dry_run_planned",
+            detail={"source": "arclink_provisioning_dry_run", "note": "planning only — not yet applied"},
         )
 
 
@@ -940,8 +942,10 @@ def render_arclink_provisioning_dry_run(
             metadata={
                 "deployment_id": deployment_id,
                 "dry_run": True,
+                "outcome": "dry_run_succeeded",
                 "service_count": len(intent["compose"]["services"]),
                 "ready_for_execution": bool(intent["execution"]["ready"]),
+                "note": "planning only — no services were started or applied",
             },
         )
         transition_arclink_provisioning_job(conn, job_id=job_id, status="succeeded")

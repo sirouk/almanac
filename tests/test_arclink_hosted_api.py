@@ -1976,6 +1976,179 @@ def test_admin_scale_operations_requires_auth_and_returns_snapshot() -> None:
     print("PASS test_admin_scale_operations_requires_auth_and_returns_snapshot")
 
 
+def test_onboarding_claim_session_creates_user_session_after_payment() -> None:
+    """After Stripe payment, the browser exchanges the onboarding session_id
+    for a user session via POST /onboarding/claim-session.
+    """
+    control = load_module("arclink_control.py", "arclink_control_hosted_claim_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_claim_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_claim_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_claim_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
+    })
+    prepared = seed_paid_deployment(control, onboarding, conn)
+
+    # Claim session -> 201 with Set-Cookie headers
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/claim-session",
+        headers={}, body=json.dumps({"session_id": "onb_hosted"}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}: {payload}")
+    expect("session" in payload, str(payload))
+    expect(payload["user_id"] == prepared["user_id"], str(payload))
+    expect(payload["email"] == "hosted-user@example.test", str(payload))
+    cookie_headers = [v for k, v in headers if k == "Set-Cookie"]
+    expect(len(cookie_headers) >= 3, f"expected at least 3 Set-Cookie headers, got {len(cookie_headers)}")
+    cookie_text = " ".join(cookie_headers)
+    expect("arclink_user_session_id=" in cookie_text, "missing session_id cookie")
+    expect("arclink_user_session_token=" in cookie_text, "missing session_token cookie")
+    expect("arclink_user_csrf=" in cookie_text, "missing csrf cookie")
+    expect("HttpOnly" in cookie_text, "missing HttpOnly flag")
+
+    # Claimed session should work for dashboard access
+    session = payload["session"]
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/dashboard",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200, f"claimed session dashboard expected 200 got {status}")
+
+    print("PASS test_onboarding_claim_session_creates_user_session_after_payment")
+
+
+def test_onboarding_claim_session_rejects_unpaid() -> None:
+    """Claim-session returns 402 if entitlement is not yet paid."""
+    control = load_module("arclink_control.py", "arclink_control_hosted_claim_unpaid_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_claim_unpaid_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_claim_unpaid_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Create onboarding session and prepare deployment (but do NOT set paid)
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn, channel="web", channel_identity="unpaid@example.test",
+        session_id="onb_unpaid", email_hint="unpaid@example.test",
+        display_name_hint="Unpaid", selected_plan_id="founders",
+    )
+    onboarding.prepare_arclink_onboarding_deployment(
+        conn, session_id=session["session_id"],
+        base_domain="example.test", prefix="unpaid-vault",
+    )
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/claim-session",
+        headers={}, body=json.dumps({"session_id": "onb_unpaid"}),
+        config=config,
+    )
+    expect(status == 402, f"expected 402 got {status}: {payload}")
+    expect(payload["error"] == "entitlement_not_paid", str(payload))
+
+    print("PASS test_onboarding_claim_session_rejects_unpaid")
+
+
+def test_onboarding_claim_session_rejects_unknown_session() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_claim_unknown_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_claim_unknown_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/claim-session",
+        headers={}, body=json.dumps({"session_id": "nonexistent"}),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}: {payload}")
+
+    print("PASS test_onboarding_claim_session_rejects_unknown_session")
+
+
+def test_onboarding_cancel_marks_session_cancelled() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_cancel_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_cancel_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # Start onboarding
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/start",
+        headers={}, body=json.dumps({"channel": "web", "email": "cancel@example.test"}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}")
+    session_id = payload["session"]["session_id"]
+
+    # Cancel it
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/cancel",
+        headers={}, body=json.dumps({"session_id": session_id}),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["status"] == "cancelled", str(payload))
+    expect(payload["changed"] is True, str(payload))
+
+    # Cancelling again is idempotent
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/cancel",
+        headers={}, body=json.dumps({"session_id": session_id}),
+        config=config,
+    )
+    expect(status == 200, f"idempotent cancel expected 200 got {status}: {payload}")
+    expect(payload["changed"] is False, str(payload))
+
+    # Cancelling nonexistent session -> 404
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/cancel",
+        headers={}, body=json.dumps({"session_id": "nonexistent"}),
+        config=config,
+    )
+    expect(status == 404, f"expected 404 got {status}: {payload}")
+
+    print("PASS test_onboarding_cancel_marks_session_cancelled")
+
+
+def test_onboarding_status_returns_entitlement_and_identity() -> None:
+    """The onboarding/status endpoint is the checkout success polling target.
+    It must return entitlement_state and user identity fields."""
+    control = load_module("arclink_control.py", "arclink_control_hosted_onbstatus_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_onbstatus_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onbstatus_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET",
+        path="/api/v1/onboarding/status",
+        headers={}, query={"session_id": "onb_hosted"},
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["user_id"] == prepared["user_id"], str(payload))
+    expect(payload["entitlement_state"] == "paid", str(payload))
+    expect(payload["display_name"] == "Hosted User", str(payload))
+
+    # Missing session_id -> 400
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/onboarding/status",
+        headers={}, query={}, config=config,
+    )
+    expect(status == 400, f"expected 400 got {status}")
+
+    # Unknown session_id -> 404
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/onboarding/status",
+        headers={}, query={"session_id": "nonexistent"}, config=config,
+    )
+    expect(status == 404, f"expected 404 got {status}")
+
+    print("PASS test_onboarding_status_returns_entitlement_and_identity")
+
+
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
@@ -2026,7 +2199,12 @@ def main() -> int:
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
     test_admin_scale_operations_requires_auth_and_returns_snapshot()
-    print("PASS all 48 ArcLink hosted API tests")
+    test_onboarding_claim_session_creates_user_session_after_payment()
+    test_onboarding_claim_session_rejects_unpaid()
+    test_onboarding_claim_session_rejects_unknown_session()
+    test_onboarding_cancel_marks_session_cancelled()
+    test_onboarding_status_returns_entitlement_and_identity()
+    print("PASS all 53 ArcLink hosted API tests")
     return 0
 
 

@@ -1,129 +1,88 @@
 # Codebase Map
 
+Freshness checkpoint: reviewed for the ArcLink ecosystem gap repair PLAN
+handoff on 2026-05-08 using public repository files only.
+
 ## Root Entrypoints
 
 | Path | Role |
 | --- | --- |
-| `deploy.sh` | Thin wrapper for canonical install, upgrade, Docker, health, enrollment, Notion, and maintenance flows. |
-| `bin/deploy.sh` | Main baremetal deploy and host lifecycle implementation. |
-| `bin/arclink-docker.sh` | Docker install, upgrade, reconcile, health, Tailnet publication, deployment repair, and dashboard mount repair. |
-| `bin/install-arclink-plugins.sh` | Copies and enables ArcLink Hermes plugins and default hooks for agent homes. |
-| `compose.yaml` | Shared Docker Compose runtime substrate. |
-| `Dockerfile` | Application image with Python, Node, Docker CLI, Hermes/qmd/runtime support, git, and shell tooling. |
+| `deploy.sh` | Thin wrapper for the canonical deploy menu and named host flows. |
+| `bin/deploy.sh` | Bare-metal install, upgrade, health, service repair, enrollment, Notion, deploy-key, and operator menu implementation. |
+| `bin/arclink-docker.sh` | Docker install, upgrade, reconfigure, reconcile, health, logs, ports, teardown, pins, and live-smoke orchestration. |
+| `compose.yaml` | Shared Host Docker service topology for control API/web, qmd, MCP, jobs, Curator, Nextcloud, and agent supervision. |
+| `Dockerfile` | Docker image build for Python, Node, qmd, Docker CLI, pinned Hermes runtime, and web assets. |
+| `bin/arclink-ctl` | Operator CLI for control-plane DB, org profile, onboarding recovery, upgrade checks, and product/admin operations. |
+| `bin/arclink-live-proof` | Credential-gated live proof runner entrypoint. |
 | `ralphie.sh` | Ralphie phase runner. |
-| `test.sh` | Full preflight plus heavier install smoke. |
-| `IMPLEMENTATION_PLAN.md` | Active backlog and validation floor for this mission. |
-| `AGENTS.md` | Repository operating guide for coding and deployment agents. |
+| `test.sh` | Heavy preflight plus sudo install smoke. |
+| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for the active ecosystem gap repair mission. |
+| `AGENTS.md` | Operator and coding-agent operating guide. |
 
 ## Major Directories
 
 | Directory | Responsibility |
 | --- | --- |
-| `plugins/hermes-agent/` | ArcLink-owned Hermes plugins. The workspace plugin mission belongs primarily here. |
-| `plugins/hermes-agent/arclink-drive/` | Native Drive plugin for Vault and Workspace file management. |
-| `plugins/hermes-agent/arclink-code/` | Native Code plugin for workspace editing and git Source Control. |
-| `plugins/hermes-agent/arclink-terminal/` | Native Terminal plugin with managed-pty persistent sessions. |
-| `plugins/hermes-agent/arclink-managed-context/` | ArcLink managed-context plugin installed alongside workspace plugins. |
-| `bin/` | Deploy, Docker, health, onboarding, qmd, PDF, Nextcloud, service, plugin install, and runtime wrappers. |
-| `python/` | Control plane, provisioning, Docker supervisor, dashboards, hosted API, onboarding, ingress, product, diagnostics, proof runner, and adapters. |
-| `tests/` | Focused regression coverage for plugins, Docker/provisioning, deploy behavior, health, onboarding, product surfaces, and services. |
-| `web/` | Next.js product/admin dashboard and browser tests; supporting surface and proof-harness pattern, not the native plugin implementation path. |
-| `config/` | Public examples, schemas, model providers, and component pins. |
-| `docs/` | Operator docs, architecture/runbooks, Docker notes, proof templates, and product documentation. |
-| `research/` | Ralphie planning, stack, coverage, steering, and handoff artifacts. |
-| `consensus/` | Phase gate records. |
-| `systemd/` | Baremetal service/user unit templates. |
+| `bin/` | Deploy, Docker, health, bootstrap, qmd, PDF, Nextcloud, service, backup, plugin install, proof, and runtime wrappers. |
+| `python/` | Control plane, hosted API, auth, product/onboarding, provisioning, Docker supervisor, action worker, MCP, Notion/SSOT, memory, evidence, diagnostics, fleet, rollout, and ingress modules. |
+| `web/` | Next.js hosted web app, onboarding, checkout, login, user dashboard, admin dashboard, API client, Node tests, and Playwright tests. |
+| `plugins/hermes-agent/` | ArcLink-owned Hermes plugins: managed context, Drive, Code, and Terminal. |
+| `hooks/hermes-agent/` | Hermes hooks, including ArcLink Telegram `/start` behavior. |
+| `skills/` | ArcLink skills for qmd, Notion, SSOT, vaults, resources, upgrade orchestration, first contact, and PDF export. |
+| `systemd/` | Bare-metal user service and timer templates. |
 | `compose/` | Supplemental Compose assets. |
+| `config/` | Public env examples, pins, model provider defaults, org-profile schemas/examples, and team-resource examples. |
+| `docs/` | Operator docs, architecture, Docker, API, product/security/runbooks, evidence templates, and docs needing status classification. |
+| `tests/` | Focused Python regression coverage for host lifecycle, Docker, onboarding, hosted API, provisioning, plugins, qmd, Notion, SSOT, memory, and docs. |
+| `research/` | Ralphie research, steering, coverage, stack, and handoff artifacts. |
+| `consensus/` | Phase gate records and build-gate status. |
 | `templates/` | Public templates used to seed private state. |
 
-## Stack Shape
+## Runtime Lanes
 
-ArcLink is primarily a Python and shell control-plane repository with a
-Docker Compose runtime and native Hermes dashboard plugins. The Next.js app is
-an important product/admin surface, but the active Drive, Code, and Terminal
-mission belongs in the Hermes plugin directories and ArcLink runtime wrappers.
-
-## Workspace Plugin Architecture
-
-| Plugin | Backend | Frontend | Current status |
-| --- | --- | --- | --- |
-| Drive | `plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py` | `plugins/hermes-agent/arclink-drive/dashboard/dist/index.js`, `style.css` | Native file manager with Vault/Workspace roots, confined file ops, metadata, trash/restore, disabled sharing flags, and browser-proof backlog marked complete. Remaining work is commit/deploy handoff. |
-| Code | `plugins/hermes-agent/arclink-code/dashboard/plugin_api.py` | `plugins/hermes-agent/arclink-code/dashboard/dist/index.js`, `style.css` | Native workbench with Explorer/tabs, editor, search, diff, confined file ops, theme controls, and Source Control. Remaining work is commit/deploy handoff. |
-| Terminal | `plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py` | `plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js`, `style.css` | Managed-pty backend with persisted session metadata, bounded scrollback, polling output, input, grouping/reorder controls, and close confirmation. Remaining work is commit/deploy handoff. |
-| Managed Context | `plugins/hermes-agent/arclink-managed-context/` | No dashboard tab | Injects ArcLink context and bootstrap behavior for agent turns. |
-
-## Drive Surfaces
-
-| File | Current role | Build implication |
+| Lane | Shape | Primary files |
 | --- | --- | --- |
-| `arclink-drive/dashboard/manifest.json` | Registers `/drive`, icon, JS, CSS, and API entry. | Keep stable unless metadata changes are required. |
-| `arclink-drive/dashboard/plugin_api.py` | Root descriptors, local/WebDAV status, path safety, metadata, upload, new file/folder, copy/duplicate, move/rename, favorite, trash/restore, batch results, preview/download. | Preserve capability truth, root confinement, symlink safety, partial failures, and conflict handling while documenting shipped behavior. |
-| `arclink-drive/dashboard/dist/index.js` | Hermes SDK React UI for root selection, browsing, preview/details, upload, selection, batch actions, context menus, confirmations, and drag moves. | Keep proof and docs aligned with the actual browser workflow. |
-| `arclink-drive/dashboard/dist/style.css` | Scoped dark responsive file-manager styling. | Preserve mobile/desktop fit and avoid nested-card clutter. |
-| `arclink-drive/README.md` | Plugin behavior and limits. | Update to match shipped behavior and known limits only. |
+| Shared Host | Public repo plus private state, systemd services, service user, per-user Unix accounts, Curator, qmd, Notion, Nextcloud, and user-agent services | `bin/deploy.sh`, `bin/bootstrap-*.sh`, `bin/install-*-services.sh`, `bin/refresh-agent-install.sh`, `python/arclink_enrollment_provisioner.py`, `systemd/user/*` |
+| Shared Host Docker | Compose services plus Docker agent supervisor and persistent Docker user homes | `compose.yaml`, `Dockerfile`, `bin/arclink-docker.sh`, `bin/docker-*.sh`, `python/arclink_docker_agent_supervisor.py` |
+| Sovereign Control Node / Hosted Product | Hosted web/API, Stripe entitlement, provisioning, action queue, control provisioner, ingress, fleet, rollout, and evidence | `python/arclink_hosted_api.py`, `python/arclink_product.py`, `python/arclink_onboarding.py`, `python/arclink_provisioning.py`, `python/arclink_action_worker.py`, `python/arclink_fleet.py`, `python/arclink_rollout.py`, `web/src/*` |
 
-## Code Surfaces
+## Docker Service Map
 
-| File | Current role | Build implication |
+`compose.yaml` defines these service-level surfaces: `postgres`, `redis`,
+`nextcloud`, `arclink-mcp`, `qmd-mcp`, `notion-webhook`, `control-api`,
+`control-web`, `control-ingress`, `control-provisioner`, `vault-watch`,
+`agent-supervisor`, `ssot-batcher`, `notification-delivery`, `health-watch`,
+`curator-refresh`, `qmd-refresh`, `pdf-ingest`, `memory-synth`,
+`hermes-docs-sync`, `quarto-render`, `backup`, `curator-gateway`,
+`curator-onboarding`, `curator-discord-onboarding`, and legacy `arclink-qmd`
+compatibility.
+
+## Completed Baseline Hotspots
+
+| Surface | Files to preserve | Assumption |
 | --- | --- | --- |
-| `arclink-code/dashboard/manifest.json` | Registers `/code`, icon, JS, CSS, and API entry. | Keep stable unless metadata changes are required. |
-| `arclink-code/dashboard/plugin_api.py` | Workspace root, file list/open/save, mkdir, search, repo discovery, git status, diff, stage, unstage, discard, commit, ignore, pull, push, rename, move, duplicate, trash, and restore. | Preserve root confinement, allowlists, confirmations, hash checks, redaction, and manual-save default. |
-| `arclink-code/dashboard/dist/index.js` | Hermes SDK React UI for Explorer/editor/Search/Source Control, diff view, tabs/dirty state, status bar, theme toggle, and confirmations. | Keep docs honest about native editor behavior and Monaco not being shipped unless proven. |
-| `arclink-code/dashboard/dist/style.css` | Scoped editor/workspace styling with dark/light support. | Preserve responsive VS Code-like layout during final cleanup. |
-| `arclink-code/README.md` | Plugin behavior and limits. | Update after final review if shipped behavior changed. |
+| Dashboard file roots | `bin/install-agent-user-services.sh`, `bin/refresh-agent-install.sh`, `plugins/hermes-agent/*/dashboard/plugin_api.py` | Drive, Code, and Terminal must deny secrets, private runtime state, traversal, and symlink escapes. |
+| qmd bind address | `systemd/user/arclink-qmd-mcp.service`, `bin/qmd-daemon.sh`, `bin/health.sh`, `bin/docker-health.sh` | Bare-metal qmd binds loopback by default unless deliberately widened. |
+| Notion exact reads | `python/arclink_control.py`, `python/arclink_mcp_server.py`, Notion skills | Agent-facing exact reads stay scoped to configured shared/indexed roots or privileged audited operations. |
+| SSOT writes | `python/arclink_notion_ssot.py`, `python/arclink_ssot_batcher.py` | Destructive Notion mutations are rejected or routed through explicit approval rails. |
+| Docker dashboard boundary | `compose.yaml`, `python/arclink_provisioning.py`, `python/arclink_docker_agent_supervisor.py`, `bin/run-hermes-dashboard-proxy.sh` | Dashboard backends must not be reachable around the auth proxy. |
+| Token argv exposure | `bin/*.sh`, `python/arclink_docker_agent_supervisor.py` | Bootstrap tokens should pass through files, stdin, or descriptors, not process argv. |
+| Generated cleanup | `bin/pdf-ingest.py`, `python/arclink_notion_webhook.py` | Cleanup revalidates generated-root containment before unlink/move. |
+| Team resources | `bin/clone-team-resources.sh`, `skills/arclink-resources/SKILL.md` | Manifest slugs are sanitized before destructive git operations. |
+| Onboarding recovery | `python/arclink_curator_onboarding.py`, `python/arclink_curator_discord_onboarding.py`, `python/arclink_public_bots.py`, `python/arclink_onboarding_completion.py`, `python/arclink_onboarding_provider_auth.py` | Failure, denial, skip, retry, cancel, provider validation, and credential handling stay visible, durable, and recoverable. |
 
-## Terminal Surfaces
+## Remaining BUILD Hotspots
 
-| File | Current role | Build implication |
+| Slice | Files to inspect first | Focus |
 | --- | --- | --- |
-| `arclink-terminal/dashboard/manifest.json` | Registers `/terminal`, icon, JS, CSS, and API entry. | Keep stable. |
-| `arclink-terminal/dashboard/plugin_api.py` | Managed-pty session status, create/list/read/input/rename/close, atomic state, bounded scrollback, root guard, redacted errors, and limits. | Preserve runtime boundary, redaction, cleanup, and polling contracts. |
-| `arclink-terminal/dashboard/dist/index.js` | Session list, terminal pane, input, polling reconnect, rename/folder/reorder controls, and close confirmation. | Keep proof notes portable and avoid raw scrollback in artifacts. |
-| `arclink-terminal/dashboard/dist/style.css` | Scoped responsive terminal session styling. | Keep mobile fit and non-overlap. |
-| `arclink-terminal/README.md` | Managed-pty backend documentation and tmux future path. | Update only if runtime backend or proof status changes. |
-
-## Runtime And Install Wiring
-
-| File | Responsibility | Mission relevance |
-| --- | --- | --- |
-| `bin/install-arclink-plugins.sh` | Copies default plugins, excludes local caches, prunes legacy plugin aliases, and preserves unknown plugin config while enabling defaults. | Keeps plugin delivery reliable and cache-free. |
-| `bin/arclink-docker.sh` | Docker operational wrapper, Tailnet publication, dashboard compose repair, service recreation, and Docker health paths. | Required for truthful URL publication and final deployment handoff. |
-| `python/arclink_provisioning.py` | Renders deployment env, volumes, services, labels, and access URLs. | Emits dashboard, Vault, and Workspace runtime signals. |
-| `python/arclink_docker_agent_supervisor.py` | Docker-mode user-agent reconciliation and plugin installation. | Ensures refreshed Docker agents receive workspace plugins. |
-| `python/arclink_live_runner.py` | Credential-gated live proof orchestration, including workspace browser proof runners. | Source for final proof result reporting, not a substitute for portable notes. |
-| `bin/refresh-agent-install.sh` | Baremetal refresh path for existing agents. | Must keep dashboard/plugin env aligned. |
-
-## Test Homes
-
-| Test/check | Role |
-| --- | --- |
-| `tests/test_arclink_plugins.py` | Primary plugin install/API/UI-contract regression coverage for Drive, Code, Terminal, and managed context. |
-| `tests/test_arclink_docker.py` | Docker wrapper, deployment repair, Tailnet publication, and dashboard mount coverage. |
-| `tests/test_arclink_provisioning.py` | Deployment render assertions for dashboard, Vault, Workspace, and service intent. |
-| `tests/test_arclink_live_runner.py` | Workspace proof runner planning, redaction, TLS URL enforcement, and browser-runner wiring. |
-| `tests/test_deploy_regressions.py` | Deploy and shell behavior regressions. |
-| `web/tests/browser/` | Product browser harness patterns that can inform proof workflows. |
+| Verification and release review | `IMPLEMENTATION_PLAN.md`, `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`, `README.md`, `AGENTS.md`, `docs/DOC_STATUS.md`, `docs/docker.md`, `docs/API_REFERENCE.md`, `docs/arclink/*`, `web/package.json`, `test.sh`, `bin/ci-preflight.sh` | Confirm the checked docs/validation slice matches behavior, run the focused validation floor, and mark proof-gated/live claims honestly. |
 
 ## Architecture Assumptions
 
-- Workspace behavior belongs in ArcLink Hermes plugins, not Hermes core.
-- Plugin APIs must return capability flags that the UI honors.
-- API responses and UI errors must be redacted and secret-free.
-- File operations must remain confined to approved roots and reject traversal or
-  symlink escape.
-- Risky operations require deliberate confirmation.
-- WebDAV/Nextcloud sharing must remain disabled until a real adapter and tests
-  exist.
-- Code remains manual-save by default.
-- Terminal execution must stay within the deployment/user boundary with bounded
-  scrollback and state.
-- Proof notes and final docs must not include local host paths, command
-  transcripts, raw terminal scrollback, private state, or secrets.
-
-## BUILD Handoff Boundary
-
-The BUILD phase should work from the remaining unchecked items in
-`IMPLEMENTATION_PLAN.md` and
-`research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md`. Planning artifacts
-should not be treated as a substitute for scoped commit curation, optional
-deployment, final health/browser proof freshness checks, or release reporting.
+- This map is based on public repository files only.
+- Private state, live user homes, token files, deploy keys, OAuth data, bot
+  tokens, and production `.env` values are intentionally out of scope.
+- BUILD should treat code and focused tests as truth when docs disagree, then
+  update docs after behavior is corrected.
+- Shared Host, Docker, and Sovereign Control Node boundaries should stay
+  distinct; parity means aligned contracts, defaults, health, and docs.

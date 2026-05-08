@@ -34,7 +34,7 @@ When answering the user, include the useful links and omit credentials:
 ## Guardrails
 
 - do not ask the user to paste or reveal their shared password
-- do not claim the password is unknown in a way that encourages recovery in chat; say credentials are intentionally omitted and access reset goes through Raven/operator
+- do not claim the password is unknown in a way that encourages recovery in chat; say credentials are intentionally omitted and access reset goes through Curator/operator
 - do not inspect other users' home directories
 - do not read central deployment secrets such as `arclink.env`, `.arclink-operator.env`, or backup key material from a user-agent session
 - if a path points at the shared vault, translate it to the user-visible `~/ArcLink` alias whenever possible

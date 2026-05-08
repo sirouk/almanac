@@ -13,6 +13,8 @@ MCP_SERVER_PY = REPO / "python" / "arclink_mcp_server.py"
 NOTION_WEBHOOK_PY = REPO / "python" / "arclink_notion_webhook.py"
 MCP_WRAPPER = REPO / "bin" / "arclink-mcp-server.sh"
 NOTION_WRAPPER = REPO / "bin" / "arclink-notion-webhook.sh"
+QMD_DAEMON = REPO / "bin" / "qmd-daemon.sh"
+QMD_SERVICE = REPO / "systemd" / "user" / "arclink-qmd-mcp.service"
 
 
 def load_module(path: Path, name: str):
@@ -90,6 +92,16 @@ def test_wrappers_force_loopback_host_by_default() -> None:
     print("PASS test_wrappers_force_loopback_host_by_default")
 
 
+def test_qmd_daemon_defaults_to_loopback_without_docker_forwarder_env() -> None:
+    body = QMD_DAEMON.read_text(encoding="utf-8")
+    service = QMD_SERVICE.read_text(encoding="utf-8")
+
+    expect('loopback_port="${QMD_MCP_LOOPBACK_PORT:-${QMD_MCP_PORT:-8181}}"' in body, body)
+    expect('container_port="${QMD_MCP_CONTAINER_PORT:-$loopback_port}"' in body, body)
+    expect("QMD_MCP_CONTAINER_PORT" not in service, service)
+    print("PASS test_qmd_daemon_defaults_to_loopback_without_docker_forwarder_env")
+
+
 def test_loopback_proxy_identity_headers_are_not_trusted_by_default() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -122,8 +134,9 @@ def main() -> int:
     test_backend_client_allowed_accepts_explicit_cidrs()
     test_notion_health_endpoint_is_available_before_transport_guard()
     test_wrappers_force_loopback_host_by_default()
+    test_qmd_daemon_defaults_to_loopback_without_docker_forwarder_env()
     test_loopback_proxy_identity_headers_are_not_trusted_by_default()
-    print("PASS all 5 loopback hardening regression tests")
+    print("PASS all 6 loopback hardening regression tests")
     return 0
 
 

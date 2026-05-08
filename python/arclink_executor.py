@@ -545,7 +545,7 @@ class ArcLinkExecutor:
         return DockerComposeApplyResult(
             deployment_id=request.deployment_id,
             project_name=str(plan["project_name"]),
-            live=True,
+            live=False,
             status=str(state["status"]),
             services=tuple(plan["services"]),
             volumes=tuple(plan["volumes"]),
@@ -675,7 +675,7 @@ class ArcLinkExecutor:
             existing["idempotent_replay"] = True
         return CloudflareDnsApplyResult(
             deployment_id=request.deployment_id,
-            live=True,
+            live=False,
             status=str(existing["status"]),
             records=tuple(existing["records"]),
             metadata={
@@ -719,7 +719,7 @@ class ArcLinkExecutor:
             existing["idempotent_replay"] = True
         return CloudflareAccessApplyResult(
             deployment_id=request.deployment_id,
-            live=True,
+            live=False,
             status=str(existing["status"]),
             applications=tuple(existing["applications"]),
             metadata={
@@ -753,7 +753,7 @@ class ArcLinkExecutor:
             )
             return ChutesKeyApplyResult(
                 deployment_id=request.deployment_id,
-                live=True,
+                live=False,
                 status=str(existing_run["status"]),
                 action=str(existing_run["action"]),
                 key_id=str(existing_run["key_id"]),
@@ -808,7 +808,7 @@ class ArcLinkExecutor:
         self._fake_chutes_runs[key] = run
         return ChutesKeyApplyResult(
             deployment_id=request.deployment_id,
-            live=True,
+            live=False,
             status=status,
             action=action,
             key_id=key_id,
@@ -856,7 +856,7 @@ class ArcLinkExecutor:
             existing["metadata"] = metadata
         return RollbackApplyResult(
             deployment_id=request.deployment_id,
-            live=True,
+            live=False,
             status=str(existing["status"]),
             actions=tuple(existing["actions"]),
             preserve_state_roots=True,

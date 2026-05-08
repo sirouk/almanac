@@ -213,6 +213,10 @@ def test_docker_operator_commands_are_present() -> None:
     expect("ARCLINK_TAILNET_SERVICE_PORT_BASE" in body, body)
     expect("wait_for_docker_agent_reconcile()" in body and "arclink-vault-reconciler.json" in body, body)
     expect("docker_record_release_state()" in body and '"deployed_from": "docker-checkout"' in body, body)
+    expect('"revision_mode": revision_mode' in body, body)
+    expect('"checkout_commit": checkout_commit' in body, body)
+    expect('"baked_image_commit": baked_commit' in body, body)
+    expect('"image_name": image_name' in body and '"image_created": image_created' in body, body)
     expect("docker_live_agent_smoke()" in body and "./bin/live-agent-tool-smoke.sh" in body, body)
     expect("COMPOSE_PROFILES=curator,quarto,backup" in body, body)
     expect("FAIL Docker Compose config is valid, but no ArcLink services are running." in body, body)
@@ -427,13 +431,23 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
     provisioner = read("python/arclink_enrollment_provisioner.py")
     expect("def ensure_container_user" in supervisor, supervisor)
     expect('"gateway", "run", "--replace"' in supervisor, supervisor)
-    expect('"--host",\n                        "0.0.0.0"' in supervisor, supervisor)
+    expect("ensure_dashboard_backend_network" in supervisor, supervisor)
+    expect('"docker", "network", "create", "--internal"' in supervisor, supervisor)
+    expect('"docker", "network", "connect"' in supervisor, supervisor)
+    expect("startswith(container_name)" in supervisor, supervisor)
+    expect('"--host",\n                        dashboard_backend_host' in supervisor, supervisor)
+    expect('"--target",\n                    f"http://{dashboard_backend_host}:{dashboard_backend_port}"' in supervisor, supervisor)
+    expect('"--host",\n                        "0.0.0.0"' not in supervisor, supervisor)
     expect("arclink_dashboard_auth_proxy.py" in supervisor, supervisor)
     expect('"docker",\n                    "run"' in supervisor, supervisor)
     expect('"--network"' in supervisor and "ARCLINK_DOCKER_NETWORK" in supervisor, supervisor)
     expect('"ARCLINK_DOCKER_CONTAINER_NAME"' in supervisor, supervisor)
     expect("run-agent-code-server.sh" not in supervisor, supervisor)
     expect('"cron", "tick"' in supervisor, supervisor)
+    expect('refresh_seconds = int(os.environ.get("ARCLINK_DOCKER_AGENT_REFRESH_SECONDS", "14400"))' in supervisor, supervisor)
+    expect('cron_seconds = int(os.environ.get("ARCLINK_DOCKER_AGENT_CRON_SECONDS", "60"))' in supervisor, supervisor)
+    expect('commands = [[str(cfg.repo_dir / "bin" / "hermes-shell.sh"), "cron", "tick"]]' in supervisor, supervisor)
+    expect('commands = [[str(cfg.repo_dir / "bin" / "user-agent-refresh.sh")]]' in supervisor, supervisor)
     expect("ensure_agent_mcp_auth" in supervisor and "ensure_agent_mcp_bootstrap_token" in supervisor, supervisor)
     expect('"docker-agent-supervisor"' in supervisor, supervisor)
     expect("run_headless_identity_setup" in supervisor and "arclink_headless_hermes_setup.py" in supervisor, supervisor)
@@ -475,6 +489,22 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect('"postgres" "5432"' in body, body)
     expect('"redis" "6379"' in body, body)
     expect("check_docker_agent_mcp_auth" in body, body)
+    expect('"control-ingress" "80" "Traefik ingress (HTTP)"' in body, body)
+    for job in (
+        "control-provisioner",
+        "ssot-batcher",
+        "notification-delivery",
+        "health-watch",
+        "curator-refresh",
+        "qmd-refresh",
+        "pdf-ingest",
+        "memory-synth",
+        "hermes-docs-sync",
+    ):
+        expect(job in body, f"docker health must inspect recurring job {job}\n{body}")
+    expect('data.get("job_name") or data.get("job")' in body, body)
+    expect('data.get("exit_code") if "exit_code" in data else data.get("returncode", 0)' in body, body)
+    expect('eval "$(' not in body, "docker health must not eval JSON status fields")
     expect("validate_token" in body and "MCP token validates" in body, body)
     expect("arclink-managed-context" in body and "SOUL.md" in body, body)
     expect("arclink-vault-reconciler.json" in body, body)
@@ -500,6 +530,17 @@ def test_dockerignore_excludes_sensitive_and_generated_context() -> None:
     ):
         expect(pattern in body, f"missing .dockerignore pattern {pattern}\n{body}")
     print("PASS test_dockerignore_excludes_sensitive_and_generated_context")
+
+
+def test_docker_docs_cover_socket_and_private_state_boundaries() -> None:
+    body = read("docs/docker.md")
+    for service in ("control-ingress", "control-provisioner", "agent-supervisor", "curator-refresh"):
+        expect(f"| `{service}` |" in body, f"docs/docker.md must document socket boundary for {service}\n{body}")
+    expect("writeable Docker socket access has host-root-equivalent capabilities" in body, body)
+    expect("control-ingress` has read-only socket access" in body, body)
+    expect("recurring" in body and "job status files" in body, body)
+    expect("health-watch` service does not mount the Docker socket" in body, body)
+    print("PASS test_docker_docs_cover_socket_and_private_state_boundaries")
 
 
 def test_readme_keeps_canonical_host_layout_root() -> None:
@@ -574,11 +615,12 @@ def main() -> int:
     test_docker_entrypoint_generates_fresh_secrets()
     test_docker_health_script_checks_container_runtime()
     test_dockerignore_excludes_sensitive_and_generated_context()
+    test_docker_docs_cover_socket_and_private_state_boundaries()
     test_readme_keeps_canonical_host_layout_root()
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 14 ArcLink Docker regression tests")
+    print("PASS all 15 ArcLink Docker regression tests")
     return 0
 
 

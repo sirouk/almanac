@@ -8,7 +8,7 @@ monitoring pipeline.
 | Signal | Source | Condition |
 |--------|--------|-----------|
 | API health degraded | `GET /api/v1/health` returns 503 | DB unreachable or background service down |
-| Stripe webhook processing failed | `arclink_stripe_webhooks.status = 'failed'` | Entitlement not applied; customer may be blocked |
+| Stripe webhook processing failed | `arclink_webhook_events.status = 'failed'` | Entitlement not applied; customer may be blocked |
 | Provisioning job failed | `arclink_provisioning_jobs.status = 'failed'` | Deployment not started; customer waiting |
 | Service unhealthy | `arclink_service_health.status != 'healthy'` | Container crash or resource exhaustion |
 
@@ -20,7 +20,7 @@ monitoring pipeline.
 | Reconciliation drift | `detect_stripe_reconciliation_drift()` returns items | Local and Stripe state diverged |
 | Rate limit exhaustion | 429 responses on admin/user login | Possible abuse or misconfigured client |
 | Queued actions stale | `arclink_action_intents.status = 'queued'` older than 1 hour | Executor not processing queue |
-| Webhook events unprocessed | `arclink_stripe_webhooks.status = 'received'` older than 15 min | Processing delay or handler error |
+| Webhook events unprocessed | `arclink_webhook_events.status = 'received'` older than 15 min | Processing delay or handler error |
 
 ## Informational (Dashboard Visibility)
 

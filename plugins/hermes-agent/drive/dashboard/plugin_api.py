@@ -102,6 +102,15 @@ _TEXT_EXTENSIONS = {
 }
 _TRASH_DIR_NAME = ".drive-trash"
 _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", _TRASH_DIR_NAME}
+_SENSITIVE_DIR_NAMES = {".ssh"}
+_SENSITIVE_FILE_NAMES = {
+    ".env",
+    "arclink-bootstrap-token",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
 _MAX_TEXT_BYTES = 1_000_000
 _SEARCH_LIMIT = 300
 
@@ -191,7 +200,6 @@ def _candidate_vault_roots() -> list[Path]:
 
 
 def _candidate_workspace_roots() -> list[Path]:
-    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     candidates: list[Path] = []
     for value in (
         os.environ.get("DRIVE_WORKSPACE_ROOT"),
@@ -201,17 +209,46 @@ def _candidate_workspace_roots() -> list[Path]:
             candidates.append(Path(value).expanduser())
     candidates.extend(
         [
-            home,
             _hermes_home() / "workspace",
         ]
     )
     return candidates
 
 
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_sensitive_path(path: Path) -> bool:
+    lowered_parts = {part.lower() for part in path.parts}
+    if lowered_parts & _SENSITIVE_DIR_NAMES:
+        return True
+    name = path.name.lower()
+    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env."):
+        return True
+    if "bootstrap-token" in name:
+        return True
+    resolved = path.expanduser().resolve(strict=False)
+    hermes = _hermes_home().expanduser().resolve(strict=False)
+    for private_root in (hermes / "secrets", hermes / "state"):
+        if resolved == private_root or _is_relative_to(resolved, private_root):
+            return True
+    return False
+
+
+def _assert_not_sensitive(path: Path) -> None:
+    if _is_sensitive_path(path):
+        raise HTTPException(status_code=403, detail="Secret or private runtime paths are not available in Drive")
+
+
 def _first_existing_dir(candidates: list[Path]) -> Path | None:
     for candidate in candidates:
         try:
-            if candidate.is_dir():
+            if candidate.is_dir() and not _is_sensitive_path(candidate):
                 return candidate.resolve(strict=False)
         except OSError:
             continue
@@ -393,6 +430,8 @@ def _resolve_local(root: Path, raw_path: Any) -> tuple[Path, str]:
     root_resolved = root.resolve(strict=False)
     if target != root_resolved and root_resolved not in target.parents:
         raise HTTPException(status_code=403, detail="Path is outside the selected Drive root")
+    if relative_path:
+        _assert_not_sensitive(target)
     return target, relative_path
 
 
@@ -406,6 +445,7 @@ def _assert_within_root(root: Path, path: Path) -> None:
 def _safe_child_relative(root: Path, path: Path) -> str | None:
     try:
         _assert_within_root(root, path)
+        _assert_not_sensitive(path)
         return path.relative_to(root).as_posix()
     except (HTTPException, ValueError, OSError):
         return None
@@ -598,6 +638,22 @@ def _resolve_conflict_destination(destination: Path, *, conflict: str) -> Path:
     return destination
 
 
+def _copy_confined(source: Path, destination: Path) -> None:
+    _assert_not_sensitive(source)
+    _assert_not_sensitive(destination)
+    if source.is_symlink():
+        raise HTTPException(status_code=400, detail="Symlink copy is not supported")
+    if source.is_dir():
+        destination.mkdir(parents=True, exist_ok=False)
+        for child in source.iterdir():
+            if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
+                continue
+            _copy_confined(child, destination / child.name)
+        shutil.copystat(source, destination, follow_symlinks=False)
+        return
+    shutil.copy2(source, destination, follow_symlinks=False)
+
+
 def _copy_local(root_id: str, root: Path, source_path: Any, destination_path: Any, *, conflict: str = "reject") -> dict[str, Any]:
     source, source_relative = _resolve_local(root, source_path)
     destination, destination_relative = _resolve_local(root, destination_path)
@@ -611,10 +667,7 @@ def _copy_local(root_id: str, root: Path, source_path: Any, destination_path: An
     destination = _resolve_conflict_destination(destination, conflict=conflict)
     destination_relative = destination.relative_to(root).as_posix()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.is_dir():
-        shutil.copytree(source, destination, symlinks=True)
-    else:
-        shutil.copy2(source, destination, follow_symlinks=False)
+    _copy_confined(source, destination)
     return {
         "ok": True,
         "root": root_id,

@@ -217,6 +217,50 @@ check_port_loopback_only 8282 "arclink-mcp backend port 8282"
     print("PASS test_loopback_bind_probe_reports_safe_and_unsafe_listeners")
 
 
+def test_required_loopback_bind_probe_fails_unsafe_listeners() -> None:
+    text = HEALTH_SH.read_text()
+    snippet = extract(text, "check_port_listening() {", "check_http_json_health() {")
+    script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+FAKEBIN="$(mktemp -d)"
+cat >"$FAKEBIN/ss" <<'EOF'
+#!/usr/bin/env bash
+cat <<'UNSAFE'
+LISTEN 0 4096 0.0.0.0:8181 0.0.0.0:*
+UNSAFE
+EOF
+chmod +x "$FAKEBIN/ss"
+PATH="$FAKEBIN:$PATH"
+{snippet}
+check_port_loopback_only 8181 "qmd MCP backend port 8181" required
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"required loopback-bind probe case failed: {result.stderr}")
+    expect(
+        "FAIL:qmd MCP backend port 8181 is exposed on non-loopback listener(s): 0.0.0.0" in result.stdout,
+        f"expected unsafe qmd listener to fail health, got: {result.stdout!r}",
+    )
+    print("PASS test_required_loopback_bind_probe_fails_unsafe_listeners")
+
+
+def test_health_uses_effective_nextcloud_enablement() -> None:
+    text = HEALTH_SH.read_text()
+    expect("if ! nextcloud_runtime_available; then" in text,
+           "health must report unavailable Nextcloud runtime before unit checks")
+    expect('if nextcloud_effectively_enabled; then\n  if ss -ltnH' in text,
+           "health must skip Nextcloud port and HTTP checks when requested but no runtime exists")
+    expect("no Nextcloud runtime is available; install podman or docker compose" in text,
+           "health warning should name the missing effective runtime")
+    print("PASS test_health_uses_effective_nextcloud_enablement")
+
+
 def test_shared_notion_without_webhook_reports_sweep_fallback_warning() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
@@ -1023,11 +1067,65 @@ check_active_agent_state
     print("PASS test_active_agent_health_allows_clean_zero_user_enrollment_state")
 
 
+def test_health_db_python_probe_command_failures_fail_closed() -> None:
+    text = HEALTH_SH.read_text()
+    snippets = "\n".join(
+        [
+            extract(text, "check_active_agent_state() {", "check_auto_provision_state() {"),
+            extract(text, "check_auto_provision_state() {", "check_notification_delivery_state() {"),
+            extract(text, "check_notification_delivery_state() {", "check_upgrade_state() {"),
+            extract(text, "check_upgrade_state() {", "check_qmd_mcp_status() {"),
+        ]
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir()
+        python = fakebin / "python3"
+        python.write_text("#!/usr/bin/env bash\nexit 17\n", encoding="utf-8")
+        python.chmod(0o755)
+        script = f"""
+PASS_COUNT=0
+WARN_COUNT=0
+FAIL_COUNT=0
+STRICT_MODE=0
+pass() {{ printf 'PASS:%s\\n' "$1"; }}
+warn() {{ printf 'WARN:%s\\n' "$1"; }}
+fail() {{ printf 'FAIL:%s\\n' "$1"; }}
+warn_or_fail() {{ warn "$1"; }}
+PATH={str(fakebin)!r}:$PATH
+ARCLINK_DB_PATH={str(root / 'control.sqlite3')!r}
+ARCLINK_RELEASE_STATE_FILE={str(root / 'release.json')!r}
+ARCLINK_UPSTREAM_REPO_URL=https://example.invalid/arclink.git
+ARCLINK_UPSTREAM_BRANCH=main
+VAULT_DIR={str(root / 'vault')!r}
+ARCLINK_HOME={str(root / 'home')!r}
+{snippets}
+check_active_agent_state
+check_auto_provision_state
+check_notification_delivery_state
+check_upgrade_state
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"probe failure script failed: {result.stderr}")
+        for expected in (
+            "FAIL:could not inspect active enrolled-agent state",
+            "FAIL:could not inspect auto-provision state",
+            "FAIL:could not inspect notification delivery state",
+            "FAIL:could not inspect ArcLink upgrade state",
+        ):
+            expect(expected in result.stdout, f"expected {expected!r}, got: {result.stdout!r}")
+        expect("WARN:" not in result.stdout, f"probe command failures must fail, got: {result.stdout!r}")
+    print("PASS test_health_db_python_probe_command_failures_fail_closed")
+
+
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_backup_timer_job_result_reports_success_and_failure()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
+    test_required_loopback_bind_probe_fails_unsafe_listeners()
+    test_health_uses_effective_nextcloud_enablement()
     test_shared_notion_without_webhook_reports_sweep_fallback_warning()
     test_shared_notion_with_public_webhook_but_no_token_warns_not_ready()
     test_shared_notion_with_installed_token_but_unconfirmed_verification_warns()
@@ -1039,7 +1137,8 @@ def main() -> int:
     test_active_agent_health_fails_when_shared_vault_parent_acl_is_mount_hostile()
     test_active_agent_health_fails_when_agent_backup_cron_last_run_failed()
     test_active_agent_health_allows_clean_zero_user_enrollment_state()
-    print("PASS all 15 health regression tests")
+    test_health_db_python_probe_command_failures_fail_closed()
+    print("PASS all 18 health regression tests")
     return 0
 
 

@@ -17,6 +17,36 @@ absent. The ordered journey model (`python/arclink_live_journey.py`) and
 evidence ledger (`python/arclink_evidence.py`) are scaffolded and tested without
 secrets.
 
+## Local Setup For Live Proof
+
+Install no-secret Python validation dependencies first:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
+When running Stripe live checks with `STRIPE_SECRET_KEY`, install Stripe's
+Python package in the local environment:
+
+```bash
+python3 -m pip install stripe
+```
+
+Workspace browser proof is generated under `web/` and needs Node plus
+Playwright:
+
+```bash
+cd web
+npm ci
+npx playwright install --with-deps chromium
+cd ..
+```
+
+`bin/arclink-live-proof --journey workspace --live --json` should be run only
+after those web dependencies are present and
+`ARCLINK_WORKSPACE_PROOF_TLS_URL` plus `ARCLINK_WORKSPACE_PROOF_AUTH` are
+supplied through environment.
+
 ## Journey Env Vars
 
 | Var | Required For | Purpose |

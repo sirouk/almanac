@@ -143,6 +143,45 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     print("PASS test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout")
 
 
+def test_public_bot_cancel_closes_open_checkout_without_creating_new_session() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_cancel_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_cancel_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_cancel_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:cancel", text="/start")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:cancel", text="/plan sovereign")
+    checkout = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:cancel",
+        text="/checkout",
+        stripe_client=stripe,
+    )
+    cancelled = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:cancel", text="/cancel")
+    expect(cancelled.action == "onboarding_cancelled", str(cancelled))
+    expect(cancelled.session_id == checkout.session_id, str(cancelled))
+    row = conn.execute(
+        "SELECT status, checkout_state FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (checkout.session_id,),
+    ).fetchone()
+    expect(row["status"] == "payment_cancelled" and row["checkout_state"] == "cancelled", str(dict(row)))
+    events = [
+        str(item["event_type"])
+        for item in conn.execute(
+            "SELECT event_type FROM arclink_onboarding_events WHERE session_id = ?",
+            (checkout.session_id,),
+        ).fetchall()
+    ]
+    expect("payment_cancelled" in events, str(events))
+    empty_cancel = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:none", text="/cancel")
+    expect(empty_cancel.action == "nothing_to_cancel", str(empty_cancel))
+    count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions WHERE channel_identity = 'tg:none'").fetchone()["n"]
+    expect(count == 0, f"cancel without an active setup must not create a blank session, found {count}")
+    print("PASS test_public_bot_cancel_closes_open_checkout_without_creating_new_session")
+
+
 def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_scale_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_scale_test")
@@ -332,6 +371,8 @@ def test_public_bot_connect_notion_resolves_active_deployment_and_records_event(
         "https://control.example.ts.net/u/arc-notionpod/notion/webhook" in turn.reply,
         turn.reply,
     )
+    expect("does not verify the Notion integration" in turn.reply, turn.reply)
+    expect("ready for dashboard verification" in turn.reply, turn.reply)
     ready = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -339,6 +380,7 @@ def test_public_bot_connect_notion_resolves_active_deployment_and_records_event(
         text="ready",
     )
     expect(ready.action == "connect_notion_ready", str(ready))
+    expect("not a completed Notion verification yet" in ready.reply, ready.reply)
     stored = conn.execute(
         "SELECT metadata_json, current_step FROM arclink_onboarding_sessions WHERE session_id = ?",
         (seeded["session_id"],),
@@ -346,6 +388,7 @@ def test_public_bot_connect_notion_resolves_active_deployment_and_records_event(
     metadata = json.loads(stored["metadata_json"])
     expect("public_bot_workflow" not in metadata, str(metadata))
     expect(metadata.get("connect_notion_user_marked_ready_at"), str(metadata))
+    expect(metadata.get("connect_notion_public_status") == "ready_for_dashboard_verification", str(metadata))
     events = [
         row["event_type"]
         for row in conn.execute(
@@ -378,6 +421,7 @@ def test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     )
     expect(opened.action == "prompt_backup_repo", str(opened))
     expect("owner/repo" in opened.reply and "dedicated deploy key" in opened.reply, opened.reply)
+    expect("does not mint, install, or verify the deploy key" in opened.reply, opened.reply)
     recorded = bots.handle_arclink_public_bot_turn(
         conn,
         channel="discord",
@@ -386,12 +430,14 @@ def test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     )
     expect(recorded.action == "record_backup_repo", str(recorded))
     expect("sirouk/arclink-agent-backup/settings/keys" in recorded.reply, recorded.reply)
+    expect("pending key setup" in recorded.reply and "backup is not active yet" in recorded.reply, recorded.reply)
     stored = conn.execute(
         "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
         (seeded["session_id"],),
     ).fetchone()
     metadata = json.loads(stored["metadata_json"])
     expect(metadata.get("config_backup_owner_repo") == "sirouk/arclink-agent-backup", str(metadata))
+    expect(metadata.get("config_backup_public_status") == "repo_recorded_pending_key_setup", str(metadata))
     expect("public_bot_workflow" not in metadata, str(metadata))
     dumped = json.dumps([dict(row) for row in conn.execute("SELECT * FROM arclink_events").fetchall()])
     expect("secret" not in dumped.lower() and "token" not in dumped.lower(), dumped)
@@ -649,6 +695,7 @@ def test_public_bot_withholds_unpublished_tailnet_app_urls() -> None:
 
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
+    test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
     test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents()
     test_public_bot_action_catalog_has_real_platform_commands()
     test_public_bot_contract_rejects_wrong_channel_and_secret_metadata()
@@ -662,7 +709,7 @@ def main() -> int:
     test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
     test_public_bot_agent_label_uses_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 14 ArcLink public bot tests")
+    print("PASS all 15 ArcLink public bot tests")
     return 0
 
 

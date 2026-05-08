@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
@@ -231,3 +232,124 @@ def ledger_from_journey(
         ledger.started_at = sa
         ledger.finished_at = fa
     return ledger
+
+
+# ---------------------------------------------------------------------------
+# DB storage / retrieval
+# ---------------------------------------------------------------------------
+
+EVIDENCE_STATUSES = frozenset({"pending", "skipped", "passed", "failed"})
+
+
+def _evidence_status_from_ledger(ledger: EvidenceLedger) -> str:
+    """Derive a single status from ledger records."""
+    if not ledger.records:
+        return "pending"
+    summary = ledger.summary
+    if summary.get("failed", 0) > 0:
+        return "failed"
+    if summary.get("skipped", 0) == len(ledger.records):
+        return "skipped"
+    if ledger.all_passed:
+        return "passed"
+    if summary.get("skipped", 0) > 0:
+        return "skipped"
+    return "pending"
+
+
+def store_evidence_run(
+    conn: sqlite3.Connection,
+    *,
+    ledger: EvidenceLedger,
+    deployment_id: str = "",
+    journey: str = "hosted",
+    evidence_path: str = "",
+) -> dict[str, Any]:
+    """Store an evidence ledger run to the DB. Returns the stored row."""
+    from arclink_control import utc_now_iso
+    status = _evidence_status_from_ledger(ledger)
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO arclink_evidence_runs (
+          run_id, deployment_id, journey, status, commit_hash,
+          started_at, finished_at, summary_json, ledger_json, evidence_path, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ledger.run_id,
+            str(deployment_id),
+            str(journey),
+            status,
+            ledger.commit_hash,
+            str(ledger.started_at),
+            str(ledger.finished_at),
+            json.dumps(ledger.summary, sort_keys=True),
+            ledger.to_json(),
+            str(evidence_path),
+            now,
+        ),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM arclink_evidence_runs WHERE run_id = ?",
+        (ledger.run_id,),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def get_evidence_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+) -> dict[str, Any] | None:
+    """Retrieve a single evidence run by ID."""
+    row = conn.execute(
+        "SELECT * FROM arclink_evidence_runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_evidence_runs(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str = "",
+    status: str = "",
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """List evidence runs, optionally filtered by deployment and status."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    if deployment_id:
+        conditions.append("deployment_id = ?")
+        params.append(deployment_id)
+    if status:
+        conditions.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"SELECT * FROM arclink_evidence_runs {where} ORDER BY created_at DESC LIMIT ?",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_evidence_status(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str = "",
+) -> dict[str, Any]:
+    """Return the latest evidence run status for operator display."""
+    runs = list_evidence_runs(conn, deployment_id=deployment_id, limit=1)
+    if not runs:
+        return {"status": "pending", "run_id": "", "note": "no evidence runs recorded"}
+    latest = runs[0]
+    return {
+        "status": latest["status"],
+        "run_id": latest["run_id"],
+        "journey": latest["journey"],
+        "commit_hash": latest["commit_hash"],
+        "created_at": latest["created_at"],
+    }

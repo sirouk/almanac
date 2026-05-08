@@ -760,6 +760,7 @@ def test_shared_team_key_prompt_offers_default_reply_for_chutes() -> None:
             expect("team already provided" in prompt.lower(), prompt)
             expect("Reply `default`" in prompt, prompt)
             expect("paste a different" in prompt.lower(), prompt)
+            expect("live provider validation happens during provisioning" in prompt, prompt)
             print("PASS test_shared_team_key_prompt_offers_default_reply_for_chutes")
         finally:
             os.environ.clear()
@@ -862,6 +863,12 @@ def test_shared_team_key_default_reply_uses_configured_secret() -> None:
             expect(captured["secret"] == "shared-chutes-key", str(captured))
             expect(captured["secret_name"] == "chutes_api_key", str(captured))
             expect("Good. I have what I need." in replies[0].text, replies[0].text)
+            expect("live provider validation is pending during provisioning" in replies[0].text, replies[0].text)
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            validation = (refreshed.get("answers") or {}).get("provider_credential_validation") or {}
+            expect(validation.get("status") == "runtime_pending", str(validation))
+            expect(validation.get("checked") == "present", str(validation))
+            expect(validation.get("provider_id") == "chutes", str(validation))
             print("PASS test_shared_team_key_default_reply_uses_configured_secret")
         finally:
             os.environ.clear()
@@ -1561,6 +1568,69 @@ def test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approva
             os.environ.update(old_env)
 
 
+def test_denied_onboarding_deletes_staged_bot_and_provider_secrets() -> None:
+    control = load_module(CONTROL_PY, "arclink_control_onboarding_deny_secret_cleanup_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "ARCLINK_MCP_HOST": "127.0.0.1",
+                "ARCLINK_MCP_PORT": "8282",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="discord",
+                chat_id="456",
+                sender_id="456",
+                sender_username="alex",
+                sender_display_name="Alex",
+            )
+            bot_secret = Path(control.write_onboarding_platform_token_secret(cfg, str(session["session_id"]), "discord", "bot-token"))
+            provider_secret = Path(control.write_onboarding_secret(cfg, str(session["session_id"]), "chutes_api_key", "provider-token"))
+            control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-bot-token",
+                pending_bot_token_path=str(bot_secret),
+                answers={"pending_provider_secret_path": str(provider_secret)},
+            )
+            denied = control.deny_onboarding_session(conn, session_id=str(session["session_id"]), actor="operator", reason="not now")
+            expect(str(denied.get("state") or "") == "denied", str(denied))
+            expect(not bot_secret.exists(), f"bot secret should be deleted: {bot_secret}")
+            expect(not provider_secret.exists(), f"provider secret should be deleted: {provider_secret}")
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            expect(not str(refreshed.get("pending_bot_token_path") or "").strip(), str(refreshed))
+            expect(not str((refreshed.get("answers") or {}).get("pending_provider_secret_path") or "").strip(), str(refreshed))
+            print("PASS test_denied_onboarding_deletes_staged_bot_and_provider_secrets")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     old_env = os.environ.copy()
     try:
@@ -1582,7 +1652,8 @@ def main() -> int:
         test_org_provided_secret_auto_stages_after_bot_token()
         test_telegram_chutes_model_prompt_uses_copyable_code_entities()
         test_chat_onboarding_auto_provision_does_not_queue_redundant_request_approval()
-        print("PASS all 15 onboarding prompt regression tests")
+        test_denied_onboarding_deletes_staged_bot_and_provider_secrets()
+        print("PASS all 16 onboarding prompt regression tests")
         return 0
     finally:
         os.environ.clear()

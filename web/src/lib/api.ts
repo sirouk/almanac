@@ -5,9 +5,20 @@ export interface ApiResult<T = Record<string, unknown>> {
   data: T;
 }
 
+/**
+ * Read a specific cookie value by name from document.cookie.
+ * Only non-HttpOnly cookies are visible to JS (i.e. CSRF tokens).
+ */
+function readCookie(name: string): string {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 async function request<T = Record<string, unknown>>(
   path: string,
   options: RequestInit = {},
+  kind: "user" | "admin" = "user",
 ): Promise<ApiResult<T>> {
   const url = `${API_BASE}${path}`;
   const headers: Record<string, string> = {
@@ -15,18 +26,9 @@ async function request<T = Record<string, unknown>>(
     ...(options.headers as Record<string, string> || {}),
   };
 
-  const sessionId = typeof window !== "undefined"
-    ? document.cookie.match(/arclink_(?:user|admin)_session_id=([^;]+)/)?.[1] || ""
-    : "";
-  const sessionToken = typeof window !== "undefined"
-    ? document.cookie.match(/arclink_(?:user|admin)_session_token=([^;]+)/)?.[1] || ""
-    : "";
-  const csrf = typeof window !== "undefined"
-    ? document.cookie.match(/arclink_(?:user|admin)_csrf=([^;]+)/)?.[1] || ""
-    : "";
-
-  if (sessionId) headers["X-ArcLink-Session-Id"] = sessionId;
-  if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+  // CSRF token is the only non-HttpOnly cookie; session credentials are
+  // transported via HttpOnly cookies (credentials: "include" handles them).
+  const csrf = readCookie(`arclink_${kind}_csrf`);
   if (csrf) headers["X-ArcLink-CSRF-Token"] = csrf;
 
   const res = await fetch(url, {
@@ -48,51 +50,64 @@ export const api = {
   openCheckout: (body: Record<string, string>) =>
     request("/onboarding/checkout", { method: "POST", body: JSON.stringify(body) }),
 
-  userDashboard: () => request("/user/dashboard"),
+  checkoutStatus: (sessionId: string) =>
+    request(`/onboarding/status?session_id=${encodeURIComponent(sessionId)}`),
 
-  userBilling: () => request("/user/billing"),
+  claimSession: (sessionId: string) =>
+    request("/onboarding/claim-session", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
 
-  userProvisioning: () => request("/user/provisioning"),
+  cancelOnboarding: (sessionId: string) =>
+    request("/onboarding/cancel", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
+
+  userDashboard: () => request("/user/dashboard", {}, "user"),
+
+  userBilling: () => request("/user/billing", {}, "user"),
+
+  userProvisioning: () => request("/user/provisioning", {}, "user"),
 
   adminDashboard: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return request(`/admin/dashboard${qs}`);
+    return request(`/admin/dashboard${qs}`, {}, "admin");
   },
 
-  adminServiceHealth: () => request("/admin/service-health"),
+  adminServiceHealth: () => request("/admin/service-health", {}, "admin"),
 
-  adminProvisioningJobs: () => request("/admin/provisioning-jobs"),
+  adminProvisioningJobs: () => request("/admin/provisioning-jobs", {}, "admin"),
 
-  adminDnsDrift: () => request("/admin/dns-drift"),
+  adminDnsDrift: () => request("/admin/dns-drift", {}, "admin"),
 
-  adminAudit: () => request("/admin/audit"),
+  adminAudit: () => request("/admin/audit", {}, "admin"),
 
-  adminEvents: () => request("/admin/events"),
+  adminEvents: () => request("/admin/events", {}, "admin"),
 
-  adminActions: () => request("/admin/actions"),
+  adminActions: () => request("/admin/actions", {}, "admin"),
 
   queueAdminAction: (body: Record<string, string>) =>
-    request("/admin/actions", { method: "POST", body: JSON.stringify(body) }),
+    request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
 
   login: (kind: "user" | "admin", body: Record<string, string>) =>
-    request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }),
+    request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }, kind),
 
   logout: (kind: "user" | "admin") =>
-    request(`/auth/${kind}/logout`, { method: "POST" }),
+    request(`/auth/${kind}/logout`, { method: "POST" }, kind),
 
   userPortal: (body: Record<string, string>) =>
-    request("/user/portal", { method: "POST", body: JSON.stringify(body) }),
+    request("/user/portal", { method: "POST", body: JSON.stringify(body) }, "user"),
 
   revokeSession: (body: Record<string, string>) =>
-    request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }),
+    request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }, "admin"),
 
-  userProviderState: () => request("/user/provider-state"),
+  userProviderState: () => request("/user/provider-state", {}, "user"),
 
-  adminProviderState: () => request("/admin/provider-state"),
+  adminProviderState: () => request("/admin/provider-state", {}, "admin"),
 
-  adminReconciliation: () => request("/admin/reconciliation"),
+  adminReconciliation: () => request("/admin/reconciliation", {}, "admin"),
 
-  adminOperatorSnapshot: () => request("/admin/operator-snapshot"),
+  adminOperatorSnapshot: () => request("/admin/operator-snapshot", {}, "admin"),
 
-  adminScaleOperations: () => request("/admin/scale-operations"),
+  adminScaleOperations: () => request("/admin/scale-operations", {}, "admin"),
+
+  health: () => request("/health"),
+
+  adapterMode: () => request("/adapter-mode"),
 };

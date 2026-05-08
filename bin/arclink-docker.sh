@@ -1212,23 +1212,55 @@ docker_record_release_state() {
   origin_url="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
   upstream_url="$(configured_or_default ARCLINK_UPSTREAM_REPO_URL "$origin_url")"
   upstream_branch="$(configured_or_default ARCLINK_UPSTREAM_BRANCH "${branch:-main}")"
+  local dirty=""
+  dirty="$(git -C "$REPO_DIR" status --porcelain 2>/dev/null | head -1 || true)"
+  local dirty_flag="false"
+  if [[ -n "$dirty" ]]; then
+    dirty_flag="true"
+  fi
+
   mkdir -p "$(dirname "$target")"
-  python3 - "$target" "$commit" "$origin_url" "$branch" "$REPO_DIR" "$upstream_url" "$upstream_branch" <<'PY'
+  local image_name="" image_id="" image_created="" baked_commit=""
+  image_name="$(configured_or_default ARCLINK_DOCKER_IMAGE "arclink/app:local")"
+  image_id="$(docker image inspect --format='{{.Id}}' "$image_name" 2>/dev/null || true)"
+  image_created="$(docker image inspect --format='{{.Created}}' "$image_name" 2>/dev/null || true)"
+  baked_commit="$(docker image inspect --format='{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_name" 2>/dev/null || true)"
+  if [[ "$baked_commit" == "<no value>" ]]; then
+    baked_commit=""
+  fi
+
+  python3 - "$target" "$commit" "$origin_url" "$branch" "$REPO_DIR" "$upstream_url" "$upstream_branch" "$dirty_flag" "$image_name" "$image_id" "$image_created" "$baked_commit" <<'PY'
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 target = Path(sys.argv[1])
+checkout_commit = sys.argv[2]
+image_name = sys.argv[9] if len(sys.argv) > 9 else ""
+image_id = sys.argv[10] if len(sys.argv) > 10 else ""
+image_created = sys.argv[11] if len(sys.argv) > 11 else ""
+baked_commit = sys.argv[12] if len(sys.argv) > 12 else ""
+revision_mode = "dirty-checkout" if sys.argv[8] == "true" else "clean-checkout"
+if image_id:
+    revision_mode += "+baked-image"
 payload = {
     "updated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     "deployed_from": "docker-checkout",
-    "deployed_commit": sys.argv[2],
+    "deployed_commit": checkout_commit,
     "deployed_source_repo": sys.argv[3],
     "deployed_source_branch": sys.argv[4],
     "deployed_source_path": sys.argv[5],
     "tracked_upstream_repo_url": sys.argv[6],
     "tracked_upstream_branch": sys.argv[7],
+    "dirty": sys.argv[8] == "true",
+    "revision_mode": revision_mode,
+    "checkout_commit": checkout_commit,
+    "baked_image_commit": baked_commit,
+    "image_name": image_name,
+    "image_id": image_id,
+    "image_created": image_created,
+    "revision_note": "bind-mounted services (agent-supervisor, curator-refresh) track live checkout; baked services track image_id",
 }
 target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY

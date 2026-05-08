@@ -933,17 +933,26 @@ def read_provider_state_api(
     session_token: str,
     session_kind: str = "user",
 ) -> ArcLinkApiResponse:
-    """Read current provider/model configuration state."""
+    """Read current provider/model configuration state.
+
+    User route returns only that user's deployments; admin route sees all.
+    """
     if session_kind == "admin":
         authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+        deployments = conn.execute(
+            "SELECT deployment_id, user_id, metadata_json FROM arclink_deployments WHERE status NOT IN ('teardown_complete', 'cancelled')"
+        ).fetchall()
     else:
-        authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+        session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+        user_id = str(session.get("user_id") or "").strip()
+        if not user_id:
+            raise ArcLinkApiAuthError("ArcLink user session has no associated user")
+        deployments = conn.execute(
+            "SELECT deployment_id, user_id, metadata_json FROM arclink_deployments WHERE status NOT IN ('teardown_complete', 'cancelled') AND user_id = ?",
+            (user_id,),
+        ).fetchall()
     provider = primary_provider()
     default_model = chutes_default_model()
-    # Gather per-deployment model assignments from arclink_deployments
-    deployments = conn.execute(
-        "SELECT deployment_id, user_id, metadata_json FROM arclink_deployments WHERE status NOT IN ('teardown_complete', 'cancelled')"
-    ).fetchall()
     deployment_models = []
     for row in deployments:
         meta = json_loads_safe(row["metadata_json"] or "{}")
@@ -1035,3 +1044,92 @@ def revoke_arclink_session(
     if commit:
         conn.commit()
     return _public_session(rowdict(conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (clean_session,)).fetchone()))
+
+
+def claim_session_from_onboarding_api(
+    conn: sqlite3.Connection,
+    *,
+    onboarding_session_id: str,
+) -> ArcLinkApiResponse:
+    """Create a user session from a paid onboarding session.
+
+    This is the bridge between the public onboarding flow and the
+    authenticated user dashboard: after Stripe confirms payment, the
+    browser exchanges the onboarding session_id for a user session.
+    Rate-limited to prevent brute-force session enumeration.
+    """
+    _require_nonempty(onboarding_session_id, "session_id")
+    clean_id = str(onboarding_session_id).strip()
+    check_arclink_rate_limit(
+        conn, scope="onboarding_claim", subject=clean_id, limit=5, window_seconds=900,
+    )
+    row = conn.execute(
+        "SELECT session_id, user_id, status, email_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (clean_id,),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkApiAuthError("Onboarding session not found")
+    session_dict = dict(row)
+    user_id = str(session_dict.get("user_id") or "").strip()
+    if not user_id:
+        raise ArcLinkApiAuthError("Onboarding session has no associated user yet")
+    user_row = conn.execute(
+        "SELECT user_id, entitlement_state FROM arclink_users WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if user_row is None:
+        raise ArcLinkApiAuthError("User account not found")
+    if str(user_row["entitlement_state"] or "") != "paid":
+        return ArcLinkApiResponse(status=402, payload={
+            "error": "entitlement_not_paid",
+            "entitlement_state": str(user_row["entitlement_state"] or "unknown"),
+            "user_id": user_id,
+        })
+    user_session = create_arclink_user_session(
+        conn,
+        user_id=user_id,
+        metadata={"source": "onboarding_claim", "onboarding_session_id": clean_id},
+    )
+    return ArcLinkApiResponse(status=201, payload={
+        "session": user_session,
+        "user_id": user_id,
+        "email": str(session_dict.get("email_hint") or ""),
+    })
+
+
+def cancel_onboarding_session_api(
+    conn: sqlite3.Connection,
+    *,
+    onboarding_session_id: str,
+) -> ArcLinkApiResponse:
+    """Mark an onboarding session as cancelled.
+
+    Called by the checkout cancel page so the backend can distinguish
+    abandoned sessions from active ones. The session can still be
+    resumed later via a new start call with the same channel identity.
+    """
+    _require_nonempty(onboarding_session_id, "session_id")
+    clean_id = str(onboarding_session_id).strip()
+    row = conn.execute(
+        "SELECT session_id, status FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (clean_id,),
+    ).fetchone()
+    if row is None:
+        return ArcLinkApiResponse(status=404, payload={"error": "session_not_found"})
+    current_status = str(row["status"] or "").strip()
+    if current_status in ("completed", "cancelled"):
+        return ArcLinkApiResponse(status=200, payload={
+            "session_id": clean_id,
+            "status": current_status,
+            "changed": False,
+        })
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET status = 'cancelled', updated_at = ? WHERE session_id = ?",
+        (utc_now_iso(), clean_id),
+    )
+    conn.commit()
+    return ArcLinkApiResponse(status=200, payload={
+        "session_id": clean_id,
+        "status": "cancelled",
+        "changed": True,
+    })

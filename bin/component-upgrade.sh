@@ -503,9 +503,31 @@ reexec_upgrade() {
       "$REPO_DIR/deploy.sh" docker upgrade
   fi
 
+  # Discover config from operator artifact breadcrumb before hardcoding default
+  local discovered_config="${ARCLINK_CONFIG_FILE:-}"
+  if [[ -z "$discovered_config" ]]; then
+    local artifact="${REPO_DIR}/.arclink-operator.env"
+    if [[ -r "$artifact" ]]; then
+      discovered_config="$(
+        (
+          ARCLINK_OPERATOR_DEPLOYED_USER=""
+          ARCLINK_OPERATOR_DEPLOYED_REPO=""
+          ARCLINK_OPERATOR_DEPLOYED_PRIV_DIR=""
+          ARCLINK_OPERATOR_DEPLOYED_CONFIG=""
+          # shellcheck disable=SC1090
+          source "$artifact"
+          printf '%s' "${ARCLINK_OPERATOR_DEPLOYED_CONFIG:-}"
+        )
+      )"
+    fi
+    if [[ -z "$discovered_config" ]]; then
+      discovered_config="/home/arclink/arclink/arclink-priv/config/arclink.env"
+    fi
+  fi
+
   note "Re-exec ./deploy.sh upgrade to apply the new pin to the live host..."
   exec sudo env \
-    ARCLINK_CONFIG_FILE="${ARCLINK_CONFIG_FILE:-/home/arclink/arclink/arclink-priv/config/arclink.env}" \
+    ARCLINK_CONFIG_FILE="$discovered_config" \
     ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
     ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-1}" \

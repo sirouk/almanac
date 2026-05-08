@@ -300,9 +300,45 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
             os.environ.update(old_env)
 
 
+def test_memory_synthesizer_source_signature_uses_file_content_hash() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, base_config(root))
+        old_env = os.environ.copy()
+        os.environ.update(base_config(root))
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            folder = root / "vault" / "Same Size"
+            folder.mkdir(parents=True)
+            note = folder / "note.md"
+            note.write_text("Alpha-1111\n", encoding="utf-8")
+            os.utime(note, (1_700_000_000, 1_700_000_000))
+            with control.connect_db(cfg) as conn:
+                settings = synth.load_settings(cfg)
+                first = synth.build_candidates(conn, cfg, settings)
+                first_candidate = next(candidate for candidate in first if candidate.source_key == "Same Size")
+                first_signature = first_candidate.source_signature
+                first_fingerprint = str(first_candidate.payload.get("fingerprint_hash") or "")
+
+                note.write_text("Beta--2222\n", encoding="utf-8")
+                os.utime(note, (1_700_000_000, 1_700_000_000))
+                second = synth.build_candidates(conn, cfg, settings)
+                second_candidate = next(candidate for candidate in second if candidate.source_key == "Same Size")
+
+                expect(second_candidate.source_signature != first_signature, second_candidate.payload)
+                expect(str(second_candidate.payload.get("fingerprint_hash") or "") != first_fingerprint, second_candidate.payload)
+            print("PASS test_memory_synthesizer_source_signature_uses_file_content_hash")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
-    print("PASS test_memory_synthesizer_caches_cards_and_injects_recall_stubs")
+    test_memory_synthesizer_source_signature_uses_file_content_hash()
+    print("PASS all 2 memory synthesizer tests")
     return 0
 
 

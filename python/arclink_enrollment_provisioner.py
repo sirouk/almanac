@@ -652,6 +652,21 @@ def _queue_operator_message(conn, cfg: Config, message: str) -> None:
     )
 
 
+def _operator_notification_credentials_enabled() -> bool:
+    return str(config_env_value("ARCLINK_OPERATOR_NOTIFICATION_INCLUDE_CREDENTIALS", "0") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _operator_password_line(access: dict[str, Any]) -> str:
+    if _operator_notification_credentials_enabled():
+        return f"Shared password: {access.get('password')}"
+    return "Shared password: withheld from operator notification; use the user completion bundle or access state."
+
+
 def _write_env_values(path: Path, values: dict[str, str]) -> None:
     existing: dict[str, str] = {}
     if path.exists():
@@ -957,7 +972,7 @@ def _operator_completion_message(
             f"Code: {access.get('code_url')}",
             *([nextcloud_line] if nextcloud_line else []),
             *([notion_line] if notion_line else []),
-            f"Shared password: {access.get('password')}",
+            _operator_password_line(access),
         ]
     )
 
@@ -1026,6 +1041,8 @@ def _run_completed_agent_backup_prompt_backfill(conn, cfg: Config) -> None:
         if not str(session.get("linked_agent_id") or "").strip():
             continue
         if bool(answers.get("agent_backup_verified")):
+            continue
+        if bool(answers.get("agent_backup_skipped")):
             continue
         if str(answers.get("agent_backup_setup_prompt_version") or "") == AGENT_BACKUP_SETUP_PROMPT_VERSION:
             continue
@@ -2881,6 +2898,36 @@ def _schedule_failure(
             else f"{message}; retry {attempts + 1}/{cfg.auto_provision_max_attempts} at {next_attempt_at}"
         ),
     )
+    session_row = conn.execute(
+        "SELECT * FROM onboarding_sessions WHERE linked_request_id = ? AND state = 'provision-pending'",
+        (request_id,),
+    ).fetchone()
+    if session_row is not None:
+        session = dict(session_row)
+        session["answers"] = json_loads(str(session.get("answers_json") or ""), {})
+        previous_error = str(session.get("provision_error") or "").strip()
+        user_message = (
+            f"Provisioning hit a host-side problem: {message}. "
+            "I saved that status here. Send /status for the latest state."
+        )
+        if not terminal:
+            user_message = (
+                f"Provisioning hit a host-side problem: {message}. "
+                f"I saved that status here and will retry automatically at {next_attempt_at}. "
+                "Send /status for the latest state."
+            )
+        updated_session = save_onboarding_session(
+            conn,
+            session_id=str(session["session_id"]),
+            provision_error=(
+                message
+                if terminal
+                else f"{message}; retry {attempts + 1}/{cfg.auto_provision_max_attempts} at {next_attempt_at}"
+            ),
+            last_prompt_at=utc_now_iso(),
+        )
+        if previous_error != str(updated_session.get("provision_error") or "").strip():
+            _notify_user_via_curator(cfg, session=updated_session, message=user_message)
     if terminal:
         _queue_operator_message(
             conn,
@@ -2929,6 +2976,14 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
         channels = _normalize_channels(row)
         model_preset = _model_preset(cfg, row)
         hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
+        token_file = hermes_home / "secrets" / "arclink-bootstrap-token"
+        token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(str(token_payload["raw_token"]) + "\n", encoding="utf-8")
+        try:
+            os.chown(token_file, uid, uid)
+        except OSError:
+            pass
+        token_file.chmod(0o600)
         activation_path = activation_trigger_path(cfg, agent_id)
 
         env = _user_subprocess_env(
@@ -2940,7 +2995,7 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
                 **_service_url_env(cfg),
                 "ARCLINK_REQUESTER_IDENTITY": requester_identity,
                 "ARCLINK_BOOTSTRAP_REQUEST_ID": request_id,
-                "ARCLINK_BOOTSTRAP_RAW_TOKEN": token_payload["raw_token"],
+                "ARCLINK_BOOTSTRAP_TOKEN_FILE": str(token_file),
                 "ARCLINK_BOOTSTRAP_AGENT_ID": agent_id,
                 "ARCLINK_BOOTSTRAP_SOURCE_IP": source_ip,
                 "ARCLINK_INIT_SKIP_HERMES_SETUP": "1",
@@ -3039,7 +3094,7 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
                     if (access.get("nextcloud_username") or access.get("username"))
                     else []
                 ),
-                f"Shared password: {access.get('password')}",
+                _operator_password_line(access),
             ]
         ),
     )

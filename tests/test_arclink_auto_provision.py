@@ -243,6 +243,10 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             expect(last.get("stdin") is subprocess.DEVNULL, f"expected headless init to use DEVNULL stdin, got {last}")
             env = last.get("env") or {}
             expect(env.get("ARCLINK_BOOTSTRAP_REQUEST_ID") == "req_run_one", env)
+            expect("ARCLINK_BOOTSTRAP_RAW_TOKEN" not in env, env)
+            token_file = Path(str(env.get("ARCLINK_BOOTSTRAP_TOKEN_FILE") or ""))
+            expect(token_file.is_file(), f"expected bootstrap token file to be staged, got {env}")
+            expect(token_file.read_text(encoding="utf-8").strip() == "tok_test", token_file.read_text(encoding="utf-8"))
             expect(env.get("ARCLINK_INIT_MODEL_PRESET") == "codex", env)
             expect(env.get("ARCLINK_SHARED_REPO_DIR") == str(REPO), env)
             expect("ARCLINK_SSOT_NOTION_TOKEN" not in env, env)

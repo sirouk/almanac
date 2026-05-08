@@ -1,23 +1,36 @@
 # ArcLink Data Safety
 
-## Per-User Isolation
+## State Models By Mode
 
-Each ArcLink deployment runs as an isolated Docker Compose stack with:
+ArcLink has three operating modes with different state boundaries.
 
-- **Dedicated Postgres database** per deployment (not shared across users)
-- **Dedicated Nextcloud instance** per deployment
-- **Dedicated Redis cache** per deployment
-- **Isolated state root** at `/srv/arclink/{deployment_id}/`
-- **Isolated Docker volumes** namespaced by Compose project name
+| Mode | State Model | Notes |
+| --- | --- | --- |
+| Shared Host | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; enrolled users have private Hermes homes under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Operator-led, systemd-backed, per-user Unix accounts. |
+| Shared Host Docker | Same private state contract, bind-mounted into Compose from `arclink-priv/`; Docker agent homes live under `arclink-priv/state/docker/users/`. | Trusted-host containerization of the shared-host substrate. |
+| Sovereign Control Node | Dockerized product control plane with per-deployment state roots, Compose projects, and secret references rendered from control-plane rows. Current product pod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; live mutation remains proof-gated unless explicitly enabled. |
 
-The isolation model is enforced by `arclink_access.py` which pins the
+Do not apply a path from one mode to another without checking the generated
+config and control-plane metadata.
+
+## Per-Deployment Isolation
+
+Sovereign deployments are rendered as isolated Docker Compose stacks with:
+
+- **Dedicated Postgres database** per deployment where the rendered pod uses one.
+- **Dedicated Nextcloud instance** per deployment.
+- **Dedicated Redis cache** per deployment where required.
+- **Isolated state root** under the configured deployment state root.
+- **Isolated Docker volumes** namespaced by Compose project name.
+
+The access model is enforced by `arclink_access.py`, which pins the
 `cloudflare_access_tcp` domain SSH strategy, `tailscale_direct_ssh` Tailscale
 SSH strategy, and `nextcloud_dedicated` isolation model.
 
 ## Volume Layout
 
-```
-/srv/arclink/{deployment_id}/
+```text
+<deployment-state-root>/{deployment_id}/
   vault/              # User vault files
   state/              # Runtime state, qmd indexes, memory synthesis
   nextcloud/          # Nextcloud data (if not using Docker volumes)
@@ -25,7 +38,7 @@ SSH strategy, and `nextcloud_dedicated` isolation model.
   config/             # Per-deployment configuration
 ```
 
-Docker volumes follow the naming convention:
+Sovereign pod Docker volumes follow the naming convention:
 - `arclink-{deployment_id}_postgres_data`
 - `arclink-{deployment_id}_nextcloud_data`
 - `arclink-{deployment_id}_redis_data`
@@ -36,6 +49,8 @@ Docker volumes follow the naming convention:
 - Compose secrets are mounted at `/run/secrets/{name}` inside containers.
 - Images supporting `_FILE` env vars (Postgres, Nextcloud) read from mounted files.
 - No plaintext secret values in database, logs, API responses, or Compose intent.
+- Shared Host and Shared Host Docker secrets belong in private `arclink-priv/`
+  config/state, not public docs or git history.
 
 ## Backup Plan
 

@@ -57,6 +57,10 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def stable_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+
+
 def resolve_backend() -> str:
     if REQUESTED_EXTRACTOR in {"none", "disabled"}:
         return "disabled"
@@ -123,6 +127,28 @@ def prune_empty_parents(path: Path, stop_at: Path) -> None:
         except OSError:
             return
         current = current.parent
+
+
+def path_within_root(path: Path, root: Path) -> bool:
+    try:
+        resolved = path.expanduser().resolve(strict=False)
+        resolved_root = root.expanduser().resolve(strict=False)
+        return os.path.commonpath([str(resolved), str(resolved_root)]) == str(resolved_root)
+    except (OSError, ValueError):
+        return False
+
+
+def safe_generated_artifact_path(path: Path) -> Path | None:
+    if not path_within_root(path, MARKDOWN_DIR):
+        return None
+    return path
+
+
+def require_generated_artifact_path(path: Path) -> Path:
+    safe_path = safe_generated_artifact_path(path)
+    if safe_path is None:
+        raise RuntimeError(f"generated artifact path is outside markdown root: {path}")
+    return safe_path
 
 
 def tool_subprocess_env() -> dict[str, str]:
@@ -205,7 +231,7 @@ def build_pipeline_signature(backend: str) -> str:
     if vision_enabled():
         parts.extend(
             [
-                f"vision_endpoint={PDF_VISION_ENDPOINT}",
+                f"vision_endpoint_sha256={stable_hash(PDF_VISION_ENDPOINT)}",
                 f"vision_model={PDF_VISION_MODEL}",
                 f"vision_max_pages={PDF_VISION_MAX_PAGES}",
             ]
@@ -501,15 +527,28 @@ def list_pdf_sources() -> list[Path]:
     return sorted(pdfs)
 
 
-def remove_generated_artifacts(path: Path) -> None:
+def remove_generated_artifacts(path: Path) -> bool:
+    path = safe_generated_artifact_path(path)
+    if path is None:
+        return False
     if path.exists():
         path.unlink()
         prune_empty_parents(path, MARKDOWN_DIR)
+        return True
+    return False
+
+
+def generated_artifact_exists(path: str | None) -> bool:
+    if not path:
+        return False
+    safe_path = safe_generated_artifact_path(Path(path))
+    return bool(safe_path and safe_path.exists())
 
 
 def promote_generated_artifact(relative_source_path: str, canonical_path: Path, manifest_generated_path: str | None) -> bool:
     """Move/delete legacy PDF sidecars so the filesystem matches the canonical
     `-pdf.md` naming qmd already exposes in display paths."""
+    canonical_path = require_generated_artifact_path(canonical_path)
     changed = False
     candidates: list[Path] = []
 
@@ -524,7 +563,8 @@ def promote_generated_artifact(relative_source_path: str, canonical_path: Path, 
             continue
         seen.add(candidate_key)
 
-        if candidate == canonical_path or not candidate.exists():
+        candidate = safe_generated_artifact_path(candidate)
+        if candidate is None or candidate == canonical_path or not candidate.exists():
             continue
 
         if canonical_path.exists():
@@ -574,6 +614,7 @@ def main() -> int:
         "failed_documents": [],
         "removed_documents": [],
         "changed_documents": [],
+        "cleanup_refused": [],
         "vision_enabled": vision_enabled(),
         "vision_model": PDF_VISION_MODEL if vision_enabled() else "",
         "vision_max_pages": PDF_VISION_MAX_PAGES if vision_enabled() else 0,
@@ -600,6 +641,7 @@ def main() -> int:
         stat = source.stat()
         source_size = int(stat.st_size)
         source_mtime = int(stat.st_mtime)
+        sha256 = file_sha256(source)
 
         row = conn.execute(
             """
@@ -613,14 +655,13 @@ def main() -> int:
 
         if (
             row is not None
-            and row["source_size"] == source_size
-            and row["source_mtime"] == source_mtime
+            and row["source_sha256"] == sha256
             and row["pipeline_signature"] == pipeline_signature
             and row["status"] == "ok"
             and (
-                Path(row["generated_abs_path"]).exists()
-                or generated_path.exists()
-                or legacy_path.exists()
+                generated_artifact_exists(row["generated_abs_path"])
+                or generated_artifact_exists(str(generated_path))
+                or generated_artifact_exists(str(legacy_path))
             )
         ):
             artifact_changed = promote_generated_artifact(relative_path, generated_path, manifest_generated_path)
@@ -642,39 +683,6 @@ def main() -> int:
                 summary["unchanged"] -= 1
                 summary["updated"] += 1
                 summary["changed_documents"].append(relative_path)
-            continue
-
-        sha256 = file_sha256(source)
-        if (
-            row is not None
-            and row["source_sha256"] == sha256
-            and row["pipeline_signature"] == pipeline_signature
-            and row["status"] == "ok"
-            and (
-                Path(row["generated_abs_path"]).exists()
-                or generated_path.exists()
-                or legacy_path.exists()
-            )
-        ):
-            artifact_changed = promote_generated_artifact(relative_path, generated_path, manifest_generated_path)
-            conn.execute(
-                """
-                UPDATE pdf_ingest_manifest
-                   SET source_abs_path = ?,
-                       generated_abs_path = ?,
-                       source_size = ?,
-                       source_mtime = ?,
-                       updated_at = ?,
-                       error = NULL
-                 WHERE source_rel_path = ?
-                """,
-                (str(source), str(generated_path), source_size, source_mtime, utc_now(), relative_path),
-            )
-            if artifact_changed:
-                summary["updated"] += 1
-                summary["changed_documents"].append(relative_path)
-            else:
-                summary["unchanged"] += 1
             continue
 
         try:
@@ -713,6 +721,7 @@ def main() -> int:
                 vision_stats,
                 pipeline_signature,
             )
+            generated_path = require_generated_artifact_path(generated_path)
             ensure_parent(generated_path)
             generated_path.write_text(rendered_markdown, encoding="utf-8")
             for obsolete_path in {legacy_path, Path(manifest_generated_path) if manifest_generated_path else None}:
@@ -812,10 +821,12 @@ def main() -> int:
         if relative_path in seen_rel_paths:
             continue
         generated_path = Path(row["generated_abs_path"])
-        remove_generated_artifacts(generated_path)
+        if remove_generated_artifacts(generated_path):
+            summary["removed"] += 1
+            summary["removed_documents"].append(relative_path)
+        else:
+            summary["cleanup_refused"].append(relative_path)
         conn.execute("DELETE FROM pdf_ingest_manifest WHERE source_rel_path = ?", (relative_path,))
-        summary["removed"] += 1
-        summary["removed_documents"].append(relative_path)
 
     conn.commit()
     conn.close()

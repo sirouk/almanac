@@ -766,6 +766,8 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           payload_json TEXT NOT NULL,
           received_at TEXT NOT NULL,
           batch_status TEXT NOT NULL DEFAULT 'pending',
+          batch_claim_id TEXT NOT NULL DEFAULT '',
+          batch_claimed_at TEXT NOT NULL DEFAULT '',
           processed_at TEXT,
           attempt_count INTEGER NOT NULL DEFAULT 0,
           last_attempt_at TEXT,
@@ -1329,6 +1331,14 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "notion_webhook_events", "attempt_count", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "notion_webhook_events", "last_attempt_at", "TEXT")
     _ensure_column(conn, "notion_webhook_events", "last_error", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "notion_webhook_events", "batch_claim_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "notion_webhook_events", "batch_claimed_at", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_notion_webhook_events_claim
+        ON notion_webhook_events (batch_status, batch_claimed_at, received_at)
+        """
+    )
     if cfg is not None:
         _backfill_ssot_pending_write_expiry(conn, ttl_seconds=cfg.ssot_pending_write_ttl_seconds)
     conn.execute(
@@ -1594,6 +1604,29 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_rollouts_deployment_status
         ON arclink_rollouts (deployment_id, status)
+        """
+    )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS arclink_evidence_runs (
+          run_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL DEFAULT '',
+          journey TEXT NOT NULL DEFAULT 'hosted',
+          status TEXT NOT NULL DEFAULT 'pending',
+          commit_hash TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL DEFAULT '',
+          finished_at TEXT NOT NULL DEFAULT '',
+          summary_json TEXT NOT NULL DEFAULT '{}',
+          ledger_json TEXT NOT NULL DEFAULT '{}',
+          evidence_path TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_evidence_runs_deployment
+        ON arclink_evidence_runs (deployment_id, status)
         """
     )
     conn.commit()
@@ -4270,7 +4303,7 @@ def approve_onboarding_session(
     session_id: str,
     actor: str,
 ) -> dict[str, Any]:
-    session = get_onboarding_session(conn, session_id)
+    session = get_onboarding_session(conn, session_id, redact_secrets=False)
     if session is None:
         raise ValueError(f"unknown onboarding session: {session_id}")
     if str(session["state"]) == "denied":
@@ -4299,11 +4332,14 @@ def deny_onboarding_session(
     actor: str,
     reason: str = "",
 ) -> dict[str, Any]:
-    session = get_onboarding_session(conn, session_id)
+    session = get_onboarding_session(conn, session_id, redact_secrets=False)
     if session is None:
         raise ValueError(f"unknown onboarding session: {session_id}")
     if str(session["state"]) == "completed":
         raise ValueError("onboarding session is already completed")
+    answers = session.get("answers", {}) if isinstance(session.get("answers"), dict) else {}
+    delete_onboarding_secret(str(session.get("pending_bot_token_path") or ""))
+    delete_onboarding_secret(str(answers.get("pending_provider_secret_path") or ""))
     now_iso = utc_now_iso()
     return save_onboarding_session(
         conn,
@@ -4313,6 +4349,12 @@ def deny_onboarding_session(
         denied_by_actor=actor,
         denial_reason=reason or "denied",
         completed_at=now_iso,
+        answers={
+            "pending_provider_secret_path": "",
+            "provider_browser_auth": {},
+        },
+        pending_bot_token="",
+        pending_bot_token_path="",
         provision_error="",
     )
 
@@ -9403,6 +9445,17 @@ def _notion_index_markdown_dir(cfg: Config) -> Path:
     return _notion_index_dir(cfg) / "markdown"
 
 
+def _safe_notion_index_markdown_path(cfg: Config, path: Path) -> Path | None:
+    try:
+        resolved_root = _notion_index_markdown_dir(cfg).resolve()
+        resolved_path = path.expanduser().resolve(strict=False)
+        if os.path.commonpath([str(resolved_path), str(resolved_root)]) != str(resolved_root):
+            return None
+    except (OSError, ValueError):
+        return None
+    return path
+
+
 def _notion_index_full_sweep_interval_seconds() -> int:
     raw = str(config_env_value("ARCLINK_NOTION_INDEX_FULL_SWEEP_INTERVAL_SECONDS", "3600") or "").strip()
     try:
@@ -9624,6 +9677,142 @@ def _walk_notion_parents_to_root(
         current_id = next_id
         current_kind = next_kind
     return None
+
+
+def _notion_root_for_live_read(
+    conn: sqlite3.Connection,
+    *,
+    target_id: str,
+    target_kind: str,
+    settings: dict[str, str],
+    roots: list[dict[str, str]],
+    notion_kwargs: dict[str, Any],
+) -> tuple[dict[str, str], str] | None:
+    normalized_id = extract_notion_space_id(str(target_id or ""))
+    normalized_kind = str(target_kind or "").strip()
+    if not normalized_id or normalized_kind not in {"page", "database", "data_source"}:
+        return None
+
+    for root in roots:
+        root_id = extract_notion_space_id(str(root.get("root_id") or ""))
+        root_kind = str(root.get("root_kind") or "").strip()
+        root_page_id = extract_notion_space_id(str(root.get("root_page_id") or ""))
+        if normalized_kind == root_kind and normalized_id == root_id:
+            return root, "configured-root"
+        if normalized_kind == "page" and normalized_id == root_page_id:
+            return root, "configured-root-page"
+
+    if normalized_kind == "page":
+        row = conn.execute(
+            """
+            SELECT root_id
+            FROM notion_index_documents
+            WHERE source_page_id = ?
+              AND state = 'active'
+            ORDER BY root_id
+            LIMIT 1
+            """,
+            (normalized_id,),
+        ).fetchone()
+        if row is not None:
+            indexed_root_id = extract_notion_space_id(str(row["root_id"] or ""))
+            indexed_root = next(
+                (
+                    root
+                    for root in roots
+                    if extract_notion_space_id(str(root.get("root_id") or "")) == indexed_root_id
+                ),
+                None,
+            )
+            if indexed_root is not None:
+                return indexed_root, "indexed-page"
+
+    if normalized_kind == "data_source":
+        try:
+            data_source = retrieve_notion_data_source(
+                data_source_id=normalized_id,
+                token=settings["token"],
+                api_version=settings["api_version"],
+                **notion_kwargs,
+            )
+        except Exception:
+            return None
+        parent = data_source.get("parent") if isinstance(data_source, dict) else {}
+        if not isinstance(parent, dict):
+            return None
+        parent_type = str(parent.get("type") or "").strip()
+        if parent_type == "database_id":
+            parent_database_id = extract_notion_space_id(str(parent.get("database_id") or ""))
+            parent_match = _notion_root_for_live_read(
+                conn,
+                target_id=parent_database_id,
+                target_kind="database",
+                settings=settings,
+                roots=roots,
+                notion_kwargs=notion_kwargs,
+            )
+            if parent_match is not None:
+                return parent_match[0], f"data-source-parent-{parent_match[1]}"
+        if parent_type == "page_id":
+            parent_page_id = extract_notion_space_id(str(parent.get("page_id") or ""))
+            parent_match = _notion_root_for_live_read(
+                conn,
+                target_id=parent_page_id,
+                target_kind="page",
+                settings=settings,
+                roots=roots,
+                notion_kwargs=notion_kwargs,
+            )
+            if parent_match is not None:
+                return parent_match[0], f"data-source-parent-{parent_match[1]}"
+        return None
+
+    walked = _walk_notion_parents_to_root(
+        entity_id=normalized_id,
+        entity_kind=normalized_kind,
+        settings=settings,
+        roots=roots,
+        notion_kwargs=notion_kwargs,
+    )
+    if walked is None:
+        return None
+    return walked[0], "parent-walk"
+
+
+def _require_notion_live_read_scope(
+    conn: sqlite3.Connection,
+    *,
+    agent_row: sqlite3.Row,
+    operation: str,
+    target_id: str,
+    target_kind: str,
+    settings: dict[str, str],
+    roots: list[dict[str, str]],
+    notion_kwargs: dict[str, Any],
+) -> tuple[dict[str, str], str]:
+    scope = _notion_root_for_live_read(
+        conn,
+        target_id=target_id,
+        target_kind=target_kind,
+        settings=settings,
+        roots=roots,
+        notion_kwargs=notion_kwargs,
+    )
+    if scope is not None:
+        return scope
+    normalized_id = extract_notion_space_id(str(target_id or ""))
+    reason = "live Notion read target is outside configured shared Notion index roots"
+    _log_notion_retrieval_audit(
+        conn,
+        agent_id=str(agent_row["agent_id"]),
+        unix_user=str(agent_row["unix_user"]),
+        operation=operation,
+        decision="deny",
+        target_id=normalized_id,
+        result_count=0,
+        note=f"{reason}; kind={target_kind or 'unknown'}",
+    )
+    raise PermissionError(reason)
 
 
 def _load_notion_collection_schema(
@@ -10556,12 +10745,12 @@ def _upsert_notion_index_document(
     return changed
 
 
-def _delete_notion_index_doc(conn: sqlite3.Connection, *, doc_key: str) -> None:
+def _delete_notion_index_doc(conn: sqlite3.Connection, cfg: Config, *, doc_key: str) -> None:
     row = conn.execute("SELECT file_path FROM notion_index_documents WHERE doc_key = ?", (doc_key,)).fetchone()
     if row is not None:
-        file_path = Path(str(row["file_path"] or ""))
+        file_path = _safe_notion_index_markdown_path(cfg, Path(str(row["file_path"] or "")))
         try:
-            if file_path.is_file():
+            if file_path is not None and file_path.is_file():
                 file_path.unlink()
         except OSError:
             pass
@@ -10570,6 +10759,7 @@ def _delete_notion_index_doc(conn: sqlite3.Connection, *, doc_key: str) -> None:
 
 def _delete_notion_index_docs_for_page(
     conn: sqlite3.Connection,
+    cfg: Config,
     *,
     root_id: str,
     page_id: str,
@@ -10582,7 +10772,7 @@ def _delete_notion_index_docs_for_page(
     for row in rows:
         doc_key = str(row["doc_key"] or "")
         if doc_key:
-            _delete_notion_index_doc(conn, doc_key=doc_key)
+            _delete_notion_index_doc(conn, cfg, doc_key=doc_key)
             removed += 1
     return removed
 
@@ -10604,6 +10794,7 @@ def _index_notion_page_payload(
     if bool(page_payload.get("in_trash")) or bool(page_payload.get("archived")):
         return _delete_notion_index_docs_for_page(
             conn,
+            cfg,
             root_id=str(root["root_id"]),
             page_id=page_id,
         )
@@ -10736,7 +10927,7 @@ def _index_notion_page_payload(
     for row in stale_rows:
         stale_key = str(row["doc_key"] or "")
         if stale_key and stale_key not in page_doc_keys:
-            _delete_notion_index_doc(conn, doc_key=stale_key)
+            _delete_notion_index_doc(conn, cfg, doc_key=stale_key)
             changed += 1
     return changed
 
@@ -10825,6 +11016,7 @@ def _crawl_notion_page_tree(
     if bool(page_payload.get("in_trash")) or bool(page_payload.get("archived")):
         return _delete_notion_index_docs_for_page(
             conn,
+            cfg,
             root_id=str(root["root_id"]),
             page_id=normalized_page_id,
         )
@@ -10877,6 +11069,7 @@ def _crawl_notion_page_tree(
 
 def _clear_stale_notion_index_documents_for_root(
     conn: sqlite3.Connection,
+    cfg: Config,
     *,
     root_id: str,
     active_doc_keys: set[str],
@@ -10889,7 +11082,7 @@ def _clear_stale_notion_index_documents_for_root(
     for row in rows:
         doc_key = str(row["doc_key"] or "")
         if doc_key and doc_key not in active_doc_keys:
-            _delete_notion_index_doc(conn, doc_key=doc_key)
+            _delete_notion_index_doc(conn, cfg, doc_key=doc_key)
             removed += 1
     return removed
 
@@ -10980,6 +11173,7 @@ def sync_shared_notion_index(
                 )
             removed_docs += _clear_stale_notion_index_documents_for_root(
                 conn,
+                cfg,
                 root_id=root["root_id"],
                 active_doc_keys=active_doc_keys,
             )
@@ -12042,6 +12236,7 @@ def notion_fetch(
     normalized_target = str(target_id or "").strip()
     if not normalized_target:
         raise ValueError("notion.fetch requires a page or database id/url")
+    roots = _resolve_notion_index_roots(settings=settings, urlopen_fn=urlopen_fn)
     target_meta = resolve_notion_target(
         target_id=normalized_target,
         token=settings["token"],
@@ -12050,6 +12245,16 @@ def notion_fetch(
     )
     target_uuid = str(target_meta.get("id") or "").strip()
     if str(target_meta.get("kind") or "") == "data_source":
+        root, scope_source = _require_notion_live_read_scope(
+            conn,
+            agent_row=agent_row,
+            operation="fetch",
+            target_id=target_uuid,
+            target_kind="data_source",
+            settings=settings,
+            roots=roots,
+            notion_kwargs=notion_kwargs,
+        )
         data_source = retrieve_notion_data_source(
             data_source_id=target_uuid,
             token=settings["token"],
@@ -12075,9 +12280,9 @@ def notion_fetch(
             operation="fetch",
             decision="allow",
             target_id=target_uuid,
-            root_id=database_id,
+            root_id=str(root.get("root_id") or database_id),
             result_count=1,
-            note="live data source fetch",
+            note=f"live data source fetch via {scope_source}",
         )
         return {
             "ok": True,
@@ -12087,9 +12292,20 @@ def notion_fetch(
             "data_source": data_source,
             "database_id": database_id,
             "database": database,
-            "indexed": bool(database_id),
+            "indexed": True,
+            "root": root,
         }
     if str(target_meta.get("kind") or "") == "database":
+        root, scope_source = _require_notion_live_read_scope(
+            conn,
+            agent_row=agent_row,
+            operation="fetch",
+            target_id=target_uuid,
+            target_kind="database",
+            settings=settings,
+            roots=roots,
+            notion_kwargs=notion_kwargs,
+        )
         database = retrieve_notion_database(
             database_id=target_uuid,
             token=settings["token"],
@@ -12112,8 +12328,9 @@ def notion_fetch(
             operation="fetch",
             decision="allow",
             target_id=target_uuid,
+            root_id=str(root.get("root_id") or ""),
             result_count=1,
-            note="live database fetch",
+            note=f"live database fetch via {scope_source}",
         )
         return {
             "ok": True,
@@ -12122,8 +12339,19 @@ def notion_fetch(
             "database": database,
             "data_source_id": data_source_id,
             "data_source": data_source,
-            "indexed": False,
+            "indexed": True,
+            "root": root,
         }
+    root, scope_source = _require_notion_live_read_scope(
+        conn,
+        agent_row=agent_row,
+        operation="fetch",
+        target_id=target_uuid,
+        target_kind="page",
+        settings=settings,
+        roots=roots,
+        notion_kwargs=notion_kwargs,
+    )
     page = retrieve_notion_page(
         page_id=target_uuid,
         token=settings["token"],
@@ -12158,9 +12386,9 @@ def notion_fetch(
         operation="fetch",
         decision="allow",
         target_id=target_uuid,
-        root_id=indexed_roots[0] if indexed_roots else "",
+        root_id=indexed_roots[0] if indexed_roots else str(root.get("root_id") or ""),
         result_count=1,
-        note="live page fetch",
+        note=f"live page fetch via {scope_source}",
     )
     return {
         "ok": True,
@@ -12171,6 +12399,7 @@ def notion_fetch(
         "attachments": attachments,
         "indexed": bool(rows),
         "indexed_roots": indexed_roots,
+        "root": root,
     }
 
 
@@ -12208,6 +12437,16 @@ def notion_query(
     target_kind = str(target_meta.get("kind") or "")
     if target_kind not in {"database", "data_source"}:
         raise ValueError("notion.query requires a database or data source target")
+    root_match, scope_source = _require_notion_live_read_scope(
+        conn,
+        agent_row=agent_row,
+        operation="query",
+        target_id=str(target_meta.get("id") or ""),
+        target_kind=target_kind,
+        settings=settings,
+        roots=roots,
+        notion_kwargs=notion_kwargs,
+    )
     normalized_limit = max(1, min(int(limit or 25), 100))
     requested_query = dict(query or {})
     if "page_size" not in requested_query:
@@ -12257,7 +12496,6 @@ def notion_query(
         entries = result.get("result") if isinstance(result, dict) else {}
     items = entries.get("results") if isinstance(entries, dict) else []
     items = [item for item in items if isinstance(item, dict)][:normalized_limit]
-    root_match = next((root for root in roots if root["root_id"] == str(target_meta.get("id") or "").strip()), None)
     _log_notion_retrieval_audit(
         conn,
         agent_id=str(agent_row["agent_id"]),
@@ -12266,9 +12504,9 @@ def notion_query(
         decision="allow",
         query_text=json_dumps(requested_query),
         target_id=str(target_meta.get("id") or ""),
-        root_id=str((root_match or {}).get("root_id") or ""),
+        root_id=str(root_match.get("root_id") or ""),
         result_count=len(items),
-        note="live collection query",
+        note=f"live collection query via {scope_source}",
     )
     return {
         "ok": True,
@@ -12462,9 +12700,62 @@ def read_ssot(
     }
 
 
+SSOT_DESTRUCTIVE_PAYLOAD_FIELD_NAMES = {
+    "archive",
+    "archived",
+    "delete",
+    "deleted",
+    "destroy",
+    "erase",
+    "in_trash",
+    "intrash",
+    "trash",
+    "trashed",
+}
+
+
+def _normalized_payload_field_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
+def _reject_destructive_ssot_payload_fields(value: Any, *, path: str = "payload") -> None:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_text = str(key or "").strip()
+            normalized_key = _normalized_payload_field_name(key_text)
+            if normalized_key in SSOT_DESTRUCTIVE_PAYLOAD_FIELD_NAMES:
+                raise ValueError(
+                    f"shared Notion payload field '{path}.{key_text or '<empty>'}' is destructive; "
+                    "archive/delete/trash require an explicit approval rail"
+                )
+            _reject_destructive_ssot_payload_fields(nested, path=f"{path}.{key_text or '<empty>'}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_destructive_ssot_payload_fields(item, path=f"{path}[{index}]")
+
+
+def _normalize_ssot_update_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("shared Notion update requires a payload object")
+    _reject_destructive_ssot_payload_fields(payload)
+    allowed_keys = {"properties", "icon", "cover"}
+    unknown_keys = set(payload) - allowed_keys
+    if unknown_keys:
+        unknown_label = ", ".join(sorted(str(key) for key in unknown_keys))
+        raise ValueError(f"shared Notion update payload has unsupported field(s): {unknown_label}")
+    if "properties" in payload and not isinstance(payload.get("properties"), dict):
+        raise ValueError("shared Notion update properties must be an object when provided")
+    normalized: dict[str, Any] = {}
+    for key in ("properties", "icon", "cover"):
+        if key in payload:
+            normalized[key] = payload[key]
+    return normalized
+
+
 def _normalize_ssot_append_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("shared Notion append requires a payload object")
+    _reject_destructive_ssot_payload_fields(payload)
     if "after" in payload and str(payload.get("after") or "").strip():
         raise ValueError("shared Notion append only supports appending at the end; omit 'after'")
     children = payload.get("children")
@@ -12555,6 +12846,7 @@ def _ssot_rich_text_request_plain(value: Any) -> str:
 def _normalize_ssot_create_database_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("shared Notion create_database requires a payload object")
+    _reject_destructive_ssot_payload_fields(payload)
     if "parent" in payload:
         raise ValueError("shared Notion create_database parent is controlled by target_id; omit payload.parent")
     allowed_keys = {"title", "name", "description", "properties", "initial_data_source", "is_inline"}
@@ -12623,6 +12915,7 @@ def _ssot_title_rich_text_request(value: Any, *, fallback: str) -> list[dict[str
 def _normalize_ssot_create_page_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("shared Notion create_page requires a payload object")
+    _reject_destructive_ssot_payload_fields(payload)
     if "parent" in payload:
         raise ValueError("shared Notion create_page parent is controlled by target_id; omit payload.parent")
     allowed_keys = {"title", "name", "properties", "children", "icon", "cover"}
@@ -12674,7 +12967,13 @@ def _normalize_ssot_create_page_payload(payload: dict[str, Any]) -> dict[str, An
 
 def _validate_ssot_write_payload_shape(operation: str, payload: dict[str, Any]) -> None:
     op = str(operation or "").strip().lower()
-    if op == "append":
+    if op == "insert":
+        if not isinstance(payload, dict):
+            raise ValueError("shared Notion insert requires a payload object")
+        _reject_destructive_ssot_payload_fields(payload)
+    elif op == "update":
+        _normalize_ssot_update_payload(payload)
+    elif op == "append":
         _normalize_ssot_append_payload(payload)
     elif op == "create_page":
         _normalize_ssot_create_page_payload(payload)
@@ -12866,6 +13165,7 @@ def _apply_ssot_write(
     notion_kwargs: dict[str, Any] = {}
     owner_identity, owner_source = ("", "insert")
     op = str(operation or "").strip().lower()
+    _validate_ssot_write_payload_shape(op, payload)
     normalized_target_id = str(target_id or "").strip()
     if op in {"create_page", "create_database"}:
         parent_meta = resolve_notion_target(
@@ -13097,7 +13397,7 @@ def _apply_ssot_write(
             }
         else:
             changed_by_property = ""
-            applied_request_payload = _strip_attribution_properties(payload)
+            applied_request_payload = _strip_attribution_properties(_normalize_ssot_update_payload(payload))
             parent = page.get("parent") if isinstance(page, dict) else {}
             if isinstance(parent, dict) and str(parent.get("type") or "").strip() == "data_source_id":
                 schema_payload = retrieve_notion_data_source(
@@ -15327,16 +15627,61 @@ def _render_notion_agent_nudge(entries: list[dict[str, str]]) -> str:
     )
 
 
-def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
-    """Dedupe + batch pending webhook events. Resolve owners. Emit per-user nudges."""
+def _claim_pending_notion_webhook_events(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 500,
+    lease_seconds: int = 600,
+) -> list[sqlite3.Row]:
+    claim_id = f"notion_batch_{secrets.token_hex(8)}"
+    now_iso = utc_now_iso()
+    stale_before = (utc_now() - dt.timedelta(seconds=max(60, int(lease_seconds)))).replace(microsecond=0).isoformat()
     rows = conn.execute(
+        """
+        SELECT id
+        FROM notion_webhook_events
+        WHERE batch_status = 'pending'
+           OR (batch_status = 'processing' AND batch_claimed_at != '' AND batch_claimed_at < ?)
+        ORDER BY received_at
+        LIMIT ?
+        """,
+        (stale_before, max(1, int(limit))),
+    ).fetchall()
+    ids = [int(row["id"]) for row in rows]
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(
+        f"""
+        UPDATE notion_webhook_events
+        SET batch_status = 'processing',
+            batch_claim_id = ?,
+            batch_claimed_at = ?,
+            last_attempt_at = ?
+        WHERE id IN ({placeholders})
+          AND (
+            batch_status = 'pending'
+            OR (batch_status = 'processing' AND batch_claimed_at != '' AND batch_claimed_at < ?)
+          )
+        """,
+        (claim_id, now_iso, now_iso, *ids, stale_before),
+    )
+    conn.commit()
+    return conn.execute(
         """
         SELECT id, event_id, event_type, payload_json
         FROM notion_webhook_events
-        WHERE batch_status = 'pending'
+        WHERE batch_status = 'processing'
+          AND batch_claim_id = ?
         ORDER BY received_at
-        """
+        """,
+        (claim_id,),
     ).fetchall()
+
+
+def process_pending_notion_events(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Dedupe + batch pending webhook events. Resolve owners. Emit per-user nudges."""
+    rows = _claim_pending_notion_webhook_events(conn)
 
     processed = 0
     event_types: dict[str, int] = {}

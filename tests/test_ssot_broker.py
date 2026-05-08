@@ -1344,7 +1344,7 @@ def test_ssot_create_page_normalizer_fails_closed_on_sloppy_agent_payloads() -> 
     try:
         mod._normalize_ssot_create_page_payload({"title": "Bad", "in_trash": True})
     except ValueError as exc:
-        expect("unsupported field" in str(exc), str(exc))
+        expect("destructive" in str(exc), str(exc))
     else:
         raise AssertionError("expected create_page to reject unsupported top-level fields")
 
@@ -1422,6 +1422,51 @@ def test_ssot_database_and_append_normalizers_reject_sloppy_agent_payloads() -> 
     else:
         raise AssertionError("expected append to reject oversized child block batches")
     print("PASS test_ssot_database_and_append_normalizers_reject_sloppy_agent_payloads")
+
+
+def test_ssot_update_payload_validation_rejects_destructive_mutations() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_ssot_update_payload_guard_test")
+    valid_payload = {
+        "properties": {
+            "Status": {"status": {"name": "In Progress"}},
+        }
+    }
+    mod._validate_ssot_write_payload_shape("update", valid_payload)
+
+    destructive_payloads = [
+        {"archived": True},
+        {"in_trash": True},
+        {"properties": {"Delete": {"checkbox": True}}},
+        {"properties": {"Status": {"status": {"name": "Blocked"}}, "Meta": {"trash": True}}},
+    ]
+    for payload in destructive_payloads:
+        try:
+            mod._validate_ssot_write_payload_shape("update", payload)
+        except ValueError as exc:
+            expect("destructive" in str(exc) or "unsupported field" in str(exc), str(exc))
+        else:
+            raise AssertionError(f"expected destructive update payload to be rejected: {payload!r}")
+
+    try:
+        mod._validate_ssot_write_payload_shape(
+            "update",
+            {"children": [{"type": "paragraph", "paragraph": {"rich_text": []}}]},
+        )
+    except ValueError as exc:
+        expect("unsupported field" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected update payload to reject block child mutations")
+
+    try:
+        mod._validate_ssot_write_payload_shape(
+            "insert",
+            {"properties": {"Name": {"title": []}}, "in_trash": True},
+        )
+    except ValueError as exc:
+        expect("destructive" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected insert payload to reject destructive Notion flags")
+    print("PASS test_ssot_update_payload_validation_rejects_destructive_mutations")
 
 
 def test_ssot_preflight_reports_write_vs_user_approval() -> None:
@@ -3437,6 +3482,7 @@ def main() -> int:
     test_ssot_create_page_rejects_payload_parent_to_avoid_private_workspace_creation()
     test_ssot_create_page_normalizer_fails_closed_on_sloppy_agent_payloads()
     test_ssot_database_and_append_normalizers_reject_sloppy_agent_payloads()
+    test_ssot_update_payload_validation_rejects_destructive_mutations()
     test_ssot_preflight_reports_write_vs_user_approval()
     test_ssot_create_payload_validation_happens_before_approval_queueing()
     test_ssot_write_allows_page_update_from_prior_agent_history()

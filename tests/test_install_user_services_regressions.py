@@ -101,9 +101,83 @@ def test_install_user_services_enables_and_starts_core_and_curator_units() -> No
         print("PASS test_install_user_services_enables_and_starts_core_and_curator_units")
 
 
+def test_install_user_services_skips_nextcloud_when_no_runtime() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        log_path = root / "systemctl.log"
+        for name in ("bash", "dirname", "id", "mkdir", "python3"):
+            target = Path("/usr/bin") / name
+            if not target.exists():
+                target = Path("/bin") / name
+            (fakebin / name).symlink_to(target)
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+        (fakebin / "rsync").write_text(
+            "#!/usr/bin/env bash\n"
+            "target=\"${@: -1}\"\n"
+            "mkdir -p \"$target\"\n",
+            encoding="utf-8",
+        )
+        (fakebin / "rsync").chmod(0o755)
+
+        home = root / "home"
+        config_path = root / "arclink-priv" / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "arclink-priv"),
+                "STATE_DIR": str(root / "arclink-priv" / "state"),
+                "RUNTIME_DIR": str(root / "arclink-priv" / "state" / "runtime"),
+                "VAULT_DIR": str(root / "arclink-priv" / "vault"),
+                "ARCLINK_DB_PATH": str(root / "arclink-priv" / "state" / "arclink-control.sqlite3"),
+                "ENABLE_NEXTCLOUD": "1",
+                "ENABLE_QUARTO": "0",
+                "PDF_INGEST_ENABLED": "0",
+                "ARCLINK_HERMES_DOCS_SYNC_ENABLED": "0",
+                "ARCLINK_CURATOR_CHANNELS": "tui-only",
+                "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+                "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+            },
+        )
+
+        result = subprocess.run(
+            [str(SCRIPT)],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": str(fakebin),
+                "ARCLINK_CONFIG_FILE": str(config_path),
+                "XDG_RUNTIME_DIR": str(root / "run-user"),
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={root / 'run-user' / 'bus'}",
+                "SYSTEMCTL_LOG": str(log_path),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"install-user-services failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        log = log_path.read_text(encoding="utf-8")
+        expect("--user disable --now arclink-nextcloud.service" in log, f"expected Nextcloud disable, got: {log!r}")
+        expect("--user enable arclink-nextcloud.service" not in log, f"Nextcloud should not be enabled without a runtime: {log!r}")
+        expect("--user restart arclink-nextcloud.service" not in log, f"Nextcloud should not be restarted without a runtime: {log!r}")
+        expect("no Nextcloud runtime is available" in result.stdout, result.stdout)
+    print("PASS test_install_user_services_skips_nextcloud_when_no_runtime")
+
+
 def main() -> int:
     test_install_user_services_enables_and_starts_core_and_curator_units()
-    print("PASS all 1 install-user-services regression tests")
+    test_install_user_services_skips_nextcloud_when_no_runtime()
+    print("PASS all 2 install-user-services regression tests")
     return 0
 
 

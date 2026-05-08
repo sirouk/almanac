@@ -40,7 +40,8 @@ plugins/hermes-agent/
 ```
 
 Python modules live under `python/` and import from `arclink_control.py` for
-database access (22 `arclink_*` tables in the shared SQLite/Postgres schema).
+database access through ArcLink-owned `arclink_*` tables in the shared
+SQLite/Postgres schema.
 Hermes dashboard plugins live under `plugins/hermes-agent/` and are installed
 into each target Hermes home by ArcLink wrapper scripts.
 

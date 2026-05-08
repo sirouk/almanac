@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { StatusBadge, ErrorAlert } from "@/components/ui";
+import { StatusBadge, ErrorAlert, LoadingSpinner } from "@/components/ui";
 
 type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation" | "operator";
 
@@ -22,7 +22,7 @@ interface HealthEntry {
   deployment_id: string;
   service_name: string;
   status: string;
-  last_check_at?: string;
+  checked_at?: string;
 }
 
 function isGoodStatus(status = "") {
@@ -44,6 +44,7 @@ function formatLabel(value: string) {
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [data, setData] = useState<AdminData | null>(null);
+  const [loading, setLoading] = useState(true);
   const [health, setHealth] = useState<{ service_health?: HealthEntry[]; recent_failures?: HealthEntry[] } | null>(null);
   const [jobs, setJobs] = useState<{ provisioning_jobs?: Record<string, string>[] } | null>(null);
   const [drift, setDrift] = useState<{ dns_drift?: Record<string, string>[] } | null>(null);
@@ -51,7 +52,7 @@ export default function AdminPage() {
   const [actions, setActions] = useState<{ actions?: Record<string, string>[] } | null>(null);
   const [events, setEvents] = useState<{ events?: Record<string, string>[] } | null>(null);
   const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
-  const [reconciliation, setReconciliation] = useState<{ drift?: Record<string, string>[]; summary?: Record<string, unknown> } | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ reconciliation?: Record<string, string>[]; drift_count?: number; drift?: Record<string, string>[]; summary?: Record<string, unknown> } | null>(null);
   const [operatorSnapshot, setOperatorSnapshot] = useState<Record<string, unknown> | null>(null);
   const [scaleOperations, setScaleOperations] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
@@ -67,7 +68,7 @@ export default function AdminPage() {
       if (r.status === 200) setData(r.data as AdminData);
       else if (r.status === 401) router.push("/login");
       else setError("Failed to load admin data.");
-    }).catch(() => setError("Failed to load admin data."));
+    }).catch(() => setError("Failed to load admin data.")).finally(() => setLoading(false));
   }, [router]);
 
   useEffect(() => {
@@ -91,6 +92,14 @@ export default function AdminPage() {
   const queuedActions = data?.sections?.find((section) => section.section === "queued_actions")?.counts?.queued || 0;
   const readySections = data?.sections?.filter((section) => isGoodStatus(section.status)).length || 0;
   const totalSections = data?.sections?.length || 0;
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoadingSpinner label="Loading admin console..." />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-jet/70">
@@ -306,7 +315,7 @@ export default function AdminPage() {
                           <td className="px-3 py-2 font-mono text-xs">{h.deployment_id}</td>
                           <td className="px-3 py-2">{h.service_name}</td>
                           <td className="px-3 py-2"><StatusBadge status={h.status} /></td>
-                          <td className="px-3 py-2 text-soft-white/40">{h.last_check_at || "-"}</td>
+                          <td className="px-3 py-2 text-soft-white/40">{h.checked_at || "-"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -373,7 +382,7 @@ export default function AdminPage() {
                         <tr key={i} className="border-b border-border/50">
                           <td className="px-3 py-2 text-soft-white/40 text-xs">{a.created_at || "-"}</td>
                           <td className="px-3 py-2 font-mono text-xs">{a.actor_id || "-"}</td>
-                          <td className="px-3 py-2">{a.action_type || "-"}</td>
+                          <td className="px-3 py-2">{a.action || a.action_type || "-"}</td>
                           <td className="px-3 py-2 font-mono text-xs">{a.target_id || "-"}</td>
                           <td className="px-3 py-2 text-soft-white/60">{a.reason || "-"}</td>
                         </tr>
@@ -558,37 +567,32 @@ export default function AdminPage() {
           {tab === "reconciliation" && (
             <div className="space-y-6">
               <h1 className="font-display text-2xl font-bold">Reconciliation</h1>
-              {reconciliation?.drift?.length ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border text-left text-soft-white/40">
-                        <th className="px-3 py-2">User</th>
-                        <th className="px-3 py-2">Field</th>
-                        <th className="px-3 py-2">Local</th>
-                        <th className="px-3 py-2">Stripe</th>
-                        <th className="px-3 py-2">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {reconciliation.drift.map((d, i) => (
-                        <tr key={i} className="border-b border-border/50">
-                          <td className="px-3 py-2 font-mono text-xs">{d.user_id || d.customer_id || "-"}</td>
-                          <td className="px-3 py-2">{d.field || "-"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{d.local_value || "-"}</td>
-                          <td className="px-3 py-2 text-soft-white/60">{d.stripe_value || "-"}</td>
-                          <td className="px-3 py-2"><StatusBadge status={d.status || "drift"} /></td>
+              {(reconciliation?.reconciliation?.length || reconciliation?.drift?.length) ? (
+                <>
+                  <p className="text-sm text-soft-white/60">
+                    {reconciliation.drift_count ?? (reconciliation.reconciliation || reconciliation.drift || []).length} drift item(s) detected.
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-soft-white/40">
+                          <th className="px-3 py-2">User</th>
+                          <th className="px-3 py-2">Kind</th>
+                          <th className="px-3 py-2">Detail</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : reconciliation?.summary ? (
-                <div className="rounded-lg border border-border bg-surface p-4">
-                  <pre className="overflow-x-auto text-xs text-soft-white/60">
-                    {JSON.stringify(reconciliation.summary, null, 2)}
-                  </pre>
-                </div>
+                      </thead>
+                      <tbody>
+                        {(reconciliation.reconciliation || reconciliation.drift || []).map((d, i) => (
+                          <tr key={i} className="border-b border-border/50">
+                            <td className="px-3 py-2 font-mono text-xs">{d.user_id || d.customer_id || "-"}</td>
+                            <td className="px-3 py-2">{d.kind || d.field || "-"}</td>
+                            <td className="px-3 py-2 text-soft-white/60">{d.detail || "-"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               ) : (
                 <p className="text-neon-green text-sm">No reconciliation drift detected.</p>
               )}

@@ -437,6 +437,22 @@ def test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboardin
                 linked_agent_id="agent-backed",
                 answers={"unix_user": "backed", "bot_platform": "discord", "agent_backup_verified": True},
             )
+            skipped_session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="444",
+                sender_id="444",
+                sender_username="skipped",
+                sender_display_name="Skipped",
+            )
+            control.save_onboarding_session(
+                conn,
+                session_id=str(skipped_session["session_id"]),
+                state="completed",
+                linked_agent_id="agent-backed",
+                answers={"unix_user": "backed", "bot_platform": "telegram", "agent_backup_skipped": True},
+            )
 
             deliveries: list[dict[str, object]] = []
 
@@ -474,6 +490,102 @@ def test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboardin
             provisioner._run_completed_agent_backup_prompt_backfill(conn, cfg)
             expect(len(deliveries) == 2, f"expected backfill to be one-shot per prompt version, got {deliveries}")
             print("PASS test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboarding")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_operator_completion_notifications_withhold_dashboard_password_by_default() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_operator_password_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ.pop("ARCLINK_OPERATOR_NOTIFICATION_INCLUDE_CREDENTIALS", None)
+        message = provisioner._operator_completion_message(
+            agent_id="agent-alex",
+            unix_user="alex",
+            bot_line="Discord bot configured",
+            access={
+                "dashboard_url": "https://agent.example.test",
+                "code_url": "https://code.example.test",
+                "username": "alex",
+                "password": "sup3r-secret",
+            },
+        )
+        expect("sup3r-secret" not in message, message)
+        expect("withheld from operator notification" in message, message)
+        print("PASS test_operator_completion_notifications_withhold_dashboard_password_by_default")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
+def test_auto_provision_failure_updates_onboarding_session_and_notifies_user() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_auto_provision_failure_surface_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_auto_provision_failure_surface_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="123",
+                sender_id="123",
+                sender_username="alex",
+                sender_display_name="Alex",
+            )
+            request = control.request_bootstrap(
+                conn,
+                cfg,
+                requester_identity="Alex",
+                unix_user="alexbot",
+                source_ip="telegram:123",
+                auto_provision=True,
+                requested_model_preset="codex",
+                requested_channels=["telegram"],
+                notify_operator=False,
+            )
+            control.approve_request(conn, request_id=str(request["request_id"]), surface="test", actor="tester", cfg=cfg)
+            control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="provision-pending",
+                linked_request_id=str(request["request_id"]),
+                linked_agent_id=str(request["agent_id"]),
+                answers={"unix_user": "alexbot", "bot_platform": "telegram"},
+            )
+            deliveries: list[dict[str, object]] = []
+
+            def fake_notify(cfg, *, session, message, telegram_reply_markup=None, telegram_parse_mode="", discord_components=None):
+                deliveries.append({"session_id": session["session_id"], "message": message})
+                return {"message_id": "1"}
+
+            provisioner._notify_user_via_curator = fake_notify
+            provisioner._schedule_failure(
+                conn,
+                cfg,
+                request_id=str(request["request_id"]),
+                agent_id=str(request["agent_id"]),
+                unix_user="alexbot",
+                message="init failed",
+                attempts=1,
+                log_path=root / "auto.log",
+            )
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
+            expect("init failed" in str(refreshed.get("provision_error") or ""), str(refreshed))
+            expect(deliveries and "init failed" in str(deliveries[0]["message"]), str(deliveries))
+            expect("/status" in str(deliveries[0]["message"]), str(deliveries))
+            print("PASS test_auto_provision_failure_updates_onboarding_session_and_notifies_user")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -930,6 +1042,7 @@ def test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade() -> None:
             def fake_run(args, **kwargs):
                 argv = list(args)
                 calls.append(argv)
+                expect(kwargs.get("env", {}).get("ARCLINK_CONFIG_FILE") == str(config_path), str(kwargs.get("env", {})))
                 pins = json.loads(pins_path.read_text(encoding="utf-8"))
                 if argv[0].endswith("component-upgrade.sh"):
                     component = argv[1]
@@ -1232,6 +1345,8 @@ def main() -> int:
     test_discord_completion_handoff_queues_root_dm_action()
     test_retry_contact_force_resends_discord_handoff_after_sent_marker()
     test_completion_bundle_send_is_idempotent()
+    test_operator_completion_notifications_withhold_dashboard_password_by_default()
+    test_auto_provision_failure_updates_onboarding_session_and_notifies_user()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
     test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboarding()
@@ -1244,7 +1359,7 @@ def main() -> int:
     test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
-    print("PASS all 19 enrollment provisioner regression tests")
+    print("PASS all 22 enrollment provisioner regression tests")
     return 0
 
 

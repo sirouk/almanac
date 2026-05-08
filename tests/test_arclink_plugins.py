@@ -1051,6 +1051,145 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
             os.environ.update(old_env)
 
 
+def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        default_workspace = hermes_home / "workspace"
+        home = root / "home" / "alex"
+        for directory in (
+            default_workspace,
+            hermes_home / "secrets",
+            hermes_home / "state",
+            hermes_home / ".ssh",
+            home,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+        (default_workspace / "README.md").write_text("workspace ok\n", encoding="utf-8")
+        (home / "home-secret.md").write_text("home should not be a default root\n", encoding="utf-8")
+        (hermes_home / ".env").write_text("TOKEN=do-not-return\n", encoding="utf-8")
+        (hermes_home / ".env.local").write_text("TOKEN=do-not-return\n", encoding="utf-8")
+        (hermes_home / "secrets" / "arclink-bootstrap-token").write_text("token-do-not-return\n", encoding="utf-8")
+        (hermes_home / "state" / "private.md").write_text("private runtime state\n", encoding="utf-8")
+        (hermes_home / ".ssh" / "id_rsa").write_text("BEGIN PRIVATE KEY\n", encoding="utf-8")
+        (hermes_home / "public.md").write_text("safe public file\n", encoding="utf-8")
+        bundle = hermes_home / "bundle"
+        bundle.mkdir()
+        (bundle / ".env").write_text("TOKEN=do-not-copy\n", encoding="utf-8")
+        (bundle / "note.md").write_text("copyable\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        for key in (
+            "DRIVE_ROOT",
+            "KNOWLEDGE_VAULT_ROOT",
+            "AGENT_VAULT_DIR",
+            "VAULT_DIR",
+            "DRIVE_WORKSPACE_ROOT",
+            "CODE_WORKSPACE_ROOT",
+            "TERMINAL_WORKSPACE_ROOT",
+        ):
+            os.environ.pop(key, None)
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(home)
+        os.environ["TERMINAL_ALLOW_ROOT"] = "1"
+        try:
+            drive_api = load_module(
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_dashboard_sensitive_paths_test",
+            )
+            code_api = load_module(
+                PLUGINS_ROOT / "code" / "dashboard" / "plugin_api.py",
+                "arclink_code_dashboard_sensitive_paths_test",
+            )
+            terminal_api = load_module(
+                PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py",
+                "arclink_terminal_dashboard_sensitive_paths_test",
+            )
+
+            drive_status = asyncio.run(drive_api.status())
+            drive_roots = {item["id"]: item for item in drive_status["roots"]}
+            expect(drive_roots["workspace"]["path"] == str(default_workspace), str(drive_roots["workspace"]))
+            code_status = asyncio.run(code_api.status())
+            expect(code_status["workspace_root"] == str(default_workspace), str(code_status))
+            terminal_status = asyncio.run(terminal_api.status())
+            expect(terminal_status["workspace_root_available"] is True, str(terminal_status))
+
+            os.environ["CODE_WORKSPACE_ROOT"] = str(hermes_home / "secrets")
+            code_sensitive_root_status = asyncio.run(code_api.status())
+            code_sensitive_roots = {item["id"]: item for item in code_sensitive_root_status["roots"]}
+            expect(code_sensitive_roots["workspace"]["available"] is False, str(code_sensitive_root_status))
+            os.environ["TERMINAL_WORKSPACE_ROOT"] = str(hermes_home / "secrets")
+            terminal_sensitive_status = asyncio.run(terminal_api.status())
+            expect(terminal_sensitive_status["workspace_root_available"] is False, str(terminal_sensitive_status))
+            os.environ.pop("CODE_WORKSPACE_ROOT", None)
+            os.environ.pop("TERMINAL_WORKSPACE_ROOT", None)
+
+            os.environ["DRIVE_WORKSPACE_ROOT"] = str(hermes_home)
+            os.environ["CODE_WORKSPACE_ROOT"] = str(hermes_home)
+            os.environ["TERMINAL_WORKSPACE_ROOT"] = str(hermes_home)
+
+            drive_listing = asyncio.run(drive_api.items(root="workspace", path="/"))
+            drive_paths = {item["path"] for item in drive_listing["items"]}
+            expect("/public.md" in drive_paths, str(drive_listing))
+            for forbidden in ("/.env", "/.env.local", "/secrets", "/state", "/.ssh"):
+                expect(forbidden not in drive_paths, str(drive_listing))
+            code_listing = asyncio.run(code_api.items(root="workspace", path="/"))
+            code_paths = {item["path"] for item in code_listing["items"]}
+            expect("/public.md" in code_paths, str(code_listing))
+            for forbidden in ("/.env", "/.env.local", "/secrets", "/state", "/.ssh"):
+                expect(forbidden not in code_paths, str(code_listing))
+
+            for operation in (
+                lambda: drive_api.content(root="workspace", path="/.env"),
+                lambda: drive_api.download(root="workspace", path="/secrets/arclink-bootstrap-token"),
+                lambda: drive_api.preview(root="workspace", path="/state/private.md"),
+                lambda: code_api.file(root="workspace", path="/.env.local"),
+                lambda: code_api.download(root="workspace", path="/secrets/arclink-bootstrap-token"),
+                lambda: code_api.preview(root="workspace", path="/state/private.md"),
+                lambda: drive_api.new_file(JsonRequest({"root": "workspace", "path": "/", "name": ".env", "content": "x"})),
+                lambda: drive_api.upload(path="/", root="workspace", files=[MemoryUpload(".env.local", b"x")]),
+                lambda: code_api.save(JsonRequest({"root": "workspace", "path": "/.env", "content": "x"})),
+                lambda: code_api.mkdir(JsonRequest({"root": "workspace", "path": "/.ssh/new"})),
+            ):
+                try:
+                    asyncio.run(operation())
+                except Exception as exc:
+                    expect(getattr(exc, "status_code", None) == 403, f"expected sensitive path rejection, got {exc!r}")
+                else:
+                    raise AssertionError("expected sensitive path operation to be rejected")
+
+            copied = asyncio.run(
+                drive_api.copy(
+                    JsonRequest(
+                        {
+                            "root": "workspace",
+                            "path": "/bundle",
+                            "destination_path": "/bundle-copy",
+                        }
+                    )
+                )
+            )
+            expect(copied["destination"] == "/bundle-copy", str(copied))
+            expect((hermes_home / "bundle-copy" / "note.md").is_file(), "expected copyable child to be copied")
+            expect(not (hermes_home / "bundle-copy" / ".env").exists(), "sensitive child should not be copied")
+
+            drive_search = asyncio.run(drive_api.items(root="workspace", path="/", query="token"))
+            expect(not drive_search["items"], str(drive_search))
+            code_search = asyncio.run(code_api.search(q="private", path="/", root="workspace"))
+            expect(not code_search["results"], str(code_search))
+
+            try:
+                asyncio.run(terminal_api.create_session(JsonRequest({"cwd": "/secrets"})))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected terminal sensitive cwd rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected terminal sensitive cwd to be rejected")
+            print("PASS test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     body = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
     expect('"/git/diff?repo="' in body, "Source Control changed-file clicks should request the diff endpoint")
@@ -2722,6 +2861,7 @@ def main() -> int:
     test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore()
     test_arclink_code_native_editor_guards_conflicting_saves()
     test_arclink_code_source_control_reports_and_updates_git_state()
+    test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths()
     test_arclink_code_browser_opens_source_control_changes_as_diffs()
     test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded()
     test_arclink_terminal_browser_exposes_persistent_session_controls()
@@ -2739,7 +2879,7 @@ def main() -> int:
     test_arclink_managed_context_budgets_live_notion_queries_per_turn()
     test_arclink_managed_context_emits_telemetry_and_respects_opt_out()
     test_arclink_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 29 ArcLink plugin tests")
+    print("PASS all 30 ArcLink plugin tests")
     return 0
 
 

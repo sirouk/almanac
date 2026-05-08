@@ -1,5 +1,193 @@
 # Build Completion Notes
 
+## 2026-05-08 Ralphie BUILD Verification Pass
+
+Scope: executed the active `IMPLEMENTATION_PLAN.md` BUILD verification tasks
+after confirming no unchecked backlog items remained in the plan or steering
+file.
+
+Rationale:
+
+- Fixed the web validation failures found during verification instead of
+  weakening release checks. Next.js 15 requires `useSearchParams()` users to be
+  under `Suspense` during static prerender, so checkout success/cancel now keep
+  their existing client behavior inside small Suspense-wrapped content
+  components.
+- Kept fake-adapter copy truthful by showing it only when the backend reports
+  fake mode, and made Playwright deterministic by mocking `adapter-mode` only
+  in tests that assert fake-mode UI. Live-mode pages still avoid unconditional
+  fake-adapter claims.
+- Updated the mocked browser onboarding flow to provide the email now required
+  for post-checkout login/status identity.
+- Closed the post-review documentation hold by removing stale language that
+  described Stripe webhook handling as a no-secret skip. Canonical docs now
+  consistently say that an unset `STRIPE_WEBHOOK_SECRET` returns
+  `stripe_webhook_secret_unset` with status 503 so Stripe retries.
+
+Documentation surface accounted for:
+
+- `AGENTS.md`, `README.md`, and `docs/DOC_STATUS.md` now frame Shared Host,
+  Shared Host Docker, Sovereign Control Node, and canonical/historical/proof-
+  gated documentation status.
+- `docs/arclink/foundation.md`, `foundation-runbook.md`,
+  `operations-runbook.md`, and `control-node-production-runbook.md` now align
+  hosted API, action-worker, Stripe webhook, executor, and proof-gated
+  production claims.
+- `docs/arclink/data-safety.md`, `docs/docker.md`,
+  `docs/arclink/local-validation.md`, `docs/arclink/live-e2e-secrets-needed.md`,
+  and the live evidence template now describe trust boundaries, Docker socket
+  and private-state exposure, validation setup, and credential-gated proof
+  limits.
+- `docs/arclink/first-day-user-guide.md` and
+  `docs/arclink/notion-human-guide.md` cover the customer/operator first-day
+  journey, dashboard expectations, Notion SSOT boundaries, and recovery paths.
+- `docs/arclink/architecture.md`, `docs/openapi/arclink-v1.openapi.json`,
+  `docs/API_REFERENCE.md`, `docs/arclink/CHANGELOG.md`, and the research maps
+  were updated to reflect the repaired web/API, Docker, onboarding, knowledge,
+  and control-plane surfaces.
+
+Verification run:
+
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 -m py_compile` for touched Python files passed.
+- Focused Python suites from the plan passed:
+  `test_arclink_plugins.py`, `test_arclink_agent_user_services.py`,
+  `test_loopback_service_hardening.py`, `test_arclink_hosted_api.py`,
+  `test_arclink_api_auth.py`, `test_arclink_dashboard.py`,
+  `test_arclink_action_worker.py`, `test_arclink_admin_actions.py`,
+  `test_arclink_provisioning.py`, `test_arclink_sovereign_worker.py`,
+  `test_arclink_fleet.py`, `test_arclink_rollout.py`,
+  `test_arclink_evidence.py`, `test_arclink_live_runner.py`,
+  `test_arclink_docker.py`, `test_deploy_regressions.py`,
+  `test_health_regressions.py`,
+  `test_arclink_curator_onboarding_regressions.py`,
+  `test_arclink_public_bots.py`, `test_pdf_ingest_env.py`,
+  `test_memory_synthesizer.py`, `test_arclink_ssot_batcher.py`, and
+  `test_documentation_truths.py`.
+- Web checks passed: `npm test`, `npm run lint`, `npm run build`, and
+  `npm run test:browser` with 41 passed and 3 desktop-skipped mobile-layout
+  tests.
+
+Known risks:
+
+- Heavy/live checks were not run: `./test.sh`, live deploy/install/upgrade,
+  Docker install/upgrade, Stripe, Cloudflare, Tailscale, Telegram, Discord,
+  Notion, provider credential smoke, and public bot mutation flows remain
+  proof-gated unless the operator explicitly authorizes them.
+- The worktree is intentionally broad from the Ralphie repair mission and still
+  needs commit curation before deployment.
+
+## 2026-05-08 Ralphie Slice 5 Onboarding Recovery Build
+
+Scope: closed the remaining Slice 5 onboarding recovery items from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Used the existing completion receipt and Discord contact retry rails rather
+  than adding another handoff channel. `/retry-contact` now gives users and
+  operators a visible recovery path that reuses the stored confirmation code.
+- Labeled public `/connect_notion` and `/config_backup` as preparation lanes
+  because the public bot does not perform Curator-grade Notion verification or
+  deploy-key setup. The commands now record pending status and point to the
+  dashboard/operator rail for completion.
+- For API-key providers, recorded `runtime_pending` validation after checking
+  that a credential is present. A live smoke call was not added because the
+  onboarding path has no existing side-effect-free provider check and live
+  calls may be quota/network dependent.
+
+Verification run:
+
+- `python3 tests/test_arclink_curator_onboarding_regressions.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_onboarding_prompts.py` passed.
+- `python3 -m py_compile` for touched onboarding/public-bot modules and tests
+  passed.
+
+Known risks:
+
+- This pass did not run live Discord, Telegram, GitHub deploy-key, Notion, or
+  provider credential smoke checks. Those remain credential-gated live proof
+  surfaces.
+- Full BUILD is not complete; Slice 6 knowledge freshness and Slice 7 docs and
+  validation items remain open.
+
+## 2026-05-08 Ralphie Shared Host Nextcloud Effective Enablement Build
+
+Scope: advanced Slice 4 / Priority 3 by closing the Nextcloud effective
+enablement gap from `IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Added a shared `nextcloud_effectively_enabled` predicate instead of letting
+  install, restart, wait, rotation, and health each interpret raw
+  `ENABLE_NEXTCLOUD` differently.
+- Treated Docker mode as compose-only, while bare-metal can use either Podman
+  or Compose. This matches the existing `nextcloud-up.sh` runtime split and
+  avoids starting or waiting on a disabled service when no runtime is present.
+- Kept `ENABLE_NEXTCLOUD=1` in persisted config as the operator's intent rather
+  than silently rewriting config when the runtime is temporarily unavailable.
+
+Verification run:
+
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 tests/test_install_user_services_regressions.py` passed.
+- `python3 tests/test_nextcloud_regressions.py` passed.
+- `python3 tests/test_health_regressions.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 -m py_compile tests/test_install_user_services_regressions.py
+  tests/test_health_regressions.py tests/test_deploy_regressions.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This pass did not run live install/upgrade, mutate systemd units, or start a
+  real Nextcloud runtime. Remaining Slice 4 Docker operation items are still
+  open.
+
+## 2026-05-08 Priority 0 Security Boundary Repair Slice
+
+Scope: closed the remaining local Priority 0 security boundary items from the
+Ralphie ecosystem gap plan.
+
+Rationale:
+
+- Isolated Docker dashboard backends with per-agent internal Docker networks
+  instead of trying to rely on the default Compose network plus a public-facing
+  auth proxy. The proxy remains the only host-loopback published surface.
+- Staged auto-provision bootstrap tokens into the per-agent bootstrap-token file
+  before invoking `init.sh`, avoiding raw token handoff through the
+  provisioning subprocess environment while preserving `init.sh` compatibility.
+- Added generated-root guards before PDF and Notion index cleanup unlinks so a
+  corrupted DB path cannot delete outside generated markdown roots.
+- Rejected unsafe team-resource slugs before any checkout path construction or
+  destructive git reset path can be reached.
+
+Files changed:
+
+- `python/arclink_docker_agent_supervisor.py` and `docs/docker.md`
+- `python/arclink_enrollment_provisioner.py` and `bin/init.sh`
+- `bin/pdf-ingest.py` and `python/arclink_control.py`
+- `bin/clone-team-resources.sh`
+- Focused tests under `tests/`
+
+Verification run:
+
+- `python3 tests/test_pdf_ingest_env.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_auto_provision.py` passed.
+- `python3 tests/test_arclink_repo_sync.py` passed.
+- `python3 tests/test_arclink_notion_knowledge.py` passed.
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 -m py_compile` for touched Python modules and tests passed.
+
+Known risks:
+
+- This slice did not address the hosted web/API identity and checkout backlog;
+  those remain the next unchecked Priority 1 items.
+
 ## 2026-05-06 Workspace Proof Screenshot And Documentation Handoff
 
 Scope: completed the portable proof-note and documentation handoff tasks for
@@ -1387,3 +1575,161 @@ Known risks:
 - This handoff did not push commits or run the canonical live host upgrade.
 - Live release state and Docker health remain the previously recorded proof
   status until an operator requests deployment.
+
+## 2026-05-08 Ralphie P0 Notion And SSOT Boundary Build
+
+Scope: advanced the highest-priority unchecked security boundary items from
+`IMPLEMENTATION_PLAN.md`: exact live Notion reads and destructive SSOT update
+payloads.
+
+Rationale:
+
+- Scoped `notion.fetch` and `notion.query` inside the existing Notion index
+  root model instead of adding a separate privileged-read mode. Exact reads now
+  allow configured roots, active indexed pages, and parent-walk-proven children;
+  out-of-root live reads are denied and audited.
+- Rejected destructive SSOT fields at payload validation time rather than
+  inventing an approval rail in this pass. The public broker already rejects
+  archive/delete/trash operations, and no explicit destructive approval model
+  exists yet.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_control.py` passed.
+- `python3 tests/test_arclink_notion_knowledge.py` passed.
+- `python3 tests/test_ssot_broker.py` passed.
+
+Known risks:
+
+- A future operator-approved destructive Notion rail would need a distinct
+  policy, audit, and UI flow; this build intentionally fails closed.
+
+## 2026-05-08 Ralphie Shared Host Health Probe Build
+
+Scope: advanced Slice 4 / Priority 3 by closing the health DB probe failure
+gap from `IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Kept health behavior in `bin/health.sh` instead of adding a separate
+  diagnostic runner. The existing shell health surface is what install,
+  upgrade, and operators already use.
+- Treated Python probe command failures as hard health failures even outside
+  strict mode, while preserving structured `WARN`, `FAIL`, and `OK` output for
+  expected degraded states.
+
+Verification run:
+
+- `bash -n bin/health.sh tests/test_health_regressions.py` passed.
+- `python3 tests/test_health_regressions.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+
+Known risks:
+
+- This pass did not run live `./deploy.sh health` or mutate the host. Remaining
+  Slice 4 Docker/operations tasks still need dedicated implementation or
+  validation before BUILD can be declared complete.
+
+## 2026-05-08 Ralphie Shared Host Root Unit Build
+
+Scope: advanced Slice 4 / Priority 3 Shared Host operations by verifying the
+completed upstream-branch and bare-metal dependency fixes, then repairing root
+systemd unit path rendering for custom config/repo paths.
+
+Rationale:
+
+- Kept the production upstream contract on `main`, matching the existing
+  upgrade guard, config examples, and deploy regressions instead of widening
+  production upgrades to arbitrary branches.
+- Added/verified `jq` and `iproute2` in bare-metal bootstrap because existing
+  pins and health commands depend on those host tools.
+- Rendered root units with systemd-native quoting and specifier escaping rather
+  than shell wrapping. Newline/carriage-return and dollar-sign paths are
+  rejected because they cannot be made legible or portable in generated unit
+  files.
+
+Verification run:
+
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_enrollment_provisioner_regressions.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This pass did not run live install/upgrade or touch `/etc/systemd/system`.
+- Remaining Slice 4 items around Nextcloud enablement, Docker health, Docker
+  release state, and Docker trust boundaries are still open.
+
+## 2026-05-08 Ralphie Onboarding Recovery Build
+
+Scope: advanced Slice 5 / Priority 4 by closing local no-secret onboarding
+recovery gaps for Curator auto-provision, operator notifications, denied
+sessions, backup skip, and public bot cancel.
+
+Rationale:
+
+- Surfaced auto-provision failures through the existing Curator session state
+  instead of introducing a second retry tracker. `onboarding_sessions` already
+  drives `/status`, so durable `provision_error` plus one user notification is
+  the narrowest recoverable path.
+- Redacted generated dashboard passwords from operator notifications by
+  default and kept user credential delivery in the existing completion bundle,
+  with an explicit opt-in env for credential-bearing operator channels.
+- Treated backup `skip` as durable user intent for the completed-session
+  backfill, while preserving `/setup-backup` as the user-initiated recovery
+  path.
+- Made public `/cancel` close active onboarding/checkout state instead of only
+  sub-workflow metadata; live deployments are not cancelled from public chat.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_control.py python/arclink_enrollment_provisioner.py python/arclink_onboarding.py python/arclink_public_bots.py python/arclink_onboarding_flow.py` passed.
+- `python3 tests/test_arclink_enrollment_provisioner_regressions.py` passed.
+- `python3 tests/test_arclink_onboarding_prompts.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+
+Known risks:
+
+- Completion acknowledgement retry/recovery and public Notion/backup command
+  depth remain open Slice 5 work.
+- This pass did not run live bot, Stripe, host provisioning, or deployment
+  flows.
+
+## 2026-05-08 Ralphie Knowledge Freshness Build
+
+Scope: completed Slice 6 / Priority 5 knowledge freshness and generated
+content safety gaps for PDF ingest, memory synthesis, SSOT event batching, and
+the ArcLink resources skill.
+
+Rationale:
+
+- Hashed the resolved PDF vision endpoint inside the pipeline signature instead
+  of writing the URL into generated markdown. This preserves change detection
+  without leaking endpoint userinfo, query values, or private hostnames.
+- Moved PDF ingest fast-path checks behind source SHA-256 comparison so
+  same-size, same-second PDF rewrites regenerate sidecars.
+- Replaced memory synthesis file freshness fingerprints with content hashes for
+  scanned source files while keeping raw hashes out of model prompts.
+- Added DB row claims for Notion webhook batch processing. Pending events move
+  to `processing` with a claim id before work starts; stale processing claims
+  can be reclaimed after a lease.
+- Removed the unsafe GitHub raw fallback installer URL from the resources skill
+  and replaced stale Raven wording with current ArcLink/Curator wording.
+
+Verification run:
+
+- `python3 tests/test_pdf_ingest_env.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_ssot_batcher.py` passed.
+- `python3 tests/test_arclink_resources_skill.py` passed.
+- `python3 -m py_compile bin/pdf-ingest.py python/arclink_memory_synthesizer.py python/arclink_control.py python/arclink_ssot_batcher.py` passed.
+- `bash -n skills/arclink-resources/scripts/show-resources.sh deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- This pass did not run live Notion webhook ingestion, live qmd reindexing,
+  PDF vision model calls, or live memory synthesis LLM calls.
+- Slice 7 documentation and validation coverage remains open before the full
+  Ralphie BUILD can be declared complete.

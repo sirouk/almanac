@@ -80,6 +80,7 @@ const MOCK_ADMIN_DASHBOARD = {
 const MOCK_ONBOARDING_START = { session: { session_id: "sess_mock_1" } };
 const MOCK_ONBOARDING_ANSWER = { ok: true };
 const MOCK_LOGIN_OK = { session: { session_id: "sess_login_1" } };
+const MOCK_ADAPTER_MODE = { fake_mode: true };
 
 // ---------------------------------------------------------------------------
 // Route mocking helper
@@ -98,6 +99,9 @@ async function mockApi(page: Page) {
     }
     if (url.includes("/user/provisioning")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_PROVISIONING) });
+    }
+    if (url.includes("/adapter-mode")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_ADAPTER_MODE) });
     }
     if (url.includes("/user/portal") && method === "POST") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ portal_url: "https://billing.stripe.com/test" }) });
@@ -204,6 +208,7 @@ test.describe("Route smoke", () => {
   });
 
   test("/onboarding renders start step", async ({ page }) => {
+    await mockApi(page);
     await page.goto("/onboarding");
     await expect(page.getByRole("heading", { name: "Choose ArcLink Onboarding" })).toBeVisible();
     await expect(page.getByText("I can take you from a few answers to agent onboard ArcLink")).toBeVisible();
@@ -326,6 +331,7 @@ test.describe("Empty and loading states", () => {
 
 test.describe("No false live claims", () => {
   test("no page claims deployment is live and running", async ({ page }) => {
+    await mockApi(page);
     const routes = ["/", "/login", "/onboarding"];
     for (const route of routes) {
       await page.goto(route);
@@ -335,6 +341,7 @@ test.describe("No false live claims", () => {
   });
 
   test("onboarding shows fake adapter notice", async ({ page }) => {
+    await mockApi(page);
     await page.goto("/onboarding");
     await expect(page.locator("text=Fake adapters active")).toBeVisible();
   });
@@ -420,6 +427,7 @@ test.describe("Onboarding flow", () => {
 
     // Step 2: Answer
     await page.fill('input[id="name"]', "New User");
+    await page.fill('input[id="email"]', "new.user@example.test");
     await page.click('button[type="submit"]');
     await expect(page.locator("text=Onboard Agent").first()).toBeVisible();
 

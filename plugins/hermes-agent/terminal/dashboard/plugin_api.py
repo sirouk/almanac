@@ -58,6 +58,15 @@ _DEFAULT_SCROLLBACK_BYTES = 1_000_000
 _DEFAULT_SCROLLBACK_LINES = 10_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
+_SENSITIVE_DIR_NAMES = {".ssh"}
+_SENSITIVE_FILE_NAMES = {
+    ".env",
+    "arclink-bootstrap-token",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
 _DEFAULT_TUI_COMMAND = "hermes"
 _DEFAULT_TUI_DIR = ""
 _DEFAULT_ROWS = 32
@@ -113,6 +122,36 @@ def _env_first(*keys: str) -> str:
     return ""
 
 
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_sensitive_path(path: Path) -> bool:
+    lowered_parts = {part.lower() for part in path.parts}
+    if lowered_parts & _SENSITIVE_DIR_NAMES:
+        return True
+    name = path.name.lower()
+    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env."):
+        return True
+    if "bootstrap-token" in name:
+        return True
+    resolved = path.expanduser().resolve(strict=False)
+    hermes = _hermes_home().expanduser().resolve(strict=False)
+    for private_root in (hermes / "secrets", hermes / "state"):
+        if resolved == private_root or _is_relative_to(resolved, private_root):
+            return True
+    return False
+
+
+def _assert_not_sensitive(path: Path) -> None:
+    if _is_sensitive_path(path):
+        raise HTTPException(status_code=403, detail="Secret or private runtime paths are not available in Terminal")
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".terminal-", suffix=".json.tmp")
@@ -132,11 +171,11 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _workspace_root() -> Path:
-    for key in ("TERMINAL_WORKSPACE_ROOT", "CODE_WORKSPACE_ROOT", "HOME"):
+    for key in ("TERMINAL_WORKSPACE_ROOT", "CODE_WORKSPACE_ROOT", "DRIVE_WORKSPACE_ROOT"):
         value = str(os.environ.get(key) or "").strip()
         if value:
             return Path(value).expanduser().resolve(strict=False)
-    return Path.home().expanduser().resolve(strict=False)
+    return (_hermes_home() / "workspace").expanduser().resolve(strict=False)
 
 
 def _shell_path() -> str:
@@ -231,6 +270,8 @@ def _resolve_cwd(raw_path: Any) -> tuple[Path, str]:
     target = (root / relative).resolve(strict=False)
     if target != root and root not in target.parents:
         raise HTTPException(status_code=403, detail="Terminal cwd is outside the configured workspace")
+    if relative or _is_sensitive_path(root):
+        _assert_not_sensitive(target)
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Terminal cwd does not exist")
     return target, relative
@@ -241,6 +282,7 @@ def _resolve_machine_cwd(raw_path: Any) -> tuple[Path, str]:
     if not text.startswith("/"):
         text = "/" + _clean_relative_path(text)
     target = Path(text).expanduser().resolve(strict=False)
+    _assert_not_sensitive(target)
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Terminal cwd does not exist")
     display = "/" if str(target) == "/" else str(target)
@@ -551,7 +593,8 @@ def _status_payload() -> dict[str, Any]:
     tui_requires_dist = "--tui" in tui_argv
     tui_available = tui_command_available and (not tui_requires_dist or _tui_dist_available())
     runtime_user_safe = _runtime_user_safe()
-    available = bool(shell and workspace_root.exists() and workspace_root.is_dir() and runtime_user_safe)
+    workspace_root_safe = not _is_sensitive_path(workspace_root)
+    available = bool(shell and workspace_root.exists() and workspace_root.is_dir() and workspace_root_safe and runtime_user_safe)
     return {
         "plugin": "terminal",
         "label": "Terminal",
@@ -560,7 +603,7 @@ def _status_payload() -> dict[str, Any]:
         "available": available,
         "backend": "managed-pty" if available else "unavailable",
         "workspace_root": "[workspace]",
-        "workspace_root_available": bool(workspace_root.exists() and workspace_root.is_dir()),
+        "workspace_root_available": bool(workspace_root.exists() and workspace_root.is_dir() and workspace_root_safe),
         "hermes_state": "[hermes-state]",
         "shell": _shell_name(),
         "runtime_user_safe": runtime_user_safe,

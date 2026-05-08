@@ -384,10 +384,11 @@ run_agent_flow() {
   local hermes_bin=""
   local preseeded_request_id="${ARCLINK_BOOTSTRAP_REQUEST_ID:-}"
   local preseeded_raw_token="${ARCLINK_BOOTSTRAP_RAW_TOKEN:-}"
+  local preseeded_token_file="${ARCLINK_BOOTSTRAP_TOKEN_FILE:-}"
   local preseeded_agent_id="${ARCLINK_BOOTSTRAP_AGENT_ID:-}"
   local preseeded_requester_identity="${ARCLINK_REQUESTER_IDENTITY:-}"
   local preseeded_source_ip="${ARCLINK_BOOTSTRAP_SOURCE_IP:-}"
-  unset ARCLINK_BOOTSTRAP_REQUEST_ID ARCLINK_BOOTSTRAP_RAW_TOKEN ARCLINK_BOOTSTRAP_AGENT_ID
+  unset ARCLINK_BOOTSTRAP_REQUEST_ID ARCLINK_BOOTSTRAP_RAW_TOKEN ARCLINK_BOOTSTRAP_AGENT_ID ARCLINK_BOOTSTRAP_TOKEN_FILE
   unset ARCLINK_REQUESTER_IDENTITY ARCLINK_BOOTSTRAP_SOURCE_IP
 
   export PATH="$HOME/.local/bin:$PATH"
@@ -402,9 +403,15 @@ run_agent_flow() {
   request_file="$(mktemp)"
   trap 'rm -f "${request_file:-}" "${hermes_state_file:-}"' EXIT
 
-  if [[ -n "$preseeded_request_id" && -n "$preseeded_raw_token" ]]; then
+  if [[ -n "$preseeded_request_id" && ( -n "$preseeded_raw_token" || -s "$preseeded_token_file" || -s "$token_file" ) ]]; then
     request_id="$preseeded_request_id"
-    token="$preseeded_raw_token"
+    if [[ -n "$preseeded_raw_token" ]]; then
+      token="$preseeded_raw_token"
+    elif [[ -s "$preseeded_token_file" ]]; then
+      token="$(tr -d '[:space:]' <"$preseeded_token_file")"
+    else
+      token="$(tr -d '[:space:]' <"$token_file")"
+    fi
     agent_id="${preseeded_agent_id:-}"
     requester_identity="${preseeded_requester_identity:-$requester_identity}"
     resuming_pending="1"

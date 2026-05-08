@@ -18,7 +18,9 @@ PYTHON3_BIN="$(command -v python3 || true)"
 PODMAN_BIN="$(command -v podman || true)"
 ARCLINK_AGENTS_STATE_DIR="${ARCLINK_AGENTS_STATE_DIR:-$SHARED_REPO_DIR/arclink-priv/state/agents}"
 ARCLINK_AGENT_VAULT_DIR="${ARCLINK_AGENT_VAULT_DIR:-${VAULT_DIR:-}}"
+ARCLINK_AGENT_WORKSPACE_DIR="${ARCLINK_AGENT_WORKSPACE_DIR:-$HERMES_HOME/workspace}"
 mkdir -p "$TARGET_DIR"
+mkdir -p "$ARCLINK_AGENT_WORKSPACE_DIR"
 
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
   if command -v hermes >/dev/null 2>&1; then
@@ -268,7 +270,7 @@ Environment=HERMES_HOME=$HERMES_HOME
 $(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 Environment=ARCLINK_SHARED_REPO_DIR=$SHARED_REPO_DIR
 Environment=ARCLINK_AGENTS_STATE_DIR=$ARCLINK_AGENTS_STATE_DIR
-ExecStart=$SHARED_REPO_DIR/bin/user-agent-refresh.sh
+ExecStart="$SHARED_REPO_DIR/bin/user-agent-refresh.sh"
 EOF
 
 cat >"$TARGET_DIR/arclink-user-agent-refresh.timer" <<EOF
@@ -292,7 +294,7 @@ Description=Run an immediate Hermes-home backup for $AGENT_ID
 Type=oneshot
 Environment=HERMES_HOME=$HERMES_HOME
 $(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
-ExecStart=$SHARED_REPO_DIR/bin/backup-agent-home.sh $HERMES_HOME
+ExecStart="$SHARED_REPO_DIR/bin/backup-agent-home.sh" "$HERMES_HOME"
 EOF
 
 rm -f "$TARGET_DIR/arclink-user-agent-backup.timer"
@@ -341,7 +343,7 @@ Environment=DISCORD_REACTIONS=true
 WorkingDirectory=$HERMES_HOME
 # Use Hermes's replace semantics so stale PID files or pre-reboot gateway
 # ownership are reclaimed on startup rather than crash-looping on "race lost".
-ExecStart=$HERMES_BIN gateway run --replace
+ExecStart="$HERMES_BIN" gateway run --replace
 Restart=always
 RestartSec=5
 
@@ -359,9 +361,12 @@ Description=ArcLink Hermes dashboard for $AGENT_ID
 
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
+Environment=DRIVE_WORKSPACE_ROOT=$ARCLINK_AGENT_WORKSPACE_DIR
+Environment=CODE_WORKSPACE_ROOT=$ARCLINK_AGENT_WORKSPACE_DIR
+Environment=TERMINAL_WORKSPACE_ROOT=$ARCLINK_AGENT_WORKSPACE_DIR
 $(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 WorkingDirectory=$HERMES_HOME
-ExecStart=$HERMES_BIN dashboard --host 127.0.0.1 --port $dashboard_backend_port --no-open
+ExecStart="$HERMES_BIN" dashboard --host 127.0.0.1 --port $dashboard_backend_port --no-open
 Restart=always
 RestartSec=5
 
@@ -378,7 +383,7 @@ Requires=arclink-user-agent-dashboard.service
 [Service]
 Environment=HERMES_HOME=$HERMES_HOME
 WorkingDirectory=$HERMES_HOME
-ExecStart=$PYTHON3_BIN $SHARED_REPO_DIR/python/arclink_dashboard_auth_proxy.py --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file $ACCESS_STATE_FILE --realm "Hermes"
+ExecStart="$PYTHON3_BIN" "$SHARED_REPO_DIR/python/arclink_dashboard_auth_proxy.py" --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file "$ACCESS_STATE_FILE" --realm "Hermes"
 Restart=always
 RestartSec=5
 

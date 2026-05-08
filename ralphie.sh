@@ -357,7 +357,7 @@ extract_review_gaps() {
 file_looks_like_auth_or_html_challenge() {
     local file="$1"
     [ -f "$file" ] || return 1
-    grep -qiE '<!doctype html|<html[ >]|</html>|cloudflare|cf_chl|challenge-platform|enable javascript and cookies|authrequired|missing or invalid access token|invalid_token' "$file" 2>/dev/null
+    grep -qiE '<!doctype html|<html[ >]|</html>|cf_chl|challenge-platform|challenge-error-text|enable javascript and cookies|authrequired|missing or invalid access token|invalid_token|window\._cf_chl_opt|cdn-cgi/challenge|cloudflare ray id|attention required! \| cloudflare' "$file" 2>/dev/null
 }
 
 review_output_invalid_reason() {
@@ -493,7 +493,7 @@ stream_engine_output() {
         }
         function looks_like_challenge(line) {
             lower = tolower(line)
-            return lower ~ /<!doctype html|<html[ >]|<\/html>|cloudflare|cf_chl|challenge-platform|challenge-error-text|enable javascript and cookies|auth required|missing or invalid access token|invalid_token|window\._cf_chl_opt|cdn-cgi\/challenge/
+            return lower ~ /<!doctype html|<html[ >]|<\/html>|cf_chl|challenge-platform|challenge-error-text|enable javascript and cookies|auth required|missing or invalid access token|invalid_token|window\._cf_chl_opt|cdn-cgi\/challenge|cloudflare ray id|attention required! \| cloudflare/
         }
         function looks_like_engine_reentry(line) {
             return line ~ /^(OpenAI Codex|Claude|workdir:|model:|provider:|approval:|sandbox:|reasoning effort:|reasoning summaries:|session id:|tokens used|--------)/
@@ -2259,17 +2259,14 @@ self_update_candidate_is_valid() {
 self_update_script_is_dirty() {
     command -v git >/dev/null 2>&1 || return 1
 
-    local self_path git_root rel_path
+    local self_path git_root git_prefix rel_path
     self_path="$(self_update_current_script_path)"
     git_root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
     [ -n "$git_root" ] || return 1
-    case "$self_path" in
-        "$git_root"/*) rel_path="${self_path#"$git_root"/}" ;;
-        *) return 1 ;;
-    esac
+    git_prefix="$(git -C "$SCRIPT_DIR" rev-parse --show-prefix 2>/dev/null || true)"
+    rel_path="${git_prefix}$(basename "$self_path")"
     git -C "$git_root" ls-files --error-unmatch -- "$rel_path" >/dev/null 2>&1 || return 0
-    ! git -C "$git_root" diff --quiet -- "$rel_path" 2>/dev/null && return 0
-    ! git -C "$git_root" diff --cached --quiet -- "$rel_path" 2>/dev/null && return 0
+    [ -n "$(git -C "$git_root" status --porcelain -- "$rel_path" 2>/dev/null || true)" ] && return 0
     return 1
 }
 
@@ -5574,21 +5571,21 @@ run_agent_with_prompt() {
             if [ -n "$timeout_cmd" ]; then
                 if is_true "$ENGINE_OUTPUT_TO_STDOUT"; then
                     (
-                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file"
+                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>&1 < "$prompt_file" | stream_engine_output "$log_file" "$output_file"
                     ) &
                 else
                     (
-                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file" false
+                        "$timeout_cmd" "$COMMAND_TIMEOUT_SECONDS" "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>&1 < "$prompt_file" | stream_engine_output "$log_file" "$output_file" false
                     ) &
                 fi
             else
                 if is_true "$ENGINE_OUTPUT_TO_STDOUT"; then
                     (
-                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file"
+                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>&1 < "$prompt_file" | stream_engine_output "$log_file" "$output_file"
                     ) &
                 else
                     (
-                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>>"$log_file" < "$prompt_file" | stream_engine_output "$log_file" "$output_file" false
+                        "${yolo_prefix[@]+"${yolo_prefix[@]}"}" "${engine_args[@]}" - 2>&1 < "$prompt_file" | stream_engine_output "$log_file" "$output_file" false
                     ) &
                 fi
             fi
@@ -8995,16 +8992,18 @@ main() {
                                 [ -n "$post_plan_repair_summary" ] && phase_warnings+=("post-plan markdown remediation: ${post_plan_repair_summary//$'\\n'/; }")
                             fi
                         fi
-                        for post_plan_issue in "${post_plan_gate_issues[@]}"; do
-                            case "$post_plan_issue" in
-                                "plan refresh required:"*)
-                                    phase_warnings+=("post-plan freshness checkpoint pending for configured backlog sources")
-                                    ;;
-                                *)
-                                    post_plan_actionable_gate_issues+=("$post_plan_issue")
-                                    ;;
-                            esac
-                        done
+                        if [ "${#post_plan_gate_issues[@]}" -gt 0 ]; then
+                            for post_plan_issue in "${post_plan_gate_issues[@]}"; do
+                                case "$post_plan_issue" in
+                                    "plan refresh required:"*)
+                                        phase_warnings+=("post-plan freshness checkpoint pending for configured backlog sources")
+                                        ;;
+                                    *)
+                                        post_plan_actionable_gate_issues+=("$post_plan_issue")
+                                        ;;
+                                esac
+                            done
+                        fi
                         if [ "${#post_plan_actionable_gate_issues[@]}" -eq 0 ] && [ -n "$post_plan_repair_summary" ]; then
                             info "Build gate passed after post-plan markdown remediation."
                         fi

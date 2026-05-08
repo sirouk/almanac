@@ -127,7 +127,7 @@ def test_cancel_through_stripe_fake() -> None:
     print("PASS test_cancel_through_stripe_fake")
 
 
-def test_comp_local_state() -> None:
+def test_comp_returns_pending_not_implemented() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_comp")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_comp")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_comp")
@@ -136,8 +136,12 @@ def test_comp_local_state() -> None:
     _queue_action(dashboard, conn, action_type="comp")
     executor = _fake_executor(executor_mod)
     result = worker.process_next_arclink_action(conn, executor=executor)
-    expect(result["status"] == "succeeded", "comp succeeded")
-    print("PASS test_comp_local_state")
+    expect(result["status"] == "pending_not_implemented", f"comp returns pending_not_implemented, got {result['status']}")
+    expect(result["result"]["status"] == "pending_not_implemented", "dispatch result is honest")
+    # Intent should be failed to prevent re-processing as if succeeded
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (result["action_id"],)).fetchone()
+    expect(row["status"] == "failed", f"intent marked failed, got {row['status']}")
+    print("PASS test_comp_returns_pending_not_implemented")
 
 
 def test_batch_processing() -> None:
@@ -247,17 +251,79 @@ def test_executor_error_secret_material_is_redacted() -> None:
     print("PASS test_executor_error_secret_material_is_redacted")
 
 
+def test_all_pending_action_types_honest() -> None:
+    """All not-yet-wired action types return pending_not_implemented."""
+    control = load_module("arclink_control.py", "arclink_control_aw_pending_all")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_pending_all")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_pending_all")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_pending_all")
+    conn = memory_db(control)
+    pending_types = ["suspend", "unsuspend", "reprovision", "rollout", "force_resynth", "rotate_bot_key"]
+    for action_type in pending_types:
+        _queue_action(dashboard, conn, action_type=action_type, target_id=f"dep_{action_type}")
+    executor = _fake_executor(executor_mod)
+    results = worker.process_arclink_action_batch(conn, executor=executor, batch_size=10)
+    expect(len(results) == len(pending_types), f"processed {len(pending_types)} actions, got {len(results)}")
+    for r in results:
+        expect(
+            r["status"] == "pending_not_implemented",
+            f"{r['action_type']} should be pending_not_implemented, got {r['status']}",
+        )
+        expect(
+            r["result"]["status"] == "pending_not_implemented",
+            f"{r['action_type']} dispatch result should be honest",
+        )
+    print("PASS test_all_pending_action_types_honest")
+
+
+def test_fake_executor_live_flag_is_false() -> None:
+    """Fake executor adapters must set live=False."""
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_live_flag")
+    executor = _fake_executor(executor_mod)
+    result = executor.docker_compose_lifecycle(executor_mod.DockerComposeLifecycleRequest(
+        deployment_id="dep_test", action="restart",
+    ))
+    expect(result.live is False, f"fake lifecycle live should be False, got {result.live}")
+
+    dns_result = executor.cloudflare_dns_apply(executor_mod.CloudflareDnsApplyRequest(
+        deployment_id="dep_test",
+        dns={"web": {"hostname": "test.example.com", "record_type": "CNAME", "target": "origin.example.com"}},
+    ))
+    expect(dns_result.live is False, f"fake DNS live should be False, got {dns_result.live}")
+
+    access_result = executor.cloudflare_access_apply(executor_mod.CloudflareAccessApplyRequest(
+        deployment_id="dep_test",
+        access={"urls": {"dashboard": "https://dash.example.com"}, "ssh": {"strategy": "cloudflare_access_tcp", "hostname": "ssh.example.com"}},
+    ))
+    expect(access_result.live is False, f"fake access live should be False, got {access_result.live}")
+
+    chutes_result = executor.chutes_key_apply(executor_mod.ChutesKeyApplyRequest(
+        deployment_id="dep_test", action="create", secret_ref="secret://arclink/chutes/dep_test",
+    ))
+    expect(chutes_result.live is False, f"fake Chutes live should be False, got {chutes_result.live}")
+
+    rollback_result = executor.rollback_apply(executor_mod.RollbackApplyRequest(
+        deployment_id="dep_test",
+        plan={"actions": ["preserve_state_roots", "stop_rendered_services"], "services": {"app": {}}},
+    ))
+    expect(rollback_result.live is False, f"fake rollback live should be False, got {rollback_result.live}")
+
+    print("PASS test_fake_executor_live_flag_is_false")
+
+
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
     test_rotate_chutes_key_uses_secret_ref()
     test_refund_through_stripe_fake()
     test_cancel_through_stripe_fake()
-    test_comp_local_state()
+    test_comp_returns_pending_not_implemented()
     test_batch_processing()
     test_empty_queue_returns_none()
     test_action_attempt_recorded()
     test_stale_action_recovery()
     test_idempotent_retry()
     test_executor_error_secret_material_is_redacted()
-    print(f"\nAll 12 action worker tests passed.")
+    test_all_pending_action_types_honest()
+    test_fake_executor_live_flag_is_false()
+    print(f"\nAll 14 action worker tests passed.")

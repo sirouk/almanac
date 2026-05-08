@@ -58,6 +58,12 @@ passwords are reconciled without printing secrets during Docker reconcile via:
 ./bin/arclink-docker.sh reconcile
 ```
 
+Private Curator completion sends the generated dashboard password to the user
+completion bundle, then scrubs that message after acknowledgement. Operator
+notifications redact that password by default; only set
+`ARCLINK_OPERATOR_NOTIFICATION_INCLUDE_CREDENTIALS=1` for an explicitly
+credential-bearing private operator channel.
+
 The reconciler invokes `bin/sync-dashboard-user-passwords.py` inside the
 provisioner context so it can read deployment state roots and update hashes.
 
@@ -210,7 +216,7 @@ Stripe Dashboard event destination during install.
 | `detect_stripe_reconciliation_drift(conn)` | Compare local vs Stripe state |
 
 **Webhook processing flow:**
-1. Record raw event in `arclink_stripe_webhooks`.
+1. Record raw event in `arclink_webhook_events`.
 2. Extract user/subscription/onboarding IDs from event + metadata.
 3. Map event type to entitlement transition.
 4. Apply entitlement change and mark processed.
@@ -243,6 +249,10 @@ surfaced via `GET /api/v1/admin/reconciliation`.
 **Troubleshooting:**
 - Webhook signature fails: verify `STRIPE_WEBHOOK_SECRET` matches the endpoint
   secret in the Stripe dashboard, not the API key.
+- Webhook secret unset: the hosted API returns 503 with
+  `stripe_webhook_secret_unset` so Stripe retries. Configure the endpoint
+  signing secret with `./deploy.sh control reconfigure`; do not replace it with
+  the Stripe API key.
 - Drift detected: review the specific drift items; most are timing issues that
   resolve on the next webhook delivery.
 - Portal link 500: check `STRIPE_SECRET_KEY` is set and valid.
@@ -491,7 +501,7 @@ Without credentials, all steps skip cleanly. Evidence template at
 | --- | --- | --- |
 | Drive | `plugins/hermes-agent/drive/` | Functional first-generation file manager |
 | Code | `plugins/hermes-agent/code/` | Functional first-generation editor/git surface |
-| Terminal | `plugins/hermes-agent/terminal/` | Managed-pty persistent sessions with bounded polling output |
+| Terminal | `plugins/hermes-agent/terminal/` | Managed-pty persistent sessions with same-origin SSE streaming and bounded polling fallback |
 | Install/enable | `bin/install-arclink-plugins.sh` | Installs all default workspace plugins and prunes legacy aliases |
 | Docker repair | `bin/arclink-docker.sh` | Repairs dashboard mounts and refreshes managed plugins |
 

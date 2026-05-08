@@ -1,62 +1,51 @@
 # Coverage Matrix
 
-## Mission Goal Coverage
+## Goal Coverage Against BUILD Backlog
 
 | Goal / criterion | Current coverage | Remaining BUILD gap | Validation surface |
 | --- | --- | --- | --- |
-| Keep work out of Hermes core | Workspace surfaces live under `plugins/hermes-agent/` and install through ArcLink wrappers. | Ensure final diff does not patch Hermes core. | Diff review, focused plugin tests. |
-| Stack identification | Stack snapshot ranks Python/shell ArcLink control plane plus native Hermes dashboard plugins as primary, with Docker Compose and Node/Next as supporting stacks. | Preserve this architecture during BUILD; do not redirect the mission into the web app or Hermes core. | Stack snapshot review, diff review. |
-| Default plugin installation | Installer enables Drive, Code, Terminal, and managed-context by default. | Keep config preservation and cache excludes green. | `tests/test_arclink_plugins.py`, shell syntax checks. |
-| Drive root model | API exposes `Vault` and `Workspace` root descriptors and local-root capabilities. | Keep docs and proof notes aligned with actual root behavior. | API tests, browser proof notes. |
-| Drive local file management | Listing, search, upload, mkdir, rename, move, favorite, trash, restore, new-file, copy, duplicate, preview, download, batch API paths, and browser workflow backlog are represented as complete in the controlling plan. | Keep final report tied to recorded proof and avoid overclaiming sharing. | Plugin tests, JS syntax check, proof notes. |
-| Drive safety | Traversal and symlink-escape handling exist for local roots; sharing capability is false. | Recheck final docs/UI language so disabled sharing is not presented as complete. | Plugin tests, docs review. |
-| Drive partial failures | Batch API returns per-item results and browser bundle contains failure-message handling. | Preserve this behavior during final cleanup. | UI contract tests and proof notes. |
-| Code workspace/editor | API lists workspace files, opens/saves bounded text with hash conflict protection, searches, and provides confined rename/move/duplicate/trash/restore operations. Browser bundle includes nested Explorer, tabs/dirty state, filetype markers, context menus, manual-save warning, and theme toggle. | Keep Monaco claims honest and preserve manual-save default in docs. | Plugin tests, JS syntax, proof notes. |
-| Code Source Control | Repo discovery, status, diff, stage, unstage, discard, commit, `.gitignore`, pull, and push exist with git CLI allowlists and confirmation flags for risky actions. Browser bundle includes stage-all, unstage-all, discard-all, pull, push, refresh, and last git result controls. | Final report should name tested git flows and residual risk without exposing repository-specific private paths. | Git fixture tests, proof notes. |
-| Code VS Code parity honesty | Current native editor keeps Monaco unbundled and documents the asset/CSP caution rather than claiming full VS Code parity. | Keep docs/UI honest about native editor scope. | Monaco blocker note, docs review. |
-| Terminal tab | Managed-pty API, JS, CSS, persisted metadata, bounded scrollback, input, polling reconnect, resource limits, and focused tests exist. | Keep polling limitation documented and proof notes free of raw scrollback. | Terminal API tests, JS syntax, proof notes. |
-| Terminal safety | Runtime blocks unrestricted root by default, resolves cwd under the workspace root, bounds scrollback/input, and redacts backend errors. | Preserve runtime boundary during final docs and commit curation. | Unit tests, runtime review. |
-| Docker dashboard mounts | Docker/provisioning emit dashboard env and mount Vault/Workspace into Hermes dashboard. | If deploying, rerun canonical upgrade/health after pushing the scoped commit. | Docker tests, Docker health. |
-| Domain/Tailnet ingress contract | Docker wrapper has Tailnet publication path and unavailable-status handling. | Final report should distinguish successful publication from unavailable status. | Docker tests, proof notes. |
-| Documentation truthfulness | Documentation alignment is marked complete in the active backlog for shipped Drive, Code, Terminal, Docker/TLS proof, and known limits. | Preserve truthfulness during commit curation and rerun review if docs change again. | Docs review against tests/proof. |
-| Commit/deploy hygiene | Public/private split exists; installer excludes generated caches. | Curate broad dirty tree into scoped commits and omit private/generated artifacts, including plugin bytecode caches. | `git status`, `git diff --check`, hygiene tests. |
+| High-risk dashboard, qmd, Notion, SSOT, token, generated cleanup, and path traversal boundaries | Slices 1 security items are checked in the plan and steering file | Preserve fail-closed behavior whenever plugin, install, qmd, Notion, PDF, or resource-sync code is touched | `tests/test_arclink_plugins.py`, `tests/test_arclink_agent_user_services.py`, `tests/test_loopback_service_hardening.py`, `tests/test_arclink_notion_knowledge.py`, `tests/test_notion_ssot.py`, `tests/test_ssot_broker.py`, `tests/test_pdf_ingest_env.py` |
+| Hosted web onboarding, checkout, auth, login, status, dashboard, and admin views | Slice 2 hosted web/API items are checked | Preserve HttpOnly/CSRF, user/admin scoping, fake/live copy, checkout truth, and API shape handling while extending journeys | `tests/test_arclink_api_auth.py`, `tests/test_arclink_hosted_api.py`, `tests/test_arclink_dashboard.py`, `web/tests/test_api_client.mjs`, `web/tests/browser/product-checks.spec.ts` |
+| Admin/provisioning surfaces are truthful | Slice 3 control-plane truthfulness items are checked | Preserve unavailable/dry-run/pending/applied/proof state distinctions | `tests/test_arclink_action_worker.py`, `tests/test_arclink_admin_actions.py`, `tests/test_arclink_provisioning.py`, `tests/test_arclink_sovereign_worker.py`, `tests/test_arclink_fleet.py`, `tests/test_arclink_rollout.py`, `tests/test_arclink_evidence.py`, `tests/test_arclink_live_runner.py` |
+| Shared Host, Docker, and Control Node operations have matching docs, defaults, health, and dependency coverage | Slice 4 Shared Host and Docker operational parity items are checked | Preserve branch default, dependency, health, release-state, Nextcloud, path quoting, and Docker trust-boundary repairs while updating docs | `tests/test_arclink_docker.py`, `tests/test_deploy_regressions.py`, `tests/test_health_regressions.py`, shell syntax checks |
+| Private Curator onboarding failure/cancel/skip/retry paths are visible and recoverable | Slice 5 private onboarding items are checked | Preserve failure surfacing, credential-channel policy, denial cleanup, durable backup skip, completion-ack retry, and provider validation | `tests/test_arclink_curator_onboarding_regressions.py`, `tests/test_arclink_enrollment_provisioner_regressions.py`, `tests/test_onboarding_completion_messages.py`, provider-auth tests |
+| Public bot onboarding failure/cancel/skip/retry paths are visible and recoverable | Slice 5 public bot onboarding items are checked | Preserve public `/cancel` semantics, backup and Notion command clarity, API-key provider validation, and fake/live-safe behavior | `tests/test_arclink_public_bots.py`, `tests/test_arclink_telegram.py`, `tests/test_arclink_discord.py`, `tests/test_arclink_onboarding_prompts.py` |
+| Knowledge freshness and generated markdown safety match `AGENTS.md` | Slice 6 knowledge freshness and generated content safety items are checked | Preserve endpoint redaction, full-source hashing, PDF rewrite detection, SSOT claim/lock, resource skill text, and generated-root containment whenever knowledge code is touched | `tests/test_pdf_ingest_env.py`, `tests/test_memory_synthesizer.py`, `tests/test_arclink_ssot_batcher.py`, `tests/test_arclink_resources_skill.py`, `tests/test_arclink_notion_webhook.py` |
+| Docs classify canonical versus stale/speculative/proof-gated material | Slice 7 documentation tasks are checked in the active plan and steering file | BUILD review must confirm docs still match behavior in the dirty worktree and keep live/proof-gated claims explicit | `tests/test_documentation_truths.py`, public hygiene checks, docs review |
+| Validation is run and summarized | Validation floor and web/live-proof prerequisites are documented in the plan | BUILD must run the relevant no-secret checks and summarize skipped proof-gated checks with concrete reasons | `git diff --check`, `bash -n`, focused Python tests, `npm test`, `npm run lint`, `npm run test:browser` when applicable |
 
-## Focused Test Coverage Map
+## Slice Coverage
 
-| Test / check | Covered now | Add or verify during BUILD |
+| Slice | Current status | Exit criteria |
 | --- | --- | --- |
-| `tests/test_arclink_plugins.py` | Plugin install, sanitized statuses, Drive roots/ops/safety, Code search/diff/file ops/git additions, and Terminal persistent sessions/root guard/browser contracts. | Rerun if plugin code or docs examples change. |
-| `tests/test_arclink_docker.py` | Docker structure, dashboard root repair, publication behavior. | Keep Tailnet unavailable-status and dashboard mount behavior covered. |
-| `tests/test_arclink_provisioning.py` | Deployment render includes dashboard, Vault, Workspace, and code-server intent. | Add terminal runtime env/service intent only if the backend requires it. |
-| `tests/test_arclink_live_runner.py` | Workspace proof runner planning, redaction, TLS-only URL enforcement, and native plugin route runner wiring. | Rerun if proof orchestration changes. |
-| `tests/test_deploy_regressions.py` | Broad deploy behavior regressions. | Run when shell/deploy glue changes. |
-| `python3 -m py_compile ...plugin_api.py` | Syntax validation available for plugin APIs. | Run after every plugin backend edit. |
-| `node --check .../dist/index.js` | Syntax validation available for plugin frontend bundles. | Run after every plugin frontend edit. |
-| `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` | Shell syntax validation. | Run after installer/Docker/deploy changes. |
-| Web checks | Next.js tests/lint/build/browser scripts exist. | Run if product surface or browser proof harness changes. |
-| Docker health | Canonical Docker health command exists. | Must pass before final deployed handoff. |
-| TLS browser proof | Workspace proof runner covers Drive, Code, and Terminal desktop/mobile routes. | Keep final notes portable and rerun if relevant code changes after the proof. |
+| 1. Security and trust boundaries | Completed baseline gate | Relevant tests rerun whenever touched; no secret/path/retrieval/destructive boundary regression. |
+| 2. Hosted web/API journey | Completed baseline gate | Browser contract remains coherent; success/cancel/status reflect backend state; user/admin scopes are enforced. |
+| 3. Control-plane truthfulness | Completed baseline gate | Admin actions, provisioner, fleet, rollout, and evidence remain truthful about disabled, pending, dry-run, applied, failed, skipped, and proof-gated states. |
+| 4. Shared Host and Docker operations | Completed baseline gate | Bare-metal and Docker docs/defaults/health agree with code; no live upgrade without operator consent. |
+| 5. Onboarding recovery | Completed baseline gate | Failure, denial, skip, retry, cancel, provider validation, and credential handling remain visible, durable, and recoverable. |
+| 6. Knowledge freshness and cleanup | Completed baseline gate | Generated content remains secret-free; freshness uses content hashes; PDF rewrites are detected; SSOT processing is claim-locked. |
+| 7. Docs and validation | Completed baseline gate; needs BUILD verification | Canonical/stale/speculative/proof-gated docs remain marked; validation prerequisites and skip conditions match actual checks. |
 
-## Active Risks
+## Required Artifact Coverage
 
-| Area | Risk | BUILD handling |
-| --- | --- | --- |
-| Worktree hygiene | Many files are modified or untracked. | Preserve user edits, inspect before editing shared files, curate commits by scope. |
-| Generated artifacts | Plugin directories can accumulate bytecode and local caches. | Keep installer excludes and omit caches from commits. |
-| Drive docs | Sharing can be misunderstood as complete because Nextcloud/WebDAV exists elsewhere. | State disabled/gated sharing plainly until a real adapter exists. |
-| Code parity | Native Code is credible but not full VS Code/Monaco. | Use VS Code-like language carefully and document the native editor limit. |
-| Terminal backend | Managed-pty persistent sessions are implemented and tested. | Keep tmux as a future option unless Docker/baremetal paths install and prove it. |
-| Terminal proof artifacts | Terminal output can contain sensitive user data. | Summarize outcomes only; do not copy raw scrollback. |
-| Live deployment | Docker/TLS proof can become stale if runtime or code changes after proof. | Rerun the relevant proof path before final deployed handoff. |
+| Required artifact | Coverage status |
+| --- | --- |
+| `research/RESEARCH_SUMMARY.md` | Summarizes objective, repository findings, path comparison, current state, assumptions, risks, and PLAN verdict with `<confidence>`. |
+| `research/CODEBASE_MAP.md` | Maps root entrypoints, major directories, runtime lanes, Docker services, completed hotspots, remaining hotspots, and architecture assumptions. |
+| `research/DEPENDENCY_RESEARCH.md` | Documents stack components, alternatives, source composition, dependency risks, and validation dependencies. |
+| `research/COVERAGE_MATRIX.md` | Maps goals and slices to current coverage, remaining BUILD gaps, and validation surfaces. |
+| `research/STACK_SNAPSHOT.md` | Provides ranked stack hypotheses, deterministic confidence score, source signals, and alternatives. |
+| `IMPLEMENTATION_PLAN.md` | Defines goal, non-negotiables, selected architecture, validation criteria, actionable slices, and BUILD handoff order. |
+| `consensus/build_gate.md` | Allows no-secret BUILD work; names proof-gated flows; no planning-only blocker is identified. |
 
 ## Coverage Verdict
 
-Planning coverage is sufficient for BUILD handoff. Final mission completion
-remains blocked by unchecked commit-hygiene, optional deployment, and
-final-report items in `IMPLEMENTATION_PLAN.md` and
-`research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md`.
+Planning coverage is sufficient for BUILD handoff. The BUILD phase should not
+claim completion until every unchecked item in `IMPLEMENTATION_PLAN.md` and
+`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` is fixed with
+tests/docs or explicitly marked blocked with a concrete operator-policy
+question.
 
-No planning-only blocker is currently identified. If the final handoff cannot
-rerun required health/proof because the target runtime, credentials, routing, or
-TLS endpoint is unavailable, record that blocker in `consensus/build_gate.md` or
-the final proof notes without checking off affected handoff tasks.
+No planning artifact contains a fallback placeholder marker. No open checkbox
+task markers remain in the active implementation plan or steering backlog after
+this PLAN pass.

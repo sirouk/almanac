@@ -133,6 +133,29 @@ runs the live agent tool smoke. Persistent Docker agent homes live under
 
 `deploy.sh` is a thin wrapper around `bin/deploy.sh`.
 
+Sovereign Control Node mode is the Dockerized paid self-serve control-plane
+path. It is separate from the operator-led Shared Host path and from Shared
+Host Docker validation. Use it for public web/API onboarding, Stripe
+entitlements, public bot webhooks, domain-or-Tailscale ingress intent, fleet
+placement, provisioning jobs, and user/admin dashboards:
+
+```bash
+./deploy.sh control install        # idempotent control-plane bootstrap + build + up + health
+./deploy.sh control upgrade        # rebuild/recreate from current checkout + health
+./deploy.sh control reconfigure    # refresh generated control config/ports only
+./deploy.sh control health
+./deploy.sh control logs [SERVICE]
+./deploy.sh control ps
+./deploy.sh control ports
+./deploy.sh control down
+./deploy.sh control backup
+./deploy.sh control reset-runtime
+```
+
+Do not use `./deploy.sh docker ...` for paid Sovereign pod control work. That
+menu is for the containerized Shared Host substrate. Do not use bare
+`./deploy.sh install` for Control Node work; bare install is Shared Host mode.
+
 Organization profile ingestion is the operator-owned path for aligning agent
 baseline, roles, teams, boundaries, and per-agent context. The private source
 file belongs at `arclink-priv/config/org-profile.yaml`; use the public
@@ -703,6 +726,28 @@ Install local test and lint dependencies before running ArcLink validation:
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
+```
+
+Web validation has a separate Node dependency lane:
+
+```bash
+cd web
+npm ci
+npm run lint
+npm test
+npm run build
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+Live proof is credential-gated. Install web dependencies before workspace
+browser proof, and install the Stripe Python package only when running live
+Stripe checks:
+
+```bash
+python3 -m pip install stripe
+bin/arclink-live-proof --live --json
+bin/arclink-live-proof --journey workspace --live --json
 ```
 
 Preflight:

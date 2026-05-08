@@ -328,6 +328,7 @@ check_port_listening() {
 check_port_loopback_only() {
   local port="$1"
   local label="${2:-port $port}"
+  local severity="${3:-warn}"
   local output=""
   local status=0
 
@@ -394,7 +395,13 @@ print(label + " only accepts loopback connections (" + ", ".join(matches) + ")")
     case "$status" in
       1|2)
         while IFS= read -r line; do
-          [[ -n "$line" ]] && warn_or_fail "$line"
+          if [[ -n "$line" ]]; then
+            if [[ "$severity" == "required" ]]; then
+              fail "$line"
+            else
+              warn_or_fail "$line"
+            fi
+          fi
         done <<<"$output"
         ;;
       *)
@@ -683,7 +690,7 @@ PY
         done <<<"$output"
         ;;
       *)
-        warn_or_fail "could not reload .vault definitions"
+        fail "could not reload .vault definitions"
         ;;
     esac
   fi
@@ -699,7 +706,7 @@ check_curator_state() {
     fail "Curator manifest missing: $ARCLINK_CURATOR_MANIFEST"
   fi
 
-  if output="$(python3 - "$ARCLINK_DB_PATH" <<'PY'
+  if output="$(python3 - "$ARCLINK_DB_PATH" 2>&1 <<'PY'
 import datetime as dt
 import json
 import sqlite3
@@ -756,7 +763,7 @@ PY
         done <<<"$output"
         ;;
       *)
-        warn_or_fail "could not inspect Curator state in $ARCLINK_DB_PATH"
+        fail "could not inspect Curator state in $ARCLINK_DB_PATH"
         ;;
     esac
   fi
@@ -770,7 +777,7 @@ check_active_agent_state() {
     return 0
   fi
 
-if output="$(python3 - "$ARCLINK_DB_PATH" "$VAULT_DIR" "${ARCLINK_HOME:-}" <<'PY'
+if output="$(python3 - "$ARCLINK_DB_PATH" "$VAULT_DIR" "${ARCLINK_HOME:-}" 2>&1 <<'PY'
 import datetime as dt
 import json
 import os
@@ -1232,7 +1239,10 @@ PY
   )"; then
     :
   else
-    :
+    if [[ -z "$output" || "$output" != *$'\n'FAIL\ * && "$output" != FAIL\ * && "$output" != *$'\n'WARN\ * && "$output" != WARN\ * && "$output" != *$'\n'OK\ * && "$output" != OK\ * ]]; then
+      fail "could not inspect active enrolled-agent state in $ARCLINK_DB_PATH"
+      return 0
+    fi
   fi
 
   while IFS= read -r line; do
@@ -1254,7 +1264,7 @@ check_auto_provision_state() {
     return 0
   fi
 
-if output="$(python3 - "$ARCLINK_DB_PATH" "${ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS:-5}" <<'PY'
+if output="$(python3 - "$ARCLINK_DB_PATH" "${ARCLINK_AUTO_PROVISION_MAX_ATTEMPTS:-5}" 2>&1 <<'PY'
 import datetime as dt
 import sqlite3
 import sys
@@ -1344,6 +1354,10 @@ PY
       esac
     done <<<"$output"
   else
+    if [[ -z "$output" || "$output" != *$'\n'FAIL\ * && "$output" != FAIL\ * && "$output" != *$'\n'WARN\ * && "$output" != WARN\ * && "$output" != *$'\n'OK\ * && "$output" != OK\ * ]]; then
+      fail "could not inspect auto-provision state in $ARCLINK_DB_PATH"
+      return 0
+    fi
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       case "$line" in
@@ -1363,7 +1377,7 @@ check_notification_delivery_state() {
   fi
 
   local output=""
-  if ! output="$(python3 - "$ARCLINK_DB_PATH" <<'PY'
+  if ! output="$(python3 - "$ARCLINK_DB_PATH" 2>&1 <<'PY'
 import datetime as dt
 import sqlite3
 import sys
@@ -1430,6 +1444,10 @@ else:
 raise SystemExit(0 if not (failed or stuck) else 1)
 PY
   )"; then
+    if [[ -z "$output" || "$output" != *$'\n'FAIL\ * && "$output" != FAIL\ * && "$output" != *$'\n'WARN\ * && "$output" != WARN\ * && "$output" != *$'\n'OK\ * && "$output" != OK\ * ]]; then
+      fail "could not inspect notification delivery state in $ARCLINK_DB_PATH"
+      return 0
+    fi
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       case "$line" in
@@ -1457,7 +1475,7 @@ check_upgrade_state() {
                 ARCLINK_DB_PATH="$ARCLINK_DB_PATH" \
                 ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
                 ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
-                python3 - <<'PY'
+                python3 - 2>&1 <<'PY'
 import datetime as dt
 import json
 import os
@@ -1560,6 +1578,10 @@ raise SystemExit(0)
 PY
   )"; then
     status_code=$?
+    if [[ -z "$output" || "$output" != *$'\n'FAIL\ * && "$output" != FAIL\ * && "$output" != *$'\n'WARN\ * && "$output" != WARN\ * && "$output" != *$'\n'OK\ * && "$output" != OK\ * ]]; then
+      fail "could not inspect ArcLink upgrade state in $ARCLINK_DB_PATH"
+      return 0
+    fi
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       case "$line" in
@@ -1733,6 +1755,7 @@ check_nextcloud_vault_mount() {
       warn_or_fail "Nextcloud cannot write the shared vault mount at $NEXTCLOUD_VAULT_CONTAINER_PATH"
     fi
   else
+    warn "Nextcloud vault mount check skipped: no compose or podman runtime available"
     return 0
   fi
 
@@ -2112,7 +2135,9 @@ if set_user_systemd_bus_env; then
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
-    if [[ "$STRICT_MODE" == "1" ]]; then
+    if ! nextcloud_runtime_available; then
+      warn "Nextcloud enabled in config but no Nextcloud runtime is available; install podman or docker compose"
+    elif [[ "$STRICT_MODE" == "1" ]]; then
       check_unit_state arclink-nextcloud.service required
     else
       check_unit_state arclink-nextcloud.service optional
@@ -2202,10 +2227,10 @@ check_notification_delivery_state
 check_upgrade_state
 
 check_port_listening "$QMD_MCP_PORT"
-check_port_loopback_only "$QMD_MCP_PORT" "qmd MCP backend port $QMD_MCP_PORT"
+check_port_loopback_only "$QMD_MCP_PORT" "qmd MCP backend port $QMD_MCP_PORT" required
 check_qmd_mcp_status
 
-if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
+if nextcloud_effectively_enabled; then
   if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$NEXTCLOUD_PORT$"; then
     pass "Nextcloud port $NEXTCLOUD_PORT is listening"
   else

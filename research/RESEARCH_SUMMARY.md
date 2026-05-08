@@ -1,125 +1,109 @@
 # Research Summary
 
-<confidence>97</confidence>
+<confidence>94</confidence>
 
 ## Objective
 
-Prepare BUILD handoff for the active ArcLink native workspace plugin mission:
+Prepare BUILD handoff for the ArcLink ecosystem gap repair mission. The mission
+is to close verified May 2026 gaps across Shared Host, Shared Host Docker,
+Sovereign Control Node, hosted web/API, private and public onboarding, Hermes
+runtime plugins, qmd/Notion/SSOT knowledge rails, documentation, validation,
+and operator/user journeys.
 
-- `ArcLink Drive`: Google Drive-like file management for Vault and Workspace roots.
-- `ArcLink Code`: VS Code-like Explorer, editor, diff, and Source Control surface.
-- `ArcLink Terminal`: persistent, revisit-able terminal sessions inside Hermes.
+The controlling backlog remains
+`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`. BUILD must not
+route to terminal `done` while unchecked tasks remain in that steering file or
+`IMPLEMENTATION_PLAN.md`.
 
-All implementation must stay in ArcLink-owned Hermes plugins, wrappers,
-generated config, Docker/service glue, and focused tests. Hermes core changes
-remain out of scope.
+## Repository Findings
 
-## Current Finding
+ArcLink is a multi-runtime platform, not a single library or web app:
 
-ArcLink already has the correct extension boundary for this mission. The active
-workspace surfaces are native Hermes dashboard plugins under
-`plugins/hermes-agent/`:
+- Bash wrappers own deploy, Docker, bootstrap, health, service installation,
+  qmd/PDF jobs, backup, upgrade, and runtime orchestration.
+- Python modules own the control plane, hosted API, browser/API auth,
+  onboarding, provisioning, Docker supervisor, action worker, MCP tools,
+  Notion/SSOT rails, memory synthesis, evidence, fleet, rollout, diagnostics,
+  and dashboard plugin APIs.
+- Docker Compose and systemd define the Shared Host Docker and bare-metal
+  Shared Host topologies.
+- The Next.js app owns the hosted onboarding, checkout, login, dashboard, and
+  admin UI surfaces.
+- ArcLink-owned Hermes plugins, hooks, generated config, and skills provide
+  runtime behavior without modifying Hermes core.
+- qmd, PDF ingest, Notion indexing, SSOT writes, memory synthesis, and resource
+  skills form the knowledge rails whose freshness and generated-content safety
+  gates are now completed baseline behavior to preserve.
 
-- `arclink-drive` registers the `/drive` dashboard tab and has a Python API,
-  JavaScript dashboard bundle, scoped CSS, manifest, plugin metadata, and
-  README. Its backend exposes Vault and Workspace roots, confined local file
-  operations, upload conflict policy, copy/duplicate, trash/restore, favorites,
-  bounded preview/search, root-keyed metadata, per-item batch results, and
-  disabled sharing capability flags.
-- `arclink-code` registers the `/code` dashboard tab and has a Python API,
-  JavaScript dashboard bundle, scoped CSS, manifest, plugin metadata, and
-  README. Its backend exposes workspace status, tree/list/open/save, hash-based
-  conflicting-save protection, bounded search, repo discovery, git status,
-  diff, stage, unstage, discard with explicit confirmation, commit,
-  `.gitignore`, pull, push, and confined rename/move/duplicate/trash/restore
-  operations. Its browser bundle contains the Explorer/Search/Source Control
-  split, diff view, tabs/dirty state, status bar, theme toggle, and manual-save
-  warning.
-- `arclink-terminal` registers the `/terminal` dashboard tab and has a
-  managed-pty backend with sanitized status, workspace-root cwd, shell/runtime
-  availability, stable session IDs, persisted metadata, bounded scrollback,
-  polling output, input, rename/folder/reorder controls, confirmation-gated
-  close, and an unrestricted-root startup guard.
-- `bin/install-arclink-plugins.sh` is the canonical delivery path for Hermes
-  homes and is covered for default plugin enablement, legacy alias pruning,
-  config preservation, and generated-cache exclusion.
-- Docker/provisioning code carries dashboard, Vault, and Workspace runtime
-  signals. The active backlog marks Docker/TLS proof, portable proof-note
-  capture, and documentation alignment complete. The remaining BUILD handoff
-  work is commit hygiene, optional deployment, and final release/health/proof
-  reporting.
-- The deterministic stack snapshot now ranks the Python/shell ArcLink control
-  plane with native Hermes dashboard plugins as the primary stack at 94/100
-  confidence. Node/Next is present as a supporting product/admin and browser
-  proof surface, not the primary implementation path for this mission.
-
-This is completion and handoff work on an existing architecture, not greenfield
-discovery.
+Repository composition verified during this PLAN pass from public repo files:
+54 first-party `python/arclink_*.py` modules, 99 Python test files, 82 shell
+scripts, 29 systemd units, 36 web source/test/config TS/TSX/MJS/JS files, 24
+`arclink_*` control DB table definitions, 4 Hermes plugins, 11 skills, and 26
+Compose services.
 
 ## Implementation Path Comparison
 
 | Path | Strengths | Weaknesses | Decision |
 | --- | --- | --- | --- |
-| Complete existing native Hermes dashboard plugins | Directly satisfies the mission, preserves Hermes core, reuses current Python/JS/CSS surfaces, and works with current install/provisioning rails. | Requires careful proof, documentation, and commit curation across a broad dirty tree. | Selected. |
-| Build a separate Next.js workspace app | Strong frontend tooling and full product-shell control. | Not native Hermes dashboard plugins and duplicates routing/runtime concerns. | Rejected for this mission. |
-| Use external tools as the primary UX | Nextcloud, code-server, and terminal links are mature and fast to expose. | Fails native Drive/Code/Terminal goals and risks fake parity or fake sharing claims. | Keep only as optional links/adapters. |
-| Patch Hermes dashboard core | Could expose missing host features quickly. | Violates constraints and creates upstream upgrade debt. | Rejected. |
+| Slice repairs through existing ArcLink wrappers, Python modules, web app, plugins, Compose, systemd units, and focused tests | Matches repository boundaries, preserves operator workflows, avoids Hermes core edits, and lets high-risk gates remain testable | Requires careful sequencing across many surfaces | Selected |
+| Disable or mark unsafe/unimplemented surfaces unavailable until a real provider, worker, or policy path exists | Prevents misleading product claims and avoids credential-dependent guesses | Leaves some journeys blocked until operator policy is defined | Acceptable for policy-owned or unsafe operations |
+| Rebuild as a new hosted control app first | Could simplify one browser journey | Leaves deploy, Docker, agent runtime, qmd, Notion, and Shared Host gaps open | Rejected |
+| Patch Hermes core or rely on private-state workarounds | Might hide a local symptom quickly | Violates constraints and creates upgrade debt | Rejected |
+| Documentation-only reconciliation | Low code risk | Does not close verified behavior gaps | Rejected except for explicitly blocked policy-only items |
 
-## Uncertainty Comparison
+## Current State
 
-| Area | Option A | Option B | Planning decision |
-| --- | --- | --- | --- |
-| Terminal backend | tmux-backed sessions | ArcLink-managed pty fallback | Managed pty is the selected shipped path for this slice because it is implemented and covered. Keep tmux as a future backend candidate only after Docker and baremetal install paths prove it. |
-| Terminal transport | WebSocket/SSE streaming | Bounded polling with POSTed input | Bounded polling is the selected shipped path because the existing plugin API supports it without adding a streaming rail. |
-| Code editor | Harden current native editor | Vendor Monaco | Do not claim Monaco parity. Ship the native editor unless Monaco workers/assets/CSP are proven inside the Hermes plugin host. |
-| Drive sharing | Disabled/gated capability | Nextcloud/WebDAV share adapter | Keep sharing disabled until a real adapter and tests exist. Do not ship synthetic share links. |
+Slices 1 through 6 are completed baseline gates in the active plan:
+
+- Security and trust boundaries.
+- Hosted web/API identity, checkout, and dashboard.
+- Control-plane execution truthfulness.
+- Shared Host and Docker operational parity.
+- Private Curator and public bot onboarding recovery.
+- Knowledge freshness and generated content safety.
+
+Slice 7 / Priority 6 documentation and validation coverage is also checked in
+the active plan and steering file:
+
+- Documentation status, first-day/operator runbooks, Docker/data-safety truth,
+  and validation dependency clarity.
+
+Current backlog state after this PLAN pass: no open checkbox task markers remain in
+`IMPLEMENTATION_PLAN.md` or
+`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`. BUILD should
+therefore proceed as a verification and review handoff: preserve the completed
+gates, run focused validation, repair any newly discovered regressions, and
+keep proof-gated/live flows blocked unless the operator explicitly authorizes
+them.
 
 ## Assumptions
 
-- Hermes dashboard plugin manifests continue to load `dashboard/plugin_api.py`,
-  `dashboard/dist/index.js`, and `dashboard/dist/style.css`.
-- Plain JavaScript/CSS bundles are acceptable for the current plugin mission.
-- Vault and Workspace remain separate first-class Drive roots.
-- Code remains manual-save by default. Auto-save, if added, must be explicit
-  opt-in with visible warning.
-- Terminal execution must stay inside the deployment/user boundary with bounded
-  state, redacted errors, and explicit lifecycle controls.
-- Portable proof notes can summarize outcomes without embedding screenshots,
-  command transcripts, host-local paths, raw terminal scrollback, or secrets.
+- Public repo code, tests, docs, wrappers, generated config, systemd units,
+  Compose services, web/API code, hooks, plugins, and skills are in scope.
+- Private state, user homes, tokens, deploy keys, OAuth credentials, bot
+  tokens, live `.env` values, live deploys, production payment flows, public bot
+  mutations, and external credential-dependent proof are out of scope unless
+  the operator explicitly authorizes them during BUILD.
+- Shared Host, Docker, and Sovereign Control Node should remain distinct while
+  their contracts, defaults, health checks, and docs become aligned.
+- Behavior must be fixed before docs; docs should mark unproved or policy-owned
+  areas as proof-gated or blocked instead of inventing product truth.
 
 ## Planning Verdict
 
-The planning phase is ready for BUILD handoff. Required artifacts are
-project-specific and portable, no fallback placeholder marker is present in the
-implementation plan, and no planning-only blocker remains.
-
-## Build Handoff
-
-Proceed against the remaining unchecked handoff items in
-`IMPLEMENTATION_PLAN.md` and
-`research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md`:
-
-1. Reconcile the broad dirty worktree into scoped commits without reverting
-   unrelated user work.
-2. Keep private state, generated caches, bytecode, secrets, and local proof
-   debris out of commits.
-3. Keep Ralphie guidance commits separate from ArcLink product commits where
-   both scopes remain present.
-4. If deploying, push to the configured upstream branch before the canonical
-   `./deploy.sh upgrade` flow.
-5. Report final release, health, smoke/browser proof, and residual risks.
+PLAN is ready for BUILD handoff. Required artifacts are project-specific and
+portable, the implementation plan contains no fallback placeholder marker, and
+no planning-only blocker was identified.
 
 ## Remaining Risks
 
-- The worktree is broad and dirty; BUILD must preserve unrelated edits and
-  curate changes intentionally.
-- The current workspace proof is only current while the plugin, Docker,
-  provisioning, proof-runner, and docs surfaces remain unchanged after the
-  recorded pass.
-- Nextcloud sharing is not implemented and must remain disabled or genuinely
-  adapter-backed.
-- Monaco and streaming terminal transport remain optional future improvements,
-  not current completion requirements.
-- Git pull, push, discard, and discard-all need continued strict allowlists,
-  confirmations, redaction, timeout handling, and proof notes.
-- Proof artifacts and final reports must stay portable and secret-free.
+- The worktree already contains many modified files; BUILD must avoid reverting
+  unrelated edits and keep any later commit scoped.
+- Public bot mutation, live Stripe, Cloudflare, Tailscale, Docker
+  install/upgrade, and host deploy/upgrade checks remain proof-gated unless the
+  operator authorizes them.
+- Documentation and validation claims still need BUILD review against the dirty
+  worktree before release completion is declared.
+- Live-proof and credential-dependent validation choices may require operator
+  policy; those should become explicit blocked questions rather than inferred
+  behavior.

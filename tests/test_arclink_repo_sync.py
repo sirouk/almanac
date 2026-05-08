@@ -636,6 +636,66 @@ def test_sync_vault_repo_mirrors_records_auth_failure_and_keeps_going() -> None:
         print("PASS test_sync_vault_repo_mirrors_records_auth_failure_and_keeps_going")
 
 
+def test_clone_team_resources_rejects_unsafe_slugs_before_git_operations() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        manifest = root / "team-resources.tsv"
+        manifest.write_text(
+            "../escape|https://example.invalid/escape.git|main|bad\n"
+            "/abs|https://example.invalid/abs.git|main|bad\n"
+            ".hidden|https://example.invalid/hidden.git|main|bad\n",
+            encoding="utf-8",
+        )
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        log = root / "git.log"
+        fake_sudo = bin_dir / "sudo"
+        fake_sudo.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$1\" == \"-n\" ]]; then shift; fi\n"
+            "if [[ \"$1\" == \"-v\" ]]; then exit 0; fi\n"
+            "if [[ \"$1\" == \"-u\" ]]; then shift 2; fi\n"
+            "while [[ \"$1\" == *=* ]]; do shift; done\n"
+            "exec \"$@\"\n",
+            encoding="utf-8",
+        )
+        fake_git = bin_dir / "git"
+        fake_git.write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$*\" >> {json.dumps(str(log))}\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        fake_systemctl = bin_dir / "systemctl"
+        fake_systemctl.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        for path in (fake_sudo, fake_git, fake_systemctl):
+            path.chmod(0o755)
+
+        result = subprocess.run(
+            ["bash", str(REPO / "bin" / "clone-team-resources.sh")],
+            cwd=REPO,
+            env={
+                **os.environ,
+                "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+                "SUDO": str(fake_sudo),
+                "ARCLINK_TEAM_RESOURCES_MANIFEST": str(manifest),
+                "ARCLINK_TEAM_RESOURCES_DIR": str(root / "vault" / "Repos"),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "ARCLINK_REPO_DIR": str(REPO),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"clone-team-resources failed: {result.stderr}\n{result.stdout}")
+        expect("skipping unsafe resource slug: ../escape" in result.stderr, result.stderr)
+        expect("skipping unsafe resource slug: /abs" in result.stderr, result.stderr)
+        expect("skipping unsafe resource slug: .hidden" in result.stderr, result.stderr)
+        expect(not log.exists(), f"git should not be called for unsafe slugs: {log.read_text() if log.exists() else ''}")
+        expect(not (root / "escape").exists(), "unsafe slug must not create outside path")
+        print("PASS test_clone_team_resources_rejects_unsafe_slugs_before_git_operations")
+
+
 def main() -> int:
     test_discover_vault_repo_sources_ignores_markdown_url_mentions()
     test_discover_vault_repo_sources_finds_local_git_checkouts()
@@ -646,7 +706,8 @@ def main() -> int:
     test_sync_vault_repo_mirrors_marks_shared_vault_checkouts_safe_for_git()
     test_repo_sync_git_disables_interactive_prompts_and_scopes_safe_directory()
     test_sync_vault_repo_mirrors_records_auth_failure_and_keeps_going()
-    print("PASS all 9 repo sync regression tests")
+    test_clone_team_resources_rejects_unsafe_slugs_before_git_operations()
+    print("PASS all 10 repo sync regression tests")
     return 0
 
 

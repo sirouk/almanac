@@ -2,123 +2,93 @@
 
 ## Stack Components
 
-| Component | Repository evidence | Mission role | Decision |
+| Component | Evidence | Role | BUILD decision |
 | --- | --- | --- | --- |
-| Hermes dashboard plugin host | Drive, Code, and Terminal `dashboard/manifest.json` files | Native dashboard tab registration, asset loading, and API mounting | Required boundary; do not patch Hermes core. |
-| Python plugin APIs | `dashboard/plugin_api.py` in each workspace plugin | Drive file operations, Code workspace/git operations, Terminal session lifecycle | Keep and harden in place. |
-| FastAPI-style router layer | Optional FastAPI imports with lightweight fallbacks in plugin APIs | Runtime route integration plus deterministic no-secret tests | Preserve fallback shims. |
-| Plain JavaScript bundles | `dashboard/dist/index.js` in each workspace plugin | Hermes SDK React UI for native dashboard tabs | Continue for this mission; add heavier bundling only after proof. |
-| Scoped CSS bundles | `dashboard/dist/style.css` in each workspace plugin | Responsive dashboard-safe UI | Extend locally without broad design-system detours. |
-| Plugin installer | `bin/install-arclink-plugins.sh` | Copies/enables ArcLink plugins, preserves config, excludes generated caches | Canonical delivery path. |
-| Docker Compose runtime | `compose.yaml`, `Dockerfile`, Docker wrapper, provisioning renderer | Runtime substrate for dashboard, Vault, Workspace, qmd, Nextcloud, code-server, health | Required for deploy-ready handoff and any final upgrade. |
-| Provisioning renderer | `python/arclink_provisioning.py` | Emits deployment env, volumes, services, labels, access URLs | Extend only for real runtime needs. |
-| Workspace proof runner | `python/arclink_live_runner.py`, `python/arclink_live_journey.py`, `tests/test_arclink_live_runner.py` | Credential-gated Docker/TLS proof orchestration for Drive, Code, and Terminal | Use for final proof reporting, with portable notes kept separate from transcripts. |
-| Git CLI | Code plugin backend | Allowlisted Source Control operations | Keep with root confinement, confirmations, timeouts, and redaction. |
-| Managed pty | Terminal backend | Persistent session IDs, shell process lifecycle, scrollback capture, input, reload revisit | Selected current backend because it is implemented, dependency-light, and tested. |
-| tmux | Terminal backend candidate | Stronger detached persistence and capture semantics | Future candidate; do not require until Docker and baremetal install paths prove it. |
-| Polling transport | Terminal dashboard/API path | Reconnectable bounded output and POSTed input | Selected current transport because it fits existing plugin API calls. |
-| WebSocket/SSE | Terminal transport candidate | Lower-latency streaming output | Future candidate after Hermes plugin host proof. |
-| Monaco Editor | Optional Code editor dependency | Rich editor foundation | Do not treat as required; ship only after vendored asset, worker, and CSP proof inside Hermes. |
-| code-server | Pinned external IDE image | Optional full IDE link | Adapter only, not native Code completion proof. |
-| Nextcloud/WebDAV | Compose service plus Drive WebDAV profile | File browser backend and future sharing adapter | Capability-gated; do not fake sharing. |
-| Next.js product app | `web/package.json`, `web/src`, web tests | Product/admin app and browser harness patterns | Supporting surface, not the selected workspace implementation path. |
-| Playwright | Web package browser test script and workspace proof runner | Desktop/mobile browser proof automation | Use for proof freshness when plugin, Docker, provisioning, or runner code changes. |
-| qmd | Pins and retrieval scripts | Vault knowledge indexing rail | Preserve while changing Drive/Workspace behavior. |
-| Tailnet/domain ingress | Docker wrapper, provisioning access URLs, health/proof rails | TLS route publication and browser proof entrypoints | Publish URLs only after successful route setup. |
-
-## Version And Runtime Signals
-
-| Component | Current signal | Planning implication |
-| --- | --- | --- |
-| Hermes agent | Pinned by component config | Do not rely on unproven dashboard host behavior; stay in plugin APIs/assets. |
-| Python | Plugin APIs and most tests are plain Python | Run compile checks and focused tests after backend edits. |
-| Node.js | Dockerfile starts from Node 22; web app has Next/React tooling | Needed for web app, Hermes dashboard assets, JS syntax checks, and proof tooling. |
-| React | Hermes provides dashboard runtime; web app uses React 19 | Avoid introducing duplicate plugin-side React build complexity unless proven necessary. |
-| Next.js | Product app uses Next 15 | Support product/admin and browser harnesses only. |
-| code-server | Pinned external image in provisioning | Useful external IDE link; not native Code parity. |
-| Nextcloud | Pinned service family in Compose/provisioning | Future share adapter must be real and tested before enabled. |
-| qmd | Pinned npm package | Preserve retrieval and vault indexing rails. |
+| Bash | `deploy.sh`, `bin/*.sh`, `test.sh` | Canonical host lifecycle, Docker wrapper, bootstrap, health, qmd/PDF/Nextcloud jobs, service installation | Keep host mutations in scripts; validate with `bash -n` and focused shell/static tests. |
+| Python 3 | `python/*.py`, `bin/*.py`, `tests/test_*.py` | Control plane, hosted API, onboarding, provisioning, action worker, MCP, Notion/SSOT, memory, diagnostics, evidence, plugin APIs | Primary behavior-fix language for API, state, worker, onboarding, and knowledge repairs. |
+| SQLite | Schema and helpers in `python/arclink_control.py` | Durable state for users, deployments, sessions, actions, health, events, evidence, fleet, rollout, onboarding, and provisioning | Preserve migrations; add focused DB tests for truthful transitions and locking. |
+| Docker Compose | `compose.yaml`, `Dockerfile`, `bin/arclink-docker.sh` | Shared Host Docker and hosted/control-node substrate | Preserve completed parity gates; document and reduce remaining trusted-host boundaries. |
+| systemd | `systemd/user/*.service`, `systemd/user/*.timer`, install scripts | Bare-metal Shared Host services, timers, and user-agent units | Preserve loopback, path quoting, service env, and health behavior. |
+| Next.js | `web/package.json`, `web/src/app/*`, `web/src/lib/api.ts` | Hosted product, onboarding, checkout, login, user dashboard, admin dashboard | Keep existing app; preserve completed auth/session/CSRF and API-shape repairs. |
+| React/TypeScript | `web/src/*.tsx`, `web/tests/*`, configs | Web UI and browser validation | Use existing components and tests; avoid introducing another frontend stack. |
+| Node.js toolchain | `web/package-lock.json`, `web/package.json`, `config/pins.json` | Next.js build/runtime, Playwright tests, qmd install, live proof/browser checks | Document local Node and Playwright prerequisites; keep web validation explicit. |
+| Hermes runtime | `config/pins.json`, Docker/bootstrap installers | Agent runtime, gateways, dashboard host, skills, cron jobs | Do not edit Hermes core; use ArcLink plugins, hooks, generated config, and wrappers. |
+| Hermes dashboard plugins | `plugins/hermes-agent/drive`, `plugins/hermes-agent/code`, `plugins/hermes-agent/terminal`, `plugins/hermes-agent/arclink-managed-context` | Agent Drive, Code, Terminal, and managed context | Preserve hardened roots, secret exclusions, terminal boundaries, and installer/Docker defaults. |
+| qmd | `bin/qmd-daemon.sh`, `bin/qmd-refresh.sh`, `skills/arclink-qmd-mcp` | Vault, PDF, and shared Notion retrieval | Preserve loopback/default scope and completed freshness guarantees; align remaining docs. |
+| Notion API and SSOT | `python/arclink_notion_*`, `python/arclink_ssot_batcher.py`, SSOT skills | Shared Notion indexing and writes through broker rails | Preserve exact-read, destructive-payload, and batch claim/lock gates. |
+| PDF ingest and memory synthesis | `bin/pdf-ingest.py`, `python/arclink_memory_synthesizer.py` | Generated markdown sidecars and managed recall hints | Preserve endpoint redaction and content-hash freshness behavior. |
+| Nextcloud | Compose service, `bin/nextcloud-*.sh`, access helpers | Shared file service and future share adapter | Preserve truthful enablement/access behavior; keep docs aligned with actual support. |
+| Stripe | Hosted API/onboarding/docs/live E2E | Entitlement and checkout | Live flows require explicit operator authorization and credentials. |
+| Telegram/Discord | `python/arclink_telegram.py`, `python/arclink_discord.py`, onboarding/public bot modules | Private Curator and public bot onboarding | Test with fakes/mocks unless operator authorizes live bot mutations. |
+| Cloudflare/Tailscale | Ingress, provisioning, docs, live proof | Domain and Tailnet routing | Treat as proof-gated external dependencies. |
+| Playwright | `web/package.json`, `web/tests/browser`, live proof runner | Browser proof for hosted and workspace surfaces | Document setup and skip conditions; run for touched web/proof surfaces when available. |
 
 ## Alternatives Compared
 
-| Decision area | Preferred | Alternative | Reasoning |
+| Decision area | Preferred path | Alternative | Reason |
 | --- | --- | --- | --- |
-| Workspace surface | Existing Hermes dashboard plugins | Separate Next.js workspace app | Native tabs are the mission; a separate app misses the requirement. |
-| Drive root model | Explicit `Vault` and `Workspace` roots | Single merged virtual root | Separate roots are safer, clearer, and already represented in API status. |
-| Drive sharing | Disabled until real adapter | Stub share buttons or synthetic links | Fake sharing is explicitly prohibited. |
-| Code editor | Harden current native editor; add Monaco only after proof | Build directly on Monaco now | Monaco workers/assets/CSP may fail inside the plugin host; the current native editor can satisfy manual-save proof without adding that risk. |
-| Code Source Control | Allowlisted git CLI actions | Arbitrary git command endpoint | Allowlisting keeps shell escape, path scope, timeout, and confirmation behavior auditable. |
-| Terminal backend | Managed pty now; tmux later if proven | Require tmux immediately | Managed pty is implemented and tested; tmux requires deployment dependency work before it can be mandatory. |
-| Terminal transport | Bounded polling now; streaming later if proven | Synchronous command endpoints | Persistent Terminal needs input/output/reconnect semantics. Polling is acceptable and documented for this slice. |
-| Runtime changes | ArcLink Docker/provisioning wrappers | Hermes core patches | Wrappers preserve upgrade compatibility and mission constraints. |
+| Security repairs | Fix inside ArcLink wrappers/plugins/Python modules with focused tests | Rely on private state conventions or manual operator discipline | Public code must fail closed and remain testable without secrets. |
+| Onboarding recovery | Make failure/denial/skip/retry/cancel state durable and user-visible | Leave failures only in operator logs or ephemeral chat context | Users need recoverable journeys and operators need auditable state. |
+| Credential delivery | Route generated credentials only through documented credential channels or remove them from operator notifications | Continue sending generated passwords to generic operator notification channels | Credential exposure is a policy and security boundary, not a convenience detail. |
+| Knowledge freshness | Use content hashes and DB claim/lock semantics | Depend on timestamps, sizes, or serial job assumptions | Same-size rewrites and concurrent batchers can produce stale or duplicate output. |
+| qmd exposure | Loopback by default with deliberate opt-in for wider bind | Default public bind | Retrieval MCP should not be exposed accidentally. |
+| Notion exact reads | Scope to configured shared/indexed roots or privileged audited operations | Allow any integration-accessible page/database | Agent-facing tools must match shared knowledge boundaries. |
+| Generated cleanup | Resolve and contain DB-stored paths before unlink/move | Trust stored paths | Corrupt or malicious rows must not delete outside generated roots. |
+| Docs | Behavior-first updates with a doc status map | Rewrite docs ahead of repairs | Prevents polished docs from covering broken behavior. |
+| Stack ownership | Preserve the multi-runtime ArcLink topology | Collapse into Python-only, Node-only, or plugin-only work | The repo has first-class Bash, Python, Compose/systemd, web, and Hermes plugin surfaces. |
 
 ## Source Composition Signals
 
-Counts exclude private state, dependency folders, build output, bytecode caches,
-and test caches. They are repository-composition signals, not a full language
-line-count audit.
+Counts exclude private state, dependency folders, build output, logs, bytecode
+caches, and completion artifacts.
 
 | Source kind | Count | Planning implication |
 | --- | ---: | --- |
-| Python | 167 | Primary control plane, plugin API, provisioning, proof runner, and test implementation language. |
-| Shell | 80 | Canonical deploy, Docker, health, plugin install, and service orchestration layer. |
-| JavaScript | 4 | Three active plugin bundles plus the web service worker; plugin JS is intentionally direct. |
-| TypeScript | 6 | Next.js config/lib and Playwright typing/config. |
-| TSX | 10 | Next.js product/admin pages and React components. |
-| CSS | 4 | Scoped plugin CSS plus web global styling. |
-| YAML | 12 | Plugin metadata, config schemas/examples, Compose, and service metadata. |
-| JSON | 12 | Package manifests, pins, schemas, fixtures, and plugin/dashboard metadata. |
+| Python first-party `arclink_*.py` modules | 54 | Primary control-plane, API, worker, onboarding, plugin API, and knowledge modules. |
+| Python tests | 99 | Broad focused regression coverage exists and should be rerun or extended for remaining documentation/validation tasks. |
+| Shell scripts | 82 | Host lifecycle, Docker, health, bootstrap, and service orchestration are first-class behavior. |
+| systemd service/timer/path units | 29 | Bare-metal services and recurring jobs are core behavior. |
+| Web TS/TSX/MJS/JS source, tests, and config | 36 | Hosted product web surface and browser validation are active. |
+| Hermes plugins | 4 | Drive, Code, Terminal, and managed-context agent plugins. |
+| Skills | 11 | Vault, qmd, Notion, SSOT, resources, upgrade, first-contact, and PDF export. |
+| `arclink_*` control DB tables | 24 | Durable state spans users, deployments, sessions, actions, events, health, fleet, rollout, evidence, and onboarding. |
 
 ## Dependency Risks
 
-- Monaco may require vendored workers/assets and CSP allowances not available
-  to dashboard plugins.
-- WebSocket/SSE terminal streaming is unproven in the Hermes plugin host.
-- Managed pty persistence is sufficient for revisit-after-reload, but not the
-  same as tmux survival across all process restarts.
-- WebDAV file capability does not imply Nextcloud share capability.
-- Git pull, push, discard, and discard-all need strict allowlists, timeouts,
-  path checks, confirmations, and redacted errors.
-- Deployment proof depends on runtime availability, TLS routing, Tailnet or
-  domain publication, and credentials.
-- The worktree is broad; BUILD must not mix generated caches, private state, or
-  unrelated edits into commits.
+- `requirements-dev.txt` includes local validation helpers but not every
+  dependency implied by heavier live or browser proof.
+- Web validation depends on Node dependencies and installed Playwright browsers.
+- Live Stripe E2E requires explicit credentials and the Stripe runtime package.
+- Docker mode mounts private state and the Docker socket into trusted services;
+  the security model must remain documented and reduced where practical.
+- qmd, Hermes, Nextcloud, Postgres, Redis, uv, nvm/Node, and Tailscale are
+  pinned or configured components whose upgrade paths must preserve private
+  config and release-state truth.
+- External proof dependencies are not safe to run automatically in PLAN.
+- Private manifests and generated DB paths can influence destructive
+  operations; BUILD must preserve path-component validation before reset,
+  unlink, or move actions.
 
-## BUILD Dependency Decision
+## Validation Dependencies
 
-No new mandatory dependency should be introduced for the handoff phase unless a
-focused proof demonstrates it inside the Hermes dashboard plugin host and
-Docker/baremetal delivery paths. Monaco, tmux, WebSocket/SSE transport, and
-Nextcloud sharing remain optional candidates until proven by code, tests, and
-browser proof.
-
-## Validation Requirements
-
-Run after workspace plugin code changes:
+Use the narrowest relevant checks during BUILD:
 
 ```bash
-python3 -m py_compile \
-  plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-code/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py
-python3 tests/test_arclink_plugins.py
-node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js
 git diff --check
+bash -n deploy.sh bin/*.sh test.sh
+python3 -m py_compile <touched python files>
+python3 tests/<nearest focused test>.py
 ```
 
-Run when installer, Docker, provisioning, or deploy glue changes:
+For web changes:
 
 ```bash
-bash -n deploy.sh bin/*.sh test.sh ralphie.sh
-python3 tests/test_arclink_agent_user_services.py
-python3 tests/test_arclink_docker.py
-python3 tests/test_arclink_provisioning.py
-python3 tests/test_deploy_regressions.py
+cd web
+npm test
+npm run lint
+npm run test:browser
 ```
 
-Before final mission handoff, verify the recorded Docker/TLS proof artifacts
-are still current. Rerun Docker health or browser proof if plugin, installer,
-Docker, provisioning, proof-runner, documentation, or runtime state changed
-after the last passing proof.
+Credential-gated live proof, Docker install/upgrade, public bot mutation,
+production payment, and live host deploy/upgrade flows require explicit
+operator authorization during BUILD.

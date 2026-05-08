@@ -13,6 +13,7 @@ from arclink_boundary import json_dumps_safe, json_loads_safe
 from arclink_control import append_arclink_event, utc_after_seconds_iso, utc_now_iso
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
+    cancel_arclink_onboarding_session,
     create_or_resume_arclink_onboarding_session,
     handoff_arclink_onboarding_channel,
     open_arclink_onboarding_checkout,
@@ -1095,6 +1096,7 @@ def _connect_notion_reply(
         updates={
             "public_bot_workflow": "connect_notion",
             "connect_notion_requested_at": utc_now_iso(),
+            "connect_notion_public_status": "awaiting_user_setup",
         },
     )
     _record_bot_action(
@@ -1103,17 +1105,22 @@ def _connect_notion_reply(
         action="connect_notion_requested",
         channel=channel,
         channel_identity=channel_identity,
-        metadata={"deployment_status": str(deployment.get("status") or "")},
+        metadata={
+            "deployment_status": str(deployment.get("status") or ""),
+            "setup_mode": "public_preparation_only",
+        },
     )
     lines = [
-        "Opening the Notion lane for your ArcLink agent.",
+        "Opening the Notion preparation lane for your ArcLink agent.",
+        "",
+        "This public command records the setup intent and callback. It does not verify the Notion integration, install secrets, or bypass the dashboard/operator verification rail.",
         "",
         "Drop this callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
         "",
         "Then share the page or database with the ArcLink integration. No tokens in chat - when I need a secret, the secure dashboard field is the only door.",
         "",
-        "Send `ready` once Notion completes the verification handshake, or `cancel` and I will seal the lane.",
+        "Send `ready` after you finish the Notion-side setup. I will mark it ready for dashboard verification, or send `cancel` and I will seal the lane.",
     ]
     return _turn(
         channel=channel,
@@ -1150,6 +1157,7 @@ def _config_backup_reply(
         updates={
             "public_bot_workflow": "config_backup_repo",
             "config_backup_requested_at": utc_now_iso(),
+            "config_backup_public_status": "awaiting_private_repo",
         },
     )
     _record_bot_action(
@@ -1158,7 +1166,10 @@ def _config_backup_reply(
         action="config_backup_requested",
         channel=channel,
         channel_identity=channel_identity,
-        metadata={"deployment_status": str(deployment.get("status") or "")},
+        metadata={
+            "deployment_status": str(deployment.get("status") or ""),
+            "setup_mode": "public_preparation_only",
+        },
     )
     example = f"{str(deployment.get('user_id') or 'you').replace('_', '-')}/arclink-{str(deployment.get('prefix') or 'pod')}"
     return _turn(
@@ -1166,9 +1177,10 @@ def _config_backup_reply(
         channel_identity=channel_identity,
         action="prompt_backup_repo",
         reply=(
-            "Opening the private backup lane.\n\n"
-            "Choose a private GitHub repository - this is where Hermes' home and the pod's configuration snapshots will rest. "
-            "Send me `owner/repo` and I will pin it to this deployment.\n\n"
+            "Opening the private backup preparation lane.\n\n"
+            "This public command records the intended private GitHub repository. It does not mint, install, or verify the deploy key; the dashboard/operator backup rail completes that step.\n\n"
+            "Choose a private GitHub repository - this is where Hermes' home and the pod's configuration snapshots will rest after key setup is verified. "
+            "Send me `owner/repo` and I will attach it to this deployment as pending setup.\n\n"
             f"Example: `{example}`\n\n"
             "Use a dedicated deploy key for this pod. The ArcLink upstream key and the arclink-priv backup key stay where they are."
         ),
@@ -1445,7 +1457,10 @@ def _handle_active_workflow(
             updated = _update_session_metadata(
                 conn,
                 session_id=str(session["session_id"]),
-                updates={"connect_notion_user_marked_ready_at": utc_now_iso()},
+                updates={
+                    "connect_notion_user_marked_ready_at": utc_now_iso(),
+                    "connect_notion_public_status": "ready_for_dashboard_verification",
+                },
                 clear=("public_bot_workflow",),
             )
             if deployment:
@@ -1455,12 +1470,13 @@ def _handle_active_workflow(
                     action="connect_notion_ready",
                     channel=channel,
                     channel_identity=channel_identity,
+                    metadata={"verification_status": "pending_dashboard_verification"},
                 )
             return _turn(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="connect_notion_ready",
-                reply="Logged. Notion is marked ready on this pod. If the webhook still reads as unverified, open the dashboard Notion panel - ArcLink will arm the verification-token install window from there.",
+                reply="Logged as ready for dashboard verification. This is not a completed Notion verification yet; open the dashboard Notion panel or operator rail to arm and confirm the verification-token install window.",
                 session=updated,
                 deployment=deployment,
             )
@@ -1489,6 +1505,7 @@ def _handle_active_workflow(
             updates={
                 "config_backup_owner_repo": owner_repo,
                 "config_backup_requested_at": utc_now_iso(),
+                "config_backup_public_status": "repo_recorded_pending_key_setup",
             },
             clear=("public_bot_workflow",),
         )
@@ -1499,7 +1516,7 @@ def _handle_active_workflow(
                 action="config_backup_repo_recorded",
                 channel=channel,
                 channel_identity=channel_identity,
-                metadata={"owner_repo": owner_repo},
+                metadata={"owner_repo": owner_repo, "verification_status": "pending_deploy_key_setup"},
             )
         settings_url = f"https://github.com/{owner_repo}/settings/keys"
         return _turn(
@@ -1507,11 +1524,11 @@ def _handle_active_workflow(
             channel_identity=channel_identity,
             action="record_backup_repo",
             reply=(
-                f"Logged. `{owner_repo}` is bound to this pod's private backup lane.\n\n"
+                f"Logged as pending key setup. `{owner_repo}` is attached to this pod's private backup lane, but backup is not active yet.\n\n"
                 "Keep the repository private. ArcLink will mint a dedicated pod deploy key with write access; "
-                "when the key is ready, set it here:\n"
+                "when the dashboard/operator rail produces the key, set it here:\n"
                 f"{settings_url}\n\n"
-                "Recorded to the deployment event stream - operators on the admin bridge can see this move."
+                "Recorded to the deployment event stream - operators on the admin bridge can see this move and finish verification."
             ),
             session=updated,
             deployment=deployment,
@@ -1637,6 +1654,52 @@ def handle_arclink_public_bot_turn(
             sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
             scale_agent_expansion_price_id=scale_agent_expansion_price_id,
             base_domain=base_domain,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        if deployment and str(deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="cancel_unavailable",
+                reply=(
+                    "No setup workflow is open to cancel. Your agent is already live; use `/agents` or `/status` from here."
+                ),
+                session=session,
+                deployment=deployment,
+                buttons=(
+                    _button("Show My Crew", command="/agents", style="secondary"),
+                    _button("Check Status", command="/status", style="secondary"),
+                ),
+            )
+        if session:
+            updated = cancel_arclink_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                reason="public bot cancel command",
+            )
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="onboarding_cancelled",
+                reply=(
+                    "Launch setup cancelled.\n\n"
+                    "I closed the open onboarding and checkout state. Send `/packages` when you want to resume with a clean handoff."
+                ),
+                session=updated,
+                deployment=deployment,
+                buttons=(
+                    _button("Take Me Aboard", command="/packages"),
+                    _button("Check Status", command="/status", style="secondary"),
+                ),
+            )
+        return _turn(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            action="nothing_to_cancel",
+            reply="No open ArcLink setup workflow is waiting on this channel. Send `/packages` when you want to start.",
+            buttons=(_button("Take Me Aboard", command="/packages"),),
         )
 
     switch_match = ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE.match(command)

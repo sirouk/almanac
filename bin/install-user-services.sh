@@ -78,11 +78,11 @@ else
 fi
 
 if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
-  if have_compose_runtime; then
+  if nextcloud_runtime_available; then
     enable_user_units arclink-nextcloud.service
   else
     systemctl --user disable --now arclink-nextcloud.service >/dev/null 2>&1 || true
-    echo "Nextcloud requested, but no compose runtime is available yet; service not enabled."
+    echo "Nextcloud requested, but no Nextcloud runtime is available yet; service not enabled."
   fi
 else
   systemctl --user disable --now arclink-nextcloud.service >/dev/null 2>&1 || true
@@ -133,7 +133,7 @@ if [[ "$ENABLE_QUARTO" == "1" ]]; then
   restart_user_units arclink-quarto-render.timer
 fi
 
-if [[ "$ENABLE_NEXTCLOUD" == "1" ]] && have_compose_runtime; then
+if nextcloud_effectively_enabled; then
   restart_user_units arclink-nextcloud.service
 fi
 

@@ -184,13 +184,38 @@ def build_scale_operations_snapshot(
         ).fetchall()
     ]
 
+    # Provisioner state: check env for enabled flag
+    provisioner_enabled = bool(
+        os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "").strip()
+        and os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "").strip().lower()
+        not in ("0", "false", "no", "off")
+    )
+    executor_adapter = str(os.environ.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower()
+
+    # Classify action types by execution readiness
+    _EXECUTABLE_ACTIONS = {"restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"}
+    _PENDING_ACTIONS = {"comp", "suspend", "unsuspend", "reprovision", "rollout", "force_resynth", "rotate_bot_key"}
+
     return {
         "fleet_capacity": capacity,
+        "fleet_surface": "internal_read_only",
         "placements": placements,
         "stale_actions": stale_actions,
         "recent_action_attempts": recent_attempts,
         "last_executor_result": recent_attempts[0] if recent_attempts else {},
         "active_rollouts": active_rollouts,
+        "rollout_surface": "internal_read_only",
+        "provisioner": {
+            "enabled": provisioner_enabled,
+            "executor_adapter": executor_adapter,
+            "status": "active" if provisioner_enabled else "disabled",
+            "note": "" if provisioner_enabled else "ARCLINK_CONTROL_PROVISIONER_ENABLED is not set; provisioning worker is idle",
+        },
+        "action_execution_readiness": {
+            "executable": sorted(_EXECUTABLE_ACTIONS),
+            "pending_not_implemented": sorted(_PENDING_ACTIONS),
+            "note": "pending_not_implemented actions will record honest pending status instead of fake success",
+        },
     }
 
 

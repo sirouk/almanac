@@ -120,6 +120,8 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["HERMES_TUI_DIR"] == "/opt/arclink/runtime/hermes-agent-src/ui-tui", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/chutes_api_key", str(intent["environment"]))
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
+    expect(intent["environment"]["QMD_MCP_CONTAINER_PORT"] == "8181", str(intent["environment"]))
+    expect(intent["environment"]["QMD_MCP_LOOPBACK_PORT"] == "18181", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
     for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
@@ -198,7 +200,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         expect(forbidden not in text, text)
     health = conn.execute("SELECT service_name, status FROM arclink_service_health WHERE deployment_id = 'dep_1'").fetchall()
     expect(len(health) == len(expected_services), str([dict(row) for row in health]))
-    expect({row["status"] for row in health} == {"planned"}, str([dict(row) for row in health]))
+    expect({row["status"] for row in health} == {"dry_run_planned"}, str([dict(row) for row in health]))
     events = conn.execute("SELECT event_type FROM arclink_events WHERE subject_id = 'dep_1' ORDER BY created_at").fetchall()
     event_types = {row["event_type"] for row in events}
     expect({"provisioning_planned", "provisioning_rendered", "provisioning_ready_for_execution"} <= event_types, str(event_types))

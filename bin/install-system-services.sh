@@ -14,6 +14,38 @@ TARGET_DIR="/etc/systemd/system"
 CONFIG_PATH="${CONFIG_FILE:-$ARCLINK_PRIV_CONFIG_DIR/arclink.env}"
 mkdir -p "$TARGET_DIR"
 
+reject_systemd_unit_value() {
+  local name="$1" value="$2"
+  case "$value" in
+    *$'\n'*|*$'\r'*)
+      echo "Refusing to render systemd unit with control characters in $name" >&2
+      exit 1
+      ;;
+    *'$'*)
+      echo "Refusing to render systemd unit with dollar-sign substitution in $name" >&2
+      exit 1
+      ;;
+  esac
+}
+
+systemd_quote_value() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '"%s"' "$value"
+}
+
+systemd_quote_exec_arg() {
+  local value="$1"
+  systemd_quote_value "$value"
+}
+
+reject_systemd_unit_value "ARCLINK_CONFIG_FILE" "$CONFIG_PATH"
+reject_systemd_unit_value "ARCLINK_REPO_DIR" "$ARCLINK_REPO_DIR"
+SYSTEMD_CONFIG_ENV="$(systemd_quote_value "ARCLINK_CONFIG_FILE=$CONFIG_PATH")"
+SYSTEMD_PROVISION_EXEC="$(systemd_quote_exec_arg "$ARCLINK_REPO_DIR/bin/arclink-enrollment-provision.sh")"
+
 cat >"$TARGET_DIR/arclink-enrollment-provision.service" <<EOF
 [Unit]
 Description=Provision approved ArcLink enrollments
@@ -23,8 +55,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Environment=HOME=/root
-Environment=ARCLINK_CONFIG_FILE=$CONFIG_PATH
-ExecStart=$ARCLINK_REPO_DIR/bin/arclink-enrollment-provision.sh
+Environment=$SYSTEMD_CONFIG_ENV
+ExecStart=$SYSTEMD_PROVISION_EXEC
 EOF
 
 cat >"$TARGET_DIR/arclink-enrollment-provision.timer" <<EOF
@@ -50,8 +82,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 Environment=HOME=/root
-Environment=ARCLINK_CONFIG_FILE=$CONFIG_PATH
-ExecStart=$ARCLINK_REPO_DIR/bin/arclink-enrollment-provision.sh --claims-only
+Environment=$SYSTEMD_CONFIG_ENV
+ExecStart=$SYSTEMD_PROVISION_EXEC --claims-only
 EOF
 
 cat >"$TARGET_DIR/arclink-notion-claim-poll.timer" <<EOF

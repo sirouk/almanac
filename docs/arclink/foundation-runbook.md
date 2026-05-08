@@ -20,7 +20,9 @@ onboarding, user-dashboard, admin-dashboard, and queued-action contracts. It is
 for development and contract testing, not production hosting. ArcLink still
 does not ship production adapters that execute customer deployment containers,
 create live DNS records, mint live model provider keys, run live public bots,
-authenticate dashboard sessions, or execute queued admin actions.
+authenticate dashboard sessions, or run a live automated admin-action worker.
+The checked-in action worker can consume queued intents through the guarded
+executor boundary for local/fake validation and explicit operator-driven runs.
 
 ## Assumptions
 
@@ -43,9 +45,12 @@ authenticate dashboard sessions, or execute queued admin actions.
 - Manual comp actions are admin-owned and must include an audit reason.
 - Dashboard read models are projections over existing ArcLink tables. They must
   not expose raw metadata columns, plaintext secrets, or provider credentials.
-- Admin dashboard actions are queued audited intent only. They require an admin
-  id, target, reason, idempotency key, and secret-free metadata before any
-  future executor may act on them.
+- Admin dashboard actions are queued audited intent first. They require an admin
+  id, target, reason, idempotency key, and secret-free metadata before the
+  action worker may claim them.
+- The action worker is guarded by the executor configuration. Fake/no-secret
+  runs are valid for contract testing; live provider or Docker side effects
+  require an explicit live-enabled operator path and live adapters.
 - Mutating executor methods must fail closed unless a live/E2E enable flag is
   deliberately supplied by the caller.
 - Executor idempotency keys are replay keys for identical inputs only. Reusing
@@ -63,9 +68,9 @@ authenticate dashboard sessions, or execute queued admin actions.
 - ArcLink workspace UX belongs in Hermes dashboard plugins, not Hermes core
   patches. Plugin status APIs must stay capability-driven and secret-free.
 - `Terminal` provides managed-pty sessions inside the configured
-  deployment/user boundary. It is bounded, polling-based, and confirmation
-  gated; it is not unrestricted host-root shell access, tmux persistence, or
-  true streaming transport.
+  deployment/user boundary. It uses same-origin SSE output streaming with a
+  bounded polling fallback and confirmation-gated close; it is not unrestricted
+  host-root shell access or tmux persistence.
 
 ## Rationale
 
@@ -73,7 +78,8 @@ The foundation keeps ArcLink additive so the project can reuse the
 working host substrate instead of duplicating deploy, runtime, retrieval,
 memory, notification, and repair behavior too early. `ARCLINK_*` names and
 `arclink_*` tables give product work a clear namespace while preserving
-compatibility with existing `ARCLINK_*` configuration and operational scripts.
+compatibility with explicit legacy aliases such as `ARC_*` where helpers
+provide them.
 
 Provisioning is dry-run first because the risky parts are contracts, not Docker
 syntax: entitlement gating, deterministic retries, host/container path
@@ -116,6 +122,8 @@ ArcLink owns:
   `python/arclink_onboarding.py`.
 - User/admin dashboard read models and queued admin action intent in
   `python/arclink_dashboard.py`.
+- Queued admin action execution, attempt rows, stale-action recovery, and
+  pending-not-implemented status handling in `python/arclink_action_worker.py`.
 - Local no-secret website/API views in `python/arclink_product_surface.py`.
 - Public Telegram/Discord bot conversation skeletons in
   `python/arclink_public_bots.py`.
@@ -131,7 +139,8 @@ refresh/gateway rails.
 
 Configuration:
 
-- Non-empty `ARCLINK_*` values override legacy `ARCLINK_*` aliases.
+- Non-empty `ARCLINK_*` values override explicit legacy aliases such as
+  `ARC_*` when a helper call or future alias map provides one.
 - Blank `ARCLINK_*` values are ignored so generated env files do not erase
   working legacy settings.
 - Conflict diagnostics name only variable keys and do not print values.
@@ -323,9 +332,10 @@ Hosted API boundary:
 - `ArcLinkApiAuthError` maps to 401, `StripeWebhookError` maps to 400, and
   unexpected exceptions map to 400 with the generic safe error string. No raw
   tracebacks or internal details are returned.
-- The Stripe webhook route skips processing and returns `{"status": "skipped"}`
-  when `STRIPE_WEBHOOK_SECRET` is not configured, allowing no-secret test and
-  development environments to operate without Stripe credentials.
+- The Stripe webhook route rejects live webhook delivery with status 503 and a
+  `stripe_webhook_secret_unset` error when `STRIPE_WEBHOOK_SECRET` is not
+  configured, so Stripe retries instead of ArcLink silently accepting an event
+  it cannot verify.
 - `make_arclink_hosted_api_wsgi()` returns a standard WSGI app suitable for
   `wsgiref`, gunicorn, or other WSGI servers.
 - The hosted API is the production boundary. The local product surface
@@ -367,9 +377,19 @@ Dashboard and admin contracts:
   action intents, audit rows, and recent failures.
 - Admin dashboard filters are intentionally simple and SQLite-compatible:
   channel, status, deployment id, user id, and `since`.
-- Admin actions are represented as `arclink_action_intents` rows with status
-  `queued`; the current helper does not call Stripe, Cloudflare, Tailscale,
-  model provider, Docker, Telegram, Discord, Notion, or host provisioning APIs.
+- Admin actions are represented as `arclink_action_intents` rows and start with
+  status `queued`.
+- `python/arclink_action_worker.py` claims the oldest queued intent, records an
+  `arclink_action_attempts` row, dispatches supported actions through the
+  guarded executor, and writes audit/event rows for success, failure, or
+  unsupported paths.
+- Executor-backed worker actions currently include restart, DNS repair, Chutes
+  key rotation, refund, and cancel. They are fake/no-secret unless the caller
+  deliberately supplies a live-enabled executor and live adapters.
+- Other accepted admin action types, including comp, reprovision, rollout,
+  suspend, unsuspend, force resynthesis, and bot-key rotation, are honest
+  pending-not-implemented paths in the worker rather than no-op applied
+  successes.
 - Admin actions require an admin id, supported action type, supported target,
   reason, and idempotency key.
 - Reusing an idempotency key for the same action returns the existing intent
@@ -398,8 +418,8 @@ Native Hermes workspace plugins:
 - Terminal status reports the managed-pty backend when the workspace root,
   shell, and non-root runtime boundary are available, while returning sanitized
   workspace/state labels. Sessions have persisted metadata, bounded scrollback,
-  polling output, reload reconnect, rename, folder/grouping, reorder controls,
-  and confirmation-gated close.
+  same-origin SSE output streaming, bounded polling fallback, reload reconnect,
+  rename, folder/grouping, reorder controls, and confirmation-gated close.
 
 ### Entitlement Repair
 
@@ -452,16 +472,22 @@ separate E2E validation before they mutate real services.
 
 ### Admin Action Repair
 
-Use queued admin actions to record operator intent when the requested operation
-is not yet backed by a live executor. Do not perform a live provider mutation
-just because an `arclink_action_intents` row exists.
+Use queued admin actions to record operator intent, then process them only
+through the action worker or an explicitly reviewed operator procedure. Do not
+perform a live provider mutation just because an `arclink_action_intents` row
+exists.
 
 If an operator retries the same request, reuse the original idempotency key.
 Expected result:
 
 - The original action id is returned.
 - No duplicate audit row is created.
-- The queued status remains available for a future executor or manual review.
+- The worker records an attempt when it claims the action.
+- Supported fake/executor-backed actions finish as succeeded or failed.
+- Accepted but unwired actions finish with a pending-not-implemented failure
+  note instead of pretending to apply.
+- Stale running actions can be returned to queued with
+  `recover_stale_actions()` after the configured threshold.
 
 If the requested metadata includes a secret, store only a `secret://...`
 reference. Plain API keys, webhook secrets, bot tokens, OAuth credentials, or
@@ -557,6 +583,7 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
   bounded no-secret API contracts, but broader Google Drive and VS Code parity
   remains future work.
 - Terminal is managed-pty shell access inside the configured
-  deployment/user boundary, with bounded scrollback and confirmation-gated
-  lifecycle controls. It is not an unrestricted host-root shell, tmux-backed
-  persistence, or true streaming transport.
+  deployment/user boundary, with same-origin SSE output streaming, bounded
+  polling fallback, bounded scrollback, and confirmation-gated lifecycle
+  controls. It is not an unrestricted host-root shell or tmux-backed
+  persistence.

@@ -52,10 +52,30 @@ def test_org_profile_docs_mark_cli_as_shipped_contract() -> None:
     print("PASS test_org_profile_docs_mark_cli_as_shipped_contract")
 
 
+def test_docs_do_not_claim_stripe_webhook_skip() -> None:
+    forbidden = (
+        "Stripe webhook skip",
+        "skip for no-secret environments",
+    )
+    offenders = []
+    for path in (REPO / "docs").rglob("*.md"):
+        body = path.read_text(encoding="utf-8")
+        for phrase in forbidden:
+            if phrase in body:
+                offenders.append(f"{path.relative_to(REPO)} contains {phrase!r}")
+    expect(not offenders, "\n".join(offenders))
+
+    foundation = (REPO / "docs" / "arclink" / "foundation.md").read_text(encoding="utf-8")
+    expect("stripe_webhook_secret_unset" in foundation, foundation)
+    expect("status 503" in foundation, foundation)
+    print("PASS test_docs_do_not_claim_stripe_webhook_skip")
+
+
 def main() -> int:
     test_agents_service_user_unit_list_matches_templates()
     test_org_profile_docs_mark_cli_as_shipped_contract()
-    print("PASS all 2 documentation truth tests")
+    test_docs_do_not_claim_stripe_webhook_skip()
+    print("PASS all 3 documentation truth tests")
     return 0
 
 

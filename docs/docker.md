@@ -121,10 +121,13 @@ the source of truth after successful publication.
 Docker mode intentionally mounts `/var/run/docker.sock` into the
 `agent-supervisor` container. That supervisor is the Docker-mode replacement for
 per-user systemd units, so it needs Docker API access to create, update, and
-remove per-agent gateway, dashboard proxy, cron, and workspace containers.
+remove per-agent gateway, dashboard proxy, cron, and workspace containers. User
+dashboard backends are bound to agent-specific internal Docker network
+addresses; only the dashboard auth-proxy sidecar is published to host loopback.
 
 Treat Docker mode as a trusted-host deployment. Do not expose the Docker socket
-or the agent-supervisor service publicly. The shared HTTP services in
+or the agent-supervisor service publicly, and do not publish raw dashboard
+backend ports or the default Compose network. The shared HTTP services in
 `compose.yaml` remain bound to `127.0.0.1` by default so external access can be
 handled deliberately through the same access rails as Shared Host Mode.
 
@@ -157,9 +160,9 @@ ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG=1 ARCLINK_DOCKER_SKIP_CURATOR_SETUP=1 ./depl
 ```
 
 Health validates the Compose file, required persisted directories, running
-core services, core HTTP/database endpoints, and Docker user-agent managed
-context/SOUL presence plus MCP token validity/refresh status when the stack is
-up.
+core services, operator-facing ingress, core HTTP/database endpoints, recurring
+job status files, and Docker user-agent managed context/SOUL presence plus MCP
+token validity/refresh status when the stack is up.
 
 ## Operator Command Parity
 
@@ -223,6 +226,53 @@ arclink-priv/state/docker/jobs/
 
 `down` stops containers and keeps data. `teardown` also removes Compose named
 volumes, but bind-mounted `arclink-priv/` state remains on disk.
+
+## Docker Socket And Private-State Trust Boundaries
+
+The Docker Compose stack intentionally mounts `/var/run/docker.sock` only into
+services that need Docker API access for routing or lifecycle management:
+
+| Service | Purpose | Why it needs the Docker socket |
+| --- | --- | --- |
+| `control-ingress` | Traefik HTTP ingress | Read-only Docker provider discovery for `control-web`, `control-api`, and the Notion webhook |
+| `control-provisioner` | Sovereign fleet provisioner | Creates and manages deployment containers when `ARCLINK_EXECUTOR_ADAPTER=local` |
+| `agent-supervisor` | Per-agent container lifecycle | Reconciles agent containers, dashboard proxies, and Hermes agent runtimes |
+| `curator-refresh` | Operator maintenance loop | Runs queued Docker-mode upgrades and Compose repair commands from Curator/operator actions |
+
+The lifecycle services also bind-mount the live repository checkout and
+`arclink-priv/` for config, state, and secrets access. `control-ingress` uses a
+read-only socket mount and does not receive `arclink-priv/`.
+
+**Implications:**
+
+- Any process with writeable Docker socket access has host-root-equivalent capabilities.
+  `control-provisioner`, `agent-supervisor`, and `curator-refresh` are trusted
+  equivalents of the host operator.
+- `control-ingress` has read-only socket access for route discovery, but it is
+  still part of the trusted host boundary and must remain loopback-first.
+- Secrets enter container env via `docker.env` passthrough. They are not baked
+  into the image, but environment values are still visible to sufficiently
+  privileged container/Docker inspectors. Keep `docker.env` private and rotate
+  via `./deploy.sh docker rotate-nextcloud-secrets`.
+- Bind-mounted `arclink-priv/` state (DB, secrets, agent homes) is shared
+  mutable state between host and containers.
+- Per-agent containers created by the supervisor run on the shared Docker
+  network (`arclink_default`) with agent-specific isolated dashboard networks.
+- The `health-watch` service does not mount the Docker socket; it runs health
+  checks via network probes and DB reads only.
+- Containers run as the image/runtime user selected by the Compose service.
+  Do not treat container uid boundaries as a substitute for host trust while a
+  service has Docker socket or private-state mounts.
+- Dashboard backends must remain on agent-specific internal networks behind
+  the dashboard auth proxy. Publishing a raw backend port bypasses the intended
+  browser session gate.
+
+**Reducing exposure:**
+
+- Do not add Docker socket mounts to other services unless they require
+  container lifecycle management.
+- Keep `docker.env` readable only by the operator and the Docker runtime.
+- Rotate secrets before any durable shared deployment.
 
 ## Notes
 

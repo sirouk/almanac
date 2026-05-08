@@ -15,6 +15,7 @@ type ResumeState = {
   step: Step;
   sessionId: string;
   name: string;
+  email: string;
   planId: PlanId;
   checkoutUrl: string;
 };
@@ -43,6 +44,7 @@ const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
   const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [planId, setPlanId] = useState<PlanId>("founders");
   const [showStandardPlans, setShowStandardPlans] = useState(false);
   const [sessionId, setSessionId] = useState("");
@@ -50,6 +52,13 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState("");
   const [resumed, setResumed] = useState(false);
+  const [fakeMode, setFakeMode] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    api.adapterMode().then((r) => {
+      if (r.status === 200) setFakeMode((r.data as { fake_mode?: boolean }).fake_mode ?? null);
+    }).catch(() => {});
+  }, []);
 
   // Restore mid-flow state on refresh / Stripe cancel return.
   useEffect(() => {
@@ -59,6 +68,7 @@ export default function OnboardingPage() {
       const parsed = JSON.parse(raw) as Partial<ResumeState>;
       if (parsed.sessionId) setSessionId(parsed.sessionId);
       if (parsed.name) setName(parsed.name);
+      if (parsed.email) setEmail(parsed.email);
       if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
       if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
       if (parsed.step && parsed.step !== "start") {
@@ -75,13 +85,13 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (step === "start") return;
-    const snapshot: ResumeState = { step, sessionId, name, planId, checkoutUrl };
+    const snapshot: ResumeState = { step, sessionId, name, email, planId, checkoutUrl };
     try {
       window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
     } catch {
       // localStorage quota or disabled - drop silently.
     }
-  }, [step, sessionId, name, planId, checkoutUrl]);
+  }, [step, sessionId, name, email, planId, checkoutUrl]);
 
   function clearResume() {
     try {
@@ -105,7 +115,7 @@ export default function OnboardingPage() {
     setPlanId(nextPlanId);
     setLoading(true);
     try {
-      const res = await api.startOnboarding({ channel: "web", channel_identity: webContactId(), plan_id: nextPlanId });
+      const res = await api.startOnboarding({ channel: "web", channel_identity: webContactId(), plan_id: nextPlanId, email });
       if (res.status === 201 && res.data) {
         const session = (res.data as Record<string, Record<string, string>>).session;
         setSessionId(session.session_id);
@@ -130,6 +140,7 @@ export default function OnboardingPage() {
         question_key: "name",
         answer_summary: name,
         display_name: name,
+        email,
       });
       if (res.status === 200) {
         setStep("checkout");
@@ -273,6 +284,19 @@ export default function OnboardingPage() {
                 placeholder="Your name or org"
               />
             </div>
+            <div>
+              <label htmlFor="email" className="block text-sm text-soft-white/60">Email</label>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-soft-white outline-none focus:border-signal-orange"
+                placeholder="you@company.com"
+              />
+              <p className="mt-1 text-xs text-soft-white/30">Used for login and status after checkout.</p>
+            </div>
             <p className="text-sm text-soft-white/40">
               {PLAN_COPY[planId].name} is on deck at <span className="text-signal-orange">{PLAN_COPY[planId].price}</span>. {PLAN_COPY[planId].summary} Agentic Expansion is $99/month on Sovereign and $79/month on Scale.
             </p>
@@ -333,9 +357,11 @@ export default function OnboardingPage() {
         )}
       </div>
 
-      <p className="mt-6 text-xs text-soft-white/30">
-        Fake adapters active in development. No live charges.
-      </p>
+      {fakeMode === true && (
+        <p className="mt-6 text-xs text-soft-white/30">
+          Fake adapters active in development. No live charges.
+        </p>
+      )}
     </div>
   );
 }

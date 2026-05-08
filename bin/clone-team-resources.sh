@@ -28,6 +28,14 @@ SUDO="${SUDO:-sudo}"
 note() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m!! %s\033[0m\n' "$*" >&2; }
 
+safe_resource_slug() {
+  local slug="${1:-}"
+  [[ "$slug" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+  [[ "$slug" != *..* ]] || return 1
+  [[ "$slug" != .* ]] || return 1
+  return 0
+}
+
 if [[ ! -f "$MANIFEST" ]]; then
   warn "no team resource manifest found at $MANIFEST"
   warn "copy config/team-resources.example.tsv into arclink-priv/config/team-resources.tsv and replace the fictional examples with private repo refs."
@@ -54,6 +62,10 @@ while IFS='|' read -r SLUG URL BRANCH NOTE_TEXT || [[ -n "${SLUG:-}${URL:-}${BRA
   NOTE_TEXT="${NOTE_TEXT%"${NOTE_TEXT##*[![:space:]]}"}"
 
   [[ -z "$SLUG" || "$SLUG" == \#* ]] && continue
+  if ! safe_resource_slug "$SLUG"; then
+    warn "skipping unsafe resource slug: $SLUG"
+    continue
+  fi
   if [[ -z "$URL" ]]; then
     warn "skipping $SLUG: missing git URL"
     continue

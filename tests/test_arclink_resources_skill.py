@@ -34,6 +34,7 @@ def test_arclink_resources_skill_renders_local_no_secret_bundle() -> None:
                     "dashboard_url": "https://arclink.example.test:30012/",
                     "code_url": "https://arclink.example.test:40012/",
                     "tailscale_host": "arclink.example.test",
+                    "remote_setup_url": "https://arclink.example.test/setup-remote-hermes-client.sh",
                     "password": "do-not-print",
                 },
                 indent=2,
@@ -77,6 +78,8 @@ def test_arclink_resources_skill_renders_local_no_secret_bundle() -> None:
         expect(f"ArcLink vault: {user_home / 'ArcLink'}" in output, output)
         expect("Shared Notion SSOT: https://www.notion.so/The-ArcLink-00000000000040008000000000000003" in output, output)
         expect("Remote SSH target after key install: operator2@arclink.example.test" in output, output)
+        expect("Raven" not in output, output)
+        expect("raw.githubusercontent.com/example/arclink" not in output, output)
         expect("do-not-print" not in output, output)
         expect("QMD MCP retrieval rail:" not in output, output)
         print("PASS test_arclink_resources_skill_renders_local_no_secret_bundle")
@@ -88,6 +91,10 @@ def test_arclink_resources_skill_documents_home_alias_contract() -> None:
     expect("~/ArcLink" in body, body)
     expect("never print passwords" in body, body)
     expect("central service-user paths" in body, body)
+    expect("Curator/operator" in body, body)
+    expect("Raven" not in body, body)
+    script_body = SCRIPT.read_text(encoding="utf-8")
+    expect("raw.githubusercontent.com/example/arclink" not in script_body, script_body)
     print("PASS test_arclink_resources_skill_documents_home_alias_contract")
 
 

@@ -1,265 +1,343 @@
-# ArcLink Native Workspace Plugin Implementation Plan
+# ArcLink Ecosystem Gap Repair Implementation Plan
 
 ## Goal
 
-Bring the native ArcLink Hermes workspace plugins home end to end:
+Repair the verified end-to-end ArcLink ecosystem gaps from the May 2026
+repository audit across Shared Host, Shared Host Docker, Sovereign Control Node,
+hosted web/API, onboarding, Hermes runtime plugins, qmd/Notion/SSOT knowledge
+rails, documentation, validation, and user/operator journeys.
 
-- `ArcLink Drive`: Google Drive-like file management for Vault and Workspace roots.
-- `ArcLink Code`: VS Code-like Explorer, editor, diff, and Source Control surface.
-- `ArcLink Terminal`: persistent, revisit-able terminal sessions.
+The controlling detailed backlog is
+`research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`. BUILD must not
+route to terminal `done` while unchecked tasks remain in that steering file or
+in this implementation plan.
 
-This is the controlling plan for the current Ralphie mission. Ralphie must not
-route to terminal `done` while any unchecked item in this file or
-`research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` remains.
-
-## Selected Architecture
-
-Complete the existing native Hermes dashboard plugins backed by ArcLink Python
-plugin APIs, plain JavaScript/CSS dashboard bundles, ArcLink install and
-provisioning wrappers, Docker Compose runtime glue, and focused tests.
-
-Rejected paths:
-
-- Separate Next.js workspace app: useful for product/admin surfaces, but not a
-  native Hermes dashboard plugin implementation.
-- External-tool-first UX: Nextcloud, code-server, and terminal links may remain
-  optional adapters, but they cannot replace native Drive, Code, and Terminal.
-- Hermes core patches: explicitly outside the mission constraints.
-
-## Current State
-
-- [x] Slice 1: Plugin contracts, default installer wiring, and Terminal scaffold.
-- [x] Slice 2A: Drive root/API hardening, upload conflict policy, partial batch
-  failure surfacing, and symlink-escape pruning.
-- [x] Deploy-readiness repairs for Tailnet URL persistence, plugin config
-  preservation, and installer cache excludes are represented in the current
-  worktree.
-- [x] Code backend/API foundation now includes search, diff, git ignore,
-  pull/push, confined file operations, theme controls, and targeted tests.
-- [x] Slice 2B: Finish Drive browser proof.
-- [x] Slice 3: Prove Code VS Code foundation over TLS.
-- [x] Slice 4A: Implement managed-pty Terminal persistent sessions, polling
-  transport, session UI, resource controls, root guard, and focused tests.
-- [x] Workspace live-proof runner now has credential-gated default executors
-  for Docker upgrade/reconcile, Docker health, and Drive/Code/Terminal
-  desktop/mobile TLS browser proof.
-- [x] Slice 5: Run Docker/TLS integration proof for Drive, Code, and Terminal.
-- [x] Final hygiene, commit curation, optional deploy, and release handoff.
+Freshness checkpoint (2026-05-08): this plan has been re-reviewed against the
+active steering backlog. Repository composition verified from public repo files:
+54 first-party `python/arclink_*.py` modules, 99 Python test files, 82 shell
+scripts, 29 systemd units, 36 web source/test/config TS/TSX/MJS/JS files, 24
+ArcLink-owned control DB table definitions, 4 Hermes plugins, 11 skills, and 26
+Compose services. Slices 1 (security), 2
+(hosted web/API), 3 (control-plane execution truthfulness), 4 (Shared Host and
+Docker operational parity), 5 (private Curator and public bot onboarding), and
+6 (knowledge freshness and generated content safety) are completed baseline
+gates. Slice 7 documentation and validation tasks are now checked in this plan
+and in the steering file. No open checkbox task markers remain in either active
+backlog file after this PLAN pass. BUILD should treat remaining work as
+verification, review, and any newly discovered follow-up rather than an
+unchecked backlog.
 
 ## Non-Negotiables
 
+- Do not read private state, user homes, secret files, token files, deploy keys,
+  OAuth credentials, bot tokens, or live `.env` values.
 - Do not edit Hermes core.
-- Keep behavior in ArcLink plugins, wrappers, generated config,
-  Docker/service glue, and tests.
-- Preserve deploy, onboarding, and domain-or-Tailscale ingress behavior.
-- Keep all file and terminal operations confined to approved roots.
-- Do not follow symlinks out of approved roots.
-- Never expose tokens, `.env` values, deploy keys, OAuth credentials, bot
-  tokens, private state, raw terminal logs, or host-local paths in UI, logs,
-  docs, tests, API responses, proof notes, or commits.
-- Do not fake Nextcloud sharing, VS Code parity, Terminal persistence, or live
-  TLS proof.
-- Default plugin UI theme is dark. Code must offer a one-click light theme.
-- Risky actions must be confirmation-gated.
+- Do not run live deploy/upgrade, production payment flows, public bot
+  mutations, external credential-dependent proof, or live host-mutating flows
+  unless the operator explicitly asks during BUILD.
+- Fix behavior before docs.
+- Add focused regression tests for security, boundary, and journey repairs.
+- Keep Shared Host, Docker, and Sovereign Control Node boundaries explicit.
+- Never expose secrets, local paths, raw credentials, raw terminal logs, or
+  private state in logs, UI, docs, tests, API responses, proof notes, or commits.
+- Apply the Mandate of Inquiry: curiosity over closure. For every meaningful
+  logic/config/service/library/doc/journey gap, record distinct possibilities,
+  inspect the unknowns, and ask a concrete operator-policy question when the
+  product vector space is not defined by code.
 
-## Handoff Build Order
+## Selected Architecture
 
-1. Stabilize the dirty worktree enough to isolate plugin, deploy, docs,
-   proof-note, and Ralphie guidance edits without reverting unrelated changes.
-2. Review the recorded Drive, Code, Terminal, Docker health, and TLS browser
-   proof results for portability and freshness.
-3. Preserve the existing portable proof notes and screenshot references without
-   adding secrets, host-local paths, raw terminal scrollback, copied command
-   transcripts, or private state.
-4. Preserve docs so they match shipped behavior. Keep Nextcloud sharing,
-   Monaco, tmux persistence, and streaming transport claims bounded to what is
-   actually implemented and proven.
-5. Rerun focused validation if any code, installer, Docker, provisioning, web,
-   or proof-runner surface changes during handoff.
-6. Curate scoped commits and prepare deploy-ready handoff.
-7. If deploying, push the curated commits to the configured upstream branch and
-   run the canonical host upgrade flow.
+Use existing ArcLink public repo boundaries:
 
-## Actionable BUILD Tasks
+- Bash deploy, Docker, health, bootstrap, and service wrappers.
+- Python control-plane, hosted API, onboarding, provisioning, MCP, worker,
+  Notion/SSOT, health, evidence, fleet, and rollout modules.
+- Docker Compose services, systemd units, and domain-or-Tailscale ingress
+  intent for Sovereign Control Node surfaces.
+- Next.js hosted web app for onboarding, checkout, login, user dashboard, and
+  admin dashboard.
+- ArcLink Hermes plugins, hooks, generated config, and skills.
 
-### 1. Verify Deploy-Readiness Baseline
+Rejected paths:
 
-- [x] Rerun focused Docker, deploy, plugin, shell, and hygiene tests for the
-  current deploy-readiness changes.
-- [x] Confirm Tailnet publication persists app URLs only after successful
-  publication or records explicit unavailable status.
-- [x] Confirm plugin installation preserves unknown config, comments, and
-  future nested config while enabling ArcLink default plugins.
-- [x] Confirm plugin install copies exclude `__pycache__/`, `*.pyc`, and other
-  local generated caches.
+- Hermes core patches.
+- Private-state workarounds.
+- Documentation-only repair.
+- Replacing the multi-surface system with a new web app before closing host,
+  Docker, onboarding, knowledge, and security gaps.
 
-### 2. Drive Finalization
+Implementation path comparison:
 
-- [x] Confirm Drive exposes `Vault` and `Workspace` as separate first-class
-  parents in `/status`, API operations, and UI state.
-- [x] Finish browser-visible breadcrumbs, root picker, list/grid view,
-  sorting, multi-select, details/preview, context menus, upload, new
-  folder/file, rename, move, duplicate/copy, favorite, trash, restore, and
-  supported batch actions as one coherent desktop/mobile workflow.
-- [x] Ensure partial batch failures are represented by API contracts and
-  browser UI failure messaging.
-- [x] Ensure destructive Drive actions use deliberate in-app confirmation.
-- [x] Keep sharing disabled or clearly gated unless a real Nextcloud/WebDAV
-  share adapter and tests are implemented.
-- [x] Add or update focused tests for Drive API/UI contracts already present.
-- [x] Add any missing Drive tests discovered while completing the final UX.
-- [x] Run browser proof for Drive over TLS on desktop and mobile.
-
-### 3. Code VS Code Foundation
-
-- [x] Add a nested Explorer tree with filetype icons, tabs, dirty markers,
-  rename, move, duplicate, delete/trash, context menus, and drag/drop
-  confirmations.
-- [x] Add Search panel and status bar.
-- [x] Add diff endpoint/view so clicking a Source Control change opens a diff.
-- [x] Add repo open/close controls, stage all, unstage all, discard all with
-  strong confirmation, add to `.gitignore`, pull, push, conflict/error
-  reporting, refresh, and last git result.
-- [x] Evaluate Monaco. Ship a vendored Monaco bundle only if Hermes asset/CSP
-  behavior works; otherwise document the blocker and harden the native editor.
-- [x] Add dark/light theme toggle and explicit auto-save opt-in warning.
-- [x] Add tests for Code file operations, git allowlists, diff behavior,
-  confirmation gates, and root confinement.
-- [x] Run browser proof for Code over TLS on desktop and mobile.
-
-### 4. Terminal Persistent Sessions
-
-- [x] Implement a persistent Terminal backend with stable session IDs,
-  metadata, lifecycle states, workspace-root cwd, shell details, bounded
-  scrollback, and atomic state writes.
-- [x] Prove or add the Terminal runtime dependency path: install/use `tmux`
-  in Docker and baremetal refresh paths, or make the ArcLink-managed pty
-  fallback the documented tested backend.
-- [x] Prefer tmux-backed sessions; if tmux is unavailable, implement and
-  document an ArcLink-managed pty/session fallback.
-- [x] Select a streaming/reconnect transport supported by the Hermes plugin
-  host; if streaming is blocked, implement bounded polling and document the
-  limitation.
-- [x] Add dashboard UI with session list, new session, rename, folders/groups,
-  reorder, move-to-folder, terminal pane, bounded polling output, input,
-  reconnect after reload, and close/kill confirmation.
-- [x] Add resource controls: max sessions, scrollback limit, redacted backend
-  errors, and cleanup behavior.
-- [x] Ensure Terminal never runs as unrestricted host root and stays in the
-  deployment/user boundary.
-- [x] Add tests for create/revisit/rename/close, scrollback bounds,
-  unavailable backend, redaction, and reload reconnect.
-- [x] Run browser proof for Terminal over TLS on desktop and mobile.
-
-### 5. Integration And Proof
-
-- [x] Run focused Python, shell, JavaScript, web, and browser checks for all
-  touched surfaces.
-- [x] Run the correct Docker upgrade/reconcile path for the target deployment.
-- [x] Run Docker health and resolve any active failures.
-- [x] Use browser automation over TLS to exercise Drive upload, rename,
-  duplicate, drag move, trash/restore, and root switch.
-- [x] Use browser automation over TLS to exercise Code open file, edit without
-  auto-save, save, diff, stage/unstage, and commit-safe workflow.
-- [x] Use browser automation over TLS to exercise Terminal create session,
-  stream output, reload, revisit, rename, and close with confirmation.
-- [x] Capture portable proof notes and screenshots without secrets, host-local
-  paths, raw terminal scrollback, or copied command transcripts.
-- [x] Update docs only after behavior exists and proof passes.
-
-### 6. Commit And Deploy-Ready Handoff
-
-- [x] Reconcile the broad dirty worktree into intentional commits without
-  reverting user work.
-- [x] Keep private state and generated caches, including plugin bytecode
-  caches, out of commits.
-- [x] Commit Ralphie guidance fixes separately from ArcLink product changes
-  when both scopes are present.
-- [x] Commit ArcLink product changes in scoped commits after tests pass.
-- [x] Deployment was not requested for this build handoff; the canonical
-  push-and-upgrade flow remains the next operator step if deployment is chosen.
-- [x] Report final release, health, smoke/browser proof, and known residual
-  risks without claiming a new live deploy.
-
-Concrete handoff sequence:
-
-1. Review `git status --short` and classify changes as Ralphie guidance,
-   workspace plugin product code, deploy/provisioning/runtime glue,
-   docs/proof notes, web/product surface, generated cache, or unrelated user
-   work.
-2. Remove generated bytecode/cache artifacts from the commit set without
-   deleting user-owned source changes.
-3. Rerun the validation floor for every classified code surface that remains
-   staged for commit.
-4. Stage and commit Ralphie guidance artifacts separately from ArcLink product
-   code where both scopes are present.
-5. Stage and commit workspace plugin, runtime glue, tests, and docs in
-   reviewable scopes with no private state or local proof debris.
-6. If deployment is requested, confirm the configured upstream branch is the
-   production branch, push the commits, run `./deploy.sh upgrade`, then record
-   release state, health, smoke, and browser proof results.
-
-## Validation Floor
-
-Run after touching workspace plugin code:
-
-```bash
-python3 -m py_compile \
-  plugins/hermes-agent/arclink-drive/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-code/dashboard/plugin_api.py \
-  plugins/hermes-agent/arclink-terminal/dashboard/plugin_api.py
-python3 tests/test_arclink_plugins.py
-node --check plugins/hermes-agent/arclink-drive/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-code/dashboard/dist/index.js
-node --check plugins/hermes-agent/arclink-terminal/dashboard/dist/index.js
-git diff --check
-```
-
-Run when installer, provisioning, Docker, or deploy code changes:
-
-```bash
-bash -n deploy.sh bin/*.sh test.sh ralphie.sh
-python3 tests/test_arclink_agent_user_services.py
-python3 tests/test_arclink_docker.py
-python3 tests/test_arclink_provisioning.py
-python3 tests/test_deploy_regressions.py
-```
-
-Run when web or product surface changes:
-
-```bash
-npm --prefix web test
-npm --prefix web run lint
-npm --prefix web run build
-npm --prefix web run test:browser
-```
-
-For final live proof, run Docker upgrade/reconcile, Docker health, and TLS
-browser proof for `/drive`, `/code`, and `/terminal` on desktop and mobile.
+| Path | Use when | Decision |
+| --- | --- | --- |
+| Existing ArcLink slices across wrappers, Python modules, web/API, plugins, Compose, systemd units, and focused tests | The gap is in current public repo behavior or docs | Selected default BUILD path. |
+| Hide or mark a surface unavailable until a real worker/provider path exists | The product would otherwise imply execution that does not happen | Acceptable for policy-dependent or unsafe operations. |
+| New product/control app rewrite | Only after host, Docker, knowledge, onboarding, and boundary gaps are closed | Rejected for this mission. |
 
 ## Validation Criteria
 
-PLAN is complete when:
+Completion requires:
 
-- Required research artifacts are project-specific, portable, and current.
-- No fallback placeholder marker exists.
-- At least two implementation paths have been compared where uncertainty
-  exists.
-- BUILD can proceed without secrets for non-live implementation work.
-- Live proof blockers, if any, are named precisely.
-- Implementation tasks are actionable and testable.
+- Every unchecked item in this file and
+  `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` is either fixed
+  with focused tests/docs or intentionally marked blocked with a concrete
+  operator-policy question.
+- High-risk auth, secret, dashboard, qmd, Notion, SSOT, Docker, token argv,
+  generated cleanup, and path traversal boundaries fail closed.
+- Hosted web onboarding, checkout, auth, login, status, dashboard, and admin
+  views are coherent and truthful.
+- Admin/provisioning surfaces stop implying execution that does not happen.
+- Shared Host, Docker, and Control Node operations have aligned defaults,
+  dependency coverage, docs, and health checks.
+- Curator and public bot onboarding failure/cancel/skip/retry paths are visible
+  and recoverable.
+- Knowledge freshness and generated markdown safety match `AGENTS.md`.
+- Docs classify canonical versus stale/speculative/proof-gated material.
+- Every touched user/operator journey includes start, success, failure, cancel,
+  retry, skip, disabled, dry-run, pending, and proof-gated states where that
+  state can occur.
+- Focused validation is run and summarized; skipped heavy/live checks name the
+  concrete reason.
 
-Current PLAN status: complete for BUILD handoff. Remaining unchecked items are
-BUILD/proof/handoff work, not planning blockers.
+## BUILD Slices
 
-BUILD is complete only when:
+### 1. Security And Trust Boundaries
 
-- Every checkbox in this file and
-  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md` is complete.
-- Deterministic focused tests pass.
-- Docker health passes on the target deployment.
-- TLS browser proof demonstrates real Drive, Code, and Terminal workflows on
-  desktop and mobile.
-- Docs match shipped behavior and do not overclaim.
-- Commits are scoped and contain no secrets, private state, generated caches,
-  local paths, or command transcripts.
+- [x] Constrain Drive, Code, and Terminal dashboard roots by default in install,
+  refresh, Docker, and plugin API paths.
+- [x] Deny secret-like files, `.env`, `.ssh`, bootstrap tokens,
+  `HERMES_HOME/secrets`, private runtime state, traversal, and symlink escapes
+  for list, preview, download, edit, search, and terminal cwd operations.
+- [x] Bind bare-metal qmd to loopback by default and make health fail on unsafe
+  public binds.
+- [x] Scope `notion.fetch` and `notion.query` exact reads to configured
+  shared/indexed Notion roots or privileged audited operations.
+- [x] Shape-validate SSOT update payloads and reject archive/trash/delete style
+  destructive mutations unless routed through an explicit approval rail.
+- [x] Close Docker dashboard backend auth-proxy bypass risk by binding,
+  isolating, or authenticating the backend.
+- [x] Remove agent bootstrap tokens from process argv patterns.
+- [x] Revalidate generated-root containment before PDF/Notion index cleanup
+  unlinks or moves DB-stored paths.
+- [x] Sanitize team-resource manifest slugs before path construction and
+  destructive git reset operations.
+- [x] Add focused regression tests for each repaired boundary.
+
+### 2. Hosted Web/API Identity, Checkout, And Dashboard
+
+- [x] Choose and implement one browser session/CSRF contract that works with
+  HttpOnly cookies and user/admin route scoping.
+- [x] Ensure web onboarding collects or receives a usable account identity for
+  status/login after entitlement.
+- [x] Make checkout success poll or verify backend entitlement state before
+  claiming completion.
+- [x] Make checkout cancel preserve or resolve resume state and call backend
+  cancellation/resume semantics.
+- [x] Add CORS headers to allowed-origin auth and error responses.
+- [x] Filter user provider state by authenticated user.
+- [x] Fix admin dashboard API shape mismatches or normalize API responses.
+- [x] Add admin auth loading/redirect guard.
+- [x] Gate fake-adapter/no-live-charge copy on actual fake mode.
+- [x] Add hosted API, web API client, and browser tests for the repaired
+  journeys.
+
+### 3. Control-Plane Execution Truthfulness
+
+- [x] Wire a deployed action-worker consumer or hide/mark queued admin actions
+  unavailable until executable.
+- [x] Replace no-op "applied" branches with real domain operations or honest
+  pending/unsupported states.
+- [x] Make `control-provisioner` disabled state unmistakable in health/admin UI.
+- [x] Distinguish dry-run planning success from applied deployment success.
+- [x] Provide coherent fleet and rollout mutation journeys or document the
+  models as internal/read-only.
+- [x] Store and read live proof/evidence results; distinguish skipped, pending,
+  failed, and passed states.
+- [x] Add focused tests for action, provisioner, dry-run, rollout/fleet, and
+  evidence semantics.
+
+### 4. Shared Host And Docker Operational Parity
+
+- [x] Normalize upstream branch defaults across README, AGENTS, common config,
+  deploy logic, examples, and tests.
+- [x] Add missing bare-metal dependencies such as `jq` and `iproute2` to
+  bootstrap and tests.
+- [x] Carry effective Nextcloud enablement through install, restart, wait, and
+  health when Compose runtime is unavailable.
+- [x] Preserve discovered nondefault config in component upgrade and pin
+  notification paths.
+- [x] Make health DB probes fail when Python probe commands fail.
+- [x] Quote, escape, or reject unsafe generated systemd root unit paths.
+- [x] Expand Docker health to cover operator-facing ingress and recurring job
+  status files.
+- [x] Repair Docker Nextcloud access sync or disable that path honestly.
+- [x] Record Docker release state with dirty/mixed revision awareness.
+- [x] Reduce Docker agent supervisor over-serialization and excessive refresh.
+- [x] Document and reduce Docker socket/private-state trust boundaries.
+
+### 5. Private Curator And Public Bot Onboarding
+
+- [x] Surface early auto-provision failures to onboarding users and durable
+  session state.
+- [x] Stop sending generated dashboard passwords to operator notification
+  channels unless those channels are explicitly documented as credential
+  channels.
+- [x] Delete staged onboarding secrets when a session is denied.
+- [x] Make backup skip durable so skipped users are not re-prompted.
+- [x] Add completion-ack retry/recovery path.
+- [x] Make public `/cancel` cancel or explicitly resume open public onboarding
+  and checkout sessions.
+- [x] Clarify or deepen public backup and Notion command semantics.
+- [x] Validate API-key provider credentials earlier where safe, or state that
+  runtime validation is pending.
+- [x] Add focused Curator, public bot, provider auth, and completion tests.
+
+### 6. Knowledge Freshness And Generated Content Safety
+
+- [x] Redact or hash PDF vision pipeline endpoint before writing generated
+  markdown frontmatter.
+- [x] Use full-source hashes for memory synthesis freshness.
+- [x] Hash PDFs before fast-path skipping or otherwise detect same-size
+  same-second rewrites.
+- [x] Add DB claim/lock semantics around SSOT batcher event processing.
+- [x] Correct resources skill stale text and unsafe fallback URL.
+- [x] Add focused tests for endpoint redaction, content freshness, concurrent
+  batch processing, and skill text.
+
+### 7. Documentation And Validation Coverage
+
+- [x] Add a doc status map that marks canonical, historical, speculative,
+  proof-gated, and stale docs.
+- [x] Update `AGENTS.md` for current Shared Host, Docker, and Sovereign Control
+  Node shape or explicitly scope it.
+- [x] Update terminal docs for actual streaming/polling behavior.
+- [x] Fix Stripe webhook table names and unset-secret behavior docs.
+- [x] Fix product DB table-count docs or remove exact counts.
+- [x] Fix config alias wording.
+- [x] Rewrite data-safety docs to distinguish Shared Host, Docker, and
+  Sovereign Control Node state models.
+- [x] Add a first-day user guide.
+- [x] Add a Control Node production runbook.
+- [x] Add a Notion human guide.
+- [x] Update Docker security docs for socket mounts, container user, env secret
+  exposure, private-state mounts, auth proxy bypass risks, and trusted-host
+  assumptions.
+- [x] Align local validation docs with actual Python, Node, Playwright, Stripe,
+  and live proof dependencies.
+- [x] Add web and Playwright validation to the top-level validation path or
+  document why it stays web-local.
+- [x] Document live-proof Node and Playwright setup, including credential-gated
+  skip conditions.
+
+## Validation Floor
+
+Always run after touched-surface repairs:
+
+```bash
+git diff --check
+bash -n deploy.sh bin/*.sh test.sh
+python3 -m py_compile <touched python files>
+python3 tests/<nearest focused test>.py
+```
+
+Likely focused tests by slice:
+
+```bash
+python3 tests/test_arclink_plugins.py
+python3 tests/test_arclink_agent_user_services.py
+python3 tests/test_loopback_service_hardening.py
+python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_action_worker.py
+python3 tests/test_arclink_admin_actions.py
+python3 tests/test_arclink_provisioning.py
+python3 tests/test_arclink_sovereign_worker.py
+python3 tests/test_arclink_fleet.py
+python3 tests/test_arclink_rollout.py
+python3 tests/test_arclink_evidence.py
+python3 tests/test_arclink_live_runner.py
+python3 tests/test_arclink_docker.py
+python3 tests/test_deploy_regressions.py
+python3 tests/test_health_regressions.py
+python3 tests/test_arclink_curator_onboarding_regressions.py
+python3 tests/test_arclink_public_bots.py
+python3 tests/test_pdf_ingest_env.py
+python3 tests/test_memory_synthesizer.py
+python3 tests/test_arclink_ssot_batcher.py
+python3 tests/test_documentation_truths.py
+```
+
+For web changes:
+
+```bash
+cd web
+npm test
+npm run lint
+npm run test:browser
+```
+
+Do not run heavy `./test.sh`, Docker install/upgrade, live proof, public bot
+mutations, Stripe/Cloudflare/Tailscale flows, or host upgrades unless the
+operator explicitly authorizes them during BUILD.
+
+## Build Handoff Order
+
+1. Treat Slices 1 through 6 as completed baseline gates; do not regress them
+   while working later slices.
+2. Treat Slice 7 documentation and validation as completed baseline artifacts
+   that still need focused review and validation before final release claims.
+3. Before filling a gap, record the possibility set and unresolved unknowns in
+   the relevant code comment, test, doc note, or handoff when they materially
+   affect the implementation choice.
+4. Add focused failing tests before code when the current behavior is risky.
+5. Implement the narrowest behavior fix in existing ArcLink public code.
+6. Run the narrow validation floor for the touched surface.
+7. Update closest docs only after behavior is true.
+8. Repeat through docs and validation while preserving completed onboarding
+   recovery and knowledge freshness gates.
+9. Record any policy-dependent choice as blocked with a concrete operator
+   question instead of inventing a product answer.
+
+## BUILD Verification Tasks
+
+These are the concrete BUILD handoff actions now that the active backlog is
+checked:
+
+1. Review the dirty worktree by slice and confirm no unrelated user edits were
+   reverted or folded into the wrong concern.
+2. Run the validation floor for every touched surface, starting with
+   `git diff --check`, `bash -n deploy.sh bin/*.sh test.sh`, focused Python
+   tests for touched modules, and web validation for touched `web/` files.
+3. Compare docs against behavior for Shared Host, Shared Host Docker,
+   Sovereign Control Node, hosted web/API, onboarding, knowledge rails, and
+   validation prerequisites.
+4. If validation finds a regression, add or tighten the nearest focused test,
+   fix behavior first, then update docs.
+5. If live credentials, production deploys, public bot mutations, Stripe,
+   Cloudflare, Tailscale, Docker install/upgrade, or host mutation are required
+   to prove a claim, mark that claim proof-gated unless the operator explicitly
+   authorizes the flow.
+6. Only declare BUILD complete after validation results and any skipped
+   proof-gated checks are summarized with concrete reasons.
+
+## Prioritization And Escalation
+
+BUILD should treat Slices 1 through 6 as release gates that must remain green
+for the rest of the mission: high-risk secret, auth, retrieval, destructive
+mutation, token, generated cleanup, path traversal, browser session/CSRF,
+checkout, CORS, user scoping, admin dashboard, control-plane truthfulness,
+Docker parity, onboarding recovery, knowledge freshness, generated markdown
+safety, SSOT batch locking, and resource skill correctness are represented as
+completed baseline gates in this plan and should be rerun whenever touched.
+
+Proceed in numbered order from Slice 7 unless a failing test or shared module
+dependency makes a later slice a prerequisite for the current repair. Keep each
+BUILD pass scoped to one slice or one tightly related cross-slice cluster, then
+run the nearest validation floor before moving on.
+
+When a task requires an operator/product policy choice, BUILD must mark that
+specific task blocked with a concrete question and continue with independent
+no-secret work. Do not infer policy for live payments, public bot mutation,
+production deploy/upgrade, external credentials, dashboard credential delivery,
+or whether an admin action should execute for real versus remain unavailable.

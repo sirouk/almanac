@@ -45,6 +45,8 @@ from arclink_api_auth import (
     read_admin_queued_actions_api,
     read_admin_reconciliation_api,
     read_admin_service_health_api,
+    cancel_onboarding_session_api,
+    claim_session_from_onboarding_api,
     read_provider_state_api,
     read_user_billing_api,
     read_user_dashboard_api,
@@ -153,8 +155,10 @@ def _json_response(
     return status, dict(payload), headers
 
 
-def _cookie_flags(config: HostedApiConfig, *, expire: bool = False) -> str:
-    flags = "; Path=/; HttpOnly; SameSite=Lax"
+def _cookie_flags(config: HostedApiConfig, *, expire: bool = False, httponly: bool = True) -> str:
+    flags = "; Path=/; SameSite=Lax"
+    if httponly:
+        flags += "; HttpOnly"
     if expire:
         flags += "; Max-Age=0"
     if config.cookie_secure:
@@ -170,14 +174,20 @@ def _session_cookies(
     kind: str,
     config: HostedApiConfig,
 ) -> list[tuple[str, str]]:
-    """Build Set-Cookie headers for session credentials."""
+    """Build Set-Cookie headers for session credentials.
+
+    Session ID and token cookies are HttpOnly (server-only extraction).
+    The CSRF cookie is explicitly non-HttpOnly so browser JS can read it
+    and send the value as a header for mutation requests.
+    """
     cookies: list[tuple[str, str]] = []
     prefix = f"arclink_{kind}"
-    flags = _cookie_flags(config)
-    for field, suffix in (
-        ("session_id", "session_id"),
-        ("session_token", "session_token"),
-        ("csrf_token", "csrf"),
+    httponly_flags = _cookie_flags(config)
+    csrf_flags = _cookie_flags(config, httponly=False)
+    for field, suffix, flags in (
+        ("session_id", "session_id", httponly_flags),
+        ("session_token", "session_token", httponly_flags),
+        ("csrf_token", "csrf", csrf_flags),
     ):
         value = str(session.get(field) or "")
         if value:
@@ -646,6 +656,91 @@ def _handle_admin_scale_operations(
     return _json_response(200, snapshot, request_id=request_id)
 
 
+def _handle_onboarding_status(
+    conn: sqlite3.Connection,
+    query: dict[str, str],
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    """Return current onboarding/entitlement state for a session.
+
+    Used by checkout success page to poll until webhook confirms payment.
+    """
+    session_id = str(query.get("session_id") or "").strip()
+    if not session_id:
+        return _json_response(400, {"error": "session_id required"}, request_id=request_id)
+    row = conn.execute(
+        """
+        SELECT s.session_id, s.status, s.user_id, s.channel, s.display_name_hint,
+               s.selected_plan_id
+        FROM arclink_onboarding_sessions s
+        WHERE s.session_id = ?
+        """,
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        return _json_response(404, {"error": "session_not_found"}, request_id=request_id)
+    row_dict = dict(row)
+    user_id = str(row_dict.get("user_id") or "").strip()
+    entitlement_state = "unknown"
+    if user_id:
+        user_row = conn.execute(
+            "SELECT entitlement_state FROM arclink_users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        if user_row is not None:
+            entitlement_state = str(dict(user_row).get("entitlement_state") or "unknown")
+    return _json_response(200, {
+        "session_id": session_id,
+        "status": row_dict.get("status") or "open",
+        "user_id": user_id,
+        "entitlement_state": entitlement_state,
+        "plan_id": row_dict.get("selected_plan_id") or "",
+        "display_name": row_dict.get("display_name_hint") or "",
+    }, request_id=request_id)
+
+
+def _handle_onboarding_claim_session(
+    conn: sqlite3.Connection,
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    result = claim_session_from_onboarding_api(
+        conn,
+        onboarding_session_id=str(body.get("session_id") or ""),
+    )
+    cookies: list[tuple[str, str]] = []
+    if result.status == 201:
+        cookies = _session_cookies(result.payload.get("session", {}), kind="user", config=config)
+    return _json_response(result.status, result.payload, request_id=request_id, extra_headers=cookies)
+
+
+def _handle_onboarding_cancel(
+    conn: sqlite3.Connection,
+    body: dict[str, Any],
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    result = cancel_onboarding_session_api(
+        conn,
+        onboarding_session_id=str(body.get("session_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_adapter_mode(
+    config: HostedApiConfig,
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    """Report whether the system is running with fake or live adapters."""
+    from arclink_adapters import resolve_stripe_client, FakeStripeClient
+    stripe = resolve_stripe_client(config.env)
+    fake_stripe = isinstance(stripe, FakeStripeClient)
+    fake_mode = fake_stripe or str(config.env.get("ARCLINK_FAKE_MODE") or config.env.get("ARCLINK_FAKE_ADAPTERS") or "").strip().lower() in ("1", "true", "yes")
+    return _json_response(200, {
+        "fake_mode": fake_mode,
+        "fake_stripe": fake_stripe,
+    }, request_id=request_id)
+
+
 def _handle_health(
     conn: sqlite3.Connection,
     request_id: str,
@@ -983,6 +1078,26 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["user"],
         "responses": {"200": {"description": "Provider state"}, "401": {"description": "Unauthorized"}},
     },
+    "onboarding_claim_session": {
+        "summary": "Claim user session after paid onboarding",
+        "tags": ["onboarding"],
+        "requestBody": _openapi_json_body({
+            "session_id": {"type": "string"},
+        }, required=["session_id"]),
+        "responses": {
+            "201": {"description": "User session created with Set-Cookie"},
+            "402": {"description": "Entitlement not yet paid"},
+            "404": {"description": "Onboarding session not found"},
+        },
+    },
+    "onboarding_cancel": {
+        "summary": "Cancel an onboarding session",
+        "tags": ["onboarding"],
+        "requestBody": _openapi_json_body({
+            "session_id": {"type": "string"},
+        }, required=["session_id"]),
+        "responses": {"200": {"description": "Session cancelled or already final"}, "404": {"description": "Session not found"}},
+    },
     "health": {
         "summary": "Liveness/readiness health check",
         "tags": ["health"],
@@ -1075,6 +1190,10 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/operator-snapshot"): "admin_operator_snapshot",
     ("GET", "/admin/scale-operations"): "admin_scale_operations",
     ("GET", "/user/provider-state"): "user_provider_state",
+    ("GET", "/onboarding/status"): "onboarding_status",
+    ("POST", "/onboarding/claim-session"): "onboarding_claim_session",
+    ("POST", "/onboarding/cancel"): "onboarding_cancel",
+    ("GET", "/adapter-mode"): "adapter_mode",
     ("GET", "/health"): "health",
     ("GET", "/openapi.json"): "openapi_spec",
 }
@@ -1084,6 +1203,10 @@ _PUBLIC_ROUTES = frozenset({
     "public_onboarding_start",
     "public_onboarding_answer",
     "public_onboarding_checkout",
+    "onboarding_status",
+    "onboarding_claim_session",
+    "onboarding_cancel",
+    "adapter_mode",
     "stripe_webhook",
     "telegram_webhook",
     "discord_webhook",
@@ -1180,6 +1303,14 @@ def route_arclink_hosted_api(
             result = _handle_provider_state(conn, headers, request_id, cfg, "admin")
         elif route_key == "user_provider_state":
             result = _handle_provider_state(conn, headers, request_id, cfg, "user")
+        elif route_key == "onboarding_status":
+            result = _handle_onboarding_status(conn, clean_query, request_id)
+        elif route_key == "onboarding_claim_session":
+            result = _handle_onboarding_claim_session(conn, parsed_body, request_id, cfg)
+        elif route_key == "onboarding_cancel":
+            result = _handle_onboarding_cancel(conn, parsed_body, request_id)
+        elif route_key == "adapter_mode":
+            result = _handle_adapter_mode(cfg, request_id)
         elif route_key == "health":
             result = _handle_health(conn, request_id)
         elif route_key == "openapi_spec":
@@ -1223,23 +1354,27 @@ def route_arclink_hosted_api(
             "api_auth_error method=%s path=%s route=%s error=%s elapsed=%.3fs request_id=%s",
             clean_method, route_path, route_key, str(exc), elapsed, request_id,
         )
-        return _json_response(401, {"error": str(exc), "request_id": request_id}, request_id=request_id)
+        cors = _cors_headers(cfg)
+        return _json_response(401, {"error": str(exc), "request_id": request_id}, request_id=request_id, extra_headers=cors)
     except StripeWebhookError as exc:
         elapsed = time.monotonic() - start
         logger.warning(
             "stripe_webhook_error path=%s error=%s elapsed=%.3fs request_id=%s",
             route_path, str(exc), elapsed, request_id,
         )
-        return _json_response(400, {"error": str(exc), "request_id": request_id}, request_id=request_id)
+        cors = _cors_headers(cfg)
+        return _json_response(400, {"error": str(exc), "request_id": request_id}, request_id=request_id, extra_headers=cors)
     except KeyError:
-        return _json_response(404, {"error": "not_found", "request_id": request_id}, request_id=request_id)
+        cors = _cors_headers(cfg)
+        return _json_response(404, {"error": "not_found", "request_id": request_id}, request_id=request_id, extra_headers=cors)
     except Exception:
         elapsed = time.monotonic() - start
         logger.exception(
             "api_error method=%s path=%s route=%s elapsed=%.3fs request_id=%s",
             clean_method, route_path, route_key, elapsed, request_id,
         )
-        return _json_response(400, {"error": GENERIC_ARCLINK_API_ERROR, "request_id": request_id}, request_id=request_id)
+        cors = _cors_headers(cfg)
+        return _json_response(400, {"error": GENERIC_ARCLINK_API_ERROR, "request_id": request_id}, request_id=request_id, extra_headers=cors)
 
 
 # --- WSGI adapter -------------------------------------------------------------

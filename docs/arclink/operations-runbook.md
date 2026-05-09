@@ -224,13 +224,17 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
 
 ## 4. Chutes Provider
 
-**Module:** `python/arclink_chutes.py`
+**Modules:** `python/arclink_chutes.py`, `python/arclink_chutes_live.py`,
+`python/arclink_chutes_oauth.py`
 
 **Operations:**
 | Function | Purpose |
 |----------|---------|
 | `parse_chutes_models(payload)` | Parse model catalog from Chutes API |
 | `validate_default_chutes_model(...)` | Confirm selected default is valid |
+| `ChutesLiveAdapter` | Secret-reference boundary for model, account, usage, quota, discount, price override, API-key, OAuth-scope, token-introspection, and balance-transfer API shapes |
+| `start_chutes_oauth_connect(...)` | Build a PKCE Chutes OAuth connect plan with state, CSRF, user/session scope, and public scope display |
+| `complete_chutes_oauth_callback(...)` | Complete a scoped OAuth callback and store returned token material behind secret references |
 
 **Key lifecycle (executor-managed):**
 - Create: `_fake_chutes_key_id(deployment_id, secret_ref, generation)` in fake mode.
@@ -248,6 +252,19 @@ unavailable and no scoped secret is present, the deployment is marked as
 requiring a per-user Chutes account/OAuth lane before inference. User-facing
 dashboards and public bots must never collect raw provider tokens; route
 provider credentials through the scoped secret handoff/secret-reference path.
+
+**OAuth and account boundary:** Chutes OAuth/connect is locally modeled and
+fake-tested, but live delegated inference and token revocation are proof-gated.
+The connect plan uses PKCE, binds state to the user and session, validates CSRF,
+stores access/refresh token material only behind generated `secret://`
+references, and returns public connection metadata without raw token values.
+The recommended product path is per-user Chutes provider account connection
+when the operator chooses that policy; until then OAuth, usage sync, API-key
+CRUD, registration assist, and balance transfer remain disabled or explicitly
+proof-gated. ArcLink must not claim silent server-side Chutes provider account
+creation or use browser/TLS challenge-bypass tooling; official
+registration-token, hotkey/coldkey, and funding requirements are treated as
+assisted or operator-authorized proof work.
 
 **Billing and budget:** Non-current billing states suspend provider access
 immediately. User and admin provider-state responses expose the local lifecycle:
@@ -270,8 +287,18 @@ direct provider balance application remain proof-gated.
 | `ARCLINK_REFUEL_CREDIT_CENTS` | Default local provider-budget credit amount |
 | `ARCLINK_REFUEL_CURRENCY` | Local credit currency, default `usd` |
 
+**External proof gates:** The provider-specific live proof path is
+`bin/arclink-live-proof --journey external --live --json`. Each Chutes provider
+proof row requires its own `ARCLINK_PROOF_CHUTES_*` flag and the matching
+secret references or live credential variables documented in
+`docs/arclink/live-e2e-secrets-needed.md`. API-key creation/deletion and
+balance transfer additionally require `ARCLINK_CHUTES_ALLOW_MUTATION`; without
+that gate, mutation methods fail closed.
+
 **Fake mode:** Default. Model catalog uses a built-in fixture. Key operations
-write to SQLite only, and budget/credit accounting is local state only.
+write to SQLite only, live-adapter fixtures return redacted Chutes provider
+payloads, OAuth callbacks use fake exchangers, and budget/credit accounting is
+local state only.
 
 **Troubleshooting:**
 - Model catalog empty: check `CHUTES_API_KEY` is set for live catalog fetch.
@@ -281,6 +308,10 @@ write to SQLite only, and budget/credit accounting is local state only.
 - Provider state says `operator_shared_key_rejected`: configure a scoped
   per-user or per-deployment secret reference, or use the per-user account/OAuth
   fallback when per-key metering is not available.
+- OAuth callback rejected: check the callback user/session, state, CSRF token,
+  callback expiry, and TLS redirect URI before assuming provider failure.
+- Balance transfer returns `fake_not_executed` or a proof-gated error: this is
+  expected until an authorized live transfer row is enabled.
 
 ## 5. Stripe Boundary
 
@@ -563,15 +594,26 @@ connectivity checks require `ARCLINK_E2E_LIVE=1`.
 
 ## 13. Live Journey and Evidence
 
-**Modules:** `python/arclink_live_journey.py`, `python/arclink_evidence.py`
+**Modules:** `python/arclink_live_journey.py`, `python/arclink_live_runner.py`,
+`python/arclink_evidence.py`
 
-Run the ordered live journey (requires credentials):
+Plan or run the ordered live journeys:
 
 ```bash
+bin/arclink-live-proof --json
+bin/arclink-live-proof --journey workspace --live --json
+bin/arclink-live-proof --journey external --live --json
 ARCLINK_E2E_LIVE=1 PYTHONPATH=python python3 -m pytest tests/test_arclink_e2e_live.py -v
 ```
 
-Without credentials, all steps skip cleanly. Evidence template at
+The hosted journey covers onboarding/provider readiness. The workspace journey
+covers Docker upgrade/health plus Drive, Code, and Terminal browser proof. The
+external journey covers named provider and live-service rows: Stripe,
+Telegram, Discord, Hermes dashboard landing, Chutes provider OAuth, Chutes
+provider usage, Chutes key CRUD, Chutes account registration, Chutes balance
+transfer, Notion shared-root SSOT, Cloudflare, and Tailscale. Without
+credentials, all steps skip or report missing environment names cleanly.
+Evidence template at
 `docs/arclink/live-e2e-evidence-template.md`.
 
 ## 14. Native Hermes Workspace Plugins

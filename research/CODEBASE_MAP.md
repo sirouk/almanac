@@ -10,13 +10,13 @@ material, and live environment values were not inspected.
 
 | Signal | Count / evidence | Planning implication |
 | --- | ---: | --- |
-| Python files | 168 | Main behavior surface for control plane, API, bots, provisioning, knowledge, memory, and plugin APIs. |
-| Python regression tests | 99 | Focused tests exist for most high-risk surfaces; add tests near touched behavior. |
-| Shell/script entrypoints | 86 | Host lifecycle, Docker, health, service, qmd, PDF, backup, and upgrade behavior are product behavior. |
-| Markdown files | 100 | Docs and research artifacts must stay aligned with repaired behavior. |
+| Python files | 172 | Main behavior surface for control plane, API, bots, provisioning, knowledge, memory, Chutes, live proof, and plugin APIs. |
+| Python regression tests | 101 | Focused tests exist for most high-risk surfaces; add tests near touched behavior. |
+| Shell/script entrypoints | 82 | Host lifecycle, Docker, health, service, qmd, PDF, backup, and upgrade behavior are product behavior. |
+| Markdown files | 103 | Docs and research artifacts must stay aligned with repaired behavior. |
 | systemd unit/timer/path files | 29 | Bare-metal runtime behavior remains supported and must stay in validation scope. |
-| Web TypeScript/JavaScript files | 21 | Hosted onboarding, checkout, login, user dashboard, admin dashboard, and browser proof need web validation. |
-| Public JSON/YAML files | 23 | Compose, pins, package manifests, OpenAPI/config, and fixtures define runtime assumptions. |
+| Web TypeScript/JavaScript files | 17 | Hosted onboarding, checkout, login, user dashboard, admin dashboard, and browser proof need web validation. |
+| Public JSON/YAML files | 22 | Compose, pins, package manifests, OpenAPI/config, and fixtures define runtime assumptions. |
 
 ## Root Entrypoints
 
@@ -98,6 +98,10 @@ synthesis, Hermes docs sync, Quarto render, backup, and Curator gateways.
 | Knowledge and memory | `python/arclink_mcp_server.py`, `python/arclink_control.py`, `python/arclink_memory_synthesizer.py`, managed-context plugin | qmd/SSOT/recall stubs are real; shared-root SSOT membership is now canonical; optional conversational-memory sibling boundaries are documented; peer-awareness remains policy-gated. |
 | Drive sharing | `python/arclink_api_auth.py`, Drive/Code plugins, dashboard page | Grants, owner approval, read-only `Linked` roots, living projection/revoke cleanup, agent-facing `shares.request`, and browser proof exist; copied snapshots no longer satisfy the product promise, so BUILD must preserve linked resources and keep browser sharing disabled until a live broker or approved Nextcloud/WebDAV/OCS adapter exists. |
 | Chutes and billing | `python/arclink_chutes.py`, `python/arclink_entitlements.py`, `python/arclink_api_auth.py` | Local fail-closed boundaries, usage ingestion, Refuel Pod local credits, failed-renewal lifecycle metadata, and per-user Chutes account/OAuth fallback are current local truth; live key management and live utilization remain proof-gated. |
+| Chutes live adapter continuation | `python/arclink_chutes.py`, `python/arclink_chutes_live.py`, `python/arclink_chutes_oauth.py` | Official registration assist, personal usage/billing endpoints, API-key CRUD, balance transfer, OAuth scopes, token introspection, and OAuth connect/callback now have secret-reference or fake coverage; live calls require explicit proof flags and secret references. |
+| Raven chat scope | `python/arclink_public_bots.py`, `python/arclink_telegram.py`, `python/arclink_discord.py`, Raven docs/tests | Current truth is control-conduit plus selected-agent labels; direct public-channel agent proxying is a policy decision and should be explicit command-based if built. |
+| Browser share-link broker | `python/arclink_api_auth.py`, Drive/Code plugins, dashboard page | Existing linked-resource grants are real; browser right-click link creation should stay disabled until an ArcLink broker or approved Nextcloud/WebDAV/OCS adapter is implemented and tested. |
+| Live proof orchestration | `python/arclink_live_runner.py`, `python/arclink_evidence.py`, `bin/arclink-live-proof`, docs | Extend provider-specific proof as opt-in, redacted, scratch-account oriented checks; never make live proof a default no-secret validation dependency. |
 | Operator setup and ingress | `bin/deploy.sh`, `compose.yaml`, `python/arclink_ingress.py`, docs | Setup choice UX, singleton operator ownership, and Cloudflare/Tailscale fake gates exist; live ingress proof remains gated. |
 | Upgrades | `config/pins.json`, `bin/deploy.sh`, `python/arclink_pin_upgrade_check.py`, public bot commands | ArcLink rails are current truth; do not expose direct unmanaged Hermes upgrades. |
 

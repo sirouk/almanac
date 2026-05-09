@@ -32,7 +32,7 @@ of collapsing the project into a single web-app or single-service stack.
 | Nextcloud | Compose service and access helpers | Shared file service and possible future sharing adapter | Do not imply cross-user Drive sharing until grants/UI/projection are complete. |
 | Stripe | Hosted API, onboarding, entitlement tests | Checkout and entitlement source of record | Use local/fake tests; live checkout/webhook proof requires authorization. |
 | Telegram and Discord | `python/arclink_telegram.py`, `python/arclink_discord.py`, public bot engine | Public Raven and private Curator channels | Use adapter tests; live registration/delivery is gated. |
-| Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py`, provider auth/provisioning | Default OpenAI-compatible model provider | Keep fail-closed local boundary; live key management and usage proof are gated. |
+| Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py`, provider auth/provisioning | Default OpenAI-compatible model provider plus account/OAuth/usage/refuel integration target | Keep fail-closed local boundary; model official registration/OAuth/usage APIs with fake fixtures first; live key management, OAuth, balance transfer, and usage proof are gated. |
 | Cloudflare and Tailscale | Ingress/provisioning modules, docs, live proof runner | Domain and tailnet routing | Fake/static tests only unless operator authorizes live proof. |
 | Playwright | `web/package.json`, `web/tests/browser` | Browser proof for hosted/dashboard flows | Run for touched web surfaces when dependencies and browsers are available. |
 
@@ -61,7 +61,9 @@ of collapsing the project into a single web-app or single-service stack.
 | Channel linking | Keep `/link-channel` and platform-safe aliases over pairing codes | Account-password login in chat; separate per-channel accounts | Pairing code model exists and avoids chat credential handling. |
 | Drive sharing | Living ArcLink grants backed by live linked resources; prefer Nextcloud/WebDAV/OCS where enabled, otherwise keep browser sharing disabled | Copied projections; public Nextcloud links; unmanaged filesystem copies | Operator policy rejects copied snapshots as the completed product promise. |
 | Notion setup | Brokered shared-root membership with scoped claims | User OAuth/integration token; page shared to integration/control identity | Operator policy makes shared-root membership canonical; other models remain research/proof-gated alternatives. |
-| Chutes credentials | Per-user Chutes credentials; if per-key metering is unproved, use a separate per-user Chutes account/OAuth session | Shared key with attribution; provider disabled until supplied | Operator policy requires an isolated fallback instead of assuming operator-account per-key metering. |
+| Chutes credentials | Per-user Chutes OAuth/delegated account as the canonical candidate, with operator-metered scoped keys only as a labeled fallback | Shared key with attribution; silent server-created accounts; provider disabled until supplied | Public Chutes proof shows registration requires token/hotkey/funding and may need human proof; per-key provider-side spend is unproven. |
+| Chutes account registration | Official registration-token/hotkey path plus guided assist only | Browser/TLS impersonation or Cloudflare/hCaptcha bypass; silent server account creation | Browser-challenge bypass is out of bounds; the local product row is `real` because ArcLink rejects silent creation, while live registration execution remains authorization-gated. |
+| Chutes usage/refuel | Personal/account endpoints for usage/quota/billing plus ArcLink internal Refuel Pod credits first | Platform-wide invocation exports as personal spend; direct Chutes balance transfer as default | Public docs identify personal endpoints and warn that several exports are platform-wide; balance transfer needs live proof before shipped copy can claim it. |
 | Memory | Keep ArcLink governed qmd/SSOT recall stubs; document optional conversational-memory siblings | Replace managed context with generic chat memory | ArcLink's product contract is governed knowledge routing, not unconstrained chat capture. |
 | Renewal failure | Immediate provider suspension, immediate and daily Raven notices, day-7 account/data-removal warning, and day-14 audited purge queue | Infer purge from billing defaults; keep only dashboard labels | Operator policy now defines the cadence; BUILD must implement it locally before public claims. |
 | One-operator mode | Enforce exactly one operator or make multi-admin mechanics internal-only/subordinate to singleton policy | Let docs and code diverge | Operator policy now defines the singleton operator model. |
@@ -72,7 +74,7 @@ of collapsing the project into a single web-app or single-service stack.
 | --- | --- | --- |
 | Stripe | Fake clients and webhook payload tests can prove local entitlement transitions | Live checkout/webhook requires explicit authorization and credentials. |
 | Telegram/Discord | Adapter tests can prove command routing, catalogs, channel linking, and copy | Live command registration, webhooks, or delivery proof is gated. |
-| Chutes | Fake utilization/key-management tests and fail-closed boundaries can be local | Per-key usage, key creation, rotation, removal, and spend/refuel proof are gated. |
+| Chutes | Fake utilization/key-management/OAuth/registration-assist tests and fail-closed boundaries can be local | OAuth connect, per-key usage, key creation, rotation, removal, account registration, balance transfer, and spend/refuel proof are gated. |
 | Notion | Broker, scoped exact reads, SSOT payload validation, indexing tests can be local | Live workspace/page permissions and user OAuth models are gated and partly policy-owned. |
 | Cloudflare/Tailscale | Fake clients, static ingress tests, and docs/health assertions can be local | Live domain/tailnet verification is gated. |
 | Docker/host deploy | Static Docker, shell, health, and Compose tests can be local | Install/upgrade, production smoke, and restart are gated. |
@@ -86,29 +88,34 @@ of collapsing the project into a single web-app or single-service stack.
   requirement.
 - qmd, Hermes, Nextcloud, Postgres, Redis, Node, and Python are pinned or
   version-resolved components; upgrade claims must go through ArcLink rails.
-- Chutes Refuel Pod is now an approved product direction, but it still needs
-  local SKU/config/provider-budget credit accounting plus live purchase and
-  live provider-balance proof before public copy can claim purchasability.
+- Chutes Refuel Pod is now an approved product direction, but public purchase,
+  direct Chutes balance application, and exact continuation copy remain gated
+  until the live payment/provider path is authorized and proven.
+- Chutes account registration must use authorized registration token, hotkey,
+  funding, OAuth, or partner-approved mechanics. Browser/TLS impersonation,
+  hCaptcha bypass, and silent server-side registration are rejected paths; live
+  execution is authorization-gated but not counted as an extra product-matrix
+  proof-gated row.
 - Private manifests and generated database paths can influence destructive
   operations; BUILD must preserve path validation before reset, unlink, move,
   or cleanup behavior.
 
 ## Current Proof And Policy Targets
 
-The dependency stack is sufficiently identified for BUILD. The pre-policy
-matrix now has no `partial` or `gap` rows after the 2026-05-08 policy
-reclassification pass. BUILD should preserve the local implementation rows and
-focus remaining work on proof and policy boundaries:
+The dependency stack is sufficiently identified for BUILD. The current matrix
+has no `partial` or `gap` rows after the 2026-05-08 policy reclassification
+and 2026-05-09 Chutes continuation pass. BUILD should preserve the local
+implementation rows and focus remaining work on proof and policy boundaries:
 
 - Live Stripe checkout/webhook, live Hermes dashboard landing, live Notion
-  permission models, live Cloudflare/Tailscale checks, live Chutes key/usage
-  operations, and live Refuel Pod purchase/provider-balance proof remain
-  proof-gated.
+  permission models, live Cloudflare/Tailscale checks, live Chutes OAuth,
+  registration, key/usage operations, and live Refuel Pod purchase/provider
+  balance proof remain proof-gated.
 - Scoped agent self-model or peer-awareness cards remain policy-gated.
 - Browser right-click Drive/Code share-link creation remains disabled until a
   live ArcLink broker or approved Nextcloud/WebDAV/OCS adapter exists.
-- Chutes threshold continuation copy and self-service provider changes remain
-  policy-gated.
+- Chutes threshold continuation copy, canonical Chutes provider path, and
+  self-service provider changes remain policy-gated.
 
 ## Validation Dependencies
 

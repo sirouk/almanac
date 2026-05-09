@@ -1,5 +1,186 @@
 # Build Completion Notes
 
+## 2026-05-09 Ralphie OAuth Callback State Hardening
+
+Scope: tightened the Chutes OAuth/connect fake callback boundary while keeping
+live provider calls and provider mutation proof-gated.
+
+Rationale:
+
+- Updated `complete_chutes_oauth_callback` so a wrong user/session or CSRF
+  callback cannot consume an otherwise valid pending connect state. Expired
+  states and validated callbacks still consume state to preserve one-time
+  callback semantics.
+- Extended `tests/test_arclink_chutes_oauth.py` to prove a rejected
+  cross-user or bad-CSRF callback does not burn the legitimate user's pending
+  Chutes connect attempt.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_chutes_live.py python/arclink_chutes_oauth.py python/arclink_evidence.py python/arclink_live_journey.py python/arclink_live_runner.py python/arclink_notion_ssot.py tests/test_arclink_chutes_and_adapters.py tests/test_arclink_chutes_live_adapter.py tests/test_arclink_chutes_oauth.py tests/test_arclink_live_journey.py tests/test_arclink_live_runner.py tests/test_notion_ssot.py tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_arclink_chutes_oauth.py` passed.
+- `python3 tests/test_arclink_chutes_live_adapter.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_live_journey.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- No live Chutes OAuth, Notion, public bot, Stripe, ingress, Docker, or host
+  proof was run; those remain gated on explicit operator authorization and
+  secret references.
+- The active product-policy rows remain unchanged: Raven direct-agent public
+  chat, browser right-click sharing, canonical Chutes provider path,
+  threshold continuation copy, self-service provider changes, and scoped
+  peer-awareness.
+
+## 2026-05-09 Ralphie Notion Harness And Policy-Gate Preservation Build
+
+Scope: closed the remaining local P1 Raven/browser-share/Notion proof-harness
+handoff tasks without live Notion, bot, provider, payment, Docker, or host
+mutation.
+
+Rationale:
+
+- Added `run_notion_ssot_no_secret_proof` to `python/arclink_notion_ssot.py`.
+  The harness validates callback URL shape, proves shared-root page readability
+  through an injected transport, can exercise the brokered create-and-trash
+  write preflight against fake or explicitly authorized live transport, and
+  returns only redacted evidence. Raw Notion tokens and secret refs are not
+  included in the response payload.
+- Chose an injected no-secret Notion harness instead of user-owned OAuth,
+  email-share-only checks, or live workspace mutation. Shared-root membership
+  remains the canonical model; user OAuth/token and live workspace mutation
+  remain proof-gated until explicit operator authorization.
+- Preserved the existing Raven public-bot policy gate: freeform public
+  messages remain control-only and point to Helm rather than becoming direct
+  private-agent chat. Direct `/ask` or `/agent <message>` proxying remains a
+  policy question.
+- Preserved disabled browser right-click share-link UI while keeping
+  `shares.request`, read-only living `Linked` projections, revoke behavior, and
+  recipient copy/duplicate into owned roots covered by existing plugin/API
+  behavior.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_chutes_live.py python/arclink_chutes_oauth.py python/arclink_evidence.py python/arclink_live_journey.py python/arclink_live_runner.py python/arclink_notion_ssot.py tests/test_arclink_chutes_and_adapters.py tests/test_arclink_chutes_live_adapter.py tests/test_arclink_chutes_oauth.py tests/test_arclink_live_journey.py tests/test_arclink_live_runner.py tests/test_notion_ssot.py tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_chutes_oauth.py` passed.
+- `python3 tests/test_arclink_chutes_live_adapter.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_live_journey.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- No live Notion shared-root, `ssot.write`, OAuth, or workspace mutation proof
+  was run. Those remain proof-gated until the operator authorizes a named live
+  proof flow and supplies secret references.
+- Raven direct-agent public chat, browser right-click share-link enablement,
+  canonical Chutes provider/OAuth selection, threshold continuation copy,
+  self-service provider changes, and scoped peer-awareness remain explicit
+  policy questions.
+- Live Stripe, Telegram, Discord, Chutes, Nextcloud, Cloudflare, Tailscale,
+  Docker install/upgrade, and host deploy/upgrade proof were not run.
+
+## 2026-05-09 Ralphie Chutes OAuth And External Proof Build
+
+Scope: advanced the remaining P0 Chutes continuation tasks without live
+provider calls, secret reads, browser bypass tooling, or provider mutations.
+
+Rationale:
+
+- Added `python/arclink_chutes_oauth.py` as the no-secret Chutes OAuth/connect
+  boundary. It builds a PKCE authorize plan, binds callback state to user and
+  session, validates CSRF, models scope display, stores exchanged fake tokens
+  only behind generated `secret://` refs, and exposes disconnect/revoke
+  readiness without returning raw tokens to browser/API-shaped payloads.
+- Added fake Chutes OAuth callback coverage in
+  `tests/test_arclink_chutes_oauth.py` for state mismatch, CSRF mismatch,
+  cross-user callback isolation, scope display, disconnect readiness, TLS
+  redirect validation, and raw-secret rejection.
+- Extended `python/arclink_live_journey.py` and
+  `python/arclink_live_runner.py` with an `external` live-proof journey. The
+  provider rows are opt-in through explicit `ARCLINK_PROOF_*` flags and cover
+  Chutes OAuth, Chutes usage/billing, Chutes key CRUD, Chutes account
+  registration, Chutes balance transfer, Notion SSOT, public bot delivery,
+  Stripe, Cloudflare, Tailscale, and Hermes dashboard landing.
+- Updated the product matrix and build gate to keep the same proof-gated
+  counts while pointing future live provider runs at
+  `bin/arclink-live-proof --journey external --live --json`.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes_oauth.py python/arclink_chutes_live.py python/arclink_live_journey.py python/arclink_live_runner.py python/arclink_evidence.py tests/test_arclink_chutes_oauth.py tests/test_arclink_chutes_live_adapter.py tests/test_arclink_live_journey.py tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_chutes_oauth.py` passed.
+- `python3 tests/test_arclink_chutes_live_adapter.py` passed.
+- `python3 tests/test_arclink_live_journey.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+
+Known risks:
+
+- No live Chutes OAuth, delegated inference, usage sync, account registration,
+  key CRUD, token revoke, or balance transfer was run. These remain
+  proof-gated until explicit operator authorization and secret references
+  exist.
+- The external journey is orchestration and redacted evidence planning; it does
+  not replace provider-specific live runners or manual proof procedures.
+- Chutes canonical provider-path choice remains a policy question until the
+  operator chooses OAuth, operator-metered keys, assisted account creation, or
+  another lane.
+
+## 2026-05-09 Ralphie Chutes Live Adapter Boundary Build
+
+Scope: advanced the P0 Chutes continuation tasks without live provider calls,
+secret reads, browser bypass tooling, or provider mutations.
+
+Rationale:
+
+- Added a secret-reference Chutes live adapter boundary in
+  `python/arclink_chutes_live.py` for model listing, current user,
+  subscription usage, user usage, quota usage, quotas, discounts, price
+  overrides, API-key list/create/delete, OAuth scopes, token introspection, and
+  balance-transfer planning.
+- Kept live mutation paths explicit: API-key create/delete and balance transfer
+  require `allow_live_mutation`, and balance transfer remains fake/not executed
+  in local proof until operator-authorized live proof succeeds.
+- Preserved the no-browser-bypass Chutes registration posture from
+  `python/arclink_chutes.py`: official registration-token/hotkey modeling is
+  represented, and `curl_cffi`/browser-challenge bypass-style requests are
+  rejected.
+- Added the new provider files to public hygiene's allowed provider-context
+  paths so future scans keep Chutes references intentional.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_chutes_live.py tests/test_arclink_chutes_and_adapters.py tests/test_arclink_chutes_live_adapter.py tests/test_public_repo_hygiene.py` passed.
+- `python3 tests/test_arclink_chutes_live_adapter.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- No live Chutes OAuth, account registration, key CRUD, usage sync, token
+  introspection, or balance transfer was run; those remain proof-gated until
+  explicit operator authorization and secret references exist.
+- Chutes OAuth/connect UI and callback-state tests remain open BUILD work.
+- Live Refuel Pod purchase and direct Chutes balance application remain
+  proof-gated; local meaning is still ArcLink internal provider-budget credit.
+
 ## 2026-05-08 Ralphie Documentation Gate Retry Repair
 
 Scope: repaired document-phase handoff clarity only. No implementation behavior

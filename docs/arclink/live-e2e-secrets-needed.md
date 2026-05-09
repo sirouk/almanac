@@ -10,7 +10,11 @@ Run `bin/arclink-live-proof` (dry-run by default) or
 Terminal TLS proof without running it, or
 `bin/arclink-live-proof --journey workspace --live` to run the gated Docker
 upgrade, Docker health, and desktop/mobile browser proof steps against a real
-HTTPS Hermes dashboard. The fake E2E harness
+HTTPS Hermes dashboard. Use
+`bin/arclink-live-proof --journey external` to plan provider-specific proof
+rows, or `bin/arclink-live-proof --journey external --live --json` only after
+the operator explicitly authorizes the named provider rows and supplies the
+required secret references or live credentials. The fake E2E harness
 (`tests/test_arclink_e2e_fake.py`) passes without credentials. Provider live
 checks in `tests/test_arclink_e2e_live.py` skip cleanly when credentials are
 absent. The ordered journey model (`python/arclink_live_journey.py`) and
@@ -85,6 +89,57 @@ Optional workspace proof timeouts:
 | `ARCLINK_WORKSPACE_PROOF_HEALTH_TIMEOUT_SECONDS` | 900 | Docker health timeout |
 | `ARCLINK_WORKSPACE_PROOF_BROWSER_TIMEOUT_SECONDS` | 300 | Per desktop/mobile browser proof timeout |
 
+## External Proof Env Vars
+
+The external journey is opt-in per provider row. If no `ARCLINK_PROOF_*` flag
+is set, dry-run planning reports all missing provider proof gates. If one or
+more proof flags are set, ArcLink requires only the environment for those named
+rows and skips unrelated provider rows.
+
+| Var | Required For | Purpose |
+|-----|-------------|---------|
+| `ARCLINK_E2E_LIVE` | All external rows | Master gate for live external proof |
+| `ARCLINK_PROOF_STRIPE` | Stripe checkout/webhook | Enables the Stripe proof row |
+| `STRIPE_SECRET_KEY` | Stripe checkout/webhook | Stripe test-mode or authorized live key |
+| `STRIPE_WEBHOOK_SECRET` | Stripe checkout/webhook | Stripe webhook signature secret |
+| `ARCLINK_PROOF_TELEGRAM` | Telegram Raven delivery | Enables live Telegram delivery/button proof |
+| `TELEGRAM_BOT_TOKEN` | Telegram Raven delivery | Public Raven bot token |
+| `ARCLINK_PROOF_DISCORD` | Discord Raven delivery | Enables live Discord delivery/button proof |
+| `DISCORD_BOT_TOKEN` | Discord Raven delivery | Public Raven bot token |
+| `DISCORD_APP_ID` | Discord Raven delivery | Discord application id |
+| `ARCLINK_PROOF_HERMES_DASHBOARD` | Hermes dashboard landing | Enables deployed dashboard landing proof |
+| `ARCLINK_HERMES_DASHBOARD_URL` | Hermes dashboard landing | HTTPS Hermes dashboard URL |
+| `ARCLINK_HERMES_DASHBOARD_AUTH` | Hermes dashboard landing | Session/auth material supplied outside tracked files |
+| `ARCLINK_PROOF_CHUTES_OAUTH` | Chutes OAuth connect | Enables OAuth connect/callback proof |
+| `ARCLINK_CHUTES_OAUTH_CLIENT_ID` | Chutes OAuth connect | Chutes OAuth client id |
+| `ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF` | Chutes OAuth connect | Secret reference for the Chutes OAuth client secret |
+| `ARCLINK_CHUTES_OAUTH_REDIRECT_URI` | Chutes OAuth connect | HTTPS callback URI registered for ArcLink |
+| `ARCLINK_PROOF_CHUTES_USAGE` | Chutes usage/billing | Enables personal usage, quota, discount, and billing read proof |
+| `ARCLINK_CHUTES_CREDENTIAL_REF` | Chutes usage/key/transfer rows | Secret reference for the authorized Chutes credential |
+| `ARCLINK_PROOF_CHUTES_KEY_CRUD` | Chutes API key CRUD | Enables key create/list/delete proof |
+| `ARCLINK_CHUTES_ALLOW_MUTATION` | Chutes key/transfer rows | Explicit mutation authorization gate |
+| `ARCLINK_PROOF_CHUTES_ACCOUNT_REGISTRATION` | Chutes account registration | Enables official registration-token/hotkey proof |
+| `ARCLINK_CHUTES_REGISTRATION_TOKEN_REF` | Chutes account registration | Secret reference for the registration token |
+| `ARCLINK_CHUTES_HOTKEY_REF` | Chutes account registration | Secret reference for the hotkey proof material |
+| `ARCLINK_CHUTES_COLDKEY_PUBLIC` | Chutes account registration | Public coldkey identifier |
+| `ARCLINK_PROOF_CHUTES_BALANCE_TRANSFER` | Chutes balance transfer | Enables direct provider balance-transfer proof |
+| `ARCLINK_CHUTES_TRANSFER_RECIPIENT_USER_ID` | Chutes balance transfer | Recipient Chutes user id for the authorized transfer |
+| `ARCLINK_CHUTES_TRANSFER_AMOUNT` | Chutes balance transfer | Authorized transfer amount |
+| `ARCLINK_PROOF_NOTION_SSOT` | Notion shared-root SSOT | Enables shared-root readability and brokered write proof |
+| `ARCLINK_SSOT_NOTION_ROOT_PAGE_ID` | Notion shared-root SSOT | Shared root page id |
+| `ARCLINK_SSOT_NOTION_TOKEN` | Notion shared-root SSOT | Notion integration token supplied outside tracked files |
+| `ARCLINK_PROOF_CLOUDFLARE` | Cloudflare ingress | Enables zone/DNS proof |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare ingress | Scoped zone DNS token |
+| `CLOUDFLARE_ZONE_ID` | Cloudflare ingress | Target zone id |
+| `ARCLINK_PROOF_TAILSCALE` | Tailscale ingress | Enables Serve/certificate proof |
+| `ARCLINK_TAILSCALE_DNS_NAME` | Tailscale ingress | Tailnet DNS name to verify |
+
+Chutes account registration and balance transfer are mutation-sensitive. Keep
+them disabled unless the operator explicitly authorizes that exact proof row
+with scratch or approved live accounts. Chutes account creation remains an
+assisted/proof-gated flow; ArcLink must not use browser/TLS impersonation or
+challenge-bypass tooling to obtain registration proof.
+
 ## Evidence
 
 After a live run, the evidence ledger JSON can be saved using the template at
@@ -100,7 +155,9 @@ Initial development can proceed without live secrets. Real end-to-end deployment
   readiness, and tailnet operator approval for any Serve/Funnel prompts.
 - Hetzner API token or SSH access to the target server.
 - Stripe secret key, webhook signing secret, product/price ids, and customer portal config.
-- Chutes owner/admin API key or account credentials capable of creating/revoking per-deployment API keys.
+- Chutes owner/admin API key or secret references capable of the authorized
+  proof row: OAuth connect, personal usage reads, API-key CRUD, official
+  registration-token/hotkey proof, or balance transfer.
 - Telegram public onboarding bot token.
 - Discord public onboarding bot token/application credentials.
 - OpenAI Codex OAuth/device-flow configuration if live BYOK verification is required.

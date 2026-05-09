@@ -17,6 +17,7 @@ The active BUILD sources are:
 - `research/RALPHIE_ARCLINK_PRODUCT_REALITY_AND_JOURNEY_STEERING.md`
 - `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`
 - `research/RALPHIE_MEMORY_SYSTEM_CHERRYPICK_STUDY.md`
+- `research/RALPHIE_END_TO_END_PROOF_AND_BUILD_SPEC_20260509.md`
 - `research/PRODUCT_REALITY_MATRIX.md`
 - `research/OPERATOR_POLICY_DECISIONS_20260508.md`
 - `consensus/build_gate.md`
@@ -29,15 +30,15 @@ SSOT, token, generated cleanup, onboarding, docs, or validation boundaries.
 
 ## Current Product Reality
 
-The product reality matrix currently contains 114 rows:
+The product reality matrix currently contains 121 rows:
 
 | Status | Count |
 | --- | ---: |
-| `real` | 98 |
+| `real` | 100 |
 | `partial` | 0 |
 | `gap` | 0 |
-| `proof-gated` | 12 |
-| `policy-question` | 4 |
+| `proof-gated` | 15 |
+| `policy-question` | 6 |
 
 This is no longer the raw pre-decision snapshot. The 2026-05-08
 operator-policy addendum has been reconciled into the product matrix for Raven
@@ -45,23 +46,31 @@ identity customization, shared-root SSOT membership, failed-renewal lifecycle,
 living linked resources, recipient copy/duplicate, exactly-one-operator
 behavior, Refuel Pod local credits, and the Chutes account/OAuth fallback.
 
-Current `partial` rows: none.
+Current `partial` rows: none. The 2026-05-09 Chutes proof packet is now
+represented in the matrix: silent Chutes account creation is not a product
+claim, browser-challenge bypass is rejected, and live OAuth/registration,
+personal usage sync, and balance-transfer behavior stay proof-gated.
 
 Highest-risk remaining BUILD work after this PLAN refresh:
 
 - Preserve and extend user isolation across dashboard, provider, channel,
   share, health, credential, billing, Notion/SSOT, and linked-resource
   surfaces while adding tests for each touched path.
+- Reconcile the 2026-05-09 Chutes proof packet: account creation is assisted
+  or proof-gated rather than silently server-created; personal usage/billing
+  endpoints are real; provider-side per-API-key spend remains unproven; Sign
+  in with Chutes / per-user account connection is the recommended canonical
+  path.
 - Keep browser right-click Drive/Code share-link creation disabled until a live
   shared backend exists or the operator chooses to build an ArcLink broker in
   this repo.
 - Keep live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
   Docker install/upgrade, and host deploy/upgrade proof gated until explicitly
   authorized.
-- Resolve the remaining four product-policy questions: scoped agent
-  self-model or peer-awareness cards, browser right-click sharing enablement,
-  public Chutes threshold-continuation copy, and user self-service provider
-  changes.
+- Resolve the remaining product-policy questions: scoped agent self-model or
+  peer-awareness cards, Raven direct-agent chat scope, browser right-click
+  sharing enablement, canonical Chutes OAuth/provider path, public Chutes
+  threshold-continuation copy, and user self-service provider changes.
 
 ## Stack Finding
 
@@ -82,13 +91,13 @@ Public source composition used by this handoff:
 
 | Signal | Count |
 | --- | ---: |
-| Python files | 168 |
-| Python regression tests | 99 |
-| Shell/script entrypoints | 86 |
-| Markdown files | 100 |
+| Python files | 172 |
+| Python regression tests | 101 |
+| Shell/script entrypoints | 82 |
+| Markdown files | 103 |
 | systemd unit/timer/path files | 29 |
-| Web TypeScript/JavaScript files | 21 |
-| Public JSON/YAML files | 23 |
+| Web TypeScript/JavaScript files | 17 |
+| Public JSON/YAML files | 22 |
 
 ## Implementation Path Comparison
 
@@ -110,20 +119,32 @@ Public source composition used by this handoff:
 - `research/COVERAGE_MATRIX.md`: goal coverage, required artifact coverage,
   product matrix status semantics, and completion rules.
 - `research/STACK_SNAPSHOT.md`: ArcLink-specific multi-runtime stack
-  hypotheses, deterministic confidence score, and rejected single-stack
-  alternatives.
+  hypotheses, deterministic 96/100 confidence score, current component
+  signals, and rejected single-stack alternatives.
+- `research/PRODUCT_REALITY_MATRIX.md`: updated 121-row reality matrix for the
+  2026-05-09 Chutes proof and Raven policy scope.
+- `research/OPERATOR_POLICY_DECISIONS_20260508.md`: portable Chutes research
+  wording without local audit-checkout paths.
+- `research/RALPHIE_END_TO_END_PROOF_AND_BUILD_SPEC_20260509.md`: portable
+  Chutes research wording without local audit-checkout paths.
 - `IMPLEMENTATION_PLAN.md`: project-specific BUILD plan with validation
   criteria and actionable tasks.
 - `consensus/build_gate.md`: no-secret build permission, blocked live flows,
   and operator-policy questions.
 
 This refresh records the current post-policy matrix totals, corrects the stack
-snapshot to ArcLink's multi-runtime architecture, and confirms there are no
-`partial` or `gap` rows.
+snapshot to ArcLink's multi-runtime architecture, updates public source-count
+signals, and confirms there are no `partial` or `gap` rows.
 
-Retry repair note: the build gate now names the remaining proof and policy
-gates. `IMPLEMENTATION_PLAN.md` must remain the newest active handoff artifact
-after this research refresh so BUILD does not loop on stale plan detection.
+It also removes local audit-checkout paths from Chutes research artifacts so
+the handoff remains portable.
+
+Retry repair note: the build gate now names exactly the 15 proof-gated rows
+and exactly the six remaining policy-question rows from the matrix. Chutes
+account-registration execution, Refuel transfer, and day-14 purge execution are
+separate non-counted authorization/expansion confirmations. `IMPLEMENTATION_PLAN.md`
+must remain the newest active handoff artifact after this research refresh so
+BUILD does not loop on stale plan detection.
 
 ## Assumptions
 
@@ -144,9 +165,10 @@ after this research refresh so BUILD does not loop on stale plan detection.
 - Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
   Docker install/upgrade, and host deploy/upgrade proof is blocked without
   operator authorization.
-- Product policy is still required for scoped agent self-model or
-  peer-awareness cards, browser right-click sharing enablement, self-service
-  provider changes, and exact public threshold copy after Refuel
+- Product policy is still required for six current matrix rows: scoped agent
+  self-model or peer-awareness cards, Raven direct-agent chat scope, browser
+  right-click sharing enablement, canonical Chutes OAuth/provider path,
+  self-service provider changes, and exact public threshold copy after Refuel
   Pod/provider-fallback rails exist.
 - Remaining decisions should be handled in dependency order: first isolation
   and secrets, then billing/provider lifecycle, then sharing/knowledge, then

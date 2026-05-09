@@ -2,6 +2,57 @@
 
 Generated: 2026-05-08 (Ralphie document phase: final product-reality alignment)
 
+Updated: 2026-05-09 (Ralphie document phase: Chutes/external-proof alignment)
+
+## 2026-05-09 Documentation Update
+
+The current implementation plan and product matrix now count 100 `real`, 0
+`partial`, 0 `gap`, 15 `proof-gated`, and 6 `policy-question` rows. This pass
+updated the project-facing runbooks for the new Chutes secret-reference live
+adapter, Chutes OAuth/connect fake callback boundary, provider-specific
+external live-proof journey, and Notion shared-root no-secret proof harness.
+
+### Files Updated
+
+| File | Change | Rationale |
+| --- | --- | --- |
+| `docs/arclink/live-e2e-secrets-needed.md` | Added `--journey external` usage, opt-in `ARCLINK_PROOF_*` behavior, provider-specific environment rows, Chutes OAuth/usage/key/account/transfer proof gates, and Notion shared-root SSOT proof variables | The live-proof docs previously covered hosted and workspace proof, but not the new provider-specific external proof journey |
+| `docs/arclink/operations-runbook.md` | Added `python/arclink_chutes_live.py` and `python/arclink_chutes_oauth.py` ownership, OAuth/account-creation rationale, mutation gates, external proof command, and the expanded live journey/evidence runbook | Operators need the current access boundary: secret refs only, fake-tested OAuth/callbacks, no silent Chutes account creation, and live mutation proof only with explicit authorization |
+| `docs/arclink/document-phase-status.md` | Added this dated status note | Keeps the document-phase handoff current without rewriting historical audit context |
+
+### Docs Inspected
+
+| File | Verdict |
+| --- | --- |
+| `AGENTS.md` | Still aligned on no-secret handling, Notion SSOT broker ownership, Chutes provider defaults, and live-proof gating |
+| `README.md` | Already names Chutes-first provider defaults, Notion SSOT, and live-proof orchestration at a product level |
+| `IMPLEMENTATION_PLAN.md` | Active handoff now points at the 2026-05-09 proof/build spec and marks the Chutes, Notion, Raven, and browser-share continuation tasks complete or gated |
+| `research/RALPHIE_END_TO_END_PROOF_AND_BUILD_SPEC_20260509.md` | New steering source for Chutes proof, external proof orchestration, and remaining operator decisions |
+| `research/PRODUCT_REALITY_MATRIX.md` | Reconciled to the new Chutes proof rows, Raven chat-scope policy row, Notion proof harness row, and current 100/15/6 totals |
+| `research/BUILD_COMPLETION_NOTES.md` | Records the no-secret Chutes live adapter, OAuth callback, Notion harness, and validation results |
+| `docs/API_REFERENCE.md` | Current hosted API docs still describe sanitized provider state and local provider-budget credit posture; no route catalog change was needed |
+| `docs/arclink/raven-public-bot.md` | Already states Raven is a public control conduit and not raw freeform private-agent chat |
+| `docs/arclink/notion-human-guide.md` | Already states shared-root membership is canonical and user-owned OAuth/email-only sharing are non-default proof-gated lanes |
+
+### Open Questions And Risks
+
+- Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
+  Docker, host deploy/upgrade, and deployed dashboard proof remain
+  credential-gated.
+- Raven direct-agent public chat scope, browser right-click share-link
+  enablement, canonical Chutes OAuth/provider path, threshold continuation
+  copy, self-service provider changes, and scoped peer-awareness remain product
+  policy questions.
+- Chutes account registration, API-key CRUD, token revoke, and balance transfer
+  require explicit authorization and secret references before any live mutation
+  proof. Current docs describe fake-tested boundaries, not completed live
+  provider proof.
+
+Docs are clear enough to proceed: project-facing runbooks now describe the
+current local implementation, ownership boundaries, proof gates, and rationale
+without local operator identity, private paths, secrets, or command
+transcripts.
+
 ## Documentation Audit
 
 Project-facing ArcLink documentation has been checked against the current

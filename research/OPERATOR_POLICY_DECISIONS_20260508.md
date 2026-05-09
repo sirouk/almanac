@@ -38,8 +38,8 @@ code already implements every behavior.
 
 ## Chutes Research Snapshot
 
-Verified 2026-05-08 from public sources and local read-only clones under
-`/tmp/arclink-chutes-research`:
+Verified 2026-05-08 from public sources and temporary read-only clones of
+public Chutes repositories:
 
 - `https://llm.chutes.ai/v1/models` returns per-model token pricing. Sample
   prices at capture time:

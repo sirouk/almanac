@@ -492,7 +492,8 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect('"postgres" "5432"' in body, body)
     expect('"redis" "6379"' in body, body)
     expect("check_docker_agent_mcp_auth" in body, body)
-    expect('"control-ingress" "80" "Traefik ingress (HTTP)"' in body, body)
+    expect('"control-ingress" "8080" "Traefik ingress (HTTP)"' in body, body)
+    expect('status in ("warn", "warning", "disabled")' in body, body)
     for job in (
         "control-provisioner",
         "control-action-worker",

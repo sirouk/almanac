@@ -130,7 +130,7 @@ check_http_with_host "http://nextcloud/status.php" "localhost" "Nextcloud"
 check_optional_tcp_with_fallback "qmd-mcp" "${QMD_MCP_CONTAINER_PORT:-8181}" "host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}" "qmd MCP runtime port"
 check_tcp "postgres" "5432" "Postgres"
 check_tcp "redis" "6379" "Redis"
-check_tcp "control-ingress" "80" "Traefik ingress (HTTP)"
+check_tcp "control-ingress" "8080" "Traefik ingress (HTTP)"
 check_optional_tcp "control-ingress" "443" "Traefik ingress (HTTPS)"
 
 check_docker_refresh_jobs() {
@@ -158,13 +158,16 @@ with connect_db(cfg) as conn:
             print(f"WARN {name}: no valid last_run_at")
             continue
         age_h = (now - last_run).total_seconds() / 3600
-        if status not in ("ok", "skipped"):
+        if status in ("ok", "skipped"):
+            if age_h > 8:
+                print(f"WARN {name}: stale ({age_h:.1f}h since last run)")
+            else:
+                print(f"OK {name}: {status} ({age_h:.1f}h ago)")
+        elif status in ("warn", "warning", "disabled"):
+            print(f"WARN {name}: last_status={status}")
+        else:
             print(f"FAIL {name}: last_status={status}")
             failures += 1
-        elif age_h > 8:
-            print(f"WARN {name}: stale ({age_h:.1f}h since last run)")
-        else:
-            print(f"OK {name}: {status} ({age_h:.1f}h ago)")
 raise SystemExit(1 if failures else 0)
 PY
   )"; then

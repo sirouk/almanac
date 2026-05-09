@@ -61,10 +61,13 @@ If a value changes, use `./deploy.sh control reconfigure` and then rerun health.
 
 ## Workers And Mutations
 
-`control-provisioner` is disabled by default unless the explicit executor and
-provider gates are enabled. Queued admin actions are durable intent; they do not
-prove that live Docker, Stripe, Cloudflare, Tailscale, model-provider, Discord,
-Telegram, or Notion mutations happened.
+`control-provisioner` is enabled by default in Control Node mode so paid
+deployments do not sit silently after Stripe clears. It still fails closed until
+the operator configures a real executor (`fake`, `local`, or `ssh`) and the
+needed provider gates. `control-action-worker` consumes durable admin intents;
+an action only proves live Docker, Stripe, Cloudflare, Tailscale, model-provider,
+Discord, Telegram, or Notion mutation when the recorded executor result is
+live and succeeded.
 
 Before enabling live mutation paths, verify:
 

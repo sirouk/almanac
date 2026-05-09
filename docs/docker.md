@@ -236,6 +236,7 @@ services that need Docker API access for routing or lifecycle management:
 | --- | --- | --- |
 | `control-ingress` | Traefik HTTP ingress | Read-only Docker provider discovery for `control-web`, `control-api`, and the Notion webhook |
 | `control-provisioner` | Sovereign fleet provisioner | Creates and manages deployment containers when `ARCLINK_EXECUTOR_ADAPTER=local` |
+| `control-action-worker` | Admin action worker | Runs queued restart/teardown and other lifecycle actions when `ARCLINK_EXECUTOR_ADAPTER=local` |
 | `agent-supervisor` | Per-agent container lifecycle | Reconciles agent containers, dashboard proxies, and Hermes agent runtimes |
 | `curator-refresh` | Operator maintenance loop | Runs queued Docker-mode upgrades and Compose repair commands from Curator/operator actions |
 

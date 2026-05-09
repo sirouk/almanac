@@ -1097,7 +1097,7 @@ PATH={str(fakebin)!r}:$PATH
 ARCLINK_DB_PATH={str(root / 'control.sqlite3')!r}
 ARCLINK_RELEASE_STATE_FILE={str(root / 'release.json')!r}
 ARCLINK_UPSTREAM_REPO_URL=https://example.invalid/arclink.git
-ARCLINK_UPSTREAM_BRANCH=main
+ARCLINK_UPSTREAM_BRANCH=arclink
 VAULT_DIR={str(root / 'vault')!r}
 ARCLINK_HOME={str(root / 'home')!r}
 {snippets}

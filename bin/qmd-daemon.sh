@@ -16,7 +16,8 @@ if [[ "$loopback_port" == "$container_port" ]]; then
   exec qmd --index "$QMD_INDEX_NAME" mcp --http --port "$loopback_port"
 fi
 
-python3 - "$container_port" "$loopback_port" <<'PY' &
+bind_host="${QMD_PROXY_BIND_HOST:-127.0.0.1}"
+python3 - "$container_port" "$loopback_port" "$bind_host" <<'PY' &
 import socket
 import socketserver
 import sys
@@ -24,6 +25,7 @@ import threading
 
 listen_port = int(sys.argv[1])
 target_port = int(sys.argv[2])
+bind_host = str(sys.argv[3] or "127.0.0.1")
 
 
 def pipe(src, dst):
@@ -62,8 +64,8 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-with Server(("0.0.0.0", listen_port), Handler) as server:
-    print(f"QMD MCP TCP forwarder listening on 0.0.0.0:{listen_port} -> 127.0.0.1:{target_port}", flush=True)
+with Server((bind_host, listen_port), Handler) as server:
+    print(f"QMD MCP TCP forwarder listening on {bind_host}:{listen_port} -> 127.0.0.1:{target_port}", flush=True)
     server.serve_forever()
 PY
 proxy_pid="$!"

@@ -14,6 +14,8 @@ const RESUME_KEY = "arclink_onboarding_resume";
 type ResumeState = {
   step: Step;
   sessionId: string;
+  claimToken: string;
+  cancelToken: string;
   name: string;
   email: string;
   planId: PlanId;
@@ -48,6 +50,8 @@ export default function OnboardingPage() {
   const [planId, setPlanId] = useState<PlanId>("founders");
   const [showStandardPlans, setShowStandardPlans] = useState(false);
   const [sessionId, setSessionId] = useState("");
+  const [claimToken, setClaimToken] = useState("");
+  const [cancelToken, setCancelToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [checkoutUrl, setCheckoutUrl] = useState("");
@@ -67,12 +71,16 @@ export default function OnboardingPage() {
       if (!raw) return;
       const parsed = JSON.parse(raw) as Partial<ResumeState>;
       if (parsed.sessionId) setSessionId(parsed.sessionId);
+      if (parsed.claimToken) setClaimToken(parsed.claimToken);
+      if (parsed.cancelToken) setCancelToken(parsed.cancelToken);
       if (parsed.name) setName(parsed.name);
       if (parsed.email) setEmail(parsed.email);
       if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
       if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
       if (parsed.step && parsed.step !== "start") {
-        setStep(parsed.step);
+        const isCheckoutResume = new URLSearchParams(window.location.search).get("resume") === "1";
+        setStep(isCheckoutResume && parsed.step === "done" ? "checkout" : parsed.step);
+        if (isCheckoutResume && parsed.step === "done") setCheckoutUrl("");
         setResumed(true);
       }
     } catch {
@@ -85,13 +93,13 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (step === "start") return;
-    const snapshot: ResumeState = { step, sessionId, name, email, planId, checkoutUrl };
+    const snapshot: ResumeState = { step, sessionId, claimToken, cancelToken, name, email, planId, checkoutUrl };
     try {
       window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
     } catch {
       // localStorage quota or disabled - drop silently.
     }
-  }, [step, sessionId, name, email, planId, checkoutUrl]);
+  }, [step, sessionId, claimToken, cancelToken, name, email, planId, checkoutUrl]);
 
   function clearResume() {
     try {
@@ -117,8 +125,11 @@ export default function OnboardingPage() {
     try {
       const res = await api.startOnboarding({ channel: "web", channel_identity: webContactId(), plan_id: nextPlanId, email });
       if (res.status === 201 && res.data) {
-        const session = (res.data as Record<string, Record<string, string>>).session;
+        const payload = res.data as Record<string, unknown>;
+        const session = payload.session as Record<string, string>;
         setSessionId(session.session_id);
+        setClaimToken(String(payload.browser_claim_token || ""));
+        setCancelToken(String(payload.browser_cancel_token || ""));
         setStep("questions");
       } else {
         setError((res.data as Record<string, string>).error || "Failed to start onboarding");

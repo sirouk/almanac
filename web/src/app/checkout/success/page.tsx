@@ -42,6 +42,7 @@ function CheckoutSuccessFallback() {
 function CheckoutSuccessContent() {
   const params = useSearchParams();
   const sessionId = params.get("session") || "";
+  const [claimToken, setClaimToken] = useState("");
   const [status, setStatus] = useState<EntitlementStatus>("pending");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -50,25 +51,35 @@ function CheckoutSuccessContent() {
 
   useEffect(() => {
     try {
-      window.localStorage.removeItem(RESUME_KEY);
+      const raw = window.localStorage.getItem(RESUME_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { sessionId?: string; claimToken?: string };
+      if (!parsed.sessionId || parsed.sessionId === sessionId) {
+        setClaimToken(parsed.claimToken || "");
+      }
     } catch {
       // localStorage can be disabled; the success page should still render.
     }
-  }, []);
+  }, [sessionId]);
 
   const claimSession = useCallback(async () => {
-    if (!sessionId || sessionClaimed) return;
+    if (!sessionId || !claimToken || sessionClaimed) return;
     try {
-      const res = await api.claimSession(sessionId);
+      const res = await api.claimSession(sessionId, claimToken);
       if (res.status === 201) {
         setSessionClaimed(true);
         const data = res.data as { email?: string };
         if (data.email) setEmail(data.email);
+        try {
+          window.localStorage.removeItem(RESUME_KEY);
+        } catch {
+          // ignore
+        }
       }
     } catch {
       // Claim failed - user can still log in manually.
     }
-  }, [sessionId, sessionClaimed]);
+  }, [sessionId, claimToken, sessionClaimed]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -99,6 +110,10 @@ function CheckoutSuccessContent() {
 
     return () => clearTimeout(timer);
   }, [sessionId, status, pollCount, claimSession]);
+
+  useEffect(() => {
+    if (status === "paid") claimSession();
+  }, [status, claimSession]);
 
   const confirmed = status === "paid";
   const timedOut = pollCount >= MAX_POLLS && status !== "paid";

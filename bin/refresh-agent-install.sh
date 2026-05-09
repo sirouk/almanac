@@ -82,6 +82,7 @@ fi
 TARGET_UID="$(id -u "$UNIX_USER")"
 TARGET_HERMES_HOME="${HERMES_HOME_ARG:-$HOME_DIR/.local/share/arclink-agent/hermes-home}"
 TARGET_WORKSPACE_DIR="${ARCLINK_AGENT_WORKSPACE_DIR:-$TARGET_HERMES_HOME/workspace}"
+TARGET_LINKED_DIR="${ARCLINK_AGENT_LINKED_DIR:-$TARGET_HERMES_HOME/linked}"
 SOURCE_REPO_DIR="${REPO_DIR_ARG:-$ARCLINK_REPO_DIR}"
 RUNTIME_PYTHON="$(require_runtime_python)"
 RUNTIME_HERMES="$(require_runtime_hermes)"
@@ -472,12 +473,16 @@ ensure_systemd_bundled_skills_env() {
 ensure_systemd_workspace_env() {
   local unit="$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-dashboard.service"
   local before="$SYSTEMD_ENV_UPDATED"
+  mkdir -p "$TARGET_LINKED_DIR"
   ensure_unit_environment_line "$unit" "Environment=DRIVE_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
   ensure_unit_environment_line "$unit" "Environment=CODE_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
   ensure_unit_environment_line "$unit" "Environment=TERMINAL_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
+  ensure_unit_environment_line "$unit" "Environment=DRIVE_LINKED_ROOT=$TARGET_LINKED_DIR"
+  ensure_unit_environment_line "$unit" "Environment=CODE_LINKED_ROOT=$TARGET_LINKED_DIR"
+  ensure_unit_environment_line "$unit" "Environment=ARCLINK_LINKED_RESOURCES_ROOT=$TARGET_LINKED_DIR"
 
   if [[ "$before" != "1" && "$SYSTEMD_ENV_UPDATED" == "1" ]]; then
-    SERVICE_NOTES+=("    - systemd env: repaired dashboard workspace roots")
+    SERVICE_NOTES+=("    - systemd env: repaired dashboard workspace and linked roots")
   fi
 }
 

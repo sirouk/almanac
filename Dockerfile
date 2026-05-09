@@ -61,9 +61,11 @@ RUN pin_value() { \
   && uv venv /opt/arclink/runtime/hermes-venv --python /usr/bin/python3 --seed \
   && uv pip install --python /opt/arclink/runtime/hermes-venv/bin/python3 \
     "/opt/arclink/runtime/hermes-agent-src[cli,mcp,messaging,cron,web]" \
-    PyYAML \
-    requests \
-    stripe \
+    "discord.py>=2.4,<3" \
+    "PyNaCl>=1.5,<2" \
+    "PyYAML>=6.0,<7" \
+    "requests>=2.32,<3" \
+    "stripe>=10,<14" \
   && if [ -d /opt/arclink/runtime/hermes-agent-src/web ]; then \
        cd /opt/arclink/runtime/hermes-agent-src/web \
        && npm ci --no-audit --no-fund \

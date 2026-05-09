@@ -81,6 +81,7 @@ def test_arclink_mcp_tools_advertise_actionable_input_schemas() -> None:
     expect(vault_combo["properties"]["fetch_limit"]["default"] == 1, str(vault_combo))
     expect(vault_combo["properties"]["body_char_limit"]["maximum"] == 12000, str(vault_combo))
     expect(vault_combo["properties"]["lineNumbers"]["default"] is False, str(vault_combo))
+    expect(vault_combo["properties"]["collections"]["items"]["enum"] == ["vault", "vault-pdf-ingest"], str(vault_combo))
     expect("rerank" not in vault_combo["properties"], str(vault_combo))
 
     knowledge_combo = mod._tool_schema("knowledge.search-and-fetch")
@@ -479,6 +480,12 @@ def test_vault_qmd_helpers_normalize_resource_content() -> None:
 
     search_args = mod._qmd_query_arguments({"query": "Example Lattice"})
     expect(search_args["collections"] == ["vault", "vault-pdf-ingest"], str(search_args))
+    try:
+        mod._qmd_query_arguments({"query": "Example Lattice", "collections": ["notion-shared"]})
+    except ValueError as exc:
+        expect("vault-pdf-ingest" in str(exc), str(exc))
+    else:
+        raise AssertionError("vault qmd arguments should reject non-vault collections")
     expect(search_args["searches"][0] == {"type": "lex", "query": "Example Lattice"}, str(search_args))
     expect(search_args["searches"][1] == {"type": "vec", "query": "Example Lattice"}, str(search_args))
     expect(search_args["rerank"] is False, str(search_args))
@@ -600,6 +607,7 @@ def test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars() ->
         expect(pdf_meta["source_type"] == "pdf", str(pdf_meta))
         expect(pdf_meta["source_rel_path"] == "Research/Example Lattice Paper.pdf", str(pdf_meta))
         expect(pdf_meta["generated_metadata"]["generated_markdown_rel_path"] == "Research/Example Lattice Paper-pdf.md", str(pdf_meta))
+        expect("generated_markdown_path" not in pdf_meta["generated_metadata"], str(pdf_meta))
         expect(pdf_meta["source_exists"] is True, str(pdf_meta))
 
         manifest = state_dir / "pdf-ingest" / "manifest.sqlite3"
@@ -650,6 +658,7 @@ def test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars() ->
         expect(normalized_pdf_meta["source_type"] == "pdf", str(normalized_pdf_meta))
         expect(normalized_pdf_meta["source_rel_path"] == "Research/Example Lattice Paper.pdf", str(normalized_pdf_meta))
         expect(normalized_pdf_meta["generated_metadata"]["source_sha256"] == "manifest-sha", str(normalized_pdf_meta))
+        expect(str(generated) not in json.dumps(normalized_pdf_meta), str(normalized_pdf_meta))
     print("PASS test_vault_source_metadata_adapts_to_vault_roots_repos_and_pdf_sidecars")
 
 

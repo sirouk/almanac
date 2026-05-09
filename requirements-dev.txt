@@ -1,5 +1,9 @@
 # Local validation dependencies for focused no-secret tests and lint checks.
 jsonschema>=4.23,<5
+discord.py>=2.4,<3
+PyNaCl>=1.5,<2
 PyYAML>=6.0,<7
+requests>=2.32,<3
+playwright>=1.44,<2
 pyflakes>=3.2,<4
 ruff>=0.8,<1

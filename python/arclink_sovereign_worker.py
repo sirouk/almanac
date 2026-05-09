@@ -151,7 +151,7 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
     edge_target = str(source.get("ARCLINK_EDGE_TARGET") or (tailscale_dns_name if ingress_mode == "tailscale" else f"edge.{base_domain}")).strip().lower()
     local_hostname = str(source.get("ARCLINK_LOCAL_FLEET_HOSTNAME") or socket.getfqdn() or socket.gethostname()).strip().lower()
     return SovereignWorkerConfig(
-        enabled=_truthy(source.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "0")),
+        enabled=_truthy(source.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "1")),
         ingress_mode=ingress_mode,
         base_domain=base_domain,
         edge_target=edge_target,

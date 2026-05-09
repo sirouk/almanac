@@ -434,6 +434,7 @@ def open_arclink_onboarding_checkout(
         success_url=success_url,
         cancel_url=cancel_url,
         idempotency_key=f"arclink:onboarding:checkout:{session_id}",
+        customer_email=str(session.get("email_hint") or ""),
         metadata={
             "arclink_user_id": user_id,
             "arclink_onboarding_session_id": session_id,

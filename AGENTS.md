@@ -197,12 +197,13 @@ If you just committed local changes and need them included in an upgrade,
 make sure they are pushed to the configured upstream first. `upgrade` consumes
 the remote, not unpushed local commits.
 
-Production deploys track `main`. Branches are fine for local development,
-focused testing, and temporary experiments, but do not switch the live
-`ARCLINK_UPSTREAM_BRANCH` away from `main` unless the operator explicitly asks
-for a one-off emergency/staging deployment and understands that production will
-follow that branch. Before running `./deploy.sh upgrade`, verify the deployed
-config is tracking `main`; if it is not, correct it or stop and ask.
+Production deploys currently track `arclink`. Branches are fine for local
+development, focused testing, and temporary experiments, but do not switch the
+live `ARCLINK_UPSTREAM_BRANCH` away from `arclink` unless the operator
+explicitly asks for a one-off emergency/staging deployment and understands
+that production will follow that branch. Before running `./deploy.sh upgrade`,
+verify the deployed config is tracking `arclink`; if it is not, correct it or
+stop and ask.
 
 When the operator asks to commit/deploy/upgrade/restart after repo changes,
 the expected sequence is:

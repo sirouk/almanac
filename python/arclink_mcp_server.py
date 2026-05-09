@@ -278,7 +278,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "query": {"type": "string", "minLength": 1, "description": "Search text for shared/private vault knowledge."},
             "collections": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {"type": "string", "enum": ["vault", "vault-pdf-ingest"]},
                 "description": "Optional qmd collections. Defaults to ['vault', 'vault-pdf-ingest'] so uploaded PDFs are included.",
             },
             "intent": {"type": "string", "description": "Optional retrieval intent passed to qmd."},
@@ -305,7 +305,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "query": {"type": "string", "minLength": 1, "description": "Search text for shared/private vault knowledge."},
             "collections": {
                 "type": "array",
-                "items": {"type": "string"},
+                "items": {"type": "string", "enum": ["vault", "vault-pdf-ingest"]},
                 "description": "Optional qmd collections. Defaults to ['vault', 'vault-pdf-ingest'] so uploaded PDFs are included.",
             },
             "intent": {"type": "string", "description": "Optional retrieval intent passed to qmd."},
@@ -553,18 +553,26 @@ def _trim_text(value: object, limit: int) -> tuple[str, bool]:
     return text[: max(0, limit - len(suffix))].rstrip() + suffix, True
 
 
-def _string_list_arg(arguments: dict, name: str, *, default: list[str]) -> list[str]:
+def _string_list_arg(arguments: dict, name: str, *, default: list[str], allowed: set[str] | None = None) -> list[str]:
     raw_value = arguments.get(name)
     if raw_value is None:
         return list(default)
     if not isinstance(raw_value, list):
         raise ValueError(f"{name} must be an array of strings")
     values = [str(value).strip() for value in raw_value if str(value or "").strip()]
+    if allowed is not None:
+        rejected = [value for value in values if value not in allowed]
+        if rejected:
+            raise ValueError(f"{name} can only include: {', '.join(sorted(allowed))}")
     return values or list(default)
 
 
 def _qmd_default_collections() -> list[str]:
     return ["vault", "vault-pdf-ingest"]
+
+
+def _qmd_vault_collection_set() -> set[str]:
+    return set(_qmd_default_collections())
 
 
 def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeout: int = 12) -> dict[str, Any]:
@@ -633,7 +641,12 @@ def _qmd_query_arguments(arguments: dict, *, limit_key: str = "limit", include_v
         searches.append({"type": "vec", "query": query})
     return {
         "searches": searches,
-        "collections": _string_list_arg(arguments, "collections", default=_qmd_default_collections()),
+        "collections": _string_list_arg(
+            arguments,
+            "collections",
+            default=_qmd_default_collections(),
+            allowed=_qmd_vault_collection_set(),
+        ),
         "intent": intent,
         # Rerank can be expensive on CPU-only qmd hosts and has caused
         # user-facing 120s Hermes MCP timeouts. The agent-facing vault bridge is
@@ -824,13 +837,12 @@ def _pdf_manifest_metadata_for_rel_path(cfg: Config, rel_path: str) -> dict[str,
             "arclink_generated": "true",
             "arclink_source_type": "pdf",
             "source_rel_path": str(row["source_rel_path"] or ""),
-            "source_host_path": str(row["source_abs_path"] or ""),
             "source_sha256": str(row["source_sha256"] or ""),
             "source_size_bytes": str(row["source_size"] or ""),
             "source_mtime_epoch": str(row["source_mtime"] or ""),
             "extractor": str(row["extractor"] or ""),
             "pipeline_signature": str(row["pipeline_signature"] or ""),
-            "generated_markdown_path": str(generated_abs_path),
+            "_generated_markdown_abs_path": str(generated_abs_path),
             "generated_markdown_rel_path": generated_rel_path,
             "manifest_updated_at": str(row["updated_at"] or ""),
         }
@@ -983,7 +995,7 @@ def _vault_source_path_for_qmd_ref(cfg: Config, source_ref: str) -> tuple[str, s
         manifest_metadata = _pdf_manifest_metadata_for_rel_path(cfg, rel_path)
         if manifest_metadata:
             file_metadata = {**file_metadata, **manifest_metadata}
-        manifest_generated_path = str(file_metadata.get("generated_markdown_path") or "").strip()
+        manifest_generated_path = str(file_metadata.get("_generated_markdown_abs_path") or "").strip()
         if manifest_generated_path:
             generated_path = Path(manifest_generated_path).resolve()
         source_rel_path = str(file_metadata.get("source_rel_path") or "").strip()
@@ -992,7 +1004,6 @@ def _vault_source_path_for_qmd_ref(cfg: Config, source_ref: str) -> tuple[str, s
             source_path, source_rel_path = _case_preserving_vault_path(cfg.vault_dir, source_rel_path)
         return collection, source_rel_path or generated_rel_path or rel_path, source_path, {
             **file_metadata,
-            "generated_markdown_path": str(generated_path),
             "generated_markdown_rel_path": str(file_metadata.get("generated_markdown_rel_path") or generated_rel_path or rel_path),
         }
     candidate = Path(source_ref)
@@ -1024,6 +1035,7 @@ def _vault_source_metadata(
     }
     if generated_metadata:
         generated_metadata = dict(generated_metadata)
+        generated_metadata.pop("_generated_markdown_abs_path", None)
         displayed_source = _display_vault_path(vault_root_path, str(generated_metadata.get("source_rel_path") or rel_path))
         if displayed_source:
             generated_metadata["source_host_path"] = displayed_source
@@ -2173,25 +2185,38 @@ class Handler(BaseHTTPRequestHandler):
                             if not isinstance(hit, dict):
                                 continue
                             target_id = _notion_search_hit_target_id(hit)
-                            if not target_id or target_id in seen_targets:
+                            index_file = _notion_index_hit_file(hit)
+                            seen_key = target_id or index_file
+                            if not seen_key or seen_key in seen_targets:
                                 continue
-                            seen_targets.add(target_id)
-                            try:
-                                fetch_result = notion_fetch(
-                                    conn,
-                                    cfg,
-                                    agent_id=agent_id,
-                                    target_id=target_id,
-                                    requested_by_actor=actor,
-                                )
-                                fetched.append(
-                                    {
-                                        "search_hit": _compact_notion_search_hit(hit),
-                                        "fetch": _compact_notion_fetch_result(fetch_result, body_char_limit=body_char_limit),
-                                    }
-                                )
-                            except Exception as exc:  # noqa: BLE001
-                                fetched.append({"search_hit": _compact_notion_search_hit(hit), "fetch_error": str(exc)})
+                            seen_targets.add(seen_key)
+                            fetched_entry: dict[str, Any] = {"search_hit": _compact_notion_search_hit(hit)}
+                            if target_id:
+                                try:
+                                    fetch_result = notion_fetch(
+                                        conn,
+                                        cfg,
+                                        agent_id=agent_id,
+                                        target_id=target_id,
+                                        requested_by_actor=actor,
+                                    )
+                                    fetched_entry["fetch"] = _compact_notion_fetch_result(fetch_result, body_char_limit=body_char_limit)
+                                except Exception as exc:  # noqa: BLE001
+                                    fetched_entry["fetch_error"] = str(exc)
+                            if "fetch" not in fetched_entry and index_file:
+                                try:
+                                    if "fetch_error" in fetched_entry:
+                                        fetched_entry["live_fetch_error"] = fetched_entry.pop("fetch_error")
+                                    fetched_entry["fetch"] = _qmd_fetch_notion_index_file(
+                                        cfg,
+                                        arguments,
+                                        file_value=index_file,
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    fetched_entry.setdefault("fetch_error", str(exc))
+                            if "fetch" not in fetched_entry and "fetch_error" not in fetched_entry:
+                                fetched_entry["fetch_error"] = "no Notion target id or indexed markdown file available"
+                            fetched.append(fetched_entry)
                             if len(fetched) >= notion_fetch_limit:
                                 break
                         source_results["notion"] = {

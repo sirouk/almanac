@@ -29,6 +29,7 @@ x-arclink-app: &arclink-app
     QMD_MCP_HOST_PORT: ${QMD_MCP_PORT:-8181}
     QMD_MCP_CONTAINER_PORT: ${QMD_MCP_CONTAINER_PORT:-8181}
     QMD_MCP_LOOPBACK_PORT: ${QMD_MCP_LOOPBACK_PORT:-18181}
+    QMD_PROXY_BIND_HOST: ${QMD_PROXY_BIND_HOST:-0.0.0.0}
     ARCLINK_CONFIG_FILE: /home/arclink/arclink/arclink-priv/config/docker.env
     ARCLINK_REPO_DIR: /home/arclink/arclink
     ARCLINK_PRIV_DIR: /home/arclink/arclink/arclink-priv
@@ -70,7 +71,7 @@ x-arclink-app: &arclink-app
     DISCORD_APP_ID: ${DISCORD_APP_ID:-}
     DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
     ARCLINK_API_INTERNAL_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}
-    ARCLINK_CONTROL_PROVISIONER_ENABLED: ${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}
+    ARCLINK_CONTROL_PROVISIONER_ENABLED: ${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}
     ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS: ${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}
     ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE: ${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}
     ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS: ${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}
@@ -288,6 +289,24 @@ services:
       - ${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}
       - python3
       - python/arclink_sovereign_worker.py
+      - --once
+      - --json
+
+  control-action-worker:
+    <<: *arclink-app
+    volumes:
+      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+      - ./arclink-priv/secrets/ssh:/root/.ssh
+      # Trusted-host boundary: restart/teardown/admin lifecycle actions call
+      # Docker Compose when ARCLINK_EXECUTOR_ADAPTER=local.
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - ./bin/docker-job-loop.sh
+      - control-action-worker
+      - ${ARCLINK_ACTION_WORKER_INTERVAL_SECONDS:-15}
+      - python3
+      - python/arclink_action_worker.py
       - --once
       - --json
     depends_on:

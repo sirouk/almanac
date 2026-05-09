@@ -34,7 +34,7 @@ live behavior without live proof.
 - Do not edit Hermes core. Use ArcLink wrappers, plugins, hooks, generated
   config, services, docs, and tests.
 - Keep public repo artifacts free of references to any external fictional
-  inspiration/franchise. Product terms such as `Limited 100 Founders` are
+  external inspiration. Product terms such as `Limited 100 Founders` are
   allowed because they are SKU/copy terms; do not explain or expand them into
   lore. The desired feeling should be achieved through restrained product
   voice, names, flow, and visual treatment, not explicit references.

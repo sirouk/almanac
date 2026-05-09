@@ -24,6 +24,7 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   control-api
   control-web
   control-provisioner
+  control-action-worker
   vault-watch
   agent-supervisor
   health-watch
@@ -210,7 +211,7 @@ bootstrap() {
   ensure_env_file_value ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS "9900"
   ensure_env_file_value ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS "7900"
   ensure_env_file_value ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS "9900"
-  ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_ENABLED "0"
+  ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_ENABLED "1"
   ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS "30"
   ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "5"
   ensure_env_file_value ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS "5"
@@ -1211,7 +1212,7 @@ docker_record_release_state() {
   branch="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   origin_url="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
   upstream_url="$(configured_or_default ARCLINK_UPSTREAM_REPO_URL "$origin_url")"
-  upstream_branch="$(configured_or_default ARCLINK_UPSTREAM_BRANCH "${branch:-main}")"
+  upstream_branch="$(configured_or_default ARCLINK_UPSTREAM_BRANCH "${branch:-arclink}")"
   local dirty=""
   dirty="$(git -C "$REPO_DIR" status --porcelain 2>/dev/null | head -1 || true)"
   local dirty_flag="false"
@@ -1864,7 +1865,7 @@ docker_component_upgrade_apply() {
   branch="$(git -C "$REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [[ "$branch" == "HEAD" ]] && branch=""
   upstream_url="$(configured_or_default ARCLINK_UPSTREAM_REPO_URL "$origin_url")"
-  upstream_branch="$(configured_or_default ARCLINK_UPSTREAM_BRANCH "${branch:-main}")"
+  upstream_branch="$(configured_or_default ARCLINK_UPSTREAM_BRANCH "${branch:-arclink}")"
   env \
     ARCLINK_COMPONENT_UPGRADE_MODE=docker \
     ARCLINK_CONFIG_FILE="$DOCKER_ENV_FILE" \

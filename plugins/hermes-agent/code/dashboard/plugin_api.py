@@ -59,7 +59,6 @@ router = APIRouter()
 
 _TEXT_EXTENSIONS = {
     ".css",
-    ".env",
     ".html",
     ".ini",
     ".js",
@@ -81,7 +80,6 @@ _TEXT_EXTENSIONS = {
 _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", ".next"}
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
-    ".env",
     ".arclink-linked-resources.json",
     "arclink-bootstrap-token",
     "id_dsa",
@@ -208,9 +206,13 @@ def _is_sensitive_path(path: Path) -> bool:
     if lowered_parts & _SENSITIVE_DIR_NAMES:
         return True
     name = path.name.lower()
-    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env."):
+    if name in _SENSITIVE_FILE_NAMES:
         return True
     if "bootstrap-token" in name:
+        return True
+    if name == ".arclink-operator.env":
+        return True
+    if "arclink-priv" in lowered_parts and (name.endswith(".env") or name in {"docker.env", "arclink.env", "install.answers.env"}):
         return True
     resolved = path.expanduser().resolve(strict=False)
     hermes = _hermes_home().expanduser().resolve(strict=False)
@@ -347,6 +349,9 @@ def _assert_writable_root(root_ctx: dict[str, Any]) -> None:
 
 def _load_access() -> dict[str, Any]:
     state_dir = _hermes_home() / "state"
+    access = _load_json(state_dir / "arclink-web-access.json")
+    if access:
+        return access
     return _load_json(state_dir / "web-access.json")
 
 
@@ -479,7 +484,7 @@ def _copy_confined(source: Path, destination: Path) -> None:
     if source.is_dir():
         destination.mkdir(parents=True, exist_ok=False)
         for child in source.iterdir():
-            if child.name in _SKIP_DIR_NAMES or (child.is_symlink() and not _allowed_linked_symlink(root_ctx, root, child)) or _is_sensitive_path(child):
+            if child.name in _SKIP_DIR_NAMES or child.is_symlink() or _is_sensitive_path(child):
                 continue
             _copy_confined(child, destination / child.name)
         shutil.copystat(source, destination, follow_symlinks=False)

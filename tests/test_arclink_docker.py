@@ -78,6 +78,7 @@ def test_compose_defines_full_stack_services() -> None:
         "control-web:",
         "control-ingress:",
         "control-provisioner:",
+        "control-action-worker:",
         "vault-watch:",
         "agent-supervisor:",
         "ssot-batcher:",
@@ -99,6 +100,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080" in body, body)
     expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
     expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)
+    expect("python/arclink_action_worker.py" in body and "control-action-worker" in body, body)
     expect("./arclink-priv/secrets/ssh:/root/.ssh" in body, body)
     expect("ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}" in body, body)
     expect(
@@ -385,7 +387,7 @@ def test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config() 
             "\n".join(
                 [
                     "ARCLINK_UPSTREAM_REPO_URL=git@github.com:example/arclink.git",
-                    "ARCLINK_UPSTREAM_BRANCH=main",
+                    "ARCLINK_UPSTREAM_BRANCH=arclink",
                     "ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED=1",
                     "ARCLINK_UPSTREAM_DEPLOY_KEY_USER=operator",
                     f"ARCLINK_UPSTREAM_DEPLOY_KEY_PATH={root}/arclink-upstream-ed25519",
@@ -416,7 +418,7 @@ def test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config() 
         expect("mode=docker" in captured, captured)
         expect(f"config={docker_env}" in captured, captured)
         expect("repo=git@github.com:example/arclink.git" in captured, captured)
-        expect("branch=main" in captured, captured)
+        expect("branch=arclink" in captured, captured)
         expect("key_enabled=1" in captured, captured)
         expect("key_user=operator" in captured, captured)
         expect(f"key_path={root}/arclink-upstream-ed25519" in captured, captured)
@@ -485,13 +487,15 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect('"host.docker.internal" "${QMD_MCP_HOST_PORT:-${QMD_MCP_PORT:-8181}}"' in body, body)
     qmd_daemon = read("bin/qmd-daemon.sh")
     expect("QMD MCP TCP forwarder listening" in qmd_daemon, qmd_daemon)
-    expect('("0.0.0.0", listen_port)' in qmd_daemon, qmd_daemon)
+    expect('QMD_PROXY_BIND_HOST:-127.0.0.1' in qmd_daemon, qmd_daemon)
+    expect('QMD_PROXY_BIND_HOST: ${QMD_PROXY_BIND_HOST:-0.0.0.0}' in read("compose.yaml"), read("compose.yaml"))
     expect('"postgres" "5432"' in body, body)
     expect('"redis" "6379"' in body, body)
     expect("check_docker_agent_mcp_auth" in body, body)
     expect('"control-ingress" "80" "Traefik ingress (HTTP)"' in body, body)
     for job in (
         "control-provisioner",
+        "control-action-worker",
         "ssot-batcher",
         "notification-delivery",
         "health-watch",
@@ -534,7 +538,7 @@ def test_dockerignore_excludes_sensitive_and_generated_context() -> None:
 
 def test_docker_docs_cover_socket_and_private_state_boundaries() -> None:
     body = read("docs/docker.md")
-    for service in ("control-ingress", "control-provisioner", "agent-supervisor", "curator-refresh"):
+    for service in ("control-ingress", "control-provisioner", "control-action-worker", "agent-supervisor", "curator-refresh"):
         expect(f"| `{service}` |" in body, f"docs/docker.md must document socket boundary for {service}\n{body}")
     expect("writeable Docker socket access has host-root-equivalent capabilities" in body, body)
     expect("control-ingress` has read-only socket access" in body, body)

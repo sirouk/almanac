@@ -781,6 +781,24 @@ def test_fake_docker_compose_lifecycle_operations() -> None:
     print("PASS test_fake_docker_compose_lifecycle_operations")
 
 
+def test_live_docker_compose_lifecycle_invokes_runner() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_live_lifecycle_test")
+    runner = mod.FakeDockerRunner()
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(adapter_name="live", live_enabled=True),
+        docker_runner=runner,
+    )
+    result = executor.docker_compose_lifecycle(
+        mod.DockerComposeLifecycleRequest(deployment_id="dep_live", action="restart")
+    )
+    expect(result.live is True and result.status == "completed", str(result))
+    expect(len(runner.runs) == 1, str(runner.runs))
+    expect(runner.runs[0]["args"] == ("restart",), str(runner.runs[0]))
+    expect(runner.runs[0]["project_name"] == "arclink-dep_live", str(runner.runs[0]))
+    expect(runner.runs[0]["compose_file"].endswith("/arcdata/deployments/dep_live/config/compose.yaml"), str(runner.runs[0]))
+    print("PASS test_live_docker_compose_lifecycle_invokes_runner")
+
+
 def main() -> int:
     test_executor_mutating_operations_fail_closed_without_live_flag()
     test_runner_stdout_preserves_compose_ps_json()
@@ -803,7 +821,8 @@ def main() -> int:
     test_injectable_docker_runner_receives_commands()
     test_live_executor_requires_docker_runner()
     test_fake_docker_compose_lifecycle_operations()
-    print("PASS all 21 ArcLink executor tests")
+    test_live_docker_compose_lifecycle_invokes_runner()
+    print("PASS all 22 ArcLink executor tests")
     return 0
 
 

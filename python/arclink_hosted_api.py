@@ -21,6 +21,7 @@ from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
 from arclink_adapters import FakeStripeClient, StripeWebhookError, resolve_stripe_client
+from arclink_chutes import renewal_lifecycle_for_billing_state
 from arclink_control import Config, connect_db, queue_notification
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
@@ -328,6 +329,16 @@ def _handle_stripe_webhook(
             _queue_paid_ping(conn, user_id=result.user_id, request_id=request_id)
         except Exception:  # noqa: BLE001 - never fail the webhook over a ping
             logger.exception("paid_ping_failed user_id=%s request_id=%s", result.user_id, request_id)
+    elif not result.replayed and result.entitlement_state != "paid" and result.user_id:
+        try:
+            _queue_billing_noncurrent_ping(
+                conn,
+                user_id=result.user_id,
+                entitlement_state=result.entitlement_state,
+                request_id=request_id,
+            )
+        except Exception:  # noqa: BLE001 - never fail the webhook over a ping
+            logger.exception("billing_noncurrent_ping_failed user_id=%s request_id=%s", result.user_id, request_id)
 
     return _json_response(200, {
         "status": "processed",
@@ -378,6 +389,60 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     logger.info(
         "paid_ping_queued user_id=%s channel=%s notification_id=%d request_id=%s",
         user_id, channel, nid, request_id,
+    )
+    return nid
+
+
+def _queue_billing_noncurrent_ping(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    entitlement_state: str,
+    request_id: str,
+) -> int | None:
+    row = conn.execute(
+        """
+        SELECT channel, channel_identity, display_name_hint
+        FROM arclink_onboarding_sessions
+        WHERE user_id = ?
+          AND channel IN ('telegram', 'discord')
+          AND channel_identity != ''
+        ORDER BY updated_at DESC, created_at DESC, session_id DESC
+        LIMIT 1
+        """,
+        (str(user_id or "").strip(),),
+    ).fetchone()
+    if row is None:
+        return None
+    channel = str(row["channel"] or "").strip().lower()
+    target_id = _public_bot_target_id(channel=channel, channel_identity=str(row["channel_identity"] or ""))
+    if channel not in {"telegram", "discord"} or not target_id:
+        return None
+    lifecycle = renewal_lifecycle_for_billing_state(entitlement_state)
+    name = str(row["display_name_hint"] or "").strip()
+    greeting = f"Captain {name}, " if name else ""
+    message = (
+        f"{greeting}billing did not renew, so ArcLink has paused provider access for your agent.\n\n"
+        "Raven will remind you once each day while payment is unresolved. "
+        "After 7 days unpaid, the reminders will explicitly warn that account and agent data removal is next. "
+        "After 14 days unpaid, ArcLink queues audited purge of the deployed agent data. "
+        "Update billing from your ArcLink dashboard to restore service."
+    )
+    nid = queue_notification(
+        conn,
+        target_kind="public-bot-user",
+        target_id=target_id,
+        channel_kind=channel,
+        message=message,
+        extra={
+            "billing_state": entitlement_state,
+            "lifecycle": lifecycle,
+            "buttons": [{"label": "Open billing", "command": "/billing"}],
+        },
+    )
+    logger.info(
+        "billing_noncurrent_ping_queued user_id=%s state=%s channel=%s notification_id=%d request_id=%s",
+        user_id, entitlement_state, channel, nid, request_id,
     )
     return nid
 
@@ -870,6 +935,7 @@ def _handle_onboarding_claim_session(
     result = claim_session_from_onboarding_api(
         conn,
         onboarding_session_id=str(body.get("session_id") or ""),
+        browser_claim_token=str(body.get("claim_token") or ""),
     )
     cookies: list[tuple[str, str]] = []
     if result.status == 201:
@@ -885,6 +951,7 @@ def _handle_onboarding_cancel(
     result = cancel_onboarding_session_api(
         conn,
         onboarding_session_id=str(body.get("session_id") or ""),
+        browser_cancel_token=str(body.get("cancel_token") or ""),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 

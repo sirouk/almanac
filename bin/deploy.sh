@@ -125,7 +125,7 @@ ARCLINK_FIRST_AGENT_MONTHLY_CENTS="${ARCLINK_FIRST_AGENT_MONTHLY_CENTS:-14900}"
 ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS="${ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS:-9900}"
 ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS="${ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS:-7900}"
 ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS="${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-9900}"
-ARCLINK_CONTROL_PROVISIONER_ENABLED="${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}"
+ARCLINK_CONTROL_PROVISIONER_ENABLED="${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}"
 ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS="${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}"
 ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE="${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
 ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS="${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}"
@@ -216,7 +216,7 @@ __arclink_upstream_branch_default=""
 if command -v git >/dev/null 2>&1; then
   __arclink_upstream_branch_default="$(git -C "$BOOTSTRAP_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 fi
-ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-${__arclink_upstream_branch_default:-main}}"
+ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-${__arclink_upstream_branch_default:-arclink}}"
 unset __arclink_upstream_branch_default
 ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_BACKEND_PORT_BASE:-19000}"
 ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE="${ARCLINK_AGENT_DASHBOARD_PROXY_PORT_BASE:-29000}"
@@ -2178,7 +2178,7 @@ emit_runtime_config() {
     write_kv ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS "${ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS:-9900}"
     write_kv ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS "${ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS:-7900}"
     write_kv ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS "${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-9900}"
-    write_kv ARCLINK_CONTROL_PROVISIONER_ENABLED "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}"
+    write_kv ARCLINK_CONTROL_PROVISIONER_ENABLED "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}"
     write_kv ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS "${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}"
     write_kv ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
     write_kv ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS "${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}"
@@ -2303,7 +2303,7 @@ emit_runtime_config() {
     write_kv ARCLINK_EXTRA_MCP_LABEL "${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
     write_kv ARCLINK_EXTRA_MCP_URL "${ARCLINK_EXTRA_MCP_URL:-}"
     write_kv ARCLINK_UPSTREAM_REPO_URL "${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
-    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-main}"
+    write_kv ARCLINK_UPSTREAM_BRANCH "${ARCLINK_UPSTREAM_BRANCH:-arclink}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED "${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_USER "${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
     write_kv ARCLINK_UPSTREAM_DEPLOY_KEY_PATH "${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
@@ -2697,12 +2697,12 @@ checkout_upstream_release() {
 }
 
 require_main_upstream_branch_for_upgrade() {
-  local branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
-  if [[ "$branch" == "main" || "${ARCLINK_ALLOW_NON_MAIN_UPGRADE:-0}" == "1" ]]; then
+  local branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
+  if [[ "$branch" == "arclink" || "${ARCLINK_ALLOW_NON_ARCLINK_UPGRADE:-0}" == "1" ]]; then
     return 0
   fi
-  echo "Refusing production upgrade from non-main upstream branch: $branch" >&2
-  echo "Set ARCLINK_ALLOW_NON_MAIN_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
+  echo "Refusing production upgrade from non-arclink upstream branch: $branch" >&2
+  echo "Set ARCLINK_ALLOW_NON_ARCLINK_UPGRADE=1 only for an explicit staging or emergency deployment." >&2
   return 1
 }
 
@@ -2751,7 +2751,7 @@ run_as_user_systemd() {
 refresh_upgrade_check_state_root() {
   local deployed_commit="${1:-}"
   local tracked_repo="${2:-${ARCLINK_UPSTREAM_REPO_URL:-}}"
-  local tracked_branch="${3:-${ARCLINK_UPSTREAM_BRANCH:-main}}"
+  local tracked_branch="${3:-${ARCLINK_UPSTREAM_BRANCH:-arclink}}"
   if [[ -z "$deployed_commit" || -z "${ARCLINK_DB_PATH:-}" ]]; then
     return 0
   fi
@@ -3158,7 +3158,7 @@ print_post_install_guide() {
 
   echo "ArcLink software updates"
   echo "  Tracked upstream:"
-  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-main}"
+  echo "    ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   echo "  Release state:"
   echo "    ${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   echo "  Upgrade command:"
@@ -3938,7 +3938,7 @@ verify_upstream_git_deploy_key_access() {
   fi
   echo "  Read check passed."
 
-  branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   write_ref="refs/heads/$branch"
   tmp_dir="$(mktemp -d)"
   if ! (
@@ -4619,7 +4619,7 @@ EOF
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   collect_upstream_git_answers
   ARCLINK_INSTALL_PUBLIC_GIT="$(ask_yes_no "Initialize the public repo as git if needed" "$default_install_public_git")"
   collect_backup_git_answers
@@ -4794,7 +4794,7 @@ collect_remove_answers() {
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   BACKUP_GIT_REMOTE="${BACKUP_GIT_REMOTE:-}"
   BACKUP_GIT_AUTHOR_NAME="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
   BACKUP_GIT_AUTHOR_EMAIL="${BACKUP_GIT_AUTHOR_EMAIL:-$ARCLINK_USER@localhost}"
@@ -4848,7 +4848,7 @@ prepare_deployed_context() {
   ARCLINK_RELEASE_STATE_FILE="${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-0}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}"
   ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}"
@@ -6774,7 +6774,7 @@ _run_component_apply() {
   load_detected_config || true
   exec env \
     ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
-    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
@@ -8115,7 +8115,7 @@ run_upgrade_flow() {
   echo "ArcLink deploy: upgrade from configured upstream"
   echo
   echo "Config:   $CONFIG_TARGET"
-  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-main}"
+  echo "Upstream: ${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}#${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   echo "Target:   $ARCLINK_REPO_DIR"
 
   require_main_upstream_branch_for_upgrade
@@ -8384,7 +8384,7 @@ EOF
   BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
   ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
   use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   collect_upstream_git_answers
 
   BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-ed25519}"
@@ -8888,7 +8888,7 @@ collect_control_install_answers() {
   ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS="${ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS:-9900}"
   ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS="${ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS:-7900}"
   ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS="${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-9900}"
-  ARCLINK_CONTROL_PROVISIONER_ENABLED="$(ask_yes_no "Enable Sovereign pod provisioner now" "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}")"
+  ARCLINK_CONTROL_PROVISIONER_ENABLED="$(ask_yes_no "Enable Sovereign pod provisioner now" "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}")"
   ARCLINK_EXECUTOR_ADAPTER="${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
   if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" ]]; then
     echo

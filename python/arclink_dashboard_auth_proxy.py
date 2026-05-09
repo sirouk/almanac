@@ -34,6 +34,7 @@ SESSION_TOKEN_TTL_SECONDS = 12 * 60 * 60
 PLUGIN_DEEPLINK_PATHS = {"/drive", "/code", "/terminal"}
 LOGIN_PATH = "/__arclink/login"
 LOGOUT_PATH = "/__arclink/logout"
+MUTATING_METHODS = {"DELETE", "PATCH", "POST", "PUT"}
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -92,6 +93,20 @@ def _safe_next(value: str) -> str:
     if candidate.startswith(LOGIN_PATH):
         return "/"
     return candidate
+
+
+def _normalize_host(value: str) -> str:
+    return str(value or "").strip().lower().rstrip(".")
+
+
+def _origin_matches_host(value: str, host: str) -> bool:
+    origin = str(value or "").strip()
+    expected = _normalize_host(host)
+    if not origin or not expected:
+        return False
+    parsed = urlsplit(origin)
+    supplied = _normalize_host(parsed.netloc)
+    return bool(supplied and hmac.compare_digest(supplied, expected))
 
 
 @dataclass(frozen=True)
@@ -328,6 +343,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _reject(self) -> None:
         self._login_form(status=401)
 
+    def _csrf_origin_ok(self) -> bool:
+        if self.command.upper() not in MUTATING_METHODS or not self.require_auth:
+            return True
+        host = self.headers.get("Host") or ""
+        origin = self.headers.get("Origin") or ""
+        if origin:
+            return _origin_matches_host(origin, host)
+        referer = self.headers.get("Referer") or ""
+        if referer:
+            return _origin_matches_host(referer, host)
+        return True
+
     def _proxy(self) -> None:
         path = urlsplit(self.path).path
         if path == LOGIN_PATH:
@@ -343,6 +370,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         auth = self._authorized()
         if not auth.ok:
             self._reject()
+            return
+        if not self._csrf_origin_ok():
+            self._send_body(403, b"Cross-origin dashboard mutation rejected.\n")
             return
 
         target = urlsplit(self.target)

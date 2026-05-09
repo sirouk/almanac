@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -127,21 +129,29 @@ def test_cancel_through_stripe_fake() -> None:
     print("PASS test_cancel_through_stripe_fake")
 
 
-def test_comp_returns_pending_not_implemented() -> None:
+def test_comp_applies_entitlement_gate() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_comp")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_comp")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_comp")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_comp")
     conn = memory_db(control)
-    _queue_action(dashboard, conn, action_type="comp")
+    control.upsert_arclink_user(conn, user_id="user_comp", entitlement_state="none")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_comp",
+        user_id="user_comp",
+        prefix="comp-test",
+        base_domain="example.test",
+        status="entitlement_required",
+    )
+    _queue_action(dashboard, conn, action_type="comp", target_id="dep_comp")
     executor = _fake_executor(executor_mod)
     result = worker.process_next_arclink_action(conn, executor=executor)
-    expect(result["status"] == "pending_not_implemented", f"comp returns pending_not_implemented, got {result['status']}")
-    expect(result["result"]["status"] == "pending_not_implemented", "dispatch result is honest")
-    # Intent should be failed to prevent re-processing as if succeeded
-    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (result["action_id"],)).fetchone()
-    expect(row["status"] == "failed", f"intent marked failed, got {row['status']}")
-    print("PASS test_comp_returns_pending_not_implemented")
+    expect(result["status"] == "succeeded", f"comp applied, got {result['status']}")
+    expect(result["result"]["status"] == "applied", str(result))
+    row = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_comp'").fetchone()
+    expect(row["status"] == "provisioning_ready", str(dict(row)))
+    print("PASS test_comp_applies_entitlement_gate")
 
 
 def test_batch_processing() -> None:
@@ -311,13 +321,29 @@ def test_fake_executor_live_flag_is_false() -> None:
     print("PASS test_fake_executor_live_flag_is_false")
 
 
+def test_disabled_action_worker_cli_exits_cleanly() -> None:
+    load_module("arclink_control.py", "arclink_control_aw_disabled_cli")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_disabled_cli")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["ARCLINK_DB_PATH"] = str(Path(tmp) / "arclink-control.sqlite3")
+        os.environ["ARCLINK_EXECUTOR_ADAPTER"] = "disabled"
+        try:
+            rc = worker.main(["--once", "--json"])
+            expect(rc == 0, f"disabled action worker should exit cleanly, got {rc}")
+            print("PASS test_disabled_action_worker_cli_exits_cleanly")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
     test_rotate_chutes_key_uses_secret_ref()
     test_refund_through_stripe_fake()
     test_cancel_through_stripe_fake()
-    test_comp_returns_pending_not_implemented()
+    test_comp_applies_entitlement_gate()
     test_batch_processing()
     test_empty_queue_returns_none()
     test_action_attempt_recorded()
@@ -326,4 +352,5 @@ if __name__ == "__main__":
     test_executor_error_secret_material_is_redacted()
     test_all_pending_action_types_honest()
     test_fake_executor_live_flag_is_false()
-    print(f"\nAll 14 action worker tests passed.")
+    test_disabled_action_worker_cli_exits_cleanly()
+    print(f"\nAll 15 action worker tests passed.")

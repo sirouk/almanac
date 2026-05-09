@@ -80,7 +80,6 @@ _DAV_NS = {"d": "DAV:", "oc": "http://owncloud.org/ns"}
 _TEXT_EXTENSIONS = {
     ".css",
     ".csv",
-    ".env",
     ".html",
     ".ini",
     ".js",
@@ -105,7 +104,6 @@ _LINKED_MANIFEST_NAME = ".arclink-linked-resources.json"
 _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", _TRASH_DIR_NAME}
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
-    ".env",
     _LINKED_MANIFEST_NAME,
     "arclink-bootstrap-token",
     "id_dsa",
@@ -195,8 +193,11 @@ def _first_url(payload: dict[str, Any], *keys: str) -> str:
 
 def _access_state() -> tuple[dict[str, Any], dict[str, Any]]:
     state_dir = _hermes_home() / "state"
+    access = _load_json(state_dir / "arclink-web-access.json")
+    if not access:
+        access = _load_json(state_dir / "web-access.json")
     return (
-        _load_json(state_dir / "web-access.json"),
+        access,
         _load_json(state_dir / "vault-reconciler.json"),
     )
 
@@ -272,9 +273,13 @@ def _is_sensitive_path(path: Path) -> bool:
     if lowered_parts & _SENSITIVE_DIR_NAMES:
         return True
     name = path.name.lower()
-    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env."):
+    if name in _SENSITIVE_FILE_NAMES:
         return True
     if "bootstrap-token" in name:
+        return True
+    if name == ".arclink-operator.env":
+        return True
+    if "arclink-priv" in lowered_parts and (name.endswith(".env") or name in {"docker.env", "arclink.env", "install.answers.env"}):
         return True
     resolved = path.expanduser().resolve(strict=False)
     hermes = _hermes_home().expanduser().resolve(strict=False)
@@ -573,6 +578,8 @@ def _next_trash_path(root: Path, relative_path: str) -> Path:
 
 
 def _is_text_item(path: Path) -> bool:
+    if path.name == ".env" or path.name.startswith(".env."):
+        return True
     if path.suffix.lower() in _TEXT_EXTENSIONS:
         return True
     mime = mimetypes.guess_type(str(path))[0] or ""

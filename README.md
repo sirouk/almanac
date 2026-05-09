@@ -217,8 +217,9 @@ docker compose version
 
 ### 2. Clone ArcLink
 
-Production deployments track the `main` branch. Use a feature branch for
-local development, but production config should always track `main`.
+Production deployments currently track the `arclink` branch. Use other
+branches for focused experiments, but production config should track `arclink`
+unless the operator explicitly chooses a temporary staging or emergency lane.
 
 ```bash
 git clone https://github.com/sirouk/arclink.git arclink

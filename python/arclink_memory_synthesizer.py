@@ -625,11 +625,12 @@ def _safe_notion_markdown_path(cfg: Config, raw_path: str) -> Path | None:
     text = str(raw_path or "").strip()
     if not text:
         return None
+    markdown_root = Path(_env("ARCLINK_NOTION_INDEX_MARKDOWN_DIR", str(cfg.state_dir / "notion-index" / "markdown"))).expanduser()
     path = Path(text).expanduser()
     if not path.is_absolute():
-        path = Path(_env("ARCLINK_NOTION_INDEX_MARKDOWN_DIR", str(cfg.state_dir / "notion-index" / "markdown"))) / path
+        path = markdown_root / path
     try:
-        path.resolve().relative_to(cfg.state_dir.resolve())
+        path.resolve().relative_to(markdown_root.resolve())
     except (OSError, ValueError):
         return None
     return path

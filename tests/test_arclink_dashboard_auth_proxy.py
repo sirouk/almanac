@@ -63,6 +63,19 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
+    def do_POST(self) -> None:  # noqa: N802
+        type(self).last_authorization = self.headers.get("Authorization")
+        type(self).last_cookie = self.headers.get("Cookie")
+        if self.path == "/api/mutate":
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_error(404)
+
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
 
@@ -238,11 +251,48 @@ def test_proxy_can_run_dashboard_helpers_without_auth() -> None:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
+def test_proxy_rejects_cross_origin_dashboard_mutations() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_csrf_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            cookie = login(proxy.server_port)
+            same_origin = f"http://127.0.0.1:{proxy.server_port}"
+            status, _headers, body = request(
+                proxy.server_port,
+                "/api/mutate",
+                method="POST",
+                body="{}",
+                headers={"Cookie": cookie, "Origin": same_origin},
+            )
+            expect(status == 200, f"expected same-origin mutation success, saw {status} {body!r}")
+
+            status, _headers, body = request(
+                proxy.server_port,
+                "/api/mutate",
+                method="POST",
+                body="{}",
+                headers={"Cookie": cookie, "Origin": "https://example.invalid"},
+            )
+            expect(status == 403, f"expected cross-origin mutation rejection, saw {status} {body!r}")
+            expect("Cross-origin" in body, body)
+            print("PASS test_proxy_rejects_cross_origin_dashboard_mutations")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
     test_proxy_can_run_dashboard_helpers_without_auth()
-    print("PASS all 3 dashboard-auth-proxy regression tests")
+    test_proxy_rejects_cross_origin_dashboard_mutations()
+    print("PASS all 4 dashboard-auth-proxy regression tests")
     return 0
 
 

@@ -401,7 +401,7 @@ upstream_git() {
 fetch_upstream_branch() {
   require_upstream_push_ready
   configure_origin_for_upstream
-  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   local fetch_output="" fetch_status=0
   fetch_output="$(upstream_git fetch -q origin "$upstream_branch" 2>&1)" || fetch_status=$?
   if [[ "$fetch_status" -eq 0 ]]; then
@@ -420,7 +420,7 @@ tracked_worktree_is_clean() {
 }
 
 sync_current_head_with_upstream_branch() {
-  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   local fetch_status=0
   fetch_upstream_branch || fetch_status=$?
   if [[ "$fetch_status" -eq 2 ]]; then
@@ -457,7 +457,7 @@ sync_current_head_with_upstream_branch() {
 
 push_current_head() {
   require_upstream_push_ready
-  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-main}"
+  local upstream_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   sync_current_head_with_upstream_branch
   note "Pushing to ${ARCLINK_UPSTREAM_REPO_URL:-origin}#$upstream_branch..."
   upstream_git push origin "HEAD:$upstream_branch" >/dev/null
@@ -495,7 +495,7 @@ reexec_upgrade() {
     note "Re-exec ./deploy.sh docker upgrade to apply the new pin to the Docker stack..."
     exec env \
       ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
-      ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+      ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
       ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-}" \
       ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
       ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
@@ -529,7 +529,7 @@ reexec_upgrade() {
   exec sudo env \
     ARCLINK_CONFIG_FILE="$discovered_config" \
     ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
-    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+    ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED="${ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED:-1}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
     ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \

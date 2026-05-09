@@ -27,6 +27,7 @@ class FakeStripeClient:
         success_url: str,
         cancel_url: str,
         client_reference_id: str = "",
+        customer_email: str = "",
         metadata: dict[str, str] | None = None,
         idempotency_key: str = "",
         line_items: list[dict[str, Any]] | None = None,
@@ -44,6 +45,7 @@ class FakeStripeClient:
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,
+            "customer_email": customer_email,
             "metadata": dict(metadata or {}),
             "subscription_data": {"metadata": dict(metadata or {})},
             "url": f"https://stripe.test/checkout/{session_id}",
@@ -83,6 +85,7 @@ class LiveStripeClient:
         success_url: str,
         cancel_url: str,
         client_reference_id: str = "",
+        customer_email: str = "",
         metadata: dict[str, str] | None = None,
         idempotency_key: str = "",
         line_items: list[dict[str, Any]] | None = None,
@@ -106,6 +109,8 @@ class LiveStripeClient:
                 }
             },
         }
+        if str(customer_email or "").strip():
+            params["customer_email"] = str(customer_email).strip()
         kwargs: dict[str, Any] = {}
         if idempotency_key:
             kwargs["idempotency_key"] = idempotency_key

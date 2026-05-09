@@ -21,7 +21,7 @@ Some broader infrastructure items in the scope below are live foundations or pla
 | --- | --- | --- |
 | The product | ArcLink | Private AI infrastructure, productized. The thing the customer buys. |
 | The metaphor | Onboarding ArcLink | Internal and Raven voice framing. Keep the public promise simple: Agent onboard ArcLink, or Agents onboard ArcLink. |
-| The cohort | The 100 | First 100 sovereigns aboard. Founder-tier mythology: early operators who shape the launch. |
+| The cohort | Founders | Early operators who shape the launch. Use the product SKU name when pricing requires it; do not explain external lore in public or operator-facing docs. |
 | The guide | Raven | Public-facing bot/persona. First contact, onboarding, launch liaison, control-panel guide. Telegram username: `@arclink_bot`. Bio: `ARCLINK CURATOR`. |
 | The agent runtime | Hermes | The agentic harness inside each pod: memory, skills, tools, reasoning loop. Each pod ships with a private Hermes. |
 | The retrieval rail | qmd vault | Vault index/retrieval over the user's files. |
@@ -740,4 +740,7 @@ Not:
 
 The ship metaphor should stay internal. Public copy should prefer the simple purchase promise: Agent onboard ArcLink, or Agents onboard ArcLink.
 
-The 100 is founder-tier framing for the first 100 sovereigns aboard. Reserve it for launch comms, founder comms, and a future founder-cohort surface. It is not currently wired into the bot or web copy.
+Founder-tier framing belongs in launch and founder communications only. Keep
+public product copy focused on what the user receives: ArcLink brings their
+agent online, connects the knowledge rails, and keeps control surfaces scoped
+to their account.

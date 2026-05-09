@@ -420,11 +420,37 @@ def test_memory_synthesizer_local_fallback_runs_without_llm_config() -> None:
             os.environ.update(old_env)
 
 
+def test_memory_synthesizer_notion_paths_stay_inside_index_root() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = base_config(root)
+        notion_root = root / "state" / "notion-index" / "markdown"
+        values["ARCLINK_NOTION_INDEX_MARKDOWN_DIR"] = str(notion_root)
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ.update(values)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            safe = synth._safe_notion_markdown_path(cfg, "root-1/page.md")
+            expect(safe == notion_root / "root-1" / "page.md", str(safe))
+            outside_state = synth._safe_notion_markdown_path(cfg, str(root / "state" / "other" / "page.md"))
+            expect(outside_state is None, str(outside_state))
+            escaped = synth._safe_notion_markdown_path(cfg, "../other/page.md")
+            expect(escaped is None, str(escaped))
+            print("PASS test_memory_synthesizer_notion_paths_stay_inside_index_root")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
     test_memory_synthesizer_local_fallback_runs_without_llm_config()
-    print("PASS all 3 memory synthesizer tests")
+    test_memory_synthesizer_notion_paths_stay_inside_index_root()
+    print("PASS all 4 memory synthesizer tests")
     return 0
 
 

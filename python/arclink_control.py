@@ -516,7 +516,7 @@ class Config:
             extra_mcp_label=extra_mcp_label,
             extra_mcp_url=extra_mcp_url,
             upstream_repo_url=env.get("ARCLINK_UPSTREAM_REPO_URL", "https://github.com/example/arclink.git"),
-            upstream_branch=env.get("ARCLINK_UPSTREAM_BRANCH", "main"),
+            upstream_branch=env.get("ARCLINK_UPSTREAM_BRANCH", "arclink"),
             upstream_deploy_key_enabled=bool_env(
                 "ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED",
                 default=False,

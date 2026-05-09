@@ -76,7 +76,7 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
                 {
                     "deployed_commit": "aaaaaaaaaaaa1111111111111111111111111111",
                     "tracked_upstream_repo_url": "https://github.com/example/arclink.git",
-                    "tracked_upstream_branch": "main",
+                    "tracked_upstream_branch": "arclink",
                 }
             )
             + "\n",
@@ -195,7 +195,7 @@ def test_upgrade_check_adds_discord_buttons_for_operator_channel() -> None:
                 {
                     "deployed_commit": "aaaaaaaaaaaa1111111111111111111111111111",
                     "tracked_upstream_repo_url": "https://github.com/example/arclink.git",
-                    "tracked_upstream_branch": "main",
+                    "tracked_upstream_branch": "arclink",
                 }
             )
             + "\n",
@@ -264,7 +264,7 @@ def test_upgrade_check_notifies_when_deployed_commit_is_unknown_but_differs() ->
                 {
                     "deployed_commit": "0000000000000000000000000000000000000000",
                     "tracked_upstream_repo_url": "https://github.com/example/arclink.git",
-                    "tracked_upstream_branch": "main",
+                    "tracked_upstream_branch": "arclink",
                 }
             )
             + "\n",
@@ -332,7 +332,7 @@ def test_upgrade_check_does_not_notify_when_deployed_is_ahead() -> None:
                 {
                     "deployed_commit": "aaaaaaaaaaaa1111111111111111111111111111",
                     "tracked_upstream_repo_url": "https://github.com/example/arclink.git",
-                    "tracked_upstream_branch": "main",
+                    "tracked_upstream_branch": "arclink",
                 }
             )
             + "\n",
@@ -401,7 +401,7 @@ def test_upgrade_check_suppresses_update_notification_during_deploy_operation() 
                 {
                     "deployed_commit": "aaaaaaaaaaaa1111111111111111111111111111",
                     "tracked_upstream_repo_url": "https://github.com/example/arclink.git",
-                    "tracked_upstream_branch": "main",
+                    "tracked_upstream_branch": "arclink",
                 }
             )
             + "\n",
@@ -478,7 +478,7 @@ def test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes() -> 
                 "ARCLINK_MCP_HOST": "127.0.0.1",
                 "ARCLINK_MCP_PORT": "8282",
                 "ARCLINK_UPSTREAM_REPO_URL": "git@github.com:example/arclink.git",
-                "ARCLINK_UPSTREAM_BRANCH": "main",
+                "ARCLINK_UPSTREAM_BRANCH": "arclink",
                 "ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED": "1",
                 "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
                 "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
@@ -541,7 +541,7 @@ def test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_servi
                 "ARCLINK_MCP_HOST": "127.0.0.1",
                 "ARCLINK_MCP_PORT": "8282",
                 "ARCLINK_UPSTREAM_REPO_URL": "git@github.com:example/arclink.git",
-                "ARCLINK_UPSTREAM_BRANCH": "main",
+                "ARCLINK_UPSTREAM_BRANCH": "arclink",
                 "ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED": "1",
                 "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
                 "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
@@ -553,7 +553,7 @@ def test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_servi
                 {
                     "deployed_commit": deployed_sha,
                     "tracked_upstream_repo_url": "git@github.com:example/arclink.git",
-                    "tracked_upstream_branch": "main",
+                    "tracked_upstream_branch": "arclink",
                 }
             )
             + "\n",
@@ -572,7 +572,7 @@ def test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_servi
 
         def fake_classify(repo_dir: Path, repo_url: str, branch: str, deployed_commit: str, upstream_commit: str) -> str:
             expect(repo_url == "https://github.com/example/arclink.git", repo_url)
-            expect(branch == "main", branch)
+            expect(branch == "arclink", branch)
             expect(deployed_commit == deployed_sha, deployed_commit)
             expect(upstream_commit == deployed_sha, upstream_commit)
             return "equal"
@@ -590,8 +590,8 @@ def test_upgrade_check_falls_back_to_https_when_operator_deploy_key_is_not_servi
             expect(result["upstream_query_url"] == "https://github.com/example/arclink.git", result)
             expect(result["upstream_transport_fallback"] == "https", result)
             expect(calls == [
-                ("git@github.com:example/arclink.git", "main", True),
-                ("https://github.com/example/arclink.git", "main", False),
+                ("git@github.com:example/arclink.git", "arclink", True),
+                ("https://github.com/example/arclink.git", "arclink", False),
             ], calls)
             job = conn.execute(
                 "SELECT last_status, last_note FROM refresh_jobs WHERE job_name = 'arclink-upgrade-check'"
@@ -619,7 +619,7 @@ def test_query_upstream_head_uses_safe_working_directory() -> None:
             (),
             {
                 "returncode": 0,
-                "stdout": "bbbbbbbbbbbb2222222222222222222222222222\trefs/heads/main\n",
+                "stdout": "bbbbbbbbbbbb2222222222222222222222222222\trefs/heads/arclink\n",
                 "stderr": "",
             },
         )()
@@ -627,7 +627,7 @@ def test_query_upstream_head_uses_safe_working_directory() -> None:
     original_run = ctl.subprocess.run
     ctl.subprocess.run = fake_run
     try:
-        sha = ctl._query_upstream_head("https://github.com/example/arclink.git", "main", None)
+        sha = ctl._query_upstream_head("https://github.com/example/arclink.git", "arclink", None)
     finally:
         ctl.subprocess.run = original_run
     expect(sha == "bbbbbbbbbbbb2222222222222222222222222222", sha)
@@ -655,7 +655,7 @@ def test_upgrade_check_git_run_disables_interactive_auth_prompts() -> None:
     original_run = ctl.subprocess.run
     ctl.subprocess.run = fake_run
     try:
-        ctl._git_run(REPO, "fetch", "origin", "main")
+        ctl._git_run(REPO, "fetch", "origin", "arclink")
     finally:
         ctl.subprocess.run = original_run
     env = seen.get("env")

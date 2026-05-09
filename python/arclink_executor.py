@@ -216,6 +216,8 @@ class DockerComposeLifecycleRequest:
     deployment_id: str
     action: str  # stop, restart, inspect, teardown
     project_name: str = ""
+    env_file: str = ""
+    compose_file: str = ""
     idempotency_key: str = ""
 
 
@@ -448,12 +450,35 @@ class ArcLinkExecutor:
                 action=action,
                 metadata={"adapter": "fake", "idempotency_key": key},
             )
+        if self.docker_runner is None:
+            raise ArcLinkExecutorError("ArcLink live Docker lifecycle requires an injectable DockerRunner")
+        project_name = request.project_name or _compose_project_name(request.deployment_id)
+        config_root = Path(f"/arcdata/deployments/{request.deployment_id}/config")
+        env_file = request.env_file or str(config_root / "arclink.env")
+        compose_file = request.compose_file or str(config_root / "compose.yaml")
+        compose_args = {
+            "stop": ("stop",),
+            "restart": ("restart",),
+            "inspect": ("ps", "--format", "json"),
+            "teardown": ("down", "--remove-orphans"),
+        }[action]
+        runner_result = self.docker_runner.run(
+            compose_args,
+            project_name=project_name,
+            env_file=env_file,
+            compose_file=compose_file,
+        )
         return DockerComposeLifecycleResult(
             deployment_id=request.deployment_id,
             live=True,
             status="completed",
             action=action,
-            metadata={"adapter": self.config.adapter_name, "idempotency_key": request.idempotency_key},
+            metadata={
+                "adapter": self.config.adapter_name,
+                "idempotency_key": request.idempotency_key,
+                "project_name": project_name,
+                "runner_status": str(runner_result.get("status") or ""),
+            },
         )
 
     def _fake_docker_compose_apply(
@@ -927,7 +952,7 @@ def _materialize_docker_compose_files(
     secrets_root.chmod(0o700)
     for resolved in resolved_secrets.values():
         if resolved.source_path:
-            Path(resolved.source_path).chmod(0o644)
+            Path(resolved.source_path).chmod(0o600)
 
     services = dict((intent.get("compose") or {}).get("services") or {}) if isinstance(intent.get("compose"), Mapping) else {}
     _ensure_volume_roots(services)

@@ -530,7 +530,7 @@ ARCLINK_EXTRA_MCP_NAME="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
 ARCLINK_EXTRA_MCP_LABEL="${ARCLINK_EXTRA_MCP_LABEL:-External knowledge rail}"
 ARCLINK_EXTRA_MCP_URL="${ARCLINK_EXTRA_MCP_URL:-}"
 ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-https://github.com/example/arclink.git}"
-ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}"
+ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
 # Dependency pins are declared in config/pins.json; bin/pins.sh reads them.
 # For pinned components, pins.json is the source of truth. Existing env values
 # are only fallbacks for partially-bootstrapped hosts where pins.json or jq is

@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import Any
+from typing import Any, Mapping
 import uuid
 
 try:
@@ -60,7 +60,6 @@ _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
-    ".env",
     "arclink-bootstrap-token",
     "id_dsa",
     "id_ecdsa",
@@ -74,6 +73,18 @@ _DEFAULT_COLS = 132
 _CPR_QUERY = b"\x1b[6n"
 _RUNTIMES: dict[str, dict[str, Any]] = {}
 _STATE_LOCK = threading.RLock()
+_TERMINAL_ENV_ALLOWLIST = {
+    "COLORTERM",
+    "HOME",
+    "HERMES_HOME",
+    "LANG",
+    "LC_ALL",
+    "LOGNAME",
+    "PATH",
+    "SHELL",
+    "TERM",
+    "USER",
+}
 
 
 def _cleanup_runtimes() -> None:
@@ -135,9 +146,13 @@ def _is_sensitive_path(path: Path) -> bool:
     if lowered_parts & _SENSITIVE_DIR_NAMES:
         return True
     name = path.name.lower()
-    if name in _SENSITIVE_FILE_NAMES or name.startswith(".env."):
+    if name in _SENSITIVE_FILE_NAMES:
         return True
     if "bootstrap-token" in name:
+        return True
+    if name == ".arclink-operator.env":
+        return True
+    if "arclink-priv" in lowered_parts and (name.endswith(".env") or name in {"docker.env", "arclink.env", "install.answers.env"}):
         return True
     resolved = path.expanduser().resolve(strict=False)
     hermes = _hermes_home().expanduser().resolve(strict=False)
@@ -520,6 +535,19 @@ def _runtime_argv(entry: dict[str, Any]) -> tuple[list[str], str]:
     return [shell, "-i"], "Terminal"
 
 
+def _terminal_env(base: Mapping[str, str]) -> dict[str, str]:
+    allowed = set(_TERMINAL_ENV_ALLOWLIST)
+    extra = str(base.get("TERMINAL_INHERIT_ENV_KEYS") or "")
+    for key in re.split(r"[\s,]+", extra):
+        clean = key.strip()
+        if clean:
+            allowed.add(clean)
+    env = {key: str(base[key]) for key in allowed if key in base}
+    env.setdefault("HOME", str(Path.home().expanduser()))
+    env.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+    return env
+
+
 def _tui_dist_available() -> bool:
     tui_dir_value = _env_first("HERMES_TUI_DIR", "TERMINAL_TUI_DIR") or _DEFAULT_TUI_DIR
     if not tui_dir_value:
@@ -542,7 +570,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     master_fd, slave_fd = pty.openpty()
     _set_pty_size(master_fd, rows, cols)
     _set_pty_size(slave_fd, rows, cols)
-    env = os.environ.copy()
+    env = _terminal_env(os.environ)
     if str(env.get("TERM") or "").strip().lower() in {"", "dumb", "unknown"}:
         env["TERM"] = "xterm-256color"
     env["COLORTERM"] = env.get("COLORTERM") or "truecolor"

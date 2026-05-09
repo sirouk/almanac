@@ -2,11 +2,16 @@
 """ArcLink admin action worker: consumes queued intents via executor."""
 from __future__ import annotations
 
+import argparse
+import json
+import os
+from pathlib import Path
 import secrets
 import sqlite3
+import time
 from typing import Any, Mapping
 
-from arclink_control import append_arclink_audit, append_arclink_event, utc_now_iso
+from arclink_control import append_arclink_audit, append_arclink_event, comp_arclink_subscription, ensure_schema, utc_now_iso
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_executor import (
     ArcLinkExecutor,
@@ -15,7 +20,10 @@ from arclink_executor import (
     ChutesKeyApplyRequest,
     CloudflareDnsApplyRequest,
     DockerComposeLifecycleRequest,
+    FakeSecretResolver,
     StripeActionApplyRequest,
+    SubprocessDockerComposeRunner,
+    SshDockerComposeRunner,
 )
 
 
@@ -172,6 +180,7 @@ def _execute_action(
 
     try:
         result = _dispatch_action(
+            conn=conn,
             executor=executor,
             action_type=action_type,
             target_kind=target_kind,
@@ -247,6 +256,7 @@ def _execute_action(
 
 def _dispatch_action(
     *,
+    conn: sqlite3.Connection,
     executor: ArcLinkExecutor,
     action_type: str,
     target_kind: str,
@@ -258,6 +268,9 @@ def _dispatch_action(
         result = executor.docker_compose_lifecycle(DockerComposeLifecycleRequest(
             deployment_id=target_id,
             action="restart",
+            project_name=metadata.get("project_name", ""),
+            env_file=metadata.get("env_file", ""),
+            compose_file=metadata.get("compose_file", ""),
             idempotency_key=metadata.get("idempotency_key", ""),
         ))
         return {"live": result.live, "status": result.status, "action": result.action}
@@ -287,14 +300,26 @@ def _dispatch_action(
         result = executor.stripe_action_apply(StripeActionApplyRequest(
             deployment_id=target_id,
             action=action_type,
-            customer_ref=metadata.get("customer_ref", ""),
+            customer_ref=metadata.get("customer_ref", "") or metadata.get("stripe_customer_ref", ""),
             idempotency_key=metadata.get("idempotency_key", ""),
         ))
         return {"live": result.live, "status": result.status, "action": result.action}
 
     if action_type == "comp":
-        # Comp requires entitlement module wiring — not yet connected to executor
-        return {"status": "pending_not_implemented", "action": "comp", "note": "entitlement operation not yet wired to executor"}
+        user_id = str(metadata.get("user_id") or (target_id if target_kind == "user" else "")).strip()
+        if not user_id and target_kind == "deployment":
+            row = conn.execute("SELECT user_id FROM arclink_deployments WHERE deployment_id = ?", (target_id,)).fetchone()
+            user_id = str(row["user_id"] or "") if row is not None else ""
+        if not user_id:
+            raise ArcLinkActionWorkerError("comp action requires a user target or deployment with owner")
+        comp_arclink_subscription(
+            conn,
+            user_id=user_id,
+            deployment_id=target_id if target_kind == "deployment" else str(metadata.get("deployment_id") or ""),
+            actor_id=str(metadata.get("actor_id") or "system:action_worker"),
+            reason=str(metadata.get("reason") or "operator queued comp action"),
+        )
+        return {"status": "applied", "action": "comp", "user_id": user_id}
 
     if action_type in ("suspend", "unsuspend"):
         return {"status": "pending_not_implemented", "action": action_type, "note": "deployment lifecycle state transition not yet implemented"}
@@ -369,3 +394,102 @@ def list_action_attempts(
         (action_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _executor_from_env(env: Mapping[str, str] | None = None) -> ArcLinkExecutor:
+    source = dict(env or os.environ)
+    adapter = str(source.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower()
+    if adapter == "fake":
+        return ArcLinkExecutor(
+            config=ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+            secret_resolver=FakeSecretResolver({}),
+        )
+    if adapter not in {"local", "ssh"}:
+        raise ArcLinkActionWorkerError(
+            "set ARCLINK_EXECUTOR_ADAPTER to fake, local, or ssh before running the action worker"
+        )
+    from arclink_sovereign_worker import SovereignSecretResolver
+
+    secret_store_dir = Path(source.get("ARCLINK_SECRET_STORE_DIR") or "/home/arclink/arclink/arclink-priv/state/sovereign-secrets")
+    materialization_root = Path(source.get("ARCLINK_ACTION_WORKER_SECRET_MATERIALIZATION_DIR") or "/tmp/arclink-action-worker/secrets")
+    resolver = SovereignSecretResolver(
+        env=source,
+        secret_store_dir=secret_store_dir,
+        materialization_root=materialization_root,
+    )
+    if adapter == "local":
+        runner = SubprocessDockerComposeRunner(docker_binary=str(source.get("ARCLINK_DOCKER_BINARY") or "docker"))
+    else:
+        ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+        key_path = str(source.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
+        known_hosts = str(source.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
+        if key_path:
+            ssh_options.extend(("-i", key_path))
+        if known_hosts:
+            ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
+        runner = SshDockerComposeRunner(
+            host=str(source.get("ARCLINK_ACTION_WORKER_SSH_HOST") or source.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or ""),
+            user=str(source.get("ARCLINK_ACTION_WORKER_SSH_USER") or source.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink"),
+            ssh_binary=str(source.get("ARCLINK_SSH_BINARY") or "ssh"),
+            rsync_binary=str(source.get("ARCLINK_RSYNC_BINARY") or "rsync"),
+            docker_binary=str(source.get("ARCLINK_DOCKER_BINARY") or "docker"),
+            ssh_options=tuple(ssh_options),
+        )
+    return ArcLinkExecutor(
+        config=ArcLinkExecutorConfig(live_enabled=True, adapter_name=adapter),
+        secret_resolver=resolver,
+        docker_runner=runner,
+    )
+
+
+def _db_connect(path: str) -> sqlite3.Connection:
+    db_path = str(path or os.environ.get("ARCLINK_DB_PATH") or "/home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    ensure_schema(conn)
+    return conn
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Consume queued ArcLink admin action intents.")
+    parser.add_argument("--db", default=os.environ.get("ARCLINK_DB_PATH", ""))
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("ARCLINK_ACTION_WORKER_BATCH_SIZE", "10")))
+    parser.add_argument("--interval", type=float, default=float(os.environ.get("ARCLINK_ACTION_WORKER_INTERVAL_SECONDS", "30")))
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    adapter = str(os.environ.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower()
+    if adapter in {"", "disabled", "off", "none"}:
+        with _db_connect(args.db) as conn:
+            pending = conn.execute(
+                "SELECT COUNT(*) AS c FROM arclink_action_intents WHERE status IN ('queued', 'running')"
+            ).fetchone()
+        payload = {
+            "status": "disabled",
+            "reason": "ARCLINK_EXECUTOR_ADAPTER is disabled",
+            "pending_actions": int(pending["c"] if pending is not None else 0),
+        }
+        if args.json:
+            print(json.dumps(payload, sort_keys=True))
+        else:
+            print(f"ArcLink action worker disabled; pending_actions={payload['pending_actions']}")
+        return 0
+
+    executor = _executor_from_env(os.environ)
+    while True:
+        with _db_connect(args.db) as conn:
+            recovered = recover_stale_actions(conn)
+            results = process_arclink_action_batch(conn, executor=executor, batch_size=max(1, args.batch_size))
+        payload = {"recovered": recovered, "processed": results}
+        if args.json:
+            print(json.dumps(payload, sort_keys=True))
+        elif results or recovered:
+            print(f"ArcLink action worker: recovered={len(recovered)} processed={len(results)}")
+        if args.once:
+            return 0
+        time.sleep(max(1.0, args.interval))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

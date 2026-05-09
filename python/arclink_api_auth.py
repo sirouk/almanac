@@ -28,6 +28,7 @@ from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_mat
 from arclink_dashboard import queue_arclink_admin_action, read_arclink_admin_dashboard, read_arclink_user_dashboard
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
+    cancel_arclink_onboarding_session,
     create_or_resume_arclink_onboarding_session,
     normalize_arclink_public_onboarding_contact,
     open_arclink_onboarding_checkout,
@@ -133,10 +134,10 @@ def extract_arclink_session_credentials(
 
 
 def extract_arclink_csrf_token(headers: Mapping[str, Any], *, session_kind: str) -> str:
-    clean_kind = _validate_session_kind(session_kind, operation="CSRF token extraction")
-    csrf_token = _header(headers, ARCLINK_CSRF_HEADER) or _cookie(headers, f"arclink_{clean_kind}_csrf")
+    _validate_session_kind(session_kind, operation="CSRF token extraction")
+    csrf_token = _header(headers, ARCLINK_CSRF_HEADER)
     if not csrf_token:
-        raise ArcLinkApiAuthError("ArcLink CSRF token is required")
+        raise ArcLinkApiAuthError("ArcLink CSRF header is required")
     return csrf_token
 
 
@@ -170,6 +171,19 @@ def _reject_secret_material(value: Any, *, path: str = "$") -> None:
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _public_onboarding_session(session: Mapping[str, Any]) -> dict[str, Any]:
+    """Return browser-safe onboarding session fields.
+
+    Internal metadata carries one-way browser proof hashes and should not be
+    reflected back to public clients as part of the session object.
+    """
+    return {
+        key: value
+        for key, value in dict(session).items()
+        if key not in {"metadata_json"}
+    }
 
 
 def hash_arclink_password(password: str, *, label: str = "ArcLink password") -> str:
@@ -757,7 +771,29 @@ def start_public_onboarding_api(
         selected_model_id=selected_model_id or chutes_default_model({}),
         metadata=metadata,
     )
-    return ArcLinkApiResponse(status=201, payload={"session": session})
+    claim_token = secrets.token_urlsafe(32)
+    cancel_token = secrets.token_urlsafe(32)
+    session_metadata = _json_loads(str(session.get("metadata_json") or "{}"))
+    session_metadata.update({
+        "browser_claim_proof_hash": _hash_token(claim_token),
+        "browser_cancel_proof_hash": _hash_token(cancel_token),
+        "browser_proofs_issued_at": utc_now_iso(),
+        "browser_proofs_channel": clean_channel,
+    })
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
+        (_json(session_metadata), utc_now_iso(), str(session["session_id"])),
+    )
+    conn.commit()
+    refreshed = conn.execute(
+        "SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (str(session["session_id"]),),
+    ).fetchone()
+    return ArcLinkApiResponse(status=201, payload={
+        "session": _public_onboarding_session(rowdict(refreshed) if refreshed is not None else session),
+        "browser_claim_token": claim_token,
+        "browser_cancel_token": cancel_token,
+    })
 
 
 def _require_nonempty(value: str, field: str) -> None:
@@ -789,7 +825,7 @@ def answer_public_onboarding_api(
         selected_plan_id=selected_plan_id,
         selected_model_id=selected_model_id,
     )
-    return ArcLinkApiResponse(status=200, payload={"session": session})
+    return ArcLinkApiResponse(status=200, payload={"session": _public_onboarding_session(session)})
 
 
 def open_public_onboarding_checkout_api(
@@ -815,7 +851,7 @@ def open_public_onboarding_checkout_api(
         base_domain=base_domain,
         line_items=line_items,
     )
-    return ArcLinkApiResponse(status=200, payload={"session": session})
+    return ArcLinkApiResponse(status=200, payload={"session": _public_onboarding_session(session)})
 
 
 def read_user_dashboard_api(
@@ -2272,6 +2308,7 @@ def claim_session_from_onboarding_api(
     conn: sqlite3.Connection,
     *,
     onboarding_session_id: str,
+    browser_claim_token: str,
 ) -> ArcLinkApiResponse:
     """Create a user session from a paid onboarding session.
 
@@ -2285,13 +2322,18 @@ def claim_session_from_onboarding_api(
     check_arclink_rate_limit(
         conn, scope="onboarding_claim", subject=clean_id, limit=5, window_seconds=900,
     )
+    _require_nonempty(browser_claim_token, "claim_token")
     row = conn.execute(
-        "SELECT session_id, user_id, status, email_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
+        "SELECT session_id, user_id, status, email_hint, metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
         (clean_id,),
     ).fetchone()
     if row is None:
         raise ArcLinkApiAuthError("Onboarding session not found")
     session_dict = dict(row)
+    session_metadata = _json_loads(str(session_dict.get("metadata_json") or "{}"))
+    expected_hash = str(session_metadata.get("browser_claim_proof_hash") or "").strip()
+    if not expected_hash or not hmac.compare_digest(expected_hash, _hash_token(browser_claim_token)):
+        raise ArcLinkApiAuthError("Onboarding claim proof failed")
     user_id = str(session_dict.get("user_id") or "").strip()
     if not user_id:
         raise ArcLinkApiAuthError("Onboarding session has no associated user yet")
@@ -2312,6 +2354,13 @@ def claim_session_from_onboarding_api(
         user_id=user_id,
         metadata={"source": "onboarding_claim", "onboarding_session_id": clean_id},
     )
+    session_metadata.pop("browser_claim_proof_hash", None)
+    session_metadata["browser_claim_proof_used_at"] = utc_now_iso()
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
+        (_json(session_metadata), utc_now_iso(), clean_id),
+    )
+    conn.commit()
     return ArcLinkApiResponse(status=201, payload={
         "session": user_session,
         "user_id": user_id,
@@ -2323,6 +2372,7 @@ def cancel_onboarding_session_api(
     conn: sqlite3.Connection,
     *,
     onboarding_session_id: str,
+    browser_cancel_token: str,
 ) -> ArcLinkApiResponse:
     """Mark an onboarding session as cancelled.
 
@@ -2331,27 +2381,39 @@ def cancel_onboarding_session_api(
     resumed later via a new start call with the same channel identity.
     """
     _require_nonempty(onboarding_session_id, "session_id")
+    _require_nonempty(browser_cancel_token, "cancel_token")
     clean_id = str(onboarding_session_id).strip()
     row = conn.execute(
-        "SELECT session_id, status FROM arclink_onboarding_sessions WHERE session_id = ?",
+        "SELECT session_id, status, metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
         (clean_id,),
     ).fetchone()
     if row is None:
         return ArcLinkApiResponse(status=404, payload={"error": "session_not_found"})
     current_status = str(row["status"] or "").strip()
-    if current_status in ("completed", "cancelled"):
+    if current_status in {"completed", "payment_cancelled", "payment_expired", "payment_failed", "abandoned"}:
         return ArcLinkApiResponse(status=200, payload={
             "session_id": clean_id,
             "status": current_status,
             "changed": False,
         })
+    session_metadata = _json_loads(str(row["metadata_json"] or "{}"))
+    expected_hash = str(session_metadata.get("browser_cancel_proof_hash") or "").strip()
+    if not expected_hash or not hmac.compare_digest(expected_hash, _hash_token(browser_cancel_token)):
+        raise ArcLinkApiAuthError("Onboarding cancel proof failed")
+    cancelled = cancel_arclink_onboarding_session(
+        conn,
+        session_id=clean_id,
+        reason="checkout cancel page",
+    )
+    session_metadata.pop("browser_cancel_proof_hash", None)
+    session_metadata["browser_cancel_proof_used_at"] = utc_now_iso()
     conn.execute(
-        "UPDATE arclink_onboarding_sessions SET status = 'cancelled', updated_at = ? WHERE session_id = ?",
-        (utc_now_iso(), clean_id),
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
+        (_json(session_metadata), utc_now_iso(), clean_id),
     )
     conn.commit()
     return ArcLinkApiResponse(status=200, payload={
         "session_id": clean_id,
-        "status": "cancelled",
+        "status": str(cancelled.get("status") or ""),
         "changed": True,
     })

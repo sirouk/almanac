@@ -578,7 +578,7 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
             live_content_updated = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
             expect("Second version" in live_content_updated["content"], str(live_content_updated))
             live_listing = asyncio.run(drive_api.items(root="linked", path="/live-brief"))
-            expect(not any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
+            expect(any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
             copied_from_linked = asyncio.run(
                 drive_api.copy(
                     JsonRequest(
@@ -594,7 +594,7 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
             )
             expect(copied_from_linked["destination_root"] == "vault", str(copied_from_linked))
             expect((vault / "Copied Live Brief" / "overview.md").is_file(), "linked copy should land in owned Vault")
-            expect(not (vault / "Copied Live Brief" / ".env").exists(), "linked copy must not include sensitive children")
+            expect((vault / "Copied Live Brief" / ".env").exists(), "accepted linked directory copies preserve owner-shared files")
             try:
                 asyncio.run(drive_api.delete(JsonRequest({"root": "linked", "path": "/shared-note.md"})))
                 raise AssertionError("expected Drive linked delete to fail")
@@ -1318,8 +1318,8 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             directory.mkdir(parents=True, exist_ok=True)
         (default_workspace / "README.md").write_text("workspace ok\n", encoding="utf-8")
         (home / "home-secret.md").write_text("home should not be a default root\n", encoding="utf-8")
-        (hermes_home / ".env").write_text("TOKEN=do-not-return\n", encoding="utf-8")
-        (hermes_home / ".env.local").write_text("TOKEN=do-not-return\n", encoding="utf-8")
+        (hermes_home / ".env").write_text("USER_ENV=visible-to-owner\n", encoding="utf-8")
+        (hermes_home / ".env.local").write_text("USER_ENV=visible-to-owner\n", encoding="utf-8")
         (hermes_home / "secrets" / "arclink-bootstrap-token").write_text("token-do-not-return\n", encoding="utf-8")
         (hermes_home / "state" / "private.md").write_text("private runtime state\n", encoding="utf-8")
         (hermes_home / ".ssh" / "id_rsa").write_text("BEGIN PRIVATE KEY\n", encoding="utf-8")
@@ -1382,24 +1382,26 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             drive_listing = asyncio.run(drive_api.items(root="workspace", path="/"))
             drive_paths = {item["path"] for item in drive_listing["items"]}
             expect("/public.md" in drive_paths, str(drive_listing))
-            for forbidden in ("/.env", "/.env.local", "/secrets", "/state", "/.ssh"):
+            expect("/.env" in drive_paths and "/.env.local" in drive_paths, str(drive_listing))
+            for forbidden in ("/secrets", "/state", "/.ssh"):
                 expect(forbidden not in drive_paths, str(drive_listing))
             code_listing = asyncio.run(code_api.items(root="workspace", path="/"))
             code_paths = {item["path"] for item in code_listing["items"]}
             expect("/public.md" in code_paths, str(code_listing))
-            for forbidden in ("/.env", "/.env.local", "/secrets", "/state", "/.ssh"):
+            expect("/.env" in code_paths and "/.env.local" in code_paths, str(code_listing))
+            for forbidden in ("/secrets", "/state", "/.ssh"):
                 expect(forbidden not in code_paths, str(code_listing))
 
+            drive_env = asyncio.run(drive_api.content(root="workspace", path="/.env"))
+            expect("visible-to-owner" in drive_env["content"], str(drive_env))
+            code_env = asyncio.run(code_api.file(root="workspace", path="/.env.local"))
+            expect("visible-to-owner" in code_env["content"], str(code_env))
+
             for operation in (
-                lambda: drive_api.content(root="workspace", path="/.env"),
                 lambda: drive_api.download(root="workspace", path="/secrets/arclink-bootstrap-token"),
                 lambda: drive_api.preview(root="workspace", path="/state/private.md"),
-                lambda: code_api.file(root="workspace", path="/.env.local"),
                 lambda: code_api.download(root="workspace", path="/secrets/arclink-bootstrap-token"),
                 lambda: code_api.preview(root="workspace", path="/state/private.md"),
-                lambda: drive_api.new_file(JsonRequest({"root": "workspace", "path": "/", "name": ".env", "content": "x"})),
-                lambda: drive_api.upload(path="/", root="workspace", files=[MemoryUpload(".env.local", b"x")]),
-                lambda: code_api.save(JsonRequest({"root": "workspace", "path": "/.env", "content": "x"})),
                 lambda: code_api.mkdir(JsonRequest({"root": "workspace", "path": "/.ssh/new"})),
             ):
                 try:
@@ -1422,7 +1424,7 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             )
             expect(copied["destination"] == "/bundle-copy", str(copied))
             expect((hermes_home / "bundle-copy" / "note.md").is_file(), "expected copyable child to be copied")
-            expect(not (hermes_home / "bundle-copy" / ".env").exists(), "sensitive child should not be copied")
+            expect((hermes_home / "bundle-copy" / ".env").exists(), "user-owned env files should copy inside the user's own surface")
 
             drive_search = asyncio.run(drive_api.items(root="workspace", path="/", query="token"))
             expect(not drive_search["items"], str(drive_search))
@@ -1495,6 +1497,9 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
                 PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py",
                 "arclink_terminal_dashboard_managed_pty_test",
             )
+            os.environ["STRIPE_SECRET_KEY"] = "sk_test_should_not_inherit"
+            terminal_env = terminal_api._terminal_env(os.environ)
+            expect("STRIPE_SECRET_KEY" not in terminal_env, str(terminal_env))
             status = asyncio.run(terminal_api.status())
             expect(status["available"] is True, str(status))
             expect(status["backend"] == "managed-pty", str(status))

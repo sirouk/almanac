@@ -22,9 +22,12 @@ The control path delegates to Docker Compose, but it does not mean
   admin dashboard.
 - `control-api`: the hosted `/api/v1` WSGI API over ArcLink's existing Python
   contracts.
-- `control-provisioner`: the disabled-by-default Sovereign worker loop that
-  claims paid `provisioning_ready` deployments and applies them to fleet hosts
-  when `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`.
+- `control-provisioner`: the Sovereign worker loop that claims paid
+  `provisioning_ready` deployments and applies them to fleet hosts. It is
+  enabled by default in Control Node mode; live mutation still requires a real
+  `ARCLINK_EXECUTOR_ADAPTER` and provider credentials.
+- `control-action-worker`: the admin-action consumer for restart, DNS/key,
+  Stripe, and entitlement actions queued from the admin dashboard.
 - `arclink-mcp`, `qmd-mcp`, `notion-webhook`, job loops, Redis/Postgres, and
   Nextcloud as the local control-node substrate.
 

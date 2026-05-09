@@ -353,7 +353,12 @@ def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> No
     )
     cookie_creds = api.extract_arclink_session_credentials({"Cookie": cookie}, session_kind="user")
     expect(cookie_creds == header_creds, str(cookie_creds))
-    expect(api.extract_arclink_csrf_token({"Cookie": cookie}, session_kind="user") == session["csrf_token"], "CSRF cookie extraction failed")
+    try:
+        api.extract_arclink_csrf_token({"Cookie": cookie}, session_kind="user")
+    except api.ArcLinkApiAuthError as exc:
+        expect("CSRF header" in str(exc), str(exc))
+    else:
+        raise AssertionError("CSRF extraction should require the explicit header, not the cookie")
 
     for bad_kind in ("", "root"):
         try:

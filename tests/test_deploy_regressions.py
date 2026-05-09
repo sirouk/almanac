@@ -3056,16 +3056,16 @@ def test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh() -> No
     print("PASS test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh")
 
 
-def test_upgrade_refuses_non_main_branch_without_explicit_override() -> None:
+def test_upgrade_refuses_non_arclink_branch_without_explicit_override() -> None:
     text = DEPLOY_SH.read_text()
     guard = extract(text, "require_main_upstream_branch_for_upgrade() {", "write_operator_checkout_artifact() {")
     upgrade = extract(text, "run_root_upgrade() {", "run_root_remove() {")
     flow = extract(text, "run_upgrade_flow() {", "run_agent_payload() {")
-    expect('ARCLINK_ALLOW_NON_MAIN_UPGRADE:-0' in guard, guard)
-    expect("Refusing production upgrade from non-main upstream branch" in guard, guard)
+    expect('ARCLINK_ALLOW_NON_ARCLINK_UPGRADE:-0' in guard, guard)
+    expect("Refusing production upgrade from non-arclink upstream branch" in guard, guard)
     expect("require_main_upstream_branch_for_upgrade" in upgrade, upgrade)
     expect("require_main_upstream_branch_for_upgrade" in flow, flow)
-    print("PASS test_upgrade_refuses_non_main_branch_without_explicit_override")
+    print("PASS test_upgrade_refuses_non_arclink_branch_without_explicit_override")
 
 
 def test_install_answer_file_has_exit_trap_cleanup() -> None:
@@ -3085,23 +3085,23 @@ def test_health_checks_failed_systemd_units_and_stale_podman_transients() -> Non
     print("PASS test_health_checks_failed_systemd_units_and_stale_podman_transients")
 
 
-def test_upstream_branch_defaults_to_main_everywhere() -> None:
-    """All deploy.sh branch fallbacks must default to main, not arclink."""
+def test_upstream_branch_defaults_to_arclink_everywhere() -> None:
+    """All deploy.sh branch fallbacks must default to arclink for the current production lane."""
     text = DEPLOY_SH.read_text()
-    # Every ${ARCLINK_UPSTREAM_BRANCH:-<value>} fallback must use main
+    # Every ${ARCLINK_UPSTREAM_BRANCH:-<value>} fallback must use arclink
     import re as _re
     fallbacks = _re.findall(r'ARCLINK_UPSTREAM_BRANCH:-(\w+)', text)
     for fb in fallbacks:
-        expect(fb == "main", f"ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'main'")
+        expect(fb == "arclink", f"ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'arclink'")
     # common.sh must also default to main
     common_text = (REPO / "bin" / "common.sh").read_text()
     common_fallbacks = _re.findall(r'ARCLINK_UPSTREAM_BRANCH:-(\w+)', common_text)
     for fb in common_fallbacks:
-        expect(fb == "main", f"common.sh ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'main'")
+        expect(fb == "arclink", f"common.sh ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'arclink'")
     # README must not say clone -b arclink
     readme_text = (REPO / "README.md").read_text()
     expect("clone -b arclink" not in readme_text, "README still says 'clone -b arclink'")
-    print("PASS test_upstream_branch_defaults_to_main_everywhere")
+    print("PASS test_upstream_branch_defaults_to_arclink_everywhere")
 
 
 def test_bootstrap_system_includes_jq_and_iproute2() -> None:
@@ -3244,14 +3244,14 @@ def main() -> int:
         test_enrollment_align_reseeds_agent_identity,
         test_root_install_and_upgrade_do_not_globally_export_runtime_secrets,
         test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh,
-        test_upgrade_refuses_non_main_branch_without_explicit_override,
+        test_upgrade_refuses_non_arclink_branch_without_explicit_override,
         test_install_answer_file_has_exit_trap_cleanup,
         test_health_checks_failed_systemd_units_and_stale_podman_transients,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,
         test_install_system_services_includes_independent_notion_claim_poller,
         test_install_system_services_units_pass_systemd_analyze_verify,
-        test_upstream_branch_defaults_to_main_everywhere,
+        test_upstream_branch_defaults_to_arclink_everywhere,
         test_bootstrap_system_includes_jq_and_iproute2,
         test_health_db_probe_failures_cause_fail,
         test_systemd_unit_paths_are_quoted,

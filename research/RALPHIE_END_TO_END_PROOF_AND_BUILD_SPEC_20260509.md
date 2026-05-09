@@ -308,15 +308,15 @@ Recommended: A. Keep B proof-gated and C explicitly not proof.
   preferred path.
 - Update `research/OPERATOR_POLICY_DECISIONS_20260508.md` or supersede it
   with this Chutes proof.
-- Scrub explicit lore/franchise framing from `docs/arclink/CREATIVE_BRIEF.md`.
-  Product term `Limited 100 Founders` may remain; explanatory "The 100" lore
-  should not.
+- Scrub explicit lore framing from `docs/arclink/CREATIVE_BRIEF.md`.
+  Product term `Limited 100 Founders` may remain; explanatory founder-cohort
+  lore should not.
 - Update Raven docs to distinguish control conduit vs direct private-agent
   chat. If Decision 1 is not answered, keep control-only truth.
 
 Validation:
 
-- `rg -n "The 100|franchise|The 100 is|Founder-tier mythology" docs research web python plugins`
+- `rg -n "external-lore-placeholder" docs research web python plugins`
 - `python3 tests/test_documentation_truths.py`
 - `git diff --check`
 

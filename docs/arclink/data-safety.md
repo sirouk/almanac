@@ -8,7 +8,7 @@ ArcLink has three operating modes with different state boundaries.
 | --- | --- | --- |
 | Shared Host | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; enrolled users have private Hermes homes under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Operator-led, systemd-backed, per-user Unix accounts. |
 | Shared Host Docker | Same private state contract, bind-mounted into Compose from `arclink-priv/`; Docker agent homes live under `arclink-priv/state/docker/users/`. | Trusted-host containerization of the shared-host substrate. |
-| Sovereign Control Node | Dockerized product control plane with per-deployment state roots, Compose projects, and secret references rendered from control-plane rows. Current product pod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; live mutation remains proof-gated unless explicitly enabled. |
+| Sovereign Control Node | Dockerized product control plane with per-deployment state roots, Compose projects, and secret references rendered from control-plane rows. Current product pod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; provisioning and admin action workers are enabled by default, but live provider/account mutation still fails closed unless the operator configures the executor and external credentials. |
 
 Do not apply a path from one mode to another without checking the generated
 config and control-plane metadata.
@@ -26,6 +26,27 @@ Sovereign deployments are rendered as isolated Docker Compose stacks with:
 The access model is enforced by `arclink_access.py`, which pins the
 `cloudflare_access_tcp` domain SSH strategy, `tailscale_direct_ssh` Tailscale
 SSH strategy, and `nextcloud_dedicated` isolation model.
+
+## User And Agent Access
+
+ArcLink intentionally gives each enrolled user and agent broad access to their
+own deployment home, vault, workspace, and dashboard tools. This should feel
+like SSH into that user's isolated agent environment, not like a narrow file
+picker. The boundary is not "hide the user's own files"; the boundary is "do
+not expose the operator control plane, another user, or shared host secrets."
+
+Dashboard Drive, Code, and Terminal plugins therefore allow normal user-owned
+files, including ordinary `.env` files inside the user's own Vault/Workspace,
+while blocking control-plane/private-state env files, Hermes bootstrap tokens,
+ArcLink secrets directories, private SSH material, and other users'
+deployment roots. Terminal sessions run with a scrubbed allowlist environment
+instead of inheriting operator/service secrets from the dashboard process.
+
+Accepted ArcLink shares are mounted as a separate Linked root in Drive and
+Code. Linked resources are scoped to the accepted file or directory, are
+read-only from the receiver's share root, cannot be reshared from that root,
+and may be copied into the receiver's own Vault/Workspace only through the
+receiver's normal user boundary.
 
 ## Volume Layout
 
@@ -52,6 +73,28 @@ Sovereign pod Docker volumes follow the naming convention:
 - Shared Host and Shared Host Docker secrets belong in private `arclink-priv/`
   config/state, not public docs or git history.
 
+## Knowledge And Memory Rails
+
+Agents should use ArcLink MCP tools before raw rummaging:
+`knowledge.search-and-fetch`, `vault.search-and-fetch`, `vault.fetch`,
+`notion.search-and-fetch`, `notion.fetch`, `ssot.read`, `ssot.write`, and
+`ssot.status`.
+
+The vault qmd rail is limited to vault-owned collections such as `vault` and
+`vault-pdf-ingest`. Notion content is exposed through the Notion-specific
+indexed rail and live Notion fetch paths, with live reads falling back to the
+indexed markdown cache when the API cannot prove the page. PDF sidecar metadata
+must not leak generated host paths across API boundaries.
+
+`arclink-managed-context` injects compact awareness sections and
+`[managed:recall-stubs]` into Hermes turns. These stubs are routing hints, not
+evidence. They tell the agent which rail to fetch from before citing,
+answering, or changing state. Dynamic managed context is not written into
+Hermes `MEMORY.md`.
+
+Almanac is the knowledge-store lineage/rail inside ArcLink. ArcLink is the
+current product identity.
+
 ## Backup Plan
 
 See `docs/arclink/backup-restore.md` for the full backup and restore procedure.
@@ -63,7 +106,9 @@ See `docs/arclink/backup-restore.md` for the full backup and restore procedure.
 
 ## Teardown Safeguards
 
-Destructive operations are gated at multiple levels:
+Destructive operations are allowed only through scoped, audited control rails.
+The product goal is to avoid tying the agent's hands while still making
+dangerous writes reversible, attributable, and policy-aware. Gating levels:
 
 1. **Admin confirmation required.** Teardown actions via
    `POST /api/v1/admin/actions` require an admin session with mutation role,
@@ -85,6 +130,12 @@ Destructive operations are gated at multiple levels:
 
 6. **Destructive state deletes are separately gated.** The executor's
    `_is_destructive_state_delete` check prevents accidental data loss.
+
+7. **SSOT destructive writes stay brokered.** Notion archive/delete/trash
+   behavior should go through `ssot.write` so ArcLink can apply page scope,
+   ownership verification, approval/undo policy, audit records, and user
+   notifications. Raw live Notion access is for reads and exact fetches, not
+   bypassing the broker.
 
 ## Secret Leak Prevention
 

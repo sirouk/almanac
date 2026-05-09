@@ -241,10 +241,10 @@ def test_component_upgrade_resolves_reachable_raw_sha_after_branch_advances() ->
                     "fi",
                     "case \"${args[0]:-}\" in",
                     "  ls-remote)",
-                    "    if [[ \"${args[2]:-}\" == \"refs/heads/main\" ]]; then",
-                    "      printf '%s\\trefs/heads/main\\n' \"$advanced_sha\"",
+                    "    if [[ \"${args[2]:-}\" == \"refs/heads/arclink\" ]]; then",
+                    "      printf '%s\\trefs/heads/arclink\\n' \"$advanced_sha\"",
                     "    else",
-                    "      printf '%s\\tHEAD\\n%s\\trefs/heads/main\\n' \"$advanced_sha\" \"$advanced_sha\"",
+                    "      printf '%s\\tHEAD\\n%s\\trefs/heads/arclink\\n' \"$advanced_sha\" \"$advanced_sha\"",
                     "    fi",
                     "    ;;",
                     "  init)",
@@ -349,7 +349,7 @@ def test_component_upgrade_commits_pending_pin_bump_without_git_identity() -> No
             + "\n",
             encoding="utf-8",
         )
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "init", "-b", "arclink"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True, text=True)
         initial_env = {
             **os.environ,
@@ -378,7 +378,7 @@ def test_component_upgrade_commits_pending_pin_bump_without_git_identity() -> No
             **os.environ,
             "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
             "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
-            "ARCLINK_UPSTREAM_BRANCH": "main",
+            "ARCLINK_UPSTREAM_BRANCH": "arclink",
             "GIT_CONFIG_GLOBAL": str(root / "missing-global-gitconfig"),
             "GIT_CONFIG_NOSYSTEM": "1",
             "HOME": str(home),
@@ -409,14 +409,14 @@ def test_component_upgrade_commits_pending_pin_bump_without_git_identity() -> No
         expect(author == "ArcLink Upgrade Bot <arclink-upgrade@localhost>", author)
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
         remote_head = subprocess.check_output(
-            ["git", f"--git-dir={remote}", "rev-parse", "refs/heads/main"],
+            ["git", f"--git-dir={remote}", "rev-parse", "refs/heads/arclink"],
             text=True,
         ).strip()
-        expect(remote_head == head, f"remote main {remote_head} did not receive {head}")
+        expect(remote_head == head, f"remote arclink {remote_head} did not receive {head}")
     print("PASS test_component_upgrade_commits_pending_pin_bump_without_git_identity")
 
 
-def test_component_upgrade_rebases_pin_commit_when_remote_main_advances() -> None:
+def test_component_upgrade_rebases_pin_commit_when_remote_arclink_advances() -> None:
     """The deployed checkout can be stale when an operator clicks Install.
 
     The helper should replay the just-created pins commit onto the current
@@ -448,7 +448,7 @@ def test_component_upgrade_rebases_pin_commit_when_remote_main_advances() -> Non
             + "\n",
             encoding="utf-8",
         )
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "init", "-b", "arclink"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True, text=True)
         commit_env = {
             **os.environ,
@@ -460,16 +460,16 @@ def test_component_upgrade_rebases_pin_commit_when_remote_main_advances() -> Non
         subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=commit_env, check=True, capture_output=True, text=True)
         remote = root / "remote.git"
         subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, text=True)
-        subprocess.run(["git", f"--git-dir={remote}", "symbolic-ref", "HEAD", "refs/heads/main"], check=True, capture_output=True, text=True)
+        subprocess.run(["git", f"--git-dir={remote}", "symbolic-ref", "HEAD", "refs/heads/arclink"], check=True, capture_output=True, text=True)
         subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True, capture_output=True, text=True)
-        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "push", "-u", "origin", "arclink"], cwd=repo, check=True, capture_output=True, text=True)
 
         advancer = root / "advancer"
         subprocess.run(["git", "clone", str(remote), str(advancer)], check=True, capture_output=True, text=True)
         (advancer / "remote-only.txt").write_text("remote advanced\n", encoding="utf-8")
         subprocess.run(["git", "add", "remote-only.txt"], cwd=advancer, check=True, capture_output=True, text=True)
         subprocess.run(["git", "commit", "-m", "remote advance"], cwd=advancer, env=commit_env, check=True, capture_output=True, text=True)
-        subprocess.run(["git", "push", "origin", "main"], cwd=advancer, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "push", "origin", "arclink"], cwd=advancer, check=True, capture_output=True, text=True)
 
         key_path = root / "upstream-key"
         known_hosts = root / "known_hosts"
@@ -481,7 +481,7 @@ def test_component_upgrade_rebases_pin_commit_when_remote_main_advances() -> Non
             **os.environ,
             "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH": str(key_path),
             "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE": str(known_hosts),
-            "ARCLINK_UPSTREAM_BRANCH": "main",
+            "ARCLINK_UPSTREAM_BRANCH": "arclink",
             "GIT_CONFIG_GLOBAL": str(root / "missing-global-gitconfig"),
             "GIT_CONFIG_NOSYSTEM": "1",
             "HOME": str(home),
@@ -507,20 +507,20 @@ def test_component_upgrade_rebases_pin_commit_when_remote_main_advances() -> Non
         )
         combined = (result.stdout or "") + (result.stderr or "")
         expect(result.returncode == 0, combined)
-        expect("Rebasing local pins commit onto origin/main before push" in combined, combined)
+        expect("Rebasing local pins commit onto origin/arclink before push" in combined, combined)
 
         remote_pins = subprocess.check_output(
-            ["git", f"--git-dir={remote}", "show", "refs/heads/main:config/pins.json"],
+            ["git", f"--git-dir={remote}", "show", "refs/heads/arclink:config/pins.json"],
             text=True,
         )
         remote_data = json.loads(remote_pins)
         expect(remote_data["components"]["nvm"]["version"] == "v99.0.0", remote_data)
         remote_note = subprocess.check_output(
-            ["git", f"--git-dir={remote}", "show", "refs/heads/main:remote-only.txt"],
+            ["git", f"--git-dir={remote}", "show", "refs/heads/arclink:remote-only.txt"],
             text=True,
         ).strip()
         expect(remote_note == "remote advanced", remote_note)
-    print("PASS test_component_upgrade_rebases_pin_commit_when_remote_main_advances")
+    print("PASS test_component_upgrade_rebases_pin_commit_when_remote_arclink_advances")
 
 
 def test_component_upgrade_requires_deploy_key_before_writing_pin() -> None:
@@ -554,7 +554,7 @@ def test_component_upgrade_requires_deploy_key_before_writing_pin() -> None:
             + "\n",
             encoding="utf-8",
         )
-        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "init", "-b", "arclink"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True, text=True)
         initial_env = {
             **os.environ,
@@ -624,7 +624,7 @@ def main() -> int:
     test_component_upgrade_resolves_reachable_raw_sha_after_branch_advances()
     test_component_upgrade_check_reports_status_when_git_resolver_fails()
     test_component_upgrade_commits_pending_pin_bump_without_git_identity()
-    test_component_upgrade_rebases_pin_commit_when_remote_main_advances()
+    test_component_upgrade_rebases_pin_commit_when_remote_arclink_advances()
     test_component_upgrade_requires_deploy_key_before_writing_pin()
     test_component_upgrade_reexec_discovers_operator_config_artifact()
     print("PASS all 14 pins regression tests")

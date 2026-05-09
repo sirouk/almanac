@@ -53,11 +53,11 @@ export const api = {
   checkoutStatus: (sessionId: string) =>
     request(`/onboarding/status?session_id=${encodeURIComponent(sessionId)}`),
 
-  claimSession: (sessionId: string) =>
-    request("/onboarding/claim-session", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
+  claimSession: (sessionId: string, claimToken: string) =>
+    request("/onboarding/claim-session", { method: "POST", body: JSON.stringify({ session_id: sessionId, claim_token: claimToken }) }),
 
-  cancelOnboarding: (sessionId: string) =>
-    request("/onboarding/cancel", { method: "POST", body: JSON.stringify({ session_id: sessionId }) }),
+  cancelOnboarding: (sessionId: string, cancelToken: string) =>
+    request("/onboarding/cancel", { method: "POST", body: JSON.stringify({ session_id: sessionId, cancel_token: cancelToken }) }),
 
   userDashboard: () => request("/user/dashboard", {}, "user"),
 

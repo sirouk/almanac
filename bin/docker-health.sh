@@ -199,6 +199,7 @@ check_docker_job_status_files() {
   fi
   local required_jobs=(
     control-provisioner
+    control-action-worker
     ssot-batcher
     notification-delivery
     health-watch

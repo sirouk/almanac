@@ -1474,7 +1474,7 @@ check_upgrade_state() {
   if ! output="$(ARCLINK_RELEASE_STATE_FILE="$ARCLINK_RELEASE_STATE_FILE" \
                 ARCLINK_DB_PATH="$ARCLINK_DB_PATH" \
                 ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
-                ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-main}" \
+                ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
                 python3 - 2>&1 <<'PY'
 import datetime as dt
 import json
@@ -1486,7 +1486,7 @@ from pathlib import Path
 release_path = Path(os.environ.get("ARCLINK_RELEASE_STATE_FILE") or "")
 db_path = os.environ.get("ARCLINK_DB_PATH") or ""
 upstream_repo = os.environ.get("ARCLINK_UPSTREAM_REPO_URL") or ""
-upstream_branch = os.environ.get("ARCLINK_UPSTREAM_BRANCH") or "main"
+upstream_branch = os.environ.get("ARCLINK_UPSTREAM_BRANCH") or "arclink"
 
 release_state = {}
 if release_path.is_file():
@@ -1498,7 +1498,7 @@ if release_path.is_file():
 deployed_commit = str(release_state.get("deployed_commit") or "").strip()
 deployed_short = deployed_commit[:12]
 tracked_repo = str(release_state.get("tracked_upstream_repo_url") or upstream_repo or "").strip()
-tracked_branch = str(release_state.get("tracked_upstream_branch") or upstream_branch or "main").strip() or "main"
+tracked_branch = str(release_state.get("tracked_upstream_branch") or upstream_branch or "arclink").strip() or "arclink"
 
 if not release_path.is_file() or not deployed_commit:
     print(f"WARN ArcLink release state missing or empty at {release_path}; run ./deploy.sh install or upgrade")

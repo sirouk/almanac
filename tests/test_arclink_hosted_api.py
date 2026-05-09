@@ -1306,6 +1306,7 @@ def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload["session"]["checkout_url"].startswith("https://checkout.stripe.com/"), str(payload))
     expect(calls and calls[0]["price_id"] == "price_live_resolve", str(calls))
+    expect(calls[0]["customer_email"] == "live-resolve@example.test", str(calls))
     print("PASS test_public_onboarding_checkout_resolves_live_stripe_from_config")
 
 
@@ -2658,11 +2659,17 @@ def test_onboarding_claim_session_creates_user_session_after_payment() -> None:
         "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
     })
     prepared = seed_paid_deployment(control, onboarding, conn)
+    claim_token = "browser-claim-proof-test"
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (json.dumps({"browser_claim_proof_hash": api._hash_token(claim_token)}), "onb_hosted"),
+    )
+    conn.commit()
 
     # Claim session -> 201 with Set-Cookie headers
     status, payload, headers = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/onboarding/claim-session",
-        headers={}, body=json.dumps({"session_id": "onb_hosted"}),
+        headers={}, body=json.dumps({"session_id": "onb_hosted", "claim_token": claim_token}),
         config=config,
     )
     expect(status == 201, f"expected 201 got {status}: {payload}")
@@ -2691,6 +2698,7 @@ def test_onboarding_claim_session_creates_user_session_after_payment() -> None:
 def test_onboarding_claim_session_rejects_unpaid() -> None:
     """Claim-session returns 402 if entitlement is not yet paid."""
     control = load_module("arclink_control.py", "arclink_control_hosted_claim_unpaid_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_claim_unpaid_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_claim_unpaid_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_claim_unpaid_test")
     conn = memory_db(control)
@@ -2706,10 +2714,16 @@ def test_onboarding_claim_session_rejects_unpaid() -> None:
         conn, session_id=session["session_id"],
         base_domain="example.test", prefix="unpaid-vault",
     )
+    claim_token = "browser-claim-proof-unpaid"
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (json.dumps({"browser_claim_proof_hash": api._hash_token(claim_token)}), "onb_unpaid"),
+    )
+    conn.commit()
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/onboarding/claim-session",
-        headers={}, body=json.dumps({"session_id": "onb_unpaid"}),
+        headers={}, body=json.dumps({"session_id": "onb_unpaid", "claim_token": claim_token}),
         config=config,
     )
     expect(status == 402, f"expected 402 got {status}: {payload}")
@@ -2748,21 +2762,22 @@ def test_onboarding_cancel_marks_session_cancelled() -> None:
     )
     expect(status == 201, f"expected 201 got {status}")
     session_id = payload["session"]["session_id"]
+    cancel_token = payload["browser_cancel_token"]
 
     # Cancel it
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/onboarding/cancel",
-        headers={}, body=json.dumps({"session_id": session_id}),
+        headers={}, body=json.dumps({"session_id": session_id, "cancel_token": cancel_token}),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
-    expect(payload["status"] == "cancelled", str(payload))
+    expect(payload["status"] == "abandoned", str(payload))
     expect(payload["changed"] is True, str(payload))
 
     # Cancelling again is idempotent
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/onboarding/cancel",
-        headers={}, body=json.dumps({"session_id": session_id}),
+        headers={}, body=json.dumps({"session_id": session_id, "cancel_token": cancel_token}),
         config=config,
     )
     expect(status == 200, f"idempotent cancel expected 200 got {status}: {payload}")
@@ -2771,7 +2786,7 @@ def test_onboarding_cancel_marks_session_cancelled() -> None:
     # Cancelling nonexistent session -> 404
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/onboarding/cancel",
-        headers={}, body=json.dumps({"session_id": "nonexistent"}),
+        headers={}, body=json.dumps({"session_id": "nonexistent", "cancel_token": cancel_token}),
         config=config,
     )
     expect(status == 404, f"expected 404 got {status}: {payload}")

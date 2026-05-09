@@ -3194,3 +3194,66 @@ Known risks:
   intake, or live Chutes key change was implemented.
 - Live Chutes key/account proof remains gated by explicit operator
   authorization and credentials.
+
+## 2026-05-09 End-To-End Gap Repair Pass
+
+Scope: repaired the highest-risk gaps from the repository-wide ArcLink audit
+without touching private state, live credentials, user homes, or live provider
+accounts.
+
+Rationale:
+
+- Website checkout now carries one-time browser proof material for dashboard
+  claim/cancel instead of treating onboarding session ids as bearer secrets.
+  Stripe Checkout receives the known email hint, success/cancel pages verify
+  backend state, and cancel stays resume-aware instead of writing a stale
+  noncanonical status.
+- User dashboard Drive/Code/Terminal now preserves broad user-owned
+  Vault/Workspace access, including ordinary user `.env` files, while blocking
+  ArcLink control-plane env files, Hermes secrets/state, bootstrap tokens, and
+  private SSH material. Terminal sessions start with a scrubbed allowlist env.
+- ArcLink MCP/qmd rails now keep vault tools to vault collections, scrub PDF
+  generated host paths, restore Notion indexed fallback for
+  `knowledge.search-and-fetch`, and restrict memory synthesis Notion reads to
+  the Notion markdown index root.
+- Control Node now deploys a real `control-action-worker`, keeps the
+  provisioner enabled by default, records disabled executor state cleanly when
+  live mutation credentials are absent, and invokes real Docker Compose
+  lifecycle runners for non-fake restart/stop/inspect/teardown actions.
+- Branch defaults and upgrade guardrails now align to `arclink`, Docker health
+  proves the action worker job, bootstrap/runtime dependency declarations were
+  tightened, and CI installs Python deps plus runs web lint/test/build.
+- Documentation now states the user-home vs control-plane boundary, active
+  knowledge/memory rails, brokered SSOT destructive-write posture, enabled
+  Control Node worker contract, and sanitized founder/cohort creative guidance.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_onboarding.py python/arclink_adapters.py python/arclink_mcp_server.py python/arclink_memory_synthesizer.py python/arclink_executor.py python/arclink_action_worker.py python/arclink_sovereign_worker.py python/arclink_dashboard_auth_proxy.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 tests/test_arclink_api_auth.py`, `test_arclink_hosted_api.py`,
+  `test_arclink_dashboard_auth_proxy.py`, `test_arclink_mcp_schemas.py`,
+  `test_memory_synthesizer.py`, `test_arclink_executor.py`,
+  `test_arclink_action_worker.py`, `test_arclink_docker.py`,
+  `test_deploy_regressions.py`, `test_arclink_plugins.py`,
+  `test_health_regressions.py`, `test_hermes_runtime_pin_regressions.py`,
+  `test_arclink_agent_user_services.py`, `test_arclink_public_bots.py`,
+  `test_arclink_onboarding_prompts.py`,
+  `test_arclink_enrollment_provisioner_regressions.py`,
+  `test_documentation_truths.py`, `test_arclink_dashboard.py`,
+  `test_arclink_admin_actions.py`, `test_arclink_chutes_oauth.py`,
+  `test_arclink_pins.py`, and `test_arclink_upgrade_notifications.py` passed.
+- `cd web && npm run lint`, `npm test`, and `npm run build` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live Stripe, Chutes, Cloudflare, Tailscale, Notion, Telegram, Discord, Docker
+  host mutation, and real user-dashboard browser proof remain gated by explicit
+  operator authorization and real credentials.
+- SSOT destructive writes remain intentionally brokered rather than fully
+  unrestricted; approval/undo policy can be relaxed later, but raw destructive
+  Notion writes should not bypass ArcLink scope/audit rails.
+- Nextcloud/WebDAV direct delete remains a legacy backend path; the native
+  Drive/Code roots use local trash semantics and linked ArcLink resources use
+  scoped read-only projections.

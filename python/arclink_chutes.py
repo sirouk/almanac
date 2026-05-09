@@ -20,6 +20,9 @@ CHUTES_ACCEPTED_ISOLATION_MODES = (
     "per_user_secret_ref",
     "per_user_chutes_account_oauth",
 )
+CHUTES_MANAGEMENT_BASE_URL = "https://api.chutes.ai"
+CHUTES_HOTKEY_HEADER = "X-Chutes-Hotkey"
+CHUTES_OFFICIAL_REGISTRATION_PATH = "/users/register"
 
 
 @dataclass(frozen=True)
@@ -45,6 +48,10 @@ class ChutesModel:
 
 
 class ChutesCatalogError(RuntimeError):
+    pass
+
+
+class ChutesAccountRegistrationError(ChutesCatalogError):
     pass
 
 
@@ -106,6 +113,40 @@ class ChutesDeploymentBoundary:
         if include_admin_fields:
             payload["key_id"] = _safe_public_identifier(self.key_id)
         return payload
+
+
+@dataclass(frozen=True)
+class ChutesOfficialRegistrationRequest:
+    """Secret-safe description of Chutes' official registration request.
+
+    This intentionally models only the documented `/users/register` API path.
+    Browser-challenge or Cloudflare/hCaptcha bypass tooling is outside ArcLink's
+    supported boundary.
+    """
+
+    method: str
+    base_url: str
+    path: str
+    query: Mapping[str, str]
+    headers: Mapping[str, str]
+    json_body: Mapping[str, str]
+
+    def to_public(self) -> dict[str, Any]:
+        return {
+            "provider": "chutes",
+            "method": self.method,
+            "base_url": self.base_url,
+            "path": self.path,
+            "query": {"token": _redact_secret_text(self.query.get("token", ""))},
+            "headers": {CHUTES_HOTKEY_HEADER: _safe_public_identifier(self.headers.get(CHUTES_HOTKEY_HEADER, ""))},
+            "json_body": {
+                "username": self.json_body.get("username", ""),
+                "coldkey": _safe_public_identifier(self.json_body.get("coldkey", "")),
+            },
+            "registration_token_required": True,
+            "browser_challenge_bypass": "not_supported",
+            "live_status": "proof_gated_until_operator_supplies_authorized_token_and_hotkey",
+        }
 
 
 @dataclass(frozen=True)
@@ -235,6 +276,60 @@ def _safe_public_identifier(value: Any) -> str:
     if any(marker in lowered for marker in ("secret", "token", "password", "api_key", "apikey", "sk_", "whsec_")):
         return ""
     return text
+
+
+def _redact_secret_text(value: Any, *, keep: int = 4) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    return f"{text[:keep]}…({len(text)} chars)"
+
+
+def build_chutes_official_registration_request(
+    *,
+    username: str,
+    coldkey: str,
+    hotkey: str,
+    registration_token: str,
+    base_url: str = CHUTES_MANAGEMENT_BASE_URL,
+) -> ChutesOfficialRegistrationRequest:
+    """Build the official Chutes account registration request.
+
+    The registration token must be obtained through an authorized Chutes flow.
+    ArcLink does not automate or bypass Cloudflare/hCaptcha/browser challenges.
+    """
+
+    clean_username = _clean_text(username)
+    clean_coldkey = _clean_text(coldkey)
+    clean_hotkey = _clean_text(hotkey)
+    clean_token = _clean_text(registration_token)
+    clean_base = _clean_text(base_url or CHUTES_MANAGEMENT_BASE_URL).rstrip("/")
+    if not clean_username or not clean_username.isalnum() or not 3 <= len(clean_username) <= 20:
+        raise ChutesAccountRegistrationError("Chutes username must be 3-20 alphanumeric characters")
+    if not clean_coldkey:
+        raise ChutesAccountRegistrationError("Chutes registration requires an authorized coldkey")
+    if not clean_hotkey:
+        raise ChutesAccountRegistrationError("Chutes registration requires an authorized hotkey")
+    if not clean_token:
+        raise ChutesAccountRegistrationError(
+            "Chutes registration requires a human/authorized registration token; ArcLink will not bypass browser challenges"
+        )
+    return ChutesOfficialRegistrationRequest(
+        method="POST",
+        base_url=clean_base,
+        path=CHUTES_OFFICIAL_REGISTRATION_PATH,
+        query={"token": clean_token},
+        headers={CHUTES_HOTKEY_HEADER: clean_hotkey},
+        json_body={"username": clean_username, "coldkey": clean_coldkey},
+    )
+
+
+def reject_chutes_browser_challenge_bypass(*, requested_tool: str = "") -> None:
+    tool = _clean_text(requested_tool) or "browser/TLS impersonation"
+    raise ChutesAccountRegistrationError(
+        f"ArcLink does not use {tool} to bypass Chutes Cloudflare/hCaptcha checks; "
+        "use the official registration token, OAuth connection, or partner-authorized API path."
+    )
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:

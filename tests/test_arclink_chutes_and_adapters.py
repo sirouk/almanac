@@ -83,6 +83,43 @@ def test_fake_chutes_key_manager_uses_secret_references() -> None:
     print("PASS test_fake_chutes_key_manager_uses_secret_references")
 
 
+def test_chutes_account_registration_requires_official_token_not_browser_bypass() -> None:
+    mod = load_module("arclink_chutes.py", "arclink_chutes_account_registration_test")
+    request = mod.build_chutes_official_registration_request(
+        username="arcuser1",
+        coldkey="5ColdkeyPublicAddressExample",
+        hotkey="5HotkeyPublicAddressExample",
+        registration_token="00000000-0000-0000-0000-000000000000",
+    )
+    expect(request.method == "POST", str(request))
+    expect(request.path == "/users/register", str(request))
+    expect(request.headers == {"X-Chutes-Hotkey": "5HotkeyPublicAddressExample"}, str(request.headers))
+    expect(request.json_body == {"username": "arcuser1", "coldkey": "5ColdkeyPublicAddressExample"}, str(request.json_body))
+    public = request.to_public()
+    public_text = json.dumps(public, sort_keys=True)
+    expect("00000000-0000-0000-0000-000000000000" not in public_text, public_text)
+    expect(public["browser_challenge_bypass"] == "not_supported", str(public))
+    expect(public["live_status"] == "proof_gated_until_operator_supplies_authorized_token_and_hotkey", str(public))
+    try:
+        mod.build_chutes_official_registration_request(
+            username="arcuser1",
+            coldkey="5ColdkeyPublicAddressExample",
+            hotkey="5HotkeyPublicAddressExample",
+            registration_token="",
+        )
+    except mod.ChutesAccountRegistrationError as exc:
+        expect("will not bypass browser challenges" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected registration without token to fail")
+    try:
+        mod.reject_chutes_browser_challenge_bypass(requested_tool="curl_cffi")
+    except mod.ChutesAccountRegistrationError as exc:
+        expect("curl_cffi" in str(exc) and "official registration token" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected curl_cffi bypass request to fail")
+    print("PASS test_chutes_account_registration_requires_official_token_not_browser_bypass")
+
+
 def test_fake_stripe_webhook_and_sessions() -> None:
     mod = load_module("arclink_adapters.py", "arclink_adapters_stripe_test")
     stripe = mod.FakeStripeClient()
@@ -612,6 +649,7 @@ def main() -> int:
     test_chutes_catalog_parses_and_validates_default_model()
     test_chutes_catalog_fails_for_missing_or_unsupported_default()
     test_fake_chutes_key_manager_uses_secret_references()
+    test_chutes_account_registration_requires_official_token_not_browser_bypass()
     test_fake_stripe_webhook_and_sessions()
     test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank()
     test_cloudflare_drift_and_traefik_label_rendering()
@@ -629,7 +667,7 @@ def main() -> int:
     test_fake_inference_enforces_chutes_boundary()
     test_chutes_usage_ingestion_updates_budget_boundary_without_secrets()
     test_chutes_usage_ingestion_blocks_after_hard_limit()
-    print("PASS all 20 ArcLink Chutes/adapter tests")
+    print("PASS all 21 ArcLink Chutes/adapter tests")
     return 0
 
 

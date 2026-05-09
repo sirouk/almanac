@@ -43,6 +43,15 @@ _WORKSPACE_ENV: dict[str, str] = {
     "ARCLINK_WORKSPACE_PROOF_AUTH": "session_fake_secret",
 }
 
+_EXTERNAL_CHUTES_OAUTH_ENV: dict[str, str] = {
+    **_BASE_ENV,
+    "ARCLINK_E2E_LIVE": "1",
+    "ARCLINK_PROOF_CHUTES_OAUTH": "1",
+    "ARCLINK_CHUTES_OAUTH_CLIENT_ID": "arclink-test-client",
+    "ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF": "secret://arclink/chutes/oauth/client-secret",
+    "ARCLINK_CHUTES_OAUTH_REDIRECT_URI": "https://control.example.test/api/v1/user/provider/chutes/callback",
+}
+
 
 class TestNoSecretDryRun(unittest.TestCase):
     """No-secret dry-run returns blocked summary with exact missing env names."""
@@ -272,6 +281,47 @@ class TestWorkspaceProofJourney(unittest.TestCase):
         self.assertIn('openPluginPage(page, "Terminal", "Sessions")', script)
         self.assertIn("captureSanitizedScreenshot", script)
         self.assertIn("ARCLINK_WORKSPACE_PROOF_SCREENSHOT_DIR", script)
+
+
+class TestExternalProofJourney(unittest.TestCase):
+    """External mode plans opt-in provider proof rows without live mutation."""
+
+    def test_external_missing_env_names_include_chutes_oauth_gate(self):
+        result = run_live_proof(env=_BASE_ENV, skip_ports=True, journey="external")
+        self.assertEqual(result.status, "blocked_missing_credentials")
+        self.assertEqual(result.journey, "external")
+        self.assertIn("ARCLINK_PROOF_CHUTES_OAUTH", result.missing_env)
+        self.assertIn("ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF", result.missing_env)
+        self.assertIn("ARCLINK_PROOF_STRIPE", result.missing_env)
+        self.assertNotIn("CHUTES_API_KEY", result.missing_env)
+        for name in result.missing_env:
+            self.assertNotIn("secret://", name)
+
+    def test_external_chutes_oauth_runner_evidence_redacts_secret_refs(self):
+        def chutes_oauth_runner(step):
+            return {
+                "step": step.name,
+                "ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF": _EXTERNAL_CHUTES_OAUTH_ENV["ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF"],
+                "connect": "fake_callback_passed",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_live_proof(
+                env=_EXTERNAL_CHUTES_OAUTH_ENV,
+                skip_ports=True,
+                live=True,
+                runners={"chutes_oauth_connect_proof": chutes_oauth_runner},
+                artifact_dir=tmpdir,
+                journey="external",
+            )
+            self.assertEqual(result.status, "live_executed")
+            self.assertEqual(result.exit_code, 1)
+            steps = result.journey_summary["steps"]
+            passed = [step for step in steps if step["name"] == "chutes_oauth_connect_proof"]
+            self.assertEqual(passed[0]["status"], "passed")
+            with open(result.evidence_path) as f:
+                raw = json.dumps(json.load(f))
+            self.assertNotIn(_EXTERNAL_CHUTES_OAUTH_ENV["ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF"], raw)
 
 
 class TestFakeRunners(unittest.TestCase):

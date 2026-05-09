@@ -70,7 +70,16 @@ def _collect_missing_env(steps: list[JourneyStep], env: Mapping[str, str]) -> li
     """Return deduplicated list of missing env var names across all steps."""
     seen: set[str] = set()
     result: list[str] = []
+    any_opt_in_enabled = any(
+        env.get(key, "").strip()
+        for step in steps
+        for key in step.required_env
+        if key.startswith("ARCLINK_PROOF_")
+    )
     for step in steps:
+        proof_flags = [key for key in step.required_env if key.startswith("ARCLINK_PROOF_")]
+        if proof_flags and any_opt_in_enabled and not any(env.get(key, "").strip() for key in proof_flags):
+            continue
         for key in step.required_env:
             if key not in seen and not env.get(key, "").strip():
                 seen.add(key)
@@ -483,7 +492,7 @@ def run_live_proof(
         skip_ports: Skip port bind checks (default True for CI).
         docker_binary: Docker binary for readiness checks.
         compose_runner: Injected compose runner for readiness checks.
-        journey: Proof journey to evaluate: hosted, workspace, or all.
+        journey: Proof journey to evaluate: hosted, external, workspace, or all.
     """
     source = dict(env) if env is not None else dict(os.environ)
 
@@ -597,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--journey",
-        choices=("hosted", "workspace", "all"),
+        choices=("hosted", "external", "workspace", "all"),
         default="hosted",
         help="Proof journey to plan or execute (default: hosted)",
     )

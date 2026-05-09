@@ -182,20 +182,106 @@ _WORKSPACE_JOURNEY_STEPS: list[dict[str, Any]] = [
 ]
 
 
+_EXTERNAL_PROOF_STEPS: list[dict[str, Any]] = [
+    {
+        "name": "stripe_checkout_webhook_proof",
+        "description": "Opt-in live Stripe checkout and webhook proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_STRIPE", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"],
+    },
+    {
+        "name": "telegram_raven_delivery_proof",
+        "description": "Opt-in live Telegram Raven delivery and button proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_TELEGRAM", "TELEGRAM_BOT_TOKEN"],
+    },
+    {
+        "name": "discord_raven_delivery_proof",
+        "description": "Opt-in live Discord Raven delivery and button proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_DISCORD", "DISCORD_BOT_TOKEN", "DISCORD_APP_ID"],
+    },
+    {
+        "name": "hermes_dashboard_landing_proof",
+        "description": "Opt-in deployed Hermes dashboard landing proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_HERMES_DASHBOARD", "ARCLINK_HERMES_DASHBOARD_URL", "ARCLINK_HERMES_DASHBOARD_AUTH"],
+    },
+    {
+        "name": "chutes_oauth_connect_proof",
+        "description": "Opt-in Chutes OAuth connect, callback, token storage, and revoke-readiness proof",
+        "required_env": [
+            "ARCLINK_E2E_LIVE",
+            "ARCLINK_PROOF_CHUTES_OAUTH",
+            "ARCLINK_CHUTES_OAUTH_CLIENT_ID",
+            "ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF",
+            "ARCLINK_CHUTES_OAUTH_REDIRECT_URI",
+        ],
+    },
+    {
+        "name": "chutes_usage_billing_sync_proof",
+        "description": "Opt-in Chutes usage, quota, discount, and billing read proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_CHUTES_USAGE", "ARCLINK_CHUTES_CREDENTIAL_REF"],
+    },
+    {
+        "name": "chutes_api_key_crud_proof",
+        "description": "Opt-in Chutes API-key create/list/delete proof with explicit mutation authorization",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_CHUTES_KEY_CRUD", "ARCLINK_CHUTES_CREDENTIAL_REF", "ARCLINK_CHUTES_ALLOW_MUTATION"],
+    },
+    {
+        "name": "chutes_account_registration_proof",
+        "description": "Opt-in official Chutes registration-token and hotkey proof",
+        "required_env": [
+            "ARCLINK_E2E_LIVE",
+            "ARCLINK_PROOF_CHUTES_ACCOUNT_REGISTRATION",
+            "ARCLINK_CHUTES_REGISTRATION_TOKEN_REF",
+            "ARCLINK_CHUTES_HOTKEY_REF",
+            "ARCLINK_CHUTES_COLDKEY_PUBLIC",
+        ],
+    },
+    {
+        "name": "chutes_balance_transfer_proof",
+        "description": "Opt-in Chutes balance transfer proof with explicit mutation authorization",
+        "required_env": [
+            "ARCLINK_E2E_LIVE",
+            "ARCLINK_PROOF_CHUTES_BALANCE_TRANSFER",
+            "ARCLINK_CHUTES_CREDENTIAL_REF",
+            "ARCLINK_CHUTES_ALLOW_MUTATION",
+            "ARCLINK_CHUTES_TRANSFER_RECIPIENT_USER_ID",
+            "ARCLINK_CHUTES_TRANSFER_AMOUNT",
+        ],
+    },
+    {
+        "name": "notion_shared_root_ssot_proof",
+        "description": "Opt-in Notion shared-root readability and brokered ssot.write proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_NOTION_SSOT", "ARCLINK_SSOT_NOTION_ROOT_PAGE_ID", "ARCLINK_SSOT_NOTION_TOKEN"],
+    },
+    {
+        "name": "cloudflare_zone_ingress_proof",
+        "description": "Opt-in Cloudflare zone verification and DNS ingress proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_CLOUDFLARE", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID"],
+    },
+    {
+        "name": "tailscale_serve_cert_proof",
+        "description": "Opt-in Tailscale Serve/certificate ingress proof",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_TAILSCALE", "ARCLINK_TAILSCALE_DNS_NAME"],
+    },
+]
+
+
 def build_journey(kind: str = "hosted") -> list[JourneyStep]:
     """Build an ordered journey step list.
 
     Args:
         kind: ``hosted`` for the public onboarding/provider journey,
-            ``workspace`` for native Drive/Code/Terminal TLS proof, or ``all``
-            for both in order.
+            ``workspace`` for native Drive/Code/Terminal TLS proof,
+            ``external`` for opt-in provider/live-service rows, or ``all``
+            for hosted, external, and workspace in order.
     """
     if kind == "hosted":
         specs = _HOSTED_JOURNEY_STEPS
     elif kind == "workspace":
         specs = _WORKSPACE_JOURNEY_STEPS
+    elif kind == "external":
+        specs = _EXTERNAL_PROOF_STEPS
     elif kind == "all":
-        specs = [*_HOSTED_JOURNEY_STEPS, *_WORKSPACE_JOURNEY_STEPS]
+        specs = [*_HOSTED_JOURNEY_STEPS, *_EXTERNAL_PROOF_STEPS, *_WORKSPACE_JOURNEY_STEPS]
     else:
         raise ValueError(f"unknown journey kind: {kind}")
     return [JourneyStep(**spec) for spec in specs]

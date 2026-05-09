@@ -378,6 +378,92 @@ def test_update_notion_database_and_data_source_use_patch_endpoints() -> None:
     print("PASS test_update_notion_database_and_data_source_use_patch_endpoints")
 
 
+def test_no_secret_notion_ssot_proof_harness_covers_callback_read_write_and_nonproof_email() -> None:
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_proof_harness_test")
+    root_id = "11111111-2222-3333-4444-555555555555"
+    seen: list[tuple[str, str, dict]] = []
+
+    def fake_urlopen(req, timeout=15):
+        body = json.loads((req.data or b"{}").decode("utf-8"))
+        seen.append((req.get_method(), req.full_url, body))
+        if req.get_method() == "GET" and req.full_url.endswith(f"/pages/{root_id}"):
+            return FakeResponse(
+                {
+                    "object": "page",
+                    "id": root_id,
+                    "url": "https://www.notion.so/shared-root-11111111222233334444555555555555",
+                    "properties": {
+                        "title": {
+                            "type": "title",
+                            "title": [{"plain_text": "Shared Root"}],
+                        }
+                    },
+                }
+            )
+        if req.get_method() == "POST" and req.full_url.endswith("/pages"):
+            return FakeResponse({"object": "page", "id": "feedface-0000-0000-0000-000000000000"})
+        if req.get_method() == "POST" and req.full_url.endswith("/databases"):
+            return FakeResponse({"object": "database", "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"})
+        if req.get_method() == "PATCH" and req.full_url.endswith("/databases/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"):
+            return FakeResponse({"object": "database", "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "in_trash": True})
+        if req.get_method() == "PATCH" and req.full_url.endswith("/pages/feedface-0000-0000-0000-000000000000"):
+            return FakeResponse({"object": "page", "id": "feedface-0000-0000-0000-000000000000", "in_trash": True})
+        raise AssertionError(f"unexpected request: {req.get_method()} {req.full_url}")
+
+    payload = mod.run_notion_ssot_no_secret_proof(
+        callback_url="https://u-amber-vault-1a2b.example.test/notion/webhook",
+        root_page_id=root_id,
+        token="secret_test_token",
+        token_ref="secret://arclink/notion/root",
+        urlopen_fn=fake_urlopen,
+        run_write_preflight=True,
+        proof_mode="fake",
+    )
+    checks = {item["name"]: item for item in payload["checks"]}
+    expect(payload["ok"] is True, str(payload))
+    expect(payload["model"] == "brokered_shared_root", str(payload))
+    expect(payload["token_ref_status"] == "secret_reference", str(payload))
+    expect(checks["callback_url_presence"]["status"] == "pass", str(checks))
+    expect(checks["shared_root_page_readability"]["status"] == "pass", str(checks))
+    expect(checks["shared_root_page_readability"]["evidence"]["page_title"] == "Shared Root", str(checks))
+    expect(checks["brokered_ssot_write_preflight"]["status"] == "pass", str(checks))
+    expect(checks["email_share_only_status"]["status"] == "not_proof", str(checks))
+    expect(checks["user_owned_oauth_status"]["status"] == "proof_gated", str(checks))
+    expect(checks["live_workspace_mutation_status"]["status"] == "proof_gated", str(checks))
+    text = json.dumps(payload, sort_keys=True)
+    expect("secret_test_token" not in text, text)
+    expect("secret://arclink/notion/root" not in text, text)
+    expect([item[0] for item in seen] == ["GET", "POST", "POST", "PATCH", "PATCH"], str(seen))
+    print("PASS test_no_secret_notion_ssot_proof_harness_covers_callback_read_write_and_nonproof_email")
+
+
+def test_notion_ssot_proof_harness_keeps_live_write_preflight_gated_without_authorization() -> None:
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_proof_harness_gated_test")
+    root_id = "11111111-2222-3333-4444-555555555555"
+    seen: list[str] = []
+
+    def fake_urlopen(req, timeout=15):
+        seen.append(f"{req.get_method()} {req.full_url}")
+        if req.get_method() == "GET" and req.full_url.endswith(f"/pages/{root_id}"):
+            return FakeResponse({"object": "page", "id": root_id, "properties": {}})
+        raise AssertionError(f"unexpected live-gated request: {req.get_method()} {req.full_url}")
+
+    payload = mod.run_notion_ssot_no_secret_proof(
+        callback_url="https://u-amber-vault-1a2b.example.test/notion/webhook",
+        root_page_id=root_id,
+        token="secret_test_token",
+        token_ref="secret://arclink/notion/root",
+        urlopen_fn=fake_urlopen,
+        run_write_preflight=True,
+        proof_mode="authorized_live",
+        allow_live_mutation=False,
+    )
+    checks = {item["name"]: item for item in payload["checks"]}
+    expect(checks["brokered_ssot_write_preflight"]["status"] == "proof_gated", str(payload))
+    expect(seen == [f"GET https://api.notion.com/v1/pages/{root_id}"], str(seen))
+    print("PASS test_notion_ssot_proof_harness_keeps_live_write_preflight_gated_without_authorization")
+
+
 def main() -> int:
     test_extract_notion_space_id_accepts_urls_and_raw_ids()
     test_normalize_notion_space_url_strips_query_and_fragment()
@@ -388,7 +474,9 @@ def main() -> int:
     test_request_json_retries_rate_limit_and_honors_retry_after()
     test_preflight_notion_root_children_creates_and_trashes_temp_objects()
     test_update_notion_database_and_data_source_use_patch_endpoints()
-    print("PASS all 9 notion ssot regression tests")
+    test_no_secret_notion_ssot_proof_harness_covers_callback_read_write_and_nonproof_email()
+    test_notion_ssot_proof_harness_keeps_live_write_preflight_gated_without_authorization()
+    print("PASS all 11 notion ssot regression tests")
     return 0
 
 

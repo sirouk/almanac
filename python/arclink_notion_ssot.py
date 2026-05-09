@@ -1055,3 +1055,151 @@ def handshake_notion_space(
         "api_version": normalized_api_version,
         "integration": integration,
     }
+
+
+def _proof_check(name: str, status: str, *, detail: str = "", evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": str(status or "").strip(),
+        "detail": str(detail or "").strip(),
+        "evidence": dict(evidence or {}),
+    }
+
+
+def _valid_notion_callback_url(callback_url: str) -> bool:
+    parsed = parse.urlparse(str(callback_url or "").strip())
+    return parsed.scheme == "https" and bool(parsed.netloc) and (parsed.path or "").rstrip("/").endswith("/notion/webhook")
+
+
+def run_notion_ssot_no_secret_proof(
+    *,
+    callback_url: str,
+    root_page_id: str,
+    token: str,
+    token_ref: str = "",
+    api_version: str = DEFAULT_NOTION_API_VERSION,
+    urlopen_fn: Callable[..., Any] | None = None,
+    run_write_preflight: bool = False,
+    proof_mode: str = "fake",
+    allow_live_mutation: bool = False,
+) -> dict[str, Any]:
+    """Run a redacted Notion SSOT setup proof.
+
+    The harness is intentionally dependency-injected. Local tests pass a fake
+    ``urlopen_fn`` and may exercise the brokered write preflight. Live callers
+    must explicitly choose ``proof_mode="authorized_live"`` and
+    ``allow_live_mutation=True`` before the write preflight can touch Notion.
+    The returned payload contains public URLs and object ids only; it never
+    returns the raw integration token.
+    """
+    normalized_mode = str(proof_mode or "fake").strip().lower()
+    if normalized_mode not in {"fake", "authorized_live"}:
+        raise ValueError("proof_mode must be 'fake' or 'authorized_live'")
+    if urlopen_fn is None:
+        if normalized_mode == "fake":
+            raise RuntimeError("fake Notion proof requires an injected urlopen_fn")
+        urlopen_fn = request.urlopen
+    normalized_token = str(token or "").strip()
+    if not normalized_token:
+        raise RuntimeError("Notion proof requires a token supplied by the caller")
+    normalized_root_id = extract_notion_space_id(root_page_id)
+    safe_token_ref = str(token_ref or "").strip()
+    token_ref_status = "secret_reference" if safe_token_ref.startswith("secret://") else "caller_supplied"
+
+    checks: list[dict[str, Any]] = [
+        _proof_check(
+            "callback_url_presence",
+            "pass" if _valid_notion_callback_url(callback_url) else "fail",
+            detail="Callback URL is HTTPS and ends at /notion/webhook."
+            if _valid_notion_callback_url(callback_url)
+            else "Callback URL must be an HTTPS /notion/webhook endpoint.",
+            evidence={"callback_url": str(callback_url or "").strip()},
+        ),
+    ]
+
+    page_payload = retrieve_notion_page(
+        page_id=normalized_root_id,
+        token=normalized_token,
+        api_version=api_version,
+        urlopen_fn=urlopen_fn,
+    )
+    checks.append(
+        _proof_check(
+            "shared_root_page_readability",
+            "pass",
+            detail="Configured shared root page was readable through the injected Notion transport.",
+            evidence={
+                "page_id": str(page_payload.get("id") or normalized_root_id).strip() or normalized_root_id,
+                "page_url": normalize_notion_space_url(str(page_payload.get("url") or "")),
+                "page_title": _page_title(page_payload),
+            },
+        )
+    )
+
+    if run_write_preflight:
+        if normalized_mode == "authorized_live" and not allow_live_mutation:
+            checks.append(
+                _proof_check(
+                    "brokered_ssot_write_preflight",
+                    "proof_gated",
+                    detail="Live brokered write preflight requires explicit mutation authorization.",
+                )
+            )
+        else:
+            preflight = preflight_notion_root_children(
+                root_page_id=normalized_root_id,
+                token=normalized_token,
+                api_version=api_version,
+                urlopen_fn=urlopen_fn,
+            )
+            checks.append(
+                _proof_check(
+                    "brokered_ssot_write_preflight",
+                    "pass",
+                    detail="Brokered create-and-trash preflight completed through the injected Notion transport.",
+                    evidence={
+                        "root_page_id": str(preflight.get("root_page_id") or ""),
+                        "temp_page_id": str(preflight.get("temp_page_id") or ""),
+                        "temp_database_id": str(preflight.get("temp_database_id") or ""),
+                    },
+                )
+            )
+    else:
+        checks.append(
+            _proof_check(
+                "brokered_ssot_write_preflight",
+                "proof_gated",
+                detail="Write preflight was not requested; live mutation remains gated.",
+            )
+        )
+
+    checks.extend(
+        [
+            _proof_check(
+                "email_share_only_status",
+                "not_proof",
+                detail="Email sharing alone does not prove Notion API access.",
+            ),
+            _proof_check(
+                "user_owned_oauth_status",
+                "proof_gated",
+                detail="User-owned OAuth is a non-default lane and requires separate authorization.",
+            ),
+            _proof_check(
+                "live_workspace_mutation_status",
+                "proof_gated" if normalized_mode != "authorized_live" or not allow_live_mutation else "authorized_live",
+                detail="Live workspace mutation is not claimed by this no-secret harness."
+                if normalized_mode != "authorized_live" or not allow_live_mutation
+                else "Caller explicitly authorized the live mutation preflight.",
+            ),
+        ]
+    )
+
+    return {
+        "ok": all(item["status"] in {"pass", "not_proof", "proof_gated", "authorized_live"} for item in checks),
+        "model": "brokered_shared_root",
+        "proof_mode": normalized_mode,
+        "token_ref_status": token_ref_status,
+        "api_version": str(api_version or DEFAULT_NOTION_API_VERSION),
+        "checks": checks,
+    }

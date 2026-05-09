@@ -88,11 +88,42 @@ class TestBuildJourney(unittest.TestCase):
         steps = journey_mod.build_journey("all")
         names = [step.name for step in steps]
         self.assertEqual(names[0], "web_onboarding_start")
+        self.assertIn("chutes_oauth_connect_proof", names)
         self.assertIn("workspace_docker_upgrade_reconcile", names)
         self.assertLess(
             names.index("discord_bot_check"),
+            names.index("chutes_oauth_connect_proof"),
+        )
+        self.assertLess(
+            names.index("chutes_oauth_connect_proof"),
             names.index("workspace_docker_upgrade_reconcile"),
         )
+
+    def test_external_journey_contains_opt_in_provider_proofs(self):
+        steps = journey_mod.build_journey("external")
+        names = [step.name for step in steps]
+        self.assertIn("chutes_oauth_connect_proof", names)
+        self.assertIn("chutes_usage_billing_sync_proof", names)
+        self.assertIn("chutes_api_key_crud_proof", names)
+        self.assertIn("chutes_account_registration_proof", names)
+        self.assertIn("chutes_balance_transfer_proof", names)
+        self.assertIn("notion_shared_root_ssot_proof", names)
+        self.assertIn("stripe_checkout_webhook_proof", names)
+        self.assertIn("telegram_raven_delivery_proof", names)
+        self.assertIn("discord_raven_delivery_proof", names)
+        self.assertIn("cloudflare_zone_ingress_proof", names)
+        self.assertIn("tailscale_serve_cert_proof", names)
+        self.assertIn("hermes_dashboard_landing_proof", names)
+        for step in steps:
+            self.assertIn("ARCLINK_E2E_LIVE", step.required_env)
+            self.assertTrue(any(key.startswith("ARCLINK_PROOF_") for key in step.required_env))
+
+    def test_external_chutes_oauth_requires_secret_reference_names(self):
+        step = next(s for s in journey_mod.build_journey("external") if s.name == "chutes_oauth_connect_proof")
+        self.assertIn("ARCLINK_CHUTES_OAUTH_CLIENT_ID", step.required_env)
+        self.assertIn("ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF", step.required_env)
+        self.assertIn("ARCLINK_CHUTES_OAUTH_REDIRECT_URI", step.required_env)
+        self.assertNotIn("ARCLINK_CHUTES_OAUTH_CLIENT_SECRET", step.required_env)
 
     def test_unknown_journey_kind_rejected(self):
         with self.assertRaises(ValueError):

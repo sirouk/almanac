@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
+import os
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -464,7 +467,7 @@ def test_public_bot_connect_notion_waits_for_credential_acknowledgement() -> Non
     )
     expect(blocked.action == "connect_notion_credentials_required", str(blocked))
     expect("credential handoff closed" in blocked.reply, blocked.reply)
-    expect("acknowledge storage" in blocked.reply, blocked.reply)
+    expect("/credentials" in blocked.reply and "confirm storage" in blocked.reply, blocked.reply)
     expect("No Notion tokens or API keys belong in chat" in blocked.reply, blocked.reply)
 
     seed_credential_handoffs(control, conn, seeded, status="available")
@@ -489,6 +492,66 @@ def test_public_bot_connect_notion_waits_for_credential_acknowledgement() -> Non
     expect("does not verify the Notion integration" in opened.reply, opened.reply)
     expect("Email sharing alone is not treated as proof" in opened.reply, opened.reply)
     print("PASS test_public_bot_connect_notion_waits_for_credential_acknowledgement")
+
+
+def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_credentials_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_credentials_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-credpod")
+    secret_ref = f"secret://arclink/dashboard/{seeded['deployment_id']}/password"
+    old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["ARCLINK_SECRET_STORE_DIR"] = tmp
+        secret_dir = Path(tmp) / seeded["deployment_id"]
+        secret_dir.mkdir(parents=True)
+        secret_path = secret_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+        secret_path.write_text("arc_public_bot_dashboard_password\n", encoding="utf-8")
+        try:
+            revealed = bots.handle_arclink_public_bot_turn(
+                conn,
+                channel="telegram",
+                channel_identity="tg:42",
+                text="/credentials",
+            )
+            expect(revealed.action == "credentials_revealed", str(revealed))
+            expect("arc_public_bot_dashboard_password" in revealed.reply, revealed.reply)
+            expect("I Stored It" in [button.label for button in revealed.buttons], str(revealed.buttons))
+            row = conn.execute(
+                """
+                SELECT status, revealed_at, removed_at
+                FROM arclink_credential_handoffs
+                WHERE deployment_id = ?
+                  AND credential_kind = 'dashboard_password'
+                """,
+                (seeded["deployment_id"],),
+            ).fetchone()
+            expect(row["status"] == "available" and bool(row["revealed_at"]) and not row["removed_at"], str(dict(row)))
+
+            stored = bots.handle_arclink_public_bot_turn(
+                conn,
+                channel="telegram",
+                channel_identity="tg:42",
+                text="/credentials-stored",
+            )
+            expect(stored.action == "credentials_stored", str(stored))
+            expect("removed" in stored.reply.lower(), stored.reply)
+            row = conn.execute(
+                """
+                SELECT status, acknowledged_at, removed_at
+                FROM arclink_credential_handoffs
+                WHERE deployment_id = ?
+                  AND credential_kind = 'dashboard_password'
+                """,
+                (seeded["deployment_id"],),
+            ).fetchone()
+            expect(row["status"] == "removed" and bool(row["acknowledged_at"]) and bool(row["removed_at"]), str(dict(row)))
+        finally:
+            if old_secret_store is None:
+                os.environ.pop("ARCLINK_SECRET_STORE_DIR", None)
+            else:
+                os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
+    print("PASS test_public_bot_credentials_reveal_and_ack_dashboard_password")
 
 
 def test_public_bot_config_backup_collects_private_repo_without_secret_leakage() -> None:
@@ -1189,6 +1252,7 @@ def main() -> int:
     test_public_bot_turns_use_shared_onboarding_rate_limit()
     test_public_bot_connect_notion_resolves_active_deployment_and_records_event()
     test_public_bot_connect_notion_waits_for_credential_acknowledgement()
+    test_public_bot_credentials_reveal_and_ack_dashboard_password()
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
@@ -1201,7 +1265,7 @@ def main() -> int:
     test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
     test_public_bot_agent_label_uses_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 20 ArcLink public bot tests")
+    print("PASS all 21 ArcLink public bot tests")
     return 0
 
 

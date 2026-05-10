@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 from typing import Any, Mapping
 
-from arclink_api_auth import check_arclink_rate_limit
+from arclink_api_auth import check_arclink_rate_limit, _resolve_revealable_credential_secret, _stable_handoff_id
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe
 from arclink_control import append_arclink_audit, append_arclink_event, utc_after_seconds_iso, utc_now_iso
@@ -52,6 +52,28 @@ ARCLINK_PUBLIC_BOT_CONFIG_BACKUP_COMMANDS = frozenset(
         "/setup_backup",
         "/backup",
         "backup",
+    }
+)
+ARCLINK_PUBLIC_BOT_CREDENTIAL_COMMANDS = frozenset(
+    {
+        "/credentials",
+        "/credential",
+        "/show-credentials",
+        "/show_credentials",
+        "credentials",
+        "credential",
+        "show credentials",
+    }
+)
+ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS = frozenset(
+    {
+        "/credentials-stored",
+        "/credentials_stored",
+        "/credential-stored",
+        "/credential_stored",
+        "credentials stored",
+        "credential stored",
+        "i stored it",
     }
 )
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
@@ -135,6 +157,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         telegram_command="status",
         discord_command="status",
         description="Check onboarding or pod status",
+    ),
+    ArcLinkPublicBotAction(
+        key="credentials",
+        telegram_command="credentials",
+        discord_command="credentials",
+        description="Reveal and acknowledge your dashboard credential",
     ),
     ArcLinkPublicBotAction(
         key="name",
@@ -1153,6 +1181,228 @@ def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
     return f"{dashboard_url}/notion/webhook" if dashboard_url else ""
 
 
+def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str, Any]) -> dict[str, Any] | None:
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    user_id = str(deployment.get("user_id") or "").strip()
+    if not deployment_id or not user_id:
+        return None
+    now = utc_now_iso()
+    metadata = _metadata(deployment)
+    refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
+    secret_ref = str(refs.get("dashboard_password") or f"secret://arclink/dashboard/{deployment_id}/password").strip()
+    handoff_id = _stable_handoff_id(deployment_id, "dashboard_password")
+    conn.execute(
+        """
+        INSERT INTO arclink_credential_handoffs (
+          handoff_id, user_id, deployment_id, credential_kind, display_name,
+          secret_ref, delivery_hint, status, created_at, updated_at
+        ) VALUES (?, ?, ?, 'dashboard_password', 'Dashboard password', ?, ?, 'available', ?, ?)
+        ON CONFLICT(deployment_id, credential_kind) DO UPDATE SET
+          user_id = excluded.user_id,
+          updated_at = excluded.updated_at
+        """,
+        (
+            handoff_id,
+            user_id,
+            deployment_id,
+            secret_ref,
+            "Copy this dashboard password into your password manager, then confirm storage.",
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM arclink_credential_handoffs WHERE handoff_id = ?", (handoff_id,)).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _credentials_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if deployment is None or str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_not_ready",
+            reply=_need_finished_onboarding_reply(),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    row = _dashboard_credential_row(conn, deployment)
+    if row is None:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_unavailable",
+            reply="I could not find the dashboard credential handoff for this deployment yet. Check status, then try `/credentials` again.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    if str(row.get("status") or "") == "removed" or str(row.get("removed_at") or "").strip():
+        access = _deployment_access(deployment)
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_already_stored",
+            reply=(
+                "That credential handoff is already closed and removed from future responses.\n\n"
+                "If you lost it, ask Raven or the operator to rotate/reissue dashboard access."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=tuple(
+                button for button in (
+                    _button("Open Helm", url=str(access.get("dashboard") or "")) if access.get("dashboard") else None,
+                    _button("Check Status", command="/status", style="secondary"),
+                )
+                if button is not None
+            ),
+        )
+    raw_secret = _resolve_revealable_credential_secret(row)
+    if not raw_secret:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_secret_not_materialized",
+            reply=(
+                "The dashboard credential exists, but the secure secret file is not materialized on this control node yet. "
+                "I will not invent it. Check status, then try `/credentials` again; if it still does not appear, the operator should rotate/reissue dashboard access."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_credential_handoffs
+        SET revealed_at = CASE WHEN revealed_at = '' THEN ? ELSE revealed_at END,
+            updated_at = ?
+        WHERE handoff_id = ? AND user_id = ?
+        """,
+        (now, now, row["handoff_id"], row["user_id"]),
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=str(deployment.get("deployment_id") or ""),
+        event_type="public_bot:dashboard_credential_revealed",
+        metadata={"channel": channel, "credential_kind": "dashboard_password"},
+        commit=False,
+    )
+    conn.commit()
+    access = _deployment_access(deployment)
+    helm = str(access.get("dashboard") or "").rstrip("/")
+    lines = [
+        "Dashboard credential handoff.",
+        "",
+        "Copy this password into your password manager now. After you confirm storage, ArcLink removes the handoff from future responses.",
+        "",
+        f"Password: `{raw_secret}`",
+    ]
+    if helm:
+        lines.extend(["", f"Helm: {helm}"])
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="credentials_revealed",
+        reply="\n".join(lines),
+        session=session,
+        deployment=deployment,
+        buttons=tuple(
+            button for button in (
+                _button("I Stored It", command="/credentials-stored"),
+                _button("Open Helm", url=helm) if helm else None,
+            )
+            if button is not None
+        ),
+    )
+
+
+def _credentials_stored_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if deployment is None:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_ack_no_deployment",
+            reply=_need_finished_onboarding_reply(),
+            session=session,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    row = _dashboard_credential_row(conn, deployment)
+    if row is None:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_ack_unavailable",
+            reply="I could not find an open dashboard credential handoff to close.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    user_id = str(deployment.get("user_id") or "")
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_credential_handoffs
+        SET status = 'removed',
+            acknowledged_at = CASE WHEN acknowledged_at = '' THEN ? ELSE acknowledged_at END,
+            removed_at = CASE WHEN removed_at = '' THEN ? ELSE removed_at END,
+            updated_at = ?
+        WHERE handoff_id = ? AND user_id = ?
+        """,
+        (now, now, now, row["handoff_id"], user_id),
+    )
+    append_arclink_audit(
+        conn,
+        action="credential_handoff_acknowledged",
+        actor_id=user_id,
+        target_kind="credential_handoff",
+        target_id=str(row["handoff_id"]),
+        reason="user confirmed dashboard credential storage through Raven",
+        metadata={"deployment_id": str(deployment.get("deployment_id") or ""), "credential_kind": "dashboard_password"},
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=str(deployment.get("deployment_id") or ""),
+        event_type="credential_handoff_removed",
+        metadata={"credential_kind": "dashboard_password", "user_id": user_id, "channel": channel},
+        commit=False,
+    )
+    conn.commit()
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="credentials_stored",
+        reply=(
+            "Locked in. I removed that dashboard credential handoff from future ArcLink responses.\n\n"
+            "Next clean moves: open Helm, wire Notion, or set private backups."
+        ),
+        session=session,
+        deployment=deployment,
+        buttons=(
+            _button("Wire Notion", command="/connect_notion", style="secondary"),
+            _button("Check Status", command="/status", style="secondary"),
+        ),
+    )
+
+
 def _credential_handoffs_confirmed_for_setup(
     conn: sqlite3.Connection,
     deployment: Mapping[str, Any],
@@ -1205,7 +1455,7 @@ def _credential_handoff_required_turn(
         "",
         f"Still waiting on: {pending_line}.",
         "",
-        "Open Helm, copy the secure completion bundle into your password manager, and acknowledge storage in the dashboard Security tab. After ArcLink removes those handoffs from future user responses, I can record the brokered SSOT setup intent.",
+        "Use `/credentials`, copy the dashboard password into your password manager, and confirm storage. After ArcLink removes that handoff from future responses, I can record the brokered SSOT setup intent.",
         "",
         "This keeps Notion setup on the dashboard/operator verification rail. No Notion tokens or API keys belong in chat.",
     ]
@@ -1215,7 +1465,7 @@ def _credential_handoff_required_turn(
     buttons: list[ArcLinkPublicBotButton] = []
     if helm:
         buttons.append(_button("Open Helm", url=helm))
-    buttons.append(_button("Check Status", command="/status", style="secondary"))
+    buttons.append(_button("Credentials", command="/credentials", style="secondary"))
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -1255,7 +1505,7 @@ def _aboard_freeform_reply(
     lines.append("")
     lines.append(
         "If you wanted to call me back, the slash commands still route here: `/help`, `/agents`, `/status`, "
-        "`/connect_notion`, `/config_backup`, `/link-channel`."
+        "`/credentials`, `/connect_notion`, `/config_backup`, `/link-channel`."
     )
     buttons: list[ArcLinkPublicBotButton] = []
     if helm:
@@ -2177,7 +2427,7 @@ def _help_reply(
             reply=(
                 "Comms are open.\n\n"
                 "I will keep this simple until your first agent is live. I can help you pick Founders, Sovereign, or Scale, open checkout, or read the board.\n\n"
-                "After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health."
+                "After launch, I reveal the working controls: credentials, your crew, Notion, private backups, channel pairing, files, code, and health."
             ),
             session=session,
             buttons=(
@@ -2191,7 +2441,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/link_channel`, `/cancel`.\n\n"
+            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/credentials`, `/connect_notion`, `/config_backup`, `/link_channel`, `/cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -2463,6 +2713,26 @@ def handle_arclink_public_bot_turn(
             channel=clean_channel,
             channel_identity=clean_identity,
             requested_slug=switch_match.group(1),
+            session=session,
+            deployment=deployment,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_CREDENTIAL_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _credentials_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _credentials_stored_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
             session=session,
             deployment=deployment,
         )

@@ -2,11 +2,37 @@
 
 Generated: 2026-05-08 (Ralphie document phase: final product-reality alignment)
 
-Updated: 2026-05-09 (Ralphie document phase: Chutes/external-proof alignment)
+Updated: 2026-05-10 (Raven selected-agent bridge contract alignment)
+
+## 2026-05-10 Raven Bridge Contract Update
+
+The current product matrix now counts 101 `real`, 0 `partial`, 0 `gap`, 15
+`proof-gated`, and 5 `policy-question` rows. Raven direct-agent chat scope is
+no longer an open policy row: slash commands remain Raven controls, while
+onboarded-user freeform Telegram/Discord messages queue selected-agent turns
+through `notification-delivery` and return the agent reply to the same linked
+channel.
+
+### Files Updated
+
+| File | Change | Rationale |
+| --- | --- | --- |
+| `research/PRODUCT_REALITY_MATRIX.md` | Reclassified Raven direct-agent public chat from `policy-question` to `real` and updated the evidence/action language | The live code, tests, docs, and deployed proof now implement Raven-mediated selected-agent freeform chat |
+| `research/COVERAGE_MATRIX.md` | Updated row totals and Raven validation coverage | The coverage map still described the older control-only policy |
+| `research/RESEARCH_SUMMARY.md` | Removed Raven chat scope from the remaining policy-question list | The operator chose the behavior and it is implemented/tested |
+| `research/BUILD_COMPLETION_NOTES.md` | Added this change as the latest build note | Future agents should not resurrect the old control-only assumption |
+
+### Open Questions And Risks
+
+- Browser right-click Drive/Code share-link enablement, canonical Chutes
+  OAuth/provider path, threshold continuation copy, self-service provider
+  changes, and scoped peer-awareness remain product-policy rows.
+- Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
+  and production-provider mutation proof remain credential-gated.
 
 ## 2026-05-09 Documentation Update
 
-The current implementation plan and product matrix now count 100 `real`, 0
+At that time, the implementation plan and product matrix counted 100 `real`, 0
 `partial`, 0 `gap`, 15 `proof-gated`, and 6 `policy-question` rows. This pass
 updated the project-facing runbooks for the new Chutes secret-reference live
 adapter, Chutes OAuth/connect fake callback boundary, provider-specific
@@ -28,7 +54,7 @@ external live-proof journey, and Notion shared-root no-secret proof harness.
 | `README.md` | Already names Chutes-first provider defaults, Notion SSOT, and live-proof orchestration at a product level |
 | `IMPLEMENTATION_PLAN.md` | Active handoff now points at the 2026-05-09 proof/build spec and marks the Chutes, Notion, Raven, and browser-share continuation tasks complete or gated |
 | `research/RALPHIE_END_TO_END_PROOF_AND_BUILD_SPEC_20260509.md` | New steering source for Chutes proof, external proof orchestration, and remaining operator decisions |
-| `research/PRODUCT_REALITY_MATRIX.md` | Reconciled to the new Chutes proof rows, Raven chat-scope policy row, Notion proof harness row, and current 100/15/6 totals |
+| `research/PRODUCT_REALITY_MATRIX.md` | Reconciled to the then-current Chutes proof rows, Raven chat-scope policy row, Notion proof harness row, and 100/15/6 totals |
 | `research/BUILD_COMPLETION_NOTES.md` | Records the no-secret Chutes live adapter, OAuth callback, Notion harness, and validation results |
 | `docs/API_REFERENCE.md` | Current hosted API docs still describe sanitized provider state and local provider-budget credit posture; no route catalog change was needed |
 | `docs/arclink/raven-public-bot.md` | Updated to state that Raven keeps slash-command control while freeform public messages queue selected-agent turns and return replies to the linked channel |

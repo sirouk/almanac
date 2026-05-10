@@ -34,17 +34,20 @@ The product reality matrix currently contains 121 rows:
 
 | Status | Count |
 | --- | ---: |
-| `real` | 100 |
+| `real` | 101 |
 | `partial` | 0 |
 | `gap` | 0 |
 | `proof-gated` | 15 |
-| `policy-question` | 6 |
+| `policy-question` | 5 |
 
 This is no longer the raw pre-decision snapshot. The 2026-05-08
 operator-policy addendum has been reconciled into the product matrix for Raven
 identity customization, shared-root SSOT membership, failed-renewal lifecycle,
 living linked resources, recipient copy/duplicate, exactly-one-operator
 behavior, Refuel Pod local credits, and the Chutes account/OAuth fallback.
+The 2026-05-10 Raven bridge update reclassifies public-channel direct-agent
+chat scope as implemented: slash commands remain Raven controls, and
+onboarded-user freeform messages route to the selected agent through Raven.
 
 Current `partial` rows: none. The 2026-05-09 Chutes proof packet is now
 represented in the matrix: silent Chutes account creation is not a product
@@ -68,9 +71,11 @@ Highest-risk remaining BUILD work after this PLAN refresh:
   Docker install/upgrade, and host deploy/upgrade proof gated until explicitly
   authorized.
 - Resolve the remaining product-policy questions: scoped agent self-model or
-  peer-awareness cards, Raven direct-agent chat scope, browser right-click
-  sharing enablement, canonical Chutes OAuth/provider path, public Chutes
-  threshold-continuation copy, and user self-service provider changes.
+  peer-awareness cards, browser right-click sharing enablement, canonical
+  Chutes OAuth/provider path, public Chutes threshold-continuation copy, and
+  user self-service provider changes. Raven direct-agent chat scope is no
+  longer a policy question: onboarded-user freeform messages route to the
+  selected agent through Raven, while slash commands remain Raven controls.
 
 ## Stack Finding
 
@@ -165,11 +170,10 @@ BUILD does not loop on stale plan detection.
 - Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
   Docker install/upgrade, and host deploy/upgrade proof is blocked without
   operator authorization.
-- Product policy is still required for six current matrix rows: scoped agent
-  self-model or peer-awareness cards, Raven direct-agent chat scope, browser
-  right-click sharing enablement, canonical Chutes OAuth/provider path,
-  self-service provider changes, and exact public threshold copy after Refuel
-  Pod/provider-fallback rails exist.
+- Product policy is still required for five current matrix rows: scoped agent
+  self-model or peer-awareness cards, browser right-click sharing enablement,
+  canonical Chutes OAuth/provider path, self-service provider changes, and
+  exact public threshold copy after Refuel Pod/provider-fallback rails exist.
 - Remaining decisions should be handled in dependency order: first isolation
   and secrets, then billing/provider lifecycle, then sharing/knowledge, then
   admin role/action behavior, then Raven and trust-signal presentation.

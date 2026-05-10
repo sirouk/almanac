@@ -1,5 +1,52 @@
 # Build Completion Notes
 
+## 2026-05-10 Raven Selected-Agent Bridge Contract Alignment
+
+Scope: reconciled the product-reality contract after Raven freeform public
+messages were changed from a control-only handoff into selected-agent chat
+turns for onboarded users.
+
+Rationale:
+
+- Raven remains the slash-command control conduit for `/help`, `/agents`,
+  `/status`, credentials, Notion, backup, channel linking, shares, and upgrade
+  guidance.
+- Onboarded-user freeform Telegram/Discord messages now queue
+  `public-agent-turn` notifications, execute the selected deployment's
+  `hermes-gateway` container through `notification-delivery`, and return the
+  agent reply to the same linked public channel.
+- The product matrix, coverage matrix, research summary, and document phase
+  status were updated so future agents do not preserve the older control-only
+  assumption.
+
+Verification run:
+
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `docker compose --env-file arclink-priv/config/docker.env config --quiet` passed.
+- `python3 -m py_compile python/arclink_public_bots.py python/arclink_notification_delivery.py` passed.
+- `git diff --check` passed.
+- `./deploy.sh control health` passed with `32 ok`, `2 warn`, and `0 fail`.
+- Live no-message-sending bridge proof from inside the upgraded
+  `notification-delivery` container reached the `sirouk | TuDudes`
+  `hermes-gateway` runtime and returned `deployed bridge ok`.
+
+Known risks:
+
+- Live Telegram/Discord delivery proof was not forced by this note; the bridge
+  was proven at the notification-worker-to-agent-runtime joint without sending
+  another user-visible public bot message.
+- The memory-synth health row is still warn because the current model returned
+  non-JSON for several vault lanes; the job loop itself exits successfully.
+- Browser right-click sharing, Chutes provider-path policy, threshold
+  continuation copy, self-service provider changes, and scoped peer-awareness
+  remain policy-gated.
+
 ## 2026-05-09 Ralphie OAuth Callback State Hardening
 
 Scope: tightened the Chutes OAuth/connect fake callback boundary while keeping
@@ -36,10 +83,11 @@ Known risks:
 - No live Chutes OAuth, Notion, public bot, Stripe, ingress, Docker, or host
   proof was run; those remain gated on explicit operator authorization and
   secret references.
-- The active product-policy rows remain unchanged: Raven direct-agent public
-  chat, browser right-click sharing, canonical Chutes provider path,
-  threshold continuation copy, self-service provider changes, and scoped
-  peer-awareness.
+- At the time of this build, the active product-policy rows included Raven
+  direct-agent public chat, browser right-click sharing, canonical Chutes
+  provider path, threshold continuation copy, self-service provider changes,
+  and scoped peer-awareness. Raven direct-agent public chat was later resolved
+  and implemented in the 2026-05-10 bridge update above.
 
 ## 2026-05-09 Ralphie Notion Harness And Policy-Gate Preservation Build
 
@@ -59,10 +107,10 @@ Rationale:
   email-share-only checks, or live workspace mutation. Shared-root membership
   remains the canonical model; user OAuth/token and live workspace mutation
   remain proof-gated until explicit operator authorization.
-- Preserved the existing Raven public-bot policy gate: freeform public
-  messages remain control-only and point to Helm rather than becoming direct
-  private-agent chat. Direct `/ask` or `/agent <message>` proxying remains a
-  policy question.
+- Preserved the then-current Raven public-bot policy gate. This historical
+  note is superseded by the 2026-05-10 Raven selected-agent bridge update:
+  onboarded-user freeform messages now route to the selected agent through
+  Raven, while slash commands remain Raven controls.
 - Preserved disabled browser right-click share-link UI while keeping
   `shares.request`, read-only living `Linked` projections, revoke behavior, and
   recipient copy/duplicate into owned roots covered by existing plugin/API
@@ -89,10 +137,11 @@ Known risks:
 - No live Notion shared-root, `ssot.write`, OAuth, or workspace mutation proof
   was run. Those remain proof-gated until the operator authorizes a named live
   proof flow and supplies secret references.
-- Raven direct-agent public chat, browser right-click share-link enablement,
-  canonical Chutes provider/OAuth selection, threshold continuation copy,
-  self-service provider changes, and scoped peer-awareness remain explicit
-  policy questions.
+- Browser right-click share-link enablement, canonical Chutes provider/OAuth
+  selection, threshold continuation copy, self-service provider changes, and
+  scoped peer-awareness remain explicit policy questions. Raven direct-agent
+  public chat was later resolved and implemented in the 2026-05-10 bridge
+  update.
 - Live Stripe, Telegram, Discord, Chutes, Nextcloud, Cloudflare, Tailscale,
   Docker install/upgrade, and host deploy/upgrade proof were not run.
 

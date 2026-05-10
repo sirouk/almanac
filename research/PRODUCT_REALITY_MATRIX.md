@@ -16,7 +16,7 @@ updated as repairs land. Rows split the product claims so BUILD can move each
 claim to `real`, `proof-gated`, or `policy-question` without hiding gaps inside
 large grouped statements.
 
-Current row totals: 100 `real`, 0 `partial`, 0 `gap`, 15 `proof-gated`, and 6
+Current row totals: 101 `real`, 0 `partial`, 0 `gap`, 15 `proof-gated`, and 5
 `policy-question`.
 
 Operator-policy update 2026-05-08: the operator answered several former
@@ -65,8 +65,8 @@ for BUILD handoff.
 | Telegram is a public-facing channel | real | `python/arclink_telegram.py`, `tests/test_arclink_telegram.py` | Preserve adapter tests. |
 | Discord is a public-facing channel | real | `python/arclink_discord.py`, `tests/test_arclink_discord.py` | Preserve adapter tests. |
 | Users can onboard with Raven, the ArcLink Curator, in public channels | real | `python/arclink_public_bots.py:1581`, `docs/arclink/raven-public-bot.md` | Keep copy aligned with implemented command names. |
-| Raven continues after onboarding as a control conduit | real | Public bot handles status, agents, add-agent, switch, Notion prep, backup prep, share approvals, upgrade-rail guidance, and channel linking; freeform live-user replies now explicitly say Raven is the public control conduit and not direct private-agent chat, with regression coverage in `tests/test_arclink_public_bots.py` | Preserve command routing and direct-agent-chat honesty. |
-| Raven direct-agent chat scope beyond control commands is chosen | policy-question | Current code keeps public-channel Raven as a control conduit; the 2026-05-09 proof/build spec recommends an explicit `/ask` or `/agent <message>` command if direct proxying is desired and rejects raw freeform proxying as the highest-risk option | Ask the operator before adding public-channel private-agent proxy behavior; keep raw freeform control-only unless explicitly changed with tests. |
+| Raven continues after onboarding as a control conduit | real | Public bot handles status, agents, add-agent, switch, Notion prep, backup prep, share approvals, upgrade-rail guidance, and channel linking; slash commands stay with Raven while freeform live-user messages queue selected-agent turns through `notification_outbox` and return on the same linked channel, with regression coverage in `tests/test_arclink_public_bots.py` and `tests/test_arclink_notification_delivery.py` | Preserve slash-command control routing, selected-agent labels, queued agent-turn delivery, and live-runtime error fallbacks. |
+| Raven direct-agent chat scope beyond control commands is chosen | real | The operator chose Raven-mediated freeform selected-agent chat. Current code queues `public-agent-turn` notifications for onboarded-user freeform messages, the notification worker executes the selected deployment's `hermes-gateway` container, and docs describe Helm as the full dashboard/direct surface rather than the only chat surface | Preserve public-channel freeform proxy behavior only for authenticated/linked onboarded users, keep unknown slash commands on Raven help, and keep cross-user deployment metadata checks in place. |
 | User can call up an inventory of agents | real | `python/arclink_public_bots.py:1192`, `tests/test_arclink_public_bots.py:465` | Preserve account scoping. |
 | User can switch selected agent | real | `python/arclink_public_bots.py`, `tests/test_arclink_public_bots.py` | Preserve account-scoped active deployment metadata and status-label tests. |
 | Replies clearly indicate which agent is active | real | `/status` is handled before the live-user freeform handoff, switch replies name the selected agent, freeform handoff names the awakened agent, and `tests/test_arclink_public_bots.py` asserts the selected label after switching | Preserve status-before-freeform routing and label assertions. |

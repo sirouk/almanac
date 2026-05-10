@@ -36,6 +36,7 @@ tests as truth, then update the closest canonical doc.
 | `docs/arclink/operator-stripe-webhook.md` | Canonical | Stripe event destination setup. |
 | `plugins/hermes-agent/*/README.md` | Canonical | Plugin-local behavior, install notes, and validation checks. |
 | `IMPLEMENTATION_PLAN.md` | Historical | Ralphie build backlog/status, not an operating runbook. |
+| `research/CONTRACT_AUDIT_20260510.md` | Historical | No-secret contract audit snapshot after the Raven selected-agent bridge repair. Useful evidence, but canonical docs/tests own current behavior. |
 | `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` | Historical | Steering backlog and audit-derived rationale. |
 | `research/*` | Historical | Research and phase notes unless a specific file says otherwise. |
 | `docs/arclink/CREATIVE_BRIEF.md` | Speculative | Product voice and public copy direction; verify against implemented web/bot behavior before treating as shipped. |

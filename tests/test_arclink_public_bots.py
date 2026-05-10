@@ -1159,8 +1159,7 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="discord:raven-owner",
         text="hello",
     )
-    expect("I'm Valkyrie, your ArcLink control conduit" in discord_freeform.reply, discord_freeform.reply)
-    expect("Your agent **Bot Buyer**" in discord_freeform.reply, discord_freeform.reply)
+    expect("I'm Valkyrie. I am routing that to **Bot Buyer** now." in discord_freeform.reply, discord_freeform.reply)
 
     channel_override = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1175,14 +1174,14 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="discord:raven-owner",
         text="hello again",
     )
-    expect("I'm Starling, your ArcLink control conduit" in discord_override.reply, discord_override.reply)
+    expect("I'm Starling. I am routing that to **Bot Buyer** now." in discord_override.reply, discord_override.reply)
     telegram_still_account = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:raven-owner",
         text="hello again",
     )
-    expect("I'm Valkyrie, your ArcLink control conduit" in telegram_still_account.reply, telegram_still_account.reply)
+    expect("I'm Valkyrie. I am routing that to **Bot Buyer** now." in telegram_still_account.reply, telegram_still_account.reply)
 
     channel_reset = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1197,7 +1196,7 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="discord:raven-owner",
         text="hello after channel reset",
     )
-    expect("I'm Valkyrie, your ArcLink control conduit" in discord_after_channel_reset.reply, discord_after_channel_reset.reply)
+    expect("I'm Valkyrie. I am routing that to **Bot Buyer** now." in discord_after_channel_reset.reply, discord_after_channel_reset.reply)
 
     account_reset = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1212,7 +1211,7 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="tg:raven-owner",
         text="hello after account reset",
     )
-    expect("I'm Raven, your ArcLink control conduit" in telegram_after_account_reset.reply, telegram_after_account_reset.reply)
+    expect("I'm Raven. I am routing that to **Bot Buyer** now." in telegram_after_account_reset.reply, telegram_after_account_reset.reply)
 
     roster = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1262,18 +1261,17 @@ def main() -> int:
     test_public_bot_ignores_cross_user_active_deployment_metadata()
     test_public_bot_withholds_unpublished_tailnet_app_urls()
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
-    test_public_bot_aboard_freeform_routes_to_helm_not_onboarding()
+    test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_agent_label_uses_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     print("PASS all 21 ArcLink public bot tests")
     return 0
 
 
-def test_public_bot_aboard_freeform_routes_to_helm_not_onboarding() -> None:
-    """Routing law: once a user has a live pod, freeform messages and even
-    /start re-triggers must NOT spit onboarding copy. They must hand the user
-    a clean Helm pointer with the slash-command map for using Raven as the
-    public control conduit.
+def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
+    """Once a user has a live pod, freeform messages become selected-agent
+    turns through Raven. Slash commands still stay on Raven and must not
+    re-trigger onboarding copy.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_aboard_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_aboard_test")
@@ -1284,21 +1282,27 @@ def test_public_bot_aboard_freeform_routes_to_helm_not_onboarding() -> None:
         prefix="arc-c7dbf98030b3",
     )
 
-    # Freeform "hey there" from an aboard user must get the routing-law reply.
+    # Freeform "hey there" from an aboard user queues an agent turn.
     freeform = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="hey there")
-    expect(freeform.action == "aboard_freeform", f"expected aboard_freeform got {freeform.action}")
-    expect("control conduit" in freeform.reply.lower(), freeform.reply)
-    expect("freeform messages here reach me, not the agent" in freeform.reply, freeform.reply)
+    expect(freeform.action == "agent_message_queued", f"expected agent_message_queued got {freeform.action}")
+    expect("I am routing that to **Bot Buyer** now" in freeform.reply, freeform.reply)
     expect("onboarding only" not in freeform.reply.lower(), freeform.reply)
     expect("Stripe collects" not in freeform.reply, "must not show onboarding copy to a paid user")
     expect("Send `/name" not in freeform.reply, "must not prompt for /name to a paid user")
     expect(any(b.label == "Open Helm" and b.url for b in freeform.buttons), "expected Open Helm URL button")
     expect(any(b.command == "/agents" for b in freeform.buttons), "expected Show My Crew button")
+    queued = conn.execute(
+        "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox WHERE target_kind = 'public-agent-turn'"
+    ).fetchone()
+    expect(queued is not None, "expected queued public-agent-turn notification")
+    expect(queued["target_id"] == "tg:99", str(dict(queued)))
+    expect(queued["channel_kind"] == "telegram", str(dict(queued)))
+    expect(queued["message"] == "hey there", str(dict(queued)))
 
-    # /start re-trigger from an aboard user gets the same routing-law reply,
+    # /start re-trigger from an aboard user gets the control help reply,
     # NOT the onboarding "Stripe collects your email" prompt.
     restart = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/start")
-    expect(restart.action == "aboard_freeform", f"expected aboard_freeform on /start re-trigger, got {restart.action}")
+    expect(restart.action == "show_help", f"expected show_help on /start re-trigger, got {restart.action}")
     expect("Stripe collects" not in restart.reply, "/start re-trigger leaked onboarding copy")
 
     # Slash commands still call Raven back: /agents must still show the crew.
@@ -1309,7 +1313,7 @@ def test_public_bot_aboard_freeform_routes_to_helm_not_onboarding() -> None:
     helped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/help")
     expect("Bridge is open" in helped.reply, helped.reply)
 
-    print("PASS test_public_bot_aboard_freeform_routes_to_helm_not_onboarding")
+    print("PASS test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding")
 
 
 def test_public_bot_agent_label_uses_user_display_name() -> None:

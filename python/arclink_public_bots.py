@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from arclink_api_auth import check_arclink_rate_limit, _resolve_revealable_credential_secret, _stable_handoff_id
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe
-from arclink_control import append_arclink_audit, append_arclink_event, utc_after_seconds_iso, utc_now_iso
+from arclink_control import append_arclink_audit, append_arclink_event, queue_notification, utc_after_seconds_iso, utc_now_iso
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
@@ -1486,27 +1486,46 @@ def _aboard_freeform_reply(
     bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     conn: sqlite3.Connection | None = None,
 ) -> ArcLinkPublicBotTurn:
-    """Routing law: once a user has a live pod, freeform messages on this
-    channel do not become private-agent chat. Raven remains the public control
-    conduit for slash commands; everything else is a clear handoff with the
-    Helm URL and a short command map for the times the user wanted Raven.
+    """Queue a public-channel freeform message for the selected agent.
+
+    Slash commands still belong to Raven. Plain text from an aboard user is
+    agent chat and is processed asynchronously by the notification worker so
+    Telegram/Discord webhook handlers do not block on model runtime.
     """
     label = _agent_label(deployment, index=0, conn=conn)
     raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     access = _deployment_access(deployment)
     helm = str(access.get("dashboard") or "").rstrip("/")
+    if conn is not None:
+        queue_notification(
+            conn,
+            target_kind="public-agent-turn",
+            target_id=channel_identity,
+            channel_kind=channel,
+            message=str(deployment.get("_public_bot_message") or ""),
+            extra={
+                "deployment_id": str(deployment.get("deployment_id") or ""),
+                "prefix": str(deployment.get("prefix") or ""),
+                "user_id": str(deployment.get("user_id") or ""),
+                "agent_label": label,
+                "raven_display_name": raven,
+                "helm_url": helm,
+            },
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=str(deployment.get("deployment_id") or ""),
+            event_type="public_bot:agent_turn_queued",
+            metadata={"channel": channel, "agent_label": label},
+        )
     lines = [
-        f"I'm {raven}, your ArcLink control conduit. Your agent **{label}** is awake on the helm, and freeform messages here reach me, not the agent.",
+        f"I'm {raven}. I am routing that to **{label}** now.",
         "",
-        "Open the helm to talk to your agent directly:" if helm else "Open the helm to talk to your agent directly.",
+        "I will bring the reply back here when the agent finishes. Slash commands still call me for controls: `/help`, `/agents`, `/status`, `/credentials`, `/connect_notion`, `/config_backup`, `/link-channel`.",
     ]
     if helm:
-        lines.append(helm)
-    lines.append("")
-    lines.append(
-        "If you wanted to call me back, the slash commands still route here: `/help`, `/agents`, `/status`, "
-        "`/credentials`, `/connect_notion`, `/config_backup`, `/link-channel`."
-    )
+        lines.extend(["", f"Helm stays open too: {helm}"])
     buttons: list[ArcLinkPublicBotButton] = []
     if helm:
         buttons.append(_button("Open Helm", url=helm))
@@ -1514,7 +1533,7 @@ def _aboard_freeform_reply(
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
-        action="aboard_freeform",
+        action="agent_message_queued",
         reply="\n".join(lines),
         session=session,
         deployment=deployment,
@@ -2773,6 +2792,13 @@ def handle_arclink_public_bot_turn(
     # sense for a paying customer. Hand them a clean Helm pointer instead.
     aboard_session, aboard_deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
     if aboard_deployment and str(aboard_deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        if message.startswith("/"):
+            return _help_reply(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                session=aboard_session,
+                deployment=aboard_deployment,
+            )
         raven = _raven_display_name(
             conn,
             channel=clean_channel,
@@ -2784,7 +2810,7 @@ def handle_arclink_public_bot_turn(
             channel=clean_channel,
             channel_identity=clean_identity,
             session=aboard_session,
-            deployment=aboard_deployment,
+            deployment={**aboard_deployment, "_public_bot_message": message},
             bot_display_name=raven,
             conn=conn,
         )

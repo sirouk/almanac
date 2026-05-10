@@ -238,6 +238,7 @@ services that need Docker API access for routing or lifecycle management:
 | `control-provisioner` | Sovereign fleet provisioner | Creates and manages deployment containers when `ARCLINK_EXECUTOR_ADAPTER=local` |
 | `control-action-worker` | Admin action worker | Runs queued restart/teardown and other lifecycle actions when `ARCLINK_EXECUTOR_ADAPTER=local` |
 | `agent-supervisor` | Per-agent container lifecycle | Reconciles agent containers, dashboard proxies, and Hermes agent runtimes |
+| `notification-delivery` | Public/channel notification worker | Delivers Raven-mediated public-channel agent turns by executing the selected deployment's Hermes gateway container |
 | `curator-refresh` | Operator maintenance loop | Runs queued Docker-mode upgrades and Compose repair commands from Curator/operator actions |
 
 The lifecycle services also bind-mount the live repository checkout and

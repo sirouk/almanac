@@ -18,8 +18,9 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
 - After onboarding, Raven remains the public control conduit for slash-command
   actions such as status, agent roster/switching, Notion setup, backup setup,
   channel linking, share approvals, and upgrade-rail guidance. Freeform public
-  messages do not become direct private-agent chat; Raven points users to Helm
-  for that.
+  messages are queued as selected-agent turns and Raven brings the agent's
+  reply back to the same linked Telegram or Discord channel. Helm remains the
+  direct dashboard chat path when the user wants the full agent surface.
 
 ## Voice Rules
 

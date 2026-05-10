@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -202,6 +204,209 @@ def _strip_public_channel_prefix(target_id: str, prefix: str) -> str:
     return value
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1800) -> int:
+    raw = config_env_value(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _compose_project_name(deployment_id: str) -> str:
+    clean = re.sub(r"[^a-z0-9_-]+", "-", str(deployment_id or "").strip().lower()).strip("-_")
+    return f"arclink-{clean}" if clean else ""
+
+
+def _deployment_root(*, deployment_id: str, prefix: str) -> Path | None:
+    base = Path(config_env_value("ARCLINK_STATE_ROOT_BASE", "/arcdata/deployments") or "/arcdata/deployments")
+    if deployment_id and prefix:
+        candidate = base / f"{deployment_id}-{prefix}"
+        if candidate.exists():
+            return candidate
+    if deployment_id:
+        matches = sorted(base.glob(f"{deployment_id}-*"))
+        if matches:
+            return matches[0]
+    return None
+
+
+def _deployment_service_container(*, project_name: str, service: str) -> str:
+    if not project_name or not service:
+        return ""
+    cmd = [
+        "docker",
+        "ps",
+        "--filter",
+        f"label=com.docker.compose.project={project_name}",
+        "--filter",
+        f"label=com.docker.compose.service={service}",
+        "--format",
+        "{{.Names}}",
+    ]
+    try:
+        proc = subprocess.run(cmd, check=False, text=True, capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    for line in str(proc.stdout or "").splitlines():
+        value = line.strip()
+        if value:
+            return value
+    return ""
+
+
+def _extract_hermes_quiet_response(stdout: str) -> str:
+    text = ANSI_RE.sub("", str(stdout or "")).replace("\r", "")
+    lines = [line.rstrip() for line in text.splitlines()]
+    clean: list[str] = []
+    for line in lines:
+        if line.startswith("session_id:"):
+            break
+        clean.append(line)
+    response = "\n".join(clean).strip()
+    return response[:6000].rstrip()
+
+
+def _run_public_agent_turn(*, deployment_id: str, prefix: str, prompt: str) -> tuple[str, str]:
+    project_name = _compose_project_name(deployment_id)
+    if not project_name:
+        return "", "The deployment id is missing, so Raven cannot choose an agent runtime."
+    timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
+    turn_cmd = [
+        "timeout",
+        "--kill-after=10s",
+        f"{timeout_seconds}s",
+        "/opt/arclink/runtime/hermes-venv/bin/hermes",
+        "chat",
+        "-Q",
+        "--source",
+        "arclink-public-bot",
+        "-q",
+        prompt[:8000],
+    ]
+    container = _deployment_service_container(project_name=project_name, service="hermes-gateway")
+    if container:
+        cmd = ["docker", "exec", container, *turn_cmd]
+    else:
+        root = _deployment_root(deployment_id=deployment_id, prefix=prefix)
+        if root is None:
+            return "", "I could not find the running deployment container or deployment root on this control node."
+        compose_file = root / "config" / "compose.yaml"
+        env_file = root / "config" / "arclink.env"
+        if not compose_file.exists() or not env_file.exists():
+            return "", "The deployment compose files are missing, so Raven cannot reach the agent runtime yet."
+        cmd = [
+            "docker",
+            "compose",
+            "-p",
+            project_name,
+            "--env-file",
+            str(env_file),
+            "-f",
+            str(compose_file),
+            "exec",
+            "-T",
+            "hermes-gateway",
+            *turn_cmd,
+        ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds + 20,
+        )
+    except subprocess.TimeoutExpired:
+        return "", "The agent turn timed out before a reply came back."
+    except OSError as exc:
+        return "", f"The control node could not start the agent turn runner: {str(exc)[:180]}"
+    if proc.returncode != 0:
+        detail = ANSI_RE.sub("", (proc.stderr or proc.stdout or "")).strip().splitlines()
+        tail = detail[-1][:180] if detail else f"exit status {proc.returncode}"
+        return "", f"The agent runtime returned an error: {tail}"
+    response = _extract_hermes_quiet_response(proc.stdout)
+    if not response:
+        return "", "The agent turn completed without a reply."
+    return response, ""
+
+
+def _deliver_public_bot_user(
+    cfg: Config,
+    *,
+    channel_kind: str,
+    target_id: str,
+    message: str,
+    extra: dict[str, Any],
+) -> str | None:
+    if channel_kind == "telegram":
+        bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = _strip_public_channel_prefix(target_id, "tg")
+        if not bot_token:
+            return "TELEGRAM_BOT_TOKEN is not configured"
+        if not chat_id:
+            return "public-bot-user telegram delivery requires target_id"
+        reply_markup = extra.get("telegram_reply_markup")
+        if not isinstance(reply_markup, dict):
+            reply_markup = None
+        parse_mode = str(extra.get("telegram_parse_mode") or "")
+        return deliver_telegram(
+            message,
+            bot_token=bot_token,
+            chat_id=chat_id,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+    if channel_kind == "discord":
+        bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
+        user_id = _strip_public_channel_prefix(target_id, "discord")
+        if not bot_token:
+            return "DISCORD_BOT_TOKEN is not configured"
+        if not user_id:
+            return "public-bot-user discord delivery requires target_id"
+        discord_components = extra.get("discord_components")
+        if not isinstance(discord_components, list):
+            discord_components = None
+        return deliver_discord_user(
+            message,
+            bot_token=bot_token,
+            user_id=user_id,
+            components=discord_components,
+        )
+    return f"public-bot-user delivery for channel_kind={channel_kind!r} not implemented yet"
+
+
+def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str, Any]) -> str | None:
+    channel_kind = str(row.get("channel_kind") or "").lower()
+    target_id = str(row.get("target_id") or "")
+    deployment_id = str(extra.get("deployment_id") or "").strip()
+    prefix = str(extra.get("prefix") or "").strip()
+    label = str(extra.get("agent_label") or prefix or "your agent").strip()
+    helm = str(extra.get("helm_url") or "").strip()
+    prompt = str(row.get("message") or "").strip()
+    if not prompt:
+        return None
+    response, error = _run_public_agent_turn(deployment_id=deployment_id, prefix=prefix, prompt=prompt)
+    if error:
+        message = f"{label} did not answer through Raven yet.\n\n{error}"
+        if helm:
+            message += f"\n\nHelm is still available: {helm}"
+    else:
+        message = f"{label}:\n\n{response}"
+    return _deliver_public_bot_user(
+        cfg,
+        channel_kind=channel_kind,
+        target_id=target_id,
+        message=message,
+        extra={},
+    )
+
+
 def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
     target_kind = (row.get("target_kind") or "").lower()
     extra_raw = str(row.get("extra_json") or "").strip()
@@ -264,41 +469,16 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
         # public channel. target_id may be raw ("123") or normalized
         # ("tg:123"/"discord:123"); channel_kind picks the platform.
         channel_kind = (row.get("channel_kind") or "").lower()
-        if channel_kind == "telegram":
-            bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
-            chat_id = _strip_public_channel_prefix(str(row.get("target_id") or ""), "tg")
-            if not bot_token:
-                return "TELEGRAM_BOT_TOKEN is not configured"
-            if not chat_id:
-                return "public-bot-user telegram delivery requires target_id"
-            reply_markup = extra.get("telegram_reply_markup")
-            if not isinstance(reply_markup, dict):
-                reply_markup = None
-            parse_mode = str(extra.get("telegram_parse_mode") or "")
-            return deliver_telegram(
-                row["message"],
-                bot_token=bot_token,
-                chat_id=chat_id,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-            )
-        if channel_kind == "discord":
-            bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
-            user_id = _strip_public_channel_prefix(str(row.get("target_id") or ""), "discord")
-            if not bot_token:
-                return "DISCORD_BOT_TOKEN is not configured"
-            if not user_id:
-                return "public-bot-user discord delivery requires target_id"
-            discord_components = extra.get("discord_components")
-            if not isinstance(discord_components, list):
-                discord_components = None
-            return deliver_discord_user(
-                row["message"],
-                bot_token=bot_token,
-                user_id=user_id,
-                components=discord_components,
-            )
-        return f"public-bot-user delivery for channel_kind={channel_kind!r} not implemented yet"
+        return _deliver_public_bot_user(
+            cfg,
+            channel_kind=channel_kind,
+            target_id=str(row.get("target_id") or ""),
+            message=str(row.get("message") or ""),
+            extra=extra,
+        )
+
+    if target_kind == "public-agent-turn":
+        return _deliver_public_agent_turn(cfg, row, extra)
 
     return f"unknown target_kind: {target_kind}"
 

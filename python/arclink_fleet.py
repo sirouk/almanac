@@ -44,10 +44,20 @@ def register_fleet_host(
     if not clean_hostname:
         raise ArcLinkFleetError("ArcLink fleet hosts require a hostname")
     clean_region = str(region or "").strip().lower()
-    _reject_secrets(tags, path="$.tags")
-    _reject_secrets(metadata, path="$.metadata")
-    tags_json = json_dumps_safe(tags, label="ArcLink fleet", error_cls=ArcLinkFleetError)
-    metadata_json = json_dumps_safe(metadata, label="ArcLink fleet", error_cls=ArcLinkFleetError)
+    if tags is not None:
+        _reject_secrets(tags, path="$.tags")
+    if metadata is not None:
+        _reject_secrets(metadata, path="$.metadata")
+    tags_json = (
+        json_dumps_safe(tags, label="ArcLink fleet", error_cls=ArcLinkFleetError)
+        if tags is not None
+        else None
+    )
+    metadata_json = (
+        json_dumps_safe(metadata, label="ArcLink fleet", error_cls=ArcLinkFleetError)
+        if metadata is not None
+        else None
+    )
     if capacity_slots < 1:
         raise ArcLinkFleetError("ArcLink fleet host capacity must be at least 1")
 
@@ -56,6 +66,30 @@ def register_fleet_host(
         (clean_hostname,),
     ).fetchone()
     if existing is not None:
+        sets: list[str] = []
+        params: list[Any] = []
+        if str(existing["region"] or "") != clean_region:
+            sets.append("region = ?")
+            params.append(clean_region)
+        if int(existing["capacity_slots"]) != int(capacity_slots):
+            sets.append("capacity_slots = ?")
+            params.append(int(capacity_slots))
+        if tags_json is not None and str(existing["tags_json"] or "{}") != tags_json:
+            sets.append("tags_json = ?")
+            params.append(tags_json)
+        if metadata_json is not None and str(existing["metadata_json"] or "{}") != metadata_json:
+            sets.append("metadata_json = ?")
+            params.append(metadata_json)
+        if sets:
+            sets.append("updated_at = ?")
+            params.append(utc_now_iso())
+            params.append(str(existing["host_id"]))
+            conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
+            conn.commit()
+            existing = conn.execute(
+                "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
+                (str(existing["host_id"]),),
+            ).fetchone()
         return dict(existing)
 
     clean_id = host_id.strip() if host_id else _fleet_id("host")
@@ -67,7 +101,7 @@ def register_fleet_host(
           observed_load, metadata_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, 'active', 0, ?, 0, ?, ?, ?)
         """,
-        (clean_id, clean_hostname, clean_region, tags_json, capacity_slots, metadata_json, now, now),
+        (clean_id, clean_hostname, clean_region, tags_json or "{}", capacity_slots, metadata_json or "{}", now, now),
     )
     conn.commit()
     return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (clean_id,)).fetchone())
@@ -158,6 +192,54 @@ def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
             for h in hosts
         ],
     }
+
+
+def reconcile_fleet_observed_loads(conn: sqlite3.Connection, *, host_id: str = "") -> list[dict[str, Any]]:
+    """Repair host load from active placement rows without deleting host registrations."""
+    clean_host_id = str(host_id or "").strip()
+    params: list[Any] = []
+    where = ""
+    if clean_host_id:
+        where = "WHERE h.host_id = ?"
+        params.append(clean_host_id)
+    rows = conn.execute(
+        f"""
+        SELECT
+          h.host_id,
+          h.hostname,
+          h.observed_load AS old_load,
+          COUNT(p.placement_id) AS active_load
+        FROM arclink_fleet_hosts h
+        LEFT JOIN arclink_deployment_placements p
+          ON p.host_id = h.host_id
+         AND p.status = 'active'
+        {where}
+        GROUP BY h.host_id, h.hostname, h.observed_load
+        """,
+        params,
+    ).fetchall()
+    repaired: list[dict[str, Any]] = []
+    now = utc_now_iso()
+    for row in rows:
+        old_load = int(row["old_load"])
+        active_load = int(row["active_load"])
+        if old_load == active_load:
+            continue
+        conn.execute(
+            "UPDATE arclink_fleet_hosts SET observed_load = ?, updated_at = ? WHERE host_id = ?",
+            (active_load, now, row["host_id"]),
+        )
+        repaired.append(
+            {
+                "host_id": str(row["host_id"]),
+                "hostname": str(row["hostname"]),
+                "old_load": old_load,
+                "observed_load": active_load,
+            }
+        )
+    if repaired:
+        conn.commit()
+    return repaired
 
 
 # ---------------------------------------------------------------------------

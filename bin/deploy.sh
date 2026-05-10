@@ -9308,9 +9308,10 @@ reset_control_runtime_database() {
     return 0
   fi
 
-  python3 - "$db_path" <<'PY'
+python3 - "$db_path" <<'PY'
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 db_path = Path(sys.argv[1])
@@ -9372,6 +9373,21 @@ try:
     if "sqlite_sequence" in existing and cleared:
         placeholders = ",".join("?" for _ in cleared)
         conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", cleared)
+    if "arclink_fleet_hosts" in existing and "arclink_deployment_placements" in existing:
+        now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        conn.execute(
+            """
+            UPDATE arclink_fleet_hosts
+               SET observed_load = (
+                     SELECT COUNT(*)
+                       FROM arclink_deployment_placements p
+                      WHERE p.host_id = arclink_fleet_hosts.host_id
+                        AND p.status = 'active'
+                   ),
+                   updated_at = ?
+            """,
+            (now,),
+        )
     conn.commit()
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("VACUUM")

@@ -50,6 +50,33 @@ def test_register_fleet_host() -> None:
     print("PASS test_register_fleet_host")
 
 
+def test_register_existing_fleet_host_updates_config_without_touching_load() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_rereg")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_rereg")
+    conn = memory_db(control)
+    host = fleet.register_fleet_host(
+        conn,
+        hostname="worker-1.example.test",
+        region="old",
+        capacity_slots=1,
+        metadata={"edge_target": "old.example.test"},
+    )
+    fleet.update_fleet_host(conn, host_id=host["host_id"], observed_load=1)
+    updated = fleet.register_fleet_host(
+        conn,
+        hostname="WORKER-1.EXAMPLE.TEST",
+        region="us-east",
+        capacity_slots=4,
+        metadata={"edge_target": "new.example.test", "executor": "local"},
+    )
+    expect(updated["host_id"] == host["host_id"], "existing host preserved")
+    expect(updated["region"] == "us-east", "region refreshed")
+    expect(int(updated["capacity_slots"]) == 4, "capacity refreshed")
+    expect(int(updated["observed_load"]) == 1, "load is not blindly reset during registration")
+    expect("new.example.test" in updated["metadata_json"], updated["metadata_json"])
+    print("PASS test_register_existing_fleet_host_updates_config_without_touching_load")
+
+
 def test_register_rejects_empty_hostname() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_empty")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_empty")
@@ -83,6 +110,24 @@ def test_fleet_capacity_summary() -> None:
     expect(summary["total_slots"] == 15, "total slots")
     expect(summary["available_slots"] == 15, "all available")
     print("PASS test_fleet_capacity_summary")
+
+
+def test_reconcile_fleet_observed_loads_repairs_stale_load() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_reconcile")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_reconcile")
+    conn = memory_db(control)
+    host = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=4)
+    fleet.update_fleet_host(conn, host_id=host["host_id"], observed_load=4)
+    repaired = fleet.reconcile_fleet_observed_loads(conn)
+    expect(len(repaired) == 1, str(repaired))
+    expect(repaired[0]["old_load"] == 4 and repaired[0]["observed_load"] == 0, str(repaired))
+    refreshed = fleet.get_fleet_host(conn, host_id=host["host_id"])
+    expect(int(refreshed["observed_load"]) == 0, str(refreshed))
+    placement = fleet.place_deployment(conn, deployment_id="dep_1")
+    expect(placement["host_id"] == host["host_id"], str(placement))
+    repaired_again = fleet.reconcile_fleet_observed_loads(conn)
+    expect(repaired_again == [], str(repaired_again))
+    print("PASS test_reconcile_fleet_observed_loads_repairs_stale_load")
 
 
 def test_place_deployment_chooses_healthy_host() -> None:
@@ -189,9 +234,11 @@ def test_placement_rejects_secret_required_tags() -> None:
 
 if __name__ == "__main__":
     test_register_fleet_host()
+    test_register_existing_fleet_host_updates_config_without_touching_load()
     test_register_rejects_empty_hostname()
     test_update_fleet_host_drain()
     test_fleet_capacity_summary()
+    test_reconcile_fleet_observed_loads_repairs_stale_load()
     test_place_deployment_chooses_healthy_host()
     test_place_deployment_rejects_saturated_hosts()
     test_place_deployment_rejects_draining_hosts()
@@ -200,4 +247,4 @@ if __name__ == "__main__":
     test_remove_placement()
     test_region_filter()
     test_placement_rejects_secret_required_tags()
-    print(f"\nAll 12 fleet tests passed.")
+    print(f"\nAll 14 fleet tests passed.")

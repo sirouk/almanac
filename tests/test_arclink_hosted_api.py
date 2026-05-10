@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -304,6 +306,60 @@ def test_admin_login_sets_session_cookies() -> None:
     print("PASS test_admin_login_sets_session_cookies")
 
 
+def test_admin_login_ignores_client_asserted_mfa() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_login_mfa_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_login_mfa_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_login_mfa_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_login_mfa_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_login_mfa",
+        email="login-mfa@example.test",
+        role="owner",
+        password="admin-test-password",
+    )
+    api.enroll_arclink_admin_totp_factor(
+        conn,
+        admin_id="admin_login_mfa",
+        secret_ref="secret://arclink/admin/admin_login_mfa/totp",
+        factor_id="totp_login_mfa",
+    )
+    api.verify_arclink_admin_totp_factor(conn, factor_id="totp_login_mfa")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/admin/login",
+        headers={},
+        body=json.dumps({"email": "login-mfa@example.test", "password": "admin-test-password", "mfa_verified": True}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}: {payload}")
+    session = payload["session"]
+    expect(not session.get("mfa_verified_at"), str(session))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/admin/actions",
+        headers=auth_headers(session, csrf=True),
+        body=json.dumps({
+            "action_type": "restart",
+            "target_kind": "deployment",
+            "target_id": prepared["deployment_id"],
+            "reason": "mfa should not be self-asserted",
+            "idempotency_key": "hosted-mfa-1",
+        }),
+        config=config,
+    )
+    expect(status == 401, f"expected MFA rejection got {status}: {payload}")
+    expect("MFA" in str(payload.get("error", "")), str(payload))
+    print("PASS test_admin_login_ignores_client_asserted_mfa")
+
+
 def test_session_revoke_requires_admin_auth_and_csrf() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_revoke_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_revoke_test")
@@ -554,6 +610,14 @@ def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
         model_id="model-b",
     )
     session_a = api.create_arclink_user_session(conn, user_id=user_a["user_id"], session_id="usess_creds_a")
+    secret_tmp = tempfile.TemporaryDirectory()
+    old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
+    os.environ["ARCLINK_SECRET_STORE_DIR"] = secret_tmp.name
+    dashboard_secret_ref = f"secret://arclink/dashboard/{user_a['deployment_id']}/password"
+    dashboard_secret_dir = Path(secret_tmp.name) / user_a["deployment_id"]
+    dashboard_secret_dir.mkdir(parents=True)
+    dashboard_secret_path = dashboard_secret_dir / f"{hashlib.sha256(dashboard_secret_ref.encode('utf-8')).hexdigest()}.secret"
+    dashboard_secret_path.write_text("arc_dashboard_test_password\n", encoding="utf-8")
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET", path="/api/v1/user/credentials", headers={}, config=config,
@@ -585,7 +649,14 @@ def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
     expect("secret://masked" in rendered, rendered)
     expect("dashboard_password" in rendered, rendered)
     expect(user_b["deployment_id"] not in rendered and user_b["user_id"] not in rendered, rendered)
-    handoff_id = credentials[0]["handoff_id"]
+    dashboard_credential = next(item for item in credentials if item["credential_kind"] == "dashboard_password")
+    provider_credential = next(item for item in credentials if item["credential_kind"] == "chutes_api_key")
+    expect(dashboard_credential["raw_secret"] == "arc_dashboard_test_password", str(dashboard_credential))
+    expect(dashboard_credential["reveal_mode"] == "user_dashboard", str(dashboard_credential))
+    expect(bool(dashboard_credential["revealed_at"]), str(dashboard_credential))
+    expect(provider_credential["raw_secret"] == "", str(provider_credential))
+    expect(provider_credential["reveal_mode"] == "not_revealable_from_user_api", str(provider_credential))
+    handoff_id = dashboard_credential["handoff_id"]
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -623,6 +694,11 @@ def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
     rendered_after = json.dumps(payload, sort_keys=True)
     expect(handoff_id not in rendered_after, rendered_after)
     expect(payload["removed_count"] >= 1, str(payload))
+    if old_secret_store is None:
+        os.environ.pop("ARCLINK_SECRET_STORE_DIR", None)
+    else:
+        os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
+    secret_tmp.cleanup()
 
     print("PASS test_user_credentials_are_acknowledged_and_removed_after_storage")
 
@@ -2840,6 +2916,7 @@ def main() -> int:
     test_safe_error_shapes_never_leak_internal_details()
     test_request_id_propagation_and_cors()
     test_admin_login_sets_session_cookies()
+    test_admin_login_ignores_client_asserted_mfa()
     test_session_revoke_requires_admin_auth_and_csrf()
     test_stripe_webhook_route_rejects_without_secret()
     test_user_billing_route_returns_entitlement_and_subscriptions()
@@ -2891,7 +2968,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 57 ArcLink hosted API tests")
+    print("PASS all 59 ArcLink hosted API tests")
     return 0
 
 

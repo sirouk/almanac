@@ -186,13 +186,32 @@ printf 'deleted_pdf_dir=%s/%s\\n' "$vault_watch_need_qmd" "$vault_watch_need_pdf
     print("PASS test_directory_events_only_trigger_pdf_reconcile_when_needed")
 
 
+def test_qmd_pending_embeddings_count_reads_qmd_status_output() -> None:
+    body = COMMON_SH.read_text(encoding="utf-8")
+    snippet = extract(body, "qmd_pending_embeddings_count() {", "\nconfigure_qmd_collections() {")
+    script = f"""
+ensure_nvm() {{ :; }}
+qmd() {{
+  printf 'Index: arclink\\nPending: 7 need embedding\\nEmbedded: 22\\n'
+}}
+QMD_INDEX_NAME=arclink
+{snippet}
+printf 'pending=%s\\n' "$(qmd_pending_embeddings_count)"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"qmd pending count case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+    expect("pending=7" in result.stdout, result.stdout)
+    print("PASS test_qmd_pending_embeddings_count_reads_qmd_status_output")
+
+
 def main() -> int:
     test_vault_watch_defaults_to_low_latency_debounce()
     test_vault_watch_accepts_fractional_debounce()
     test_vault_watch_caps_continuous_burst_batches()
     test_vault_watch_requests_async_memory_synthesis_without_blocking()
     test_directory_events_only_trigger_pdf_reconcile_when_needed()
-    print("PASS all 5 vault watch regression tests")
+    test_qmd_pending_embeddings_count_reads_qmd_status_output()
+    print("PASS all 6 vault watch regression tests")
     return 0
 
 

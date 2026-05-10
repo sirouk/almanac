@@ -28,6 +28,7 @@ from arclink_control import (
 _BATCHER_KICK_LOCK = threading.Lock()
 _BATCHER_KICK_TIMER: threading.Timer | None = None
 _BATCHER_KICK_DEBOUNCE_SECONDS = 1.0
+MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 
 
 def _spawn_batcher_now() -> None:
@@ -313,7 +314,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/notion/webhook":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            self._send_json({"error": "invalid content length"}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if length < 0 or length > MAX_WEBHOOK_BODY_BYTES:
+            self._send_json({"error": "webhook body too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return
         raw_body = self.rfile.read(length)
         try:
             payload = json.loads(raw_body.decode("utf-8") or "{}")

@@ -173,6 +173,16 @@ def test_webhook_module_exposes_setting_key_constant() -> None:
     print("PASS test_webhook_module_exposes_setting_key_constant")
 
 
+def test_webhook_rejects_oversized_body_before_reading_payload() -> None:
+    body = WEBHOOK_PY.read_text(encoding="utf-8")
+    expect("MAX_WEBHOOK_BODY_BYTES = 256 * 1024" in body, "expected explicit Notion webhook body cap")
+    limit_idx = body.index("if length < 0 or length > MAX_WEBHOOK_BODY_BYTES:")
+    read_idx = body.index("raw_body = self.rfile.read(length)")
+    expect(limit_idx < read_idx, "webhook must reject oversized Content-Length before reading request body")
+    expect("HTTPStatus.REQUEST_ENTITY_TOO_LARGE" in body[limit_idx:read_idx], "expected 413 response for oversized webhook body")
+    print("PASS test_webhook_rejects_oversized_body_before_reading_payload")
+
+
 def test_signed_verification_token_post_is_accepted() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -262,11 +272,12 @@ def test_kick_ssot_batcher_debounces_bursts_and_invokes_systemctl() -> None:
 
 def main() -> int:
     test_webhook_module_exposes_setting_key_constant()
+    test_webhook_rejects_oversized_body_before_reading_payload()
     test_handle_verification_token_post_refuses_overwrite_until_reset()
     test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm()
     test_signed_verification_token_post_is_accepted()
     test_kick_ssot_batcher_debounces_bursts_and_invokes_systemctl()
-    print("PASS all 5 ArcLink notion webhook regression tests")
+    print("PASS all 6 ArcLink notion webhook regression tests")
     return 0
 
 

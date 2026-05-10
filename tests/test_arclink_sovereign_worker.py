@@ -67,6 +67,7 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
         executor_adapter="fake",
         batch_size=5,
         max_attempts=3,
+        running_stale_seconds=60,
         register_local_host=register_local,
         local_hostname="worker-1.example.test",
         local_ssh_host="",
@@ -335,6 +336,87 @@ def test_sovereign_worker_fails_closed_without_fleet_capacity() -> None:
     print("PASS test_sovereign_worker_fails_closed_without_fleet_capacity")
 
 
+def test_sovereign_worker_repairs_stale_local_host_load() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_stale_load")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_sovereign_stale_load")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_stale_load")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    host = fleet.register_fleet_host(conn, hostname="worker-1.example.test", region="old", capacity_slots=2)
+    fleet.update_fleet_host(conn, host_id=host["host_id"], observed_load=2)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    expect(results[0]["status"] == "applied", str(results))
+    refreshed = conn.execute(
+        "SELECT region, capacity_slots, observed_load FROM arclink_fleet_hosts WHERE host_id = ?",
+        (host["host_id"],),
+    ).fetchone()
+    expect(refreshed["region"] == "us-east", str(dict(refreshed)))
+    expect(int(refreshed["capacity_slots"]) == 2, str(dict(refreshed)))
+    expect(int(refreshed["observed_load"]) == 1, str(dict(refreshed)))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(dep["status"] == "active", str(dict(dep)))
+    print("PASS test_sovereign_worker_repairs_stale_local_host_load")
+
+
+def test_sovereign_worker_recovers_stale_running_job() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_stale_running")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_stale_running")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    job = worker_mod._ensure_apply_job(conn, deployment_id="dep_1")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running")
+    conn.execute(
+        "UPDATE arclink_provisioning_jobs SET started_at = '2000-01-01T00:00:00+00:00' WHERE job_id = ?",
+        (job["job_id"],),
+    )
+    conn.execute("UPDATE arclink_deployments SET status = 'provisioning' WHERE deployment_id = 'dep_1'")
+    conn.commit()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    expect(results[0]["status"] == "applied", str(results))
+    refreshed = conn.execute("SELECT status, attempt_count, error FROM arclink_provisioning_jobs WHERE job_id = ?", (job["job_id"],)).fetchone()
+    expect(refreshed["status"] == "succeeded", str(dict(refreshed)))
+    expect(int(refreshed["attempt_count"]) == 2, str(dict(refreshed)))
+    event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
+    expect("sovereign_provisioning_recovered_stale_running_job" in event_types, str(event_types))
+    print("PASS test_sovereign_worker_recovers_stale_running_job")
+
+
+def test_sovereign_worker_recovers_succeeded_job_without_handoff() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_succeeded_handoff")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_sovereign_succeeded_handoff")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_succeeded_handoff")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    host = fleet.register_fleet_host(
+        conn,
+        hostname="worker-1.example.test",
+        region="us-east",
+        capacity_slots=2,
+        metadata={"edge_target": "edge.example.test"},
+    )
+    fleet.place_deployment(conn, deployment_id="dep_1")
+    job = worker_mod._ensure_apply_job(conn, deployment_id="dep_1")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="succeeded")
+    conn.execute("UPDATE arclink_deployments SET status = 'provisioning' WHERE deployment_id = 'dep_1'")
+    conn.commit()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    expect(results == [], str(results))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(dep["status"] == "active", str(dict(dep)))
+    event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
+    expect("user_handoff_ready" in event_types, str(event_types))
+    expect("public_bot:vessel_online_ping_queued" in event_types, str(event_types))
+    queued = conn.execute("SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()["c"]
+    expect(int(queued) == 1, f"expected recovered handoff notification, got {queued}")
+    refreshed = fleet.get_fleet_host(conn, host_id=host["host_id"])
+    expect(int(refreshed["observed_load"]) == 1, str(refreshed))
+    print("PASS test_sovereign_worker_recovers_succeeded_job_without_handoff")
+
+
 def test_notion_webhook_secret_is_generated_without_notion_token() -> None:
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_notion_secret")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -359,5 +441,8 @@ if __name__ == "__main__":
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
+    test_sovereign_worker_repairs_stale_local_host_load()
+    test_sovereign_worker_recovers_stale_running_job()
+    test_sovereign_worker_recovers_succeeded_job_without_handoff()
     test_notion_webhook_secret_is_generated_without_notion_token()
-    print("\nAll 6 Sovereign worker tests passed.")
+    print("\nAll 9 Sovereign worker tests passed.")

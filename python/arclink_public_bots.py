@@ -1877,8 +1877,8 @@ def _add_agent_reply(
         session_id=str(extra_session["session_id"]),
         stripe_client=stripe_client,
         price_id=price_id,
-        success_url=f"{root}/checkout/success?kind=additional_agent",
-        cancel_url=f"{root}/checkout/cancel?kind=additional_agent",
+        success_url=f"{root}/checkout/success?kind=additional_agent&session={str(extra_session['session_id'])}",
+        cancel_url=f"{root}/checkout/cancel?kind=additional_agent&session={str(extra_session['session_id'])}",
         base_domain=base_domain or default_base_domain({}),
     )
     return _reply(
@@ -2662,8 +2662,8 @@ def handle_arclink_public_bot_turn(
             session_id=str(session["session_id"]),
             stripe_client=stripe_client,
             price_id=checkout_price_id,
-            success_url=f"{root}/checkout/success",
-            cancel_url=f"{root}/checkout/cancel",
+            success_url=f"{root}/checkout/success?session={str(session['session_id'])}",
+            cancel_url=f"{root}/checkout/cancel?session={str(session['session_id'])}",
             base_domain=base_domain or default_base_domain({}),
         )
         plan_label = _plan_label(selected_plan)

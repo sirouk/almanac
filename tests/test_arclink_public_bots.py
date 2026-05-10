@@ -168,6 +168,9 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     )
     expect({started.session_id, named.session_id, planned.session_id, checkout.session_id} == {started.session_id}, "session changed")
     expect(checkout.action == "open_checkout" and checkout.checkout_url.startswith("https://stripe.test/checkout/"), str(checkout))
+    checkout_session = stripe.checkout_sessions[checkout.checkout_url.rsplit("/", 1)[1]]
+    expect(f"/checkout/success?session={checkout.session_id}" in checkout_session["success_url"], str(checkout_session))
+    expect(f"/checkout/cancel?session={checkout.session_id}" in checkout_session["cancel_url"], str(checkout_session))
     expect(checkout.buttons and checkout.buttons[0].label == "Hire Sovereign - $199/month", str(checkout.buttons))
     session = conn.execute(
         "SELECT channel, channel_identity, status, checkout_state, email_hint, display_name_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
@@ -609,6 +612,8 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     expect(add.checkout_url.startswith("https://stripe.test/checkout/"), str(add))
     checkout = stripe.checkout_sessions[add.checkout_url.rsplit("/", 1)[1]]
     expect(checkout["price_id"] == "price_additional_agent", str(checkout))
+    expect(f"kind=additional_agent&session={add.session_id}" in checkout["success_url"], str(checkout))
+    expect(f"kind=additional_agent&session={add.session_id}" in checkout["cancel_url"], str(checkout))
     add_session = conn.execute(
         "SELECT user_id, selected_plan_id, metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
         (add.session_id,),

@@ -965,6 +965,48 @@ def _credential_label(kind: str) -> str:
     }.get(kind, kind.replace("_", " ").title())
 
 
+def _secret_store_root() -> Path:
+    configured = str(os.environ.get("ARCLINK_SECRET_STORE_DIR") or "").strip()
+    if configured:
+        return Path(configured).resolve()
+    state_dir = str(os.environ.get("STATE_DIR") or "").strip()
+    if state_dir:
+        return (Path(state_dir) / "sovereign-secrets").resolve()
+    return Path("/home/arclink/arclink/arclink-priv/state/sovereign-secrets").resolve()
+
+
+def _dashboard_password_secret_path(*, deployment_id: str, secret_ref: str) -> Path | None:
+    clean_deployment = str(deployment_id or "").strip()
+    clean_ref = str(secret_ref or "").strip()
+    if not clean_deployment or clean_ref != f"secret://arclink/dashboard/{clean_deployment}/password":
+        return None
+    root = _secret_store_root()
+    deployment_root = (root / clean_deployment).resolve()
+    path = (deployment_root / f"{hashlib.sha256(clean_ref.encode('utf-8')).hexdigest()}.secret").resolve()
+    try:
+        path.relative_to(deployment_root)
+    except ValueError:
+        return None
+    return path
+
+
+def _resolve_revealable_credential_secret(row: Mapping[str, Any]) -> str:
+    kind = str(row.get("credential_kind") or "").strip()
+    if kind != "dashboard_password":
+        return ""
+    path = _dashboard_password_secret_path(
+        deployment_id=str(row.get("deployment_id") or ""),
+        secret_ref=str(row.get("secret_ref") or ""),
+    )
+    if path is None or not path.is_file():
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return raw if raw.startswith("arc_") else ""
+
+
 def _deployment_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
     refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
     defaults = {
@@ -992,6 +1034,11 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
         if kind not in ARCLINK_CREDENTIAL_HANDOFF_KINDS:
             continue
         _reject_secret_material({"secret_ref": secret_ref})
+        delivery_hint = (
+            "Copy the dashboard password shown here into your password manager, then acknowledge storage."
+            if kind == "dashboard_password"
+            else "This provider or integration credential is managed through ArcLink's scoped secret rail; ask Raven or the operator for a rotation workflow."
+        )
         conn.execute(
             """
             INSERT INTO arclink_credential_handoffs (
@@ -1013,7 +1060,7 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
                 kind,
                 _credential_label(kind),
                 secret_ref,
-                "Copy the credential from the secure completion bundle into your password manager, then acknowledge storage here.",
+                delivery_hint,
                 now,
                 now,
             ),
@@ -1021,9 +1068,10 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
     conn.commit()
 
 
-def _public_credential_handoff(row: Mapping[str, Any]) -> dict[str, Any]:
+def _public_credential_handoff(row: Mapping[str, Any], *, raw_secret: str = "") -> dict[str, Any]:
     status = str(row.get("status") or "")
     removed = status == "removed" or bool(str(row.get("removed_at") or ""))
+    revealable = bool(raw_secret) and not removed
     payload = {
         "handoff_id": str(row.get("handoff_id") or ""),
         "deployment_id": str(row.get("deployment_id") or ""),
@@ -1035,11 +1083,11 @@ def _public_credential_handoff(row: Mapping[str, Any]) -> dict[str, Any]:
         "removed_at": str(row.get("removed_at") or ""),
         "delivery_hint": "" if removed else str(row.get("delivery_hint") or ""),
         "copy_guidance": "" if removed else "Store it in a password manager; do not paste it into shared channels.",
-        "raw_secret": "",
+        "raw_secret": raw_secret if revealable else "",
     }
     if not removed:
         payload["secret_ref"] = mask_secret_ref(str(row.get("secret_ref") or ""))
-        payload["reveal_mode"] = "secure_completion_bundle"
+        payload["reveal_mode"] = "user_dashboard" if revealable else "not_revealable_from_user_api"
     return payload
 
 
@@ -1079,15 +1127,37 @@ def read_user_credentials_api(
         """,
         (target_user, clean_deployment, clean_deployment),
     ).fetchall()
-    credentials = [_public_credential_handoff(rowdict(row)) for row in rows if str(row["status"] or "") != "removed"]
+    credentials = []
+    revealed_ids: list[str] = []
+    now = utc_now_iso()
+    for row in rows:
+        row_data = rowdict(row)
+        if str(row_data.get("status") or "") == "removed":
+            continue
+        raw_secret = _resolve_revealable_credential_secret(row_data)
+        if raw_secret and not str(row_data.get("revealed_at") or ""):
+            row_data["revealed_at"] = now
+            revealed_ids.append(str(row_data.get("handoff_id") or ""))
+        credentials.append(_public_credential_handoff(row_data, raw_secret=raw_secret))
+    if revealed_ids:
+        conn.executemany(
+            """
+            UPDATE arclink_credential_handoffs
+            SET revealed_at = CASE WHEN revealed_at = '' THEN ? ELSE revealed_at END,
+                updated_at = ?
+            WHERE handoff_id = ?
+            """,
+            [(now, now, hid) for hid in revealed_ids],
+        )
+        conn.commit()
     removed_count = sum(1 for row in rows if str(row["status"] or "") == "removed")
     return ArcLinkApiResponse(
         status=200,
         payload={
             "instructions": {
-                "copy": "Copy each credential from the secure completion bundle into your password manager.",
+                "copy": "Copy any revealed dashboard credential into your password manager.",
                 "acknowledge": "After acknowledgement, ArcLink removes the handoff from future user API responses.",
-                "reissue": "Ask the operator to rotate or reissue a removed credential.",
+                "reissue": "Ask Raven or the operator to rotate or reissue a removed credential.",
             },
             "credentials": credentials,
             "removed_count": removed_count,

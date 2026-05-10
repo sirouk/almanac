@@ -101,14 +101,6 @@ export default function OnboardingPage() {
     }
   }, [step, sessionId, claimToken, cancelToken, name, email, planId, checkoutUrl]);
 
-  function clearResume() {
-    try {
-      window.localStorage.removeItem(RESUME_KEY);
-    } catch {
-      // ignore
-    }
-  }
-
   function webContactId() {
     const key = "arclink_web_contact_id";
     const existing = window.localStorage.getItem(key);
@@ -345,7 +337,6 @@ export default function OnboardingPage() {
                 </p>
                 <a
                   href={checkoutUrl}
-                  onClick={clearResume}
                   className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
                 >
                   Complete The Hire

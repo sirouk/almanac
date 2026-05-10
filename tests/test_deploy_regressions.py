@@ -2106,6 +2106,8 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     expect("arclink_channel_pairing_codes" in text, "expected reset to clear channel pairing codes")
     expect("arclink_users" in text, "expected reset to clear client users")
     expect("arclink_deployments" in text, "expected reset to clear deployments")
+    expect("UPDATE arclink_fleet_hosts" in text, "expected reset to reconcile preserved fleet host load")
+    expect("observed_load =" in text, "expected reset to clear stale fleet saturation")
     expect("DELETE FROM arclink_admins" not in text, "reset must not delete admin accounts")
     expect("DELETE FROM arclink_fleet_hosts" not in text, "reset must not delete fleet hosts")
     print("PASS test_control_runtime_reset_is_backup_first_and_guarded")

@@ -22,7 +22,7 @@ from wsgiref.simple_server import make_server
 
 from arclink_adapters import FakeStripeClient, StripeWebhookError, resolve_stripe_client
 from arclink_chutes import renewal_lifecycle_for_billing_state
-from arclink_control import Config, connect_db, queue_notification
+from arclink_control import Config, append_arclink_event, connect_db, queue_notification
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
     GENERIC_ARCLINK_API_ERROR,
@@ -355,7 +355,7 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     """
     row = conn.execute(
         """
-        SELECT channel, channel_identity, display_name_hint
+        SELECT session_id, channel, channel_identity, display_name_hint
         FROM arclink_onboarding_sessions
         WHERE user_id = ?
           AND channel IN ('telegram', 'discord')
@@ -367,6 +367,21 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     ).fetchone()
     if row is None:
         return None
+    session_id = str(row["session_id"] or "").strip()
+    if session_id:
+        existing = conn.execute(
+            """
+            SELECT 1
+            FROM arclink_events
+            WHERE subject_kind = 'onboarding_session'
+              AND subject_id = ?
+              AND event_type = 'public_bot:payment_cleared_ping_queued'
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+        if existing is not None:
+            return None
     channel = str(row["channel"] or "").strip().lower()
     target_id = _public_bot_target_id(channel=channel, channel_identity=str(row["channel_identity"] or ""))
     if channel not in {"telegram", "discord"} or not target_id:
@@ -386,6 +401,14 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
         message=message,
         extra=_public_bot_ping_actions(),
     )
+    if session_id:
+        append_arclink_event(
+            conn,
+            subject_kind="onboarding_session",
+            subject_id=session_id,
+            event_type="public_bot:payment_cleared_ping_queued",
+            metadata={"notification_id": nid, "channel": channel},
+        )
     logger.info(
         "paid_ping_queued user_id=%s channel=%s notification_id=%d request_id=%s",
         user_id, channel, nid, request_id,
@@ -489,7 +512,7 @@ def _handle_admin_login(
         email=str(body.get("email") or ""),
         password=str(body.get("password") or ""),
         login_subject=str(body.get("login_subject") or body.get("email") or ""),
-        mfa_verified=bool(body.get("mfa_verified")),
+        mfa_verified=False,
         metadata=body.get("metadata"),
     )
     cookies = _session_cookies(result.payload.get("session", {}), kind="admin", config=config)

@@ -26,9 +26,11 @@ from arclink_control import (
     append_arclink_event,
     connect_db,
     create_arclink_provisioning_job,
+    parse_utc_iso,
     queue_notification,
     transition_arclink_provisioning_job,
     upsert_arclink_service_health,
+    utc_now,
     utc_now_iso,
 )
 from arclink_executor import (
@@ -45,7 +47,7 @@ from arclink_executor import (
     SshDockerComposeRunner,
     SubprocessDockerComposeRunner,
 )
-from arclink_fleet import ArcLinkFleetError, place_deployment, register_fleet_host
+from arclink_fleet import ArcLinkFleetError, place_deployment, reconcile_fleet_observed_loads, register_fleet_host
 from arclink_ingress import persist_arclink_dns_records
 from arclink_provisioning import (
     ARCLINK_PROVISIONING_SERVICE_NAMES,
@@ -79,6 +81,7 @@ class SovereignWorkerConfig:
     executor_adapter: str
     batch_size: int
     max_attempts: int
+    running_stale_seconds: int
     register_local_host: bool
     local_hostname: str
     local_ssh_host: str
@@ -164,6 +167,7 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
         executor_adapter=str(source.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower(),
         batch_size=max(1, int(source.get("ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE", "5"))),
         max_attempts=max(1, int(source.get("ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS", "5"))),
+        running_stale_seconds=max(60, int(source.get("ARCLINK_SOVEREIGN_RUNNING_STALE_SECONDS", "900"))),
         register_local_host=_truthy(source.get("ARCLINK_REGISTER_LOCAL_FLEET_HOST", "0")),
         local_hostname=local_hostname,
         local_ssh_host=str(source.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip().lower(),
@@ -201,6 +205,9 @@ def process_sovereign_batch(
             capacity_slots=worker.local_capacity_slots,
             metadata=local_metadata,
         )
+    reconcile_fleet_observed_loads(conn)
+    recover_stale_sovereign_jobs(conn, stale_seconds=worker.running_stale_seconds)
+    recover_succeeded_sovereign_handoffs(conn, worker=worker)
     rows = conn.execute(
         """
         SELECT d.*
@@ -223,6 +230,84 @@ def process_sovereign_batch(
     for row in rows:
         results.append(process_sovereign_deployment(conn, deployment=dict(row), worker=worker, executor=executor))
     return results
+
+
+def recover_stale_sovereign_jobs(conn: sqlite3.Connection, *, stale_seconds: int = 900) -> list[dict[str, Any]]:
+    threshold = max(60, int(stale_seconds))
+    cutoff = utc_now().timestamp() - threshold
+    rows = conn.execute(
+        """
+        SELECT j.job_id, j.deployment_id, j.started_at
+        FROM arclink_provisioning_jobs j
+        JOIN arclink_deployments d ON d.deployment_id = j.deployment_id
+        WHERE j.job_kind = ?
+          AND j.status = 'running'
+          AND d.status = 'provisioning'
+        """,
+        (SOLO_JOB_KIND,),
+    ).fetchall()
+    recovered: list[dict[str, Any]] = []
+    for row in rows:
+        started = parse_utc_iso(str(row["started_at"] or ""))
+        if started is None or started.timestamp() > cutoff:
+            continue
+        error = f"stale Sovereign provisioning job recovered after {threshold} seconds"
+        transition_arclink_provisioning_job(conn, job_id=str(row["job_id"]), status="failed", error=error)
+        _mark_deployment_status(conn, deployment_id=str(row["deployment_id"]), status="provisioning_failed")
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=str(row["deployment_id"]),
+            event_type="sovereign_provisioning_recovered_stale_running_job",
+            metadata={"job_id": str(row["job_id"]), "error": error},
+        )
+        recovered.append({"job_id": str(row["job_id"]), "deployment_id": str(row["deployment_id"]), "status": "failed"})
+    return recovered
+
+
+def recover_succeeded_sovereign_handoffs(
+    conn: sqlite3.Connection,
+    *,
+    worker: SovereignWorkerConfig,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT d.*, j.job_id
+        FROM arclink_deployments d
+        JOIN arclink_provisioning_jobs j
+          ON j.deployment_id = d.deployment_id
+         AND j.job_kind = ?
+         AND j.status = 'succeeded'
+        WHERE d.status IN ('provisioning', 'active')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM arclink_events e
+            WHERE e.subject_kind = 'deployment'
+              AND e.subject_id = d.deployment_id
+              AND e.event_type = 'user_handoff_ready'
+          )
+        ORDER BY d.updated_at ASC, d.deployment_id ASC
+        """,
+        (SOLO_JOB_KIND,),
+    ).fetchall()
+    recovered: list[dict[str, Any]] = []
+    for row in rows:
+        deployment = dict(row)
+        deployment_id = str(deployment["deployment_id"])
+        job_id = str(deployment["job_id"])
+        if str(deployment.get("status") or "") != "active":
+            _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
+        urls = _access_urls_for_deployment(conn, deployment=deployment, worker=worker)
+        _queue_vessel_online_notifications(conn, deployment_id=deployment_id, urls=urls)
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="user_handoff_ready",
+            metadata={"job_id": job_id, "urls": urls, "recovered": True},
+        )
+        recovered.append({"deployment_id": deployment_id, "job_id": job_id, "status": "handoff_recovered"})
+    return recovered
 
 
 def process_sovereign_deployment(
@@ -499,6 +584,44 @@ def _executor_for_host(
             "set ARCLINK_EXECUTOR_ADAPTER to fake, local, or ssh before enabling the Sovereign provisioner"
         )
     return ArcLinkExecutor(config=config, secret_resolver=resolver, docker_runner=runner)
+
+
+def _access_urls_for_deployment(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+) -> dict[str, str]:
+    host_meta: dict[str, Any] = {}
+    placement = conn.execute(
+        """
+        SELECT h.metadata_json
+        FROM arclink_deployment_placements p
+        JOIN arclink_fleet_hosts h ON h.host_id = p.host_id
+        WHERE p.deployment_id = ?
+          AND p.status = 'active'
+        ORDER BY p.placed_at DESC
+        LIMIT 1
+        """,
+        (str(deployment["deployment_id"]),),
+    ).fetchone()
+    if placement is not None:
+        host_meta = json_loads_safe(str(placement["metadata_json"] or "{}"))
+    intent = render_arclink_provisioning_intent(
+        conn,
+        deployment_id=str(deployment["deployment_id"]),
+        base_domain=worker.base_domain,
+        edge_target=str(host_meta.get("edge_target") or worker.edge_target),
+        state_root_base=str(host_meta.get("state_root_base") or worker.state_root_base),
+        ingress_mode=worker.ingress_mode,
+        tailscale_dns_name=worker.tailscale_dns_name,
+        tailscale_host_strategy=worker.tailscale_host_strategy,
+        tailscale_notion_path=worker.tailscale_notion_path,
+        env=worker.env,
+    )
+    access = intent.get("access") if isinstance(intent.get("access"), Mapping) else {}
+    urls = access.get("urls") if isinstance(access.get("urls"), Mapping) else {}
+    return {str(k): str(v) for k, v in urls.items()}
 
 
 def _secret_refs(intent: Mapping[str, Any]) -> list[str]:

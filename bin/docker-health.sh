@@ -117,6 +117,16 @@ check_optional_tcp_with_fallback() {
   warn "$label could not be reached at $primary_host:$primary_port or $fallback_host:$fallback_port"
 }
 
+check_control_ingress_https() {
+  local mode="${ARCLINK_INGRESS_MODE:-domain}"
+  local tail_url="${ARCLINK_TAILSCALE_CONTROL_URL:-}"
+  if [[ "$mode" == "tailscale" && "$tail_url" == https://* ]]; then
+    pass "Traefik ingress (HTTPS) is delegated to the configured Tailscale/Funnel route"
+    return
+  fi
+  check_optional_tcp "control-ingress" "443" "Traefik ingress (HTTPS)"
+}
+
 check_dir "$ARCLINK_PRIV_DIR" "Docker private state"
 check_dir "$VAULT_DIR" "Docker vault"
 check_dir "$STATE_DIR" "Docker state"
@@ -131,7 +141,7 @@ check_optional_tcp_with_fallback "qmd-mcp" "${QMD_MCP_CONTAINER_PORT:-8181}" "ho
 check_tcp "postgres" "5432" "Postgres"
 check_tcp "redis" "6379" "Redis"
 check_tcp "control-ingress" "8080" "Traefik ingress (HTTP)"
-check_optional_tcp "control-ingress" "443" "Traefik ingress (HTTPS)"
+check_control_ingress_https
 
 check_docker_refresh_jobs() {
   local output=""

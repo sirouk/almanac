@@ -760,6 +760,14 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     raise RuntimeError("model did not return a JSON object")
 
 
+def _should_try_local_fallback_after_model_error(exc: Exception) -> bool:
+    message = str(exc or "").casefold()
+    return (
+        "model did not return a json object" in message
+        or "memory synthesis llm returned no choices" in message
+    )
+
+
 def _candidate_prompt(candidate: SourceCandidate, settings: SynthesisSettings) -> str:
     prompt_payload = _payload_for_prompt(candidate.payload)
     parts = _source_text_budget(
@@ -1373,9 +1381,11 @@ def run_once(
             ]
 
             synthesized = 0
+            fallback_synthesized = 0
             failed = 0
             changed = stale_count
             errors: list[str] = []
+            fallback_reasons: list[str] = []
             for candidate in to_process:
                 try:
                     card_json = _normalize_card_payload(model_client(candidate, settings))
@@ -1391,6 +1401,28 @@ def run_once(
                         changed += 1
                     synthesized += 1
                 except Exception as exc:  # noqa: BLE001
+                    if _settings_has_llm_config(settings) and _should_try_local_fallback_after_model_error(exc):
+                        try:
+                            card_json = _normalize_card_payload(local_non_llm_fallback_model(candidate, settings))
+                            card_text = render_card_text(candidate, card_json)
+                            if _upsert_card(
+                                conn,
+                                candidate,
+                                settings,
+                                status="ok",
+                                card_json=card_json,
+                                card_text=card_text,
+                                last_error=f"llm fallback after: {exc}",
+                            ):
+                                changed += 1
+                            synthesized += 1
+                            fallback_synthesized += 1
+                            fallback_reasons.append(
+                                f"{candidate.source_kind}:{candidate.source_key}: {_clean_space(exc, limit=160)}"
+                            )
+                            continue
+                        except Exception as fallback_exc:  # noqa: BLE001
+                            exc = fallback_exc
                     failed += 1
                     errors.append(f"{candidate.source_kind}:{candidate.source_key}: {_clean_space(exc, limit=160)}")
                     preserved_text = ""
@@ -1423,6 +1455,7 @@ def run_once(
                         "source": "memory-synth",
                         "changed_cards": changed,
                         "synthesized": synthesized,
+                        "fallback_synthesized": fallback_synthesized,
                         "failed": failed,
                         "stale": stale_count,
                     },
@@ -1438,13 +1471,14 @@ def run_once(
                 status=status,
                 note=(
                     f"candidates={len(candidates)}; synthesized={synthesized}; skipped={skipped}; "
-                    f"changed={changed}; stale={stale_count}; failed={failed}"
+                    f"fallback={fallback_synthesized}; changed={changed}; stale={stale_count}; failed={failed}"
                 ),
             )
             result = {
                 "status": status,
                 "changed": changed,
                 "synthesized": synthesized,
+                "fallback_synthesized": fallback_synthesized,
                 "skipped": skipped,
                 "failed": failed,
                 "stale": stale_count,
@@ -1452,6 +1486,7 @@ def run_once(
                 "model": settings.model,
                 "prompt_version": PROMPT_VERSION,
                 "errors": errors[:8],
+                "fallback_reasons": fallback_reasons[:8],
                 "finished_at": utc_now_iso(),
             }
             _write_status(settings, result)

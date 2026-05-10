@@ -493,6 +493,10 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect('"redis" "6379"' in body, body)
     expect("check_docker_agent_mcp_auth" in body, body)
     expect('"control-ingress" "8080" "Traefik ingress (HTTP)"' in body, body)
+    expect("check_control_ingress_https()" in body, body)
+    expect('ARCLINK_INGRESS_MODE:-domain' in body, body)
+    expect('ARCLINK_TAILSCALE_CONTROL_URL:-' in body, body)
+    expect("configured Tailscale/Funnel route" in body, body)
     expect('status in ("warn", "warning", "disabled")' in body, body)
     for job in (
         "control-provisioner",

@@ -420,6 +420,74 @@ def test_memory_synthesizer_local_fallback_runs_without_llm_config() -> None:
             os.environ.update(old_env)
 
 
+def test_memory_synthesizer_falls_back_when_llm_returns_malformed_json() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = base_config(root)
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ.update(values)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                insert_agent(conn, root)
+                seed_sources(root, conn)
+                control.reload_vault_definitions(conn, cfg)
+                conn.execute("DELETE FROM notification_outbox")
+                conn.commit()
+
+            calls: list[str] = []
+
+            def malformed_model(candidate: synth.SourceCandidate, settings: synth.SynthesisSettings) -> dict[str, object]:
+                calls.append(f"{candidate.source_kind}:{candidate.source_key}")
+                raise RuntimeError("model did not return a JSON object")
+
+            first = synth.run_once(cfg, model_client=malformed_model)
+            expect(first["status"] == "ok", str(first))
+            expect(first["failed"] == 0, str(first))
+            expect(first["synthesized"] >= 4, str(first))
+            expect(first["fallback_synthesized"] >= 4, str(first))
+            expect(first["model"] == "vision-model-test", str(first))
+            expect(first["errors"] == [], str(first))
+            expect(len(first["fallback_reasons"]) >= 4, str(first))
+            expect(any(call == "vault:Research" for call in calls), calls)
+
+            with control.connect_db(cfg) as conn:
+                card_rows = conn.execute(
+                    """
+                    SELECT source_kind, source_key, status, card_json, card_text, model, last_error
+                    FROM memory_synthesis_cards
+                    WHERE status = 'ok'
+                    """
+                ).fetchall()
+                expect(len(card_rows) >= 4, f"expected fallback ok cards, got {len(card_rows)}")
+                card_text = "\n".join(str(row["card_text"] or "") for row in card_rows)
+                expect("Local fallback found" in card_text, card_text)
+                expect("Confidence: low." in card_text, card_text)
+                expect("Trust score: 0.40." in card_text, card_text)
+                expect(all(str(row["model"] or "") == "vision-model-test" for row in card_rows), card_rows)
+                expect(
+                    all("llm fallback after: model did not return a JSON object" in str(row["last_error"] or "") for row in card_rows),
+                    card_rows,
+                )
+
+            calls.clear()
+
+            def should_not_call_model(candidate: synth.SourceCandidate, settings: synth.SynthesisSettings) -> dict[str, object]:
+                raise AssertionError(f"unchanged fallback card should be cached, not reprocessed: {candidate.source_key}")
+
+            second = synth.run_once(cfg, model_client=should_not_call_model)
+            expect(second["status"] == "ok", str(second))
+            expect(second["synthesized"] == 0, str(second))
+            expect(second["fallback_synthesized"] == 0, str(second))
+            print("PASS test_memory_synthesizer_falls_back_when_llm_returns_malformed_json")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_memory_synthesizer_notion_paths_stay_inside_index_root() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -449,8 +517,9 @@ def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
     test_memory_synthesizer_local_fallback_runs_without_llm_config()
+    test_memory_synthesizer_falls_back_when_llm_returns_malformed_json()
     test_memory_synthesizer_notion_paths_stay_inside_index_root()
-    print("PASS all 4 memory synthesizer tests")
+    print("PASS all 5 memory synthesizer tests")
     return 0
 
 

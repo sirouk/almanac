@@ -1782,11 +1782,20 @@ def _aboard_freeform_reply(
             "helm_url": helm,
             "source_kind": source_kind,
         }
+        turn_metadata = deployment.get("_public_bot_metadata")
         reply_to_message_id = str(deployment.get("_public_bot_reply_to_message_id") or "").strip()
         if channel == "telegram" and reply_to_message_id:
             extra["telegram_reply_to_message_id"] = reply_to_message_id
+        if channel == "telegram" and isinstance(turn_metadata, Mapping):
+            for key in (
+                "telegram_update_kind",
+                "telegram_update_json",
+                "telegram_native_callback",
+            ):
+                value = turn_metadata.get(key)
+                if value not in (None, ""):
+                    extra[key] = value
         if channel == "discord":
-            turn_metadata = deployment.get("_public_bot_metadata")
             if isinstance(turn_metadata, Mapping):
                 for key in ("discord_channel_id", "discord_user_id", "discord_message_id", "discord_chat_type"):
                     value = str(turn_metadata.get(key) or "").strip()

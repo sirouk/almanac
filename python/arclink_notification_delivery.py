@@ -436,6 +436,11 @@ def _run_public_agent_gateway_turn(
         "display_name": str(extra.get("display_name") or extra.get("agent_label") or "").strip(),
         "chat_type": chat_type,
     }
+    if clean_channel == "telegram":
+        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
+            value = extra.get(key)
+            if value not in (None, ""):
+                payload[key] = value
     try:
         proc = subprocess.run(
             cmd,

@@ -756,13 +756,13 @@ def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> No
     expect("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING" in bridge_source, bridge_source)
     expect("streaming.enabled = True" in bridge_source, bridge_source)
     expect("show_reasoning = True" not in bridge_source, bridge_source)
+    expect("Update.de_json" in bridge_source, "Telegram rich updates should be replayed through Hermes/PTB")
+    expect("_handle_media_message" in bridge_source, "Telegram media must use Hermes' own media handler")
+    expect("_handle_callback_query" in bridge_source, "Telegram callback queries must use Hermes' own callback handler")
     expect(bridge._is_slash_command("/provider") is True, "slash command should be recognized")
     expect(bridge._is_slash_command("  /reload-mcp") is True, "leading whitespace slash command should be recognized")
     expect(bridge._is_slash_command("hello") is False, "chat text should not be a slash command")
-    expect(
-        bridge_source.count("message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT") == 2,
-        "Telegram and Discord bridge events must both preserve Hermes command type",
-    )
+    expect("message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT" in bridge_source, bridge_source)
     print("PASS test_public_agent_bridge_enables_gateway_streaming_without_reasoning")
 
 

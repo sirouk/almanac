@@ -44,6 +44,30 @@ def test_telegram_parse_update() -> None:
     })
     expect(callback is not None, "should parse callback")
     expect(callback["text"] == "/plan sovereign", str(callback))
+    native_callback = tg.parse_telegram_update({
+        "update_id": 4,
+        "callback_query": {
+            "id": "cb_2",
+            "from": {"id": 99},
+            "message": {"message_id": 8, "chat": {"id": 42}},
+            "data": "mp:model:123",
+        },
+    })
+    expect(native_callback is not None, "should parse native callback")
+    expect(native_callback["telegram_native_callback"] is True, str(native_callback))
+    expect("telegram_update_json" in native_callback, str(native_callback))
+    media = tg.parse_telegram_update({
+        "update_id": 5,
+        "message": {
+            "message_id": 9,
+            "chat": {"id": 42},
+            "from": {"id": 99},
+            "photo": [{"file_id": "small"}, {"file_id": "large"}],
+        },
+    })
+    expect(media is not None, "should parse rich media")
+    expect(media["text"] == "[Telegram photo]", str(media))
+    expect(media["telegram_update_kind"] == "photo", str(media))
     print("PASS test_telegram_parse_update")
 
 
@@ -191,6 +215,47 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     print("PASS test_telegram_active_chat_scope_adds_agent_commands")
 
 
+def test_telegram_active_media_carries_native_update_to_agent_bridge() -> None:
+    import json
+
+    control = load_module("arclink_control.py", "arclink_control_tg_native_media_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_native_media_test")
+    conn = memory_db(control)
+    seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        prefix="arc-tg-media",
+    )
+
+    result = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 31,
+            "message": {
+                "message_id": 32,
+                "chat": {"id": 42},
+                "from": {"id": 99},
+                "voice": {"file_id": "voice_file", "duration": 3},
+            },
+        },
+        telegram_bot_token="123:abc",
+    )
+    expect(result is not None and result["action"] == "agent_message_queued", str(result))
+    row = conn.execute(
+        "SELECT message, extra_json FROM notification_outbox WHERE target_kind = 'public-agent-turn' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(row["message"] == "[Telegram voice message]", str(dict(row)))
+    extra = json.loads(str(row["extra_json"] or "{}"))
+    expect(extra.get("telegram_reply_to_message_id") == "32", str(extra))
+    expect(extra.get("telegram_update_kind") == "voice", str(extra))
+    native_update = json.loads(extra.get("telegram_update_json") or "{}")
+    expect(native_update.get("update_id") == 31, str(native_update))
+    expect(native_update.get("message", {}).get("voice", {}).get("file_id") == "voice_file", str(native_update))
+    print("PASS test_telegram_active_media_carries_native_update_to_agent_bridge")
+
+
 def test_telegram_status_reports_selected_agent_label() -> None:
     control = load_module("arclink_control.py", "arclink_control_tg_selected_agent_test")
     tg = load_module("arclink_telegram.py", "arclink_telegram_selected_agent_test")
@@ -295,12 +360,13 @@ def main() -> int:
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
     test_telegram_active_chat_scope_adds_agent_commands()
+    test_telegram_active_media_carries_native_update_to_agent_bridge()
     test_telegram_status_reports_selected_agent_label()
     test_telegram_webhook_registration_allows_buttons()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 11 ArcLink Telegram adapter tests")
+    print("PASS all 12 ArcLink Telegram adapter tests")
     return 0
 
 

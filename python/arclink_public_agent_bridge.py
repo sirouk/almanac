@@ -158,22 +158,25 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
     await bot.initialize()
     try:
         adapter._bot = bot  # type: ignore[attr-defined]
-        source = SessionSource(
-            platform=platform,
-            chat_id=chat_id,
-            chat_name=display_name,
-            chat_type="dm",
-            user_id=user_id,
-            user_name=display_name,
-            message_id=message_id,
-        )
-        event = MessageEvent(
-            text=text,
-            message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
-            source=source,
-            message_id=message_id,
-        )
-        await adapter.handle_message(event)
+        if await _try_replay_native_telegram_update(adapter, bot, payload):
+            pass
+        else:
+            source = SessionSource(
+                platform=platform,
+                chat_id=chat_id,
+                chat_name=display_name,
+                chat_type="dm",
+                user_id=user_id,
+                user_name=display_name,
+                message_id=message_id,
+            )
+            event = MessageEvent(
+                text=text,
+                message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
+                source=source,
+                message_id=message_id,
+            )
+            await adapter.handle_message(event)
         while getattr(adapter, "_background_tasks", None):
             tasks = list(adapter._background_tasks)  # type: ignore[attr-defined]
             if not tasks:
@@ -184,6 +187,68 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
             await bot.shutdown()
         except Exception:
             pass
+
+
+async def _try_replay_native_telegram_update(adapter: Any, bot: Any, payload: Mapping[str, Any]) -> bool:
+    """Replay a raw Telegram update through Hermes' own Telegram handlers.
+
+    ArcLink owns the public Raven webhook, but active-agent turns should not
+    require us to clone every upstream Telegram media/callback branch. When the
+    ingress layer passes the original update JSON, rebuild the PTB Update and
+    dispatch it to Hermes' native adapter methods. If an upstream Hermes update
+    changes media handling, this bridge follows that code instead of a forked
+    ArcLink parser.
+    """
+    raw_update = str(payload.get("telegram_update_json") or "").strip()
+    if not raw_update:
+        return False
+    try:
+        from telegram import Update
+
+        update_payload = json.loads(raw_update)
+        if not isinstance(update_payload, dict):
+            return False
+        update = Update.de_json(update_payload, bot)
+    except Exception:
+        return False
+
+    context = SimpleNamespace(bot=bot)
+    callback = getattr(update, "callback_query", None)
+    if callback is not None:
+        handler = getattr(adapter, "_handle_callback_query", None)
+        if callable(handler):
+            await handler(update, context)
+            return True
+        return False
+
+    message = getattr(update, "message", None)
+    if message is None:
+        return False
+
+    if getattr(message, "text", None):
+        handler_name = "_handle_command" if str(message.text or "").strip().startswith("/") else "_handle_text_message"
+        handler = getattr(adapter, handler_name, None)
+        if callable(handler):
+            await handler(update, context)
+            return True
+        return False
+
+    if getattr(message, "location", None) is not None or getattr(message, "venue", None) is not None:
+        handler = getattr(adapter, "_handle_location_message", None)
+        if callable(handler):
+            await handler(update, context)
+            return True
+        return False
+
+    media_fields = ("photo", "video", "audio", "voice", "document", "sticker")
+    if any(getattr(message, field, None) for field in media_fields):
+        handler = getattr(adapter, "_handle_media_message", None)
+        if callable(handler):
+            await handler(update, context)
+            return True
+        return False
+
+    return False
 
 
 class _DiscordRest:

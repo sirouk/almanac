@@ -8,6 +8,7 @@ Uses fake mode (no network) when the token is absent.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import pathlib
 import re
@@ -699,11 +700,64 @@ def _telegram_display_name(user: Mapping[str, Any]) -> str:
     return ""
 
 
-def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
-    """Extract chat_id, user_id, text, and display_name from a Telegram update."""
+def _telegram_update_json(update: Mapping[str, Any]) -> str:
+    try:
+        return json.dumps(update, sort_keys=True, separators=(",", ":"))[:60000]
+    except TypeError:
+        return ""
+
+
+def _telegram_message_kind(msg: Mapping[str, Any]) -> str:
+    if msg.get("photo"):
+        return "photo"
+    if msg.get("video"):
+        return "video"
+    if msg.get("audio"):
+        return "audio"
+    if msg.get("voice"):
+        return "voice"
+    if msg.get("document"):
+        return "document"
+    if msg.get("sticker"):
+        return "sticker"
+    if msg.get("venue"):
+        return "venue"
+    if msg.get("location"):
+        return "location"
+    if msg.get("contact"):
+        return "contact"
+    if msg.get("poll"):
+        return "poll"
+    return "message"
+
+
+def _telegram_fallback_text_for_kind(kind: str) -> str:
+    labels = {
+        "photo": "[Telegram photo]",
+        "video": "[Telegram video]",
+        "audio": "[Telegram audio]",
+        "voice": "[Telegram voice message]",
+        "document": "[Telegram document]",
+        "sticker": "[Telegram sticker]",
+        "venue": "[Telegram venue pin]",
+        "location": "[Telegram location pin]",
+        "contact": "[Telegram contact card]",
+        "poll": "[Telegram poll]",
+    }
+    return labels.get(kind, "[Telegram update]")
+
+
+def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Extract routing identity and preserve the native Telegram update.
+
+    Text is still used for Raven command routing, but the raw update is carried
+    to active-agent delivery so Hermes' own Telegram adapter can parse rich
+    messages and callback queries without ArcLink shadowing upstream logic.
+    """
     callback = update.get("callback_query") or {}
     if callback:
         data = str(callback.get("data") or "").strip()
+        native_callback = not data.startswith("arclink:")
         if data.startswith("arclink:"):
             data = data[len("arclink:"):].strip()
         msg = callback.get("message") or {}
@@ -718,9 +772,16 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
                 "text": data,
                 "callback_query_id": str(callback.get("id") or ""),
                 "display_name": _telegram_display_name(user),
+                "telegram_message_id": str(msg.get("message_id") or ""),
+                "telegram_update_kind": "callback_query",
+                "telegram_native_callback": native_callback,
+                "telegram_update_json": _telegram_update_json(update),
             }
     msg = update.get("message") or update.get("edited_message") or {}
-    text = str(msg.get("text") or "").strip()
+    kind = _telegram_message_kind(msg)
+    text = str(msg.get("text") or msg.get("caption") or "").strip()
+    if not text and kind != "message":
+        text = _telegram_fallback_text_for_kind(kind)
     chat = msg.get("chat") or {}
     user = msg.get("from") or {}
     chat_id = str(chat.get("id") or "")
@@ -733,6 +794,8 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
         "text": text,
         "message_id": str(msg.get("message_id") or ""),
         "display_name": _telegram_display_name(user),
+        "telegram_update_kind": kind,
+        "telegram_update_json": _telegram_update_json(update),
     }
 
 
@@ -759,7 +822,13 @@ def handle_telegram_update(
     if parsed is None:
         return None
     channel_identity = f"tg:{parsed['user_id']}" if parsed["user_id"] else f"tg:{parsed['chat_id']}"
-    turn_metadata: dict[str, Any] = {"telegram_message_id": parsed.get("message_id", "")}
+    turn_metadata: dict[str, Any] = {
+        "telegram_message_id": parsed.get("message_id", "") or parsed.get("telegram_message_id", ""),
+        "telegram_update_kind": parsed.get("telegram_update_kind", ""),
+        "telegram_update_json": parsed.get("telegram_update_json", ""),
+    }
+    if parsed.get("telegram_native_callback"):
+        turn_metadata["telegram_native_callback"] = True
     if str(parsed.get("text") or "").strip().startswith("/"):
         turn_metadata["active_agent_command_names"] = [
             item["command"] for item in arclink_public_bot_telegram_agent_commands()

@@ -1,6 +1,7 @@
 # Public Agent Gateway Parity And Scale Audit
 
-Status: 2026-05-11 code audit after Raven active-agent bridge repair.
+Status: 2026-05-11 code audit after Raven active-agent bridge repair and
+Telegram native-update replay.
 
 ## Current Truth
 
@@ -16,8 +17,12 @@ This gives current public-channel chat these real Hermes properties:
 
 - Hermes session handling, plugin hooks, MCP/bootstrap context, model runtime,
   command parsing, and selected-agent state.
-- Telegram and Discord text turns are passed as `MessageType.TEXT`.
-- Telegram and Discord slash turns are passed as `MessageType.COMMAND`.
+- Telegram text and slash turns carry the original update JSON and are replayed
+  through Hermes' own Telegram adapter handlers when available.
+- Telegram media, location/venue, and non-Raven callback queries now follow the
+  same native Hermes Telegram handler path in the bridge.
+- Discord text turns are passed as `MessageType.TEXT`.
+- Discord slash turns are passed as `MessageType.COMMAND`.
 - Gateway streaming is enabled for public bridge turns unless explicitly
   disabled (`python/arclink_public_agent_bridge.py:78`).
 - Discord reactions are available through a raw-message shim with
@@ -36,15 +41,16 @@ because that path severs native platform behavior
 
 ## Parity Gap
 
-This is not full native Telegram/Discord parity yet. The current bridge creates
+This is not full native Telegram/Discord parity yet. Telegram is now much
+closer because raw updates replay through Hermes' adapter. Discord still creates
 synthetic per-turn events and only carries text, slash command text, source ids,
 and basic reply/message ids into Hermes:
 
-- Telegram bridge event: `python/arclink_public_agent_bridge.py:170`.
 - Discord bridge event: `python/arclink_public_agent_bridge.py:354`.
-- Telegram public ingress currently parses only callback data and text messages;
-  it drops media/location/sticker event shape before the bridge
-  (`python/arclink_telegram.py:702`).
+- Telegram public ingress preserves raw update JSON for active-agent delivery.
+  Direct Hermes appears to handle location/venue plus media/sticker/callbacks;
+  contact and poll remain product-extension territory unless upstream Hermes
+  adds native handlers.
 - Discord public ingress currently parses slash commands, components, and plain
   content; it does not carry attachments/voice/thread/member objects into the
   bridge payload (`python/arclink_discord.py:241`).
@@ -66,13 +72,9 @@ and reaction methods
 These are the functions that do not yet have full "as if Hermes were directly
 connected" parity:
 
-- Telegram inbound media: photo, video, audio, voice, document, and sticker
-  messages are not converted into Hermes `media_urls`/`media_types` in the
-  public bridge.
-- Telegram location/contact/poll style updates are not carried.
-- Telegram callback queries from Hermes-generated inline buttons are not
-  represented as native Hermes callback events; ArcLink callback data is handled
-  by Raven.
+- Telegram contact and poll updates are still not full parity unless Hermes
+  itself grows native handlers for them. ArcLink surfaces them as active-agent
+  update placeholders today, not rich structured native events.
 - Discord inbound attachments/files/images are not passed into Hermes as
   attachment-backed media/document events.
 - Discord voice channel/listening features cannot work through the current

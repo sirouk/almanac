@@ -667,15 +667,12 @@ test.describe("Onboarding flow", () => {
     await page.click("text=Founders - $149/month");
     await expect(page.getByRole("heading", { name: "Name The Agent" })).toBeVisible();
 
-    // Step 2: Answer
+    // Step 2: Answer; the site should prepare Stripe immediately after this.
     await page.fill('input[id="name"]', "New User");
     await page.fill('input[id="email"]', "new.user@example.test");
     await page.click('button[type="submit"]');
-    await expect(page.locator("text=Onboard Agent").first()).toBeVisible();
-
-    // Step 3: Checkout
-    await page.getByRole("button", { name: "Onboard Agent - $149/month" }).click();
-    await expect(page.getByRole("heading", { name: "Stripe Link Ready" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Stripe Handoff Ready" })).toBeVisible();
     await expect(page.locator("text=Complete The Hire").last()).toBeVisible();
+    await expect(page.locator("text=Stage 1 is ready").last()).toBeVisible();
   });
 });

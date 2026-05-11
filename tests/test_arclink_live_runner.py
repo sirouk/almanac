@@ -35,6 +35,19 @@ _FULL_ENV: dict[str, str] = {
     "DISCORD_BOT_TOKEN": "discord_fake_token",
 }
 
+_TAILSCALE_HOSTED_ENV: dict[str, str] = {
+    **_BASE_ENV,
+    "ARCLINK_E2E_LIVE": "1",
+    "ARCLINK_INGRESS_MODE": "tailscale",
+    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.ts.net",
+    "STRIPE_SECRET_KEY": "sk_test_fake123456789",
+    "STRIPE_WEBHOOK_SECRET": "whsec_fake123456789",
+    "ARCLINK_E2E_DOCKER": "1",
+    "CHUTES_API_KEY": "chutes_fake_key_123",
+    "TELEGRAM_BOT_TOKEN": "123456:ABCfake",
+    "DISCORD_BOT_TOKEN": "discord_fake_token",
+}
+
 _WORKSPACE_ENV: dict[str, str] = {
     **_BASE_ENV,
     "ARCLINK_E2E_LIVE": "1",
@@ -125,6 +138,20 @@ class TestCredentialPresentDryRun(unittest.TestCase):
             result = run_live_proof(env=_FULL_ENV, skip_ports=True, live=True, artifact_dir=tmpdir)
             self.assertEqual(result.status, "live_ready_pending_execution")
             self.assertEqual(result.exit_code, 0)
+
+    def test_tailscale_ingress_dry_run_does_not_require_cloudflare(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_live_proof(
+                env=_TAILSCALE_HOSTED_ENV,
+                skip_ports=True,
+                live=False,
+                artifact_dir=tmpdir,
+            )
+            self.assertEqual(result.status, "dry_run_ready")
+            self.assertEqual(result.missing_env, [])
+            names = [step["name"] for step in result.journey_summary["steps"]]
+            self.assertIn("tailscale_ingress_health_check", names)
+            self.assertNotIn("dns_health_check", names)
 
 
 class TestWorkspaceProofJourney(unittest.TestCase):

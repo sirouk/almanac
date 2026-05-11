@@ -84,6 +84,26 @@ def test_chutes_missing() -> None:
     print("PASS test_chutes_missing")
 
 
+def test_tailscale_ingress_diagnostics_skip_cloudflare() -> None:
+    mod = load_module("arclink_diagnostics.py", "arclink_diag_tailscale")
+    env = {
+        "ARCLINK_INGRESS_MODE": "tailscale",
+        "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.ts.net",
+        "STRIPE_SECRET_KEY": "x",
+        "STRIPE_WEBHOOK_SECRET": "x",
+        "CHUTES_API_KEY": "x",
+        "TELEGRAM_BOT_TOKEN": "x",
+        "DISCORD_BOT_TOKEN": "x",
+        "DISCORD_APP_ID": "x",
+    }
+    result = mod.run_diagnostics(env=env, docker_binary="python3")
+    providers = [check.provider for check in result.checks]
+    expect("tailscale" in providers, str(providers))
+    expect("cloudflare" not in providers, str(providers))
+    expect(result.all_ok, result.to_json())
+    print("PASS test_tailscale_ingress_diagnostics_skip_cloudflare")
+
+
 def test_telegram_missing() -> None:
     mod = load_module("arclink_diagnostics.py", "arclink_diag_tg_missing")
     checks = mod.diagnose_telegram(env={})
@@ -158,13 +178,14 @@ def main() -> int:
     test_credential_values_never_in_output()
     test_cloudflare_missing()
     test_chutes_missing()
+    test_tailscale_ingress_diagnostics_skip_cloudflare()
     test_telegram_missing()
     test_discord_missing()
     test_docker_diagnostic()
     test_full_diagnostics_machine_readable()
     test_full_diagnostics_all_present()
     test_diagnostics_noop_without_live_flag()
-    print("PASS all 11 ArcLink diagnostics tests")
+    print("PASS all 12 ArcLink diagnostics tests")
     return 0
 
 

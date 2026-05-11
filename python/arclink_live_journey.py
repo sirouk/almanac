@@ -68,7 +68,27 @@ def missing_credentials(step: JourneyStep) -> list[str]:
 # Journey definition
 # ---------------------------------------------------------------------------
 
-_HOSTED_JOURNEY_STEPS: list[dict[str, Any]] = [
+def _ingress_mode(env: dict[str, str] | None = None) -> str:
+    source = env if env is not None else os.environ
+    return str(source.get("ARCLINK_INGRESS_MODE") or "").strip().lower()
+
+
+def _hosted_ingress_step(env: dict[str, str] | None = None) -> dict[str, Any]:
+    mode = _ingress_mode(env)
+    if mode == "tailscale":
+        return {
+            "name": "tailscale_ingress_health_check",
+            "description": "Verify Tailscale Serve/Funnel/certificate and service health endpoints",
+            "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_TAILSCALE_DNS_NAME"],
+        }
+    return {
+        "name": "dns_health_check",
+        "description": "Verify DNS records and service health endpoints",
+        "required_env": ["ARCLINK_E2E_LIVE", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID"],
+    }
+
+
+_HOSTED_JOURNEY_STEP_SPECS: list[dict[str, Any]] = [
     {
         "name": "web_onboarding_start",
         "description": "Start onboarding session via hosted API",
@@ -94,11 +114,7 @@ _HOSTED_JOURNEY_STEPS: list[dict[str, Any]] = [
         "description": "Submit provisioning job for the deployment",
         "required_env": ["ARCLINK_E2E_LIVE"],
     },
-    {
-        "name": "dns_health_check",
-        "description": "Verify DNS records and service health endpoints",
-        "required_env": ["ARCLINK_E2E_LIVE", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ZONE_ID"],
-    },
+    _hosted_ingress_step,
     {
         "name": "docker_deployment_check",
         "description": "Verify Docker Compose stack is running and healthy",
@@ -265,7 +281,14 @@ _EXTERNAL_PROOF_STEPS: list[dict[str, Any]] = [
 ]
 
 
-def build_journey(kind: str = "hosted") -> list[JourneyStep]:
+def _hosted_journey_steps(env: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    specs: list[dict[str, Any]] = []
+    for spec in _HOSTED_JOURNEY_STEP_SPECS:
+        specs.append(spec(env) if callable(spec) else spec)
+    return specs
+
+
+def build_journey(kind: str = "hosted", env: dict[str, str] | None = None) -> list[JourneyStep]:
     """Build an ordered journey step list.
 
     Args:
@@ -273,15 +296,17 @@ def build_journey(kind: str = "hosted") -> list[JourneyStep]:
             ``workspace`` for native Drive/Code/Terminal TLS proof,
             ``external`` for opt-in provider/live-service rows, or ``all``
             for hosted, external, and workspace in order.
+        env: Optional environment mapping used to resolve deployment-specific
+            proof steps such as Cloudflare-vs-Tailscale ingress.
     """
     if kind == "hosted":
-        specs = _HOSTED_JOURNEY_STEPS
+        specs = _hosted_journey_steps(env)
     elif kind == "workspace":
         specs = _WORKSPACE_JOURNEY_STEPS
     elif kind == "external":
         specs = _EXTERNAL_PROOF_STEPS
     elif kind == "all":
-        specs = [*_HOSTED_JOURNEY_STEPS, *_EXTERNAL_PROOF_STEPS, *_WORKSPACE_JOURNEY_STEPS]
+        specs = [*_hosted_journey_steps(env), *_EXTERNAL_PROOF_STEPS, *_WORKSPACE_JOURNEY_STEPS]
     else:
         raise ValueError(f"unknown journey kind: {kind}")
     return [JourneyStep(**spec) for spec in specs]

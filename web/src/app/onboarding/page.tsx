@@ -133,6 +133,40 @@ export default function OnboardingPage() {
     }
   }
 
+  async function openCheckoutForSession(nextSessionId = sessionId) {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await api.openCheckout({
+        session_id: nextSessionId,
+        success_url: window.location.origin + "/checkout/success?session=" + encodeURIComponent(nextSessionId),
+        cancel_url: window.location.origin + "/checkout/cancel?session=" + encodeURIComponent(nextSessionId),
+      });
+      if (res.status === 200) {
+        const session = (res.data as Record<string, Record<string, string>>).session;
+        const url = session?.checkout_url || (res.data as Record<string, string>).checkout_url;
+        if (url) {
+          setCheckoutUrl(url);
+          setStep("done");
+          return true;
+        }
+        setStep("checkout");
+        setError("Stripe did not return a checkout link. Try again.");
+        return false;
+      } else {
+        setStep("checkout");
+        setError((res.data as Record<string, string>).error || "Checkout failed");
+        return false;
+      }
+    } catch {
+      setError("Network error. Please try again.");
+      setStep("checkout");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleAnswer(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -146,35 +180,10 @@ export default function OnboardingPage() {
         email,
       });
       if (res.status === 200) {
-        setStep("checkout");
+        setLoading(false);
+        await openCheckoutForSession(sessionId);
       } else {
         setError((res.data as Record<string, string>).error || "Failed to save answer");
-      }
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleCheckout() {
-    setError("");
-    setLoading(true);
-    try {
-      const res = await api.openCheckout({
-        session_id: sessionId,
-        success_url: window.location.origin + "/checkout/success?session=" + encodeURIComponent(sessionId),
-        cancel_url: window.location.origin + "/checkout/cancel?session=" + encodeURIComponent(sessionId),
-      });
-      if (res.status === 200) {
-        const session = (res.data as Record<string, Record<string, string>>).session;
-        const url = session?.checkout_url || (res.data as Record<string, string>).checkout_url;
-        if (url) {
-          setCheckoutUrl(url);
-        }
-        setStep("done");
-      } else {
-        setError((res.data as Record<string, string>).error || "Checkout failed");
       }
     } catch {
       setError("Network error. Please try again.");
@@ -200,16 +209,16 @@ export default function OnboardingPage() {
           priority
         />
         <p className="mb-2 text-xs uppercase tracking-[0.22em] text-soft-white/40">
-          {step === "start" && "Step 1 of 4 - First contact"}
-          {step === "questions" && "Step 2 of 4 - Name the agent"}
-          {step === "checkout" && "Step 3 of 4 - Stripe handoff"}
-          {step === "done" && "Step 4 of 4 - Launch queue"}
+          {step === "start" && "Step 1 of 3 - First contact"}
+          {step === "questions" && "Step 2 of 3 - Name and contact"}
+          {step === "checkout" && "Step 3 of 3 - Stripe handoff"}
+          {step === "done" && "Step 3 of 3 - Stripe handoff"}
         </p>
         <h1 className="font-display text-2xl font-bold">
           {step === "start" && "Choose ArcLink Onboarding"}
           {step === "questions" && "Name The Agent"}
           {step === "checkout" && PLAN_COPY[planId].checkout}
-          {step === "done" && "Stripe Link Ready"}
+          {step === "done" && "Stripe Handoff Ready"}
         </h1>
 
         {error && <ErrorAlert message={error} className="mt-4" />}
@@ -308,7 +317,7 @@ export default function OnboardingPage() {
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
-              {loading ? "Saving..." : "Save & Continue"}
+              {loading ? "Preparing Stripe..." : "Continue To Stripe"}
             </button>
           </form>
         )}
@@ -319,7 +328,7 @@ export default function OnboardingPage() {
               I will hand you to Stripe, watch for confirmation, then move your ArcLink onboarding into the launch queue.
             </p>
             <button
-              onClick={handleCheckout}
+              onClick={() => openCheckoutForSession()}
               disabled={loading}
               className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
             >
@@ -333,7 +342,7 @@ export default function OnboardingPage() {
             {checkoutUrl ? (
               <>
                 <p className="text-sm text-soft-white/60">
-                  I have your checkout link ready.
+                  Stage 1 is ready: finish the Stripe handoff. When payment clears, Raven starts provisioning and reports the result with your working links.
                 </p>
                 <a
                   href={checkoutUrl}

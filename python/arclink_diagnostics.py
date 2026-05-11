@@ -67,6 +67,18 @@ def diagnose_cloudflare(env: Mapping[str, str] | None = None) -> list[Diagnostic
     ]
 
 
+def diagnose_tailscale(env: Mapping[str, str] | None = None) -> list[DiagnosticCheck]:
+    source = env if env is not None else os.environ
+    return [
+        _credential_check("tailscale", "ARCLINK_TAILSCALE_DNS_NAME", source),
+    ]
+
+
+def _ingress_mode(env: Mapping[str, str] | None = None) -> str:
+    source = env if env is not None else os.environ
+    return str(source.get("ARCLINK_INGRESS_MODE") or "").strip().lower()
+
+
 def diagnose_chutes(env: Mapping[str, str] | None = None) -> list[DiagnosticCheck]:
     source = env if env is not None else os.environ
     return [
@@ -115,7 +127,10 @@ def run_diagnostics(
     """
     checks: list[DiagnosticCheck] = []
     checks.extend(diagnose_stripe(env))
-    checks.extend(diagnose_cloudflare(env))
+    if _ingress_mode(env) == "tailscale":
+        checks.extend(diagnose_tailscale(env))
+    else:
+        checks.extend(diagnose_cloudflare(env))
     checks.extend(diagnose_chutes(env))
     checks.extend(diagnose_telegram(env))
     checks.extend(diagnose_discord(env))

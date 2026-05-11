@@ -58,6 +58,22 @@ class TestBuildJourney(unittest.TestCase):
         for step in steps:
             self.assertEqual(step.status, "pending")
 
+    def test_hosted_journey_defaults_to_cloudflare_dns_health(self):
+        steps = journey_mod.build_journey("hosted", env={"ARCLINK_INGRESS_MODE": "cloudflare"})
+        ingress = next(step for step in steps if step.name == "dns_health_check")
+        self.assertIn("CLOUDFLARE_API_TOKEN", ingress.required_env)
+        self.assertIn("CLOUDFLARE_ZONE_ID", ingress.required_env)
+        self.assertNotIn("ARCLINK_TAILSCALE_DNS_NAME", ingress.required_env)
+
+    def test_hosted_journey_uses_tailscale_health_for_tailscale_ingress(self):
+        steps = journey_mod.build_journey("hosted", env={"ARCLINK_INGRESS_MODE": "tailscale"})
+        names = [step.name for step in steps]
+        self.assertIn("tailscale_ingress_health_check", names)
+        self.assertNotIn("dns_health_check", names)
+        ingress = next(step for step in steps if step.name == "tailscale_ingress_health_check")
+        self.assertIn("ARCLINK_TAILSCALE_DNS_NAME", ingress.required_env)
+        self.assertNotIn("CLOUDFLARE_API_TOKEN", ingress.required_env)
+
     def test_all_steps_have_live_gate(self):
         for step in journey_mod.build_journey():
             self.assertIn("ARCLINK_E2E_LIVE", step.required_env,
@@ -85,9 +101,10 @@ class TestBuildJourney(unittest.TestCase):
             self.assertIn("ARCLINK_WORKSPACE_PROOF_AUTH", step.required_env)
 
     def test_all_journey_appends_workspace_after_hosted(self):
-        steps = journey_mod.build_journey("all")
+        steps = journey_mod.build_journey("all", env={"ARCLINK_INGRESS_MODE": "tailscale"})
         names = [step.name for step in steps]
         self.assertEqual(names[0], "web_onboarding_start")
+        self.assertIn("tailscale_ingress_health_check", names)
         self.assertIn("chutes_oauth_connect_proof", names)
         self.assertIn("workspace_docker_upgrade_reconcile", names)
         self.assertLess(

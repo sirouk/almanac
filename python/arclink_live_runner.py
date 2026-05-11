@@ -508,7 +508,7 @@ def run_live_proof(
     diagnostics = run_diagnostics(env=source, docker_binary=docker_binary)
 
     # Phase 3: Journey planning
-    steps = build_journey(journey)
+    steps = build_journey(journey, env=source)
     all_missing = _collect_missing_env(steps, source)
     effective_runners = runners
     if effective_runners is None and journey == "workspace":

@@ -1,11 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect } from "react";
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { api } from "@/lib/api";
-
-const RESUME_KEY = "arclink_onboarding_resume";
 
 export default function CheckoutCancelPage() {
   return (
@@ -34,23 +31,6 @@ function CheckoutCancelFallback() {
 function CheckoutCancelContent() {
   const params = useSearchParams();
   const sessionId = params.get("session") || "";
-
-  // Inform the backend that checkout was cancelled so the session state
-  // is updated. The session can still be resumed via a new onboarding start.
-  useEffect(() => {
-    if (sessionId) {
-      try {
-        const raw = window.localStorage.getItem(RESUME_KEY);
-        const parsed = raw ? JSON.parse(raw) as { sessionId?: string; cancelToken?: string } : {};
-        if (!parsed.sessionId || parsed.sessionId === sessionId) {
-          const cancelToken = parsed.cancelToken || "";
-          if (cancelToken) api.cancelOnboarding(sessionId, cancelToken).catch(() => {});
-        }
-      } catch {
-        // localStorage can be disabled; leave the session resumable.
-      }
-    }
-  }, [sessionId]);
 
   // Resume link carries the session ID so the onboarding page can restore
   // the flow from localStorage (which persists) or start fresh.

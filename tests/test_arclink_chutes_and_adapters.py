@@ -183,7 +183,7 @@ def test_cloudflare_drift_and_traefik_label_rendering() -> None:
     print("PASS test_cloudflare_drift_and_traefik_label_rendering")
 
 
-def test_tailscale_path_access_urls_can_use_dedicated_tls_ports() -> None:
+def test_tailscale_path_access_urls_stay_on_public_path_routes() -> None:
     mod = load_module("arclink_adapters.py", "arclink_adapters_tailnet_ports_test")
     urls = mod.arclink_access_urls(
         prefix="abc123",
@@ -194,10 +194,11 @@ def test_tailscale_path_access_urls_can_use_dedicated_tls_ports() -> None:
         tailnet_service_ports={"hermes": "8443", "files": 8444, "code": 8445},
     )
     expect(urls["dashboard"] == "https://worker.example.test/u/abc123", str(urls))
-    expect(urls["hermes"] == "https://worker.example.test:8443/", str(urls))
+    expect(urls["hermes"] == "https://worker.example.test/u/abc123/hermes", str(urls))
     expect(urls["files"] == "https://worker.example.test/u/abc123/drive", str(urls))
     expect(urls["code"] == "https://worker.example.test/u/abc123/code", str(urls))
-    print("PASS test_tailscale_path_access_urls_can_use_dedicated_tls_ports")
+    expect(":8443" not in "\n".join(urls.values()), str(urls))
+    print("PASS test_tailscale_path_access_urls_stay_on_public_path_routes")
 
 
 def test_chutes_key_rotate_and_state_tracking() -> None:
@@ -653,7 +654,7 @@ def main() -> int:
     test_fake_stripe_webhook_and_sessions()
     test_stripe_client_resolver_returns_fake_without_key_and_rejects_blank()
     test_cloudflare_drift_and_traefik_label_rendering()
-    test_tailscale_path_access_urls_can_use_dedicated_tls_ports()
+    test_tailscale_path_access_urls_stay_on_public_path_routes()
     test_chutes_key_rotate_and_state_tracking()
     test_fake_inference_smoke_and_failure_reporting()
     test_fake_stripe_billing_portal_session()

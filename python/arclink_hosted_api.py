@@ -390,8 +390,9 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
     greeting = f"Captain {name}, " if name else ""
     message = (
         f"{greeting}payment cleared.\n\n"
-        "I have your ArcLink agent reserved and onboarding is starting now. "
-        "I will ping this same channel the moment your agent is ready - usually 30 to 90 seconds."
+        "Stage 2 complete: Stripe confirmed the handoff.\n"
+        "Stage 3 is starting now: I am preparing your ArcLink resources, wiring the agent, and checking the deployment health.\n\n"
+        "Stay in this channel. I will report back here with the result and working links as soon as the agent is ready."
     )
     nid = queue_notification(
         conn,
@@ -921,8 +922,8 @@ def _handle_onboarding_status(
         return _json_response(400, {"error": "session_id required"}, request_id=request_id)
     row = conn.execute(
         """
-        SELECT s.session_id, s.status, s.user_id, s.channel, s.display_name_hint,
-               s.selected_plan_id
+        SELECT s.session_id, s.status, s.user_id, s.channel, s.channel_identity,
+               s.display_name_hint, s.selected_plan_id
         FROM arclink_onboarding_sessions s
         WHERE s.session_id = ?
         """,
@@ -946,6 +947,8 @@ def _handle_onboarding_status(
         "entitlement_state": entitlement_state,
         "plan_id": row_dict.get("selected_plan_id") or "",
         "display_name": row_dict.get("display_name_hint") or "",
+        "channel": row_dict.get("channel") or "",
+        "channel_identity": row_dict.get("channel_identity") or "",
     }, request_id=request_id)
 
 

@@ -254,6 +254,29 @@ def _deployment_urls(prefix: str, base_domain: str, metadata: Mapping[str, Any] 
     meta = dict(metadata or {})
     publish_state = meta.get("tailnet_app_publication")
     tailnet_apps_unavailable = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "unavailable"
+    ingress_mode = str(meta.get("ingress_mode") or os.environ.get("ARCLINK_INGRESS_MODE") or "domain").strip().lower()
+    tailscale_dns_name = str(
+        meta.get("tailscale_dns_name") or os.environ.get("ARCLINK_TAILSCALE_DNS_NAME") or base_domain
+    ).strip()
+    tailscale_host_strategy = str(
+        meta.get("tailscale_host_strategy")
+        or os.environ.get("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY")
+        or "path"
+    ).strip()
+    if ingress_mode == "tailscale" and tailscale_host_strategy == "path":
+        if tailnet_apps_unavailable:
+            host = tailscale_dns_name or base_domain
+            return {
+                "dashboard": f"https://{host}/u/{prefix}",
+                "notion": f"https://{host}/u/{prefix}/notion/webhook",
+            }
+        return arclink_access_urls(
+            prefix=prefix,
+            base_domain=base_domain,
+            ingress_mode=ingress_mode,
+            tailscale_dns_name=tailscale_dns_name,
+            tailscale_host_strategy=tailscale_host_strategy,
+        )
     stored_urls = meta.get("access_urls")
     if isinstance(stored_urls, Mapping):
         safe_urls = {
@@ -268,15 +291,6 @@ def _deployment_urls(prefix: str, base_domain: str, metadata: Mapping[str, Any] 
             if safe_urls.get("notion"):
                 limited["notion"] = safe_urls["notion"]
             return limited
-    ingress_mode = str(meta.get("ingress_mode") or os.environ.get("ARCLINK_INGRESS_MODE") or "domain").strip().lower()
-    tailscale_dns_name = str(
-        meta.get("tailscale_dns_name") or os.environ.get("ARCLINK_TAILSCALE_DNS_NAME") or base_domain
-    ).strip()
-    tailscale_host_strategy = str(
-        meta.get("tailscale_host_strategy")
-        or os.environ.get("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY")
-        or "path"
-    ).strip()
     if ingress_mode == "tailscale" and tailnet_apps_unavailable:
         host = tailscale_dns_name or base_domain
         return {
@@ -400,8 +414,8 @@ def _user_dashboard_sections(
     memory = next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""})
     health_index = {str(item["service_name"]): item for item in health}
     hermes_url = str(urls.get("hermes") or "").rstrip("/")
-    drive_url = f"{hermes_url}/drive" if hermes_url else str(urls.get("files") or "")
-    code_url = f"{hermes_url}/code" if hermes_url else str(urls.get("code") or "")
+    drive_url = str(urls.get("files") or "").strip() or (f"{hermes_url}/drive" if hermes_url else "")
+    code_url = str(urls.get("code") or "").strip() or (f"{hermes_url}/code" if hermes_url else "")
     terminal_url = f"{hermes_url}/terminal" if hermes_url else str(urls.get("terminal") or "")
     plugin_links = [
         {"role": "Hermes Dashboard", "url": str(urls.get("hermes") or urls.get("dashboard") or "")},

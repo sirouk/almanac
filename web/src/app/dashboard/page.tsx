@@ -264,7 +264,7 @@ function urlJoin(base: string, path = "") {
 function hermesBaseUrl(dep: Deployment) {
   const urls = dep.access?.urls || {};
   if (urls.hermes) return urls.hermes;
-  if (dep.hostname) return `https://${dep.hostname}:8443/`;
+  if (urls.dashboard) return urls.dashboard;
   return "";
 }
 
@@ -274,9 +274,9 @@ function hermesPluginLinks(dep: Deployment) {
   const dashboard = base || urls.dashboard || "";
   return [
     { name: "Hermes Dashboard", href: dashboard },
-    { name: "Drive", href: base ? urlJoin(base, "drive") : (urls.files || "") },
-    { name: "Code", href: base ? urlJoin(base, "code") : (urls.code || "") },
-    { name: "Terminal", href: base ? urlJoin(base, "terminal") : (urls.terminal || "") },
+    { name: "Drive", href: urls.files || (base ? urlJoin(base, "drive") : "") },
+    { name: "Code", href: urls.code || (base ? urlJoin(base, "code") : "") },
+    { name: "Terminal", href: urls.terminal || (base ? urlJoin(base, "terminal") : "") },
   ];
 }
 
@@ -659,10 +659,9 @@ export default function DashboardPage() {
                 Per-deployment workspace and vault access through the authenticated Hermes dashboard.
               </p>
               {data.deployments?.map((dep) => {
-                const host = dep.hostname || "";
                 const provisioned = dep.status === "active" || dep.status === "running";
                 const vaultHealth = dep.service_health?.find((s) => s.service_name === "hermes-dashboard" || s.service_name === "qmd-mcp");
-                const vaultUrl = hermesPluginLinks(dep).find((link) => link.name === "Drive")?.href || (provisioned && host ? `https://${host}:8443/drive` : "");
+                const vaultUrl = hermesPluginLinks(dep).find((link) => link.name === "Drive")?.href || "";
                 return (
                   <DeploymentCard key={dep.deployment_id} dep={dep}>
                     <div className="grid gap-3 sm:grid-cols-2">

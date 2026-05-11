@@ -441,15 +441,29 @@ def test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns() -> None:
     expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
     expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(intent["access"]))
     expect(intent["access"]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(intent["access"]))
+    expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(intent["access"]))
     expect(intent["access"]["urls"]["notion"] == "https://worker.example.test/u/amber-vault-1a2b/notion/webhook", str(intent["access"]))
     expect(intent["access"]["ssh"]["strategy"] == "tailscale_direct_ssh", str(intent["access"]))
     expect(intent["access"]["ssh"]["command_hint"] == "ssh arc-amber-vault-1a2b@worker.example.test", str(intent["access"]))
     labels = intent["compose"]["services"]["nextcloud"]["labels"]
     expect(labels == {}, str(labels))
     dashboard_labels = intent["compose"]["services"]["dashboard"]["labels"]
+    expect(dashboard_labels == {}, str(dashboard_labels))
+    hermes_labels = intent["compose"]["services"]["hermes-dashboard"]["labels"]
     expect(
-        dashboard_labels["traefik.http.routers.arclink-amber-vault-1a2b-dashboard.priority"] == "10",
-        str(dashboard_labels),
+        hermes_labels["traefik.http.routers.arclink-amber-vault-1a2b-hermes-root.rule"]
+        == "Host(`worker.example.test`) && PathPrefix(`/u/amber-vault-1a2b`)",
+        str(hermes_labels),
+    )
+    expect(
+        hermes_labels["traefik.http.middlewares.arclink-amber-vault-1a2b-hermes-root-strip.stripprefix.prefixes"]
+        == "/u/amber-vault-1a2b",
+        str(hermes_labels),
+    )
+    expect(
+        hermes_labels["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"]
+        == "Host(`worker.example.test`) && PathPrefix(`/u/amber-vault-1a2b/hermes`)",
+        str(hermes_labels),
     )
     notion_labels = intent["compose"]["services"]["notion-webhook"]["labels"]
     expect(
@@ -485,10 +499,10 @@ def test_tailscale_ingress_uses_dedicated_app_ports_when_recorded() -> None:
     env = intent["environment"]
     services = intent["compose"]["services"]
     expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
-    expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(intent["access"]))
+    expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(intent["access"]))
     expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(intent["access"]))
     expect(intent["access"]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(intent["access"]))
-    expect(env["ARCLINK_HERMES_URL"] == "https://worker.example.test:8443/", str(env))
+    expect(env["ARCLINK_HERMES_URL"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(env))
     expect(env["ARCLINK_FILES_URL"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(env))
     nextcloud_env = services["nextcloud"]["environment"]
     expect("OVERWRITEPROTOCOL" not in nextcloud_env, str(nextcloud_env))

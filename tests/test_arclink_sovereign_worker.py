@@ -148,7 +148,7 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     expect(targets == {("discord", "200"), ("telegram", "100")}, str(notifications))
     notification = next(item for item in notifications if item["channel_kind"] == "telegram")
     expect("Agent online" in notification["message"], str(notification["message"]))
-    expect("I'm Raven. Your ArcLink agent is ready" in notification["message"], str(notification["message"]))
+    expect("Stage 4 complete: your ArcLink agent is ready" in notification["message"], str(notification["message"]))
     expect("Dashboard: https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
     expect("Hermes:" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
@@ -293,7 +293,7 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     expect(results[0]["status"] == "applied", str(results))
     expect(results[0]["dns_records"] == [], str(results))
     expect(results[0]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1234", str(results))
-    expect(results[0]["urls"]["hermes"] == "https://worker.example.test:8443/", str(results))
+    expect(results[0]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1234/hermes", str(results))
     expect(results[0]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1234/drive", str(results))
     expect(results[0]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1234/code", str(results))
     metadata = json.loads(

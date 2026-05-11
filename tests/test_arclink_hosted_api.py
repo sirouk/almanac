@@ -2914,6 +2914,7 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
     expect(payload["user_id"] == prepared["user_id"], str(payload))
     expect(payload["entitlement_state"] == "paid", str(payload))
     expect(payload["display_name"] == "Hosted User", str(payload))
+    expect(payload["channel"] == "web", str(payload))
 
     # Missing session_id -> 400
     status, payload, _ = hosted.route_arclink_hosted_api(

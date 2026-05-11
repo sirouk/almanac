@@ -292,6 +292,7 @@ def _render_notion_webhook_labels(
         "traefik.enable": "true",
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`) && PathPrefix(`{clean_path}`)",
         f"traefik.http.routers.{router}.entrypoints": "web",
+        f"traefik.http.routers.{router}.service": router,
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
     }
     clean_network = str(docker_network or "").strip()

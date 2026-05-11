@@ -320,6 +320,38 @@ def test_public_bot_founders_checkout_uses_founders_price() -> None:
     print("PASS test_public_bot_founders_checkout_uses_founders_price")
 
 
+def test_public_bot_plan_selection_opens_checkout_when_stripe_is_available() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_plan_checkout_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_plan_checkout_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_plan_checkout_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:auto", text="/start", display_name_hint="Buyer")
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:auto",
+        text="/plan founders",
+        stripe_client=stripe,
+        price_id="price_sovereign_test",
+        founders_price_id="price_founders_test",
+        base_domain="example.test",
+    )
+    expect(opened.action == "open_checkout", str(opened))
+    expect(opened.checkout_url.startswith("https://stripe.test/checkout/"), str(opened))
+    expect("Stage 1" in opened.reply and "Stage 4" in opened.reply, opened.reply)
+    expect(opened.buttons and opened.buttons[0].url == opened.checkout_url, str(opened.buttons))
+    checkout_session = stripe.checkout_sessions[opened.checkout_url.rsplit("/", 1)[1]]
+    expect(checkout_session["price_id"] == "price_founders_test", str(checkout_session))
+    row = conn.execute(
+        "SELECT status, checkout_state FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (opened.session_id,),
+    ).fetchone()
+    expect(row["status"] == "checkout_open" and row["checkout_state"] == "open", str(dict(row)))
+    print("PASS test_public_bot_plan_selection_opens_checkout_when_stripe_is_available")
+
+
 def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_action_catalog_test")
     telegram = bots.arclink_public_bot_telegram_commands()
@@ -1114,6 +1146,55 @@ def test_public_bot_withholds_unpublished_tailnet_app_urls() -> None:
     print("PASS test_public_bot_withholds_unpublished_tailnet_app_urls")
 
 
+def test_public_bot_canonicalizes_tailscale_path_resource_urls() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bots_tailscale_urls_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_tailscale_urls_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:tailscale",
+        prefix="arc-tailscale",
+        base_domain="worker.example.ts.net",
+    )
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "access_urls": {
+                        "dashboard": "https://worker.example.ts.net/u/arc-tailscale",
+                        "files": "https://worker.example.ts.net/u/arc-tailscale/drive",
+                        "code": "https://worker.example.ts.net/u/arc-tailscale/code",
+                        "hermes": "https://worker.example.ts.net:8443/",
+                    },
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.ts.net",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8443},
+                    "tailnet_app_publication": {"status": "published", "successful_roles": ["hermes"]},
+                },
+                sort_keys=True,
+            ),
+            seeded["deployment_id"],
+        ),
+    )
+    conn.commit()
+    deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (seeded["deployment_id"],)).fetchone())
+    access = bots._deployment_access(deployment)
+    expect(access["dashboard"] == "https://worker.example.ts.net/u/arc-tailscale", str(access))
+    expect(access["files"] == "https://worker.example.ts.net/u/arc-tailscale/drive", str(access))
+    expect(access["code"] == "https://worker.example.ts.net/u/arc-tailscale/code", str(access))
+    expect(access["hermes"] == "https://worker.example.ts.net/u/arc-tailscale/hermes", str(access))
+    expect(":8443" not in "\n".join(access.values()), str(access))
+    print("PASS test_public_bot_canonicalizes_tailscale_path_resource_urls")
+
+
 def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_raven_name_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_raven_name_test")
@@ -1275,6 +1356,8 @@ def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
     test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents()
+    test_public_bot_founders_checkout_uses_founders_price()
+    test_public_bot_plan_selection_opens_checkout_when_stripe_is_available()
     test_public_bot_action_catalog_has_real_platform_commands()
     test_public_bot_contract_rejects_wrong_channel_and_secret_metadata()
     test_public_bot_turns_use_shared_onboarding_rate_limit()
@@ -1289,11 +1372,12 @@ def main() -> int:
     test_public_bot_share_approval_buttons_are_owner_scoped()
     test_public_bot_ignores_cross_user_active_deployment_metadata()
     test_public_bot_withholds_unpublished_tailnet_app_urls()
+    test_public_bot_canonicalizes_tailscale_path_resource_urls()
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 21 ArcLink public bot tests")
+    print("PASS all 24 ArcLink public bot tests")
     return 0
 
 

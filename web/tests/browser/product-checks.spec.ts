@@ -53,7 +53,14 @@ const MOCK_USER_DASHBOARD = {
         },
       },
       bot_contact: { channel: "telegram", first_contacted: true, handoff_recorded: true },
-      access: { urls: { files: "https://test.arclink.online:8443" } },
+      access: {
+        urls: {
+          dashboard: "https://test.arclink.online/u/arc-test",
+          files: "https://test.arclink.online/u/arc-test/drive",
+          code: "https://test.arclink.online/u/arc-test/code",
+          hermes: "https://test.arclink.online/u/arc-test/hermes",
+        },
+      },
     },
   ],
   entitlement: { state: "paid" },
@@ -412,10 +419,10 @@ test.describe("Route smoke", () => {
     await expect(page.locator("body")).not.toContainText("Generate share link");
     await expect(page.locator("body")).not.toContainText("Create share link");
     await page.locator('button:has-text("services"):visible').first().click();
-    await expect(page.getByRole("link", { name: "Hermes Dashboard →" })).toHaveAttribute("href", "https://test.arclink.online:8443/");
-    await expect(page.getByRole("link", { name: "Drive →" })).toHaveAttribute("href", "https://test.arclink.online:8443/drive");
-    await expect(page.getByRole("link", { name: "Code →" })).toHaveAttribute("href", "https://test.arclink.online:8443/code");
-    await expect(page.getByRole("link", { name: "Terminal →" })).toHaveAttribute("href", "https://test.arclink.online:8443/terminal");
+    await expect(page.getByRole("link", { name: "Hermes Dashboard →" })).toHaveAttribute("href", "https://test.arclink.online/u/arc-test/hermes");
+    await expect(page.getByRole("link", { name: "Drive →" })).toHaveAttribute("href", "https://test.arclink.online/u/arc-test/drive");
+    await expect(page.getByRole("link", { name: "Code →" })).toHaveAttribute("href", "https://test.arclink.online/u/arc-test/code");
+    await expect(page.getByRole("link", { name: "Terminal →" })).toHaveAttribute("href", "https://test.arclink.online/u/arc-test/hermes/terminal");
     await page.locator('button:has-text("model"):visible').first().click();
     await expect(page.getByText("Provider Settings")).toBeVisible();
     await expect(page.getByText("Self-Service Provider Add")).toBeVisible();

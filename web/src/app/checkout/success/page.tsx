@@ -46,6 +46,7 @@ function CheckoutSuccessContent() {
   const [status, setStatus] = useState<EntitlementStatus>("pending");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
+  const [channel, setChannel] = useState("");
   const [sessionClaimed, setSessionClaimed] = useState(false);
   const [pollCount, setPollCount] = useState(0);
 
@@ -92,8 +93,9 @@ function CheckoutSuccessContent() {
       try {
         const res = await api.checkoutStatus(sessionId);
         if (res.status === 200) {
-          const data = res.data as { entitlement_state?: string; display_name?: string };
+          const data = res.data as { entitlement_state?: string; display_name?: string; channel?: string };
           if (data.display_name) setDisplayName(data.display_name);
+          if (data.channel) setChannel(data.channel);
           if (data.entitlement_state === "paid") {
             setStatus("paid");
             claimSession();
@@ -117,6 +119,7 @@ function CheckoutSuccessContent() {
 
   const confirmed = status === "paid";
   const timedOut = pollCount >= MAX_POLLS && status !== "paid";
+  const channelLabel = channel === "telegram" ? "Telegram" : channel === "discord" ? "Discord" : "";
 
   return (
     <main className="flex min-h-screen items-center justify-center px-6">
@@ -142,6 +145,11 @@ function CheckoutSuccessContent() {
             <p className="text-sm text-soft-white/65">
               {displayName ? `Captain ${displayName}, ` : ""}Raven has confirmed payment and your ArcLink agent is entering the launch queue.
             </p>
+            {channelLabel && (
+              <p className="mt-2 text-sm text-soft-white/65">
+                Return to your {channelLabel} chat with Raven for provisioning updates, credentials, and the ready links. You can close this tab once you see this confirmation.
+              </p>
+            )}
             {sessionClaimed && (
               <p className="mt-2 text-sm text-neon-green">
                 You are signed in{email ? ` as ${email}` : ""}.
@@ -156,7 +164,7 @@ function CheckoutSuccessContent() {
               Payment confirmation is taking longer than expected. This is normal - Stripe webhooks can take a few minutes.
             </p>
             <p className="mt-2 text-sm text-soft-white/65">
-              You can safely close this page. Check your dashboard for status updates.
+              You can safely close this page. If you began in Telegram or Discord, return to Raven there; otherwise check your dashboard for status updates.
             </p>
           </div>
         )}

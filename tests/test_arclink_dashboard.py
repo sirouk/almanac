@@ -129,8 +129,8 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     expect(deployment["agent_label"] == "Dashboard Person", str(deployment))
     expect(deployment["access"]["urls"]["dashboard"] == "https://u-amber-vault-1a2b.example.test", str(deployment))
     expect(section_index["files"]["label"] == "Drive", str(section_index["files"]))
-    expect(section_index["files"]["url"] == "https://hermes-amber-vault-1a2b.example.test/drive", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://hermes-amber-vault-1a2b.example.test/code", str(section_index["code"]))
+    expect(section_index["files"]["url"] == "https://u-amber-vault-1a2b.example.test/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://u-amber-vault-1a2b.example.test/code", str(section_index["code"]))
     expect(section_index["terminal"]["url"] == "https://hermes-amber-vault-1a2b.example.test/terminal", str(section_index["terminal"]))
     expect(section_index["hermes"]["label"] == "Hermes Dashboard", str(section_index["hermes"]))
     expect(section_index["hermes"]["url"] == "https://hermes-amber-vault-1a2b.example.test", str(section_index["hermes"]))
@@ -220,7 +220,7 @@ def test_user_dashboard_projects_local_notion_ssot_verification_without_secret_t
     print("PASS test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token")
 
 
-def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
+def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_tailnet_test")
@@ -258,11 +258,12 @@ def test_user_dashboard_prefers_stored_tailnet_app_urls() -> None:
     view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
     deployment = view["deployments"][0]
     section_index = {section["section"]: section for section in deployment["sections"]}
-    expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test:8443/", str(deployment))
-    expect(section_index["files"]["url"] == "https://worker.example.test:8443/drive", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://worker.example.test:8443/code", str(section_index["code"]))
-    expect(section_index["terminal"]["url"] == "https://worker.example.test:8443/terminal", str(section_index["terminal"]))
-    print("PASS test_user_dashboard_prefers_stored_tailnet_app_urls")
+    expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(deployment))
+    expect(section_index["files"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(section_index["code"]))
+    expect(section_index["terminal"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/hermes/terminal", str(section_index["terminal"]))
+    expect(":8443" not in json.dumps(deployment["access"]["urls"], sort_keys=True), str(deployment["access"]["urls"]))
+    print("PASS test_user_dashboard_canonicalizes_tailnet_path_app_urls")
 
 
 def test_user_dashboard_withholds_unpublished_tailnet_app_urls() -> None:
@@ -439,7 +440,7 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
     test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token()
-    test_user_dashboard_prefers_stored_tailnet_app_urls()
+    test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()

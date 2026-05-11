@@ -864,6 +864,75 @@ def _plan_checkout_label(plan: str) -> str:
     return f"Hire Sovereign - ${SOVEREIGN_MONTHLY_DOLLARS}/month"
 
 
+def _checkout_price_id_for_plan(
+    plan: str,
+    *,
+    price_id: str,
+    founders_price_id: str,
+    scale_price_id: str,
+) -> str:
+    clean = _normalize_public_bot_plan(plan) or "founders"
+    checkout_price_id = str(price_id or "").strip()
+    if clean == "founders" and str(founders_price_id or "").strip():
+        checkout_price_id = str(founders_price_id or "").strip()
+    if clean == "founders" and not checkout_price_id:
+        raise ArcLinkPublicBotError("Founders checkout requires ARCLINK_FOUNDERS_PRICE_ID")
+    if clean == "scale" and str(scale_price_id or "").strip():
+        checkout_price_id = str(scale_price_id or "").strip()
+    if clean == "scale" and not str(scale_price_id or "").strip():
+        raise ArcLinkPublicBotError("Scale checkout requires ARCLINK_SCALE_PRICE_ID")
+    if not checkout_price_id:
+        raise ArcLinkPublicBotError("Sovereign checkout requires ARCLINK_SOVEREIGN_PRICE_ID")
+    return checkout_price_id
+
+
+def _open_first_agent_checkout_turn(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    stripe_client: Any,
+    selected_plan: str,
+    price_id: str,
+    founders_price_id: str,
+    scale_price_id: str,
+    base_domain: str,
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
+) -> ArcLinkPublicBotTurn:
+    root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
+    checkout_price_id = _checkout_price_id_for_plan(
+        selected_plan,
+        price_id=price_id,
+        founders_price_id=founders_price_id,
+        scale_price_id=scale_price_id,
+    )
+    session = open_arclink_onboarding_checkout(
+        conn,
+        session_id=str(session["session_id"]),
+        stripe_client=stripe_client,
+        price_id=checkout_price_id,
+        success_url=f"{root}/checkout/success?session={str(session['session_id'])}",
+        cancel_url=f"{root}/checkout/cancel?session={str(session['session_id'])}",
+        base_domain=base_domain or default_base_domain({}),
+    )
+    plan_label = _plan_label(selected_plan)
+    return _reply(
+        session,
+        action="open_checkout",
+        reply=(
+            f"{plan_label} checkout is ready.\n\n"
+            "Stage 1: finish the Stripe handoff at the link below.\n"
+            "Stage 2: I watch for Stripe confirmation and report back in this same channel.\n"
+            "Stage 3: once payment clears, I launch provisioning and keep you posted while Drive, Code, Terminal, memory, and health come online.\n"
+            "Stage 4: when the agent is ready, I bring back the working links and credential handoff."
+        ),
+        buttons=(
+            _button(_plan_checkout_label(selected_plan), url=str(session.get("checkout_url") or "")),
+            _button("Check Status", command="/status", style="secondary"),
+        ),
+        bot_display_name=bot_display_name,
+    )
+
+
 def _pair_channel_value(message: str, command: str) -> str | None:
     if command in ARCLINK_PUBLIC_BOT_PAIR_CHANNEL_COMMANDS:
         return ""
@@ -1304,9 +1373,25 @@ def _raven_name_reply(
 
 def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     metadata = _metadata(deployment)
-    stored_urls = metadata.get("access_urls")
     publish_state = metadata.get("tailnet_app_publication")
     tailnet_apps_unavailable = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "unavailable"
+    base_domain = str(deployment.get("base_domain") or metadata.get("base_domain") or "").strip().lower().strip(".")
+    ingress_mode = str(metadata.get("ingress_mode") or "").strip().lower()
+    if not ingress_mode:
+        ingress_mode = "tailscale" if base_domain.endswith(".ts.net") else "domain"
+    tailscale_dns_name = str(metadata.get("tailscale_dns_name") or base_domain).strip().lower().strip(".")
+    tailscale_strategy = str(metadata.get("tailscale_host_strategy") or "path").strip().lower()
+    if ingress_mode == "tailscale" and tailscale_strategy == "path":
+        if tailnet_apps_unavailable:
+            return {"dashboard": f"https://{tailscale_dns_name or base_domain}/u/{deployment.get('prefix') or ''}"}
+        return arclink_access_urls(
+            prefix=str(deployment.get("prefix") or ""),
+            base_domain=base_domain,
+            ingress_mode=ingress_mode,
+            tailscale_dns_name=tailscale_dns_name,
+            tailscale_host_strategy=tailscale_strategy,
+        )
+    stored_urls = metadata.get("access_urls")
     if isinstance(stored_urls, Mapping):
         safe_urls = {
             str(role): str(url).strip()
@@ -1317,12 +1402,6 @@ def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
             return safe_urls
         if tailnet_apps_unavailable and safe_urls.get("dashboard"):
             return {"dashboard": safe_urls["dashboard"]}
-    base_domain = str(deployment.get("base_domain") or metadata.get("base_domain") or "").strip().lower().strip(".")
-    ingress_mode = str(metadata.get("ingress_mode") or "").strip().lower()
-    if not ingress_mode:
-        ingress_mode = "tailscale" if base_domain.endswith(".ts.net") else "domain"
-    tailscale_dns_name = str(metadata.get("tailscale_dns_name") or base_domain).strip().lower().strip(".")
-    tailscale_strategy = str(metadata.get("tailscale_host_strategy") or "path").strip().lower()
     if ingress_mode == "tailscale" and tailnet_apps_unavailable:
         return {"dashboard": f"https://{tailscale_dns_name or base_domain}/u/{deployment.get('prefix') or ''}"}
     return arclink_access_urls(
@@ -3235,6 +3314,18 @@ def handle_arclink_public_bot_turn(
                 f"Agent onboard ArcLink for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
                 "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
+        if stripe_client is not None:
+            return _open_first_agent_checkout_turn(
+                conn,
+                session,
+                stripe_client=stripe_client,
+                selected_plan=plan,
+                price_id=price_id,
+                founders_price_id=founders_price_id,
+                scale_price_id=scale_price_id,
+                base_domain=base_domain,
+                bot_display_name=raven,
+            )
         return _reply(
             session,
             action="prompt_checkout",
@@ -3248,38 +3339,16 @@ def handle_arclink_public_bot_turn(
     if command in {"checkout", "/checkout"}:
         if stripe_client is None:
             raise ArcLinkPublicBotError("checkout requires an injected Stripe client")
-        root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
         selected_plan = _normalize_public_bot_plan(str(session.get("selected_plan_id") or "founders"))
-        checkout_price_id = str(price_id or "").strip()
-        if selected_plan == "founders" and str(founders_price_id or "").strip():
-            checkout_price_id = str(founders_price_id or "").strip()
-        if selected_plan == "founders" and not checkout_price_id:
-            raise ArcLinkPublicBotError("Founders checkout requires ARCLINK_FOUNDERS_PRICE_ID")
-        if selected_plan == "scale" and str(scale_price_id or "").strip():
-            checkout_price_id = str(scale_price_id or "").strip()
-        if selected_plan == "scale" and not str(scale_price_id or "").strip():
-            raise ArcLinkPublicBotError("Scale checkout requires ARCLINK_SCALE_PRICE_ID")
-        session = open_arclink_onboarding_checkout(
+        return _open_first_agent_checkout_turn(
             conn,
-            session_id=str(session["session_id"]),
-            stripe_client=stripe_client,
-            price_id=checkout_price_id,
-            success_url=f"{root}/checkout/success?session={str(session['session_id'])}",
-            cancel_url=f"{root}/checkout/cancel?session={str(session['session_id'])}",
-            base_domain=base_domain or default_base_domain({}),
-        )
-        plan_label = _plan_label(selected_plan)
-        return _reply(
             session,
-            action="open_checkout",
-            reply=(
-                f"{plan_label} checkout is open. Complete the Stripe handoff at the link below. "
-                "The instant payment clears, I move your ArcLink agent into the launch queue and report back here."
-            ),
-            buttons=(
-                _button(_plan_checkout_label(selected_plan), url=str(session.get("checkout_url") or "")),
-                _button("Check Status", command="/status", style="secondary"),
-            ),
+            stripe_client=stripe_client,
+            selected_plan=selected_plan,
+            price_id=price_id,
+            founders_price_id=founders_price_id,
+            scale_price_id=scale_price_id,
+            base_domain=base_domain,
             bot_display_name=raven,
         )
     return _reply(

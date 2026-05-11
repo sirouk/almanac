@@ -187,9 +187,11 @@ Provisioning dry run:
   `CODE_WORKSPACE_ROOT` so Drive and Code operate
   inside deployment-owned roots.
 - Access URL metadata is rendered for dashboard, files, code, and Hermes. In
-  Tailscale path mode, a per-service tailnet HTTPS port may override the Hermes
-  path URL while files and code stay under the authenticated user dashboard at
-  `/u/<prefix>/drive` and `/u/<prefix>/code`.
+  Tailscale path mode, user-facing URLs stay on the public path route:
+  `/u/<prefix>`, `/u/<prefix>/drive`, `/u/<prefix>/code`, and
+  `/u/<prefix>/hermes`. Per-service tailnet HTTPS ports can exist for internal
+  publication/probing, but they are not the links Raven gives to newly
+  onboarded users.
 - Nextcloud overwrite settings are applied only when the files URL is a
   root-level HTTPS host or host:port. Path-prefixed URLs are not written as
   Nextcloud canonical overwrite hosts.

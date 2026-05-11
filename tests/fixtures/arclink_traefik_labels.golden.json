@@ -3,12 +3,14 @@
     "traefik.enable": "true",
     "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.entrypoints": "web",
     "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.rule": "Host(`u-amber-vault-1a2b.example.test`)",
+    "traefik.http.routers.arclink-amber-vault-1a2b-dashboard.service": "arclink-amber-vault-1a2b-dashboard",
     "traefik.http.services.arclink-amber-vault-1a2b-dashboard.loadbalancer.server.port": "3000"
   },
   "hermes": {
     "traefik.enable": "true",
     "traefik.http.routers.arclink-amber-vault-1a2b-hermes.entrypoints": "web",
     "traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule": "Host(`hermes-amber-vault-1a2b.example.test`)",
+    "traefik.http.routers.arclink-amber-vault-1a2b-hermes.service": "arclink-amber-vault-1a2b-hermes",
     "traefik.http.services.arclink-amber-vault-1a2b-hermes.loadbalancer.server.port": "3210"
   }
 }

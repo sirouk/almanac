@@ -278,17 +278,13 @@ def arclink_access_urls(
         )
         if strategy == "path":
             prefixes = arclink_role_path_prefixes(prefix)
-            urls = {role: f"https://{hostnames[role]}{prefixes[role]}" for role in hostnames}
-            urls["files"] = f"{urls['dashboard'].rstrip('/')}/drive"
-            urls["code"] = f"{urls['dashboard'].rstrip('/')}/code"
-            ports = tailnet_service_ports or {}
-            for role in ("hermes",):
-                try:
-                    port = int(ports.get(role) or 0)
-                except (TypeError, ValueError):
-                    port = 0
-                if 0 < port < 65536:
-                    urls[role] = f"https://{hostnames[role]}:{port}/"
+            dashboard = f"https://{hostnames['dashboard']}{prefixes['dashboard']}"
+            urls = {
+                "dashboard": dashboard,
+                "files": f"{dashboard.rstrip('/')}/drive",
+                "code": f"{dashboard.rstrip('/')}/code",
+                "hermes": f"https://{hostnames['hermes']}{prefixes['hermes']}",
+            }
             return urls
         urls = {role: f"https://{hostname}" for role, hostname in hostnames.items()}
         urls["files"] = f"{urls['dashboard'].rstrip('/')}/drive"
@@ -315,6 +311,7 @@ def render_traefik_http_labels(
         "traefik.enable": "true",
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`)",
         f"traefik.http.routers.{router}.entrypoints": "web",
+        f"traefik.http.routers.{router}.service": router,
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),
     }
     clean_network = str(docker_network or "").strip()
@@ -343,6 +340,7 @@ def render_traefik_http_path_labels(
         "traefik.enable": "true",
         f"traefik.http.routers.{router}.rule": f"Host(`{hostname}`) && PathPrefix(`{clean_path}`)",
         f"traefik.http.routers.{router}.entrypoints": "web",
+        f"traefik.http.routers.{router}.service": router,
         f"traefik.http.routers.{router}.middlewares": middleware,
         f"traefik.http.middlewares.{middleware}.stripprefix.prefixes": clean_path,
         f"traefik.http.services.{router}.loadbalancer.server.port": str(int(port)),

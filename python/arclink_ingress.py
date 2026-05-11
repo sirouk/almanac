@@ -215,22 +215,31 @@ def render_traefik_dynamic_labels(
         raise ValueError("ArcLink ingress mode must be domain or tailscale")
     path_prefixes = arclink_role_path_prefixes(prefix) if mode == "tailscale" and strategy == "path" else {}
     labels: dict[str, dict[str, str]] = {}
+    if path_prefixes:
+        labels["dashboard"] = {}
+        root_labels = render_traefik_http_path_labels(
+            service_name=f"{prefix}-hermes-root",
+            hostname=hostnames["hermes"],
+            path_prefix=path_prefixes["dashboard"],
+            port=int(ports["hermes"]),
+            docker_network=docker_network,
+            priority=10,
+        )
+        alias_labels = render_traefik_http_path_labels(
+            service_name=f"{prefix}-hermes",
+            hostname=hostnames["hermes"],
+            path_prefix=path_prefixes["hermes"],
+            port=int(ports["hermes"]),
+            docker_network=docker_network,
+            priority=100,
+        )
+        labels["hermes"] = {**root_labels, **alias_labels}
+        return labels
     for role in ARCLINK_HOST_ROLES:
-        if path_prefixes:
-            priority = 10 if role == "dashboard" else 100
-            labels[role] = render_traefik_http_path_labels(
-                service_name=f"{prefix}-{role}",
-                hostname=hostnames[role],
-                path_prefix=path_prefixes[role],
-                port=int(ports[role]),
-                docker_network=docker_network,
-                priority=priority,
-            )
-        else:
-            labels[role] = render_traefik_http_labels(
-                service_name=f"{prefix}-{role}",
-                hostname=hostnames[role],
-                port=int(ports[role]),
-                docker_network=docker_network,
-            )
+        labels[role] = render_traefik_http_labels(
+            service_name=f"{prefix}-{role}",
+            hostname=hostnames[role],
+            port=int(ports[role]),
+            docker_network=docker_network,
+        )
     return labels

@@ -864,7 +864,7 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     lines = [
         "Agent online.",
         "",
-        "I'm Raven. Your ArcLink agent is ready: Drive, Code, Terminal, memory, and deployment health are lit.",
+        "Stage 4 complete: your ArcLink agent is ready. Drive, Code, Terminal, memory, and deployment health are lit.",
         "",
     ]
     for label, url in (

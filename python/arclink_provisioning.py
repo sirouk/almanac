@@ -543,7 +543,7 @@ def _render_services(
         ),
         "notification-delivery": _service(
             image=app_image,
-            command=["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/arclink-notification-delivery.sh"],
+            command=["./bin/docker-job-loop.sh", "notification-delivery", "5", "./bin/arclink-notification-delivery.sh"],
             environment=env,
             deploy=_limits("notification-delivery"),
         ),

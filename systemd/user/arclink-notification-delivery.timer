@@ -1,9 +1,10 @@
 [Unit]
-Description=Deliver queued ArcLink notifications every minute
+Description=Deliver queued ArcLink notifications promptly
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=1m
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
 Unit=arclink-notification-delivery.service
 
 [Install]

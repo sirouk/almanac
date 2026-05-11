@@ -101,6 +101,11 @@ def test_compose_defines_full_stack_services() -> None:
     expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
     expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)
     expect("python/arclink_action_worker.py" in body and "control-action-worker" in body, body)
+    expect(
+        '["./bin/docker-job-loop.sh", "notification-delivery", "5", "./bin/arclink-notification-delivery.sh"]'
+        in body,
+        "public-channel agent turns should not wait on a 60s notification poll",
+    )
     expect("./arclink-priv/secrets/ssh:/root/.ssh" in body, body)
     expect("ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}" in body, body)
     expect(

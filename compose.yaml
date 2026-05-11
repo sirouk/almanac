@@ -350,7 +350,7 @@ services:
       # Trusted delivery boundary: Raven-mediated public-channel agent turns
       # execute the selected deployment's Hermes gateway container.
       - /var/run/docker.sock:/var/run/docker.sock
-    command: ["./bin/docker-job-loop.sh", "notification-delivery", "60", "./bin/arclink-notification-delivery.sh"]
+    command: ["./bin/docker-job-loop.sh", "notification-delivery", "5", "./bin/arclink-notification-delivery.sh"]
 
   health-watch:
     <<: *arclink-job

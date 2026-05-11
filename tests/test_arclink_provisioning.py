@@ -98,6 +98,15 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         "managed-context-install",
     }
     expect(set(services) == expected_services, sorted(services))
+    expect(
+        services["notification-delivery"]["command"] == [
+            "./bin/docker-job-loop.sh",
+            "notification-delivery",
+            "5",
+            "./bin/arclink-notification-delivery.sh",
+        ],
+        str(services["notification-delivery"]),
+    )
     expect(intent["execution"]["ready"], str(intent["execution"]))
     expect(intent["state_roots"]["root"] == "/arcdata/deployments/dep_1-amber-vault-1a2b", str(intent["state_roots"]))
     expect(intent["state_roots"]["linked_resources"].endswith("/linked-resources"), str(intent["state_roots"]))

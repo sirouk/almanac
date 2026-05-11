@@ -1,5 +1,33 @@
 # Build Completion Notes
 
+## 2026-05-11 Telegram Active-Agent Command Scope
+
+Scope: repaired the mismatch where Raven routed non-Raven slash commands to the
+active agent, but Telegram's slash menu still displayed only Raven's global
+public command catalog.
+
+- Added per-chat Telegram command scope refresh for chats with an active
+  ArcLink deployment. The scoped menu merges Raven controls with
+  non-conflicting active-agent Hermes commands from the pinned Hermes command
+  registry, falling back to a bundled safe core list when the registry is not
+  present.
+- Kept Raven-owned public controls reserved in that chat menu and suppressed
+  direct `/update`; `/update`, `/upgrade_hermes`, and `/upgrade-hermes` now
+  all route to ArcLink's pinned upgrade guidance instead of unmanaged
+  `hermes update`.
+- Documented that Discord remains global-command constrained, so `/agent
+  <message-or-command>` is still the public bridge for Discord and for any
+  Telegram command-name conflict such as Hermes `/status`.
+
+Verification run:
+
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 -m py_compile python/arclink_telegram.py python/arclink_public_bots.py python/arclink_hosted_api.py tests/test_arclink_telegram.py tests/test_arclink_public_bots.py` passed.
+- `git diff --check` passed.
+
 ## 2026-05-10 Raven Selected-Agent Bridge Contract Alignment
 
 Scope: reconciled the product-reality contract after Raven freeform public

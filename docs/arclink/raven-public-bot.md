@@ -23,10 +23,13 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
   queued as selected-agent turns and Raven brings the agent's reply back to the
   same linked Telegram or Discord channel.
 - Non-Raven slash commands from an onboarded user are passed to the active
-  agent instead of being swallowed by Raven help. Platforms that cannot expose
-  every active Hermes command can use `/agent <message-or-command>`; on
-  Discord the registered `/agent` command accepts a `message` option. Helm
-  remains the direct dashboard path for the richest agent surface.
+  agent instead of being swallowed by Raven help. Telegram publishes a
+  per-chat command scope for onboarded chats that merges Raven controls with
+  non-conflicting active-agent Hermes commands. Platforms or command names
+  that cannot safely share the public slash namespace can use
+  `/agent <message-or-command>`; on Discord the registered `/agent` command
+  accepts a `message` option. Helm remains the direct dashboard path for the
+  richest agent surface.
 
 ## Voice Rules
 
@@ -86,7 +89,7 @@ Hidden/account-state actions:
 - `/add-agent` is accepted only after the account has an active first deployment. It is surfaced as an `/agents` button, not as a global registered command.
 - `/agent-{slug}` switches the active agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
 - `/share-approve {grant_id}` and `/share-deny {grant_id}` are button-only owner actions for read-only Drive/Code share grants. Raven only honors them from a public channel linked to the share owner.
-- `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, but it does not run direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
+- `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, and `/update` is intercepted too. Neither path runs direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
 - `/raven-name` remains accepted as the Discord-friendly alias for
   `/raven_name`.
 
@@ -109,7 +112,7 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 - `Back To My Crew` returns to the agent roster.
 - Share approval notifications use `Approve` and `Deny` buttons. Approving lets the recipient accept the resource as read-only under `Linked`; denying leaves the share closed.
 
-Telegram uses inline keyboard buttons. Discord uses message components. The command catalog remains intentionally small because global slash commands cannot reflect each individual account state.
+Telegram uses inline keyboard buttons. Discord uses message components. The default public command catalog remains intentionally small because global slash commands cannot reflect each individual account state. Once a Telegram chat has an active ArcLink deployment, Raven refreshes that chat's Telegram command scope with the default public commands plus non-conflicting active-agent Hermes commands such as `/model`, `/provider`, `/reload_mcp`, `/reload_skills`, `/usage`, and `/stop`. Raven-owned controls such as `/help`, `/status`, `/agents`, `/credentials`, `/connect_notion`, `/config_backup`, `/link_channel`, and `/upgrade_hermes` stay reserved for Raven; use `/agent /status` or Helm when a conflicting Hermes command is needed.
 
 Telegram webhook registration must include `callback_query` in `allowed_updates`; otherwise inline buttons render but Telegram never delivers taps to ArcLink. `deploy.sh control install|upgrade` registers the public webhook at `/api/v1/webhooks/telegram` and refreshes command buttons so Raven can acknowledge taps and send the next turn.
 

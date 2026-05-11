@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
+import re
 import sqlite3
 import sys
 import urllib.parse
@@ -21,6 +22,7 @@ if str(_PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(_PYTHON_DIR))
 
 from arclink_public_bots import (
+    ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES,
     arclink_public_bot_telegram_commands,
     arclink_public_bot_turn_telegram_reply_markup,
     handle_arclink_public_bot_turn,
@@ -31,6 +33,72 @@ logger = logging.getLogger("arclink.telegram")
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
+ARCLINK_TELEGRAM_COMMAND_LIMIT = 100
+_TELEGRAM_COMMAND_RE = re.compile(r"[^a-z0-9_]")
+_TELEGRAM_MULTI_UNDERSCORE_RE = re.compile(r"_{2,}")
+_TELEGRAM_CHAT_COMMAND_SCOPE_CACHE: set[tuple[str, str]] = set()
+
+ARCLINK_TELEGRAM_AGENT_FALLBACK_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("new", "Agent: start a fresh session"),
+    ("topic", "Agent: inspect Telegram topic sessions"),
+    ("retry", "Agent: retry the last message"),
+    ("undo", "Agent: remove the last exchange"),
+    ("title", "Agent: set or show session title"),
+    ("branch", "Agent: branch the current session"),
+    ("compress", "Agent: compress conversation context"),
+    ("rollback", "Agent: list or restore checkpoints"),
+    ("stop", "Agent: stop the running agent"),
+    ("approve", "Agent: approve a pending command"),
+    ("deny", "Agent: deny a pending command"),
+    ("goal", "Agent: set or inspect standing goal"),
+    ("profile", "Agent: show profile and home"),
+    ("sethome", "Agent: set this chat as home"),
+    ("resume", "Agent: resume a named session"),
+    ("model", "Agent: switch or inspect model"),
+    ("provider", "Agent: alias for model/provider"),
+    ("personality", "Agent: set personality"),
+    ("footer", "Agent: toggle reply footer"),
+    ("yolo", "Agent: toggle approval mode"),
+    ("reasoning", "Agent: manage reasoning effort"),
+    ("fast", "Agent: toggle fast mode"),
+    ("voice", "Agent: manage voice mode"),
+    ("curator", "Agent: skill maintenance"),
+    ("kanban", "Agent: collaboration board"),
+    ("reload_mcp", "Agent: reload MCP servers"),
+    ("reload_skills", "Agent: reload skills"),
+    ("restart", "Agent: restart gateway"),
+    ("usage", "Agent: show token usage"),
+    ("insights", "Agent: usage insights"),
+    ("debug", "Agent: prepare debug report"),
+)
+ARCLINK_TELEGRAM_AGENT_ALIAS_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("provider", "Agent: alias for model/provider"),
+)
+ARCLINK_TELEGRAM_SUPPRESSED_AGENT_COMMANDS = frozenset(
+    {
+        # Raven owns these names in public channels.
+        "agent",
+        "agents",
+        "cancel",
+        "checkout",
+        "commands",
+        "config_backup",
+        "connect_notion",
+        "credentials",
+        "help",
+        "link_channel",
+        "name",
+        "pair_channel",
+        "plan",
+        "raven_name",
+        "start",
+        "status",
+        "upgrade_hermes",
+        # Direct Hermes update is intentionally hidden behind ArcLink's pinned
+        # upgrade rail.
+        "update",
+    }
+)
 
 
 class ArcLinkTelegramError(RuntimeError):
@@ -197,6 +265,220 @@ def telegram_set_my_commands(
         payload=payload,
         timeout=20,
     )
+
+
+def telegram_get_my_commands(
+    *,
+    bot_token: str,
+    scope: dict[str, Any] | None = None,
+    language_code: str = "",
+) -> list[dict[str, str]]:
+    payload: dict[str, Any] = {}
+    if scope is not None:
+        payload["scope"] = scope
+    if language_code:
+        payload["language_code"] = language_code
+    result = _request_json(
+        _telegram_url(bot_token, "getMyCommands"),
+        method="POST" if payload else "GET",
+        payload=payload or None,
+        timeout=20,
+    )
+    value = result.get("result", result)
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _telegram_command_name(raw: str) -> str:
+    name = str(raw or "").strip().lower().lstrip("/").replace("-", "_")
+    name = _TELEGRAM_COMMAND_RE.sub("", name)
+    name = _TELEGRAM_MULTI_UNDERSCORE_RE.sub("_", name)
+    return name.strip("_")[:32]
+
+
+def _telegram_chat_scope(chat_id: str) -> dict[str, Any]:
+    clean = str(chat_id or "").strip()
+    scoped_id: int | str
+    if re.fullmatch(r"-?\d+", clean):
+        scoped_id = int(clean)
+    else:
+        scoped_id = clean
+    return {"type": "chat", "chat_id": scoped_id}
+
+
+def _hermes_agent_source_candidates(env: Mapping[str, str] | None = None) -> list[pathlib.Path]:
+    e = dict(env or os.environ)
+    raw_candidates: list[str] = []
+    for key in ("ARCLINK_HERMES_AGENT_SRC", "ARCLINK_HERMES_SOURCE_DIR", "HERMES_AGENT_SRC"):
+        value = str(e.get(key) or "").strip()
+        if value:
+            raw_candidates.append(value)
+    for key in ("ARCLINK_RUNTIME_DIR", "RUNTIME_DIR"):
+        value = str(e.get(key) or "").strip()
+        if value:
+            raw_candidates.append(str(pathlib.Path(value) / "hermes-agent-src"))
+    for key in ("STATE_DIR", "ARCLINK_STATE_DIR"):
+        value = str(e.get(key) or "").strip()
+        if value:
+            raw_candidates.append(str(pathlib.Path(value) / "runtime" / "hermes-agent-src"))
+    for key in ("ARCLINK_PRIV_DIR", "CONFIG_PRIV_DIR"):
+        value = str(e.get(key) or "").strip()
+        if value:
+            raw_candidates.append(str(pathlib.Path(value) / "state" / "runtime" / "hermes-agent-src"))
+    raw_candidates.extend(
+        [
+            "/home/arclink/arclink/arclink-priv/state/runtime/hermes-agent-src",
+            "/srv/config-priv/state/runtime/hermes-agent-src",
+            "/opt/arclink/runtime/hermes-agent-src",
+        ]
+    )
+    seen: set[str] = set()
+    candidates: list[pathlib.Path] = []
+    for raw in raw_candidates:
+        path = pathlib.Path(raw).expanduser()
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if (path / "hermes_cli" / "commands.py").exists():
+            candidates.append(path)
+    return candidates
+
+
+def _load_hermes_telegram_menu_commands(
+    *,
+    max_commands: int = ARCLINK_TELEGRAM_COMMAND_LIMIT,
+    env: Mapping[str, str] | None = None,
+) -> tuple[list[tuple[str, str]], int, str]:
+    """Best-effort read of Hermes's own Telegram command menu helper."""
+    for source_root in _hermes_agent_source_candidates(env):
+        added = False
+        root = str(source_root)
+        if root not in sys.path:
+            sys.path.insert(0, root)
+            added = True
+        try:
+            from hermes_cli.commands import (  # type: ignore
+                COMMAND_REGISTRY,
+                _is_gateway_available,
+                _requires_argument,
+                _resolve_config_gates,
+                _sanitize_telegram_name,
+            )
+
+            overrides = _resolve_config_gates()
+            commands: list[tuple[str, str]] = []
+            for cmd_def in COMMAND_REGISTRY:
+                if not _is_gateway_available(cmd_def, overrides):
+                    continue
+                if _requires_argument(str(getattr(cmd_def, "args_hint", ""))):
+                    continue
+                name = _sanitize_telegram_name(str(getattr(cmd_def, "name", "")))
+                description = str(getattr(cmd_def, "description", "") or f"Run /{name}").strip()
+                if name and description:
+                    commands.append((name, description))
+                if len(commands) >= max_commands:
+                    break
+            return commands, 0, root
+        except Exception as exc:  # noqa: BLE001 - command menu must fall back safely
+            logger.debug("hermes_telegram_menu_load_failed source=%s error=%s", root, str(exc)[:160])
+        finally:
+            if added:
+                try:
+                    sys.path.remove(root)
+                except ValueError:
+                    pass
+    return list(ARCLINK_TELEGRAM_AGENT_FALLBACK_COMMANDS), 0, "fallback"
+
+
+def arclink_public_bot_telegram_agent_commands(
+    *,
+    env: Mapping[str, str] | None = None,
+    max_commands: int = ARCLINK_TELEGRAM_COMMAND_LIMIT,
+) -> list[dict[str, str]]:
+    raw_commands, _hidden_count, _source = _load_hermes_telegram_menu_commands(
+        max_commands=max_commands,
+        env=env,
+    )
+    result: list[dict[str, str]] = []
+    seen: set[str] = set()
+    raw_with_aliases = list(raw_commands) + list(ARCLINK_TELEGRAM_AGENT_ALIAS_COMMANDS)
+    for raw_name, raw_description in raw_with_aliases:
+        name = _telegram_command_name(raw_name)
+        if not name or name in seen or name in ARCLINK_TELEGRAM_SUPPRESSED_AGENT_COMMANDS:
+            continue
+        description = str(raw_description or f"Agent: run /{name}").strip()
+        if not description.lower().startswith("agent:"):
+            description = f"Agent: {description[:90]}"
+        result.append({"command": name, "description": description[:256]})
+        seen.add(name)
+        if len(result) >= max_commands:
+            break
+    return result
+
+
+def arclink_public_bot_telegram_chat_commands(
+    *,
+    include_agent_commands: bool,
+    env: Mapping[str, str] | None = None,
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_commands(commands: list[dict[str, str]]) -> None:
+        for item in commands:
+            name = _telegram_command_name(str(item.get("command") or ""))
+            description = str(item.get("description") or "").strip()
+            if not name or not description or name in seen:
+                continue
+            merged.append({"command": name, "description": description[:256]})
+            seen.add(name)
+            if len(merged) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
+                return
+
+    add_commands(arclink_public_bot_telegram_commands())
+    if include_agent_commands and len(merged) < ARCLINK_TELEGRAM_COMMAND_LIMIT:
+        add_commands(arclink_public_bot_telegram_agent_commands(env=env))
+    return merged[:ARCLINK_TELEGRAM_COMMAND_LIMIT]
+
+
+def refresh_arclink_public_telegram_chat_commands(
+    *,
+    bot_token: str,
+    chat_id: str,
+    include_agent_commands: bool,
+    env: Mapping[str, str] | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    clean_token = str(bot_token or "").strip()
+    clean_chat_id = str(chat_id or "").strip()
+    if not clean_token or not clean_chat_id:
+        return {"skipped": True, "reason": "missing_token_or_chat"}
+    commands = arclink_public_bot_telegram_chat_commands(
+        include_agent_commands=include_agent_commands,
+        env=env,
+    )
+    signature = ",".join(item["command"] for item in commands)
+    cache_key = (clean_chat_id, signature)
+    if not force and cache_key in _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE:
+        return {
+            "skipped": True,
+            "reason": "unchanged",
+            "chat_id": clean_chat_id,
+            "command_count": len(commands),
+            "include_agent_commands": include_agent_commands,
+        }
+    scope = _telegram_chat_scope(clean_chat_id)
+    telegram_set_my_commands(bot_token=clean_token, commands=commands, scope=scope)
+    _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE.add(cache_key)
+    return {
+        "registered": [item["command"] for item in commands],
+        "scope": scope,
+        "chat_id": clean_chat_id,
+        "command_count": len(commands),
+        "include_agent_commands": include_agent_commands,
+    }
 
 
 def telegram_set_webhook(
@@ -380,6 +662,7 @@ def handle_telegram_update(
     sovereign_agent_expansion_price_id: str = "",
     scale_agent_expansion_price_id: str = "",
     base_domain: str = "",
+    telegram_bot_token: str = "",
 ) -> dict[str, Any] | None:
     """Process a single Telegram update through the shared bot contract.
 
@@ -406,6 +689,21 @@ def handle_telegram_update(
         metadata={"telegram_message_id": parsed.get("message_id", "")},
         display_name_hint=parsed.get("display_name", ""),
     )
+    command_scope: dict[str, Any] | None = None
+    clean_token = str(telegram_bot_token or "").strip()
+    if clean_token:
+        include_agent_commands = bool(
+            turn.deployment_id and turn.status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+        )
+        try:
+            command_scope = refresh_arclink_public_telegram_chat_commands(
+                bot_token=clean_token,
+                chat_id=parsed["chat_id"],
+                include_agent_commands=include_agent_commands,
+                force=turn.action == "switch_agent",
+            )
+        except Exception as exc:  # noqa: BLE001 - never fail the webhook on menu refresh
+            logger.warning("telegram_command_scope_refresh_failed action=%s error=%s", turn.action, str(exc)[:160])
     return {
         "chat_id": parsed["chat_id"],
         "text": turn.reply,
@@ -413,6 +711,7 @@ def handle_telegram_update(
         "session_id": turn.session_id,
         "action": turn.action,
         "callback_query_id": parsed.get("callback_query_id", ""),
+        "command_scope": command_scope,
     }
 
 
@@ -550,6 +849,7 @@ def run_telegram_polling(
                     sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
                     scale_agent_expansion_price_id=scale_agent_expansion_price_id,
                     base_domain=base_domain,
+                    telegram_bot_token=config.bot_token,
                 )
                 if result:
                     transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))

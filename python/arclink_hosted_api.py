@@ -1017,6 +1017,7 @@ def _handle_telegram_webhook(
     telegram_transport: Any | None = None,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Handle an incoming Telegram Bot API update (webhook mode)."""
+    telegram_config = TelegramConfig.from_env(config.env)
     result = handle_telegram_update(
         conn, body,
         stripe_client=stripe_client,
@@ -1027,6 +1028,7 @@ def _handle_telegram_webhook(
         sovereign_agent_expansion_price_id=config.sovereign_agent_expansion_price_id,
         scale_agent_expansion_price_id=config.scale_agent_expansion_price_id,
         base_domain=config.base_domain,
+        telegram_bot_token=telegram_config.bot_token,
     )
     if result is None:
         return _json_response(200, {"ok": True, "action": "ignored"}, request_id=request_id)
@@ -1046,7 +1048,6 @@ def _handle_telegram_webhook(
         except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
             logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
     else:
-        telegram_config = TelegramConfig.from_env(config.env)
         if telegram_config.is_live:
             live_transport = LiveTelegramTransport(telegram_config)
             if callback_query_id:

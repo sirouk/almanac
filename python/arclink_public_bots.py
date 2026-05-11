@@ -109,6 +109,7 @@ ARCLINK_PUBLIC_BOT_UPGRADE_HERMES_COMMANDS = frozenset(
     {
         "/upgrade-hermes",
         "/upgrade_hermes",
+        "/update",
         "upgrade-hermes",
         "upgrade_hermes",
         "upgrade hermes",

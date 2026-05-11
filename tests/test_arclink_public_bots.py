@@ -626,6 +626,17 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
     expect("unmanaged `hermes update`" in upgrade.reply, upgrade.reply)
     count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
     expect(count == 0, f"upgrade command should not create an onboarding session, got {count}")
+
+    direct_update = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:new",
+        text="/update",
+    )
+    expect(direct_update.action == "upgrade_hermes_unavailable", str(direct_update))
+    expect("unmanaged `hermes update`" in direct_update.reply, direct_update.reply)
+    count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
+    expect(count == 0, f"direct Hermes update command should not create an onboarding session, got {count}")
     print("PASS test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions")
 
 
@@ -664,6 +675,15 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     expect(upgrade.action == "upgrade_hermes_controlled", str(upgrade))
     expect("ArcLink" in upgrade.reply and "`hermes update`" in upgrade.reply, upgrade.reply)
     expect(any(button.command == "/status" for button in upgrade.buttons), str(upgrade.buttons))
+
+    direct_update = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/update",
+    )
+    expect(direct_update.action == "upgrade_hermes_controlled", str(direct_update))
+    expect("ArcLink" in direct_update.reply and "`hermes update`" in direct_update.reply, direct_update.reply)
 
     add = bots.handle_arclink_public_bot_turn(
         conn,

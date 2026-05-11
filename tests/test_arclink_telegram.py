@@ -116,6 +116,50 @@ def test_telegram_registers_public_bot_actions() -> None:
     print("PASS test_telegram_registers_public_bot_actions")
 
 
+def test_telegram_active_chat_scope_adds_agent_commands() -> None:
+    control = load_module("arclink_control.py", "arclink_control_tg_active_scope_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_active_scope_test")
+    conn = memory_db(control)
+    seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        prefix="arc-tg-scope",
+    )
+    calls: list[dict[str, object]] = []
+    tg.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+    result = tg.handle_telegram_update(
+        conn,
+        {"update_id": 20, "message": {"message_id": 9, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agents"}},
+        telegram_bot_token="123:abc",
+    )
+
+    expect(result is not None and result["action"] == "show_agents", str(result))
+    expect(calls, "expected per-chat command scope refresh")
+    expect(calls[0]["scope"] == {"type": "chat", "chat_id": 42}, str(calls[0]))
+    names = {item["command"] for item in calls[0]["commands"]}
+    expect("agent" in names and "agents" in names, str(names))
+    expect("model" in names, str(names))
+    expect("provider" in names, str(names))
+    expect("reload_mcp" in names, str(names))
+    expect("update" not in names, "unsafe direct Hermes update must stay hidden")
+    expect(len(names) == len(calls[0]["commands"]), "command names must be unique")
+    expect(len(names) <= 100, "Telegram command limit exceeded")
+    expect(result.get("command_scope", {}).get("include_agent_commands") is True, str(result.get("command_scope")))
+
+    before = len(calls)
+    skipped = tg.refresh_arclink_public_telegram_chat_commands(
+        bot_token="123:abc",
+        chat_id="42",
+        include_agent_commands=True,
+    )
+    expect(len(calls) == before, "unchanged command scope should be cached")
+    expect(skipped.get("skipped") is True and skipped.get("reason") == "unchanged", str(skipped))
+    print("PASS test_telegram_active_chat_scope_adds_agent_commands")
+
+
 def test_telegram_status_reports_selected_agent_label() -> None:
     control = load_module("arclink_control.py", "arclink_control_tg_selected_agent_test")
     tg = load_module("arclink_telegram.py", "arclink_telegram_selected_agent_test")
@@ -219,12 +263,13 @@ def main() -> int:
     test_telegram_handle_update_through_bot_contract()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
+    test_telegram_active_chat_scope_adds_agent_commands()
     test_telegram_status_reports_selected_agent_label()
     test_telegram_webhook_registration_allows_buttons()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 10 ArcLink Telegram adapter tests")
+    print("PASS all 11 ArcLink Telegram adapter tests")
     return 0
 
 

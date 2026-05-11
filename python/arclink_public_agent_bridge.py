@@ -71,6 +71,10 @@ def _required(payload: Mapping[str, Any], key: str) -> str:
     return value
 
 
+def _is_slash_command(text: str) -> bool:
+    return str(text or "").lstrip().startswith("/")
+
+
 def _public_bridge_streaming_enabled() -> bool:
     return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "1").strip().lower() not in {
         "0",
@@ -165,7 +169,7 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
         )
         event = MessageEvent(
             text=text,
-            message_type=MessageType.TEXT,
+            message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
             source=source,
             message_id=message_id,
         )
@@ -349,7 +353,7 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
         )
         event = MessageEvent(
             text=text,
-            message_type=MessageType.COMMAND if text.startswith("/") else MessageType.TEXT,
+            message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
             source=source,
             raw_message=_DiscordRawMessage(rest=rest, channel_id=channel_id, message_id=message_id),
             message_id=message_id or None,

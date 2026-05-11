@@ -587,10 +587,18 @@ def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
 
 
 def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> None:
+    bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_contract_test")
     bridge_source = (PYTHON_DIR / "arclink_public_agent_bridge.py").read_text(encoding="utf-8")
     expect("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING" in bridge_source, bridge_source)
     expect("streaming.enabled = True" in bridge_source, bridge_source)
     expect("show_reasoning = True" not in bridge_source, bridge_source)
+    expect(bridge._is_slash_command("/provider") is True, "slash command should be recognized")
+    expect(bridge._is_slash_command("  /reload-mcp") is True, "leading whitespace slash command should be recognized")
+    expect(bridge._is_slash_command("hello") is False, "chat text should not be a slash command")
+    expect(
+        bridge_source.count("message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT") == 2,
+        "Telegram and Discord bridge events must both preserve Hermes command type",
+    )
     print("PASS test_public_agent_bridge_enables_gateway_streaming_without_reasoning")
 
 

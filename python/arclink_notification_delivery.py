@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -356,7 +357,7 @@ def _run_public_agent_gateway_turn(
 ) -> tuple[bool, str]:
     """Try to route a public bot turn through Hermes' native gateway pipeline.
 
-    The quiet CLI fallback below can produce a text answer, but it bypasses
+    The legacy quiet CLI path can produce a text answer, but it bypasses
     platform behavior such as Telegram reactions, typing indicators, interim
     assistant messages, native command handling, and platform formatting. The
     bridge helper runs inside the deployment container and receives secrets via
@@ -461,6 +462,23 @@ def _run_public_agent_gateway_turn(
     return False, "Hermes public gateway bridge completed without an ok response"
 
 
+def _public_agent_quiet_fallback_enabled() -> bool:
+    """Return whether degraded quiet CLI delivery is explicitly allowed.
+
+    Public channel delivery is a product contract for native Hermes behavior.
+    Falling back to ``hermes chat -Q`` hides bridge failures while severing
+    streaming, reactions, command handling, and platform formatting, so the
+    default is fail-closed. Operators can still opt into the degraded path for a
+    maintenance window with ARCLINK_PUBLIC_AGENT_QUIET_FALLBACK=1.
+    """
+    return os.environ.get("ARCLINK_PUBLIC_AGENT_QUIET_FALLBACK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _deliver_public_bot_user(
     cfg: Config,
     *,
@@ -532,6 +550,19 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     )
     if bridged:
         return None
+    if not _public_agent_quiet_fallback_enabled():
+        message = f"{label} did not answer through the Hermes gateway bridge yet.\n\n{_bridge_error}"
+        if helm:
+            message += f"\n\nHelm is still available: {helm}"
+        return _deliver_public_bot_user(
+            cfg,
+            channel_kind=channel_kind,
+            target_id=target_id,
+            message=message,
+            extra={
+                "telegram_reply_to_message_id": str(extra.get("telegram_reply_to_message_id") or ""),
+            },
+        )
     response, error = _run_public_agent_turn(deployment_id=deployment_id, prefix=prefix, prompt=prompt)
     if error:
         message = f"{label} did not answer through Raven yet.\n\n{error}"

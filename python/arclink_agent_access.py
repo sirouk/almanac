@@ -411,7 +411,7 @@ def wait_for_http(
     while time.time() < deadline:
         try:
             if username or password:
-                login_url = urllib.parse.urljoin(url, "/__arclink/login")
+                login_url = urllib.parse.urljoin(url.rstrip("/") + "/", "__arclink/login")
                 form = urllib.parse.urlencode({"username": username, "password": password, "next": url}).encode("utf-8")
                 login_request = urllib.request.Request(
                     login_url,

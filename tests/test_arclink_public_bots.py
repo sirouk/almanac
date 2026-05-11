@@ -551,7 +551,25 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
             )
             expect(revealed.action == "credentials_revealed", str(revealed))
             expect("arc_public_bot_dashboard_password" in revealed.reply, revealed.reply)
+            expect("Username: `arc-credpod`" in revealed.reply, revealed.reply)
+            expect("not your email" in revealed.reply, revealed.reply)
             expect("I Stored It" in [button.label for button in revealed.buttons], str(revealed.buttons))
+            telegram_markup = bots.arclink_public_bot_turn_telegram_reply_markup(revealed)
+            flat_telegram_buttons = [
+                button
+                for row_buttons in telegram_markup["inline_keyboard"]
+                for button in row_buttons
+            ]
+            copy_buttons = {button["text"]: button.get("copy_text", {}).get("text", "") for button in flat_telegram_buttons}
+            expect(copy_buttons.get("Copy Username") == "arc-credpod", str(flat_telegram_buttons))
+            expect(copy_buttons.get("Copy Password") == "arc_public_bot_dashboard_password", str(flat_telegram_buttons))
+            discord_components = bots.arclink_public_bot_turn_discord_components(revealed)
+            discord_labels = [
+                component.get("label")
+                for row_payload in discord_components
+                for component in row_payload.get("components", [])
+            ]
+            expect("Copy Password" not in discord_labels and "I Stored It" in discord_labels, str(discord_labels))
             row = conn.execute(
                 """
                 SELECT status, revealed_at, removed_at

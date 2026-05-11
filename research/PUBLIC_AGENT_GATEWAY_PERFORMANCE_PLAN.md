@@ -20,13 +20,18 @@ ArcLink public Telegram and Discord webhooks are now a fast ingress path:
   the durable `arclink-notification-delivery` worker still owns delivery.
 - Claim/lease logic prevents live triggers and polling workers from delivering
   the same row twice.
+- The legacy quiet CLI fallback is fail-closed by default. Operators must set
+  `ARCLINK_PUBLIC_AGENT_QUIET_FALLBACK=1` before ArcLink will knowingly deliver
+  a degraded text-only response instead of surfacing a gateway-bridge failure.
 
-This is good enough for responsive single-node operation, but it is not the
-final high-throughput gateway architecture. The current selected-agent bridge
-still shells into the target deployment's `hermes-gateway` container and starts
-`arclink_public_agent_bridge.py` for each delivered turn. That preserves native
-Hermes platform behavior, but it is too expensive to treat as the final
-load-balanced design.
+This is good enough for responsive single-node text/command operation, but it
+is not the final high-throughput gateway architecture. The current
+selected-agent bridge still shells into the target deployment's
+`hermes-gateway` container and starts `arclink_public_agent_bridge.py` for each
+delivered turn. That preserves the Hermes message pipeline for text, slash
+commands, typing, reactions, and streaming, but it is too expensive to treat as
+the final load-balanced design and does not yet carry every native Telegram or
+Discord event type. See `research/PUBLIC_AGENT_GATEWAY_PARITY_AND_SCALE_AUDIT.md`.
 
 ## Immediate Backpressure Contract
 
@@ -62,10 +67,14 @@ The production gateway should move toward this shape:
 6. The warm bridge imports Hermes gateway code once, keeps platform adapters
    warm, and accepts synthetic platform events for Telegram/Discord without a
    per-message `docker exec` and Python import cycle.
-7. Raven controls remain namespaced. Active-agent commands and normal messages
+7. The event envelope preserves full native parity where the platform allows it:
+   text, slash commands, reply context, message ids, attachments/media,
+   callback/query ids, thread/channel metadata, typing/reaction hooks, and
+   platform send/edit/media operations.
+8. Raven controls remain namespaced. Active-agent commands and normal messages
    route through the selected deployment only after user/deployment/linkage
    authorization is verified.
-8. Observability records queue depth, live-trigger saturation, claim latency,
+9. Observability records queue depth, live-trigger saturation, claim latency,
    turn duration, bridge failures, platform send failures, and per-deployment
    backpressure.
 

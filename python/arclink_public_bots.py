@@ -320,6 +320,7 @@ class ArcLinkPublicBotButton:
     command: str = ""
     url: str = ""
     style: str = "primary"
+    copy_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -592,8 +593,15 @@ def _claim_agent_bridge_intro(
     return True
 
 
-def _button(label: str, *, command: str = "", url: str = "", style: str = "primary") -> ArcLinkPublicBotButton:
-    return ArcLinkPublicBotButton(label=label, command=command, url=url, style=style)
+def _button(
+    label: str,
+    *,
+    command: str = "",
+    url: str = "",
+    style: str = "primary",
+    copy_text: str = "",
+) -> ArcLinkPublicBotButton:
+    return ArcLinkPublicBotButton(label=label, command=command, url=url, style=style, copy_text=copy_text)
 
 
 def _reply(
@@ -780,7 +788,9 @@ def arclink_public_bot_turn_telegram_reply_markup(turn: ArcLinkPublicBotTurn) ->
     row: list[dict[str, Any]] = []
     for button in buttons:
         payload: dict[str, Any] = {"text": button.label[:64]}
-        if button.url:
+        if button.copy_text:
+            payload["copy_text"] = {"text": button.copy_text[:256]}
+        elif button.url:
             payload["url"] = button.url
         else:
             command = button.command or button.label
@@ -802,7 +812,9 @@ def arclink_public_bot_turn_discord_components(turn: ArcLinkPublicBotTurn) -> li
         return []
     rows: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
-    for index, button in enumerate(buttons):
+    for button in buttons:
+        if button.copy_text:
+            continue
         payload: dict[str, Any] = {
             "type": 2,
             "label": button.label[:80],
@@ -813,9 +825,11 @@ def arclink_public_bot_turn_discord_components(turn: ArcLinkPublicBotTurn) -> li
         else:
             payload["custom_id"] = f"arclink:{button.command or button.label}"[:100]
         current.append(payload)
-        if len(current) == 5 or index == len(buttons) - 1:
+        if len(current) == 5:
             rows.append({"type": 1, "components": current})
             current = []
+    if current:
+        rows.append({"type": 1, "components": current})
     return rows
 
 
@@ -1413,6 +1427,22 @@ def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     )
 
 
+def _dashboard_username(deployment: Mapping[str, Any]) -> str:
+    metadata = _metadata(deployment)
+    for candidate in (
+        metadata.get("dashboard_username"),
+        metadata.get("helm_username"),
+        metadata.get("username"),
+    ):
+        value = str(candidate or "").strip()
+        if value:
+            return "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-") or "arclink"
+    prefix = str(deployment.get("prefix") or "").strip()
+    if prefix:
+        return "".join(ch.lower() if ch.isalnum() else "-" for ch in prefix).strip("-") or "arclink"
+    return "arclink"
+
+
 def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
     dashboard_url = str(_deployment_access(deployment).get("dashboard") or "").rstrip("/")
     return f"{dashboard_url}/notion/webhook" if dashboard_url else ""
@@ -1537,12 +1567,17 @@ def _credentials_reply(
     conn.commit()
     access = _deployment_access(deployment)
     helm = str(access.get("dashboard") or "").rstrip("/")
+    username = _dashboard_username(deployment)
     lines = [
         "Dashboard credential handoff.",
         "",
-        "Copy this password into your password manager now. After you confirm storage, ArcLink removes the handoff from future responses.",
+        "Use this exact Helm username and password. The username is not your email.",
+        "",
+        f"Username: `{username}`",
         "",
         f"Password: `{raw_secret}`",
+        "",
+        "Copy both into your password manager now. After you confirm storage, ArcLink removes the handoff from future responses.",
     ]
     if helm:
         lines.extend(["", f"Helm: {helm}"])
@@ -1555,6 +1590,8 @@ def _credentials_reply(
         deployment=deployment,
         buttons=tuple(
             button for button in (
+                _button("Copy Username", copy_text=username),
+                _button("Copy Password", copy_text=raw_secret),
                 _button("I Stored It", command="/credentials-stored"),
                 _button("Open Helm", url=helm) if helm else None,
             )

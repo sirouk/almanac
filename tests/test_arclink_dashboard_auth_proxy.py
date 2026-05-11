@@ -287,12 +287,55 @@ def test_proxy_rejects_cross_origin_dashboard_mutations() -> None:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
+def test_proxy_login_is_safe_behind_stripped_mount_prefix() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_mount_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "arc-test", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            prefix = "/u/arc-test"
+            status, _headers, body = request(
+                proxy.server_port,
+                "/",
+                headers={"X-Forwarded-Prefix": prefix},
+            )
+            expect(status == 401, f"expected login gate, saw {status}")
+            expect(f'action="{prefix}/__arclink/login"' in body, body)
+            expect(f'name="next" value="{prefix}/"' in body, body)
+
+            form = urlencode({"username": "arc-test", "password": "test-password", "next": f"{prefix}/"})
+            status, headers, _body = request(
+                proxy.server_port,
+                "/__arclink/login",
+                method="POST",
+                body=form,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "X-Forwarded-Prefix": prefix,
+                },
+            )
+            expect(status == 303, f"expected login redirect, saw {status} {headers}")
+            expect(headers.get("Location") == f"{prefix}/", headers)
+            cookie = headers.get("Set-Cookie") or ""
+            expect("Path=/u/arc-test" in cookie, cookie)
+            expect("Path=/" not in cookie.replace("Path=/u/arc-test", ""), cookie)
+            print("PASS test_proxy_login_is_safe_behind_stripped_mount_prefix")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
     test_proxy_can_run_dashboard_helpers_without_auth()
     test_proxy_rejects_cross_origin_dashboard_mutations()
-    print("PASS all 4 dashboard-auth-proxy regression tests")
+    test_proxy_login_is_safe_behind_stripped_mount_prefix()
+    print("PASS all 5 dashboard-auth-proxy regression tests")
     return 0
 
 

@@ -95,6 +95,43 @@ def _safe_next(value: str) -> str:
     return candidate
 
 
+def _safe_mount_prefix(value: str) -> str:
+    candidate = str(value or "").split(",", 1)[0].strip()
+    if not candidate:
+        return ""
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc:
+        return ""
+    path = parsed.path.strip()
+    if not path or path == "/":
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path.rstrip("/")
+
+
+def _join_mount_path(prefix: str, path: str) -> str:
+    clean_prefix = _safe_mount_prefix(prefix)
+    clean_path = str(path or "").strip() or "/"
+    parsed = urlsplit(clean_path)
+    if parsed.scheme or parsed.netloc:
+        clean_path = "/"
+    elif not clean_path.startswith("/"):
+        clean_path = "/"
+    if not clean_prefix:
+        return clean_path
+    if clean_path == clean_prefix or clean_path.startswith(f"{clean_prefix}/"):
+        return clean_path
+    if clean_path == "/":
+        return f"{clean_prefix}/"
+    return f"{clean_prefix}{clean_path}"
+
+
+def _is_login_path(value: str) -> bool:
+    path = urlsplit(str(value or "")).path.rstrip("/") or "/"
+    return path == LOGIN_PATH or path.endswith(LOGIN_PATH)
+
+
 def _normalize_host(value: str) -> str:
     return str(value or "").strip().lower().rstrip(".")
 
@@ -196,10 +233,23 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _session_cookie_header(self, username: str) -> str:
         value = self._make_token(username)
-        return f"{SESSION_COOKIE_NAME}={value}; HttpOnly; Path=/; SameSite=Lax; Secure"
+        return f"{SESSION_COOKIE_NAME}={value}; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure"
 
     def _clear_session_cookie_header(self) -> str:
-        return f"{SESSION_COOKIE_NAME}=; HttpOnly; Path=/; SameSite=Lax; Secure; Max-Age=0"
+        return f"{SESSION_COOKIE_NAME}=; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure; Max-Age=0"
+
+    def _mount_prefix(self) -> str:
+        return _safe_mount_prefix(
+            self.headers.get("X-Forwarded-Prefix")
+            or self.headers.get("X-Forwarded-Prefixes")
+            or ""
+        )
+
+    def _cookie_path(self) -> str:
+        return self._mount_prefix() or "/"
+
+    def _public_path(self, path: str) -> str:
+        return _join_mount_path(self._mount_prefix(), path)
 
     def _plugin_deeplink_path(self) -> str:
         path = urlsplit(self.path).path.rstrip("/") or "/"
@@ -261,10 +311,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _login_form(self, *, status: int = 401, error: str = "") -> None:
-        next_path = _safe_next(parse_qs(urlsplit(self.path).query).get("next", [self.path])[0])
-        if next_path.startswith(LOGIN_PATH):
+    def _login_form(self, *, status: int = 401, error: str = "", next_path: str = "") -> None:
+        raw_next = next_path or parse_qs(urlsplit(self.path).query).get("next", [self.path])[0]
+        next_path = _safe_next(raw_next)
+        if _is_login_path(next_path):
             next_path = "/"
+        public_next = self._public_path(next_path)
+        login_action = self._public_path(LOGIN_PATH)
         error_html = f'<p class="error">{html.escape(error)}</p>' if error else ""
         body = f"""<!doctype html>
 <html lang="en">
@@ -285,11 +338,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
   </style>
 </head>
 <body>
-  <form method="post" action="{LOGIN_PATH}">
+  <form method="post" action="{html.escape(login_action, quote=True)}">
     <h1>{html.escape(self.realm)}</h1>
     <p>Sign in to open this Hermes dashboard.</p>
     {error_html}
-    <input type="hidden" name="next" value="{html.escape(next_path, quote=True)}">
+    <input type="hidden" name="next" value="{html.escape(public_next, quote=True)}">
     <label for="username">Username</label>
     <input id="username" name="username" autocomplete="username" required autofocus>
     <label for="password">Password</label>
@@ -317,6 +370,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         username = str(form.get("username", [""])[0] or "")
         password = str(form.get("password", [""])[0] or "")
         next_path = _safe_next(str(form.get("next", ["/"])[0] or "/"))
+        if _is_login_path(next_path):
+            next_path = self._public_path("/")
         access = load_access(self.access_file)
         if not (
             access.get("username")
@@ -324,7 +379,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             and secrets.compare_digest(username, access["username"])
             and secrets.compare_digest(password, access["password"])
         ):
-            self._login_form(status=401, error="Invalid dashboard credentials.")
+            self._login_form(status=401, error="Invalid dashboard credentials.", next_path=next_path)
             return
 
         self.send_response(303)
@@ -335,7 +390,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_logout(self) -> None:
         self.send_response(303)
-        self.send_header("Location", LOGIN_PATH)
+        self.send_header("Location", self._public_path(LOGIN_PATH))
         self.send_header("Set-Cookie", self._clear_session_cookie_header())
         self.send_header("Content-Length", "0")
         self.end_headers()

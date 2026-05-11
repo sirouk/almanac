@@ -178,10 +178,15 @@ http_status_code() {
     cookie_file="$(mktemp /tmp/arclink-dashboard-cookie.XXXXXX)"
     local username="${auth%%:*}"
     local password="${auth#*:}"
-    local scheme="${url%%://*}"
-    local authority
-    authority="$(printf '%s' "$url" | sed -E 's#^[a-zA-Z]+://([^/]+).*#\1#')"
-    local login_url="${scheme}://${authority}/__arclink/login"
+    local login_url
+    login_url="$(python3 - "$url" <<'PY'
+import sys
+import urllib.parse
+
+url = sys.argv[1]
+print(urllib.parse.urljoin(url.rstrip("/") + "/", "__arclink/login"))
+PY
+)"
     local login_args=(--max-time 10 -sS -o /dev/null -c "$cookie_file" -X POST --data-urlencode "username=$username" --data-urlencode "password=$password" --data-urlencode "next=/")
     if [[ -n "$host_header" ]]; then
       login_args+=(-H "Host: $host_header")
@@ -306,10 +311,11 @@ import urllib.request
 dashboard_url, username, password = sys.argv[1:4]
 cookie_jar = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-form = urllib.parse.urlencode({"username": username, "password": password, "next": "/"}).encode("utf-8")
+next_path = urllib.parse.urlsplit(dashboard_url).path or "/"
+form = urllib.parse.urlencode({"username": username, "password": password, "next": next_path}).encode("utf-8")
 opener.open(
     urllib.request.Request(
-        urllib.parse.urljoin(dashboard_url, "/__arclink/login"),
+        urllib.parse.urljoin(dashboard_url.rstrip("/") + "/", "__arclink/login"),
         data=form,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",

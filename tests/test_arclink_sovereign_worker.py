@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import json
+import hashlib
 from pathlib import Path
 
 from arclink_test_helpers import expect, load_module
@@ -435,6 +436,31 @@ def test_notion_webhook_secret_is_generated_without_notion_token() -> None:
     print("PASS test_notion_webhook_secret_is_generated_without_notion_token")
 
 
+def test_dashboard_password_secret_is_generated_for_canonical_handoff_store() -> None:
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_dashboard_secret")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        secret_store = Path(tmpdir) / "store" / "dep_1"
+        resolver = worker_mod.SovereignSecretResolver(
+            env={},
+            secret_store_dir=secret_store,
+            materialization_root=Path(tmpdir) / "materialized",
+        )
+        secret_ref = "secret://arclink/dashboard/dep_1/password"
+        resolved = resolver.materialize(
+            secret_ref,
+            "/run/secrets/dashboard_password",
+        )
+        central_secret = secret_store / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+        materialized_secret = Path(resolved.source_path)
+        expect(central_secret.exists(), f"expected canonical dashboard password secret file: {central_secret}")
+        expect(materialized_secret.exists(), f"expected materialized compose secret file: {materialized_secret}")
+        central_value = central_secret.read_text(encoding="utf-8").strip()
+        materialized_value = materialized_secret.read_text(encoding="utf-8").strip()
+        expect(central_value == materialized_value, "compose secret must mirror canonical store material")
+        expect(central_value.startswith("arc_"), "expected generated ArcLink dashboard password")
+    print("PASS test_dashboard_password_secret_is_generated_for_canonical_handoff_store")
+
+
 if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
@@ -445,4 +471,5 @@ if __name__ == "__main__":
     test_sovereign_worker_recovers_stale_running_job()
     test_sovereign_worker_recovers_succeeded_job_without_handoff()
     test_notion_webhook_secret_is_generated_without_notion_token()
-    print("\nAll 9 Sovereign worker tests passed.")
+    test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
+    print("\nAll 10 Sovereign worker tests passed.")

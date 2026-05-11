@@ -1247,7 +1247,8 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="tg:raven-owner",
         text="/agents",
     )
-    expect("Bot Buyer" in roster.reply, roster.reply)
+    expect("Bot Buyer" not in roster.reply, roster.reply)
+    expect("Agent #name" in roster.reply, roster.reply)
     expect("Valkyrie" not in roster.reply and "Starling" not in roster.reply, roster.reply)
 
     unattached_reset = bots.handle_arclink_public_bot_turn(
@@ -1290,7 +1291,7 @@ def main() -> int:
     test_public_bot_withholds_unpublished_tailnet_app_urls()
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
-    test_public_bot_agent_label_uses_user_display_name()
+    test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     print("PASS all 21 ArcLink public bot tests")
     return 0
@@ -1458,16 +1459,17 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     print("PASS test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding")
 
 
-def test_public_bot_agent_label_uses_user_display_name() -> None:
-    """Agent labels must use the user's chosen display name, not the cryptic
-    Title-Cased prefix hash. When a user has multiple pods sharing the same
-    name, append a short prefix tail like '#69f2' so they're distinguishable.
+def test_public_bot_agent_label_does_not_use_user_display_name() -> None:
+    """Agent labels must not reuse the user's chosen display name. Without an
+    explicit agent name, use a neutral prefix-tail label instead of making the
+    roster look like the agent is named after the human.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_label_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_label_test")
     conn = memory_db(control)
 
-    # First pod with display_name_hint = "Chris"
+    # First pod with display_name_hint = "Chris"; this is the human's name,
+    # not the agent's name.
     seed = seed_active_public_bot_deployment(
         control, conn,
         channel="telegram", channel_identity="tg:777",
@@ -1480,11 +1482,12 @@ def test_public_bot_agent_label_uses_user_display_name() -> None:
     conn.commit()
 
     crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:777", text="/agents")
-    expect("Chris" in crew.reply, f"expected user's name in roster, got: {crew.reply}")
+    expect("Chris" not in crew.reply, f"user display name must not become the agent label: {crew.reply}")
+    expect("Agent #c7dbf980" in crew.reply, f"expected neutral agent label, got: {crew.reply}")
     expect("C7Dbf98030B3" not in crew.reply, "must not show cryptic Title-Cased prefix hash as label")
 
-    # Add a second pod under the same user → both should be distinguished
-    # with the prefix tail like "#9805".
+    # Add a second pod under the same user; both should stay distinguishable
+    # through their neutral prefix-tail labels.
     second_dep = "arcdep_second"
     control.reserve_arclink_deployment_prefix(
         conn,
@@ -1508,10 +1511,9 @@ def test_public_bot_agent_label_uses_user_display_name() -> None:
     conn.commit()
 
     crew2 = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:777", text="/agents")
-    # Both names appear; at least one carries a #tail to disambiguate.
-    expect(crew2.reply.count("Chris") >= 2, f"expected two Chris entries, got: {crew2.reply}")
-    expect("#" in crew2.reply, f"expected disambiguator suffix, got: {crew2.reply}")
-    print("PASS test_public_bot_agent_label_uses_user_display_name")
+    expect("Chris" not in crew2.reply, f"user display name must not become any agent label: {crew2.reply}")
+    expect("Agent #c7dbf980" in crew2.reply and "Agent #69f25807" in crew2.reply, f"expected two neutral labels, got: {crew2.reply}")
+    print("PASS test_public_bot_agent_label_does_not_use_user_display_name")
 
 
 def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> None:

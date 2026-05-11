@@ -1007,52 +1007,18 @@ def _agent_label(
 
     Order of preference:
     1. Explicit metadata.agent_name / metadata.display_name
-    2. The user's onboarding display_name_hint (the name they actually picked).
-       If that user has multiple pods sharing the same display name, append a
-       short prefix tail like "#69f2" so they're distinguishable in the roster.
-    3. Explicit agent_id
-    4. A clean "Agent #<prefix-tail>" rather than the cryptic Title-Cased hash
-    5. "Agent N" as a last resort.
+    2. Explicit agent_id
+    3. A clean "Agent #<prefix-tail>" rather than the cryptic Title-Cased hash
+    4. "Agent N" as a last resort.
+
+    The onboarding display_name_hint is the human's name, not the agent's
+    name. Reusing it here makes the roster read as if the agent were named
+    after the user.
     """
     metadata = _metadata(deployment)
     candidate = str(metadata.get("agent_name") or metadata.get("display_name") or "").strip()
     if candidate:
         return candidate[:40]
-
-    deployment_id = str(deployment.get("deployment_id") or "").strip()
-    user_id = str(deployment.get("user_id") or "").strip()
-    if conn is not None:
-        row = None
-        if deployment_id:
-            row = conn.execute(
-                "SELECT display_name_hint FROM arclink_onboarding_sessions "
-                "WHERE deployment_id = ? AND display_name_hint != '' "
-                "ORDER BY updated_at DESC LIMIT 1",
-                (deployment_id,),
-            ).fetchone()
-        if row is None and user_id:
-            row = conn.execute(
-                "SELECT display_name_hint FROM arclink_onboarding_sessions "
-                "WHERE user_id = ? AND display_name_hint != '' "
-                "ORDER BY updated_at DESC LIMIT 1",
-                (user_id,),
-            ).fetchone()
-        if row is not None:
-            display_name = str(row["display_name_hint"] or "").strip()
-            if display_name:
-                tail = ""
-                if user_id:
-                    others = conn.execute(
-                        "SELECT COUNT(*) AS c FROM arclink_deployments "
-                        "WHERE user_id = ? AND deployment_id != ?",
-                        (user_id, deployment_id),
-                    ).fetchone()
-                    if others and others["c"] > 0:
-                        prefix = str(deployment.get("prefix") or "")
-                        prefix_tail = prefix.rsplit("-", 1)[-1][:4]
-                        if prefix_tail:
-                            tail = f" #{prefix_tail}"
-                return (display_name + tail)[:40]
 
     agent_id = str(deployment.get("agent_id") or "").strip()
     if agent_id:

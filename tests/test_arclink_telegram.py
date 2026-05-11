@@ -44,6 +44,7 @@ def test_telegram_parse_update() -> None:
     })
     expect(callback is not None, "should parse callback")
     expect(callback["text"] == "/plan sovereign", str(callback))
+    expect(callback["callback_message_id"] == "", str(callback))
     native_callback = tg.parse_telegram_update({
         "update_id": 4,
         "callback_query": {
@@ -55,6 +56,7 @@ def test_telegram_parse_update() -> None:
     })
     expect(native_callback is not None, "should parse native callback")
     expect(native_callback["telegram_native_callback"] is True, str(native_callback))
+    expect(native_callback["callback_message_id"] == "8", str(native_callback))
     expect("telegram_update_json" in native_callback, str(native_callback))
     media = tg.parse_telegram_update({
         "update_id": 5,

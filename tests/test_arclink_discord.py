@@ -362,6 +362,52 @@ def test_discord_registers_public_bot_actions() -> None:
     print("PASS test_discord_registers_public_bot_actions")
 
 
+def test_discord_credential_ack_updates_original_component_message() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_credential_ack_update_test")
+    control = load_module("arclink_control.py", "arclink_control_dc_credential_ack_update_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="discord",
+        channel_identity="discord:discord_user_cred",
+        prefix="arc-dc-cred",
+    )
+
+    result = dc.handle_discord_interaction(
+        conn,
+        {
+            "type": 3,
+            "channel_id": "ch_cred",
+            "user": {"id": "discord_user_cred", "username": "buyer"},
+            "message": {"id": "msg_secret_handoff"},
+            "data": {"custom_id": "arclink:/credentials-stored"},
+        },
+    )
+
+    expect(result is not None and result["action"] == "credentials_stored", str(result))
+    expect(result["type"] == 7, str(result))
+    expect("Password:" not in result["data"]["content"], str(result["data"]))
+    expect("removed" in result["data"]["content"].lower(), str(result["data"]))
+    labels = [
+        component.get("label")
+        for row in result["data"].get("components", [])
+        for component in row.get("components", [])
+    ]
+    expect("Wire Notion" in labels and "Check Status" in labels, str(labels))
+    row = conn.execute(
+        """
+        SELECT status, acknowledged_at, removed_at
+        FROM arclink_credential_handoffs
+        WHERE deployment_id = ?
+          AND credential_kind = 'dashboard_password'
+        """,
+        (seeded["deployment_id"],),
+    ).fetchone()
+    expect(row["status"] == "removed" and bool(row["acknowledged_at"]) and bool(row["removed_at"]), str(dict(row)))
+    print("PASS test_discord_credential_ack_updates_original_component_message")
+
+
 def main() -> int:
     test_discord_config_from_env()
     test_discord_ping_pong()
@@ -375,7 +421,8 @@ def main() -> int:
     test_discord_live_transport_requires_config()
     test_discord_validate_live_readiness()
     test_discord_registers_public_bot_actions()
-    print("PASS all 12 ArcLink Discord adapter tests")
+    test_discord_credential_ack_updates_original_component_message()
+    print("PASS all 13 ArcLink Discord adapter tests")
     return 0
 
 

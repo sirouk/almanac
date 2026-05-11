@@ -2079,6 +2079,81 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
     print("PASS test_telegram_webhook_acknowledges_button_callbacks")
 
 
+def test_telegram_credential_ack_edits_original_secret_message() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_credential_ack_edit_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_credential_ack_edit_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_credential_ack_edit_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    class CaptureTransport:
+        def __init__(self) -> None:
+            self.sent_messages = []
+            self.edited_messages = []
+            self.answered_callbacks = []
+
+        def send_message(self, chat_id: str, text: str, reply_markup=None):
+            self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
+            return {"message_id": len(self.sent_messages)}
+
+        def edit_message_text(self, chat_id: str, message_id: int, text: str, reply_markup=None):
+            self.edited_messages.append(
+                {"chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup}
+            )
+            return {"ok": True}
+
+        def answer_callback_query(self, callback_query_id: str, text: str = ""):
+            self.answered_callbacks.append({"callback_query_id": callback_query_id, "text": text})
+            return {"ok": True}
+
+    def credential_ack_result(*args, **kwargs):
+        return {
+            "chat_id": "12345",
+            "text": "Locked in. I removed that dashboard credential handoff from future ArcLink responses.",
+            "reply_markup": {"inline_keyboard": [[{"text": "Wire Notion", "callback_data": "arclink:/connect_notion"}]]},
+            "session_id": "onb_credential_ack",
+            "action": "credentials_stored",
+            "channel_identity": "tg:67890",
+            "callback_query_id": "cb_stored",
+            "callback_message_id": "10",
+        }
+
+    old_handle = hosted.handle_telegram_update
+    hosted.handle_telegram_update = credential_ack_result
+    transport = CaptureTransport()
+    try:
+        status, payload, _ = hosted._handle_telegram_webhook(
+            conn,
+            {
+                "update_id": 3,
+                "callback_query": {
+                    "id": "cb_stored",
+                    "from": {"id": 67890},
+                    "message": {"message_id": 10, "chat": {"id": 12345}},
+                    "data": "arclink:/credentials-stored",
+                },
+            },
+            "req_tg_credential_ack_edit",
+            config,
+            adapters.FakeStripeClient(),
+            telegram_transport=transport,
+        )
+    finally:
+        hosted.handle_telegram_update = old_handle
+
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload.get("callback_acknowledged") is True, str(payload))
+    expect(payload.get("edited") is True, str(payload))
+    expect(payload.get("sent") is False, str(payload))
+    expect(transport.sent_messages == [], str(transport.sent_messages))
+    expect(len(transport.edited_messages) == 1, str(transport.edited_messages))
+    edited = transport.edited_messages[0]
+    expect(edited["message_id"] == 10, str(edited))
+    expect("Password:" not in edited["text"], edited["text"])
+    expect("removed" in edited["text"].lower(), edited["text"])
+    print("PASS test_telegram_credential_ack_edits_original_secret_message")
+
+
 def test_discord_webhook_route() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_dc_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dc_test")
@@ -3084,6 +3159,7 @@ def main() -> int:
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
     test_public_agent_live_trigger_auto_mode_defers_without_docker_socket()
     test_telegram_webhook_acknowledges_button_callbacks()
+    test_telegram_credential_ack_edits_original_secret_message()
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
     test_user_provider_state_route()
@@ -3110,7 +3186,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 61 ArcLink hosted API tests")
+    print("PASS all 62 ArcLink hosted API tests")
     return 0
 
 

@@ -771,6 +771,7 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
                 "user_id": user_id,
                 "text": data,
                 "callback_query_id": str(callback.get("id") or ""),
+                "callback_message_id": str(msg.get("message_id") or ""),
                 "display_name": _telegram_display_name(user),
                 "telegram_message_id": str(msg.get("message_id") or ""),
                 "telegram_update_kind": "callback_query",
@@ -872,6 +873,7 @@ def handle_telegram_update(
         "action": turn.action,
         "channel_identity": channel_identity,
         "callback_query_id": parsed.get("callback_query_id", ""),
+        "callback_message_id": parsed.get("callback_message_id", ""),
         "command_scope": command_scope,
     }
 
@@ -914,6 +916,19 @@ class LiveTelegramTransport:
         result = self._call("answerCallbackQuery", payload)
         return result.get("result", {})
 
+    def edit_message_text(
+        self,
+        chat_id: str,
+        message_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": int(message_id), "text": text}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        result = self._call("editMessageText", payload)
+        return result.get("result", {})
+
     def get_updates(self, offset: int = 0, timeout: int = 30) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"timeout": timeout}
         if offset:
@@ -927,6 +942,7 @@ class FakeTelegramTransport:
 
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, Any]] = []
+        self.edited_messages: list[dict[str, Any]] = []
         self.updates_queue: list[dict[str, Any]] = []
 
     def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -938,6 +954,19 @@ class FakeTelegramTransport:
 
     def answer_callback_query(self, callback_query_id: str, text: str = "") -> dict[str, Any]:
         return {"callback_query_id": callback_query_id, "text": text}
+
+    def edit_message_text(
+        self,
+        chat_id: str,
+        message_id: int,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        msg = {"chat_id": chat_id, "message_id": int(message_id), "text": text}
+        if reply_markup is not None:
+            msg["reply_markup"] = reply_markup
+        self.edited_messages.append(msg)
+        return msg
 
     def get_updates(self, offset: int = 0, timeout: int = 0) -> list[dict[str, Any]]:
         updates = [u for u in self.updates_queue if u.get("update_id", 0) >= offset]

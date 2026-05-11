@@ -1227,8 +1227,39 @@ def _handle_telegram_webhook(
     if result is None:
         return _json_response(200, {"ok": True, "action": "ignored"}, request_id=request_id)
     sent = False
+    edited = False
     callback_acknowledged = False
     callback_query_id = str(result.get("callback_query_id") or "").strip()
+    callback_message_id = str(result.get("callback_message_id") or "").strip()
+    should_edit_callback_message = (
+        str(result.get("action") or "") == "credentials_stored"
+        and bool(callback_query_id)
+        and bool(callback_message_id)
+    )
+
+    def _try_edit_callback_message(transport: Any, *, transport_label: str) -> bool:
+        if not should_edit_callback_message or not hasattr(transport, "edit_message_text"):
+            return False
+        reply_text = str(result.get("text") or "").strip()
+        if not reply_text:
+            return False
+        try:
+            transport.edit_message_text(
+                result["chat_id"],
+                int(callback_message_id),
+                reply_text,
+                reply_markup=result.get("reply_markup"),
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 - do not make Telegram retry a credential ack forever
+            logger.warning(
+                "telegram_callback_message_edit_failed transport=%s action=%s error=%s",
+                transport_label,
+                result.get("action", ""),
+                str(exc)[:160],
+            )
+            return False
+
     if telegram_transport is not None:
         if callback_query_id and hasattr(telegram_transport, "answer_callback_query"):
             try:
@@ -1236,8 +1267,9 @@ def _handle_telegram_webhook(
                 callback_acknowledged = True
             except Exception as exc:  # noqa: BLE001 - webhook must acknowledge update even if callback ack fails
                 logger.warning("telegram_callback_ack_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
+        edited = _try_edit_callback_message(telegram_transport, transport_label="injected")
         reply_text = str(result.get("text") or "").strip()
-        if reply_text:
+        if reply_text and not edited:
             try:
                 telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                 sent = True
@@ -1252,8 +1284,9 @@ def _handle_telegram_webhook(
                     callback_acknowledged = True
                 except Exception as exc:  # noqa: BLE001 - still try to send the actual reply
                     logger.warning("telegram_callback_ack_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
+            edited = _try_edit_callback_message(live_transport, transport_label="live")
             reply_text = str(result.get("text") or "").strip()
-            if reply_text:
+            if reply_text and not edited:
                 try:
                     live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                     sent = True
@@ -1273,6 +1306,7 @@ def _handle_telegram_webhook(
             "ok": True,
             "action": result.get("action", "reply"),
             "sent": sent,
+            "edited": edited,
             "callback_acknowledged": callback_acknowledged,
             "live_triggered": live_triggered,
         },

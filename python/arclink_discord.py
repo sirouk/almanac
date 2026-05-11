@@ -297,6 +297,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "user_id": str(user.get("id") or ""),
             "text": custom_id,
             "display_name": _discord_display_name(user),
+            "message_id": str((interaction.get("message") or {}).get("id") or ""),
             "chat_type": "dm" if interaction.get("guild_id") in (None, "") else "group",
         }
 
@@ -377,6 +378,14 @@ def handle_discord_interaction(
     components = arclink_public_bot_turn_discord_components(turn)
     if components:
         data["components"] = components
+    if itype == 3 and str(turn.action or "") == "credentials_stored":
+        return {
+            "type": 7,  # UPDATE_MESSAGE: scrub the original credential handoff message.
+            "data": data,
+            "session_id": turn.session_id,
+            "action": turn.action,
+            "channel_identity": channel_identity,
+        }
     return {
         "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
         "data": data,

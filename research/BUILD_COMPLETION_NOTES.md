@@ -5,6 +5,13 @@
 Scope: tightened the Raven selected-agent live-trigger path so public
 Telegram/Discord webhook ingress stays fast under load.
 
+- Follow-up repair: API ingress no longer attempts selected-agent delivery
+  from Dockerized Control Node containers that do not mount
+  `/var/run/docker.sock`. In that mode, it acknowledges the webhook and leaves
+  the durable turn for the Docker-capable notification-delivery worker.
+- Lowered the Control Node notification-delivery poll interval from 5 seconds
+  to 1 second so selected-agent public-channel turns still start quickly
+  without giving API ingress direct Docker authority.
 - Replaced the unbounded per-message thread start in `arclink_hosted_api.py`
   with a bounded process-local executor.
 - Added `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_WORKERS` and

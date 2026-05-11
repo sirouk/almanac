@@ -1029,6 +1029,22 @@ def _public_agent_live_trigger_enabled(config: HostedApiConfig) -> bool:
     }
 
 
+def _public_agent_live_trigger_can_run_locally(config: HostedApiConfig) -> bool:
+    """Return whether this API process may run public-agent delivery work.
+
+    In Dockerized Control Node mode, the API container deliberately does not
+    mount the Docker socket. The delivery worker has that trusted-host
+    boundary instead. Auto mode therefore only runs the low-latency in-process
+    trigger when the process can actually reach the local Docker API.
+    """
+    mode = str(config.env.get("ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_RUNNER", "auto")).strip().lower()
+    if mode in {"0", "false", "no", "off", "queue", "worker", "delivery-worker", "notification-delivery"}:
+        return False
+    if mode in {"1", "true", "yes", "on", "local", "inline", "api"}:
+        return True
+    return os.path.exists("/var/run/docker.sock")
+
+
 def _bounded_int_config(
     config: HostedApiConfig,
     name: str,
@@ -1107,6 +1123,14 @@ def _kick_public_agent_live_trigger(
     clean_channel = str(channel_kind or "").strip().lower()
     clean_target = str(target_id or "").strip()
     if clean_channel not in {"telegram", "discord"} or not clean_target:
+        return False
+    if not _public_agent_live_trigger_can_run_locally(config):
+        logger.debug(
+            "public_agent_live_trigger_deferred channel=%s target=%s runner=notification-delivery request_id=%s",
+            clean_channel,
+            clean_target,
+            request_id,
+        )
         return False
     executor, pending_gate = _public_agent_live_trigger_pool(config)
     if not pending_gate.acquire(blocking=False):

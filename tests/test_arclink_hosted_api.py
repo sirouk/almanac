@@ -1844,7 +1844,12 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_send_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_send_test")
     conn = memory_db(control)
-    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    config = hosted.HostedApiConfig(
+        env={
+            "ARCLINK_BASE_DOMAIN": "example.test",
+            "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_RUNNER": "local",
+        }
+    )
 
     class CaptureTransport:
         def __init__(self) -> None:
@@ -1972,6 +1977,7 @@ def test_public_agent_live_trigger_backpressure_defers_to_delivery_worker() -> N
     config = hosted.HostedApiConfig(
         env={
             "ARCLINK_BASE_DOMAIN": "example.test",
+            "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_RUNNER": "local",
             "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_MAX_PENDING": "1",
         }
     )
@@ -2001,6 +2007,30 @@ def test_public_agent_live_trigger_backpressure_defers_to_delivery_worker() -> N
         hosted._public_agent_live_trigger_pool = old_pool
     expect(triggered is False, "saturated live trigger should leave the queued row for notification-delivery")
     print("PASS test_public_agent_live_trigger_backpressure_defers_to_delivery_worker")
+
+
+def test_public_agent_live_trigger_auto_mode_defers_without_docker_socket() -> None:
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_live_trigger_socket_boundary_test")
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    old_exists = hosted.os.path.exists
+    old_pool = hosted._public_agent_live_trigger_pool
+    hosted.os.path.exists = lambda path: False if path == "/var/run/docker.sock" else old_exists(path)
+    hosted._public_agent_live_trigger_pool = lambda _config: (_ for _ in ()).throw(
+        AssertionError("API ingress without Docker socket must not submit delivery work")
+    )
+    try:
+        triggered = hosted._kick_public_agent_live_trigger(
+            config=config,
+            channel_kind="telegram",
+            target_id="tg:67890",
+            request_id="req_no_socket",
+        )
+    finally:
+        hosted.os.path.exists = old_exists
+        hosted._public_agent_live_trigger_pool = old_pool
+    expect(triggered is False, "Dockerized API ingress should leave delivery to notification-delivery")
+    print("PASS test_public_agent_live_trigger_auto_mode_defers_without_docker_socket")
 
 
 def test_telegram_webhook_acknowledges_button_callbacks() -> None:
@@ -3052,6 +3082,7 @@ def main() -> int:
     test_telegram_webhook_route()
     test_telegram_webhook_sends_reply_when_transport_is_available()
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
+    test_public_agent_live_trigger_auto_mode_defers_without_docker_socket()
     test_telegram_webhook_acknowledges_button_callbacks()
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
@@ -3079,7 +3110,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 60 ArcLink hosted API tests")
+    print("PASS all 61 ArcLink hosted API tests")
     return 0
 
 

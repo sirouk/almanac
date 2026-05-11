@@ -9,9 +9,15 @@ ArcLink public Telegram and Discord webhooks are now a fast ingress path:
 - The webhook handler acknowledges the platform after Raven/public-bot routing.
 - Selected-agent messages are persisted as `notification_outbox` rows with
   `target_kind=public-agent-turn`.
-- A bounded live trigger attempts immediate delivery.
-- If the live trigger is disabled, saturated, or fails to submit, the durable
-  `arclink-notification-delivery` worker still claims and delivers the row.
+- The API process only runs a bounded in-process live trigger when it can
+  actually reach the local Docker API. In Dockerized Control Node mode, the
+  API container deliberately does not mount `/var/run/docker.sock`, so it
+  leaves the turn on the durable queue.
+- The Docker-capable `arclink-notification-delivery` worker polls once per
+  second, claims the row, and delivers through the selected deployment's
+  Hermes gateway container.
+- If the live trigger is disabled, unavailable, saturated, or fails to submit,
+  the durable `arclink-notification-delivery` worker still owns delivery.
 - Claim/lease logic prevents live triggers and polling workers from delivering
   the same row twice.
 
@@ -27,12 +33,15 @@ load-balanced design.
 `python/arclink_hosted_api.py` uses these controls:
 
 - `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER=1`
+- `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_RUNNER=auto`
 - `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_WORKERS=4`
 - `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_MAX_PENDING=64`
 
 The live trigger must never block webhook ingress and must never spawn
-unbounded threads. Saturation is acceptable because the notification row is
-already durable; the recovery worker owns eventual delivery.
+unbounded threads. It must also never force Docker access into API ingress.
+Saturation or local-runner unavailability is acceptable because the
+notification row is already durable; the delivery worker owns the real
+trusted-host execution path.
 
 ## Target Load-Balanced Shape
 

@@ -2033,6 +2033,8 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect('"arclink_credential_handoffs"' in text, "runtime reset must clear credential handoffs")
     expect("remove_control_generated_secret_refs()" in text, "runtime reset must clear generated per-deployment secret refs")
     expect("sovereign-secrets" in text and "-name 'arcdep_*'" in text, "runtime reset must target generated deployment secret dirs only")
+    expect("reset_control_telegram_active_command_scopes" in text, "runtime reset must clear stale active Telegram command scopes")
+    expect("include_agent_commands=False" in text, "runtime reset should restore old active chats to the Raven-only command menu")
     expect("collect_control_install_answers()" in text, "expected control-node provider configuration flow")
     expect("Sovereign deployment style" in text, "expected control install to ask for single-machine/hosted-fleet style")
     expect("single-machine - one starter machine runs the control node and first worker" in text, "expected single-machine setup guidance")

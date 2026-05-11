@@ -9314,6 +9314,66 @@ remove_control_generated_secret_refs() {
   find "$secret_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' \) -exec rm -rf {} +
 }
 
+reset_control_telegram_active_command_scopes() {
+  local db_path="$1"
+
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+
+  ARCLINK_CONFIG_FILE="$CONFIG_TARGET" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+
+from arclink_control import config_env_value
+from arclink_telegram import refresh_arclink_public_telegram_chat_commands
+
+db_path = sys.argv[1]
+token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+if not token:
+    print("Telegram active agent command scope reset skipped: no public bot token")
+    raise SystemExit(0)
+
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+try:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT channel_identity
+          FROM arclink_onboarding_sessions
+         WHERE channel = 'telegram'
+           AND channel_identity != ''
+           AND deployment_id != ''
+           AND status IN ('active', 'first_contacted', 'provisioning_ready', 'provisioning')
+         ORDER BY channel_identity
+        """
+    ).fetchall()
+finally:
+    conn.close()
+
+reset = 0
+failed = 0
+for row in rows:
+    identity = str(row["channel_identity"] or "")
+    chat_id = identity.removeprefix("tg:")
+    if not chat_id:
+        continue
+    try:
+        refresh_arclink_public_telegram_chat_commands(
+            bot_token=token,
+            chat_id=chat_id,
+            include_agent_commands=False,
+            force=True,
+        )
+        reset += 1
+    except Exception as exc:  # noqa: BLE001 - reset should not strand local cleanup
+        failed += 1
+        print(f"Warning: could not reset Telegram command scope for {identity[:8]}...: {str(exc)[:160]}", file=sys.stderr)
+
+print(f"Telegram active agent command scopes reset: {reset} chat(s), {failed} failure(s)")
+PY
+}
+
 reset_control_runtime_database() {
   local db_path="$1"
 
@@ -9465,6 +9525,8 @@ run_control_runtime_reset() {
   remove_control_generated_pods
   echo "Removing generated per-deployment secret-store directories..."
   remove_control_generated_secret_refs
+  echo "Resetting Telegram active-agent command scopes..."
+  reset_control_telegram_active_command_scopes "$db_path"
   echo "Clearing customer/test runtime rows from control database..."
   reset_control_runtime_database "$db_path"
   echo "Runtime counts after reset:"

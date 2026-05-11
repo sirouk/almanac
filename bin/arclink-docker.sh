@@ -753,7 +753,7 @@ with sqlite3.connect(db_path) as conn:
     if published:
         metadata["access_urls"] = {
             "dashboard": f"https://{host}/u/{prefix}",
-            "hermes": f"https://{host}:{ports['hermes']}/",
+            "hermes": f"https://{host}/u/{prefix}/hermes",
             "files": f"https://{host}/u/{prefix}/drive",
             "code": f"https://{host}/u/{prefix}/code",
             "notion": f"https://{host}/u/{prefix}/notion/webhook",

@@ -23,6 +23,9 @@ inventory is known.
   conflict diagnostics in onboarding session metadata, and queues an operator
   alert when a legacy Raven-name collision, hard Raven control collision, or
   policy-suppressed command such as `/update` appears.
+- The same alert path records and reports hidden active-agent command counts
+  when Telegram's 100-command menu cap prevents the entire Hermes command
+  inventory from being visible.
 - Active Telegram inline buttons are rewritten to the Raven namespace so
   button taps keep reaching Raven even when the visible bare slash command
   belongs to the selected agent.

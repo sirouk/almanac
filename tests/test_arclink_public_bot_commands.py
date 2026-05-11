@@ -44,6 +44,7 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
                 {"command": "model", "description": "Switch model"},
             ],
             "arclink-arcdep-hermes-gateway-1",
+            3,
         )
 
         result = commands.refresh_active_telegram_command_scopes(
@@ -71,9 +72,11 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         expect("agents" in metadata["telegram_command_scope_legacy_conflicts"], str(metadata))
         expect("raven" in metadata["telegram_command_scope_hard_conflicts"], str(metadata))
         expect("update" in metadata["telegram_command_scope_policy_suppressed"], str(metadata))
+        expect(metadata["telegram_command_scope_hidden_count"] == 3, str(metadata))
         outbox = conn.execute("SELECT target_kind, message FROM notification_outbox").fetchall()
         expect(len(outbox) == 1 and outbox[0]["target_kind"] == "operator", str([dict(r) for r in outbox]))
         expect("command scope drift" in outbox[0]["message"], outbox[0]["message"])
+        expect("hidden=3" in outbox[0]["message"], outbox[0]["message"])
         conn.close()
         print("PASS test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_operator")
 

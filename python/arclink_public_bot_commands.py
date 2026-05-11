@@ -94,10 +94,10 @@ def _redacted_identity(identity: str) -> str:
     return clean
 
 
-def _agent_commands_from_gateway_container(deployment_id: str) -> tuple[list[dict[str, str]], str]:
+def _agent_commands_from_gateway_container(deployment_id: str) -> tuple[list[dict[str, str]], str, int]:
     clean_deployment = str(deployment_id or "").strip()
     if not clean_deployment:
-        return [], "missing-deployment"
+        return [], "missing-deployment", 0
     container = f"arclink-{clean_deployment}-hermes-gateway-1"
     script = r"""
 import json
@@ -121,10 +121,10 @@ print(json.dumps({"commands":[{"command": n, "description": d} for n, d in cmds]
         payload = json.loads(result.stdout.strip().splitlines()[-1])
         commands = payload.get("commands")
         if isinstance(commands, list):
-            return [item for item in commands if isinstance(item, dict)], container
+            return [item for item in commands if isinstance(item, dict)], container, int(payload.get("hidden") or 0)
     except Exception:
-        return [], "fallback"
-    return [], "fallback"
+        return [], "fallback", 0
+    return [], "fallback", 0
 
 
 def _update_session_command_scope_metadata(
@@ -164,7 +164,7 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
             chat_id = identity.removeprefix("tg:")
             if not chat_id:
                 continue
-            commands, source = _agent_commands_from_gateway_container(str(row["deployment_id"] or ""))
+            commands, source, source_hidden_count = _agent_commands_from_gateway_container(str(row["deployment_id"] or ""))
             if not commands:
                 commands = arclink_public_bot_telegram_agent_commands(env=env)
             plan = arclink_public_bot_telegram_active_command_plan(agent_commands=commands, env=env)
@@ -195,11 +195,16 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
             metadata["telegram_command_scope_legacy_conflicts"] = list(plan.get("legacy_raven_conflicts") or [])
             metadata["telegram_command_scope_hard_conflicts"] = list(plan.get("hard_raven_conflicts") or [])
             metadata["telegram_command_scope_policy_suppressed"] = list(plan.get("policy_suppressed") or [])
+            metadata["telegram_command_scope_hidden_count"] = max(
+                int(source_hidden_count or 0),
+                int(plan.get("hidden_count") or 0),
+            )
             signature = "|".join(
                 [
                     ",".join(metadata["telegram_command_scope_legacy_conflicts"]),
                     ",".join(metadata["telegram_command_scope_hard_conflicts"]),
                     ",".join(metadata["telegram_command_scope_policy_suppressed"]),
+                    str(metadata["telegram_command_scope_hidden_count"]),
                     str(plan.get("raven_command") or ""),
                 ]
             )
@@ -207,6 +212,7 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
                 metadata["telegram_command_scope_legacy_conflicts"]
                 or metadata["telegram_command_scope_hard_conflicts"]
                 or metadata["telegram_command_scope_policy_suppressed"]
+                or metadata["telegram_command_scope_hidden_count"]
             ):
                 if metadata.get("telegram_command_scope_alert_signature") != signature:
                     issues.append(
@@ -218,6 +224,7 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
                             "legacy_conflicts": metadata["telegram_command_scope_legacy_conflicts"],
                             "hard_conflicts": metadata["telegram_command_scope_hard_conflicts"],
                             "policy_suppressed": metadata["telegram_command_scope_policy_suppressed"],
+                            "hidden_count": metadata["telegram_command_scope_hidden_count"],
                         }
                     )
                     metadata["telegram_command_scope_alert_signature"] = signature
@@ -235,11 +242,12 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
                     f"{issue['channel']} raven=/{issue['raven_command']} "
                     f"legacy={','.join(issue['legacy_conflicts']) or '-'} "
                     f"hard={','.join(issue['hard_conflicts']) or '-'} "
-                    f"suppressed={','.join(issue['policy_suppressed']) or '-'}"
+                    f"suppressed={','.join(issue['policy_suppressed']) or '-'} "
+                    f"hidden={issue['hidden_count'] or 0}"
                 )
             message = (
                 "ArcLink Telegram command scope drift detected after command refresh.\n\n"
-                "Raven kept the visible active-chat menu conflict-free by moving ArcLink controls behind the Raven command and letting the active agent own the bare slash namespace.\n\n"
+                "Raven kept the visible active-chat menu conflict-free by moving ArcLink controls behind the Raven command and letting the active agent own the bare slash namespace. Telegram command menus are capped, so hidden counts mean some active-agent commands remain reachable by typing them or through Helm even though Telegram cannot show them all.\n\n"
                 + "\n".join(f"- {line}" for line in snippets)
             )
             queue_notification(

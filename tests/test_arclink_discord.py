@@ -192,6 +192,28 @@ def test_discord_status_reports_selected_agent_label() -> None:
     extra = json.loads(queued["extra_json"])
     expect(extra["discord_channel_id"] == "ch_3", str(extra))
     expect(extra["discord_user_id"] == "discord_user_3", str(extra))
+
+    arbitrary_agent_command = dc.handle_discord_interaction(
+        conn,
+        transport.make_message(user_id="discord_user_3", channel_id="ch_3", content="/yolo"),
+    )
+    expect(
+        arbitrary_agent_command is not None and arbitrary_agent_command["action"] == "agent_message_queued",
+        str(arbitrary_agent_command),
+    )
+    expect(arbitrary_agent_command["data"]["content"] == "Sent to your active agent.", str(arbitrary_agent_command["data"]))
+    expect("I am routing" not in arbitrary_agent_command["data"]["content"], str(arbitrary_agent_command["data"]))
+    arbitrary_row = conn.execute(
+        "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(arbitrary_row["target_kind"] == "public-agent-turn", str(dict(arbitrary_row)))
+    expect(arbitrary_row["target_id"] == "discord:discord_user_3", str(dict(arbitrary_row)))
+    expect(arbitrary_row["channel_kind"] == "discord", str(dict(arbitrary_row)))
+    expect(arbitrary_row["message"] == "/yolo", str(dict(arbitrary_row)))
+    arbitrary_extra = json.loads(arbitrary_row["extra_json"])
+    expect(arbitrary_extra["discord_channel_id"] == "ch_3", str(arbitrary_extra))
+    expect(arbitrary_extra["discord_user_id"] == "discord_user_3", str(arbitrary_extra))
+    expect(arbitrary_extra["source_kind"] == "agent_command", str(arbitrary_extra))
     print("PASS test_discord_status_reports_selected_agent_label")
 
 

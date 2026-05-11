@@ -158,6 +158,27 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
         telegram_bot_token="123:abc",
     )
     expect(agent_agents is not None and agent_agents["action"] == "agent_message_queued", str(agent_agents))
+    expect(str(agent_agents.get("text") or "") == "", str(agent_agents))
+
+    arbitrary_agent_command = tg.handle_telegram_update(
+        conn,
+        {"update_id": 22, "message": {"message_id": 11, "chat": {"id": 42}, "from": {"id": 99}, "text": "/yolo"}},
+        telegram_bot_token="123:abc",
+    )
+    expect(
+        arbitrary_agent_command is not None and arbitrary_agent_command["action"] == "agent_message_queued",
+        str(arbitrary_agent_command),
+    )
+    expect(str(arbitrary_agent_command.get("text") or "") == "", str(arbitrary_agent_command))
+    queued = conn.execute(
+        "SELECT message, extra_json FROM notification_outbox WHERE target_kind = 'public-agent-turn' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(queued["message"] == "/yolo", str(dict(queued)))
+    import json
+
+    extra = json.loads(str(queued["extra_json"] or "{}"))
+    expect(extra.get("source_kind") == "agent_command", str(extra))
+    expect(extra.get("telegram_reply_to_message_id") == "11", str(extra))
 
     before = len(calls)
     skipped = tg.refresh_arclink_public_telegram_chat_commands(

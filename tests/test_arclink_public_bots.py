@@ -1343,6 +1343,18 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     expect("From now on" not in second_freeform.reply, second_freeform.reply)
     expect(second_freeform.reply == "", second_freeform.reply)
 
+    # Unknown bare slash commands are still active-agent commands even before
+    # Telegram has refreshed/stored the active Hermes command inventory.
+    arbitrary_slash_without_inventory = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        text="/yolo",
+    )
+    expect(arbitrary_slash_without_inventory.action == "agent_message_queued", str(arbitrary_slash_without_inventory.action))
+    expect(arbitrary_slash_without_inventory.reply == "", arbitrary_slash_without_inventory.reply)
+    expect("I am routing" not in arbitrary_slash_without_inventory.reply, arbitrary_slash_without_inventory.reply)
+
     # /start re-trigger from an aboard user gets the control help reply,
     # NOT the onboarding "Stripe collects your email" prompt.
     restart = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/start")
@@ -1388,6 +1400,23 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     expect(slash_row["message"] == "/provider", str(dict(slash_row)))
     slash_extra = json.loads(str(slash_row["extra_json"] or "{}"))
     expect(slash_extra.get("source_kind") == "agent_command", str(slash_extra))
+
+    arbitrary_slash = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/yolo")
+    expect(arbitrary_slash.action == "agent_message_queued", str(arbitrary_slash.action))
+    expect(arbitrary_slash.reply == "", arbitrary_slash.reply)
+    expect("I am routing" not in arbitrary_slash.reply, arbitrary_slash.reply)
+    arbitrary_row = conn.execute(
+        """
+        SELECT message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect(arbitrary_row["message"] == "/yolo", str(dict(arbitrary_row)))
+    arbitrary_extra = json.loads(str(arbitrary_row["extra_json"] or "{}"))
+    expect(arbitrary_extra.get("source_kind") == "agent_command", str(arbitrary_extra))
 
     # /agent is an explicit Raven-owned pass-through for platforms whose slash
     # command menus cannot expose every active Hermes command.

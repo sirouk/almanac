@@ -181,6 +181,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(managed_installer_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["RUNTIME_DIR"] == "/opt/arclink/runtime", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["VAULT_DIR"] == "/srv/vault", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_PASSWORD_FILE"] == "/run/secrets/dashboard_password", str(services["managed-context-install"]))
     expect(
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",

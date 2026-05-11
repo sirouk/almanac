@@ -570,6 +570,7 @@ def _render_services(
                 "ARCLINK_HERMES_DOCS_VAULT_DIR": f"{CONTAINER_VAULT_DIR}/Agents_KB/hermes-agent-docs",
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
                 "ARCLINK_PREFIX": prefix,
+                "ARCLINK_DASHBOARD_USERNAME": env["ARCLINK_DASHBOARD_USERNAME"],
                 "ARCLINK_PRIMARY_PROVIDER": env["ARCLINK_PRIMARY_PROVIDER"],
                 "ARCLINK_CHUTES_BASE_URL": env["ARCLINK_CHUTES_BASE_URL"],
                 "ARCLINK_CHUTES_DEFAULT_MODEL": env["ARCLINK_CHUTES_DEFAULT_MODEL"],

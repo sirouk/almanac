@@ -71,6 +71,37 @@ def _required(payload: Mapping[str, Any], key: str) -> str:
     return value
 
 
+def _public_bridge_streaming_enabled() -> bool:
+    return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _enable_public_bridge_gateway_defaults(cfg: Any) -> None:
+    """Make bridged public turns feel like native Hermes gateway turns.
+
+    ArcLink's public bot owns Telegram/Discord webhooks, so these turns enter
+    Hermes through a synthetic platform event. Deployment homes can have global
+    gateway streaming disabled for other uses; public channel turns should still
+    get Hermes typing/progress/streaming unless the operator explicitly turns
+    the bridge knob off. This intentionally does not enable show_reasoning.
+    """
+    if not _public_bridge_streaming_enabled():
+        return
+    streaming = getattr(cfg, "streaming", None)
+    if streaming is None:
+        return
+    try:
+        streaming.enabled = True
+        if not getattr(streaming, "transport", ""):
+            streaming.transport = "edit"
+    except Exception:
+        return
+
+
 async def _run_telegram(payload: Mapping[str, Any]) -> None:
     _add_runtime_paths()
 
@@ -95,6 +126,7 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
     from gateway.session import SessionSource
 
     cfg = load_gateway_config()
+    _enable_public_bridge_gateway_defaults(cfg)
     platform = Platform.TELEGRAM
     platform_cfg = cfg.platforms.get(platform) or PlatformConfig()
     platform_cfg.enabled = True
@@ -234,6 +266,7 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
     from gateway.session import SessionSource
 
     cfg = load_gateway_config()
+    _enable_public_bridge_gateway_defaults(cfg)
     platform = Platform.DISCORD
     platform_cfg = cfg.platforms.get(platform) or PlatformConfig()
     platform_cfg.enabled = True

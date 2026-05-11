@@ -586,6 +586,14 @@ def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
             os.environ.update(old_env)
 
 
+def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> None:
+    bridge_source = (PYTHON_DIR / "arclink_public_agent_bridge.py").read_text(encoding="utf-8")
+    expect("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING" in bridge_source, bridge_source)
+    expect("streaming.enabled = True" in bridge_source, bridge_source)
+    expect("show_reasoning = True" not in bridge_source, bridge_source)
+    print("PASS test_public_agent_bridge_enables_gateway_streaming_without_reasoning")
+
+
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
@@ -594,7 +602,8 @@ def main() -> int:
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
-    print("PASS all 7 notification delivery regression tests")
+    test_public_agent_bridge_enables_gateway_streaming_without_reasoning()
+    print("PASS all 8 notification delivery regression tests")
     return 0
 
 

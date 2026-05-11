@@ -1899,22 +1899,50 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
             "text": "",
             "reply_markup": None,
             "action": "agent_message_queued",
+            "channel_identity": "tg:67890",
             "callback_query_id": "",
         }
 
+    live_trigger_calls: list[dict[str, str]] = []
+
+    def fake_live_trigger(cfg, *, channel_kind="", target_id="", limit=0, verbose=False):
+        del cfg, limit, verbose
+        live_trigger_calls.append({"channel_kind": channel_kind, "target_id": target_id})
+        return {"processed": 1, "delivered": 1, "errors": 0}
+
+    class ImmediateThread:
+        def __init__(self, *, target, name="", daemon=False):
+            del name, daemon
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    old_handle = hosted.handle_telegram_update
+    old_trigger = hosted.run_public_agent_turns_once
+    old_thread = hosted.threading.Thread
     hosted.handle_telegram_update = queued_agent_turn
+    hosted.run_public_agent_turns_once = fake_live_trigger
+    hosted.threading.Thread = ImmediateThread
     quiet_transport = CaptureTransport()
-    status, payload, _ = hosted._handle_telegram_webhook(
-        conn,
-        update,
-        "req_tg_send_empty",
-        config,
-        adapters.FakeStripeClient(),
-        telegram_transport=quiet_transport,
-    )
+    try:
+        status, payload, _ = hosted._handle_telegram_webhook(
+            conn,
+            update,
+            "req_tg_send_empty",
+            config,
+            adapters.FakeStripeClient(),
+            telegram_transport=quiet_transport,
+        )
+    finally:
+        hosted.handle_telegram_update = old_handle
+        hosted.run_public_agent_turns_once = old_trigger
+        hosted.threading.Thread = old_thread
     expect(status == 200, f"empty agent handoff should still ack webhook: {status} {payload}")
     expect(payload.get("sent") is False, str(payload))
+    expect(payload.get("live_triggered") is True, str(payload))
     expect(quiet_transport.sent_messages == [], str(quiet_transport.sent_messages))
+    expect(live_trigger_calls == [{"channel_kind": "telegram", "target_id": "tg:67890"}], str(live_trigger_calls))
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
 
 

@@ -15,6 +15,7 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import time
 from typing import Any, Mapping
 from urllib.parse import parse_qs
@@ -70,6 +71,7 @@ from arclink_discord import (
     DiscordConfig,
     handle_discord_webhook_request,
 )
+from arclink_notification_delivery import run_public_agent_turns_once
 from arclink_product import base_domain as default_base_domain
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
@@ -1011,6 +1013,62 @@ def _handle_health(
     return _json_response(status, {"status": "ok" if db_ok else "degraded", "db": db_ok}, request_id=request_id)
 
 
+def _public_agent_live_trigger_enabled(config: HostedApiConfig) -> bool:
+    return str(config.env.get("ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _kick_public_agent_live_trigger(
+    *,
+    config: HostedApiConfig,
+    channel_kind: str,
+    target_id: str,
+    request_id: str,
+) -> bool:
+    if not _public_agent_live_trigger_enabled(config):
+        return False
+    clean_channel = str(channel_kind or "").strip().lower()
+    clean_target = str(target_id or "").strip()
+    if clean_channel not in {"telegram", "discord"} or not clean_target:
+        return False
+
+    def _worker() -> None:
+        try:
+            summary = run_public_agent_turns_once(
+                Config.from_env(),
+                channel_kind=clean_channel,
+                target_id=clean_target,
+                limit=1,
+            )
+            logger.info(
+                "public_agent_live_trigger channel=%s target=%s delivered=%s errors=%s request_id=%s",
+                clean_channel,
+                clean_target,
+                summary.get("delivered", 0),
+                summary.get("errors", 0),
+                request_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - webhook has already been acknowledged
+            logger.warning(
+                "public_agent_live_trigger_failed channel=%s target=%s error=%s request_id=%s",
+                clean_channel,
+                clean_target,
+                str(exc)[:240],
+                request_id,
+            )
+
+    threading.Thread(
+        target=_worker,
+        name=f"arclink-public-agent-live-trigger-{clean_channel}",
+        daemon=True,
+    ).start()
+    return True
+
+
 def _handle_telegram_webhook(
     conn: sqlite3.Connection,
     body: dict[str, Any],
@@ -1068,6 +1126,14 @@ def _handle_telegram_webhook(
                     sent = True
                 except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
+    live_triggered = False
+    if str(result.get("action") or "") == "agent_message_queued":
+        live_triggered = _kick_public_agent_live_trigger(
+            config=config,
+            channel_kind="telegram",
+            target_id=str(result.get("channel_identity") or ""),
+            request_id=request_id,
+        )
     return _json_response(
         200,
         {
@@ -1075,6 +1141,7 @@ def _handle_telegram_webhook(
             "action": result.get("action", "reply"),
             "sent": sent,
             "callback_acknowledged": callback_acknowledged,
+            "live_triggered": live_triggered,
         },
         request_id=request_id,
     )
@@ -1113,6 +1180,13 @@ def _handle_discord_webhook(
         )
     except ArcLinkDiscordError as exc:
         return _json_response(401, {"error": str(exc)}, request_id=request_id)
+    if str(response.get("action") or "") == "agent_message_queued":
+        _kick_public_agent_live_trigger(
+            config=config,
+            channel_kind="discord",
+            target_id=str(response.get("channel_identity") or ""),
+            request_id=request_id,
+        )
     return _json_response(200, response, request_id=request_id)
 
 

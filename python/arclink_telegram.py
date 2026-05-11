@@ -801,6 +801,7 @@ def handle_telegram_update(
         "reply_markup": arclink_public_bot_turn_telegram_reply_markup(turn),
         "session_id": turn.session_id,
         "action": turn.action,
+        "channel_identity": channel_identity,
         "callback_query_id": parsed.get("callback_query_id", ""),
         "command_scope": command_scope,
     }

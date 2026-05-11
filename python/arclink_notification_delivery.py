@@ -29,6 +29,8 @@ from arclink_control import (
     has_pending_curator_brief_fanout,
     mark_notification_delivered,
     mark_notification_error,
+    utc_after_seconds_iso,
+    utc_now_iso,
 )
 from arclink_discord import discord_create_dm_channel, discord_send_message
 from arclink_http import http_request
@@ -216,6 +218,11 @@ def _int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1800) 
     except ValueError:
         value = default
     return max(minimum, min(maximum, value))
+
+
+def _notification_due_now(row: dict[str, Any]) -> bool:
+    next_attempt_at = str(row.get("next_attempt_at") or "").strip()
+    return not next_attempt_at or next_attempt_at <= utc_now_iso()
 
 
 def _compose_project_name(deployment_id: str) -> str:
@@ -543,6 +550,105 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     )
 
 
+def _claim_notification_for_delivery(
+    conn: Any,
+    notification_id: int,
+    *,
+    lease_seconds: int,
+) -> bool:
+    """Lease a notification row so live triggers and polling cannot duplicate it."""
+    now_iso = utc_now_iso()
+    cursor = conn.execute(
+        """
+        UPDATE notification_outbox
+        SET last_attempt_at = ?,
+            next_attempt_at = ?
+        WHERE id = ?
+          AND delivered_at IS NULL
+          AND (next_attempt_at IS NULL OR next_attempt_at = '' OR next_attempt_at <= ?)
+        """,
+        (now_iso, utc_after_seconds_iso(lease_seconds), int(notification_id), now_iso),
+    )
+    conn.commit()
+    return int(getattr(cursor, "rowcount", 0) or 0) == 1
+
+
+def run_public_agent_turns_once(
+    cfg: Config,
+    *,
+    channel_kind: str = "",
+    target_id: str = "",
+    limit: int = 3,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Immediately deliver queued public-agent turns for live webhook triggers.
+
+    Public Telegram/Discord webhooks use this as an edge-triggered fast path:
+    the outbox row remains the durable contract, but the active agent is kicked
+    right away instead of waiting for the periodic notification loop.
+    """
+    summary = {
+        "processed": 0,
+        "delivered": 0,
+        "errors": 0,
+        "not_due": 0,
+        "claimed_elsewhere": 0,
+    }
+    clean_channel = str(channel_kind or "").strip().lower()
+    clean_target = str(target_id or "").strip()
+    where = ["delivered_at IS NULL", "target_kind = 'public-agent-turn'"]
+    params: list[Any] = []
+    if clean_channel:
+        where.append("channel_kind = ?")
+        params.append(clean_channel)
+    if clean_target:
+        where.append("target_id = ?")
+        params.append(clean_target)
+    params.append(max(1, int(limit)))
+    with connect_db(cfg) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at, delivery_error,
+                   attempt_count, last_attempt_at, next_attempt_at
+            FROM notification_outbox
+            WHERE {' AND '.join(where)}
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        for raw_row in rows:
+            row = dict(raw_row)
+            if not _notification_due_now(row):
+                summary["not_due"] += 1
+                continue
+            if not _claim_notification_for_delivery(
+                conn,
+                int(row["id"]),
+                lease_seconds=_int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900) + 90,
+            ):
+                summary["claimed_elsewhere"] += 1
+                continue
+            summary["processed"] += 1
+            try:
+                extra_raw = str(row.get("extra_json") or "").strip()
+                extra = json.loads(extra_raw) if extra_raw else {}
+                if not isinstance(extra, dict):
+                    extra = {}
+                error = _deliver_public_agent_turn(cfg, row, extra)
+            except Exception as exc:  # noqa: BLE001
+                error = f"exception: {exc}"
+            if error:
+                mark_notification_error(conn, int(row["id"]), error)
+                summary["errors"] += 1
+                if verbose:
+                    sys.stderr.write(f"[deliver-public-agent] id={row['id']} error={error}\n")
+                continue
+            mark_notification_delivered(conn, int(row["id"]))
+            summary["delivered"] += 1
+    return summary
+
+
 def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
     target_kind = (row.get("target_kind") or "").lower()
     extra_raw = str(row.get("extra_json") or "").strip()
@@ -658,6 +764,8 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
         deploy_operation = active_deploy_operation(cfg)
 
         for row in rows:
+            if not _notification_due_now(row):
+                continue
             summary["processed"] += 1
             if deploy_operation is not None and _is_operator_upgrade_notification(row):
                 summary["deferred_during_deploy"] += 1

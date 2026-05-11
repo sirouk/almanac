@@ -382,6 +382,7 @@ def handle_discord_interaction(
         "data": data,
         "session_id": turn.session_id,
         "action": turn.action,
+        "channel_identity": channel_identity,
     }
 
 

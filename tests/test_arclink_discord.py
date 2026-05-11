@@ -228,7 +228,7 @@ def test_discord_full_onboarding_flow() -> None:
     steps = [
         ("/start", "prompt_name"),
         ("name Discord Bot", "prompt_package"),
-        ("plan sovereign", "prompt_checkout"),
+        ("plan sovereign", "open_checkout"),
     ]
     session_ids = set()
     for text, expected_action in steps:
@@ -238,6 +238,9 @@ def test_discord_full_onboarding_flow() -> None:
         )
         expect(result is not None, f"no result for {text}")
         expect(result["action"] == expected_action, f"expected {expected_action}, got {result['action']}")
+        if expected_action == "open_checkout":
+            expect(result["data"].get("components"), str(result["data"]))
+            expect(result["data"]["components"][0]["components"][0]["url"].startswith("https://stripe.test"), str(result["data"]))
         session_ids.add(result["session_id"])
 
     expect(len(session_ids) == 1, f"session changed: {session_ids}")

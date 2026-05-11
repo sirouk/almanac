@@ -744,6 +744,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_CODE_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "ARCLINK_TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
         "HERMES_TUI_DIR": "/opt/arclink/runtime/hermes-agent-src/ui-tui",
+        "TELEGRAM_REACTIONS": "true",
+        "DISCORD_REACTIONS": "true",
         "QMD_STATE_DIR": CONTAINER_QMD_STATE_DIR,
         "QMD_MCP_CONTAINER_PORT": "8181",
         "QMD_MCP_LOOPBACK_PORT": "18181",

@@ -481,6 +481,7 @@ def _apply_deployment(
         tailscale_notion_path=worker.tailscale_notion_path,
         env=worker.env,
     )
+    _persist_deployment_access_urls(conn, deployment_id=deployment_id, urls=intent["access"]["urls"])
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
     selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
     if worker.ingress_mode == "domain" and intent["dns"]:
@@ -540,6 +541,27 @@ def _apply_deployment(
         "dns_records": list(dns_result.records),
         "urls": dict(intent["access"]["urls"]),
     }
+
+
+def _persist_deployment_access_urls(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    urls: Mapping[str, Any],
+) -> None:
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkSovereignWorkerError(f"ArcLink deployment not found: {deployment_id}")
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+    metadata["access_urls"] = {str(role): str(url) for role, url in dict(urls).items() if str(url or "").strip()}
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
+    )
+    conn.commit()
 
 
 def _executor_for_host(

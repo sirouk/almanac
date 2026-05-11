@@ -300,6 +300,8 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
         conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
     )
     expect(metadata["tailnet_service_ports"] == {"hermes": 8443}, str(metadata))
+    expect(metadata["access_urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1234/hermes", str(metadata))
+    expect(metadata["access_urls"]["files"] == "https://worker.example.test/u/amber-vault-1234/drive", str(metadata))
     dns_count = conn.execute("SELECT COUNT(*) AS c FROM arclink_dns_records").fetchone()["c"]
     expect(dns_count == 0, str(dns_count))
     event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'sovereign_pod_applied'").fetchone()

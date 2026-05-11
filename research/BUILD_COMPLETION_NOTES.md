@@ -1,5 +1,47 @@
 # Build Completion Notes
 
+## 2026-05-11 Conflict-Free Raven Active-Agent Command Scope
+
+Scope: made the active Telegram slash surface conflict-free by giving the
+active agent the bare slash namespace and moving Raven controls behind a
+dedicated Raven command that is selected after the active agent command
+inventory is known.
+
+- Active Telegram command scopes now contain one Raven control command,
+  normally `/raven`, plus the active agent's current Hermes command menu.
+  If an upgraded plugin, skill, or Hermes runtime introduces `/raven`,
+  ArcLink falls back to `/arclink`, then `/arclink_control`, then a visible
+  `arclink_ops*` escape hatch.
+- Bare `/agents`, `/status`, `/help`, `/model`, `/provider`, and similar
+  active-agent commands route to the active agent after Telegram command-scope
+  refresh records the active command inventory. Raven controls stay reachable
+  as `/raven agents`, `/raven status`, `/raven credentials`, `/raven
+  connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven
+  upgrade_hermes`, and `/raven cancel`.
+- Public bot command registration now refreshes every active Telegram chat
+  scope after control install/upgrade, records the command source and
+  conflict diagnostics in onboarding session metadata, and queues an operator
+  alert when a legacy Raven-name collision, hard Raven control collision, or
+  policy-suppressed command such as `/update` appears.
+- Active Telegram inline buttons are rewritten to the Raven namespace so
+  button taps keep reaching Raven even when the visible bare slash command
+  belongs to the selected agent.
+- Telegram share approval buttons now use `/raven approve {grant_id}` and
+  `/raven deny {grant_id}` while keeping the older `/share-approve` and
+  `/share-deny` forms owner-scoped for compatibility.
+
+Verification run:
+
+- `python3 tests/test_arclink_public_bot_commands.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 -m py_compile python/arclink_telegram.py python/arclink_public_bots.py python/arclink_public_bot_commands.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_sovereign_worker.py tests/test_arclink_telegram.py tests/test_arclink_public_bots.py tests/test_arclink_public_bot_commands.py tests/test_arclink_sovereign_worker.py` passed.
+- `git diff --check` passed.
+
 ## 2026-05-11 Telegram Active-Agent Command Scope
 
 Scope: repaired the mismatch where Raven routed non-Raven slash commands to the

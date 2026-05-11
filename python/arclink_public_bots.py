@@ -120,6 +120,10 @@ ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny)\s+(share_[0-9a-f]{32})$")
 ARCLINK_PUBLIC_BOT_RAVEN_DISPLAY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 ._-]{0,31}$")
+ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_COMMANDS = frozenset({"/raven", "/arclink", "/arclink_control"})
+ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_FALLBACK_RE = re.compile(r"^/arclink_ops\d{0,2}$")
+ARCLINK_PUBLIC_BOT_AGENT_POLICY_SUPPRESSED_COMMANDS = frozenset({"update"})
+ARCLINK_PUBLIC_BOT_COMMAND_NAME_RE = re.compile(r"[^a-z0-9_]")
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIR_CODE_TTL_SECONDS = 10 * 60
@@ -361,6 +365,58 @@ def _clean_raven_display_name(raw: str) -> str:
             "Raven display name may use letters, numbers, spaces, dot, underscore, or hyphen"
         )
     return clean
+
+
+def _public_bot_command_name(message: str) -> str:
+    token = str(message or "").strip().split(maxsplit=1)[0].split("@", 1)[0]
+    name = token.lower().lstrip("/").replace("-", "_")
+    name = ARCLINK_PUBLIC_BOT_COMMAND_NAME_RE.sub("", name)
+    return name[:32]
+
+
+def _raven_control_rewrite(message: str, command: str) -> str | None:
+    parts = str(message or "").strip().split(maxsplit=1)
+    if not parts:
+        return "/help"
+    control = parts[0].lower().split("@", 1)[0]
+    if control not in ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_COMMANDS and not ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_FALLBACK_RE.fullmatch(control):
+        return None
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    rest_parts = rest.split(maxsplit=1)
+    raw_verb = rest_parts[0].strip().lower() if rest_parts else ""
+    verb = raw_verb.replace("-", "_")
+    tail = rest_parts[1].strip() if len(rest_parts) > 1 else ""
+    if not verb or verb in {"help", "commands", "menu"}:
+        return "/help"
+    if verb.startswith("agent_") and len(verb) > len("agent_"):
+        return f"/agent-{verb[len('agent_'):]}"
+    if verb in {"agent", "agents", "crew", "roster", "manifest"}:
+        return "/agents"
+    if verb in {"status", "health"}:
+        return "/status"
+    if verb in {"credentials", "credential"}:
+        return "/credentials"
+    if verb in {"credentials_stored", "credential_stored", "stored"}:
+        return "/credentials-stored"
+    if verb in {"notion", "ssot", "connect_notion", "connect-notion"}:
+        return "/connect_notion"
+    if verb in {"backup", "config_backup", "config-backup"}:
+        return "/config_backup"
+    if verb in {"link", "pair", "channel", "link_channel", "link-channel", "pair_channel", "pair-channel"}:
+        return f"/link_channel {tail}".strip()
+    if verb in {"add", "add_agent", "add-agent"}:
+        return "/add-agent"
+    if verb in {"approve", "share_approve", "share-approve"}:
+        return f"/share-approve {tail}".strip()
+    if verb in {"deny", "share_deny", "share-deny"}:
+        return f"/share-deny {tail}".strip()
+    if verb in {"upgrade", "upgrade_hermes", "upgrade-hermes", "update"}:
+        return "/upgrade_hermes"
+    if verb in {"cancel", "stop"}:
+        return "/cancel"
+    if verb in {"name", "raven_name", "raven-name"}:
+        return f"/raven_name {tail}".strip()
+    return "/help"
 
 
 def _raven_name_command_value(message: str, command: str) -> str | None:
@@ -684,10 +740,42 @@ def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
     return commands
 
 
+def _active_raven_callback_command(command: str) -> str:
+    value = str(command or "").strip()
+    mapping = {
+        "/help": "/raven help",
+        "/commands": "/raven help",
+        "/status": "/raven status",
+        "/agents": "/raven agents",
+        "/credentials": "/raven credentials",
+        "/credentials-stored": "/raven credentials_stored",
+        "/credentials_stored": "/raven credentials_stored",
+        "/connect_notion": "/raven connect_notion",
+        "/connect-notion": "/raven connect_notion",
+        "/config_backup": "/raven config_backup",
+        "/config-backup": "/raven config_backup",
+        "/link_channel": "/raven link_channel",
+        "/link-channel": "/raven link_channel",
+        "/add-agent": "/raven add_agent",
+        "/add_agent": "/raven add_agent",
+        "/upgrade_hermes": "/raven upgrade_hermes",
+        "/upgrade-hermes": "/raven upgrade_hermes",
+        "/cancel": "/raven cancel",
+    }
+    if value.startswith("/agent-") or value.startswith("/agent_"):
+        return f"/raven {value.lstrip('/')}"
+    share_match = ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE.match(value.lower())
+    if share_match:
+        action = "approve" if share_match.group(1) == "approve" else "deny"
+        return f"/raven {action} {share_match.group(2)}"
+    return mapping.get(value, value)
+
+
 def arclink_public_bot_turn_telegram_reply_markup(turn: ArcLinkPublicBotTurn) -> dict[str, Any] | None:
     buttons = tuple(turn.buttons or ())
     if not buttons:
         return None
+    active = turn.status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
     rows: list[list[dict[str, Any]]] = []
     row: list[dict[str, Any]] = []
     for button in buttons:
@@ -695,7 +783,10 @@ def arclink_public_bot_turn_telegram_reply_markup(turn: ArcLinkPublicBotTurn) ->
         if button.url:
             payload["url"] = button.url
         else:
-            payload["callback_data"] = f"arclink:{button.command or button.label}"[:64]
+            command = button.command or button.label
+            if active:
+                command = _active_raven_callback_command(command)
+            payload["callback_data"] = f"arclink:{command}"[:64]
         row.append(payload)
         if len(row) == 2:
             rows.append(row)
@@ -981,6 +1072,23 @@ def _agent_slug(label: str) -> str:
 
 def _metadata(row: Mapping[str, Any] | None) -> dict[str, Any]:
     return json_loads_safe(str((row or {}).get("metadata_json") or "{}"))
+
+
+def _agent_command_names_from_context(
+    turn_metadata: Mapping[str, Any],
+    session: Mapping[str, Any] | None,
+) -> set[str]:
+    names: set[str] = set()
+    session_meta = _metadata(session)
+    for source in (turn_metadata, session_meta):
+        for key in ("active_agent_command_names", "telegram_active_agent_command_names"):
+            raw = source.get(key) if isinstance(source, Mapping) else None
+            if isinstance(raw, (list, tuple, set)):
+                for item in raw:
+                    name = _public_bot_command_name(f"/{item}")
+                    if name:
+                        names.add(name)
+    return names
 
 
 def _deployment_plan_id(session: Mapping[str, Any] | None, deployment: Mapping[str, Any] | None) -> str:
@@ -1615,7 +1723,7 @@ def _aboard_freeform_reply(
         lines.extend(
             [
                 f"From now on, your normal messages in this channel will be routed to your active agent, **{label}**.",
-                "Use `/agents` any time to choose a different active agent. Raven keeps ArcLink controls; agent messages go to the agent at the helm.",
+                "Use `/raven` any time for ArcLink controls and agent selection. Bare slash commands belong to the agent at the helm.",
                 "",
             ]
         )
@@ -1623,7 +1731,7 @@ def _aboard_freeform_reply(
         [
             f"I'm {raven}. I am routing that to **{label}** now.",
             "",
-            "I will bring the reply back here when the agent finishes. Raven controls stay here: `/help`, `/agents`, `/status`, `/credentials`, `/connect_notion`, `/config_backup`, `/link-channel`.",
+            "I will bring the reply back here when the agent finishes. Raven controls stay behind `/raven`; active-agent slash commands stay in the bare slash menu.",
         ]
     )
     if helm:
@@ -2562,7 +2670,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, I read them all: `/agents`, `/status`, `/credentials`, `/connect_notion`, `/config_backup`, `/link_channel`, `/cancel`.\n\n"
+            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, or `/raven cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -2677,6 +2785,54 @@ def handle_arclink_public_bot_turn(
     captured_display_name = str(display_name_hint or "").strip()[:40]
     turn_metadata = dict(metadata or {})
     reply_to_message_id = str(turn_metadata.get("telegram_message_id") or turn_metadata.get("message_id") or "").strip()
+    raven_control_requested = False
+    rewritten = _raven_control_rewrite(message, command)
+    if rewritten is not None:
+        message = rewritten
+        command = message.lower()
+        raven_control_requested = True
+
+    if message.startswith("/") and not raven_control_requested:
+        context_session, context_deployment = _deployment_context(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+        )
+        if (
+            context_deployment
+            and str(context_deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+        ):
+            command_name = _public_bot_command_name(message)
+            agent_command_names = _agent_command_names_from_context(turn_metadata, context_session)
+            if command_name in ARCLINK_PUBLIC_BOT_AGENT_POLICY_SUPPRESSED_COMMANDS:
+                return _upgrade_hermes_reply(
+                    channel=clean_channel,
+                    channel_identity=clean_identity,
+                    session=context_session,
+                    deployment=context_deployment,
+                )
+            if command_name and command_name in agent_command_names:
+                raven = _raven_display_name(
+                    conn,
+                    channel=clean_channel,
+                    channel_identity=clean_identity,
+                    session=context_session,
+                    deployment=context_deployment,
+                )
+                return _aboard_freeform_reply(
+                    channel=clean_channel,
+                    channel_identity=clean_identity,
+                    session=context_session,
+                    deployment={
+                        **context_deployment,
+                        "_public_bot_message": message,
+                        "_public_bot_reply_to_message_id": reply_to_message_id,
+                    },
+                    bot_display_name=raven,
+                    conn=conn,
+                    source_kind="agent_command",
+                    include_bridge_intro=False,
+                )
 
     if _raven_name_command_value(message, command) is not None:
         return _raven_name_reply(

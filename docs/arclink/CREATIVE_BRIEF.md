@@ -435,7 +435,7 @@ Hire Founders
 ```text
 Control panel is open.
 
-Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If you prefer typed controls, I understand: `/agents`, `/status`, `/connect_notion`, `/config_backup`, `/link_channel`, and `/cancel`.
+Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If this is an active Telegram chat, use `/raven agents`, `/raven status`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, or `/raven cancel` for ArcLink controls. Bare slash commands belong to the agent at the helm.
 
 Pick one lane and I will keep the steps tight.
 ```
@@ -450,7 +450,9 @@ Set Up Backup
 
 ### Crew Roster
 
-Triggered by `/agents`.
+Triggered by `/agents` before the active Telegram command scope is refreshed,
+or by `/raven agents` after the active agent owns the bare Telegram slash
+namespace.
 
 ```text
 Your ArcLink crew
@@ -644,7 +646,8 @@ I can run that lane once your first agent is awake aboard ArcLink. Send `/start`
 
 ## Command And Button Inventory
 
-Registered public Telegram commands:
+Registered public Telegram commands before an active Telegram chat receives its
+per-chat active-agent scope:
 
 | Command | Description |
 | --- | --- |
@@ -660,6 +663,14 @@ Registered public Telegram commands:
 | `/config_backup` | Configure private pod backup |
 | `/link_channel` | Link Telegram and Discord to the same ArcLink account |
 | `/cancel` | Close the active setup workflow |
+
+In active Telegram chats, the visible command menu changes to one Raven
+control command, normally `/raven`, plus the active agent's current Hermes
+commands. Use `/raven agents`, `/raven status`, `/raven connect_notion`,
+`/raven config_backup`, `/raven link_channel`, or `/raven cancel` for ArcLink
+controls there. Bare slash commands belong to the active agent. Discord keeps
+global slash commands and uses `/agent <message-or-command>` for active-agent
+commands.
 
 Hidden/account-state actions:
 

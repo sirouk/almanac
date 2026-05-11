@@ -57,7 +57,7 @@ external live-proof journey, and Notion shared-root no-secret proof harness.
 | `research/PRODUCT_REALITY_MATRIX.md` | Reconciled to the then-current Chutes proof rows, Raven chat-scope policy row, Notion proof harness row, and 100/15/6 totals |
 | `research/BUILD_COMPLETION_NOTES.md` | Records the no-secret Chutes live adapter, OAuth callback, Notion harness, and validation results |
 | `docs/API_REFERENCE.md` | Current hosted API docs still describe sanitized provider state and local provider-budget credit posture; no route catalog change was needed |
-| `docs/arclink/raven-public-bot.md` | Updated to state that Raven keeps slash-command control while freeform public messages queue selected-agent turns and return replies to the linked channel |
+| `docs/arclink/raven-public-bot.md` | Updated to state that active Telegram chats move Raven controls behind `/raven`, expose active-agent slash commands in the per-chat menu, and queue selected-agent turns back to the linked channel |
 | `docs/arclink/notion-human-guide.md` | Already states shared-root membership is canonical and user-owned OAuth/email-only sharing are non-default proof-gated lanes |
 
 ### Open Questions And Risks
@@ -118,7 +118,7 @@ transcripts, or machine-only evidence were added.
 | `docs/openapi/arclink-v1.openapi.json` | Already includes the current hosted API route catalog |
 | `docs/arclink/architecture.md` | Reflects credential/share routes, current user dashboard API wiring, and Drive/Code `Linked` root boundaries |
 | `docs/arclink/first-day-user-guide.md` | Already describes credential acknowledgement and read-only linked resources for users |
-| `docs/arclink/raven-public-bot.md` | Documents `/raven_name`, `/link_channel`, `/connect_notion`, share approval callbacks, upgrade-rail guidance, and Raven-mediated selected-agent chat |
+| `docs/arclink/raven-public-bot.md` | Documents `/raven` active Telegram controls, `/raven_name`, `/link_channel`, `/connect_notion`, share approval callbacks, command-scope conflict alerts, upgrade-rail guidance, and Raven-mediated selected-agent chat |
 | `docs/arclink/notion-human-guide.md` | Already names shared-root membership as the canonical SSOT sharing model and keeps user-owned OAuth/email-share paths non-default |
 | `plugins/hermes-agent/drive/README.md` and `plugins/hermes-agent/code/README.md` | Document `Linked` root discovery, read-only behavior, no reshare, owned copy/duplicate from linked content, and the disabled browser share-link gate |
 | `plugins/hermes-agent/arclink-managed-context/README.md` | Already documents recall budget tiers and sibling conversational-memory boundaries |

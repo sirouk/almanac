@@ -74,9 +74,12 @@ ARCLINK_TELEGRAM_AGENT_FALLBACK_COMMANDS: tuple[tuple[str, str], ...] = (
 ARCLINK_TELEGRAM_AGENT_ALIAS_COMMANDS: tuple[tuple[str, str], ...] = (
     ("provider", "Agent: alias for model/provider"),
 )
-ARCLINK_TELEGRAM_SUPPRESSED_AGENT_COMMANDS = frozenset(
-    {
-        # Raven owns these names in public channels.
+ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES = ("raven", "arclink", "arclink_control")
+ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION = "Raven: ArcLink controls, roster, status, and setup"
+ARCLINK_TELEGRAM_POLICY_SUPPRESSED_AGENT_COMMANDS = frozenset({"update"})
+ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES = frozenset(
+    _telegram_name
+    for _telegram_name in (
         "agent",
         "agents",
         "cancel",
@@ -94,10 +97,7 @@ ARCLINK_TELEGRAM_SUPPRESSED_AGENT_COMMANDS = frozenset(
         "start",
         "status",
         "upgrade_hermes",
-        # Direct Hermes update is intentionally hidden behind ArcLink's pinned
-        # upgrade rail.
-        "update",
-    }
+    )
 )
 
 
@@ -406,7 +406,7 @@ def arclink_public_bot_telegram_agent_commands(
     raw_with_aliases = list(raw_commands) + list(ARCLINK_TELEGRAM_AGENT_ALIAS_COMMANDS)
     for raw_name, raw_description in raw_with_aliases:
         name = _telegram_command_name(raw_name)
-        if not name or name in seen or name in ARCLINK_TELEGRAM_SUPPRESSED_AGENT_COMMANDS:
+        if not name or name in seen:
             continue
         description = str(raw_description or f"Agent: run /{name}").strip()
         if not description.lower().startswith("agent:"):
@@ -418,11 +418,84 @@ def arclink_public_bot_telegram_agent_commands(
     return result
 
 
+def arclink_public_bot_telegram_active_command_plan(
+    *,
+    agent_commands: list[dict[str, str]] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build a conflict-free active-chat Telegram command plan.
+
+    In active chats the active agent owns the bare slash namespace. Raven gets
+    one safe control command whose name is selected after the agent command
+    inventory is known, so an upstream Hermes/plugin/skill command cannot
+    accidentally steal or shadow Raven's visible control entry.
+    """
+    raw_agent = list(agent_commands) if agent_commands is not None else arclink_public_bot_telegram_agent_commands(env=env)
+    normalized_agent: list[dict[str, str]] = []
+    seen_agent: set[str] = set()
+    suppressed: list[str] = []
+    for item in raw_agent:
+        name = _telegram_command_name(str(item.get("command") or ""))
+        description = str(item.get("description") or "").strip()
+        if not name or not description or name in seen_agent:
+            continue
+        if name in ARCLINK_TELEGRAM_POLICY_SUPPRESSED_AGENT_COMMANDS:
+            suppressed.append(name)
+            continue
+        normalized_agent.append({"command": name, "description": description[:256]})
+        seen_agent.add(name)
+
+    raven_command = ""
+    for candidate in ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES:
+        if candidate not in seen_agent:
+            raven_command = candidate
+            break
+    if not raven_command:
+        # Last-resort deterministic escape hatch. It is intentionally clunky so
+        # any upstream collision is obvious in the operator alert.
+        for suffix in range(10):
+            candidate = f"arclink_ops{suffix}"
+            if candidate not in seen_agent:
+                raven_command = candidate
+                break
+    if not raven_command:
+        raven_command = "arclink_ops"
+
+    commands: list[dict[str, str]] = [
+        {"command": raven_command, "description": ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION[:256]}
+    ]
+    used = {raven_command}
+    for item in normalized_agent:
+        if item["command"] in used:
+            continue
+        commands.append(item)
+        used.add(item["command"])
+        if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
+            break
+
+    legacy_conflicts = sorted(seen_agent & ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES)
+    hard_conflicts = sorted(seen_agent & set(ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES))
+    hidden_count = max(0, len(normalized_agent) + 1 - len(commands))
+    return {
+        "commands": commands,
+        "agent_command_names": sorted(seen_agent),
+        "legacy_raven_conflicts": legacy_conflicts,
+        "hard_raven_conflicts": hard_conflicts,
+        "policy_suppressed": sorted(set(suppressed)),
+        "raven_command": raven_command,
+        "hidden_count": hidden_count,
+    }
+
+
 def arclink_public_bot_telegram_chat_commands(
     *,
     include_agent_commands: bool,
     env: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
+    if include_agent_commands:
+        plan = arclink_public_bot_telegram_active_command_plan(env=env)
+        return list(plan["commands"])
+
     merged: list[dict[str, str]] = []
     seen: set[str] = set()
 
@@ -438,8 +511,6 @@ def arclink_public_bot_telegram_chat_commands(
                 return
 
     add_commands(arclink_public_bot_telegram_commands())
-    if include_agent_commands and len(merged) < ARCLINK_TELEGRAM_COMMAND_LIMIT:
-        add_commands(arclink_public_bot_telegram_agent_commands(env=env))
     return merged[:ARCLINK_TELEGRAM_COMMAND_LIMIT]
 
 
@@ -455,10 +526,15 @@ def refresh_arclink_public_telegram_chat_commands(
     clean_chat_id = str(chat_id or "").strip()
     if not clean_token or not clean_chat_id:
         return {"skipped": True, "reason": "missing_token_or_chat"}
-    commands = arclink_public_bot_telegram_chat_commands(
-        include_agent_commands=include_agent_commands,
-        env=env,
-    )
+    plan: dict[str, Any] = {}
+    if include_agent_commands:
+        plan = arclink_public_bot_telegram_active_command_plan(env=env)
+        commands = list(plan["commands"])
+    else:
+        commands = arclink_public_bot_telegram_chat_commands(
+            include_agent_commands=False,
+            env=env,
+        )
     signature = ",".join(item["command"] for item in commands)
     cache_key = (clean_chat_id, signature)
     if not force and cache_key in _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE:
@@ -468,6 +544,10 @@ def refresh_arclink_public_telegram_chat_commands(
             "chat_id": clean_chat_id,
             "command_count": len(commands),
             "include_agent_commands": include_agent_commands,
+            "raven_command": plan.get("raven_command", ""),
+            "legacy_raven_conflicts": plan.get("legacy_raven_conflicts", []),
+            "hard_raven_conflicts": plan.get("hard_raven_conflicts", []),
+            "policy_suppressed": plan.get("policy_suppressed", []),
         }
     scope = _telegram_chat_scope(clean_chat_id)
     telegram_set_my_commands(bot_token=clean_token, commands=commands, scope=scope)
@@ -478,6 +558,12 @@ def refresh_arclink_public_telegram_chat_commands(
         "chat_id": clean_chat_id,
         "command_count": len(commands),
         "include_agent_commands": include_agent_commands,
+        "raven_command": plan.get("raven_command", ""),
+        "agent_command_names": plan.get("agent_command_names", []),
+        "legacy_raven_conflicts": plan.get("legacy_raven_conflicts", []),
+        "hard_raven_conflicts": plan.get("hard_raven_conflicts", []),
+        "policy_suppressed": plan.get("policy_suppressed", []),
+        "hidden_count": plan.get("hidden_count", 0),
     }
 
 
@@ -673,6 +759,11 @@ def handle_telegram_update(
     if parsed is None:
         return None
     channel_identity = f"tg:{parsed['user_id']}" if parsed["user_id"] else f"tg:{parsed['chat_id']}"
+    turn_metadata: dict[str, Any] = {"telegram_message_id": parsed.get("message_id", "")}
+    if str(parsed.get("text") or "").strip().startswith("/"):
+        turn_metadata["active_agent_command_names"] = [
+            item["command"] for item in arclink_public_bot_telegram_agent_commands()
+        ]
     turn = handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -686,7 +777,7 @@ def handle_telegram_update(
         sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
         scale_agent_expansion_price_id=scale_agent_expansion_price_id,
         base_domain=base_domain,
-        metadata={"telegram_message_id": parsed.get("message_id", "")},
+        metadata=turn_metadata,
         display_name_hint=parsed.get("display_name", ""),
     )
     command_scope: dict[str, Any] | None = None

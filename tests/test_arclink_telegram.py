@@ -132,7 +132,7 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
 
     result = tg.handle_telegram_update(
         conn,
-        {"update_id": 20, "message": {"message_id": 9, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agents"}},
+        {"update_id": 20, "message": {"message_id": 9, "chat": {"id": 42}, "from": {"id": 99}, "text": "/raven agents"}},
         telegram_bot_token="123:abc",
     )
 
@@ -140,14 +140,24 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     expect(calls, "expected per-chat command scope refresh")
     expect(calls[0]["scope"] == {"type": "chat", "chat_id": 42}, str(calls[0]))
     names = {item["command"] for item in calls[0]["commands"]}
-    expect("agent" in names and "agents" in names, str(names))
+    expect("raven" in names, str(names))
+    expect("agents" in names and "status" in names and "help" in names, str(names))
     expect("model" in names, str(names))
     expect("provider" in names, str(names))
     expect("reload_mcp" in names, str(names))
+    expect("credentials" not in names and "connect_notion" not in names, str(names))
     expect("update" not in names, "unsafe direct Hermes update must stay hidden")
     expect(len(names) == len(calls[0]["commands"]), "command names must be unique")
     expect(len(names) <= 100, "Telegram command limit exceeded")
     expect(result.get("command_scope", {}).get("include_agent_commands") is True, str(result.get("command_scope")))
+    expect(result.get("command_scope", {}).get("raven_command") == "raven", str(result.get("command_scope")))
+
+    agent_agents = tg.handle_telegram_update(
+        conn,
+        {"update_id": 21, "message": {"message_id": 10, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agents"}},
+        telegram_bot_token="123:abc",
+    )
+    expect(agent_agents is not None and agent_agents["action"] == "agent_message_queued", str(agent_agents))
 
     before = len(calls)
     skipped = tg.refresh_arclink_public_telegram_chat_commands(
@@ -193,7 +203,7 @@ def test_telegram_status_reports_selected_agent_label() -> None:
     expect(switched is not None and switched["action"] == "switch_agent", str(switched))
     status = tg.handle_telegram_update(
         conn,
-        {"update_id": 11, "message": {"message_id": 2, "chat": {"id": 42}, "from": {"id": 99}, "text": "/status"}},
+        {"update_id": 11, "message": {"message_id": 2, "chat": {"id": 42}, "from": {"id": 99}, "text": "/raven status"}},
     )
     expect(status is not None and status["action"] == "show_status", str(status))
     expect("Agent at the helm: Bob" in status["text"], status["text"])

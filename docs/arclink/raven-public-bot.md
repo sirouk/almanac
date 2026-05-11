@@ -15,21 +15,29 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
 - Notion and backup are setup lanes for the active account. Notion setup stays
   behind the credential handoff: Raven can record the setup intent only after
   the user stores and acknowledges the secure completion bundle in Helm.
-- After onboarding, Raven remains the public control conduit for ArcLink-owned
-  slash actions such as status, agent roster/switching, Notion setup, backup
-  setup, channel linking, share approvals, and upgrade-rail guidance. The
-  first normal post-onboarding message in a linked channel explains that normal
-  messages now route to the active agent. After that, normal messages are
-  queued as selected-agent turns and Raven brings the agent's reply back to the
-  same linked Telegram or Discord channel.
-- Non-Raven slash commands from an onboarded user are passed to the active
-  agent instead of being swallowed by Raven help. Telegram publishes a
-  per-chat command scope for onboarded chats that merges Raven controls with
-  non-conflicting active-agent Hermes commands. Platforms or command names
-  that cannot safely share the public slash namespace can use
-  `/agent <message-or-command>`; on Discord the registered `/agent` command
-  accepts a `message` option. Helm remains the direct dashboard path for the
-  richest agent surface.
+- After onboarding, Raven remains the public control conduit, but the active
+  agent owns the normal slash namespace wherever the platform can support it.
+  The first normal post-onboarding message in a linked channel explains that
+  normal messages now route to the active agent. After that, normal messages
+  are queued as selected-agent turns and Raven brings the agent's reply back
+  to the same linked Telegram or Discord channel.
+- In active Telegram chats, Raven refreshes a per-chat command scope with one
+  Raven control command, normally `/raven`, plus the active agent's current
+  Hermes command menu. Bare slash commands such as `/agents`, `/status`,
+  `/model`, `/provider`, and `/reload_mcp` belong to the active agent when
+  they appear in that active-agent inventory. Raven control actions move
+  behind `/raven`, for example `/raven agents`, `/raven status`,
+  `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, and
+  `/raven link_channel`.
+- If a future plugin, skill, or Hermes upgrade collides with `/raven`, ArcLink
+  chooses a fallback Raven control command such as `/arclink` or
+  `/arclink_control` and queues an operator alert after command refresh. Direct
+  `/update` remains suppressed from active-agent command menus and routes to
+  ArcLink's managed upgrade rail.
+- Discord global slash commands cannot be per-user active-agent command menus.
+  Discord keeps the registered Raven controls and exposes `/agent
+  <message-or-command>` as the active-agent slash bridge. Helm remains the
+  direct dashboard path for the richest agent surface.
 
 ## Voice Rules
 
@@ -59,7 +67,8 @@ Weak:
 
 ## Account-Aware Commands
 
-Registered public commands:
+Registered public commands before the active Telegram per-chat scope takes
+over:
 
 - `/start`
 - `/help`
@@ -82,13 +91,17 @@ Registered public commands:
 - `/link_channel`
 - `/upgrade_hermes`
 - `/cancel`
+- `/raven <control>` is the active Telegram Raven control namespace. Use
+  `/raven agents`, `/raven status`, `/raven credentials`, `/raven
+  connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven
+  upgrade_hermes`, or `/raven cancel`.
 
 Hidden/account-state actions:
 
 - `/pair-channel` and `/pair_channel` remain backward-compatible aliases for `/link-channel` and `/link_channel`.
 - `/add-agent` is accepted only after the account has an active first deployment. It is surfaced as an `/agents` button, not as a global registered command.
 - `/agent-{slug}` switches the active agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
-- `/share-approve {grant_id}` and `/share-deny {grant_id}` are button-only owner actions for read-only Drive/Code share grants. Raven only honors them from a public channel linked to the share owner.
+- `/share-approve {grant_id}` and `/share-deny {grant_id}` are backward-compatible owner actions for read-only Drive/Code share grants. Active Telegram approval buttons use `/raven approve {grant_id}` and `/raven deny {grant_id}` so they cannot collide with the active agent's slash namespace. Raven only honors either form from a public channel linked to the share owner.
 - `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, and `/update` is intercepted too. Neither path runs direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
 - `/raven-name` remains accepted as the Discord-friendly alias for
   `/raven_name`.
@@ -112,7 +125,9 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 - `Back To My Crew` returns to the agent roster.
 - Share approval notifications use `Approve` and `Deny` buttons. Approving lets the recipient accept the resource as read-only under `Linked`; denying leaves the share closed.
 
-Telegram uses inline keyboard buttons. Discord uses message components. The default public command catalog remains intentionally small because global slash commands cannot reflect each individual account state. Once a Telegram chat has an active ArcLink deployment, Raven refreshes that chat's Telegram command scope with the default public commands plus non-conflicting active-agent Hermes commands such as `/model`, `/provider`, `/reload_mcp`, `/reload_skills`, `/usage`, and `/stop`. Raven-owned controls such as `/help`, `/status`, `/agents`, `/credentials`, `/connect_notion`, `/config_backup`, `/link_channel`, and `/upgrade_hermes` stay reserved for Raven; use `/agent /status` or Helm when a conflicting Hermes command is needed.
+Telegram uses inline keyboard buttons. Discord uses message components. The default public command catalog remains intentionally small because global slash commands cannot reflect each individual account state. Once a Telegram chat has an active ArcLink deployment, Raven refreshes that chat's Telegram command scope with one Raven control command plus active-agent Hermes commands such as `/agents`, `/status`, `/help`, `/model`, `/provider`, `/reload_mcp`, `/reload_skills`, `/usage`, and `/stop`. This scope is refreshed after public bot command registration during control install/upgrade, and Telegram webhook handling also refreshes the active chat scope when the user interacts. The refresh writes the observed active-agent command names into session metadata and queues an operator notification when it sees a legacy Raven-name collision, a hard Raven control collision, or a policy-suppressed command such as `/update`.
+
+Raven buttons in active Telegram chats are rewritten to the Raven namespace so taps continue to reach Raven even when the bare slash command belongs to the active agent. For example, `Show My Crew` becomes `/raven agents` and `Check Status` becomes `/raven status`.
 
 Telegram webhook registration must include `callback_query` in `allowed_updates`; otherwise inline buttons render but Telegram never delivers taps to ArcLink. `deploy.sh control install|upgrade` registers the public webhook at `/api/v1/webhooks/telegram` and refreshes command buttons so Raven can acknowledge taps and send the next turn.
 

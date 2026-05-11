@@ -92,9 +92,11 @@ provisioner context so it can read deployment state roots and update hashes.
 **Linked resources:** Cross-user Drive/Code sharing is modeled as read-only
 share grants. A user session creates a pending grant for a recipient, Raven
 queues an owner approval notification when the owner has a linked Telegram or
-Discord channel, and the owner can approve or deny it with the button-only
-`/share-approve {grant_id}` and `/share-deny {grant_id}` callbacks or through
-the hosted API. The recipient accepts an approved grant with their own user
+Discord channel, and the owner can approve or deny it with button callbacks.
+Active Telegram buttons use `/raven approve {grant_id}` and `/raven deny
+{grant_id}` so they cannot collide with the active agent's slash namespace;
+the backward-compatible `/share-approve {grant_id}` and `/share-deny
+{grant_id}` forms remain owner-scoped. The recipient accepts an approved grant with their own user
 session, and accepted resources are listed at
 `GET /api/v1/user/linked-resources`. Drive and Code expose a read-only `Linked`
 root when `ARCLINK_LINKED_RESOURCES_ROOT` or the plugin fallback projection

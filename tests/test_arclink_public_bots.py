@@ -979,8 +979,8 @@ def test_public_bot_share_approval_buttons_are_owner_scoped() -> None:
     extra = json.loads(notification["extra_json"])
     buttons = extra["telegram_reply_markup"]["inline_keyboard"][0]
     callbacks = {button["text"]: button["callback_data"] for button in buttons}
-    expect(callbacks["Approve"] == f"arclink:/share-approve {grant_id}", str(callbacks))
-    expect(callbacks["Deny"] == f"arclink:/share-deny {grant_id}", str(callbacks))
+    expect(callbacks["Approve"] == f"arclink:/raven approve {grant_id}", str(callbacks))
+    expect(callbacks["Deny"] == f"arclink:/raven deny {grant_id}", str(callbacks))
 
     refused = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1343,9 +1343,27 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     expect(restart.action == "show_help", f"expected show_help on /start re-trigger, got {restart.action}")
     expect("Stripe collects" not in restart.reply, "/start re-trigger leaked onboarding copy")
 
-    # Slash commands still call Raven back: /agents must still show the crew.
+    # Without a refreshed Telegram command inventory, legacy Raven aliases
+    # remain backward-compatible.
     crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/agents")
     expect(crew.action == "show_agents", str(crew.action))
+
+    # Once Telegram command-scope refresh records active Hermes commands,
+    # conflicting bare slash commands belong to the selected agent. Raven's
+    # control surface remains available through /raven.
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?
+        WHERE channel = 'telegram' AND channel_identity = 'tg:99'
+        """,
+        (json.dumps({"telegram_active_agent_command_names": ["agents", "status", "help"]}),),
+    )
+    conn.commit()
+    agent_agents = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/agents")
+    expect(agent_agents.action == "agent_message_queued", str(agent_agents.action))
+    raven_crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/raven agents")
+    expect(raven_crew.action == "show_agents", str(raven_crew.action))
 
     # Non-Raven slash commands pass through to the active agent, preserving the
     # user's Hermes command text instead of being swallowed by Raven help.
@@ -1385,9 +1403,17 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     ).fetchone()
     expect(agent_row["message"] == "/reload-mcp", str(dict(agent_row)))
 
-    # /help on an aboard user goes to the postlaunch control panel.
-    helped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/help")
+    # Raven's postlaunch control panel moves behind /raven when the active
+    # agent owns the bare slash namespace.
+    helped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/raven help")
     expect("Bridge is open" in helped.reply, helped.reply)
+    fallback_status = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        text="/arclink_ops0 status",
+    )
+    expect(fallback_status.action == "show_status", str(fallback_status.action))
 
     # Registered Raven launch/setup commands stay with Raven after onboarding
     # instead of accidentally becoming agent prompts.

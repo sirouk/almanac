@@ -484,8 +484,8 @@ def _public_bot_ping_actions() -> dict[str, Any]:
         "telegram_reply_markup": {
             "inline_keyboard": [
                 [
-                    {"text": "Check Status", "callback_data": "arclink:/status"},
-                    {"text": "Show My Crew", "callback_data": "arclink:/agents"},
+                    {"text": "Check Status", "callback_data": "arclink:/raven status"},
+                    {"text": "Show My Crew", "callback_data": "arclink:/raven agents"},
                 ],
             ],
         },

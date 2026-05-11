@@ -158,8 +158,8 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
         for button in row
     ]
     expect(any(button.get("text") == "Open Helm" and button.get("url") for button in telegram_buttons), str(extra))
-    expect(any(button.get("text") == "Show My Crew" and button.get("callback_data") == "arclink:/agents" for button in telegram_buttons), str(extra))
-    expect(any(button.get("text") == "Link Channel" and button.get("callback_data") == "arclink:/link-channel" for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Show My Crew" and button.get("callback_data") == "arclink:/raven agents" for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Link Channel" and button.get("callback_data") == "arclink:/raven link-channel" for button in telegram_buttons), str(extra))
     session = conn.execute("SELECT status, current_step FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
     expect(session["status"] == "first_contacted" and session["current_step"] == "first_agent_contact", str(dict(session)))
     paired = conn.execute(

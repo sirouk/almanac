@@ -1527,8 +1527,8 @@ def _share_approval_button_extra(*, channel: str, grant_id: str) -> dict[str, An
         return {
             "telegram_reply_markup": {
                 "inline_keyboard": [[
-                    {"text": "Deny", "callback_data": f"arclink:{deny_command}"},
-                    {"text": "Approve", "callback_data": f"arclink:{approve_command}"},
+                    {"text": "Deny", "callback_data": f"arclink:/raven deny {grant_id}"},
+                    {"text": "Approve", "callback_data": f"arclink:/raven approve {grant_id}"},
                 ]]
             }
         }

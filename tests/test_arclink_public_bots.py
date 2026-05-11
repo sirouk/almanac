@@ -330,16 +330,19 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     expect("link_channel" in telegram_names, str(telegram))
     expect("raven_name" in telegram_names, str(telegram))
     expect("upgrade_hermes" in telegram_names, str(telegram))
+    expect("agent" in telegram_names, str(telegram))
     expect("connect-notion" not in telegram_names, str(telegram))
     expect("config-backup" not in telegram_names, str(telegram))
     expect("upgrade-hermes" not in telegram_names, str(telegram))
 
     discord = bots.arclink_public_bot_discord_application_commands()
     discord_names = {item["name"] for item in discord}
-    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
+    expect({"arclink", "agent", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
     expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"founders", "sovereign", "scale"}, str(plan))
+    agent = next(item for item in discord if item["name"] == "agent")
+    expect(agent["options"][0]["name"] == "message" and agent["options"][0]["required"] is True, str(agent))
     print("PASS test_public_bot_action_catalog_has_real_platform_commands")
 
 
@@ -1270,8 +1273,8 @@ def main() -> int:
 
 def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     """Once a user has a live pod, freeform messages become selected-agent
-    turns through Raven. Slash commands still stay on Raven and must not
-    re-trigger onboarding copy.
+    turns through Raven. Raven-owned slash commands stay on Raven; other slash
+    commands pass through to the active agent.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_aboard_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_aboard_test")
@@ -1283,8 +1286,15 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     )
 
     # Freeform "hey there" from an aboard user queues an agent turn.
-    freeform = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="hey there")
+    freeform = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        text="hey there",
+        metadata={"telegram_message_id": "4321"},
+    )
     expect(freeform.action == "agent_message_queued", f"expected agent_message_queued got {freeform.action}")
+    expect("From now on, your normal messages in this channel will be routed to your active agent" in freeform.reply, freeform.reply)
     expect("I am routing that to **Bot Buyer** now" in freeform.reply, freeform.reply)
     expect("onboarding only" not in freeform.reply.lower(), freeform.reply)
     expect("Stripe collects" not in freeform.reply, "must not show onboarding copy to a paid user")
@@ -1298,6 +1308,14 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     expect(queued["target_id"] == "tg:99", str(dict(queued)))
     expect(queued["channel_kind"] == "telegram", str(dict(queued)))
     expect(queued["message"] == "hey there", str(dict(queued)))
+    queued_extra = json.loads(str(queued["extra_json"] or "{}"))
+    expect(queued_extra.get("source_kind") == "chat", str(queued_extra))
+    expect(queued_extra.get("telegram_reply_to_message_id") == "4321", str(queued_extra))
+
+    # The bridge intro is a one-time channel handoff, not repeated forever.
+    second_freeform = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="second note")
+    expect(second_freeform.action == "agent_message_queued", str(second_freeform.action))
+    expect("From now on" not in second_freeform.reply, second_freeform.reply)
 
     # /start re-trigger from an aboard user gets the control help reply,
     # NOT the onboarding "Stripe collects your email" prompt.
@@ -1309,9 +1327,52 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     crew = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/agents")
     expect(crew.action == "show_agents", str(crew.action))
 
+    # Non-Raven slash commands pass through to the active agent, preserving the
+    # user's Hermes command text instead of being swallowed by Raven help.
+    provider = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/provider")
+    expect(provider.action == "agent_message_queued", str(provider.action))
+    expect("Bridge is open" not in provider.reply, provider.reply)
+    slash_row = conn.execute(
+        """
+        SELECT message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect(slash_row["message"] == "/provider", str(dict(slash_row)))
+    slash_extra = json.loads(str(slash_row["extra_json"] or "{}"))
+    expect(slash_extra.get("source_kind") == "agent_command", str(slash_extra))
+
+    # /agent is an explicit Raven-owned pass-through for platforms whose slash
+    # command menus cannot expose every active Hermes command.
+    agent_command = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        text="/agent /reload-mcp",
+    )
+    expect(agent_command.action == "agent_message_queued", str(agent_command.action))
+    agent_row = conn.execute(
+        """
+        SELECT message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect(agent_row["message"] == "/reload-mcp", str(dict(agent_row)))
+
     # /help on an aboard user goes to the postlaunch control panel.
     helped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/help")
     expect("Bridge is open" in helped.reply, helped.reply)
+
+    # Registered Raven launch/setup commands stay with Raven after onboarding
+    # instead of accidentally becoming agent prompts.
+    package = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="/packages")
+    expect(package.action == "show_help", str(package.action))
 
     print("PASS test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding")
 

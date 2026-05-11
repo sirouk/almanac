@@ -122,6 +122,7 @@ ARCLINK_PUBLIC_BOT_RAVEN_DISPLAY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 ._-]
 GITHUB_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PAIR_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 PAIR_CODE_TTL_SECONDS = 10 * 60
+ARCLINK_PUBLIC_BOT_AGENT_BRIDGE_INTRO_EVENT = "public_bot:agent_bridge_intro_sent"
 ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME = "Raven"
 FOUNDERS_MONTHLY_DOLLARS = 149
 SOVEREIGN_MONTHLY_DOLLARS = 199
@@ -208,6 +209,20 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         telegram_command="agents",
         discord_command="agents",
         description="Open your ArcLink crew manifest",
+    ),
+    ArcLinkPublicBotAction(
+        key="agent",
+        telegram_command="agent",
+        discord_command="agent",
+        description="Send a message or command to your active agent",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "message",
+                "description": "Message or slash command for the active agent",
+                "required": True,
+            },
+        ),
     ),
     ArcLinkPublicBotAction(
         key="raven_name",
@@ -463,6 +478,63 @@ def _store_raven_display_name(
     conn.commit()
 
 
+def _agent_passthrough_message(message: str, command: str) -> str | None:
+    if command in {"/agent", "agent"}:
+        return ""
+    for prefix in ("/agent ", "agent "):
+        if command.startswith(prefix):
+            return str(message or "")[len(prefix) :].strip()
+    return None
+
+
+def _agent_bridge_channel_subject(channel: str, channel_identity: str) -> str:
+    return f"{channel}:{channel_identity}"
+
+
+def _agent_bridge_intro_already_sent(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM arclink_events
+        WHERE subject_kind = 'public_bot_channel'
+          AND subject_id = ?
+          AND event_type = ?
+        LIMIT 1
+        """,
+        (_agent_bridge_channel_subject(channel, channel_identity), ARCLINK_PUBLIC_BOT_AGENT_BRIDGE_INTRO_EVENT),
+    ).fetchone()
+    return row is not None
+
+
+def _claim_agent_bridge_intro(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    deployment: Mapping[str, Any],
+) -> bool:
+    if _agent_bridge_intro_already_sent(conn, channel=channel, channel_identity=channel_identity):
+        return False
+    append_arclink_event(
+        conn,
+        subject_kind="public_bot_channel",
+        subject_id=_agent_bridge_channel_subject(channel, channel_identity),
+        event_type=ARCLINK_PUBLIC_BOT_AGENT_BRIDGE_INTRO_EVENT,
+        metadata={
+            "channel": channel,
+            "channel_identity": channel_identity,
+            "deployment_id": str(deployment.get("deployment_id") or ""),
+            "user_id": str(deployment.get("user_id") or ""),
+        },
+    )
+    return True
+
+
 def _button(label: str, *, command: str = "", url: str = "", style: str = "primary") -> ArcLinkPublicBotButton:
     return ArcLinkPublicBotButton(label=label, command=command, url=url, style=style)
 
@@ -661,6 +733,17 @@ def _command_value(message: str, command: str, names: tuple[str, ...]) -> str | 
         if command.startswith(prefix):
             return message[len(prefix):].strip()
     return None
+
+
+def _is_raven_launch_command(message: str, command: str) -> bool:
+    if command in ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS or command in ARCLINK_PUBLIC_BOT_STANDARD_PACKAGE_COMMANDS:
+        return True
+    if command in {"checkout", "/checkout", "name", "/name", "plan", "/plan"}:
+        return True
+    return (
+        _command_value(message, command, ("name", "/name")) is not None
+        or _command_value(message, command, ("plan", "/plan")) is not None
+    )
 
 
 def _normalize_public_bot_plan(raw: str) -> str:
@@ -1485,45 +1568,63 @@ def _aboard_freeform_reply(
     deployment: Mapping[str, Any],
     bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     conn: sqlite3.Connection | None = None,
+    source_kind: str = "chat",
+    include_bridge_intro: bool = False,
 ) -> ArcLinkPublicBotTurn:
-    """Queue a public-channel freeform message for the selected agent.
+    """Queue a public-channel message or command for the selected agent.
 
-    Slash commands still belong to Raven. Plain text from an aboard user is
-    agent chat and is processed asynchronously by the notification worker so
-    Telegram/Discord webhook handlers do not block on model runtime.
+    Raven-owned slash commands are handled before this function. Anything that
+    reaches here belongs to the selected agent and is processed asynchronously
+    so Telegram/Discord webhook handlers do not block on model runtime.
     """
     label = _agent_label(deployment, index=0, conn=conn)
     raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     access = _deployment_access(deployment)
     helm = str(access.get("dashboard") or "").rstrip("/")
     if conn is not None:
+        extra = {
+            "deployment_id": str(deployment.get("deployment_id") or ""),
+            "prefix": str(deployment.get("prefix") or ""),
+            "user_id": str(deployment.get("user_id") or ""),
+            "agent_label": label,
+            "raven_display_name": raven,
+            "helm_url": helm,
+            "source_kind": source_kind,
+        }
+        reply_to_message_id = str(deployment.get("_public_bot_reply_to_message_id") or "").strip()
+        if channel == "telegram" and reply_to_message_id:
+            extra["telegram_reply_to_message_id"] = reply_to_message_id
         queue_notification(
             conn,
             target_kind="public-agent-turn",
             target_id=channel_identity,
             channel_kind=channel,
             message=str(deployment.get("_public_bot_message") or ""),
-            extra={
-                "deployment_id": str(deployment.get("deployment_id") or ""),
-                "prefix": str(deployment.get("prefix") or ""),
-                "user_id": str(deployment.get("user_id") or ""),
-                "agent_label": label,
-                "raven_display_name": raven,
-                "helm_url": helm,
-            },
+            extra=extra,
         )
         append_arclink_event(
             conn,
             subject_kind="deployment",
             subject_id=str(deployment.get("deployment_id") or ""),
             event_type="public_bot:agent_turn_queued",
-            metadata={"channel": channel, "agent_label": label},
+            metadata={"channel": channel, "agent_label": label, "source_kind": source_kind},
         )
-    lines = [
-        f"I'm {raven}. I am routing that to **{label}** now.",
-        "",
-        "I will bring the reply back here when the agent finishes. Slash commands still call me for controls: `/help`, `/agents`, `/status`, `/credentials`, `/connect_notion`, `/config_backup`, `/link-channel`.",
-    ]
+    lines: list[str] = []
+    if include_bridge_intro:
+        lines.extend(
+            [
+                f"From now on, your normal messages in this channel will be routed to your active agent, **{label}**.",
+                "Use `/agents` any time to choose a different active agent. Raven keeps ArcLink controls; agent messages go to the agent at the helm.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"I'm {raven}. I am routing that to **{label}** now.",
+            "",
+            "I will bring the reply back here when the agent finishes. Raven controls stay here: `/help`, `/agents`, `/status`, `/credentials`, `/connect_notion`, `/config_backup`, `/link-channel`.",
+        ]
+    )
     if helm:
         lines.extend(["", f"Helm stays open too: {helm}"])
     buttons: list[ArcLinkPublicBotButton] = []
@@ -2573,6 +2674,8 @@ def handle_arclink_public_bot_turn(
     message = str(text or "").strip()
     command = message.lower()
     captured_display_name = str(display_name_hint or "").strip()[:40]
+    turn_metadata = dict(metadata or {})
+    reply_to_message_id = str(turn_metadata.get("telegram_message_id") or turn_metadata.get("message_id") or "").strip()
 
     if _raven_name_command_value(message, command) is not None:
         return _raven_name_reply(
@@ -2611,6 +2714,54 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             session=session,
             deployment=deployment,
+        )
+
+    agent_passthrough = _agent_passthrough_message(message, command)
+    if agent_passthrough is not None:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        if not deployment or str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="agent_message_unavailable",
+                reply=_need_finished_onboarding_reply(),
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Take Me Aboard", command="/packages"),),
+            )
+        if not agent_passthrough:
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="agent_message_missing",
+                reply=(
+                    "Tell me what to send to your active agent after `/agent`.\n\n"
+                    "Example: `/agent check the vault index` or `/agent /provider`."
+                ),
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+            )
+        raven = _raven_display_name(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+        return _aboard_freeform_reply(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment={
+                **deployment,
+                "_public_bot_message": agent_passthrough,
+                "_public_bot_reply_to_message_id": reply_to_message_id,
+            },
+            bot_display_name=raven,
+            conn=conn,
+            source_kind="agent_command" if agent_passthrough.startswith("/") else "agent_passthrough",
+            include_bridge_intro=False,
         )
 
     pair_value = _pair_channel_value(message, command)
@@ -2792,7 +2943,7 @@ def handle_arclink_public_bot_turn(
     # sense for a paying customer. Hand them a clean Helm pointer instead.
     aboard_session, aboard_deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
     if aboard_deployment and str(aboard_deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
-        if message.startswith("/"):
+        if command in {"/start", "start", "restart"} or _is_raven_launch_command(message, command):
             return _help_reply(
                 channel=clean_channel,
                 channel_identity=clean_identity,
@@ -2810,9 +2961,24 @@ def handle_arclink_public_bot_turn(
             channel=clean_channel,
             channel_identity=clean_identity,
             session=aboard_session,
-            deployment={**aboard_deployment, "_public_bot_message": message},
+            deployment={
+                **aboard_deployment,
+                "_public_bot_message": message,
+                "_public_bot_reply_to_message_id": reply_to_message_id,
+            },
             bot_display_name=raven,
             conn=conn,
+            source_kind="agent_command" if message.startswith("/") else "chat",
+            include_bridge_intro=(
+                bool(message)
+                and not message.startswith("/")
+                and _claim_agent_bridge_intro(
+                    conn,
+                    channel=clean_channel,
+                    channel_identity=clean_identity,
+                    deployment=aboard_deployment,
+                )
+            ),
         )
 
     session = create_or_resume_arclink_onboarding_session(

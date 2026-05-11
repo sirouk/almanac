@@ -114,6 +114,7 @@ def deliver_telegram(
     chat_id: str,
     reply_markup: dict[str, Any] | None = None,
     parse_mode: str = "",
+    reply_to_message_id: int | None = None,
 ) -> str | None:
     if not bot_token:
         return "TELEGRAM_BOT_TOKEN is not configured"
@@ -126,6 +127,7 @@ def deliver_telegram(
             text=message,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
         )
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown telegram delivery error"
@@ -355,12 +357,18 @@ def _deliver_public_bot_user(
         if not isinstance(reply_markup, dict):
             reply_markup = None
         parse_mode = str(extra.get("telegram_parse_mode") or "")
+        reply_to_message_id = None
+        try:
+            reply_to_message_id = int(str(extra.get("telegram_reply_to_message_id") or "").strip() or "0") or None
+        except ValueError:
+            reply_to_message_id = None
         return deliver_telegram(
             message,
             bot_token=bot_token,
             chat_id=chat_id,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id,
         )
     if channel_kind == "discord":
         bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
@@ -403,7 +411,9 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
         channel_kind=channel_kind,
         target_id=target_id,
         message=message,
-        extra={},
+        extra={
+            "telegram_reply_to_message_id": str(extra.get("telegram_reply_to_message_id") or ""),
+        },
     )
 
 

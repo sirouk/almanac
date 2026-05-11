@@ -363,6 +363,7 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, str] | None:
         "chat_id": chat_id,
         "user_id": user_id,
         "text": text,
+        "message_id": str(msg.get("message_id") or ""),
         "display_name": _telegram_display_name(user),
     }
 
@@ -402,6 +403,7 @@ def handle_telegram_update(
         sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
         scale_agent_expansion_price_id=scale_agent_expansion_price_id,
         base_domain=base_domain,
+        metadata={"telegram_message_id": parsed.get("message_id", "")},
         display_name_hint=parsed.get("display_name", ""),
     )
     return {

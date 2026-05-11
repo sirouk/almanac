@@ -15,12 +15,18 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
 - Notion and backup are setup lanes for the active account. Notion setup stays
   behind the credential handoff: Raven can record the setup intent only after
   the user stores and acknowledges the secure completion bundle in Helm.
-- After onboarding, Raven remains the public control conduit for slash-command
-  actions such as status, agent roster/switching, Notion setup, backup setup,
-  channel linking, share approvals, and upgrade-rail guidance. Freeform public
-  messages are queued as selected-agent turns and Raven brings the agent's
-  reply back to the same linked Telegram or Discord channel. Helm remains the
-  direct dashboard chat path when the user wants the full agent surface.
+- After onboarding, Raven remains the public control conduit for ArcLink-owned
+  slash actions such as status, agent roster/switching, Notion setup, backup
+  setup, channel linking, share approvals, and upgrade-rail guidance. The
+  first normal post-onboarding message in a linked channel explains that normal
+  messages now route to the active agent. After that, normal messages are
+  queued as selected-agent turns and Raven brings the agent's reply back to the
+  same linked Telegram or Discord channel.
+- Non-Raven slash commands from an onboarded user are passed to the active
+  agent instead of being swallowed by Raven help. Platforms that cannot expose
+  every active Hermes command can use `/agent <message-or-command>`; on
+  Discord the registered `/agent` command accepts a `message` option. Helm
+  remains the direct dashboard path for the richest agent surface.
 
 ## Voice Rules
 
@@ -59,6 +65,9 @@ Registered public commands:
 - `/plan`
 - `/checkout`
 - `/agents`
+- `/agent <message-or-command>` sends a message or slash command to the active
+  agent. Use this when a platform command menu does not expose the specific
+  Hermes command you want.
 - `/raven_name` sets Raven's ArcLink-message display name for the current
   channel or, after account linking, the whole account. The preference changes
   Raven's name in ArcLink-rendered bot messages; Telegram and Discord platform

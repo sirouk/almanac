@@ -94,6 +94,14 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
     }
     parsed_raven_name = dc.parse_discord_interaction(raven_name)
     expect(parsed_raven_name["text"] == "/raven-name account Valkyrie", str(parsed_raven_name))
+    agent = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "agent", "options": [{"name": "message", "value": "/reload-mcp"}]},
+    }
+    parsed_agent = dc.parse_discord_interaction(agent)
+    expect(parsed_agent["text"] == "/reload-mcp", str(parsed_agent))
     component = {
         "type": 3,
         "channel_id": "ch_1",
@@ -303,7 +311,7 @@ def test_discord_registers_public_bot_actions() -> None:
     expect(calls[0]["path"] == "/applications/app123/commands", str(calls[0]))
     expect(calls[0]["method"] == "PUT", str(calls[0]))
     names = {item["name"] for item in calls[0]["payload"]}
-    expect({"arclink", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "agents", "name", "plan"} <= names, str(names))
+    expect({"arclink", "agent", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "agents", "name", "plan"} <= names, str(names))
     expect("email" not in names, str(names))
     expect(result["scope"] == "global", str(result))
     expect(result["result_count"] == len(calls[0]["payload"]), str(result))

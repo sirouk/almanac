@@ -150,12 +150,13 @@ def test_public_bot_user_delivery_supports_telegram_and_discord_dm() -> None:
             discord_dm_calls: list[dict[str, str]] = []
             discord_send_calls: list[dict[str, object]] = []
 
-            def fake_telegram(*, bot_token, chat_id, text, reply_markup=None, parse_mode=""):
+            def fake_telegram(*, bot_token, chat_id, text, reply_to_message_id=None, reply_markup=None, parse_mode=""):
                 telegram_calls.append(
                     {
                         "bot_token": bot_token,
                         "chat_id": chat_id,
                         "text": text,
+                        "reply_to_message_id": reply_to_message_id,
                         "reply_markup": reply_markup,
                         "parse_mode": parse_mode,
                     }
@@ -270,12 +271,13 @@ def test_public_agent_turn_delivery_runs_agent_and_returns_to_public_channel() -
                 prompts.append({"deployment_id": deployment_id, "prefix": prefix, "prompt": prompt})
                 return "Agent heard you.", ""
 
-            def fake_telegram(*, bot_token, chat_id, text, reply_markup=None, parse_mode=""):
+            def fake_telegram(*, bot_token, chat_id, text, reply_to_message_id=None, reply_markup=None, parse_mode=""):
                 calls.append(
                     {
                         "bot_token": bot_token,
                         "chat_id": chat_id,
                         "text": text,
+                        "reply_to_message_id": reply_to_message_id,
                         "reply_markup": reply_markup,
                         "parse_mode": parse_mode,
                     }
@@ -297,6 +299,7 @@ def test_public_agent_turn_delivery_runs_agent_and_returns_to_public_channel() -
                             "prefix": "arc-testpod",
                             "agent_label": "Test Agent",
                             "helm_url": "https://example.test/u/arc-testpod",
+                            "telegram_reply_to_message_id": "321",
                         }
                     ),
                 },
@@ -305,6 +308,7 @@ def test_public_agent_turn_delivery_runs_agent_and_returns_to_public_channel() -
             expect(prompts == [{"deployment_id": "arcdep_test", "prefix": "arc-testpod", "prompt": "hello agent"}], str(prompts))
             expect(calls[0]["chat_id"] == "123", str(calls))
             expect(calls[0]["bot_token"] == "telegram-public-token", str(calls))
+            expect(calls[0]["reply_to_message_id"] == 321, str(calls))
             expect("Test Agent:\n\nAgent heard you." == calls[0]["text"], str(calls))
             print("PASS test_public_agent_turn_delivery_runs_agent_and_returns_to_public_channel")
         finally:

@@ -107,6 +107,7 @@ def test_telegram_registers_public_bot_actions() -> None:
     expect("link_channel" in command_sets[0], str(command_sets))
     expect("raven_name" in command_sets[0], str(command_sets))
     expect("agents" in command_sets[0], str(command_sets))
+    expect("agent" in command_sets[0], str(command_sets))
     expect("email" not in command_sets[0], str(command_sets))
     expect("connect-notion" not in command_sets[0], str(command_sets))
     expect(calls[0].get("scope") is None, str(calls[0]))

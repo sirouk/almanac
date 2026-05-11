@@ -397,6 +397,85 @@ def test_public_agent_turn_delivery_prefers_gateway_bridge_when_available() -> N
             os.environ.update(old_env)
 
 
+def test_public_agent_turn_delivery_bridges_discord_channel_metadata() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_discord_bridge_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_discord_bridge_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "DISCORD_BOT_TOKEN": "discord-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            bridge_calls: list[dict[str, object]] = []
+
+            def fake_gateway_turn(**kwargs):
+                bridge_calls.append(kwargs)
+                expect(kwargs["channel_kind"] == "discord", str(kwargs))
+                expect(kwargs["target_id"] == "discord:456", str(kwargs))
+                expect(kwargs["extra"]["discord_channel_id"] == "chan_456", str(kwargs))
+                expect(kwargs["extra"]["discord_user_id"] == "456", str(kwargs))
+                return True, ""
+
+            def forbidden_agent_turn(**kwargs):
+                raise AssertionError(f"quiet fallback should not run after bridge success: {kwargs}")
+
+            def forbidden_discord_send(**kwargs):
+                raise AssertionError(f"Raven fallback delivery should not run after bridge success: {kwargs}")
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            delivery._run_public_agent_turn = forbidden_agent_turn
+            delivery.discord_send_message = forbidden_discord_send
+            error = delivery.deliver_row(
+                cfg,
+                {
+                    "target_kind": "public-agent-turn",
+                    "target_id": "discord:456",
+                    "channel_kind": "discord",
+                    "message": "/provider",
+                    "extra_json": json.dumps(
+                        {
+                            "deployment_id": "arcdep_test",
+                            "prefix": "arc-testpod",
+                            "agent_label": "Test Agent",
+                            "discord_channel_id": "chan_456",
+                            "discord_user_id": "456",
+                            "discord_chat_type": "dm",
+                        }
+                    ),
+                },
+            )
+            expect(error is None, str(error))
+            expect(len(bridge_calls) == 1, str(bridge_calls))
+            print("PASS test_public_agent_turn_delivery_bridges_discord_channel_metadata")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_turn_runner_prefers_running_gateway_container() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -512,9 +591,10 @@ def main() -> int:
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
     test_public_agent_turn_delivery_runs_agent_and_returns_to_public_channel()
     test_public_agent_turn_delivery_prefers_gateway_bridge_when_available()
+    test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
-    print("PASS all 6 notification delivery regression tests")
+    print("PASS all 7 notification delivery regression tests")
     return 0
 
 

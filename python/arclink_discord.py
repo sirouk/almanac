@@ -282,6 +282,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "user_id": str(user.get("id") or ""),
             "text": text,
             "display_name": _discord_display_name(user),
+            "chat_type": "dm" if interaction.get("guild_id") in (None, "") else "group",
         }
 
     # Type 3 = MESSAGE_COMPONENT (buttons)
@@ -296,6 +297,7 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "user_id": str(user.get("id") or ""),
             "text": custom_id,
             "display_name": _discord_display_name(user),
+            "chat_type": "dm" if interaction.get("guild_id") in (None, "") else "group",
         }
 
     # Type 4 = AUTOCOMPLETE - skip for now
@@ -307,6 +309,8 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
             "user_id": str(author.get("id") or ""),
             "text": str(interaction.get("content") or ""),
             "display_name": _discord_display_name(author),
+            "message_id": str(interaction.get("id") or ""),
+            "chat_type": "dm" if interaction.get("guild_id") in (None, "") else "group",
         }
 
     return None
@@ -352,6 +356,12 @@ def handle_discord_interaction(
         sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
         scale_agent_expansion_price_id=scale_agent_expansion_price_id,
         base_domain=base_domain,
+        metadata={
+            "discord_channel_id": parsed.get("channel_id", ""),
+            "discord_user_id": parsed.get("user_id", ""),
+            "discord_message_id": parsed.get("message_id", ""),
+            "discord_chat_type": parsed.get("chat_type", "dm"),
+        },
         display_name_hint=parsed.get("display_name", ""),
     )
     content = turn.reply

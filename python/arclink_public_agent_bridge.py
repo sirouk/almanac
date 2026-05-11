@@ -16,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Any, Mapping
+from types import SimpleNamespace
+from urllib.parse import quote
 
 
 def _json_error(message: str) -> int:
@@ -148,10 +150,192 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
             pass
 
 
+class _DiscordRest:
+    def __init__(self, token: str) -> None:
+        self.token = token
+        self._session: Any | None = None
+
+    async def __aenter__(self) -> "_DiscordRest":
+        import aiohttp
+
+        self._session = aiohttp.ClientSession(
+            headers={
+                "Authorization": f"Bot {self.token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "ArcLinkPublicAgentBridge/1.0",
+            }
+        )
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        if self._session is not None:
+            await self._session.close()
+
+    async def request(self, method: str, path: str, *, payload: Any | None = None) -> Any:
+        if self._session is None:
+            raise RuntimeError("Discord REST session is not open")
+        url = f"https://discord.com/api/v10{path}"
+        async with self._session.request(method, url, json=payload) as response:
+            text = await response.text()
+            if response.status >= 300:
+                raise RuntimeError(f"discord http {response.status}: {text[:240]}")
+            if not text.strip():
+                return {}
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"raw": text}
+
+
+class _DiscordRawMessage:
+    def __init__(self, *, rest: _DiscordRest, channel_id: str, message_id: str) -> None:
+        self._rest = rest
+        self.channel_id = channel_id
+        self.id = message_id
+
+    async def add_reaction(self, emoji: str) -> None:
+        if not self.id:
+            return
+        await self._rest.request(
+            "PUT",
+            f"/channels/{self.channel_id}/messages/{self.id}/reactions/{quote(emoji, safe='')}/@me",
+        )
+
+    async def remove_reaction(self, emoji: str, user: Any = None) -> None:
+        del user
+        if not self.id:
+            return
+        await self._rest.request(
+            "DELETE",
+            f"/channels/{self.channel_id}/messages/{self.id}/reactions/{quote(emoji, safe='')}/@me",
+        )
+
+
+async def _run_discord(payload: Mapping[str, Any]) -> None:
+    _add_runtime_paths()
+
+    bot_token = _required(payload, "bot_token")
+    channel_id = _required(payload, "channel_id")
+    user_id = _required(payload, "user_id")
+    text = _required(payload, "text")
+    message_id = str(payload.get("message_id") or "").strip()
+    display_name = str(payload.get("display_name") or "").strip() or None
+
+    os.environ["DISCORD_BOT_TOKEN"] = bot_token
+    os.environ.setdefault("DISCORD_REACTIONS", "true")
+    os.environ.setdefault("DISCORD_REPLY_TO_MODE", "first")
+    _set_csv_env("DISCORD_ALLOWED_USERS", user_id)
+    _set_csv_env("DISCORD_FREE_RESPONSE_CHANNELS", channel_id)
+
+    from gateway.config import HomeChannel, Platform, PlatformConfig, load_gateway_config
+    from gateway.platforms.base import MessageEvent, MessageType, SendResult
+    from gateway.run import GatewayRunner
+    from gateway.session import SessionSource
+
+    cfg = load_gateway_config()
+    platform = Platform.DISCORD
+    platform_cfg = cfg.platforms.get(platform) or PlatformConfig()
+    platform_cfg.enabled = True
+    platform_cfg.token = bot_token
+    platform_cfg.gateway_restart_notification = False
+    platform_cfg.reply_to_mode = os.environ.get("DISCORD_REPLY_TO_MODE", "first")
+    platform_cfg.home_channel = HomeChannel(
+        platform=platform,
+        chat_id=channel_id,
+        name=os.environ.get("DISCORD_HOME_CHANNEL_NAME", "ArcLink public channel"),
+    )
+    cfg.platforms[platform] = platform_cfg
+
+    async with _DiscordRest(bot_token) as rest:
+        runner = GatewayRunner(cfg)
+        adapter = runner._create_adapter(platform, platform_cfg)
+        if adapter is None:
+            raise RuntimeError("Hermes could not create a Discord adapter")
+
+        async def _send(
+            chat_id: str,
+            content: str,
+            reply_to: str | None = None,
+            metadata: Mapping[str, Any] | None = None,
+        ) -> SendResult:
+            target_channel = str((metadata or {}).get("thread_id") or chat_id or channel_id)
+            chunks = adapter.truncate_message(adapter.format_message(content), getattr(adapter, "MAX_MESSAGE_LENGTH", 2000))
+            sent_ids: list[str] = []
+            for idx, chunk in enumerate(chunks or [""]):
+                body: dict[str, Any] = {"content": chunk}
+                if reply_to and idx == 0 and getattr(adapter, "_reply_to_mode", "first") != "off":
+                    body["message_reference"] = {
+                        "message_id": str(reply_to),
+                        "channel_id": target_channel,
+                        "fail_if_not_exists": False,
+                    }
+                sent = await rest.request("POST", f"/channels/{target_channel}/messages", payload=body)
+                sent_id = str(sent.get("id") or "")
+                if sent_id:
+                    sent_ids.append(sent_id)
+            return SendResult(success=True, message_id=sent_ids[0] if sent_ids else None, raw_response={"message_ids": sent_ids})
+
+        async def _edit_message(chat_id: str, message_id_arg: str, content: str, *, finalize: bool = False) -> SendResult:
+            del finalize
+            target_channel = str(chat_id or channel_id)
+            chunks = adapter.truncate_message(adapter.format_message(content), getattr(adapter, "MAX_MESSAGE_LENGTH", 2000))
+            await rest.request(
+                "PATCH",
+                f"/channels/{target_channel}/messages/{message_id_arg}",
+                payload={"content": (chunks[0] if chunks else "")},
+            )
+            return SendResult(success=True, message_id=message_id_arg)
+
+        async def _send_typing(chat_id: str, metadata: Mapping[str, Any] | None = None) -> None:
+            del metadata
+            await rest.request("POST", f"/channels/{chat_id or channel_id}/typing")
+
+        async def _stop_typing(chat_id: str) -> None:
+            del chat_id
+
+        adapter.send = _send  # type: ignore[method-assign]
+        adapter.edit_message = _edit_message  # type: ignore[method-assign]
+        adapter.send_typing = _send_typing  # type: ignore[method-assign]
+        adapter.stop_typing = _stop_typing  # type: ignore[method-assign]
+        adapter._client = SimpleNamespace(user=SimpleNamespace(id="arclink-public-bridge"))  # type: ignore[attr-defined]
+        adapter.set_message_handler(runner._handle_message)
+        adapter.set_fatal_error_handler(runner._handle_adapter_fatal_error)
+        adapter.set_session_store(runner.session_store)
+        adapter.set_busy_session_handler(runner._handle_active_session_busy_message)
+        runner.adapters[platform] = adapter
+
+        source = SessionSource(
+            platform=platform,
+            chat_id=channel_id,
+            chat_name=display_name,
+            chat_type=str(payload.get("chat_type") or "dm"),
+            user_id=user_id,
+            user_name=display_name,
+            message_id=message_id or None,
+        )
+        event = MessageEvent(
+            text=text,
+            message_type=MessageType.COMMAND if text.startswith("/") else MessageType.TEXT,
+            source=source,
+            raw_message=_DiscordRawMessage(rest=rest, channel_id=channel_id, message_id=message_id),
+            message_id=message_id or None,
+        )
+        await adapter.handle_message(event)
+        while getattr(adapter, "_background_tasks", None):
+            tasks = list(adapter._background_tasks)  # type: ignore[attr-defined]
+            if not tasks:
+                break
+            await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+
+
 async def _run(payload: Mapping[str, Any]) -> None:
     platform = str(payload.get("platform") or "").strip().lower()
     if platform == "telegram":
         await _run_telegram(payload)
+        return
+    if platform == "discord":
+        await _run_discord(payload)
         return
     raise RuntimeError(f"public agent gateway bridge does not support platform {platform or 'blank'} yet")
 

@@ -356,14 +356,34 @@ def _run_public_agent_gateway_turn(
     stdin so bot tokens never appear in argv.
     """
     clean_channel = channel_kind.strip().lower()
-    if clean_channel != "telegram":
+    if clean_channel == "telegram":
+        bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = _strip_public_channel_prefix(target_id, "tg")
+        user_id = chat_id
+        message_id = str(extra.get("telegram_reply_to_message_id") or "").strip()
+        chat_type = "dm"
+    elif clean_channel == "discord":
+        bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
+        user_id = str(extra.get("discord_user_id") or _strip_public_channel_prefix(target_id, "discord")).strip()
+        chat_id = str(extra.get("discord_channel_id") or "").strip()
+        message_id = str(extra.get("discord_message_id") or "").strip()
+        chat_type = str(extra.get("discord_chat_type") or "dm").strip() or "dm"
+        if not bot_token:
+            return False, "DISCORD_BOT_TOKEN is not configured for Hermes public gateway bridge"
+        if not chat_id and user_id:
+            try:
+                dm = discord_create_dm_channel(bot_token=bot_token, recipient_id=user_id)
+                chat_id = str(dm.get("id") or "").strip() if isinstance(dm, dict) else ""
+            except Exception as exc:  # noqa: BLE001
+                return False, f"discord public gateway bridge could not open DM: {str(exc)[:180]}"
+    else:
         return False, f"Hermes public gateway bridge is not implemented for {clean_channel or 'blank'}"
-    bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
     if not bot_token:
-        return False, "TELEGRAM_BOT_TOKEN is not configured for Hermes public gateway bridge"
-    chat_id = _strip_public_channel_prefix(target_id, "tg")
+        return False, f"{clean_channel.upper()}_BOT_TOKEN is not configured for Hermes public gateway bridge"
     if not chat_id:
-        return False, "telegram public gateway bridge requires target_id"
+        return False, f"{clean_channel} public gateway bridge requires a channel id"
+    if not user_id:
+        return False, f"{clean_channel} public gateway bridge requires a user id"
     project_name = _compose_project_name(deployment_id)
     if not project_name:
         return False, "deployment id is missing"
@@ -401,10 +421,12 @@ def _run_public_agent_gateway_turn(
         "platform": clean_channel,
         "bot_token": bot_token,
         "chat_id": chat_id,
-        "user_id": chat_id,
+        "channel_id": chat_id,
+        "user_id": user_id,
         "text": prompt[:8000],
-        "message_id": str(extra.get("telegram_reply_to_message_id") or "").strip(),
+        "message_id": message_id,
         "display_name": str(extra.get("display_name") or extra.get("agent_label") or "").strip(),
+        "chat_type": chat_type,
     }
     try:
         proc = subprocess.run(

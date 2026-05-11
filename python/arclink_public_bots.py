@@ -1703,6 +1703,15 @@ def _aboard_freeform_reply(
         reply_to_message_id = str(deployment.get("_public_bot_reply_to_message_id") or "").strip()
         if channel == "telegram" and reply_to_message_id:
             extra["telegram_reply_to_message_id"] = reply_to_message_id
+        if channel == "discord":
+            turn_metadata = deployment.get("_public_bot_metadata")
+            if isinstance(turn_metadata, Mapping):
+                for key in ("discord_channel_id", "discord_user_id", "discord_message_id", "discord_chat_type"):
+                    value = str(turn_metadata.get(key) or "").strip()
+                    if value:
+                        extra[key] = value
+            if reply_to_message_id and "discord_message_id" not in extra:
+                extra["discord_message_id"] = reply_to_message_id
         queue_notification(
             conn,
             target_kind="public-agent-turn",
@@ -2784,7 +2793,12 @@ def handle_arclink_public_bot_turn(
     command = message.lower()
     captured_display_name = str(display_name_hint or "").strip()[:40]
     turn_metadata = dict(metadata or {})
-    reply_to_message_id = str(turn_metadata.get("telegram_message_id") or turn_metadata.get("message_id") or "").strip()
+    reply_to_message_id = str(
+        turn_metadata.get("telegram_message_id")
+        or turn_metadata.get("discord_message_id")
+        or turn_metadata.get("message_id")
+        or ""
+    ).strip()
     raven_control_requested = False
     rewritten = _raven_control_rewrite(message, command)
     if rewritten is not None:
@@ -2827,6 +2841,7 @@ def handle_arclink_public_bot_turn(
                         **context_deployment,
                         "_public_bot_message": message,
                         "_public_bot_reply_to_message_id": reply_to_message_id,
+                        "_public_bot_metadata": turn_metadata,
                     },
                     bot_display_name=raven,
                     conn=conn,
@@ -2914,6 +2929,7 @@ def handle_arclink_public_bot_turn(
                 **deployment,
                 "_public_bot_message": agent_passthrough,
                 "_public_bot_reply_to_message_id": reply_to_message_id,
+                "_public_bot_metadata": turn_metadata,
             },
             bot_display_name=raven,
             conn=conn,
@@ -3122,6 +3138,7 @@ def handle_arclink_public_bot_turn(
                 **aboard_deployment,
                 "_public_bot_message": message,
                 "_public_bot_reply_to_message_id": reply_to_message_id,
+                "_public_bot_metadata": turn_metadata,
             },
             bot_display_name=raven,
             conn=conn,

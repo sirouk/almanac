@@ -180,6 +180,18 @@ def test_discord_status_reports_selected_agent_label() -> None:
     expect(agent_turn is not None and agent_turn["action"] == "agent_message_queued", str(agent_turn))
     expect(agent_turn["data"]["content"] == "Sent to your active agent.", str(agent_turn["data"]))
     expect("I am routing" not in agent_turn["data"]["content"], str(agent_turn["data"]))
+    queued = conn.execute(
+        "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(queued["target_kind"] == "public-agent-turn", str(dict(queued)))
+    expect(queued["target_id"] == "discord:discord_user_3", str(dict(queued)))
+    expect(queued["channel_kind"] == "discord", str(dict(queued)))
+    expect(queued["message"] == "hello active agent", str(dict(queued)))
+    import json
+
+    extra = json.loads(queued["extra_json"])
+    expect(extra["discord_channel_id"] == "ch_3", str(extra))
+    expect(extra["discord_user_id"] == "discord_user_3", str(extra))
     print("PASS test_discord_status_reports_selected_agent_label")
 
 

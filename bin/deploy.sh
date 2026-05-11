@@ -9239,6 +9239,7 @@ This will back up first, then clear customer/test runtime data:
   - public Raven onboarding sessions and channel pairing codes
   - users, subscriptions, deployments, provisioning jobs, service health
   - generated Sovereign pod containers, named volumes, and /arcdata/deployments entries
+  - generated per-deployment secret-store directories
   - notification, webhook, audit, action, rate-limit, and event rows
 
 It preserves:
@@ -9300,6 +9301,19 @@ remove_control_generated_pods() {
   fi
 }
 
+remove_control_generated_secret_refs() {
+  local host_priv="" secret_root=""
+
+  host_priv="$(control_host_priv_dir)"
+  secret_root="$host_priv/state/sovereign-secrets"
+
+  if [[ ! -d "$secret_root" ]]; then
+    return 0
+  fi
+
+  find "$secret_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' \) -exec rm -rf {} +
+}
+
 reset_control_runtime_database() {
   local db_path="$1"
 
@@ -9317,6 +9331,7 @@ from pathlib import Path
 db_path = Path(sys.argv[1])
 tables = [
     "arclink_channel_pairing_codes",
+    "arclink_credential_handoffs",
     "arclink_onboarding_events",
     "arclink_onboarding_sessions",
     "arclink_user_sessions",
@@ -9448,6 +9463,8 @@ run_control_runtime_reset() {
   stop_control_runtime_writers
   echo "Stopping and removing generated Sovereign pod stacks..."
   remove_control_generated_pods
+  echo "Removing generated per-deployment secret-store directories..."
+  remove_control_generated_secret_refs
   echo "Clearing customer/test runtime rows from control database..."
   reset_control_runtime_database "$db_path"
   echo "Runtime counts after reset:"

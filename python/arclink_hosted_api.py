@@ -17,6 +17,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
@@ -76,6 +77,12 @@ from arclink_product import base_domain as default_base_domain
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
 logger = logging.getLogger("arclink.hosted_api")
+
+_PUBLIC_AGENT_LIVE_TRIGGER_LOCK = threading.Lock()
+_PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR: ThreadPoolExecutor | None = None
+_PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR_WORKERS = 0
+_PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE: threading.BoundedSemaphore | None = None
+_PUBLIC_AGENT_LIVE_TRIGGER_PENDING_LIMIT = 0
 
 # --- Configuration -----------------------------------------------------------
 
@@ -1022,6 +1029,72 @@ def _public_agent_live_trigger_enabled(config: HostedApiConfig) -> bool:
     }
 
 
+def _bounded_int_config(
+    config: HostedApiConfig,
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = str(config.env.get(name, str(default))).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _public_agent_live_trigger_pool(
+    config: HostedApiConfig,
+) -> tuple[ThreadPoolExecutor, threading.BoundedSemaphore]:
+    """Return the bounded live-trigger executor.
+
+    The public webhook handler is an ingress boundary. It must acknowledge
+    Telegram/Discord quickly and never spawn unbounded work. Durable outbox
+    rows remain the source of truth; if this bounded kick is saturated, the
+    notification worker will recover the pending turn.
+    """
+    workers = _bounded_int_config(
+        config,
+        "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_WORKERS",
+        4,
+        minimum=1,
+        maximum=64,
+    )
+    pending_limit = _bounded_int_config(
+        config,
+        "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_MAX_PENDING",
+        64,
+        minimum=1,
+        maximum=4096,
+    )
+    global _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR
+    global _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR_WORKERS
+    global _PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE
+    global _PUBLIC_AGENT_LIVE_TRIGGER_PENDING_LIMIT
+    with _PUBLIC_AGENT_LIVE_TRIGGER_LOCK:
+        if (
+            _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR is None
+            or _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR_WORKERS != workers
+        ):
+            old_executor = _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR
+            _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR = ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="arclink-public-agent-live-trigger",
+            )
+            _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR_WORKERS = workers
+            if old_executor is not None:
+                old_executor.shutdown(wait=False, cancel_futures=True)
+        if (
+            _PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE is None
+            or _PUBLIC_AGENT_LIVE_TRIGGER_PENDING_LIMIT != pending_limit
+        ):
+            _PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE = threading.BoundedSemaphore(pending_limit)
+            _PUBLIC_AGENT_LIVE_TRIGGER_PENDING_LIMIT = pending_limit
+        return _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR, _PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE
+
+
 def _kick_public_agent_live_trigger(
     *,
     config: HostedApiConfig,
@@ -1034,6 +1107,22 @@ def _kick_public_agent_live_trigger(
     clean_channel = str(channel_kind or "").strip().lower()
     clean_target = str(target_id or "").strip()
     if clean_channel not in {"telegram", "discord"} or not clean_target:
+        return False
+    executor, pending_gate = _public_agent_live_trigger_pool(config)
+    if not pending_gate.acquire(blocking=False):
+        logger.warning(
+            "public_agent_live_trigger_saturated channel=%s target=%s pending_limit=%s request_id=%s",
+            clean_channel,
+            clean_target,
+            _bounded_int_config(
+                config,
+                "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_MAX_PENDING",
+                64,
+                minimum=1,
+                maximum=4096,
+            ),
+            request_id,
+        )
         return False
 
     def _worker() -> None:
@@ -1061,11 +1150,31 @@ def _kick_public_agent_live_trigger(
                 request_id,
             )
 
-    threading.Thread(
-        target=_worker,
-        name=f"arclink-public-agent-live-trigger-{clean_channel}",
-        daemon=True,
-    ).start()
+    try:
+        future = executor.submit(_worker)
+    except Exception as exc:  # noqa: BLE001 - leave the durable row for the worker
+        pending_gate.release()
+        logger.warning(
+            "public_agent_live_trigger_submit_failed channel=%s target=%s error=%s request_id=%s",
+            clean_channel,
+            clean_target,
+            str(exc)[:240],
+            request_id,
+        )
+        return False
+
+    def _release_live_trigger_slot(_future: Any) -> None:
+        try:
+            pending_gate.release()
+        except ValueError:
+            logger.warning(
+                "public_agent_live_trigger_slot_release_failed channel=%s target=%s request_id=%s",
+                clean_channel,
+                clean_target,
+                request_id,
+            )
+
+    future.add_done_callback(_release_live_trigger_slot)
     return True
 
 

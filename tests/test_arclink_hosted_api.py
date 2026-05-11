@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import tempfile
+from concurrent.futures import Future
 from pathlib import Path
 
 from arclink_test_helpers import auth_headers, expect, load_module, memory_db
@@ -1910,20 +1911,39 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         live_trigger_calls.append({"channel_kind": channel_kind, "target_id": target_id})
         return {"processed": 1, "delivered": 1, "errors": 0}
 
-    class ImmediateThread:
-        def __init__(self, *, target, name="", daemon=False):
-            del name, daemon
-            self.target = target
+    class ImmediateExecutor:
+        def submit(self, fn):
+            fut = Future()
+            try:
+                fn()
+            except BaseException as exc:  # noqa: BLE001
+                fut.set_exception(exc)
+            else:
+                fut.set_result(None)
+            return fut
 
-        def start(self):
-            self.target()
+    class OpenGate:
+        def __init__(self):
+            self.released = False
+
+        def acquire(self, *, blocking=False):
+            expect(blocking is False, "live trigger should never block webhook ingress")
+            return True
+
+        def release(self):
+            self.released = True
+
+    live_gate = OpenGate()
+
+    def fake_pool(_config):
+        return ImmediateExecutor(), live_gate
 
     old_handle = hosted.handle_telegram_update
     old_trigger = hosted.run_public_agent_turns_once
-    old_thread = hosted.threading.Thread
+    old_pool = hosted._public_agent_live_trigger_pool
     hosted.handle_telegram_update = queued_agent_turn
     hosted.run_public_agent_turns_once = fake_live_trigger
-    hosted.threading.Thread = ImmediateThread
+    hosted._public_agent_live_trigger_pool = fake_pool
     quiet_transport = CaptureTransport()
     try:
         status, payload, _ = hosted._handle_telegram_webhook(
@@ -1937,13 +1957,50 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     finally:
         hosted.handle_telegram_update = old_handle
         hosted.run_public_agent_turns_once = old_trigger
-        hosted.threading.Thread = old_thread
+        hosted._public_agent_live_trigger_pool = old_pool
     expect(status == 200, f"empty agent handoff should still ack webhook: {status} {payload}")
     expect(payload.get("sent") is False, str(payload))
     expect(payload.get("live_triggered") is True, str(payload))
+    expect(live_gate.released is True, "live trigger slot should be released after the worker completes")
     expect(quiet_transport.sent_messages == [], str(quiet_transport.sent_messages))
     expect(live_trigger_calls == [{"channel_kind": "telegram", "target_id": "tg:67890"}], str(live_trigger_calls))
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
+
+
+def test_public_agent_live_trigger_backpressure_defers_to_delivery_worker() -> None:
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_live_trigger_backpressure_test")
+    config = hosted.HostedApiConfig(
+        env={
+            "ARCLINK_BASE_DOMAIN": "example.test",
+            "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_MAX_PENDING": "1",
+        }
+    )
+
+    class UnusedExecutor:
+        def submit(self, fn):
+            raise AssertionError("saturated live trigger must not submit work")
+
+    class ClosedGate:
+        def acquire(self, *, blocking=False):
+            expect(blocking is False, "live trigger should never block webhook ingress")
+            return False
+
+        def release(self):
+            raise AssertionError("closed gate should not be released")
+
+    old_pool = hosted._public_agent_live_trigger_pool
+    hosted._public_agent_live_trigger_pool = lambda _config: (UnusedExecutor(), ClosedGate())
+    try:
+        triggered = hosted._kick_public_agent_live_trigger(
+            config=config,
+            channel_kind="telegram",
+            target_id="tg:67890",
+            request_id="req_saturated",
+        )
+    finally:
+        hosted._public_agent_live_trigger_pool = old_pool
+    expect(triggered is False, "saturated live trigger should leave the queued row for notification-delivery")
+    print("PASS test_public_agent_live_trigger_backpressure_defers_to_delivery_worker")
 
 
 def test_telegram_webhook_acknowledges_button_callbacks() -> None:
@@ -2994,6 +3051,7 @@ def main() -> int:
     test_stripe_webhook_queues_paid_ping_for_discord_user()
     test_telegram_webhook_route()
     test_telegram_webhook_sends_reply_when_transport_is_available()
+    test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
     test_telegram_webhook_acknowledges_button_callbacks()
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
@@ -3021,7 +3079,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 59 ArcLink hosted API tests")
+    print("PASS all 60 ArcLink hosted API tests")
     return 0
 
 

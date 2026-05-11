@@ -1,5 +1,33 @@
 # Build Completion Notes
 
+## 2026-05-11 Public Agent Gateway Backpressure
+
+Scope: tightened the Raven selected-agent live-trigger path so public
+Telegram/Discord webhook ingress stays fast under load.
+
+- Replaced the unbounded per-message thread start in `arclink_hosted_api.py`
+  with a bounded process-local executor.
+- Added `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_WORKERS` and
+  `ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_MAX_PENDING` controls. When live-trigger
+  capacity is saturated, the webhook still acknowledges the platform and the
+  durable `notification_outbox` row remains for `notification-delivery`.
+- Kept the durable claim/lease notification worker as the recovery path and
+  documented the next high-scale move: a warm internal public-agent bridge
+  service per deployment, so ArcLink can stop paying the per-turn `docker exec`
+  and Python import cost.
+- Added `research/PUBLIC_AGENT_GATEWAY_PERFORMANCE_PLAN.md` to separate the
+  immediate safe behavior from the final load-balanced gateway target.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `git diff --check` passed.
+
 ## 2026-05-11 Conflict-Free Raven Active-Agent Command Scope
 
 Scope: made the active Telegram slash surface conflict-free by giving the

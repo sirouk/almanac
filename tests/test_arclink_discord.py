@@ -173,6 +173,13 @@ def test_discord_status_reports_selected_agent_label() -> None:
     expect(status is not None and status["action"] == "show_status", str(status))
     expect("Agent at the helm: Bob" in status["data"]["content"], status["data"]["content"])
     expect("onboarding only" not in status["data"]["content"].lower(), status["data"]["content"])
+    agent_turn = dc.handle_discord_interaction(
+        conn,
+        transport.make_message(user_id="discord_user_3", channel_id="ch_3", content="/agent hello active agent"),
+    )
+    expect(agent_turn is not None and agent_turn["action"] == "agent_message_queued", str(agent_turn))
+    expect(agent_turn["data"]["content"] == "Sent to your active agent.", str(agent_turn["data"]))
+    expect("I am routing" not in agent_turn["data"]["content"], str(agent_turn["data"]))
     print("PASS test_discord_status_reports_selected_agent_label")
 
 

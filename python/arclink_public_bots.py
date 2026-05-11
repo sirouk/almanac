@@ -1727,19 +1727,19 @@ def _aboard_freeform_reply(
                 "",
             ]
         )
-    lines.extend(
-        [
-            f"I'm {raven}. I am routing that to **{label}** now.",
-            "",
-            "I will bring the reply back here when the agent finishes. Raven controls stay behind `/raven`; active-agent slash commands stay in the bare slash menu.",
-        ]
-    )
-    if helm:
-        lines.extend(["", f"Helm stays open too: {helm}"])
+    if include_bridge_intro:
+        lines.extend(
+            [
+                "Your active agent replies here. Raven controls stay behind `/raven`; bare slash commands belong to the agent at the helm.",
+            ]
+        )
+        if helm:
+            lines.extend(["", f"Helm stays open too: {helm}"])
     buttons: list[ArcLinkPublicBotButton] = []
-    if helm:
+    if include_bridge_intro and helm:
         buttons.append(_button("Open Helm", url=helm))
-    buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
+    if include_bridge_intro:
+        buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
     return _turn(
         channel=channel,
         channel_identity=channel_identity,

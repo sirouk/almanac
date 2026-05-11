@@ -354,8 +354,15 @@ def handle_discord_interaction(
         base_domain=base_domain,
         display_name_hint=parsed.get("display_name", ""),
     )
+    content = turn.reply
+    if not str(content or "").strip() and turn.action == "agent_message_queued":
+        # Discord interaction callbacks cannot have an empty content payload.
+        # Freeform Discord gateway support should eventually use the same
+        # native Hermes bridge as Telegram; until then, keep the interaction
+        # valid without reintroducing a Raven routing preamble.
+        content = "Sent to your active agent."
     data: dict[str, Any] = {
-        "content": turn.reply,
+        "content": content,
     }
     components = arclink_public_bot_turn_discord_components(turn)
     if components:

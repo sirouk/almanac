@@ -1182,7 +1182,8 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="discord:raven-owner",
         text="hello",
     )
-    expect("I'm Valkyrie. I am routing that to **Bot Buyer** now." in discord_freeform.reply, discord_freeform.reply)
+    expect(discord_freeform.action == "agent_message_queued", str(discord_freeform.action))
+    expect("I am routing" not in discord_freeform.reply, discord_freeform.reply)
 
     channel_override = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1197,14 +1198,16 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="discord:raven-owner",
         text="hello again",
     )
-    expect("I'm Starling. I am routing that to **Bot Buyer** now." in discord_override.reply, discord_override.reply)
+    expect(discord_override.action == "agent_message_queued", str(discord_override.action))
+    expect("I am routing" not in discord_override.reply, discord_override.reply)
     telegram_still_account = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:raven-owner",
         text="hello again",
     )
-    expect("I'm Valkyrie. I am routing that to **Bot Buyer** now." in telegram_still_account.reply, telegram_still_account.reply)
+    expect(telegram_still_account.action == "agent_message_queued", str(telegram_still_account.action))
+    expect("I am routing" not in telegram_still_account.reply, telegram_still_account.reply)
 
     channel_reset = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1219,7 +1222,8 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="discord:raven-owner",
         text="hello after channel reset",
     )
-    expect("I'm Valkyrie. I am routing that to **Bot Buyer** now." in discord_after_channel_reset.reply, discord_after_channel_reset.reply)
+    expect(discord_after_channel_reset.action == "agent_message_queued", str(discord_after_channel_reset.action))
+    expect("I am routing" not in discord_after_channel_reset.reply, discord_after_channel_reset.reply)
 
     account_reset = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1234,7 +1238,8 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="tg:raven-owner",
         text="hello after account reset",
     )
-    expect("I'm Raven. I am routing that to **Bot Buyer** now." in telegram_after_account_reset.reply, telegram_after_account_reset.reply)
+    expect(telegram_after_account_reset.action == "agent_message_queued", str(telegram_after_account_reset.action))
+    expect("I am routing" not in telegram_after_account_reset.reply, telegram_after_account_reset.reply)
 
     roster = bots.handle_arclink_public_bot_turn(
         conn,
@@ -1315,7 +1320,7 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     )
     expect(freeform.action == "agent_message_queued", f"expected agent_message_queued got {freeform.action}")
     expect("From now on, your normal messages in this channel will be routed to your active agent" in freeform.reply, freeform.reply)
-    expect("I am routing that to **Bot Buyer** now" in freeform.reply, freeform.reply)
+    expect("I am routing" not in freeform.reply, freeform.reply)
     expect("onboarding only" not in freeform.reply.lower(), freeform.reply)
     expect("Stripe collects" not in freeform.reply, "must not show onboarding copy to a paid user")
     expect("Send `/name" not in freeform.reply, "must not prompt for /name to a paid user")
@@ -1336,6 +1341,7 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     second_freeform = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:99", text="second note")
     expect(second_freeform.action == "agent_message_queued", str(second_freeform.action))
     expect("From now on" not in second_freeform.reply, second_freeform.reply)
+    expect(second_freeform.reply == "", second_freeform.reply)
 
     # /start re-trigger from an aboard user gets the control help reply,
     # NOT the onboarding "Stripe collects your email" prompt.

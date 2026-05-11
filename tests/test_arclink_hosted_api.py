@@ -1891,6 +1891,30 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     )
     expect(status == 200, f"reply send failure should still ack webhook: {status} {payload}")
     expect(payload.get("sent") is False, str(payload))
+
+    def queued_agent_turn(*args, **kwargs):
+        del args, kwargs
+        return {
+            "chat_id": "12345",
+            "text": "",
+            "reply_markup": None,
+            "action": "agent_message_queued",
+            "callback_query_id": "",
+        }
+
+    hosted.handle_telegram_update = queued_agent_turn
+    quiet_transport = CaptureTransport()
+    status, payload, _ = hosted._handle_telegram_webhook(
+        conn,
+        update,
+        "req_tg_send_empty",
+        config,
+        adapters.FakeStripeClient(),
+        telegram_transport=quiet_transport,
+    )
+    expect(status == 200, f"empty agent handoff should still ack webhook: {status} {payload}")
+    expect(payload.get("sent") is False, str(payload))
+    expect(quiet_transport.sent_messages == [], str(quiet_transport.sent_messages))
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
 
 

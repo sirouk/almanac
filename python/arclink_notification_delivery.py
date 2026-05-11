@@ -338,6 +338,100 @@ def _run_public_agent_turn(*, deployment_id: str, prefix: str, prompt: str) -> t
     return response, ""
 
 
+def _run_public_agent_gateway_turn(
+    *,
+    deployment_id: str,
+    prefix: str,
+    channel_kind: str,
+    target_id: str,
+    prompt: str,
+    extra: dict[str, Any],
+) -> tuple[bool, str]:
+    """Try to route a public bot turn through Hermes' native gateway pipeline.
+
+    The quiet CLI fallback below can produce a text answer, but it bypasses
+    platform behavior such as Telegram reactions, typing indicators, interim
+    assistant messages, native command handling, and platform formatting. The
+    bridge helper runs inside the deployment container and receives secrets via
+    stdin so bot tokens never appear in argv.
+    """
+    clean_channel = channel_kind.strip().lower()
+    if clean_channel != "telegram":
+        return False, f"Hermes public gateway bridge is not implemented for {clean_channel or 'blank'}"
+    bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+    if not bot_token:
+        return False, "TELEGRAM_BOT_TOKEN is not configured for Hermes public gateway bridge"
+    chat_id = _strip_public_channel_prefix(target_id, "tg")
+    if not chat_id:
+        return False, "telegram public gateway bridge requires target_id"
+    project_name = _compose_project_name(deployment_id)
+    if not project_name:
+        return False, "deployment id is missing"
+    timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
+    bridge_cmd = [
+        "/opt/arclink/runtime/hermes-venv/bin/python3",
+        "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+    ]
+    container = _deployment_service_container(project_name=project_name, service="hermes-gateway")
+    if container:
+        cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+    else:
+        root = _deployment_root(deployment_id=deployment_id, prefix=prefix)
+        if root is None:
+            return False, "deployment container/root not found for gateway bridge"
+        compose_file = root / "config" / "compose.yaml"
+        env_file = root / "config" / "arclink.env"
+        if not compose_file.exists() or not env_file.exists():
+            return False, "deployment compose files are missing for gateway bridge"
+        cmd = [
+            "docker",
+            "compose",
+            "-p",
+            project_name,
+            "--env-file",
+            str(env_file),
+            "-f",
+            str(compose_file),
+            "exec",
+            "-T",
+            "hermes-gateway",
+            *bridge_cmd,
+        ]
+    payload = {
+        "platform": clean_channel,
+        "bot_token": bot_token,
+        "chat_id": chat_id,
+        "user_id": chat_id,
+        "text": prompt[:8000],
+        "message_id": str(extra.get("telegram_reply_to_message_id") or "").strip(),
+        "display_name": str(extra.get("display_name") or extra.get("agent_label") or "").strip(),
+    }
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=json.dumps(payload, sort_keys=True),
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds + 30,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Hermes public gateway bridge timed out"
+    except OSError as exc:
+        return False, f"could not start Hermes public gateway bridge: {str(exc)[:180]}"
+    if proc.returncode != 0:
+        detail = ANSI_RE.sub("", (proc.stderr or proc.stdout or "")).strip().splitlines()
+        tail = detail[-1][:220] if detail else f"exit status {proc.returncode}"
+        return False, f"Hermes public gateway bridge failed: {tail}"
+    try:
+        payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        payload_out = {}
+    if isinstance(payload_out, dict) and payload_out.get("ok") is True:
+        return True, ""
+    return False, "Hermes public gateway bridge completed without an ok response"
+
+
 def _deliver_public_bot_user(
     cfg: Config,
     *,
@@ -398,6 +492,16 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     helm = str(extra.get("helm_url") or "").strip()
     prompt = str(row.get("message") or "").strip()
     if not prompt:
+        return None
+    bridged, _bridge_error = _run_public_agent_gateway_turn(
+        deployment_id=deployment_id,
+        prefix=prefix,
+        channel_kind=channel_kind,
+        target_id=target_id,
+        prompt=prompt,
+        extra={**extra, "agent_label": label},
+    )
+    if bridged:
         return None
     response, error = _run_public_agent_turn(deployment_id=deployment_id, prefix=prefix, prompt=prompt)
     if error:

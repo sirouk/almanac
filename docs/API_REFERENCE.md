@@ -51,7 +51,7 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | POST | `/webhooks/telegram` | Telegram Bot API webhook |
 | POST | `/webhooks/discord` | Discord interaction webhook |
 | POST | `/auth/admin/login` | Create admin session |
-| POST | `/auth/user/login` | Create user session with email plus dashboard password |
+| POST | `/auth/user/login` | Create user session with email plus the user-scoped dashboard password |
 | GET | `/health` | Liveness check (DB connectivity) |
 | GET | `/openapi.json` | OpenAPI 3.1 spec (machine-readable route catalog) |
 

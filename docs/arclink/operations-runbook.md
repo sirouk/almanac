@@ -65,10 +65,12 @@ authorization, and destructive maintenance. Do not create a second owner for
 coverage; rotate or recover the owner account, then add subordinate admin roles
 only for delegated operations.
 
-**User dashboard passwords:** User login requires the same dashboard password
-issued for the user's Hermes dashboard. New Sovereign pods seed that password
-through a Docker secret and store only its hash in the control DB. Existing pod
-passwords are reconciled without printing secrets during Docker reconcile via:
+**User dashboard credentials:** Sovereign user login and the user's Hermes
+dashboards use one user-scoped dashboard credential by default. New pods seed
+the same username, normally the user's email, and the same user-scoped dashboard
+password through Docker secrets, then store only the password hash in the
+control DB. Existing pod passwords are reconciled without printing secrets
+during Docker reconcile via:
 
 ```bash
 ./bin/arclink-docker.sh reconcile

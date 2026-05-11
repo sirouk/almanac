@@ -17,9 +17,10 @@ Use the chat channel where onboarding completed.
 ## Dashboard
 
 The dashboard links are sent at completion and shown in the user dashboard.
-Dashboard access is protected by ArcLink's generated web-access credential and
-session proxy. Do not send dashboard passwords or session material in shared
-channels.
+Sovereign users get one dashboard username, normally their email, and one
+dashboard password for their ArcLink console and Hermes dashboards. Dashboard
+access is protected by ArcLink's generated web-access credential and session
+proxy. Do not send dashboard passwords or session material in shared channels.
 
 When ArcLink presents credential handoff items, copy them into a password
 manager and then acknowledge storage in the user session. After acknowledgement,

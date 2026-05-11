@@ -187,14 +187,20 @@ def _secret_ref(metadata: Mapping[str, Any], key: str, default: str) -> str:
     return value or default
 
 
-def _render_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
+def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
+    explicit = str(metadata.get("dashboard_password_ref") or "").strip()
+    if explicit:
+        return explicit
+    clean_user = _safe_segment(user_id)
+    if clean_user:
+        return f"secret://arclink/dashboard/users/{clean_user}/password"
+    return f"secret://arclink/dashboard/{deployment_id}/password"
+
+
+def _render_secret_refs(deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
     return {
         "chutes_api_key": _secret_ref(metadata, "chutes_secret_ref", f"secret://arclink/chutes/{deployment_id}"),
-        "dashboard_password": _secret_ref(
-            metadata,
-            "dashboard_password_ref",
-            f"secret://arclink/dashboard/{deployment_id}/password",
-        ),
+        "dashboard_password": dashboard_password_secret_ref(deployment_id=deployment_id, user_id=user_id, metadata=metadata),
         "nextcloud_admin_password": _secret_ref(
             metadata,
             "nextcloud_admin_password_ref",
@@ -675,7 +681,7 @@ def render_arclink_provisioning_intent(
         tailscale_host_strategy=clean_tailscale_strategy,
         docker_network=control_network_name,
     )
-    secret_refs = _render_secret_refs(deployment_id, metadata)
+    secret_refs = _render_secret_refs(deployment_id, str(deployment["user_id"]), metadata)
     compose_secrets = _render_compose_secrets(secret_refs)
     tailnet_service_ports = _clean_tailnet_service_ports(metadata.get("tailnet_service_ports"))
     access_urls = arclink_access_urls(
@@ -716,6 +722,7 @@ def render_arclink_provisioning_intent(
         ),
         "ARCLINK_BACKEND_ALLOWED_CIDRS": str(source_env.get("ARCLINK_BACKEND_ALLOWED_CIDRS") or "172.16.0.0/12"),
         "ARCLINK_DASHBOARD_HOST": hostnames["dashboard"],
+        "ARCLINK_DASHBOARD_USERNAME": str(user.get("email") or deployment["user_id"]),
         "ARCLINK_FILES_HOST": hostnames["files"],
         "ARCLINK_CODE_HOST": hostnames["code"],
         "ARCLINK_HERMES_HOST": hostnames["hermes"],

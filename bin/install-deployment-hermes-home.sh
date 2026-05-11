@@ -69,8 +69,8 @@ try:
 except Exception:
     existing = {}
 
-username = str(existing.get("username") or os.environ.get("ARCLINK_DASHBOARD_USERNAME") or os.environ.get("ARCLINK_PREFIX") or "arclink").strip()
-username = "".join(ch.lower() if ch.isalnum() else "-" for ch in username).strip("-") or "arclink"
+username = str(os.environ.get("ARCLINK_DASHBOARD_USERNAME") or existing.get("username") or os.environ.get("ARCLINK_PREFIX") or "arclink").strip().lower()
+username = "".join(ch for ch in username if ch.isalnum() or ch in "@._-").strip(".-_") or "arclink"
 password_file = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD_FILE") or "").strip()
 password_from_file = ""
 if password_file:
@@ -78,7 +78,7 @@ if password_file:
         password_from_file = Path(password_file).read_text(encoding="utf-8").splitlines()[0].strip()
     except Exception:
         password_from_file = ""
-password = str(existing.get("password") or os.environ.get("ARCLINK_DASHBOARD_PASSWORD") or password_from_file or secrets.token_urlsafe(24))
+password = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD") or password_from_file or existing.get("password") or secrets.token_urlsafe(24))
 session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
 payload = {
     **existing,

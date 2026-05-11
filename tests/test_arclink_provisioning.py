@@ -116,6 +116,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["nextcloud_db_password"]["secret_ref"] == "secret://arclink/nextcloud/dep_1/db-password", str(compose_secrets))
     expect(compose_secrets["nextcloud_db_password"]["target"] == "/run/secrets/nextcloud_db_password", str(compose_secrets))
     expect(compose_secrets["nextcloud_admin_password"]["target"] == "/run/secrets/nextcloud_admin_password", str(compose_secrets))
+    expect(compose_secrets["dashboard_password"]["secret_ref"] == "secret://arclink/dashboard/users/user_1/password", str(compose_secrets))
     expect(compose_secrets["dashboard_password"]["target"] == "/run/secrets/dashboard_password", str(compose_secrets))
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
@@ -134,6 +135,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["TELEGRAM_REACTIONS"] == "true", str(intent["environment"]))
     expect(intent["environment"]["DISCORD_REACTIONS"] == "true", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/chutes_api_key", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(intent["environment"]))
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_CONTAINER_PORT"] == "8181", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_LOOPBACK_PORT"] == "18181", str(intent["environment"]))
@@ -223,6 +225,41 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     event_types = {row["event_type"] for row in events}
     expect({"provisioning_planned", "provisioning_rendered", "provisioning_ready_for_execution"} <= event_types, str(event_types))
     print("PASS test_dry_run_renders_full_service_dns_access_intent_without_secrets")
+
+
+def test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_user_sso_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_user_sso_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_2",
+        user_id="user_1",
+        prefix="second-vault-2b3c",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+    control.upsert_arclink_user(conn, user_id="user_2", email="other@example.test", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_3",
+        user_id="user_2",
+        prefix="other-vault-3c4d",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+    intent_1 = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep_1")
+    intent_2 = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep_2")
+    intent_3 = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep_3")
+    ref_1 = intent_1["secret_refs"]["dashboard_password"]
+    ref_2 = intent_2["secret_refs"]["dashboard_password"]
+    ref_3 = intent_3["secret_refs"]["dashboard_password"]
+    expect(ref_1 == "secret://arclink/dashboard/users/user_1/password", ref_1)
+    expect(ref_2 == ref_1, f"same user deployments should share the dashboard password ref: {ref_1} vs {ref_2}")
+    expect(ref_3 == "secret://arclink/dashboard/users/user_2/password", ref_3)
+    expect(ref_3 != ref_1, f"different users must not share dashboard password refs: {ref_1} vs {ref_3}")
+    print("PASS test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso")
 
 
 def test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible() -> None:
@@ -524,6 +561,7 @@ def test_tailscale_ingress_uses_dedicated_app_ports_when_recorded() -> None:
 
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
+    test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso()
     test_entitlement_gate_blocks_executable_intent_but_keeps_dry_run_visible()
     test_secret_validator_fails_job_and_same_idempotency_key_can_resume_after_fix()
     test_failed_provisioning_retry_clears_stale_timestamps_and_error()
@@ -533,7 +571,7 @@ def main() -> int:
     test_rendered_services_include_resource_limits_and_healthchecks()
     test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
     test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
-    print("PASS all 10 ArcLink provisioning tests")
+    print("PASS all 11 ArcLink provisioning tests")
     return 0
 
 

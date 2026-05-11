@@ -975,19 +975,28 @@ def _secret_store_root() -> Path:
     return Path("/home/arclink/arclink/arclink-priv/state/sovereign-secrets").resolve()
 
 
-def _dashboard_password_secret_path(*, deployment_id: str, secret_ref: str) -> Path | None:
+def _dashboard_password_secret_path(*, deployment_id: str, user_id: str = "", secret_ref: str) -> Path | None:
     clean_deployment = str(deployment_id or "").strip()
+    clean_user = str(user_id or "").strip()
     clean_ref = str(secret_ref or "").strip()
-    if not clean_deployment or clean_ref != f"secret://arclink/dashboard/{clean_deployment}/password":
-        return None
     root = _secret_store_root()
-    deployment_root = (root / clean_deployment).resolve()
-    path = (deployment_root / f"{hashlib.sha256(clean_ref.encode('utf-8')).hexdigest()}.secret").resolve()
-    try:
-        path.relative_to(deployment_root)
-    except ValueError:
-        return None
-    return path
+    if clean_deployment and clean_ref == f"secret://arclink/dashboard/{clean_deployment}/password":
+        deployment_root = (root / clean_deployment).resolve()
+        path = (deployment_root / f"{hashlib.sha256(clean_ref.encode('utf-8')).hexdigest()}.secret").resolve()
+        try:
+            path.relative_to(deployment_root)
+        except ValueError:
+            return None
+        return path
+    if clean_user and clean_ref == f"secret://arclink/dashboard/users/{clean_user}/password":
+        users_root = (root / "users").resolve()
+        path = (users_root / f"{hashlib.sha256(clean_ref.encode('utf-8')).hexdigest()}.secret").resolve()
+        try:
+            path.relative_to(users_root)
+        except ValueError:
+            return None
+        return path
+    return None
 
 
 def _resolve_revealable_credential_secret(row: Mapping[str, Any]) -> str:
@@ -996,6 +1005,7 @@ def _resolve_revealable_credential_secret(row: Mapping[str, Any]) -> str:
         return ""
     path = _dashboard_password_secret_path(
         deployment_id=str(row.get("deployment_id") or ""),
+        user_id=str(row.get("user_id") or ""),
         secret_ref=str(row.get("secret_ref") or ""),
     )
     if path is None or not path.is_file():
@@ -1007,10 +1017,21 @@ def _resolve_revealable_credential_secret(row: Mapping[str, Any]) -> str:
     return raw if raw.startswith("arc_") else ""
 
 
-def _deployment_secret_refs(deployment_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
+def _dashboard_password_ref_for_handoff(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
+    refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
+    explicit = str((refs or {}).get("dashboard_password") or metadata.get("dashboard_password_ref") or "").strip()
+    if explicit:
+        return explicit
+    clean_user = str(user_id or "").strip()
+    if clean_user:
+        return f"secret://arclink/dashboard/users/{clean_user}/password"
+    return f"secret://arclink/dashboard/{deployment_id}/password"
+
+
+def _deployment_secret_refs(deployment_id: str, metadata: Mapping[str, Any], *, user_id: str = "") -> dict[str, str]:
     refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
     defaults = {
-        "dashboard_password": f"secret://arclink/dashboard/{deployment_id}/password",
+        "dashboard_password": _dashboard_password_ref_for_handoff(deployment_id=deployment_id, user_id=user_id, metadata=metadata),
         "chutes_api_key": f"secret://arclink/chutes/{deployment_id}",
     }
     result: dict[str, str] = {}
@@ -1030,7 +1051,7 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
         raise ArcLinkApiAuthError("ArcLink user session cannot read another user deployment")
     metadata = _json_loads(str(row["metadata_json"] or "{}"))
     now = utc_now_iso()
-    for kind, secret_ref in _deployment_secret_refs(deployment_id, metadata).items():
+    for kind, secret_ref in _deployment_secret_refs(deployment_id, metadata, user_id=user_id).items():
         if kind not in ARCLINK_CREDENTIAL_HANDOFF_KINDS:
             continue
         _reject_secret_material({"secret_ref": secret_ref})

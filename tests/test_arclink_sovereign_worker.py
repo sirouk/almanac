@@ -151,6 +151,7 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     expect("Stage 4 complete: your ArcLink agent is ready" in notification["message"], str(notification["message"]))
     expect("Dashboard: https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
     expect("Hermes:" in notification["message"], str(notification["message"]))
+    expect("Use /credentials or tap Credentials" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
     expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
     telegram_buttons = [
@@ -159,6 +160,7 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
         for button in row
     ]
     expect(any(button.get("text") == "Open Helm" and button.get("url") for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Credentials" and button.get("callback_data") == "arclink:/raven credentials" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Show My Crew" and button.get("callback_data") == "arclink:/raven agents" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Link Channel" and button.get("callback_data") == "arclink:/raven link-channel" for button in telegram_buttons), str(extra))
     session = conn.execute("SELECT status, current_step FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
@@ -460,6 +462,18 @@ def test_dashboard_password_secret_is_generated_for_canonical_handoff_store() ->
         materialized_value = materialized_secret.read_text(encoding="utf-8").strip()
         expect(central_value == materialized_value, "compose secret must mirror canonical store material")
         expect(central_value.startswith("arc_"), "expected generated ArcLink dashboard password")
+        resolver_2 = worker_mod.SovereignSecretResolver(
+            env={},
+            secret_store_dir=Path(tmpdir) / "store" / "dep_2",
+            materialization_root=Path(tmpdir) / "materialized-2",
+        )
+        user_ref = "secret://arclink/dashboard/users/user_1/password"
+        user_first = resolver.materialize(user_ref, "/run/secrets/dashboard_password")
+        user_second = resolver_2.materialize(user_ref, "/run/secrets/dashboard_password")
+        user_secret = Path(tmpdir) / "store" / "users" / f"{hashlib.sha256(user_ref.encode('utf-8')).hexdigest()}.secret"
+        expect(user_secret.exists(), f"expected user-scoped dashboard password secret file: {user_secret}")
+        expect(Path(user_first.source_path).read_text(encoding="utf-8") == Path(user_second.source_path).read_text(encoding="utf-8"), "same user ref must materialize the same dashboard password across deployments")
+        expect(user_secret.read_text(encoding="utf-8").strip() == Path(user_first.source_path).read_text(encoding="utf-8").strip(), "materialized user secret must mirror canonical user store")
     print("PASS test_dashboard_password_secret_is_generated_for_canonical_handoff_store")
 
 

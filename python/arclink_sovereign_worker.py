@@ -114,14 +114,19 @@ class SovereignSecretResolver(FileMaterializingSecretResolver):
         return self._generated_secret_value(secret_ref)
 
     def _generated_secret_value(self, secret_ref: str) -> str:
-        self.secret_store_dir.mkdir(parents=True, exist_ok=True)
-        path = self.secret_store_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+        path = self._generated_secret_path(secret_ref)
+        path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             return path.read_text(encoding="utf-8").strip()
         value = f"arc_{secrets.token_urlsafe(36)}"
         path.write_text(value + "\n", encoding="utf-8")
         path.chmod(0o600)
         return value
+
+    def _generated_secret_path(self, secret_ref: str) -> Path:
+        if secret_ref.startswith("secret://arclink/dashboard/users/"):
+            return self.secret_store_dir.parent / "users" / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+        return self.secret_store_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
 
 
 def _provider_env_for_ref(secret_ref: str) -> str:
@@ -900,6 +905,8 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "Need the Helm password again before you store it? Use /credentials or tap Credentials.",
+            "",
             "Use /raven for ArcLink controls, roster, Notion, backups, and linked channels. Bare slash commands belong to your active agent.",
         ]
     )
@@ -915,12 +922,14 @@ def _vessel_online_actions(*, urls: Mapping[str, Any]) -> dict[str, Any]:
         discord_buttons.append({"type": 2, "label": "Open Helm", "style": 5, "url": dashboard})
     telegram_row.extend(
         [
+            {"text": "Credentials", "callback_data": "arclink:/raven credentials"},
             {"text": "Show My Crew", "callback_data": "arclink:/raven agents"},
             {"text": "Link Channel", "callback_data": "arclink:/raven link-channel"},
         ]
     )
     discord_buttons.extend(
         [
+            {"type": 2, "label": "Credentials", "style": 2, "custom_id": "arclink:/credentials"},
             {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
             {"type": 2, "label": "Link Channel", "style": 2, "custom_id": "arclink:/link-channel"},
         ]

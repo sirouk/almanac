@@ -614,8 +614,8 @@ def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
     secret_tmp = tempfile.TemporaryDirectory()
     old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
     os.environ["ARCLINK_SECRET_STORE_DIR"] = secret_tmp.name
-    dashboard_secret_ref = f"secret://arclink/dashboard/{user_a['deployment_id']}/password"
-    dashboard_secret_dir = Path(secret_tmp.name) / user_a["deployment_id"]
+    dashboard_secret_ref = f"secret://arclink/dashboard/users/{user_a['user_id']}/password"
+    dashboard_secret_dir = Path(secret_tmp.name) / "users"
     dashboard_secret_dir.mkdir(parents=True)
     dashboard_secret_path = dashboard_secret_dir / f"{hashlib.sha256(dashboard_secret_ref.encode('utf-8')).hexdigest()}.secret"
     dashboard_secret_path.write_text("arc_dashboard_test_password\n", encoding="utf-8")

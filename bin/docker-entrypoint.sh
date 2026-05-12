@@ -292,6 +292,9 @@ ensure_nextcloud_config() {
   if [[ -f "$nextcloud_config" ]]; then
     return 0
   fi
+  if [[ ! -w "$(dirname "$nextcloud_config")" ]]; then
+    return 0
+  fi
 
   cat >"$nextcloud_config" <<'EOF'
 <?php
@@ -320,7 +323,13 @@ copy_legacy_nextcloud_data_if_needed() {
 ensure_nextcloud_data_dir() {
   local live_data="$PRIV_DIR/state/nextcloud/html/data"
 
+  if [[ -d "$live_data" && ! -w "$live_data" ]]; then
+    return 0
+  fi
   mkdir -p "$live_data"
+  if [[ ! -w "$live_data" ]]; then
+    return 0
+  fi
   copy_legacy_nextcloud_data_if_needed
   if [[ ! -f "$live_data/.ncdata" ]]; then
     cat >"$live_data/.ncdata" <<'EOF'

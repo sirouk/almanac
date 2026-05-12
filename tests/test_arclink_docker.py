@@ -508,6 +508,8 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
         "rsync -a --no-owner --no-group --ignore-existing" in body,
         "rootless Docker entrypoint rsync must not preserve owner/group on bind mounts",
     )
+    expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
+    expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
     print("PASS test_docker_entrypoint_generates_fresh_secrets")
 
 

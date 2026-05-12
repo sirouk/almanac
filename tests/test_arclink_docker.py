@@ -497,6 +497,10 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     expect("NEXTCLOUD_ADMIN_PASSWORD=$nextcloud_admin_password" in body, body)
     expect("POSTGRES_PASSWORD=change-me" not in body, body)
     expect("NEXTCLOUD_ADMIN_PASSWORD=change-me" not in body, body)
+    expect(
+        "rsync -a --no-owner --no-group --ignore-existing" in body,
+        "rootless Docker entrypoint rsync must not preserve owner/group on bind mounts",
+    )
     print("PASS test_docker_entrypoint_generates_fresh_secrets")
 
 

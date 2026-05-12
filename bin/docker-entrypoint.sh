@@ -49,7 +49,7 @@ ensure_docker_state_dirs() {
 ensure_docker_state_dirs
 
 if [[ -d "$TEMPLATE_DIR" ]]; then
-  rsync -a --ignore-existing "$TEMPLATE_DIR"/ "$PRIV_DIR"/
+  rsync -a --no-owner --no-group --ignore-existing "$TEMPLATE_DIR"/ "$PRIV_DIR"/
 fi
 
 generate_secret() {
@@ -311,7 +311,7 @@ copy_legacy_nextcloud_data_if_needed() {
   fi
 
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --ignore-existing "$legacy_data"/ "$live_data"/
+    rsync -a --no-owner --no-group --ignore-existing "$legacy_data"/ "$live_data"/
   else
     cp -Rpn "$legacy_data"/. "$live_data"/
   fi

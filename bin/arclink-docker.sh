@@ -172,7 +172,6 @@ require_docker_compose() {
 prepare_compose() {
   require_docker_compose
   bootstrap
-  reserve_docker_ports
 }
 
 bootstrap() {

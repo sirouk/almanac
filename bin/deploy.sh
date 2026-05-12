@@ -9512,12 +9512,15 @@ PY
 
 run_control_runtime_reset() {
   local state_dir="$BOOTSTRAP_DIR/arclink-priv/state"
-  local backup_dir="" db_path=""
+  local backup_dir="" db_path="" docker_env=""
 
   confirm_control_runtime_reset
 
   begin_deploy_operation "control-reset-runtime" "$state_dir"
   trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
+
+  docker_env="$(docker_env_file_path)"
+  CONFIG_TARGET="$docker_env"
 
   backup_dir="$(new_control_runtime_backup_dir)"
   create_control_runtime_backup "$backup_dir"

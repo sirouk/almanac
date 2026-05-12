@@ -174,6 +174,12 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     memory_synth_volumes = {item["target"]: item["source"] for item in services["memory-synth"]["volumes"]}
     expect(memory_synth_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["memory-synth"]))
     expect(memory_synth_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["memory-synth"]))
+    for service_name in ("vault-watch", "notion-webhook", "notification-delivery", "health-watch"):
+        service_volumes = {item["target"]: item["source"] for item in services[service_name]["volumes"]}
+        expect(
+            service_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"],
+            f"{service_name} missing writable memory state volume: {services[service_name]}",
+        )
     expect("code-server" not in services, str(services))
     expect(services["managed-context-install"]["command"][:2] == ["./bin/install-deployment-hermes-home.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
     managed_installer_volumes = {item["target"]: item["source"] for item in services["managed-context-install"]["volumes"]}

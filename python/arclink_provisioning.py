@@ -428,6 +428,7 @@ def _render_services(
     app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
     nextcloud_db_name = _postgres_db_name(prefix="nextcloud", deployment_id=deployment_id)
+    memory_volume = {"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR}
 
     _limits = ARCLINK_DEFAULT_RESOURCE_LIMITS.get
     _hc = ARCLINK_DEFAULT_HEALTHCHECKS.get
@@ -479,7 +480,7 @@ def _render_services(
             image=app_image,
             command=["./bin/vault-watch.sh"],
             environment=env,
-            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}],
+            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}, memory_volume],
             depends_on=["qmd-mcp"],
             deploy=_limits("vault-watch"),
         ),
@@ -489,7 +490,7 @@ def _render_services(
             environment=env,
             volumes=[
                 {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
-                {"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR},
+                memory_volume,
             ],
             depends_on=["qmd-mcp"],
             deploy=_limits("memory-synth"),
@@ -546,7 +547,7 @@ def _render_services(
             image=app_image,
             command=["./bin/arclink-notion-webhook.sh", "--host", "0.0.0.0", "--port", "8283"],
             environment=env,
-            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}],
+            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}, memory_volume],
             labels=labels["notion"],
             secrets=[
                 {"source": "notion_webhook_secret", "target": secret_target["notion_webhook_secret"]},
@@ -558,12 +559,14 @@ def _render_services(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "notification-delivery", "5", "./bin/arclink-notification-delivery.sh"],
             environment=env,
+            volumes=[memory_volume],
             deploy=_limits("notification-delivery"),
         ),
         "health-watch": _service(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "health-watch", "300", "./bin/health-watch.sh"],
             environment=env,
+            volumes=[memory_volume],
             deploy=_limits("health-watch"),
         ),
         "managed-context-install": _service(

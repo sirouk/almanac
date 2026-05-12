@@ -31,6 +31,14 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
 )
 DOCKER_PORT_MANIFEST="$REPO_DIR/arclink-priv/state/docker/ports.json"
 
+docker_default_runtime_uid() {
+  id -u arclink 2>/dev/null || id -u
+}
+
+docker_default_runtime_gid() {
+  id -g arclink 2>/dev/null || id -g
+}
+
 usage() {
   cat <<'EOF'
 Usage: bin/arclink-docker.sh <command> [args]
@@ -227,8 +235,41 @@ bootstrap() {
   ensure_env_file_value ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "4"
   ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"
   ensure_env_file_value ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "/home/arclink/arclink/arclink-priv/secrets/ssh/known_hosts"
+  ensure_env_file_value ARCLINK_DOCKER_UID "$(docker_default_runtime_uid)"
+  ensure_env_file_value ARCLINK_DOCKER_GID "$(docker_default_runtime_gid)"
   ensure_env_file_value ARCLINK_DOCKER_SOCKET_GID "$(stat -c %g /var/run/docker.sock 2>/dev/null || printf '0')"
+  ensure_docker_app_bind_permissions
   reserve_docker_ports
+}
+
+ensure_docker_app_bind_permissions() {
+  local uid="" gid="" path=""
+
+  uid="$(configured_or_default ARCLINK_DOCKER_UID "$(docker_default_runtime_uid)")"
+  gid="$(configured_or_default ARCLINK_DOCKER_GID "$(docker_default_runtime_gid)")"
+  if [[ ! "$uid" =~ ^[0-9]+$ || ! "$gid" =~ ^[0-9]+$ ]]; then
+    echo "Invalid ARCLINK_DOCKER_UID/GID values: uid=$uid gid=$gid" >&2
+    return 1
+  fi
+
+  mkdir -p "$REPO_DIR/arclink-priv/config" "$REPO_DIR/arclink-priv/state"
+  chown "$uid:$gid" "$REPO_DIR/arclink-priv" "$REPO_DIR/arclink-priv/config" "$REPO_DIR/arclink-priv/state" 2>/dev/null || true
+  [[ -e "$DOCKER_ENV_FILE" ]] && chown "$uid:$gid" "$DOCKER_ENV_FILE" 2>/dev/null || true
+  [[ -e "$DOCKER_ENV_FILE" ]] && chmod 600 "$DOCKER_ENV_FILE" 2>/dev/null || true
+
+  for path in \
+    "$REPO_DIR/arclink-priv/published" \
+    "$REPO_DIR/arclink-priv/quarto" \
+    "$REPO_DIR/arclink-priv/secrets" \
+    "$REPO_DIR/arclink-priv/vault"; do
+    [[ -e "$path" ]] && chown -R "$uid:$gid" "$path" 2>/dev/null || true
+  done
+
+  if [[ -d "$REPO_DIR/arclink-priv/state" ]]; then
+    find "$REPO_DIR/arclink-priv/state" -mindepth 1 \
+      -path "$REPO_DIR/arclink-priv/state/nextcloud" -prune \
+      -o -exec chown -h "$uid:$gid" {} + 2>/dev/null || true
+  fi
 }
 
 env_file_value() {

@@ -42,7 +42,27 @@ RUN apt-get update \
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-RUN useradd --create-home --home-dir /home/arclink --shell /bin/bash arclink
+ARG ARCLINK_UID=1000
+ARG ARCLINK_GID=1000
+
+RUN set -eux; \
+    if getent group "$ARCLINK_GID" >/dev/null; then \
+      arclink_group="$(getent group "$ARCLINK_GID" | cut -d: -f1)"; \
+    else \
+      groupadd --gid "$ARCLINK_GID" arclink; \
+      arclink_group="arclink"; \
+    fi; \
+    if getent passwd arclink >/dev/null; then \
+      usermod --uid "$ARCLINK_UID" --gid "$arclink_group" --home /home/arclink --shell /bin/bash arclink; \
+    elif getent passwd "$ARCLINK_UID" >/dev/null; then \
+      existing_user="$(getent passwd "$ARCLINK_UID" | cut -d: -f1)"; \
+      usermod --login arclink --home /home/arclink --move-home "$existing_user"; \
+      usermod --gid "$arclink_group" --shell /bin/bash arclink; \
+    else \
+      useradd --uid "$ARCLINK_UID" --gid "$arclink_group" --create-home --home-dir /home/arclink --shell /bin/bash arclink; \
+    fi; \
+    mkdir -p /home/arclink; \
+    chown "$ARCLINK_UID:$ARCLINK_GID" /home/arclink
 
 WORKDIR /home/arclink/arclink
 COPY . /home/arclink/arclink
@@ -82,7 +102,7 @@ RUN pin_value() { \
        && npm ci --no-audit --no-fund \
        && npm run build; \
      fi \
-  && chown -R arclink:arclink /home/arclink /opt/arclink
+  && chown -R "$ARCLINK_UID:$ARCLINK_GID" /home/arclink /opt/arclink
 
 USER arclink
 

@@ -131,6 +131,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        ARCLINK_UID: ${ARCLINK_DOCKER_UID:-1000}
+        ARCLINK_GID: ${ARCLINK_DOCKER_GID:-1000}
     image: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
     profiles: ["build"]
     command: ["true"]

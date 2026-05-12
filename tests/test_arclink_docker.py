@@ -44,6 +44,8 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("download.docker.com/linux/debian" in body and "docker-ce-cli" in body, body)
     expect("docker-compose-plugin" in body, body)
     expect("iproute2" in body, body)
+    expect("ARG ARCLINK_UID=1000" in body and "ARG ARCLINK_GID=1000" in body, body)
+    expect('getent passwd "$ARCLINK_UID"' in body and 'chown -R "$ARCLINK_UID:$ARCLINK_GID"' in body, body)
     expect("USER arclink" in body, body)
     print("PASS test_dockerfile_installs_pinned_runtime_assets")
 
@@ -51,6 +53,8 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
 def test_compose_defines_full_stack_services() -> None:
     body = read("compose.yaml")
     expect("arclink-app:" in body and "dockerfile: Dockerfile" in body, body)
+    expect("ARCLINK_UID: ${ARCLINK_DOCKER_UID:-1000}" in body, body)
+    expect("ARCLINK_GID: ${ARCLINK_DOCKER_GID:-1000}" in body, body)
     expect('profiles: ["build"]' in body, body)
     expect("ARCLINK_BACKEND_ALLOWED_CIDRS:" in body, body)
     expect("ARCLINK_BASE_DOMAIN:" in body and "ARCLINK_PRIMARY_PROVIDER:" in body, body)
@@ -210,6 +214,9 @@ def test_docker_operator_commands_are_present() -> None:
         'ensure_env_file_value ARCLINK_DOCKER_SOCKET_GID "$(stat -c %g /var/run/docker.sock 2>/dev/null || printf ' in body,
         body,
     )
+    expect('ensure_env_file_value ARCLINK_DOCKER_UID "$(docker_default_runtime_uid)"' in body, body)
+    expect("ensure_docker_app_bind_permissions()" in body, body)
+    expect('-path "$REPO_DIR/arclink-priv/state/nextcloud" -prune' in body, body)
     expect("qmd-mcp" in body and "qmd --version" in body, body)
     expect('pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' in body, body)
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)

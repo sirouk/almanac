@@ -147,7 +147,7 @@ function CheckoutSuccessContent() {
             </p>
             {channelLabel && (
               <p className="mt-2 text-sm text-soft-white/65">
-                Return to your {channelLabel} chat with Raven for provisioning updates, credentials, and the ready links. You can close this tab once you see this confirmation.
+                Return to your {channelLabel} chat with Raven. Raven will send the ready links and dashboard credential handoff there when provisioning is complete. This page will not show the password.
               </p>
             )}
             {sessionClaimed && (

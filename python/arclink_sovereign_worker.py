@@ -1378,7 +1378,7 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Need the Helm password again before you store it? Use /credentials or tap Credentials.",
+            "Raven keeps the dashboard credential handoff in this chat until you store it. Use /credentials or tap Credentials, then confirm with /credentials-stored.",
             "",
             "Use /raven for ArcLink controls, roster, Notion, backups, and linked channels. Bare slash commands belong to your active agent.",
         ]

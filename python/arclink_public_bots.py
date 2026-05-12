@@ -10,6 +10,7 @@ from typing import Any, Mapping
 from arclink_api_auth import (
     ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS,
     check_arclink_rate_limit,
+    _dashboard_password_ref_for_handoff,
     expire_revealable_user_material,
     _resolve_revealable_credential_secret,
     _stable_handoff_id,
@@ -1462,8 +1463,11 @@ def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str,
     now = utc_now_iso()
     expires_at = utc_after_seconds_iso(ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS)
     metadata = _metadata(deployment)
-    refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
-    secret_ref = str(refs.get("dashboard_password") or f"secret://arclink/dashboard/{deployment_id}/password").strip()
+    secret_ref = _dashboard_password_ref_for_handoff(
+        deployment_id=deployment_id,
+        user_id=user_id,
+        metadata=metadata,
+    )
     handoff_id = _stable_handoff_id(deployment_id, "dashboard_password")
     conn.execute(
         """
@@ -1473,6 +1477,14 @@ def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str,
         ) VALUES (?, ?, ?, 'dashboard_password', 'Dashboard password', ?, ?, 'available', ?, ?, ?)
         ON CONFLICT(deployment_id, credential_kind) DO UPDATE SET
           user_id = excluded.user_id,
+          secret_ref = CASE
+            WHEN arclink_credential_handoffs.status = 'available' THEN excluded.secret_ref
+            ELSE arclink_credential_handoffs.secret_ref
+          END,
+          delivery_hint = CASE
+            WHEN arclink_credential_handoffs.status = 'available' THEN excluded.delivery_hint
+            ELSE arclink_credential_handoffs.delivery_hint
+          END,
           expires_at = CASE
             WHEN arclink_credential_handoffs.status = 'available' AND arclink_credential_handoffs.expires_at = '' THEN excluded.expires_at
             ELSE arclink_credential_handoffs.expires_at
@@ -1491,7 +1503,10 @@ def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str,
         ),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM arclink_credential_handoffs WHERE handoff_id = ?", (handoff_id,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM arclink_credential_handoffs WHERE deployment_id = ? AND credential_kind = 'dashboard_password'",
+        (deployment_id,),
+    ).fetchone()
     return dict(row) if row is not None else None
 
 

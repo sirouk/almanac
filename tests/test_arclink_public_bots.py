@@ -534,11 +534,11 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_credentials_test")
     conn = memory_db(control)
     seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-credpod")
-    secret_ref = f"secret://arclink/dashboard/{seeded['deployment_id']}/password"
+    secret_ref = f"secret://arclink/dashboard/users/{seeded['user_id']}/password"
     old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["ARCLINK_SECRET_STORE_DIR"] = tmp
-        secret_dir = Path(tmp) / seeded["deployment_id"]
+        secret_dir = Path(tmp) / "users"
         secret_dir.mkdir(parents=True)
         secret_path = secret_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
         secret_path.write_text("arc_public_bot_dashboard_password\n", encoding="utf-8")
@@ -605,6 +605,68 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
             else:
                 os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
     print("PASS test_public_bot_credentials_reveal_and_ack_dashboard_password")
+
+
+def test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_credentials_repair_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_credentials_repair_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-repairpod")
+    legacy_ref = f"secret://arclink/dashboard/{seeded['deployment_id']}/password"
+    canonical_ref = f"secret://arclink/dashboard/users/{seeded['user_id']}/password"
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO arclink_credential_handoffs (
+          handoff_id, user_id, deployment_id, credential_kind, display_name,
+          secret_ref, delivery_hint, status, expires_at, created_at, updated_at
+        ) VALUES ('cred_legacy_dashboard', ?, ?, 'dashboard_password', 'Dashboard password', ?, ?, 'available', ?, ?, ?)
+        """,
+        (
+            seeded["user_id"],
+            seeded["deployment_id"],
+            legacy_ref,
+            "Copy into a password manager, then acknowledge.",
+            control.utc_after_seconds_iso(3600),
+            now,
+            now,
+        ),
+    )
+    conn.commit()
+    old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["ARCLINK_SECRET_STORE_DIR"] = tmp
+        secret_dir = Path(tmp) / "users"
+        secret_dir.mkdir(parents=True)
+        secret_path = secret_dir / f"{hashlib.sha256(canonical_ref.encode('utf-8')).hexdigest()}.secret"
+        secret_path.write_text("arc_public_bot_repaired_dashboard_password\n", encoding="utf-8")
+        try:
+            revealed = bots.handle_arclink_public_bot_turn(
+                conn,
+                channel="telegram",
+                channel_identity="tg:42",
+                text="/credentials",
+            )
+            expect(revealed.action == "credentials_revealed", str(revealed))
+            expect("arc_public_bot_repaired_dashboard_password" in revealed.reply, revealed.reply)
+            row = conn.execute(
+                """
+                SELECT handoff_id, secret_ref, revealed_at
+                FROM arclink_credential_handoffs
+                WHERE deployment_id = ?
+                  AND credential_kind = 'dashboard_password'
+                """,
+                (seeded["deployment_id"],),
+            ).fetchone()
+            expect(row["handoff_id"] == "cred_legacy_dashboard", str(dict(row)))
+            expect(row["secret_ref"] == canonical_ref, str(dict(row)))
+            expect(bool(row["revealed_at"]), str(dict(row)))
+        finally:
+            if old_secret_store is None:
+                os.environ.pop("ARCLINK_SECRET_STORE_DIR", None)
+            else:
+                os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
+    print("PASS test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret")
 
 
 def test_public_bot_config_backup_collects_private_repo_without_secret_leakage() -> None:
@@ -1382,6 +1444,7 @@ def main() -> int:
     test_public_bot_connect_notion_resolves_active_deployment_and_records_event()
     test_public_bot_connect_notion_waits_for_credential_acknowledgement()
     test_public_bot_credentials_reveal_and_ack_dashboard_password()
+    test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret()
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
@@ -1395,7 +1458,7 @@ def main() -> int:
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 24 ArcLink public bot tests")
+    print("PASS all 25 ArcLink public bot tests")
     return 0
 
 

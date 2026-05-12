@@ -1143,6 +1143,57 @@ if changed:
 PY
 }
 
+compose_service_secrets_available() {
+  local compose_file="$1"
+  local service_name="$2"
+
+  python3 - "$compose_file" "$service_name" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+compose_file = Path(sys.argv[1])
+service_name = sys.argv[2]
+
+try:
+    payload = json.loads(compose_file.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+services = payload.get("services")
+if not isinstance(services, dict):
+    raise SystemExit(1)
+service = services.get(service_name)
+if not isinstance(service, dict):
+    raise SystemExit(1)
+service_secrets = service.get("secrets") or []
+if not service_secrets:
+    raise SystemExit(0)
+
+compose_secrets = payload.get("secrets")
+if not isinstance(compose_secrets, dict):
+    raise SystemExit(1)
+
+for item in service_secrets:
+    if isinstance(item, dict):
+        source = str(item.get("source") or "").strip()
+    else:
+        source = str(item or "").strip()
+    if not source:
+        raise SystemExit(1)
+    spec = compose_secrets.get(source)
+    if not isinstance(spec, dict):
+        raise SystemExit(1)
+    secret_file = str(spec.get("file") or "").strip()
+    if not secret_file or not Path(secret_file).is_file():
+        raise SystemExit(1)
+
+raise SystemExit(0)
+PY
+}
+
 docker_refresh_deployment_managed_plugins() {
   local deployments_root=""
   local compose_file="" deploy_root="" root_name="" deployment_id="" clean_id="" project="" refreshed=0
@@ -1165,8 +1216,10 @@ docker_refresh_deployment_managed_plugins() {
     fi
     project="arclink-$clean_id"
 
-    env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-      docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install >/dev/null
+    if compose_service_secrets_available "$compose_file" managed-context-install; then
+      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+        docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install >/dev/null
+    fi
 
     while IFS= read -r legacy_container; do
       [[ -n "$legacy_container" ]] || continue
@@ -1186,6 +1239,9 @@ docker_refresh_deployment_managed_plugins() {
       notification-delivery \
       health-watch; do
       if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq "$service_name"; then
+        if ! compose_service_secrets_available "$compose_file" "$service_name"; then
+          continue
+        fi
         env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
           docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate "$service_name" >/dev/null
       fi

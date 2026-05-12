@@ -191,6 +191,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("--unsafe-print" in body, "full Docker config output should require an explicit unsafe flag")
     expect('elif [[ "$1" == "--unsafe-print" ]]' in body and 'compose config "$@"' in body, "full compose config should be reachable only behind --unsafe-print")
     expect("reserve_docker_ports()" in body, body)
+    expect("repair_docker_app_named_volumes()" in body and "arclink_arclink-qmd" in body, body)
     expect("compose up -d --no-build" in body, body)
     expect("show_ports()" in body, body)
     expect("docker_port_set_available()" in body, body)

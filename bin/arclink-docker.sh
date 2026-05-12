@@ -174,6 +174,28 @@ prepare_compose() {
   bootstrap
 }
 
+repair_docker_app_named_volumes() {
+  local uid="" gid="" image="" volume=""
+
+  uid="$(configured_or_default ARCLINK_DOCKER_UID "$(docker_default_runtime_uid)")"
+  gid="$(configured_or_default ARCLINK_DOCKER_GID "$(docker_default_runtime_gid)")"
+  image="$(configured_or_default ARCLINK_DOCKER_IMAGE "arclink/app:local")"
+  if [[ ! "$uid" =~ ^[0-9]+$ || ! "$gid" =~ ^[0-9]+$ ]]; then
+    echo "Invalid ARCLINK_DOCKER_UID/GID values: uid=$uid gid=$gid" >&2
+    return 1
+  fi
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  for volume in arclink_arclink-qmd; do
+    if docker volume inspect "$volume" >/dev/null 2>&1; then
+      docker run --rm --user 0:0 --entrypoint sh -v "$volume:/target" "$image" \
+        -lc "chown -R '$uid:$gid' /target"
+    fi
+  done
+}
+
 bootstrap() {
   ARCLINK_REPO_DIR="$REPO_DIR" \
   ARCLINK_PRIV_DIR="$REPO_DIR/arclink-priv" \
@@ -1962,6 +1984,7 @@ main() {
       ;;
     up)
       prepare_compose
+      repair_docker_app_named_volumes
       compose up -d --no-build "$@"
       ;;
     reconcile)

@@ -1080,6 +1080,17 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         if isinstance(memory_volumes, list):
             service_changed = ensure_volume(memory_volumes, source=str(deployment_root / "vault"), target="/srv/vault") or service_changed
             service_changed = ensure_volume(memory_volumes, source=str(deployment_root / "state" / "memory"), target="/srv/memory") or service_changed
+    for service_name in ("vault-watch", "notion-webhook", "notification-delivery", "health-watch"):
+        service = services.get(service_name)
+        if not isinstance(service, dict):
+            continue
+        service_volumes = service.setdefault("volumes", [])
+        if isinstance(service_volumes, list):
+            service_changed = ensure_volume(
+                service_volumes,
+                source=str(deployment_root / "state" / "memory"),
+                target="/srv/memory",
+            ) or service_changed
     installer = services.get("managed-context-install")
     if isinstance(installer, dict):
         installer_changed = False
@@ -1165,22 +1176,20 @@ docker_refresh_deployment_managed_plugins() {
       --filter "label=com.docker.compose.service=code-server" \
       --format '{{.Names}}' 2>/dev/null)
 
-    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq hermes-dashboard; then
-      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate hermes-dashboard >/dev/null
-    fi
-    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq dashboard; then
-      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate dashboard >/dev/null
-    fi
-    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq nextcloud; then
-      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate nextcloud >/dev/null
-    fi
-    if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq memory-synth; then
-      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-        docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate memory-synth >/dev/null
-    fi
+    for service_name in \
+      hermes-dashboard \
+      dashboard \
+      nextcloud \
+      memory-synth \
+      vault-watch \
+      notion-webhook \
+      notification-delivery \
+      health-watch; do
+      if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq "$service_name"; then
+        env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+          docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate "$service_name" >/dev/null
+      fi
+    done
     refreshed=$((refreshed + 1))
   done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/compose.yaml' -type f 2>/dev/null | sort)
 

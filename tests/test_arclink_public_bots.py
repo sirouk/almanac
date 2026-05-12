@@ -551,8 +551,8 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
             )
             expect(revealed.action == "credentials_revealed", str(revealed))
             expect("arc_public_bot_dashboard_password" in revealed.reply, revealed.reply)
-            expect("Username: `arc-credpod`" in revealed.reply, revealed.reply)
-            expect("not your email" in revealed.reply, revealed.reply)
+            expect("Username: `arc-credpod@example.test`" in revealed.reply, revealed.reply)
+            expect("same pair opens each of your ArcLink agent dashboards" in revealed.reply, revealed.reply)
             expect("I Stored It" in [button.label for button in revealed.buttons], str(revealed.buttons))
             telegram_markup = bots.arclink_public_bot_turn_telegram_reply_markup(revealed)
             flat_telegram_buttons = [
@@ -561,7 +561,7 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
                 for button in row_buttons
             ]
             copy_buttons = {button["text"]: button.get("copy_text", {}).get("text", "") for button in flat_telegram_buttons}
-            expect(copy_buttons.get("Copy Username") == "arc-credpod", str(flat_telegram_buttons))
+            expect(copy_buttons.get("Copy Username") == "arc-credpod@example.test", str(flat_telegram_buttons))
             expect(copy_buttons.get("Copy Password") == "arc_public_bot_dashboard_password", str(flat_telegram_buttons))
             discord_components = bots.arclink_public_bot_turn_discord_components(revealed)
             discord_labels = [
@@ -667,6 +667,59 @@ def test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret() -> 
             else:
                 os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
     print("PASS test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret")
+
+
+def test_public_bot_credentials_can_target_newly_ready_agent() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_credentials_target_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_credentials_target_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-first")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_second",
+        user_id=seeded["user_id"],
+        prefix="arc-second",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    secret_ref = f"secret://arclink/dashboard/users/{seeded['user_id']}/password"
+    old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["ARCLINK_SECRET_STORE_DIR"] = tmp
+        secret_dir = Path(tmp) / "users"
+        secret_dir.mkdir(parents=True)
+        secret_path = secret_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+        secret_path.write_text("arc_public_bot_targeted_dashboard_password\n", encoding="utf-8")
+        try:
+            revealed = bots.handle_arclink_public_bot_turn(
+                conn,
+                channel="telegram",
+                channel_identity="tg:42",
+                text="/raven credentials arcdep_second",
+            )
+            expect(revealed.action == "credentials_revealed", str(revealed))
+            expect(revealed.deployment_id == "arcdep_second", str(revealed))
+            expect("arc_public_bot_targeted_dashboard_password" in revealed.reply, revealed.reply)
+            expect("Username: `arc-first@example.test`" in revealed.reply, revealed.reply)
+            row = conn.execute(
+                """
+                SELECT deployment_id, revealed_at
+                FROM arclink_credential_handoffs
+                WHERE credential_kind = 'dashboard_password'
+                """,
+            ).fetchone()
+            expect(row["deployment_id"] == "arcdep_second" and bool(row["revealed_at"]), str(dict(row)))
+        finally:
+            if old_secret_store is None:
+                os.environ.pop("ARCLINK_SECRET_STORE_DIR", None)
+            else:
+                os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
+    print("PASS test_public_bot_credentials_can_target_newly_ready_agent")
 
 
 def test_public_bot_config_backup_collects_private_repo_without_secret_leakage() -> None:
@@ -1445,6 +1498,7 @@ def main() -> int:
     test_public_bot_connect_notion_waits_for_credential_acknowledgement()
     test_public_bot_credentials_reveal_and_ack_dashboard_password()
     test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret()
+    test_public_bot_credentials_can_target_newly_ready_agent()
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
@@ -1458,7 +1512,7 @@ def main() -> int:
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 25 ArcLink public bot tests")
+    print("PASS all 26 ArcLink public bot tests")
     return 0
 
 

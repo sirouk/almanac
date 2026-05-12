@@ -161,20 +161,24 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
         for button in row
     ]
     expect(any(button.get("text") == "Open Helm" and button.get("url") for button in telegram_buttons), str(extra))
-    expect(any(button.get("text") == "Credentials" and button.get("callback_data") == "arclink:/raven credentials" for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Credentials" and button.get("callback_data") == "arclink:/raven credentials dep_1" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Show My Crew" and button.get("callback_data") == "arclink:/raven agents" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Link Channel" and button.get("callback_data") == "arclink:/raven link-channel" for button in telegram_buttons), str(extra))
-    session = conn.execute("SELECT status, current_step FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
+    session = conn.execute("SELECT status, current_step, metadata_json FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
     expect(session["status"] == "first_contacted" and session["current_step"] == "first_agent_contact", str(dict(session)))
+    session_meta = json.loads(session["metadata_json"])
+    expect(session_meta.get("active_deployment_id") == "dep_1", str(session_meta))
     paired = conn.execute(
         """
-        SELECT status, current_step
+        SELECT status, current_step, metadata_json
         FROM arclink_onboarding_sessions
         WHERE channel = 'discord'
           AND channel_identity = 'discord:200'
         """
     ).fetchone()
     expect(paired["status"] == "first_contacted" and paired["current_step"] == "first_agent_contact", str(dict(paired)))
+    paired_meta = json.loads(paired["metadata_json"])
+    expect(paired_meta.get("active_deployment_id") == "dep_1", str(paired_meta))
     queued_event = conn.execute(
         """
         SELECT metadata_json

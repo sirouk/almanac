@@ -1386,8 +1386,9 @@ def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _vessel_online_actions(*, urls: Mapping[str, Any]) -> dict[str, Any]:
+def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any]) -> dict[str, Any]:
     dashboard = str(urls.get("dashboard") or "").strip()
+    credential_command = f"/raven credentials {str(deployment_id or '').strip()}".strip()
     telegram_row: list[dict[str, str]] = []
     discord_buttons: list[dict[str, Any]] = []
     if dashboard:
@@ -1395,14 +1396,14 @@ def _vessel_online_actions(*, urls: Mapping[str, Any]) -> dict[str, Any]:
         discord_buttons.append({"type": 2, "label": "Open Helm", "style": 5, "url": dashboard})
     telegram_row.extend(
         [
-            {"text": "Credentials", "callback_data": "arclink:/raven credentials"},
+            {"text": "Credentials", "callback_data": f"arclink:{credential_command}"[:64]},
             {"text": "Show My Crew", "callback_data": "arclink:/raven agents"},
             {"text": "Link Channel", "callback_data": "arclink:/raven link-channel"},
         ]
     )
     discord_buttons.extend(
         [
-            {"type": 2, "label": "Credentials", "style": 2, "custom_id": "arclink:/credentials"},
+            {"type": 2, "label": "Credentials", "style": 2, "custom_id": f"arclink:{credential_command}"[:100]},
             {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
             {"type": 2, "label": "Link Channel", "style": 2, "custom_id": "arclink:/link-channel"},
         ]
@@ -1411,6 +1412,31 @@ def _vessel_online_actions(*, urls: Mapping[str, Any]) -> dict[str, Any]:
         "telegram_reply_markup": {"inline_keyboard": [telegram_row[:2], telegram_row[2:]] if len(telegram_row) > 2 else [telegram_row]},
         "discord_components": [{"type": 1, "components": discord_buttons[:5]}],
     }
+
+
+def _focus_public_bot_session_on_deployment(
+    conn: sqlite3.Connection,
+    *,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+) -> None:
+    session_id = str(session.get("session_id") or "").strip()
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    if not session_id or not deployment_id:
+        return
+    metadata = json_loads_safe(str(session.get("metadata_json") or "{}"))
+    metadata["active_deployment_id"] = deployment_id
+    prefix = str(deployment.get("prefix") or "").strip()
+    if prefix:
+        metadata["active_agent_label"] = f"Agent #{prefix.rsplit('-', 1)[-1]}"
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (json_dumps_safe(metadata), utc_now_iso(), session_id),
+    )
 
 
 def _queue_vessel_online_notifications(
@@ -1457,7 +1483,7 @@ def _queue_vessel_online_notifications(
     seen: set[tuple[str, str]] = set()
     queued = 0
     message = _vessel_online_message(urls=urls)
-    extra = _vessel_online_actions(urls=urls)
+    extra = _vessel_online_actions(deployment_id=deployment_id, urls=urls)
     for row in rows:
         session = dict(row)
         target = _public_bot_target_for_session(session)
@@ -1470,6 +1496,7 @@ def _queue_vessel_online_notifications(
         if key in seen:
             continue
         seen.add(key)
+        _focus_public_bot_session_on_deployment(conn, session=session, deployment=dict(deployment))
         queue_notification(
             conn,
             target_kind="public-bot-user",

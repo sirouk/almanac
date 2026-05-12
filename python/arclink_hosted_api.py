@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, urlparse
 from wsgiref.simple_server import make_server
 
 from arclink_adapters import FakeStripeClient, StripeWebhookError, resolve_stripe_client
+from arclink_boundary import json_loads_safe
 from arclink_chutes import renewal_lifecycle_for_billing_state
 from arclink_control import (
     Config,
@@ -78,7 +79,7 @@ from arclink_api_auth import (
     revoke_user_share_grant_api,
     start_public_onboarding_api,
 )
-from arclink_dashboard import build_operator_snapshot, build_scale_operations_snapshot
+from arclink_dashboard import _deployment_urls, build_operator_snapshot, build_scale_operations_snapshot
 from arclink_discord import (
     ArcLinkDiscordError,
     DiscordConfig,
@@ -1136,8 +1137,8 @@ def _handle_onboarding_status(
         return _json_response(400, {"error": "session_id required"}, request_id=request_id)
     row = conn.execute(
         """
-        SELECT s.session_id, s.status, s.user_id, s.channel, s.channel_identity,
-               s.display_name_hint, s.selected_plan_id
+        SELECT s.session_id, s.status, s.user_id, s.deployment_id, s.channel, s.channel_identity,
+               s.display_name_hint, s.selected_plan_id, s.checkout_state
         FROM arclink_onboarding_sessions s
         WHERE s.session_id = ?
         """,
@@ -1154,12 +1155,56 @@ def _handle_onboarding_status(
         ).fetchone()
         if user_row is not None:
             entitlement_state = str(dict(user_row).get("entitlement_state") or "unknown")
+    deployment_payload: dict[str, Any] | None = None
+    deployment_id = str(row_dict.get("deployment_id") or "").strip()
+    if deployment_id and user_id:
+        deployment_row = conn.execute(
+            """
+            SELECT deployment_id, user_id, prefix, base_domain, status, metadata_json, updated_at
+            FROM arclink_deployments
+            WHERE deployment_id = ? AND user_id = ?
+            """,
+            (deployment_id, user_id),
+        ).fetchone()
+        if deployment_row is not None:
+            deployment = dict(deployment_row)
+            metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+            urls = _deployment_urls(
+                str(deployment.get("prefix") or ""),
+                str(deployment.get("base_domain") or ""),
+                metadata,
+            )
+            status = str(deployment.get("status") or "")
+            health = [
+                dict(item)
+                for item in conn.execute(
+                    """
+                    SELECT service_name, status, checked_at
+                    FROM arclink_service_health
+                    WHERE deployment_id = ?
+                    ORDER BY service_name
+                    """,
+                    (deployment_id,),
+                ).fetchall()
+            ]
+            deployment_payload = {
+                "deployment_id": deployment_id,
+                "status": status,
+                "ready": status in {"active", "first_contacted"},
+                "prefix": str(deployment.get("prefix") or ""),
+                "access": {"urls": urls},
+                "service_health": health,
+                "updated_at": str(deployment.get("updated_at") or ""),
+            }
     return _json_response(200, {
         "session_id": session_id,
         "status": row_dict.get("status") or "open",
         "user_id": user_id,
         "entitlement_state": entitlement_state,
         "plan_id": row_dict.get("selected_plan_id") or "",
+        "checkout_state": row_dict.get("checkout_state") or "",
+        "deployment_id": deployment_id,
+        "deployment": deployment_payload,
         "display_name": row_dict.get("display_name_hint") or "",
         "channel": row_dict.get("channel") or "",
         "channel_identity": row_dict.get("channel_identity") or "",

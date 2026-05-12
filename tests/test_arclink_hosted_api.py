@@ -3633,6 +3633,11 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
     prepared = seed_paid_deployment(control, onboarding, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'active', updated_at = ? WHERE deployment_id = ?",
+        (control.utc_now_iso(), prepared["deployment_id"]),
+    )
+    conn.commit()
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="GET",
@@ -3645,6 +3650,10 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
     expect(payload["entitlement_state"] == "paid", str(payload))
     expect(payload["display_name"] == "Hosted User", str(payload))
     expect(payload["channel"] == "web", str(payload))
+    expect(payload["deployment_id"] == prepared["deployment_id"], str(payload))
+    expect(payload["deployment"]["ready"] is True, str(payload))
+    expect(payload["deployment"]["access"]["urls"]["hermes"].startswith("https://"), str(payload))
+    expect(payload["deployment"]["service_health"][0]["service_name"] == "qmd-mcp", str(payload))
 
     # Missing session_id -> 400
     status, payload, _ = hosted.route_arclink_hosted_api(

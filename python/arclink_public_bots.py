@@ -126,6 +126,18 @@ ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_conta
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny)\s+(share_[0-9a-f]{32})$")
+ARCLINK_PUBLIC_BOT_CREDENTIAL_TARGET_PREFIXES = (
+    "/credentials ",
+    "/credential ",
+    "/show-credentials ",
+    "/show_credentials ",
+)
+ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_TARGET_PREFIXES = (
+    "/credentials-stored ",
+    "/credentials_stored ",
+    "/credential-stored ",
+    "/credential_stored ",
+)
 ARCLINK_PUBLIC_BOT_RAVEN_DISPLAY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9 ._-]{0,31}$")
 ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_COMMANDS = frozenset({"/raven", "/arclink", "/arclink_control"})
 ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_FALLBACK_RE = re.compile(r"^/arclink_ops\d{0,2}$")
@@ -403,9 +415,9 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
     if verb in {"status", "health"}:
         return "/status"
     if verb in {"credentials", "credential"}:
-        return "/credentials"
+        return f"/credentials {tail}".strip()
     if verb in {"credentials_stored", "credential_stored", "stored"}:
-        return "/credentials-stored"
+        return f"/credentials-stored {tail}".strip()
     if verb in {"notion", "ssot", "connect_notion", "connect-notion"}:
         return "/connect_notion"
     if verb in {"backup", "config_backup", "config-backup"}:
@@ -777,6 +789,10 @@ def _active_raven_callback_command(command: str) -> str:
         "/upgrade-hermes": "/raven upgrade_hermes",
         "/cancel": "/raven cancel",
     }
+    if value.startswith("/credentials "):
+        return f"/raven credentials {value.split(maxsplit=1)[1].strip()}".strip()
+    if value.startswith("/credentials-stored ") or value.startswith("/credentials_stored "):
+        return f"/raven credentials_stored {value.split(maxsplit=1)[1].strip()}".strip()
     if value.startswith("/agent-") or value.startswith("/agent_"):
         return f"/raven {value.lstrip('/')}"
     share_match = ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE.match(value.lower())
@@ -1055,6 +1071,46 @@ def _deployment_for_session(conn: sqlite3.Connection, session: Mapping[str, Any]
         LIMIT 1
         """,
         (session_user_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _target_from_command(command: str, *, aliases: frozenset[str], prefixes: tuple[str, ...]) -> str | None:
+    value = str(command or "").strip().lower()
+    if value in aliases:
+        return ""
+    for prefix in prefixes:
+        if value.startswith(prefix):
+            return value[len(prefix):].strip()
+    return None
+
+
+def _deployment_for_selector(
+    conn: sqlite3.Connection,
+    *,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+    selector: str,
+) -> dict[str, Any] | None:
+    clean = str(selector or "").strip().lower()
+    if not clean:
+        return dict(deployment) if deployment is not None else None
+    user_id = str((deployment or {}).get("user_id") or (session or {}).get("user_id") or "").strip()
+    if not user_id:
+        return None
+    row = conn.execute(
+        """
+        SELECT *
+        FROM arclink_deployments
+        WHERE user_id = ?
+          AND (
+            LOWER(deployment_id) = ?
+            OR LOWER(prefix) = ?
+            OR LOWER(agent_id) = ?
+          )
+        LIMIT 1
+        """,
+        (user_id, clean, clean, clean),
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -1434,19 +1490,33 @@ def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     )
 
 
-def _dashboard_username(deployment: Mapping[str, Any]) -> str:
+def _normalize_dashboard_username(value: str) -> str:
+    clean = str(value or "").strip().lower()
+    return "".join(ch for ch in clean if ch.isalnum() or ch in "@._-").strip(".-_") or ""
+
+
+def _dashboard_username(conn: sqlite3.Connection, deployment: Mapping[str, Any]) -> str:
     metadata = _metadata(deployment)
     for candidate in (
         metadata.get("dashboard_username"),
         metadata.get("helm_username"),
         metadata.get("username"),
     ):
-        value = str(candidate or "").strip()
+        value = _normalize_dashboard_username(str(candidate or ""))
         if value:
-            return "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-") or "arclink"
+            return value
+    user_id = str(deployment.get("user_id") or "").strip()
+    if user_id:
+        row = conn.execute("SELECT email FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
+        email = _normalize_dashboard_username(str(row["email"] or "")) if row is not None else ""
+        if email:
+            return email
+        fallback_user = _normalize_dashboard_username(user_id)
+        if fallback_user:
+            return fallback_user
     prefix = str(deployment.get("prefix") or "").strip()
     if prefix:
-        return "".join(ch.lower() if ch.isalnum() else "-" for ch in prefix).strip("-") or "arclink"
+        return _normalize_dashboard_username(prefix) or "arclink"
     return "arclink"
 
 
@@ -1610,11 +1680,11 @@ def _credentials_reply(
     conn.commit()
     access = _deployment_access(deployment)
     helm = str(access.get("dashboard") or "").rstrip("/")
-    username = _dashboard_username(deployment)
+    username = _dashboard_username(conn, deployment)
     lines = [
         "Dashboard credential handoff.",
         "",
-        "Use this exact Helm username and password. The username is not your email.",
+        "Use this exact Helm username and password. This same pair opens each of your ArcLink agent dashboards.",
         "",
         f"Username: `{username}`",
         "",
@@ -3194,8 +3264,14 @@ def handle_arclink_public_bot_turn(
             deployment=deployment,
         )
 
-    if command in ARCLINK_PUBLIC_BOT_CREDENTIAL_COMMANDS:
+    credential_target = _target_from_command(
+        command,
+        aliases=ARCLINK_PUBLIC_BOT_CREDENTIAL_COMMANDS,
+        prefixes=ARCLINK_PUBLIC_BOT_CREDENTIAL_TARGET_PREFIXES,
+    )
+    if credential_target is not None:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        deployment = _deployment_for_selector(conn, session=session, deployment=deployment, selector=credential_target)
         return _credentials_reply(
             conn,
             channel=clean_channel,
@@ -3204,8 +3280,14 @@ def handle_arclink_public_bot_turn(
             deployment=deployment,
         )
 
-    if command in ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS:
+    credential_ack_target = _target_from_command(
+        command,
+        aliases=ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS,
+        prefixes=ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_TARGET_PREFIXES,
+    )
+    if credential_ack_target is not None:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        deployment = _deployment_for_selector(conn, session=session, deployment=deployment, selector=credential_ack_target)
         return _credentials_stored_reply(
             conn,
             channel=clean_channel,

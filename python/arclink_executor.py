@@ -540,8 +540,9 @@ class ArcLinkExecutor:
                 env_file=str(plan["env_file"]),
                 compose_file=str(plan["compose_file"]),
             )
-        finally:
+        except Exception:
             _cleanup_materialized_secret_files(resolved.values())
+            raise
         return DockerComposeApplyResult(
             deployment_id=request.deployment_id,
             project_name=str(plan["project_name"]),

@@ -83,6 +83,11 @@ def load_access(path: Path) -> dict[str, str]:
     }
 
 
+def _clean_login_username(value: str) -> str:
+    candidate = str(value or "").strip().lower()
+    return "".join(ch for ch in candidate if ch.isalnum() or ch in "@._-").strip(".-_")
+
+
 def _safe_next(value: str) -> str:
     candidate = str(value or "").strip() or "/"
     parsed = urlsplit(candidate)
@@ -367,16 +372,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         else:
             form = parse_qs(raw_body.decode("utf-8", "replace"), keep_blank_values=True)
 
-        username = str(form.get("username", [""])[0] or "")
-        password = str(form.get("password", [""])[0] or "")
+        username = _clean_login_username(str(form.get("username", [""])[0] or ""))
+        password = str(form.get("password", [""])[0] or "").strip()
         next_path = _safe_next(str(form.get("next", ["/"])[0] or "/"))
         if _is_login_path(next_path):
             next_path = self._public_path("/")
         access = load_access(self.access_file)
+        access_username = _clean_login_username(access.get("username") or "")
         if not (
-            access.get("username")
+            access_username
             and access.get("password")
-            and secrets.compare_digest(username, access["username"])
+            and secrets.compare_digest(username, access_username)
             and secrets.compare_digest(password, access["password"])
         ):
             self._login_form(status=401, error="Invalid dashboard credentials.", next_path=next_path)
@@ -384,7 +390,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         self.send_response(303)
         self.send_header("Location", next_path)
-        self.send_header("Set-Cookie", self._session_cookie_header(username))
+        self.send_header("Set-Cookie", self._session_cookie_header(access_username))
         self.send_header("Content-Length", "0")
         self.end_headers()
 

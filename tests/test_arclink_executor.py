@@ -891,8 +891,8 @@ def test_injectable_docker_runner_receives_commands() -> None:
     print("PASS test_injectable_docker_runner_receives_commands")
 
 
-def test_live_docker_compose_apply_cleans_materialized_secret_copies() -> None:
-    mod = load_module("arclink_executor.py", "arclink_executor_secret_cleanup_test")
+def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_secret_restart_test")
     intent = sample_intent()
     secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -912,8 +912,9 @@ def test_live_docker_compose_apply_cleans_materialized_secret_copies() -> None:
         )
         secret_copy = root / "nextcloud_db_password"
         expect(result.status == "applied", str(result))
-        expect(not secret_copy.exists(), f"materialized secret copy should be cleaned: {secret_copy}")
-    print("PASS test_live_docker_compose_apply_cleans_materialized_secret_copies")
+        expect(secret_copy.is_file(), f"compose secret source must remain for docker restart: {secret_copy}")
+        expect(secret_copy.stat().st_mode & 0o777 == 0o600, oct(secret_copy.stat().st_mode & 0o777))
+    print("PASS test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart")
 
 
 def test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure() -> None:
@@ -1154,7 +1155,7 @@ def main() -> int:
     test_fake_docker_compose_rejects_missing_depends_on_service()
     test_dry_run_output_is_secret_free()
     test_injectable_docker_runner_receives_commands()
-    test_live_docker_compose_apply_cleans_materialized_secret_copies()
+    test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
     test_ssh_docker_runner_requires_explicit_host_allowlist()

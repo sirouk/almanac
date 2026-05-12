@@ -238,8 +238,8 @@ bootstrap() {
   ensure_env_file_value ARCLINK_DOCKER_UID "$(docker_default_runtime_uid)"
   ensure_env_file_value ARCLINK_DOCKER_GID "$(docker_default_runtime_gid)"
   ensure_env_file_value ARCLINK_DOCKER_SOCKET_GID "$(stat -c %g /var/run/docker.sock 2>/dev/null || printf '0')"
-  ensure_docker_app_bind_permissions
   reserve_docker_ports
+  ensure_docker_app_bind_permissions
 }
 
 ensure_docker_app_bind_permissions() {

@@ -559,6 +559,14 @@ def test_dockerignore_excludes_sensitive_and_generated_context() -> None:
         "/.ralphie",
         "HUMAN_INSTRUCTIONS.md",
         "/research/HUMAN_FEEDBACK.md",
+        "arclink-priv/**",
+        "node_modules",
+        "**/node_modules",
+        ".next",
+        "**/.next",
+        "*.sqlite3",
+        "*.sqlite3-shm",
+        "*.sqlite3-wal",
     ):
         expect(pattern in body, f"missing .dockerignore pattern {pattern}\n{body}")
     print("PASS test_dockerignore_excludes_sensitive_and_generated_context")

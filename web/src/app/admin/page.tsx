@@ -1069,10 +1069,13 @@ function OperatorSection({ title, ready, checks }: { title: string; ready: boole
 
 function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadiness; onQueued: () => void }) {
   const executableActions = useMemo(
-    () => readiness?.executable ?? ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"],
+    () => readiness?.executable ?? ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"],
     [readiness?.executable],
   );
-  const disabledActions = readiness?.pending_not_implemented || readiness?.disabled || [];
+  const disabledActions = [
+    ...(readiness?.pending_not_implemented || []),
+    ...(readiness?.disabled || []),
+  ].filter((action, index, list) => list.indexOf(action) === index);
   const [actionType, setActionType] = useState(executableActions[0] || "restart");
   const [targetKind, setTargetKind] = useState("deployment");
   const [targetId, setTargetId] = useState("");
@@ -1177,7 +1180,7 @@ function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadi
       </div>
       {disabledActions.length > 0 && (
         <div className="border border-border/70 bg-carbon/70 px-3 py-2">
-          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Disabled until worker wiring lands</p>
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Disabled or proof-gated actions</p>
           <div className="mt-2 flex flex-wrap gap-2">
             {disabledActions.map((action) => (
               <span key={action} className="rounded border border-border/70 px-2 py-1 text-xs text-soft-white/45">

@@ -1626,9 +1626,10 @@ resolve_agent_control_plane_endpoint() {
 }
 
 detect_github_repo() {
+  local default_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
   GITHUB_REPO_URL=""
   GITHUB_REPO_OWNER_REPO=""
-  GITHUB_REPO_BRANCH="main"
+  GITHUB_REPO_BRANCH="$default_branch"
 
   if ! command -v git >/dev/null 2>&1; then
     GITHUB_REPO_URL="https://github.com/example/arclink"
@@ -1639,7 +1640,7 @@ detect_github_repo() {
   local remote_url="" branch="" owner_repo=""
   remote_url="$(git -C "$ARCLINK_REPO_DIR" remote get-url origin 2>/dev/null || true)"
   branch="$(git -C "$ARCLINK_REPO_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-  GITHUB_REPO_BRANCH="${branch:-main}"
+  GITHUB_REPO_BRANCH="${branch:-$default_branch}"
 
   case "$remote_url" in
     https://github.com/*)
@@ -1660,7 +1661,7 @@ detect_github_repo() {
   else
     GITHUB_REPO_URL="https://github.com/example/arclink"
     GITHUB_REPO_OWNER_REPO="example/arclink"
-    GITHUB_REPO_BRANCH="main"
+    GITHUB_REPO_BRANCH="$default_branch"
   fi
 }
 

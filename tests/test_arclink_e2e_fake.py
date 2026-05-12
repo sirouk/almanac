@@ -54,11 +54,12 @@ def _api(hosted, conn, config, method, path, headers=None, body=None, stripe_cli
     return status, payload, resp_headers
 
 
-def browser_auth_headers(session: dict, *, csrf: bool = False) -> dict[str, str]:
+def browser_auth_headers(session: dict, *, kind: str = "user", csrf: bool = False) -> dict[str, str]:
+    prefix = "arclink_admin" if kind == "admin" else "arclink_user"
     cookie = (
-        f"arclink_user_session_id={session['session_id']}; "
-        f"arclink_user_session_token={session['session_token']}; "
-        f"arclink_user_csrf={session['csrf_token']}"
+        f"{prefix}_session_id={session['session_id']}; "
+        f"{prefix}_session_token={session['session_token']}; "
+        f"{prefix}_csrf={session['csrf_token']}"
     )
     headers = {"Cookie": cookie}
     if csrf:
@@ -227,7 +228,7 @@ def test_full_fake_journey():
 
     # ---- 20. Admin queues action -----------------------------------------
     status, payload, _ = _api(hosted, conn, config, "POST", "/admin/actions",
-                              headers=auth_headers(admin_session, csrf=True),
+                              headers=browser_auth_headers(admin_session, kind="admin", csrf=True),
                               body={
                                   "action_type": "restart",
                                   "target_kind": "deployment",
@@ -251,7 +252,7 @@ def test_full_fake_journey():
 
     # ---- 23. User portal link (Stripe billing portal) --------------------
     status, payload, _ = _api(hosted, conn, config, "POST", "/user/portal",
-                              headers=auth_headers(user_session, csrf=True),
+                              headers=browser_auth_headers(user_session, csrf=True),
                               stripe_client=stripe_client)
     expect(status == 200, f"user portal: expected 200 got {status}: {payload}")
 

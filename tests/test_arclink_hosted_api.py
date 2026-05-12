@@ -278,6 +278,9 @@ def test_request_id_propagation_and_cors() -> None:
     cors_dict = {k.lower(): v for k, v in headers}
     expect("access-control-allow-origin" in cors_dict, str(cors_dict))
     expect("Authorization" not in cors_dict.get("access-control-allow-headers", ""), str(cors_dict))
+    expect("X-ArcLink-Session-Id" not in cors_dict.get("access-control-allow-headers", ""), str(cors_dict))
+    expect("X-ArcLink-Session-Token" not in cors_dict.get("access-control-allow-headers", ""), str(cors_dict))
+    expect("X-ArcLink-CSRF-Token" in cors_dict.get("access-control-allow-headers", ""), str(cors_dict))
     expect(cors_dict.get("allow") == "POST, OPTIONS", str(cors_dict))
 
     status, payload, headers = hosted.route_arclink_hosted_api(
@@ -3246,6 +3249,34 @@ def test_wsgi_503_status_text_for_degraded_health() -> None:
     print("PASS test_wsgi_503_status_text_for_degraded_health")
 
 
+def test_wsgi_405_status_text_for_rejected_preflight_method() -> None:
+    from io import BytesIO
+    control = load_module("arclink_control.py", "arclink_control_hosted_405_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_405_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    app = hosted.make_arclink_hosted_api_wsgi(conn, config=config)
+
+    captured: list[tuple[str, list]] = []
+
+    def start_response(status: str, headers: list) -> None:
+        captured.append((status, headers))
+
+    environ = {
+        "REQUEST_METHOD": "OPTIONS",
+        "PATH_INFO": "/api/v1/onboarding/start",
+        "QUERY_STRING": "",
+        "CONTENT_LENGTH": "0",
+        "HTTP_ACCESS_CONTROL_REQUEST_METHOD": "GET",
+        "wsgi.input": BytesIO(b""),
+    }
+    app(environ, start_response)
+    expect(len(captured) == 1, f"expected 1 start_response call, got {len(captured)}")
+    expect(captured[0][0] == "405 Method Not Allowed", f"expected 405 text got '{captured[0][0]}'")
+
+    print("PASS test_wsgi_405_status_text_for_rejected_preflight_method")
+
+
 def test_hosted_api_has_executable_control_node_entrypoint() -> None:
     source = (load_module("arclink_hosted_api.py", "arclink_hosted_api_entrypoint_test").__loader__.path)  # type: ignore[attr-defined]
     text = open(source, encoding="utf-8").read()
@@ -3658,6 +3689,7 @@ def main() -> int:
     test_user_login_sets_session_cookies_and_logout_clears_them()
     test_public_onboarding_checkout_route()
     test_public_onboarding_checkout_resolves_live_stripe_from_config()
+    test_public_onboarding_checkout_maps_package_price_ids()
     test_web_telegram_discord_onboarding_parity()
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()
@@ -3694,6 +3726,7 @@ def main() -> int:
     test_rate_limit_onboarding_returns_429()
     test_webhook_rate_limits_are_provider_scoped()
     test_wsgi_503_status_text_for_degraded_health()
+    test_wsgi_405_status_text_for_rejected_preflight_method()
     test_onboarding_payload_validation_rejects_missing_fields()
     test_onboarding_payload_validation_rejects_invalid_channel()
     test_admin_operator_snapshot_requires_auth_and_returns_snapshot()
@@ -3703,7 +3736,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 70 ArcLink hosted API tests")
+    print("PASS all 72 ArcLink hosted API tests")
     return 0
 
 

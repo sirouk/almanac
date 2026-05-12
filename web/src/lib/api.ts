@@ -72,8 +72,17 @@ export const api = {
 
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
 
+  createShareGrant: (body: Record<string, string>) =>
+    request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  approveShareGrant: (body: Record<string, string>) =>
+    request("/user/share-grants/approve", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   denyShareGrant: (body: Record<string, string>) =>
     request("/user/share-grants/deny", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  acceptShareGrant: (body: Record<string, string>) =>
+    request("/user/share-grants/accept", { method: "POST", body: JSON.stringify(body) }, "user"),
 
   revokeShareGrant: (body: Record<string, string>) =>
     request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }, "user"),

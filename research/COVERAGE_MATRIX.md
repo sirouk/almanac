@@ -12,6 +12,23 @@
 | No unauthorized live mutation | Build gate blocks deploys, provider proof, bot mutation, Docker host mutation, and production flows | Completion notes must list skipped live gates. |
 | Compare implementation paths | Research summary, dependency research, stack snapshot, and implementation plan compare viable paths | BUILD should update notes if the selected path changes. |
 
+## 2026-05-12 Closure Status
+
+The post-commit revisit found no remaining FACT or actionable PARTIAL source
+gaps in the current local tree. The only active correction was aligning the web
+browser fixture with backend action-readiness behavior for `comp`.
+
+A later three-pass follow-up tightened additional local congruence gaps in the
+same boundary: admin action disabled-state rendering, browser API client
+route/auth-shape tests, hosted API CORS and WSGI 405 status text, deploy branch
+defaults, Docker build-context excludes, and fake E2E browser-cookie mutation
+coverage.
+
+Live/provider/deploy proof remains intentionally outside local source closure:
+no live Stripe, Chutes, Cloudflare, Tailscale, Telegram, Discord, Notion, remote
+Docker host, deploy, upgrade, Docker install/upgrade, payment-flow, or public-bot
+mutation proof was run without explicit operator authorization.
+
 ## Wave 1 Coverage
 
 | Audit IDs | Target behavior | Primary files | Required focused tests |
@@ -46,7 +63,7 @@
 | `research/DEPENDENCY_RESEARCH.md` | Documents stack components, pins, alternatives, integration posture, risks, and validation dependencies. |
 | `research/COVERAGE_MATRIX.md` | Maps goals, Wave 1 coverage, later waves, artifact coverage, and completion rules. |
 | `research/STACK_SNAPSHOT.md` | Provides ranked stack hypotheses, deterministic confidence score, and alternatives. |
-| `IMPLEMENTATION_PLAN.md` | Provides goal, constraints, retry checkpoint, selected path, validation criteria, and actionable BUILD tasks without fallback placeholder or premature completed BUILD checkboxes. |
+| `IMPLEMENTATION_PLAN.md` | Provides goal, constraints, retry checkpoint, selected path, validation criteria, and completed local source-remediation checklist with live proof gates explicitly operator-gated. |
 | `consensus/build_gate.md` | Records no-secret BUILD permission and blocked live/private operations. |
 
 ## Completion Rules
@@ -61,4 +78,6 @@ repaired locally with focused tests or explicitly deferred with:
 - focused tests preserving the interim boundary.
 
 Terminal audit completion is not reached while any FACT or actionable PARTIAL
-finding remains unresolved or undeferred.
+finding remains unresolved or undeferred. As of the 2026-05-12 closure revisit,
+the local source-remediation backlog is closed; live/operator-authorized proof
+remains a separate gate.

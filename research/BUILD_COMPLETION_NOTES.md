@@ -1,5 +1,117 @@
 # Build Completion Notes
 
+## 2026-05-12 Three-Pass Sovereign Revisit
+
+Scope: performed three additional local passes over the Sovereign control-node
+surface: public API/auth/webhook contracts, browser user journeys, and
+deployment/runtime packaging. No private state, live providers, production
+deploys, public bot mutations, Docker install/upgrade, remote Docker hosts, or
+payment-flow live proof were touched.
+
+Findings and fixes:
+
+- Admin action UI still merged disabled actions with `pending_not_implemented`
+  using fallback semantics in the action form. Fixed it to display the union of
+  unavailable/proof-gated actions and restored `comp` to the default executable
+  fallback list.
+- The web API client tests still modeled legacy header-supplied session
+  credentials instead of the current HttpOnly-cookie plus CSRF browser contract.
+  Updated the client test harness, added missing share-grant client methods,
+  and expanded route parity coverage across onboarding claim/cancel/status,
+  share grants, provider/admin snapshots, health, and adapter-mode.
+- Hosted API preflight 405 responses could serialize as `405 OK` through the
+  WSGI status-text helper. Added the correct status text and regression
+  coverage.
+- Browser CORS still allowed ArcLink session-id/session-token headers even
+  though browser transport is cookie-only. Tightened allowed headers to
+  `Content-Type`, `X-ArcLink-CSRF-Token`, and `X-ArcLink-Request-Id`.
+- `detect_github_repo` still defaulted generated GitHub branch references to
+  `main`. Switched the default to `${ARCLINK_UPSTREAM_BRANCH:-arclink}` and
+  added a deploy regression.
+- `.dockerignore` excluded private state but not common generated/build/runtime
+  state such as `node_modules`, `.next`, and SQLite files. Added those excludes
+  and expanded Docker regression coverage.
+- The fake E2E journey still queued admin mutations with header credentials.
+  Updated it to exercise browser cookies plus CSRF for admin actions and user
+  portal mutations, matching the hardened hosted API contract.
+- One hosted API test function existed but was not invoked by the manual test
+  runner; wired it into the runner and updated the printed count.
+
+Validation run:
+
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `cd web && npm test` passed.
+- `python3 tests/test_arclink_e2e_fake.py` passed.
+- Sovereign focused Python sweep passed:
+  `test_arclink_api_auth.py`, `test_arclink_admin_actions.py`,
+  `test_arclink_action_worker.py`, `test_arclink_executor.py`,
+  `test_arclink_sovereign_worker.py`, `test_arclink_control_db.py`,
+  `test_arclink_provisioning.py`, `test_arclink_entitlements.py`,
+  `test_arclink_telegram.py`, `test_arclink_discord.py`,
+  `test_arclink_live_runner.py`, `test_arclink_fleet.py`,
+  `test_arclink_ingress.py`, `test_arclink_secrets_regex.py`,
+  `test_arclink_product_surface.py`, and `test_arclink_live_journey.py`.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+- `cd web && npm run test:browser` passed.
+- `./bin/ci-preflight.sh` passed.
+- `git diff --check` passed.
+
+Remaining boundary:
+
+- Live Stripe, Chutes, Cloudflare, Tailscale, Telegram, Discord, Notion, remote
+  Docker host, deploy/upgrade, Docker install/upgrade, public-bot mutation, and
+  real payment-flow proof remain explicit operator-authorized live gates.
+
+## 2026-05-12 Audit Closure Revisit
+
+Scope: revisited the full
+`research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md` report against the
+current committed tree after the audit hardening checkpoint. No private state,
+live secrets, production services, external providers, payment flows, public bot
+mutations, Docker install/upgrade flows, deploys, upgrades, or
+credential-dependent checks were touched.
+
+Findings:
+
+- Source scans and prior focused coverage show the FACT and actionable PARTIAL
+  findings have local source-level remediations or corrected/outdated
+  verification, with regression coverage across the remediated risk surfaces.
+- `IMPLEMENTATION_PLAN.md` still had all phase checklist boxes open even though
+  source and completion notes showed Phases 0-5 were locally closed; updated the
+  plan to reflect current source reality and the still-gated live proof posture.
+- `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md` lacked a closure
+  addendum; added one clarifying that no source gaps remain and live proof was
+  not run.
+- `research/COVERAGE_MATRIX.md` still described terminal completion as future
+  tense; updated it with the local closure state and live/operator proof
+  boundary.
+- `web/tests/browser/product-checks.spec.ts` still mocked `comp` as pending even
+  though backend action readiness exposes `comp` as executable when probes pass;
+  aligned the fixture with backend behavior.
+
+Validation run:
+
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `cd web && npm test` passed.
+- `./bin/ci-preflight.sh` passed.
+
+Remaining live/operator gates:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Telegram, Discord, Notion,
+  remote Docker host, ingress, deploy, upgrade, Docker install/upgrade,
+  payment-flow, or public-bot mutation proof was run. Those require explicit
+  operator authorization and real credentials.
+
 ## 2026-05-12 Ralphie Attempt 2 Phase 2 Artifact Repair
 
 Scope: re-attempted the highest-priority open `IMPLEMENTATION_PLAN.md` slice

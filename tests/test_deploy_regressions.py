@@ -3095,12 +3095,16 @@ def test_health_checks_failed_systemd_units_and_stale_podman_transients() -> Non
 def test_upstream_branch_defaults_to_arclink_everywhere() -> None:
     """All deploy.sh branch fallbacks must default to arclink for the current production lane."""
     text = DEPLOY_SH.read_text()
+    detect = extract(text, "detect_github_repo() {", "discover_existing_config() {")
+    expect('local default_branch="${ARCLINK_UPSTREAM_BRANCH:-arclink}"' in detect, detect)
+    expect('GITHUB_REPO_BRANCH="main"' not in detect, detect)
+    expect('GITHUB_REPO_BRANCH="${branch:-$default_branch}"' in detect, detect)
     # Every ${ARCLINK_UPSTREAM_BRANCH:-<value>} fallback must use arclink
     import re as _re
     fallbacks = _re.findall(r'ARCLINK_UPSTREAM_BRANCH:-(\w+)', text)
     for fb in fallbacks:
         expect(fb == "arclink", f"ARCLINK_UPSTREAM_BRANCH fallback is '{fb}', expected 'arclink'")
-    # common.sh must also default to main
+    # common.sh must also default to the production arclink lane
     common_text = (REPO / "bin" / "common.sh").read_text()
     common_fallbacks = _re.findall(r'ARCLINK_UPSTREAM_BRANCH:-(\w+)', common_text)
     for fb in common_fallbacks:

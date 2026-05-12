@@ -11,15 +11,14 @@ import assert from "node:assert/strict";
 // --- Replicate api.ts logic for testability ---
 
 const API_BASE = "/api/v1";
-const FAKE_SESSION_ID = "sess_test_123";
-const FAKE_SESSION_TOKEN = "tok_test_456";
-const FAKE_CSRF = "csrf_test_789";
+const FAKE_USER_CSRF = "csrf_user_789";
+const FAKE_ADMIN_CSRF = "csrf_admin_987";
 
 let lastFetchUrl = "";
 let lastFetchOpts = {};
 
 globalThis.document = {
-  cookie: `arclink_user_session_id=${FAKE_SESSION_ID}; arclink_user_session_token=${FAKE_SESSION_TOKEN}; arclink_user_csrf=${FAKE_CSRF}`,
+  cookie: `arclink_user_session_id=usess_hidden; arclink_user_session_token=utok_hidden; arclink_user_csrf=${FAKE_USER_CSRF}; arclink_admin_session_id=asess_hidden; arclink_admin_session_token=atok_hidden; arclink_admin_csrf=${FAKE_ADMIN_CSRF}`,
 };
 globalThis.window = {};
 
@@ -33,17 +32,19 @@ function resetFetch(status = 200, data = { ok: true }) {
   };
 }
 
-async function request(path, options = {}) {
+function readCookie(name) {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+async function request(path, options = {}, kind = "user") {
   const url = `${API_BASE}${path}`;
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
   };
-  const sessionId = document.cookie.match(/arclink_(?:user|admin)_session_id=([^;]+)/)?.[1] || "";
-  const sessionToken = document.cookie.match(/arclink_(?:user|admin)_session_token=([^;]+)/)?.[1] || "";
-  const csrf = document.cookie.match(/arclink_(?:user|admin)_csrf=([^;]+)/)?.[1] || "";
-  if (sessionId) headers["X-ArcLink-Session-Id"] = sessionId;
-  if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+  const csrf = readCookie(`arclink_${kind}_csrf`);
   if (csrf) headers["X-ArcLink-CSRF-Token"] = csrf;
   const res = await fetch(url, { ...options, headers, credentials: "include" });
   const data = await res.json();
@@ -54,30 +55,42 @@ const api = {
   startOnboarding: (body) => request("/onboarding/start", { method: "POST", body: JSON.stringify(body) }),
   answerOnboarding: (body) => request("/onboarding/answer", { method: "POST", body: JSON.stringify(body) }),
   openCheckout: (body) => request("/onboarding/checkout", { method: "POST", body: JSON.stringify(body) }),
-  userDashboard: () => request("/user/dashboard"),
-  userBilling: () => request("/user/billing"),
-  userProvisioning: () => request("/user/provisioning"),
-  userCredentials: () => request("/user/credentials"),
-  acknowledgeCredential: (body) => request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }),
-  userLinkedResources: () => request("/user/linked-resources"),
-  denyShareGrant: (body) => request("/user/share-grants/deny", { method: "POST", body: JSON.stringify(body) }),
-  revokeShareGrant: (body) => request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }),
+  checkoutStatus: (sessionId) => request(`/onboarding/status?session_id=${encodeURIComponent(sessionId)}`),
+  claimSession: (sessionId, claimToken) => request("/onboarding/claim-session", { method: "POST", body: JSON.stringify({ session_id: sessionId, claim_token: claimToken }) }),
+  cancelOnboarding: (sessionId, cancelToken) => request("/onboarding/cancel", { method: "POST", body: JSON.stringify({ session_id: sessionId, cancel_token: cancelToken }) }),
+  userDashboard: () => request("/user/dashboard", {}, "user"),
+  userBilling: () => request("/user/billing", {}, "user"),
+  userProvisioning: () => request("/user/provisioning", {}, "user"),
+  userCredentials: () => request("/user/credentials", {}, "user"),
+  acknowledgeCredential: (body) => request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }, "user"),
+  userLinkedResources: () => request("/user/linked-resources", {}, "user"),
+  createShareGrant: (body) => request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
+  approveShareGrant: (body) => request("/user/share-grants/approve", { method: "POST", body: JSON.stringify(body) }, "user"),
+  denyShareGrant: (body) => request("/user/share-grants/deny", { method: "POST", body: JSON.stringify(body) }, "user"),
+  acceptShareGrant: (body) => request("/user/share-grants/accept", { method: "POST", body: JSON.stringify(body) }, "user"),
+  revokeShareGrant: (body) => request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }, "user"),
   adminDashboard: (params) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
-    return request(`/admin/dashboard${qs}`);
+    return request(`/admin/dashboard${qs}`, {}, "admin");
   },
-  adminServiceHealth: () => request("/admin/service-health"),
-  adminProvisioningJobs: () => request("/admin/provisioning-jobs"),
-  adminDnsDrift: () => request("/admin/dns-drift"),
-  adminAudit: () => request("/admin/audit"),
-  adminEvents: () => request("/admin/events"),
-  adminActions: () => request("/admin/actions"),
-  queueAdminAction: (body) => request("/admin/actions", { method: "POST", body: JSON.stringify(body) }),
-  login: (kind, body) => request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }),
-  logout: (kind) => request(`/auth/${kind}/logout`, { method: "POST" }),
-  userPortal: (body) => request("/user/portal", { method: "POST", body: JSON.stringify(body) }),
-  revokeSession: (body) => request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }),
-  userProviderState: () => request("/user/provider-state"),
+  adminServiceHealth: () => request("/admin/service-health", {}, "admin"),
+  adminProvisioningJobs: () => request("/admin/provisioning-jobs", {}, "admin"),
+  adminDnsDrift: () => request("/admin/dns-drift", {}, "admin"),
+  adminAudit: () => request("/admin/audit", {}, "admin"),
+  adminEvents: () => request("/admin/events", {}, "admin"),
+  adminActions: () => request("/admin/actions", {}, "admin"),
+  queueAdminAction: (body) => request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
+  login: (kind, body) => request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }, kind),
+  logout: (kind) => request(`/auth/${kind}/logout`, { method: "POST" }, kind),
+  userPortal: (body) => request("/user/portal", { method: "POST", body: JSON.stringify(body) }, "user"),
+  revokeSession: (body) => request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }, "admin"),
+  userProviderState: () => request("/user/provider-state", {}, "user"),
+  adminProviderState: () => request("/admin/provider-state", {}, "admin"),
+  adminReconciliation: () => request("/admin/reconciliation", {}, "admin"),
+  adminOperatorSnapshot: () => request("/admin/operator-snapshot", {}, "admin"),
+  adminScaleOperations: () => request("/admin/scale-operations", {}, "admin"),
+  health: () => request("/health"),
+  adapterMode: () => request("/adapter-mode"),
 };
 
 // --- Tests ---
@@ -100,6 +113,25 @@ describe("API client route construction", () => {
   it("openCheckout POSTs to /onboarding/checkout", async () => {
     await api.openCheckout({ session_id: "s1" });
     assert.ok(lastFetchUrl.endsWith("/onboarding/checkout"));
+  });
+
+  it("checkoutStatus GETs /onboarding/status with session_id", async () => {
+    await api.checkoutStatus("s1");
+    assert.ok(lastFetchUrl.endsWith("/onboarding/status?session_id=s1"));
+  });
+
+  it("claimSession POSTs to /onboarding/claim-session", async () => {
+    await api.claimSession("s1", "claim_1");
+    assert.ok(lastFetchUrl.endsWith("/onboarding/claim-session"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).claim_token, "claim_1");
+  });
+
+  it("cancelOnboarding POSTs to /onboarding/cancel", async () => {
+    await api.cancelOnboarding("s1", "cancel_1");
+    assert.ok(lastFetchUrl.endsWith("/onboarding/cancel"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).cancel_token, "cancel_1");
   });
 
   it("userDashboard GETs /user/dashboard", async () => {
@@ -134,9 +166,30 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/user/linked-resources"));
   });
 
+  it("createShareGrant POSTs to /user/share-grants", async () => {
+    await api.createShareGrant({ recipient_user_id: "usr_2", resource_kind: "drive" });
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).recipient_user_id, "usr_2");
+  });
+
+  it("approveShareGrant POSTs to /user/share-grants/approve", async () => {
+    await api.approveShareGrant({ grant_id: "share_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants/approve"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
+  });
+
   it("denyShareGrant POSTs to /user/share-grants/deny", async () => {
     await api.denyShareGrant({ grant_id: "share_1" });
     assert.ok(lastFetchUrl.endsWith("/user/share-grants/deny"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
+  });
+
+  it("acceptShareGrant POSTs to /user/share-grants/accept", async () => {
+    await api.acceptShareGrant({ grant_id: "share_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants/accept"));
     assert.equal(lastFetchOpts.method, "POST");
     assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
   });
@@ -214,22 +267,60 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/user/provider-state"));
   });
 
+  it("adminProviderState GETs /admin/provider-state", async () => {
+    await api.adminProviderState();
+    assert.ok(lastFetchUrl.endsWith("/admin/provider-state"));
+  });
+
+  it("adminReconciliation GETs /admin/reconciliation", async () => {
+    await api.adminReconciliation();
+    assert.ok(lastFetchUrl.endsWith("/admin/reconciliation"));
+  });
+
+  it("adminOperatorSnapshot GETs /admin/operator-snapshot", async () => {
+    await api.adminOperatorSnapshot();
+    assert.ok(lastFetchUrl.endsWith("/admin/operator-snapshot"));
+  });
+
+  it("adminScaleOperations GETs /admin/scale-operations", async () => {
+    await api.adminScaleOperations();
+    assert.ok(lastFetchUrl.endsWith("/admin/scale-operations"));
+  });
+
   it("revokeSession POSTs to /admin/sessions/revoke", async () => {
     await api.revokeSession({ target_session_id: "s1", session_kind: "user" });
     assert.ok(lastFetchUrl.endsWith("/admin/sessions/revoke"));
+  });
+
+  it("health GETs /health", async () => {
+    await api.health();
+    assert.ok(lastFetchUrl.endsWith("/health"));
+  });
+
+  it("adapterMode GETs /adapter-mode", async () => {
+    await api.adapterMode();
+    assert.ok(lastFetchUrl.endsWith("/adapter-mode"));
   });
 });
 
 describe("API client header injection", () => {
   beforeEach(() => resetFetch());
 
-  it("injects session credentials from cookies", async () => {
+  it("injects only the user CSRF token from cookies", async () => {
     await api.userDashboard();
     const h = lastFetchOpts.headers;
-    assert.equal(h["X-ArcLink-Session-Id"], FAKE_SESSION_ID);
-    assert.equal(h["Authorization"], `Bearer ${FAKE_SESSION_TOKEN}`);
-    assert.equal(h["X-ArcLink-CSRF-Token"], FAKE_CSRF);
+    assert.equal(h["X-ArcLink-Session-Id"], undefined);
+    assert.equal(h["Authorization"], undefined);
+    assert.equal(h["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
     assert.equal(h["Content-Type"], "application/json");
+  });
+
+  it("injects the admin CSRF token for admin calls", async () => {
+    await api.adminDashboard();
+    const h = lastFetchOpts.headers;
+    assert.equal(h["X-ArcLink-Session-Id"], undefined);
+    assert.equal(h["Authorization"], undefined);
+    assert.equal(h["X-ArcLink-CSRF-Token"], FAKE_ADMIN_CSRF);
   });
 
   it("sends credentials: include for cookie transport", async () => {
@@ -243,6 +334,7 @@ describe("API client header injection", () => {
     await api.userDashboard();
     assert.equal(lastFetchOpts.headers["X-ArcLink-Session-Id"], undefined);
     assert.equal(lastFetchOpts.headers["Authorization"], undefined);
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], undefined);
     document.cookie = orig;
   });
 });
@@ -263,4 +355,4 @@ describe("API client response parsing", () => {
   });
 });
 
-console.log("PASS all 27 ArcLink web API client tests");
+console.log("PASS all 42 ArcLink web API client tests");

@@ -207,9 +207,9 @@ const MOCK_ADMIN_DASHBOARD = {
   active_sessions: { user: 1, admin: 1 },
   recent_failures: [],
   action_execution_readiness: {
-    executable: ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"],
-    pending_not_implemented: ["comp", "force_resynth", "reprovision", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
-    disabled: ["comp", "force_resynth", "reprovision", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
+    executable: ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"],
+    pending_not_implemented: ["force_resynth", "reprovision", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
+    disabled: ["force_resynth", "reprovision", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
     executor_adapter: "fake",
     queue_policy: "admin UI queues only modeled worker actions; pending actions stay disabled until worker wiring lands",
   },
@@ -648,7 +648,7 @@ test.describe("Dashboard tabs", () => {
     await page.goto("/admin");
     await page.locator('button:has-text("actions"):visible').first().click();
     await expect(page.getByText("Queue Modeled Action")).toBeVisible();
-    await expect(page.getByText("Disabled until worker wiring lands", { exact: true })).toBeVisible();
+    await expect(page.getByText("Disabled or proof-gated actions", { exact: true })).toBeVisible();
     await expect(page.getByText("Force resynth")).toBeVisible();
     await expect(page.getByLabel("Action type")).toHaveValue("restart");
   });

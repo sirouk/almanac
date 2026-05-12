@@ -42,6 +42,52 @@ copy the original wording blindly:
 - LOW-18: `arclink_evidence_runs` uses empty-string timestamp sentinels, not
   nullable timestamp columns. The data-contract concern remains.
 
+## 2026-05-12 Closure Revisit
+
+The committed source was revisited against this verification report after the
+local audit-remediation checkpoint. Result:
+
+- All 79 FACT findings have local source-level remediation or have been
+  verified as corrected/outdated by source review. The remediated risk surfaces
+  are covered by focused regression tests and broad local preflight.
+- All 7 actionable PARTIAL findings have been handled according to the corrected
+  scope in this report.
+- The 2 FICTION/outdated findings, `ME-11` and `ME-25`, remain
+  regression-awareness items only.
+- No live Stripe, Chutes, Cloudflare, Tailscale, Telegram, Discord, Notion,
+  remote Docker host, deploy, upgrade, Docker install/upgrade, payment-flow, or
+  public-bot mutation proof was run. Those remain explicit operator-authorized
+  live validation gates, not unresolved source-remediation gaps.
+- The revisit found one remaining local artifact mismatch: the browser product
+  fixture still mocked `comp` as pending even though backend readiness exposes
+  `comp` as executable when executor probes pass. That fixture has been aligned
+  with the backend readiness contract.
+
+Current local closure posture: no known FACT/actionable PARTIAL source gaps
+remain in this report. Future regressions should be tracked against the IDs
+below and re-opened in `IMPLEMENTATION_PLAN.md` with source evidence.
+
+### 2026-05-12 Three-Pass Follow-Up
+
+A subsequent three-pass source, journey, and deployment-runtime audit found and
+fixed additional local congruence gaps around the same closure boundary:
+
+- Admin action form now reports the union of pending/proof-gated and disabled
+  actions instead of hiding probe-disabled actions behind fallback semantics.
+- Browser API client tests now match the HttpOnly-cookie plus CSRF contract and
+  cover the missing onboarding/share/admin snapshot routes.
+- Hosted API WSGI 405 status text and browser CORS allowed headers were
+  tightened.
+- `detect_github_repo` now defaults generated GitHub branch references to the
+  configured `arclink` upstream lane instead of `main`.
+- Docker build context hygiene now excludes generated web dependencies/builds
+  and SQLite runtime state.
+- Fake E2E admin/user mutations now exercise browser cookies plus CSRF.
+
+The follow-up validation passed focused Sovereign tests, web lint/build,
+Playwright browser checks, shell syntax checks, and `./bin/ci-preflight.sh`.
+Live/provider/deploy proofs remain operator-gated.
+
 ## Critical
 
 | ID | Verdict | Ground truth | Fix direction |

@@ -103,6 +103,7 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("api.queueAdminAction"), "missing admin action API call");
     assert.ok(content.includes("Operations Triage"), "admin page should expose operations triage");
     assert.ok(content.includes("Disabled and proof-gated actions"), "admin page should label disabled operations");
+    assert.ok(content.includes("Disabled or proof-gated actions"), "admin action form should not imply every disabled action only lacks worker wiring");
   });
 
   it("No page claims live provisioning with fake adapters", () => {
@@ -130,10 +131,22 @@ describe("API client route parity with hosted API", () => {
       "/onboarding/start",
       "/onboarding/answer",
       "/onboarding/checkout",
+      "/onboarding/status?session_id=",
+      "/onboarding/claim-session",
+      "/onboarding/cancel",
       "/user/dashboard",
       "/user/billing",
       "/user/provisioning",
+      "/user/credentials",
+      "/user/credentials/acknowledge",
+      "/user/linked-resources",
+      "/user/share-grants",
+      "/user/share-grants/approve",
+      "/user/share-grants/deny",
+      "/user/share-grants/accept",
+      "/user/share-grants/revoke",
       "/user/portal",
+      "/user/provider-state",
       "/admin/dashboard",
       "/admin/service-health",
       "/admin/provisioning-jobs",
@@ -141,9 +154,15 @@ describe("API client route parity with hosted API", () => {
       "/admin/audit",
       "/admin/events",
       "/admin/actions",
+      "/admin/provider-state",
+      "/admin/reconciliation",
+      "/admin/operator-snapshot",
+      "/admin/scale-operations",
       "/admin/sessions/revoke",
       "/auth/${kind}/login",
       "/auth/${kind}/logout",
+      "/health",
+      "/adapter-mode",
     ];
     for (const path of requiredPaths) {
       assert.ok(apiContent.includes(path), `missing API route: ${path}`);

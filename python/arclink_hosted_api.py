@@ -110,8 +110,7 @@ SESSION_COOKIE_SAMESITE = "Strict"
 CORS_ALLOWED_METHODS = "GET, POST, OPTIONS"
 CORS_ALLOWED_HEADERS = (
     "Content-Type, "
-    "X-ArcLink-Session-Id, X-ArcLink-Session-Token, X-ArcLink-CSRF-Token, "
-    "X-ArcLink-Request-Id"
+    "X-ArcLink-CSRF-Token, X-ArcLink-Request-Id"
 )
 CORS_MAX_AGE = "86400"
 REQUEST_ID_HEADER = "x-arclink-request-id"
@@ -2366,6 +2365,7 @@ def _status_text(status_code: int) -> str:
         401: "401 Unauthorized",
         403: "403 Forbidden",
         404: "404 Not Found",
+        405: "405 Method Not Allowed",
         413: "413 Payload Too Large",
         429: "429 Too Many Requests",
         500: "500 Internal Server Error",

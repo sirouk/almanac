@@ -7,6 +7,7 @@
 /.env.*
 /.ralphie
 /arclink-priv
+arclink-priv/**
 /completion_log
 /consensus
 /coverage
@@ -14,6 +15,14 @@
 /logs
 /research/HUMAN_FEEDBACK.md
 /specs
+node_modules
+**/node_modules
+.next
+**/.next
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
 __pycache__
 .pytest_cache
 .mypy_cache

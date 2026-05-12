@@ -351,6 +351,8 @@ def test_secret_validator_rejects_plaintext_provider_and_gateway_values() -> Non
         "telegram": {"environment": {"TELEGRAM_BOT_TOKEN_REF": "123456:abcdefghijklmnopqrstuvwxyz"}},
         "discord": {"environment": {"DISCORD_BOT_TOKEN_REF": "discord-token-plaintext"}},
         "notion": {"environment": {"NOTION_TOKEN_REF": "ntn_plaintext"}},
+        "aws": {"notes": "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP"},
+        "jwt": {"notes": "jwt=eyJaaaaaaaaaaaa.eyJbbbbbbbbbbbb.cccccccccccccccc"},
     }
     for name, payload in cases.items():
         try:
@@ -369,6 +371,20 @@ def test_secret_validator_rejects_plaintext_provider_and_gateway_values() -> Non
                 "TELEGRAM_BOT_TOKEN_REF": "secret://arclink/telegram/dep_1/bot-token",
                 "DISCORD_BOT_TOKEN_REF": "secret://arclink/discord/dep_1/bot-token",
                 "NOTION_TOKEN_REF": "secret://arclink/notion/dep_1/token",
+            },
+            "integrations": {
+                "notion": {
+                    "callback_url": "https://u-amber-vault-1a2b.example.test/notion/webhook",
+                    "secret_ref": "secret://arclink/notion/dep_1/webhook-secret",
+                }
+            },
+            "compose": {
+                "secrets": {
+                    "chutes_api_key": {
+                        "source": "chutes_api_key",
+                        "target": "/run/secrets/chutes_api_key",
+                    }
+                }
             },
         }
     )
@@ -400,6 +416,30 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
         str(intent["runtime_resolution"]),
     )
     print("PASS test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit")
+
+
+def test_nextcloud_postgres_database_name_is_identifier_safe() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_db_name_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_db_name_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", email="person@example.test", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep.with-dash.and.dot",
+        user_id="user_1",
+        prefix="amber-vault-1a2b",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+    intent = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep.with-dash.and.dot")
+    db_service_env = intent["compose"]["services"]["nextcloud-db"]["environment"]
+    app_service_env = intent["compose"]["services"]["nextcloud"]["environment"]
+    db_name = db_service_env["POSTGRES_DB"]
+    expect(db_name == "nextcloud_dep_with_dash_and_dot", str(db_service_env))
+    expect(app_service_env["POSTGRES_DB"] == db_name, str(app_service_env))
+    expect("-" not in db_name and "." not in db_name, db_name)
+    expect(len(db_name) <= 63, db_name)
+    print("PASS test_nextcloud_postgres_database_name_is_identifier_safe")
 
 
 def test_failed_execution_job_gets_idempotent_rollback_plan_event() -> None:
@@ -568,11 +608,12 @@ def main() -> int:
     test_failed_provisioning_retry_clears_stale_timestamps_and_error()
     test_secret_validator_rejects_plaintext_provider_and_gateway_values()
     test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit()
+    test_nextcloud_postgres_database_name_is_identifier_safe()
     test_failed_execution_job_gets_idempotent_rollback_plan_event()
     test_rendered_services_include_resource_limits_and_healthchecks()
     test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
     test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
-    print("PASS all 11 ArcLink provisioning tests")
+    print("PASS all 12 ArcLink provisioning tests")
     return 0
 
 

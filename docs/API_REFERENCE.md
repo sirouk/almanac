@@ -3,11 +3,25 @@
 - Version: v1
 - Prefix: `/api/v1`
 - Transport: WSGI (Python), JSON request/response
-- Auth: Cookie-based session (HttpOnly, Secure, SameSite=Lax) + CSRF header on mutations
+- Auth: Cookie-based session + CSRF header on mutations
 
 ## Authentication
 
-Sessions are issued via `/auth/admin/login` and `/auth/user/login`. Both routes require email plus password. Credentials are delivered as cookies (`arclink_{kind}_session_id`, `arclink_{kind}_session_token`, `arclink_{kind}_csrf`). Mutations require `X-ArcLink-CSRF-Token` header matching the session.
+Sessions are issued via `/auth/admin/login` and `/auth/user/login`. Both
+routes require email plus password and return generic auth errors to callers.
+Credentials are delivered as cookies
+(`arclink_{kind}_session_id`, `arclink_{kind}_session_token`,
+`arclink_{kind}_csrf`). The session id/token cookies are `HttpOnly`; the CSRF
+cookie is readable by the browser so the web client can echo it in
+`X-ArcLink-CSRF-Token` for mutations.
+
+Session and CSRF token hashes use HMAC-SHA256. Production deployments should
+set `ARCLINK_SESSION_HASH_PEPPER` and
+`ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`; development falls back to a fixed
+dev pepper when the required flag is not set.
+
+Browser routes use cookie credentials. Header credentials remain available for
+API clients but are not preferred for browser CSRF routes.
 
 ### Headers
 
@@ -28,15 +42,40 @@ Rate limits are enforced per-scope using a sliding window stored in the `rate_li
 | `user_login` | 10 requests | 15 min |
 | `onboarding:{channel}` | 5 requests | 15 min |
 | `public_bot:{channel}` | via `check_arclink_rate_limit` | configurable |
+| `webhook:stripe` | `ARCLINK_WEBHOOK_RATE_LIMIT_STRIPE` | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` |
+| `webhook:telegram` | `ARCLINK_WEBHOOK_RATE_LIMIT_TELEGRAM` | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` |
+| `webhook:discord` | `ARCLINK_WEBHOOK_RATE_LIMIT_DISCORD` | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` |
 
 When exceeded, the API returns `429` with `{"error": "ArcLink rate limit exceeded"}`, `Retry-After`, and `X-RateLimit-*` headers.
 
 ## CORS
 
-Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 with:
-- `Access-Control-Allow-Methods: GET, POST, OPTIONS`
+Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) is
+route-checked: unknown paths return `404`, unsupported requested methods return
+`405`, and valid preflights return `204` with an `Allow` header for the
+matched route plus:
+
 - `Access-Control-Allow-Credentials: true`
 - `Access-Control-Max-Age: 86400`
+
+Early errors, including route misses, body-size failures, and CIDR denials,
+carry CORS headers when CORS is configured.
+
+## Request Bodies
+
+The hosted API caps request bodies before JSON parsing. General JSON routes
+default to `ARCLINK_HOSTED_API_MAX_BODY_BYTES=1048576`; webhook routes default
+to `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES=2097152`. Over-limit requests
+return `413` with `body_too_large`. Malformed JSON returns `400` with
+`invalid_json`.
+
+## Network Boundary
+
+Admin and backend-control routes are protected by
+`ARCLINK_BACKEND_ALLOWED_CIDRS`. Control Node Compose defaults this to the
+Docker private range, and operators should narrow it to the actual reverse
+proxy or tailnet source ranges for production. Public onboarding, webhooks,
+health, and OpenAPI routes remain outside this CIDR gate.
 
 ## Routes
 
@@ -48,8 +87,8 @@ Configured via `ARCLINK_CORS_ORIGIN` env var. Preflight (`OPTIONS`) returns 204 
 | POST | `/onboarding/answer` | Answer onboarding question |
 | POST | `/onboarding/checkout` | Open Stripe checkout |
 | POST | `/webhooks/stripe` | Stripe webhook receiver |
-| POST | `/webhooks/telegram` | Telegram Bot API webhook |
-| POST | `/webhooks/discord` | Discord interaction webhook |
+| POST | `/webhooks/telegram` | Telegram Bot API webhook; requires `X-Telegram-Bot-Api-Secret-Token` matching `TELEGRAM_WEBHOOK_SECRET` |
+| POST | `/webhooks/discord` | Discord interaction webhook; verifies signature timestamp tolerance and interaction replay |
 | POST | `/auth/admin/login` | Create admin session |
 | POST | `/auth/user/login` | Create user session with email plus the user-scoped dashboard password |
 | GET | `/health` | Liveness check (DB connectivity) |
@@ -115,7 +154,16 @@ All errors return JSON with `error` and `request_id` fields:
 |----------|---------|---------|
 | `ARCLINK_CORS_ORIGIN` | (none) | Allowed CORS origin |
 | `ARCLINK_COOKIE_DOMAIN` | (none) | Cookie Domain attribute |
-| `ARCLINK_COOKIE_SECURE` | `1` | Set Secure flag on cookies |
+| `ARCLINK_COOKIE_SECURE` | auto | Set Secure flag on cookies; defaults off only for plain HTTP localhost origins |
+| `ARCLINK_COOKIE_SAMESITE` | `Strict` | Session and CSRF cookie SameSite value |
+| `ARCLINK_SESSION_HASH_PEPPER` | dev fallback | HMAC pepper for session and CSRF token hashes |
+| `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `0` | Require a configured pepper before issuing sessions |
+| `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
+| `ARCLINK_HOSTED_API_MAX_BODY_BYTES` | `1048576` | General request body cap |
+| `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES` | `2097152` | Webhook request body cap |
+| `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` | `60` | Webhook rate-limit window |
+| `ARCLINK_WEBHOOK_RATE_LIMIT_DEFAULT` | `60` | Default webhook requests per window |
+| `TELEGRAM_WEBHOOK_SECRET` | (none) | Telegram webhook secret-token verification; webhook handling fails closed when unset |
 | `STRIPE_WEBHOOK_SECRET` | (none) | Stripe signature verification |
 | `ARCLINK_LOG_LEVEL` | `INFO` | Logging verbosity |
 | `ARCLINK_DEFAULT_PRICE_ID` | `price_arclink_founders` | Limited 100 Founders Stripe price |

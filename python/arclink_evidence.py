@@ -116,6 +116,7 @@ class EvidenceRecord:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["timestamp"] = data["timestamp"] if data.get("timestamp") else None
         data["provider_id"] = redact_any(data.get("provider_id", ""), key="provider_id")
         data["url"] = redact_any(data.get("url", ""), key="url")
         data["health_summary"] = redact_any(data.get("health_summary", ""), key="health_summary")
@@ -128,6 +129,7 @@ class EvidenceRecord:
 class EvidenceLedger:
     """Ordered collection of evidence records."""
     run_id: str = ""
+    status: str = ""
     started_at: float = 0.0
     finished_at: float = 0.0
     commit_hash: str = ""
@@ -139,8 +141,9 @@ class EvidenceLedger:
     def to_dict(self) -> dict[str, Any]:
         d = {
             "run_id": self.run_id,
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
+            "status": self.status,
+            "started_at": self.started_at if self.started_at else None,
+            "finished_at": self.finished_at if self.finished_at else None,
             "commit_hash": self.commit_hash,
             "records": [record.to_dict() for record in self.records],
         }
@@ -241,11 +244,13 @@ def ledger_from_journey(
 # DB storage / retrieval
 # ---------------------------------------------------------------------------
 
-EVIDENCE_STATUSES = frozenset({"pending", "skipped", "passed", "failed"})
+EVIDENCE_STATUSES = frozenset({"pending", "skipped", "passed", "failed", "blocked", "blocked_missing_credentials", "blocked_no_registered_runner"})
 
 
 def _evidence_status_from_ledger(ledger: EvidenceLedger) -> str:
     """Derive a single status from ledger records."""
+    if ledger.status:
+        return "blocked" if ledger.status.startswith("blocked_") else ledger.status
     if not ledger.records:
         return "pending"
     summary = ledger.summary
@@ -258,6 +263,14 @@ def _evidence_status_from_ledger(ledger: EvidenceLedger) -> str:
     if summary.get("skipped", 0) > 0:
         return "skipped"
     return "pending"
+
+
+def _timestamp_text(value: float) -> str:
+    return str(value) if value else ""
+
+
+def _timestamp_state(value: float) -> str:
+    return "recorded" if value else "not_recorded"
 
 
 def store_evidence_run(
@@ -276,8 +289,9 @@ def store_evidence_run(
         """
         INSERT OR REPLACE INTO arclink_evidence_runs (
           run_id, deployment_id, journey, status, commit_hash,
-          started_at, finished_at, summary_json, ledger_json, evidence_path, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          started_at, finished_at, started_at_state, finished_at_state,
+          summary_json, ledger_json, evidence_path, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             ledger.run_id,
@@ -285,8 +299,10 @@ def store_evidence_run(
             str(journey),
             status,
             ledger.commit_hash,
-            str(ledger.started_at),
-            str(ledger.finished_at),
+            _timestamp_text(ledger.started_at),
+            _timestamp_text(ledger.finished_at),
+            _timestamp_state(ledger.started_at),
+            _timestamp_state(ledger.finished_at),
             json.dumps(ledger.summary, sort_keys=True),
             ledger.to_json(),
             str(evidence_path),

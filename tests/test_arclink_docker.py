@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import sqlite3
 import shutil
@@ -43,6 +44,7 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("download.docker.com/linux/debian" in body and "docker-ce-cli" in body, body)
     expect("docker-compose-plugin" in body, body)
     expect("iproute2" in body, body)
+    expect("USER arclink" in body, body)
     print("PASS test_dockerfile_installs_pinned_runtime_assets")
 
 
@@ -106,7 +108,8 @@ def test_compose_defines_full_stack_services() -> None:
         in body,
         "public-channel agent turns should stay on the Docker-capable delivery worker with a low-latency poll",
     )
-    expect("./arclink-priv/secrets/ssh:/root/.ssh" in body, body)
+    expect("./arclink-priv/secrets/ssh:/root/.ssh" not in body, body)
+    expect("./arclink-priv/secrets/ssh:/home/arclink/.ssh" in body, body)
     expect("ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}" in body, body)
     expect(
         "ARCLINK_FLEET_SSH_KEY_PATH: ${ARCLINK_FLEET_SSH_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519}"
@@ -116,12 +119,21 @@ def test_compose_defines_full_stack_services() -> None:
     expect("${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}" in body, body)
     expect("ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor" in body, body)
     expect("ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}" in body, body)
+    expect("ARCLINK_DOCKER_SOCKET_GID: ${ARCLINK_DOCKER_SOCKET_GID:-0}" in body, body)
     expect("Intentional trusted-host boundary" in body, body)
     expect(
         "- .:/home/arclink/arclink" in body
         and "${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}" in body,
         "agent-supervisor and curator-refresh must mount the live checkout for Docker operator actions",
     )
+    socket_mounts = re.findall(r"^\s+- /var/run/docker\.sock:/var/run/docker\.sock(?::ro)?\s*$", body, re.MULTILINE)
+    expect(len(socket_mounts) == 6, f"unexpected Docker socket mount count: {socket_mounts}\n{body}")
+    expect(body.count("/var/run/docker.sock:/var/run/docker.sock:ro") == 1, body)
+    expect(body.count("/var/run/docker.sock:/var/run/docker.sock\n") == 5, body)
+    expect(body.count("group_add:\n      - ${ARCLINK_DOCKER_SOCKET_GID:-0}") == 5, body)
+    for socket_service in ("control-provisioner", "control-action-worker", "agent-supervisor", "notification-delivery", "curator-refresh"):
+        block = extract(body, f"  {socket_service}:", "\n\n")
+        expect("group_add:" in block, f"{socket_service} missing socket gid group_add\n{block}")
     expect(
         "/var/run/docker.sock:/var/run/docker.sock" in body,
         "agent-supervisor must intentionally mount the Docker socket to reconcile per-agent containers",
@@ -192,6 +204,10 @@ def test_docker_operator_commands_are_present() -> None:
     expect(
         'ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"'
         in body,
+        body,
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_DOCKER_SOCKET_GID "$(stat -c %g /var/run/docker.sock 2>/dev/null || printf ' in body,
         body,
     )
     expect("qmd-mcp" in body and "qmd --version" in body, body)
@@ -550,10 +566,11 @@ def test_dockerignore_excludes_sensitive_and_generated_context() -> None:
 
 def test_docker_docs_cover_socket_and_private_state_boundaries() -> None:
     body = read("docs/docker.md")
-    for service in ("control-ingress", "control-provisioner", "control-action-worker", "agent-supervisor", "curator-refresh"):
+    for service in ("control-ingress", "control-provisioner", "control-action-worker", "agent-supervisor", "notification-delivery", "curator-refresh"):
         expect(f"| `{service}` |" in body, f"docs/docker.md must document socket boundary for {service}\n{body}")
     expect("writeable Docker socket access has host-root-equivalent capabilities" in body, body)
     expect("control-ingress` has read-only socket access" in body, body)
+    expect("ARCLINK_DOCKER_SOCKET_GID" in body and "shared ArcLink app image as the `arclink` Unix user" in body, body)
     expect("recurring" in body and "job status files" in body, body)
     expect("health-watch` service does not mount the Docker socket" in body, body)
     print("PASS test_docker_docs_cover_socket_and_private_state_boundaries")

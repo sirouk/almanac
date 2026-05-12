@@ -11,6 +11,18 @@ from pathlib import Path
 from arclink_test_helpers import auth_headers, expect, load_module, memory_db
 
 
+def browser_auth_headers(session: dict, *, kind: str = "user", csrf: bool = False, token: str = "") -> dict[str, str]:
+    cookie = (
+        f"arclink_{kind}_session_id={session['session_id']}; "
+        f"arclink_{kind}_session_token={token or session['session_token']}; "
+        f"arclink_{kind}_csrf={session['csrf_token']}"
+    )
+    headers = {"Cookie": cookie}
+    if csrf:
+        headers["X-ArcLink-CSRF-Token"] = session["csrf_token"]
+    return headers
+
+
 def seed_paid_deployment(
     control,
     onboarding,
@@ -179,14 +191,14 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
         config=config,
     )
     expect(status == 401, f"expected 401 got {status}: {payload}")
-    expect("CSRF" in str(payload.get("error", "")), str(payload))
+    expect(payload.get("error") == "unauthorized", str(payload))
 
     # With CSRF -> 202
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
         method="POST",
         path="/api/v1/admin/actions",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
         body=action_body,
         config=config,
     )
@@ -265,6 +277,34 @@ def test_request_id_propagation_and_cors() -> None:
     expect(status == 204, f"expected 204 got {status}")
     cors_dict = {k.lower(): v for k, v in headers}
     expect("access-control-allow-origin" in cors_dict, str(cors_dict))
+    expect("Authorization" not in cors_dict.get("access-control-allow-headers", ""), str(cors_dict))
+    expect(cors_dict.get("allow") == "POST, OPTIONS", str(cors_dict))
+
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="OPTIONS",
+        path="/api/v1/does-not-exist",
+        headers={},
+        config=config,
+    )
+    expect(status == 404, f"unknown OPTIONS should route-check, got {status}: {payload}")
+    cors_dict = {k.lower(): v for k, v in headers}
+    expect("access-control-allow-origin" in cors_dict, str(cors_dict))
+
+    local_config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "localhost",
+        "ARCLINK_CORS_ORIGIN": "http://localhost:3000",
+    })
+    expect(local_config.cookie_secure is False, "plain HTTP localhost should default to non-Secure cookies")
+    expect(local_config.cookie_samesite == "Strict", "CSRF/session cookies should default SameSite=Strict")
+    forced_secure = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "localhost",
+        "ARCLINK_CORS_ORIGIN": "http://localhost:3000",
+        "ARCLINK_COOKIE_SECURE": "1",
+        "ARCLINK_COOKIE_SAMESITE": "Lax",
+    })
+    expect(forced_secure.cookie_secure is True, "explicit cookie secure override should win")
+    expect(forced_secure.cookie_samesite == "Lax", "explicit SameSite compatibility override should win")
 
     print("PASS test_request_id_propagation_and_cors")
 
@@ -346,7 +386,7 @@ def test_admin_login_ignores_client_asserted_mfa() -> None:
         conn,
         method="POST",
         path="/api/v1/admin/actions",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
         body=json.dumps({
             "action_type": "restart",
             "target_kind": "deployment",
@@ -357,7 +397,7 @@ def test_admin_login_ignores_client_asserted_mfa() -> None:
         config=config,
     )
     expect(status == 401, f"expected MFA rejection got {status}: {payload}")
-    expect("MFA" in str(payload.get("error", "")), str(payload))
+    expect(payload.get("error") == "unauthorized", str(payload))
     print("PASS test_admin_login_ignores_client_asserted_mfa")
 
 
@@ -390,7 +430,7 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
         conn,
         method="POST",
         path="/api/v1/admin/sessions/revoke",
-        headers=auth_headers(admin_session, csrf=True),
+        headers=browser_auth_headers(admin_session, kind="admin", csrf=True),
         body=json.dumps({"target_session_id": user_session["session_id"], "session_kind": "user", "reason": "test revoke"}),
         config=config,
     )
@@ -417,7 +457,6 @@ def test_stripe_webhook_route_rejects_without_secret() -> None:
     # Money-safety: misconfigured webhook MUST return 5xx so Stripe retries and
     # operators are forced to notice. A 200 would silently accept payments.
     expect(status == 503, f"expected 503 got {status}")
-    expect(payload.get("status") == "misconfigured", str(payload))
     expect(payload.get("error") == "stripe_webhook_secret_unset", str(payload))
 
     print("PASS test_stripe_webhook_route_rejects_without_secret")
@@ -477,6 +516,29 @@ def test_user_provisioning_status_route() -> None:
     expect("service_health" in dep, str(dep))
 
     print("PASS test_user_provisioning_status_route")
+
+
+def test_user_provisioning_status_missing_requested_deployment_is_404() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_prov_missing_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_prov_missing_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_prov_missing_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_prov_missing_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_prov_missing")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/provisioning",
+        headers=auth_headers(session),
+        query={"deployment_id": "dep_missing_requested"},
+        config=config,
+    )
+    expect(status == 404, f"expected requested deployment 404 got {status}: {payload}")
+    expect(payload == {"error": "deployment_not_found", "deployments": []}, str(payload))
+    print("PASS test_user_provisioning_status_missing_requested_deployment_is_404")
 
 
 def test_user_routes_are_isolated_across_accounts() -> None:
@@ -539,7 +601,7 @@ def test_user_routes_are_isolated_across_accounts() -> None:
         config=config,
     )
     expect(status == 401, f"cross-user dashboard query expected 401 got {status}: {payload}")
-    expect("another user" in str(payload.get("error", "")), str(payload))
+    expect(payload.get("error") == "unauthorized", str(payload))
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -575,7 +637,7 @@ def test_user_routes_are_isolated_across_accounts() -> None:
         config=config,
     )
     expect(status == 401, f"cross-user provisioning query expected 401 got {status}: {payload}")
-    expect("another user deployment" in str(payload.get("error", "")), str(payload))
+    expect(payload.get("error") == "unauthorized", str(payload))
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -654,10 +716,23 @@ def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
     provider_credential = next(item for item in credentials if item["credential_kind"] == "chutes_api_key")
     expect(dashboard_credential["raw_secret"] == "arc_dashboard_test_password", str(dashboard_credential))
     expect(dashboard_credential["reveal_mode"] == "user_dashboard", str(dashboard_credential))
+    expect(dashboard_credential["expires_at"], str(dashboard_credential))
     expect(bool(dashboard_credential["revealed_at"]), str(dashboard_credential))
     expect(provider_credential["raw_secret"] == "", str(provider_credential))
     expect(provider_credential["reveal_mode"] == "not_revealable_from_user_api", str(provider_credential))
     handoff_id = dashboard_credential["handoff_id"]
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/credentials",
+        headers=auth_headers(session_a),
+        config=config,
+    )
+    expect(status == 200, f"second credentials read expected 200 got {status}: {payload}")
+    repeated = next(item for item in payload["credentials"] if item["handoff_id"] == handoff_id)
+    expect(repeated["raw_secret"] == "", str(repeated))
+    expect(repeated["reveal_mode"] == "not_revealable_from_user_api", str(repeated))
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -673,7 +748,7 @@ def test_user_credentials_are_acknowledged_and_removed_after_storage() -> None:
         conn,
         method="POST",
         path="/api/v1/user/credentials/acknowledge",
-        headers=auth_headers(session_a, csrf=True),
+        headers=browser_auth_headers(session_a, csrf=True),
         body=json.dumps({"handoff_id": handoff_id}),
         config=config,
     )
@@ -785,7 +860,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants",
-            headers=auth_headers(owner_session, csrf=True),
+            headers=browser_auth_headers(owner_session, csrf=True),
             body=json.dumps(body),
             config=config,
         )
@@ -793,6 +868,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
         grant = payload["grant"]
         grant_id = grant["grant_id"]
         expect(grant["status"] == "pending_owner_approval", str(grant))
+        expect(grant["expires_at"], str(grant))
         expect(grant["reshare_allowed"] is False, str(grant))
         expect(grant["projection"]["status"] == "not_materialized", str(grant))
         expect(payload["owner_notification"]["queued"] is False, str(payload["owner_notification"]))
@@ -801,7 +877,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/accept",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -811,7 +887,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/approve",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -821,7 +897,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/approve",
-            headers=auth_headers(owner_session, csrf=True),
+            headers=browser_auth_headers(owner_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -832,7 +908,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/accept",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -893,7 +969,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/revoke",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -903,7 +979,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/revoke",
-            headers=auth_headers(owner_session, csrf=True),
+            headers=browser_auth_headers(owner_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -929,7 +1005,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/revoke",
-            headers=auth_headers(owner_session, csrf=True),
+            headers=browser_auth_headers(owner_session, csrf=True),
             body=json.dumps({"grant_id": grant_id}),
             config=config,
         )
@@ -943,7 +1019,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps(reshare_body),
             config=config,
         )
@@ -956,7 +1032,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants",
-            headers=auth_headers(owner_session, csrf=True),
+            headers=browser_auth_headers(owner_session, csrf=True),
             body=json.dumps(deny_body),
             config=config,
         )
@@ -966,7 +1042,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/deny",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps({"grant_id": denied_grant_id}),
             config=config,
         )
@@ -975,7 +1051,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/deny",
-            headers=auth_headers(owner_session, csrf=True),
+            headers=browser_auth_headers(owner_session, csrf=True),
             body=json.dumps({"grant_id": denied_grant_id}),
             config=config,
         )
@@ -985,7 +1061,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             conn,
             method="POST",
             path="/api/v1/user/share-grants/accept",
-            headers=auth_headers(recipient_session, csrf=True),
+            headers=browser_auth_headers(recipient_session, csrf=True),
             body=json.dumps({"grant_id": denied_grant_id}),
             config=config,
         )
@@ -1139,7 +1215,7 @@ def test_admin_queued_actions_list_route() -> None:
     # Queue an action first
     hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/admin/actions",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
         body=json.dumps({
             "action_type": "restart", "target_kind": "deployment",
             "target_id": prepared["deployment_id"], "reason": "list test",
@@ -1194,7 +1270,7 @@ def test_user_portal_link_route() -> None:
     # With auth + CSRF -> 200 with portal_url
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/user/portal",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, csrf=True),
         body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
         config=config,
     )
@@ -1265,17 +1341,45 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
         conn,
         method="POST",
         path="/api/v1/auth/user/logout",
-        headers=auth_headers(session),
+        headers=browser_auth_headers(session),
         config=config,
     )
     expect(status == 401, f"expected 401 without CSRF got {status}")
+
+    # Logout is a browser-cookie route; header bearer credentials alone are not accepted.
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/user/logout",
+        headers=auth_headers(session, csrf=True),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 for header-only browser logout got {status}")
+
+    # A stolen session id plus CSRF must not revoke unless the session token authenticates first.
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/user/logout",
+        headers=browser_auth_headers(session, csrf=True, token="wrong-token"),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 for wrong logout token got {status}")
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/dashboard",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 200, f"session should remain active after wrong logout token got {status}")
 
     # Logout with CSRF
     status, payload, headers = hosted.route_arclink_hosted_api(
         conn,
         method="POST",
         path="/api/v1/auth/user/logout",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, csrf=True),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -1548,15 +1652,22 @@ def test_admin_logout_clears_cookies_and_revokes_session() -> None:
     # Logout without CSRF should fail
     status, _, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/logout",
-        headers=auth_headers(session),
+        headers=browser_auth_headers(session, kind="admin"),
         config=config,
     )
     expect(status == 401, f"expected 401 without CSRF got {status}")
 
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/auth/admin/logout",
+        headers=auth_headers(session, csrf=True),
+        config=config,
+    )
+    expect(status == 401, f"expected 401 for header-only browser logout got {status}")
+
     # Logout with CSRF
     status, payload, headers = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/logout",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
         config=config,
     )
     expect(status == 200, f"logout expected 200 got {status}")
@@ -1803,11 +1914,68 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
     print("PASS test_stripe_webhook_processes_entitlement_transition")
 
 
+def test_stripe_webhook_received_duplicate_is_acknowledged_as_replay() -> None:
+    import time as _time
+    control = load_module("arclink_control.py", "arclink_control_hosted_whreceived_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_whreceived_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_whreceived_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_whreceived_test")
+    conn = memory_db(control)
+    secret = "whsec_test_received"
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_WEBHOOK_SECRET": secret,
+    })
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    control.set_arclink_user_entitlement(conn, user_id=prepared["user_id"], entitlement_state="none")
+    event_payload = json.dumps({
+        "id": "evt_received_duplicate",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_received_duplicate",
+                "customer": "cus_received_duplicate",
+                "subscription": "sub_received_duplicate",
+                "client_reference_id": prepared["user_id"],
+                "metadata": {"arclink_onboarding_session_id": "onb_hosted"},
+            }
+        },
+    })
+    conn.execute(
+        """
+        INSERT INTO arclink_webhook_events (provider, event_id, event_type, received_at, status, payload_json)
+        VALUES ('stripe', 'evt_received_duplicate', 'checkout.session.completed', '2026-05-11T00:00:00+00:00', 'received', ?)
+        """,
+        (event_payload,),
+    )
+    conn.commit()
+    signature = adapters.sign_stripe_webhook(event_payload, secret, timestamp=int(_time.time()))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload,
+        config=config,
+    )
+    expect(status == 200, f"received duplicate expected 200 got {status}: {payload}")
+    expect(payload["replayed"] is True, str(payload))
+    user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", (prepared["user_id"],)).fetchone()
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_received_duplicate'").fetchone()
+    expect(user["entitlement_state"] == "none", str(dict(user)))
+    expect(webhook["status"] == "received", str(dict(webhook)))
+    print("PASS test_stripe_webhook_received_duplicate_is_acknowledged_as_replay")
+
+
 def test_telegram_webhook_route() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_tg_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_test")
     conn = memory_db(control)
-    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+    })
 
     # Valid update
     update = json.dumps({
@@ -1821,7 +1989,7 @@ def test_telegram_webhook_route() -> None:
     })
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/webhooks/telegram",
-        headers={}, body=update, config=config,
+        headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"}, body=update, config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload.get("ok") is True, str(payload))
@@ -1831,12 +1999,48 @@ def test_telegram_webhook_route() -> None:
     # Non-text update (no message) should be ignored
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/webhooks/telegram",
-        headers={}, body=json.dumps({"update_id": 2}), config=config,
+        headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"}, body=json.dumps({"update_id": 2}), config=config,
     )
     expect(status == 200, f"expected 200 got {status}")
     expect(payload.get("action") == "ignored", str(payload))
 
     print("PASS test_telegram_webhook_route")
+
+
+def test_telegram_webhook_secret_boundary() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_secret_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_secret_test")
+    conn = memory_db(control)
+    update = json.dumps({"update_id": 1})
+
+    missing_config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/webhooks/telegram",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
+        body=update,
+        config=missing_config,
+    )
+    expect(status == 503, f"missing configured secret should fail closed got {status}: {payload}")
+    expect(payload.get("error") == "telegram_webhook_secret_unset", str(payload))
+
+    configured = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+    })
+    for headers in ({}, {"X-Telegram-Bot-Api-Secret-Token": "wrong"}):
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/webhooks/telegram",
+            headers=headers,
+            body=update,
+            config=configured,
+        )
+        expect(status == 401, f"bad Telegram webhook secret should reject got {status}: {payload}")
+
+    print("PASS test_telegram_webhook_secret_boundary")
 
 
 def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
@@ -1848,8 +2052,10 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         env={
             "ARCLINK_BASE_DOMAIN": "example.test",
             "ARCLINK_PUBLIC_AGENT_LIVE_TRIGGER_RUNNER": "local",
+            "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
         }
     )
+    telegram_headers = {"X-Telegram-Bot-Api-Secret-Token": "tg_secret"}
 
     class CaptureTransport:
         def __init__(self) -> None:
@@ -1876,6 +2082,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         config,
         adapters.FakeStripeClient(),
         telegram_transport=transport,
+        headers=telegram_headers,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload.get("sent") is True, str(payload))
@@ -1894,6 +2101,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         config,
         adapters.FakeStripeClient(),
         telegram_transport=FailingTransport(),
+        headers=telegram_headers,
     )
     expect(status == 200, f"reply send failure should still ack webhook: {status} {payload}")
     expect(payload.get("sent") is False, str(payload))
@@ -1958,6 +2166,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
             config,
             adapters.FakeStripeClient(),
             telegram_transport=quiet_transport,
+            headers=telegram_headers,
         )
     finally:
         hosted.handle_telegram_update = old_handle
@@ -2038,7 +2247,10 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_callback_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_callback_test")
     conn = memory_db(control)
-    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+    })
 
     class CaptureTransport:
         def __init__(self) -> None:
@@ -2070,6 +2282,7 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
         config,
         adapters.FakeStripeClient(),
         telegram_transport=transport,
+        headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload.get("sent") is True, str(payload))
@@ -2084,7 +2297,10 @@ def test_telegram_credential_ack_edits_original_secret_message() -> None:
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_credential_ack_edit_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_credential_ack_edit_test")
     conn = memory_db(control)
-    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+    })
 
     class CaptureTransport:
         def __init__(self) -> None:
@@ -2137,6 +2353,7 @@ def test_telegram_credential_ack_edits_original_secret_message() -> None:
             config,
             adapters.FakeStripeClient(),
             telegram_transport=transport,
+            headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
         )
     finally:
         hosted.handle_telegram_update = old_handle
@@ -2155,10 +2372,12 @@ def test_telegram_credential_ack_edits_original_secret_message() -> None:
 
 
 def test_discord_webhook_route() -> None:
+    import time as _time
     control = load_module("arclink_control.py", "arclink_control_hosted_dc_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dc_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    timestamp = str(int(_time.time()))
 
     # Ping interaction (with test_public_key sentinel)
     import os
@@ -2166,10 +2385,10 @@ def test_discord_webhook_route() -> None:
     os.environ["DISCORD_BOT_TOKEN"] = "fake"
     os.environ["DISCORD_APP_ID"] = "app123"
     try:
-        ping_body = json.dumps({"type": 1})
+        ping_body = json.dumps({"id": "int_ping", "type": 1})
         status, payload, _ = hosted.route_arclink_hosted_api(
             conn, method="POST", path="/api/v1/webhooks/discord",
-            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": "123"},
+            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": timestamp},
             body=ping_body, config=config,
         )
         expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -2177,6 +2396,7 @@ def test_discord_webhook_route() -> None:
 
         # Slash command
         interaction = json.dumps({
+            "id": "int_slash",
             "type": 2,
             "channel_id": "chan1",
             "member": {"user": {"id": "user1"}},
@@ -2184,7 +2404,7 @@ def test_discord_webhook_route() -> None:
         })
         status, payload, _ = hosted.route_arclink_hosted_api(
             conn, method="POST", path="/api/v1/webhooks/discord",
-            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": "123"},
+            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": timestamp},
             body=interaction, config=config,
         )
         expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -2519,6 +2739,232 @@ def test_wsgi_adapter_smoke() -> None:
     print("PASS test_wsgi_adapter_smoke")
 
 
+def test_wsgi_adapter_can_use_per_request_connections() -> None:
+    from io import BytesIO
+
+    control = load_module("arclink_control.py", "arclink_control_hosted_wsgi_per_request_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_wsgi_per_request_test")
+    opened: list[object] = []
+    closed: list[object] = []
+
+    class TrackedConnection:
+        def __init__(self) -> None:
+            self.conn = memory_db(control)
+            opened.append(self)
+
+        def execute(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            return self.conn.execute(*args, **kwargs)
+
+        def commit(self) -> None:
+            self.conn.commit()
+
+        def rollback(self) -> None:
+            self.conn.rollback()
+
+        def close(self) -> None:
+            closed.append(self)
+            self.conn.close()
+
+        @property
+        def in_transaction(self) -> bool:
+            return self.conn.in_transaction
+
+    def connect(_config):  # type: ignore[no-untyped-def]
+        return TrackedConnection()
+
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    app = hosted.make_arclink_hosted_api_wsgi(None, config=config, connect=connect)
+    captured: list[tuple[str, list]] = []
+
+    def start_response(status: str, headers: list) -> None:
+        captured.append((status, headers))
+
+    result = app(
+        {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": "/api/v1/health",
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": "0",
+            "REMOTE_ADDR": "127.0.0.1",
+            "wsgi.input": BytesIO(b""),
+        },
+        start_response,
+    )
+    expect(captured and captured[0][0] == "200 OK", f"expected health 200 got {captured}: {result}")
+    expect(len(opened) == 1 and opened == closed, f"per-request connection lifecycle mismatch opened={opened} closed={closed}")
+    print("PASS test_wsgi_adapter_can_use_per_request_connections")
+
+
+def test_request_body_limits_and_json_errors() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_body_boundary_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_body_boundary_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_CORS_ORIGIN": "https://app.arclink.online",
+        "ARCLINK_HOSTED_API_MAX_BODY_BYTES": "32",
+    })
+
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps({"channel": "web", "email": "oversized@example.test", "padding": "x" * 80}),
+        config=config,
+    )
+    expect(status == 413, f"expected 413 got {status}: {payload}")
+    expect(payload.get("error") == "body_too_large", str(payload))
+    header_dict = {k.lower(): v for k, v in headers}
+    expect(header_dict.get("access-control-allow-origin") == "https://app.arclink.online", str(header_dict))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body="{not-json",
+        config=hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"}),
+    )
+    expect(status == 400, f"expected malformed JSON 400 got {status}: {payload}")
+    expect(payload.get("error") == "invalid_json", str(payload))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps(["not", "an", "object"]),
+        config=hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"}),
+    )
+    expect(status == 400, f"expected non-object JSON 400 got {status}: {payload}")
+    expect(payload.get("error") == "invalid_json", str(payload))
+
+    print("PASS test_request_body_limits_and_json_errors")
+
+
+def test_wsgi_body_limit_rejects_before_read() -> None:
+    from io import BytesIO
+
+    class FailingInput(BytesIO):
+        def read(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("WSGI body was read before size rejection")
+
+    control = load_module("arclink_control.py", "arclink_control_hosted_wsgi_body_limit_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_wsgi_body_limit_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_CORS_ORIGIN": "https://app.arclink.online",
+        "ARCLINK_HOSTED_API_MAX_BODY_BYTES": "8",
+    })
+    app = hosted.make_arclink_hosted_api_wsgi(conn, config=config)
+
+    captured: list[tuple[str, list]] = []
+
+    def start_response(status: str, headers: list) -> None:
+        captured.append((status, headers))
+
+    result = app({
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/api/v1/onboarding/start",
+        "QUERY_STRING": "",
+        "CONTENT_LENGTH": "128",
+        "CONTENT_TYPE": "application/json",
+        "REMOTE_ADDR": "127.0.0.1",
+        "wsgi.input": FailingInput(b""),
+    }, start_response)
+    expect(captured and captured[0][0] == "413 Payload Too Large", f"expected 413 got {captured}")
+    payload = json.loads(result[0])
+    expect(payload.get("error") == "body_too_large", str(payload))
+    header_dict = {k.lower(): v for k, v in captured[0][1]}
+    expect(header_dict.get("access-control-allow-origin") == "https://app.arclink.online", str(header_dict))
+
+    print("PASS test_wsgi_body_limit_rejects_before_read")
+
+
+def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_cidr_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_cidr_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_cidr_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_CORS_ORIGIN": "https://app.arclink.online",
+        "ARCLINK_BACKEND_ALLOWED_CIDRS": "203.0.113.0/24,172.16.0.0/12",
+    })
+    api.upsert_arclink_admin(conn, admin_id="admin_cidr", email="cidr@example.test", role="ops")
+    session = api.create_arclink_admin_session(conn, admin_id="admin_cidr", session_id="asess_cidr")
+
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers=auth_headers(session),
+        config=config,
+        remote_addr="198.51.100.9",
+    )
+    expect(status == 403, f"expected disallowed remote 403 got {status}: {payload}")
+    header_dict = {k.lower(): v for k, v in headers}
+    expect(header_dict.get("access-control-allow-origin") == "https://app.arclink.online", str(header_dict))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers=auth_headers(session),
+        config=config,
+        remote_addr="203.0.113.7",
+    )
+    expect(status == 200, f"expected allowed remote 200 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers={**auth_headers(session), "X-Forwarded-For": "198.51.100.9"},
+        config=config,
+        remote_addr="127.0.0.1",
+    )
+    expect(status == 403, f"expected forwarded disallowed remote 403 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers={**auth_headers(session), "X-Forwarded-For": "203.0.113.8"},
+        config=config,
+        remote_addr="172.18.0.10",
+    )
+    expect(
+        status == 200,
+        f"expected trusted proxy forwarded allowed remote 200 got {status}: {payload}",
+    )
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers={**auth_headers(session), "X-Forwarded-For": "203.0.113.8"},
+        config=config,
+        remote_addr="198.51.100.9",
+    )
+    expect(status == 403, f"expected untrusted direct spoofed forwarded remote 403 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps({"channel": "web", "email": "cidr-public@example.test"}),
+        config=config,
+        remote_addr="198.51.100.9",
+    )
+    expect(status == 201, f"public onboarding should bypass admin CIDR got {status}: {payload}")
+
+    print("PASS test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes")
+
+
 def test_read_only_admin_blocked_from_mutations() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_ro_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_ro_test")
@@ -2540,7 +2986,7 @@ def test_read_only_admin_blocked_from_mutations() -> None:
     # read_only admin cannot queue actions even with CSRF
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/admin/actions",
-        headers=auth_headers(session, csrf=True),
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
         body=json.dumps({
             "action_type": "restart", "target_kind": "deployment",
             "target_id": prepared["deployment_id"], "reason": "ro test",
@@ -2549,7 +2995,7 @@ def test_read_only_admin_blocked_from_mutations() -> None:
         config=config,
     )
     expect(status == 401, f"read_only mutation expected 401 got {status}: {payload}")
-    expect("role" in str(payload.get("error", "")).lower(), f"expected role error: {payload}")
+    expect(payload.get("error") == "unauthorized", str(payload))
 
     print("PASS test_read_only_admin_blocked_from_mutations")
 
@@ -2705,6 +3151,69 @@ def test_rate_limit_onboarding_returns_429() -> None:
     expect("x-ratelimit-limit" in header_dict, f"missing X-RateLimit-Limit: {header_dict}")
 
     print("PASS test_rate_limit_onboarding_returns_429")
+
+
+def test_webhook_rate_limits_are_provider_scoped() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_webhook_rl_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_webhook_rl_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+        "ARCLINK_WEBHOOK_RATE_LIMIT_DEFAULT": "1",
+        "ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS": "60",
+    })
+
+    cases = [
+        (
+            "/api/v1/webhooks/stripe",
+            {},
+            json.dumps({"id": "evt_rl", "type": "checkout.session.completed", "data": {"object": {}}}),
+        ),
+        (
+            "/api/v1/webhooks/telegram",
+            {"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
+            json.dumps({"update_id": 1}),
+        ),
+        (
+            "/api/v1/webhooks/discord",
+            {"x-signature-ed25519": "sig", "x-signature-timestamp": "1"},
+            json.dumps({"id": "int_rl", "type": 1}),
+        ),
+    ]
+
+    for path, headers, body in cases:
+        hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path=path,
+            headers=headers,
+            body=body,
+            config=config,
+            remote_addr="198.51.100.10",
+        )
+        status, payload, response_headers = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path=path,
+            headers=headers,
+            body=body,
+            config=config,
+            remote_addr="198.51.100.10",
+        )
+        expect(status == 429, f"{path} expected provider-scoped 429 got {status}: {payload}")
+        header_dict = {k.lower(): v for k, v in response_headers}
+        expect(header_dict.get("x-ratelimit-limit") == "1", f"missing limit header for {path}: {header_dict}")
+
+    scopes = {
+        row["scope"]
+        for row in conn.execute("SELECT DISTINCT scope FROM rate_limits WHERE scope LIKE 'arclink:webhook:%'")
+    }
+    expect(
+        scopes == {"arclink:webhook:stripe", "arclink:webhook:telegram", "arclink:webhook:discord"},
+        str(scopes),
+    )
+    print("PASS test_webhook_rate_limits_are_provider_scoped")
 
 
 def test_wsgi_503_status_text_for_degraded_health() -> None:
@@ -3136,6 +3645,7 @@ def main() -> int:
     test_stripe_webhook_route_rejects_without_secret()
     test_user_billing_route_returns_entitlement_and_subscriptions()
     test_user_provisioning_status_route()
+    test_user_provisioning_status_missing_requested_deployment_is_404()
     test_user_routes_are_isolated_across_accounts()
     test_user_credentials_are_acknowledged_and_removed_after_storage()
     test_user_share_grants_create_approved_accepted_linked_resources()
@@ -3152,9 +3662,11 @@ def main() -> int:
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()
     test_stripe_webhook_processes_entitlement_transition()
+    test_stripe_webhook_received_duplicate_is_acknowledged_as_replay()
     test_stripe_webhook_queues_paid_ping_for_telegram_user()
     test_stripe_webhook_queues_paid_ping_for_discord_user()
     test_telegram_webhook_route()
+    test_telegram_webhook_secret_boundary()
     test_telegram_webhook_sends_reply_when_transport_is_available()
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
     test_public_agent_live_trigger_auto_mode_defers_without_docker_socket()
@@ -3169,6 +3681,10 @@ def main() -> int:
     test_stripe_webhook_rejects_bad_signature()
     test_unauthenticated_logout_and_portal_rejected()
     test_wsgi_adapter_smoke()
+    test_wsgi_adapter_can_use_per_request_connections()
+    test_request_body_limits_and_json_errors()
+    test_wsgi_body_limit_rejects_before_read()
+    test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes()
     test_hosted_api_has_executable_control_node_entrypoint()
     test_read_only_admin_blocked_from_mutations()
     test_login_rejects_unknown_email()
@@ -3176,6 +3692,7 @@ def main() -> int:
     test_openapi_spec_matches_static_copy()
     test_rate_limit_returns_429_with_headers()
     test_rate_limit_onboarding_returns_429()
+    test_webhook_rate_limits_are_provider_scoped()
     test_wsgi_503_status_text_for_degraded_health()
     test_onboarding_payload_validation_rejects_missing_fields()
     test_onboarding_payload_validation_rejects_invalid_channel()
@@ -3186,7 +3703,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 62 ArcLink hosted API tests")
+    print("PASS all 70 ArcLink hosted API tests")
     return 0
 
 

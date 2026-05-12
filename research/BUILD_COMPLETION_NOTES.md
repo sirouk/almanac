@@ -1,5 +1,1593 @@
 # Build Completion Notes
 
+## 2026-05-12 Ralphie Attempt 2 Phase 2 Artifact Repair
+
+Scope: re-attempted the highest-priority open `IMPLEMENTATION_PLAN.md` slice
+after Wave 1: Phase 2 side effects, idempotency, and race controls. Existing
+dirty-tree implementation work was preserved. No private state, live secrets,
+production services, external providers, payment flows, public bot mutations,
+Docker install/upgrade flows, deploys, upgrades, or credential-dependent
+checks were touched.
+
+- Re-ran the Wave 1 validation floor first because the retry note referenced
+  prior machine-check failure.
+- Re-ran Phase 2 focused validation and marked the Phase 2 checklist complete
+  only after the current tests passed.
+- Left later open phases, broad release validation, and live/operator proof
+  gates open.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+
+Known risks:
+
+- This is local non-live proof only. Live Stripe/Chutes/payment effects,
+  public bot mutations, remote Docker host behavior, ingress, deploy, upgrade,
+  and Docker install/upgrade proof remain authorization/credential gated.
+- Phase 3 and later checklist items remain open in `IMPLEMENTATION_PLAN.md`;
+  terminal BUILD completion is not claimed in this slice.
+
+## 2026-05-12 Ralphie Wave 1 Plan Reconciliation
+
+Scope: executed the active highest-priority `IMPLEMENTATION_PLAN.md` slice:
+Phase 0 inventory and Phase 1 Wave 1 trust-boundary proof. The current source
+already contained the required Wave 1 behavior, so this pass changed only
+planning/completion notes. Existing dirty-tree implementation edits were
+preserved, and no private state, live secrets, production services, external
+providers, payment flows, public bot mutations, Docker install/upgrade flows,
+deploys, upgrades, or credential-dependent checks were touched.
+
+- Marked Phase 0 and Phase 1 Wave 1 checklist items complete in
+  `IMPLEMENTATION_PLAN.md` after direct source/test verification.
+- Verified `ME-11` and `ME-25` remained FICTION/outdated awareness items only.
+- Left later implementation phases and live/operator-authorization gates open.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+
+Known risks:
+
+- This is local non-live proof only. Live provider, payment, public bot,
+  remote Docker host, ingress, deploy, upgrade, and Docker install/upgrade
+  behavior remain gated by explicit operator authorization and real
+  credentials.
+- Later plan phases remain unchecked in `IMPLEMENTATION_PLAN.md`; terminal
+  BUILD completion is not claimed in this slice.
+
+## 2026-05-12 Ralphie Wave 1 Active Checklist Execution
+
+Scope: executed the highest-priority active `IMPLEMENTATION_PLAN.md` slice:
+Phase 0 inventory plus Phase 1 Wave 1 trust-boundary validation. The current
+source already contained the Wave 1 repairs, so this pass made no runtime code
+changes. No private state, live secrets, production services, external
+providers, payment flows, public bot mutations, Docker install/upgrade flows,
+deploys, upgrades, or credential-dependent checks were touched.
+
+- Confirmed the dirty worktree before patching and preserved unrelated
+  existing edits.
+- Re-read the active audit verification entries for Wave 1 and kept `ME-11`
+  and `ME-25` as FICTION/outdated regression-awareness items only.
+- Marked Phase 0, Phase 1, and focused-validation note tasks complete in
+  `IMPLEMENTATION_PLAN.md` after local proof.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+
+Known risks:
+
+- This was local non-live proof only. Live provider, payment, public bot,
+  remote Docker host, ingress, deploy, upgrade, and Docker install/upgrade
+  behavior remain gated by explicit operator authorization and real
+  credentials.
+- Later plan phases remain unchecked in `IMPLEMENTATION_PLAN.md`; terminal
+  BUILD completion is not claimed in this slice.
+
+## 2026-05-12 Ralphie Broad Non-Live Validation Reconciliation
+
+Scope: after focused Phase 2-5 validation passed, ran the broad non-live
+preflight gate. No private state, live provider, payment, bot mutation, Docker
+host mutation, deploy, upgrade, Docker install/upgrade, production ingress
+proof, or credential-dependent check was performed.
+
+Verification run:
+
+- `./bin/ci-preflight.sh` passed.
+
+Skipped gates:
+
+- `./test.sh` was not run because it invokes the sudo install smoke and can
+  mutate host state.
+- Browser Playwright proof was not run.
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion, Telegram, Discord,
+  Docker host, ingress, deploy, upgrade, Docker install/upgrade, payment flow,
+  or public bot proof was run.
+
+Known risks:
+
+- `IMPLEMENTATION_PLAN.md` still keeps the live/operator authorization gate
+  unchecked. Terminal BUILD completion should not be claimed until any desired
+  live proof is explicitly authorized and run, or deferred with operator-facing
+  risk.
+
+## 2026-05-12 Ralphie Phase 5 Active Checklist Reconciliation
+
+Scope: executed the next active plan slice after Phase 4: web/API response
+shape contracts, hosted API connection behavior, 404 provisioning status,
+action readiness and rate limits, action-worker initialization, CORS/cookie
+posture, checkout cancel/admin fetch gating, deploy branch/systemd quoting,
+SSH executor boundaries, Notion/qmd hardening, and remaining operational
+honesty cleanup. The current source already contained the implementation
+repairs, so this slice made no runtime code changes. No private state, live
+provider, payment, bot mutation, Docker host mutation, deploy, upgrade, or
+Docker install/upgrade activity was performed.
+
+- Verified source behavior for canonical backend/web response shapes, per-
+  request WSGI connection support, clean missing-provisioning 404s, action
+  readiness/admin rate limits, one-time action-worker connection/schema setup,
+  narrowed CORS and local cookie behavior, checkout cancel backend wiring,
+  admin secondary-fetch gating, `arclink` upstream branch defaults, quoted
+  systemd environment values, SSH executor allowlisting, Notion conflict and
+  parent-walk behavior, qmd loopback binding, hardened git protocol flags,
+  valid UI action reset behavior, and explicit live-proof env opt-ins.
+- Marked Phase 5 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_hosted_api.py` passed in the Phase 4 run.
+- `python3 tests/test_arclink_dashboard.py` passed in the Phase 3 run.
+- `python3 tests/test_arclink_action_worker.py` passed in the Phase 2 run.
+- `python3 tests/test_arclink_live_runner.py` passed in the Phase 2 run.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_arclink_repo_sync.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+
+Known risks:
+
+- Broad release validation remains separate from this focused implementation
+  block.
+- Live provider, payment, public bot, remote Docker host, ingress, deploy, and
+  upgrade behavior remain credential/authorization gated.
+
+## 2026-05-12 Ralphie Phase 4 Active Checklist Reconciliation
+
+Scope: executed the next active plan slice after Phase 3: schema, TTL,
+identity, stale onboarding, duplicate-email handling, protected status,
+memory-synthesis framing, timestamp normalization, evidence timestamp output,
+and drift hygiene. The current source already contained the implementation
+repairs, so this slice made no runtime code changes. No private state, live
+provider, payment, bot mutation, Docker host mutation, deploy, upgrade, or
+Docker install/upgrade activity was performed.
+
+- Verified source behavior for deterministic email merge, high-value
+  schema/status checks, subscription drift classification, explicit staged
+  revoke transaction assertions, TTL/one-time reveal behavior for handoffs and
+  shares, stale onboarding expiry, protected user status preservation,
+  duplicate-email onboarding reuse/fail-loud behavior by corrected scope,
+  memory-synthesis source framing, cached handoff recovery metadata, indexes,
+  active-factor uniqueness, evidence timestamp null semantics, and grouped
+  migration safety.
+- Marked Phase 4 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_control_db.py` passed in the Phase 2 run.
+- `python3 tests/test_arclink_entitlements.py` passed in the Phase 2 run.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+
+Known risks:
+
+- This is local proof only. Existing live databases may still require
+  operator-planned migration/drift review before production rollout.
+- Later active plan phases remain unchecked in `IMPLEMENTATION_PLAN.md`, so
+  this is not terminal BUILD completion.
+
+## 2026-05-12 Ralphie Phase 3 Active Checklist Reconciliation
+
+Scope: executed the next active plan slice after Phase 2: cancellation,
+teardown, cleanup, port release, DNS drift, compose/DNS status honesty,
+identifier safety, and DNS status preservation. The current source already
+contained the implementation repairs, so this slice made no runtime code
+changes. No private state, live provider, payment, bot mutation, Docker host
+mutation, deploy, upgrade, or Docker install/upgrade activity was performed.
+
+- Verified source behavior for teardown lifecycle, local and remote secret
+  material cleanup, inactive deployment port filtering, cancelled/torn-down DNS
+  drift suppression, safe deployment-derived database names, project-aware
+  compose status, provider/transport failure reporting, private secret file
+  materialization, and unchanged DNS row status preservation.
+- Marked Phase 3 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_executor.py` passed in the Phase 2 run.
+- `python3 tests/test_arclink_sovereign_worker.py` passed in the Phase 2 run.
+- `python3 tests/test_arclink_ingress.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+
+Known risks:
+
+- This is local proof only. Live DNS provider behavior, remote Docker hosts,
+  and production teardown remain unproven without explicit operator
+  authorization.
+- Later active plan phases remain unchecked in `IMPLEMENTATION_PLAN.md`, so
+  this is not terminal BUILD completion.
+
+## 2026-05-12 Ralphie Phase 2 Active Checklist Reconciliation
+
+Scope: executed the next highest-priority active plan slice after Wave 1:
+Phase 2 side effects, idempotency, and race controls. The current source
+already contained the implementation repairs, so this slice made no runtime
+code changes. No private state, live provider, payment, bot mutation, Docker
+host mutation, deploy, upgrade, or Docker install/upgrade activity was
+performed.
+
+- Verified source behavior for live Stripe/Chutes adapter execution or
+  fail-closed behavior, atomic action claims with hardened DB connections,
+  guarded refuel spending, durable operation idempotency, atomic placement,
+  entitlement/user rechecks, audit-before-side-effect ordering,
+  server-derived DNS/Stripe metadata, honest live-proof failure status,
+  Stripe webhook duplicate handling, dashboard password hash stability, and
+  safe action-worker error codes.
+- Marked Phase 2 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+
+Known risks:
+
+- This is local proof only; live provider calls, payment effects, Docker host
+  behavior, ingress, and production deploy paths remain unproven without
+  explicit operator authorization.
+- Later active plan phases remain unchecked in `IMPLEMENTATION_PLAN.md`, so
+  this is not terminal BUILD completion.
+
+## 2026-05-12 Ralphie Wave 1 Checklist Reconciliation
+
+Scope: executed the active highest-priority checklist slice from
+`IMPLEMENTATION_PLAN.md`: Phase 0 inventory plus Phase 1 Wave 1 trust-boundary
+validation. No private state, live secrets, production services, external
+providers, payment flows, public bot mutations, Docker install/upgrade flows,
+deploys, or upgrades were touched.
+
+- Verified the current source still contains the Wave 1 security repairs for
+  Telegram webhook secrets, non-root/scoped Docker runtime policy,
+  auth-before-CSRF mutation ordering, Discord timestamp/replay protection,
+  hosted API body caps and `invalid_json`, CORS/preflight behavior, backend
+  CIDR enforcement, peppered session hashes, centralized secret redaction,
+  webhook rate limits, browser/API auth separation, generic auth failures, and
+  session-kind enforcement.
+- Marked Phase 0 and Phase 1 checklist items complete in
+  `IMPLEMENTATION_PLAN.md`.
+- Restored the required `domain-or-Tailscale ingress` proof-gate wording in
+  `IMPLEMENTATION_PLAN.md` after the Docker regression caught it missing.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `python3 tests/test_arclink_docker.py` initially failed on the missing plan
+  ingress wording and passed after the plan repair.
+
+Known risks:
+
+- This slice proves Wave 1 locally only. Later unchecked plan phases still need
+  focused validation in this active checklist before terminal BUILD completion
+  is declared.
+- Live provider, payment, public bot, remote Docker host, ingress, deploy, and
+  upgrade proof remain credential/authorization gated.
+
+## 2026-05-12 Ralphie Broad Non-Live Preflight
+
+Scope: after focused Phase 1-5 validation passed, ran the broad non-live
+preflight gate that does not require live credentials or sudo install smoke.
+
+Verification run:
+
+- `./bin/ci-preflight.sh` passed.
+
+Skipped gates:
+
+- `./test.sh` was not run because it invokes `sudo bin/ci-install-smoke.sh` and
+  can mutate host state.
+- Browser Playwright proof was not run.
+- No live provider, payment, public bot, remote Docker host, ingress, deploy,
+  or upgrade proof was run.
+
+## 2026-05-12 Ralphie Phase 5 Local Validation Reconciliation
+
+Scope: executed the final implementation checklist block before broad release
+validation: web/API shape contracts, action readiness and rate limits,
+action-worker initialization, CORS/cookie posture, checkout cancel/admin fetch
+gating, deploy branch/systemd quoting, Notion/qmd runtime hardening, and
+remaining low operational-honesty cleanup. No private state, live provider,
+payment, bot mutation, Docker host mutation, deploy, upgrade, or Docker
+install/upgrade activity was performed.
+
+- Confirmed current source/tests cover canonical reconciliation/audit shapes,
+  action readiness and admin action rate limits, one-time action-worker
+  connection/schema setup, narrowed CORS and local cookie behavior,
+  checkout-cancel backend wiring, admin secondary-fetch gating, `arclink`
+  upstream branch defaults, quoted systemd environment values, Notion conflict
+  and parent-walk behavior, qmd loopback binding, hardened git protocol flags,
+  valid action reset behavior, and explicit live-proof env opt-ins.
+- Marked Phase 5 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_hosted_api.py` passed in the Wave 1 run.
+- `python3 tests/test_arclink_dashboard.py` passed in the Phase 3 run.
+- `python3 tests/test_arclink_action_worker.py` passed in the Phase 2 run.
+- `python3 tests/test_arclink_live_runner.py` passed in the Phase 2 run.
+- `python3 tests/test_loopback_service_hardening.py` passed in the Wave 1 run.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_arclink_repo_sync.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+
+Known risks:
+
+- Broad release validation (`./bin/ci-preflight.sh`, `./test.sh`, and browser
+  Playwright proof) was not run in this slice.
+- Live provider, payment, public bot, remote Docker host, ingress, deploy, and
+  upgrade behavior remain credential/authorization gated.
+
+## 2026-05-12 Ralphie Phase 4 Local Validation Reconciliation
+
+Scope: executed the next unchecked plan slice after Phase 3: schema, TTL,
+identity, stale onboarding, duplicate-email, status, and drift hygiene. No
+private state, live provider, payment, bot mutation, Docker host mutation,
+deploy, upgrade, or Docker install/upgrade activity was performed.
+
+- Confirmed current source/tests cover deterministic email merge, high-value
+  schema/status checks, subscription drift classification, explicit staged
+  revoke transaction assertions, TTL/one-time reveal behavior for handoffs and
+  shares, stale onboarding expiry, protected user status preservation,
+  duplicate-email onboarding reuse/fail-loud behavior by corrected scope,
+  indexes, active-factor uniqueness, evidence timestamp null semantics, and
+  grouped migration safety.
+- Marked Phase 4 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_control_db.py` passed in the Phase 2 run and
+  covers operation idempotency plus Wave 4 schema/status/index checks.
+- `python3 tests/test_arclink_api_auth.py` passed in the Wave 1 run and covers
+  staged revoke transaction assertions plus handoff/share behavior.
+- `python3 tests/test_arclink_hosted_api.py` passed in the Wave 1 run and
+  covers handoff/share API behavior and past-due provider-state handling.
+- `python3 tests/test_arclink_entitlements.py` passed in the Phase 2 run and
+  covers subscription state/drift behavior.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+
+Known risks:
+
+- This is local proof only. Existing live databases may still require
+  operator-planned migration/drift review before production rollout.
+
+## 2026-05-12 Ralphie Phase 3 Local Validation Reconciliation
+
+Scope: executed the next unchecked plan slice after Phase 2: cancellation,
+teardown, cleanup, port release, DNS drift, compose/DNS status honesty, and DNS
+status preservation. No private state, live provider, payment, bot mutation,
+Docker host mutation, deploy, upgrade, or Docker install/upgrade activity was
+performed.
+
+- Confirmed current source/tests cover teardown from requested/cancelled to
+  torn down, local and remote materialized-secret cleanup, inactive deployment
+  port release/filtering, cancelled/torn-down DNS drift suppression,
+  project-aware compose status with transport failure surfacing, and preserving
+  provisioned DNS row status for unchanged desired records.
+- Marked Phase 3 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_executor.py` passed in the Phase 2 run and covers
+  compose secret cleanup plus lifecycle transport failure behavior.
+- `python3 tests/test_arclink_sovereign_worker.py` passed in the Phase 2 run
+  and covers teardown lifecycle, port release, compose status, and DNS teardown.
+- `python3 tests/test_arclink_ingress.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+
+Known risks:
+
+- This is local proof only. Live DNS provider behavior, remote Docker hosts,
+  and production teardown remain unproven without explicit operator
+  authorization.
+
+## 2026-05-12 Ralphie Phase 2 Local Validation Reconciliation
+
+Scope: executed the next highest-priority unchecked plan slice after Wave 1:
+Phase 2 side effects, idempotency, and race controls. No private state, live
+provider, payment, bot mutation, Docker host mutation, deploy, upgrade, or
+Docker install/upgrade activity was performed.
+
+- Confirmed current source/tests cover live Stripe/Chutes adapter execution or
+  fail-closed behavior, atomic action claims, guarded refuel spending, durable
+  operation idempotency, active placement uniqueness, entitlement/user rechecks,
+  audit-before-side-effect recording, server-derived DNS/Stripe metadata, and
+  honest live-proof non-success behavior.
+- Marked Phase 2 complete in `IMPLEMENTATION_PLAN.md` after focused local
+  validation.
+
+Verification run:
+
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+
+Known risks:
+
+- This is local proof only; live provider calls, payment effects, Docker host
+  behavior, ingress, and production deploy paths remain unproven without
+  explicit operator authorization.
+
+## 2026-05-12 Ralphie Wave 1 Plan Reconciliation
+
+Scope: executed the highest-priority active plan slice against the current
+dirty public worktree: Phase 0 inventory plus Wave 1 trust-boundary source
+inspection and validation. No private state, live secrets, production service,
+provider, payment, public bot, Docker install/upgrade, deploy, or upgrade
+activity was performed.
+
+- Verified the active audit wording for Wave 1 before editing.
+- Confirmed the current source and tests already close the Wave 1 trust-boundary
+  IDs: CR-1, CR-2, CR-6, CR-7, CR-8, CR-9, CR-11, HI-1, HI-4, HI-7, ME-2,
+  ME-3, ME-4, ME-12, ME-13, LOW-1, LOW-8, and LOW-9.
+- Marked Phase 0 and Phase 1 complete in `IMPLEMENTATION_PLAN.md` after local
+  focused proof.
+- Restored the Sovereign domain-or-Tailscale ingress proof-gate wording in the
+  active plan so the Docker documentation regression remains covered.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `python3 tests/test_arclink_docker.py` initially failed on missing plan
+  ingress wording and passed after the plan repair.
+
+Skipped live/broad gates:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion, Telegram, Discord,
+  Docker host mutation, deploy, upgrade, Docker install/upgrade, payment flow,
+  public bot mutation, production ingress proof, `./bin/ci-preflight.sh`,
+  `./test.sh`, or browser Playwright proof was run.
+
+Known risks:
+
+- This proves Wave 1 locally only. Terminal BUILD completion still requires
+  later FACT/actionable PARTIAL items to be fixed or explicitly deferred, plus
+  operator-authorized live proof for provider/host/ingress behavior.
+
+## 2026-05-12 Ralphie Plan Reconciliation And Local Validation
+
+Scope: executed the highest-priority active plan tasks against the current
+dirty public worktree: Phase 0 inventory, Wave 1 validation, then focused
+later-wave local validation for already-modified implementation surfaces. No
+private state, live provider, payment, bot mutation, Docker host mutation,
+deploy, upgrade, or Docker install/upgrade activity was performed.
+
+- Verified the active audit file and current dirty-tree state before changing
+  code.
+- Re-ran the Wave 1 validation floor. Runtime/security surfaces passed; the
+  only failure was the Docker documentation regression test requiring the active
+  plan to retain the Sovereign domain-or-Tailscale ingress wording.
+- Restored that plan contract wording in `IMPLEMENTATION_PLAN.md` and marked
+  Phase 0 plus Phase 1 Wave 1 trust-boundary tasks complete after focused
+  validation.
+- Ran the later-wave focused validation floor and marked locally implemented
+  Phase 2 through Phase 5 tasks complete in `IMPLEMENTATION_PLAN.md`; broad
+  release validation remains open.
+- `ME-11` and `ME-25` remain FICTION/outdated regression-awareness items only.
+
+Verification run:
+
+- `git diff --check` passed before and after the plan patch.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `python3 tests/test_arclink_docker.py` initially failed on missing plan
+  wording, then passed after the plan repair.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_ingress.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_notion_knowledge.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_arclink_repo_sync.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+
+Skipped live/broad gates:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion, Telegram, Discord,
+  Docker host mutation, deploy, upgrade, Docker install/upgrade, payment flow,
+  public bot mutation, production ingress proof, `./bin/ci-preflight.sh`,
+  `./test.sh`, or browser Playwright proof was run.
+
+Known risks:
+
+- This pass proves focused local validation only. Broad release validation
+  remains separate: `./bin/ci-preflight.sh`, `./test.sh`, and browser
+  Playwright proof were not run.
+- Local validation does not prove production provider credentials, public bot
+  mutation, Docker host behavior, or live ingress.
+
+## 2026-05-12 Ralphie Plan Recheck And Fleet Schema Repair
+
+Scope: executed the highest-priority remaining local BUILD task against the
+current dirty public worktree: reconcile stale plan status with source/tests,
+then fix the first validation regression found. No private state, live
+provider, payment, bot mutation, Docker host mutation, deploy, upgrade, or
+Docker install/upgrade activity was performed.
+
+- Fixed a fresh-schema regression in `python/arclink_control.py`: fleet host
+  status `CHECK` constraints and drift status constants now match the existing
+  fleet writer contract of `active`, `degraded`, and `offline`.
+- Rationale: changed the control-plane schema contract instead of the fleet
+  writer/tests because `python/arclink_fleet.py` already treats draining as a
+  separate boolean and uses `offline` for unhealthy hosts.
+- Updated `IMPLEMENTATION_PLAN.md` to mark locally implemented/verified Wave
+  1-5 items complete, while leaving broad release validation as a remaining
+  non-live gate.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py python/arclink_executor.py python/arclink_action_worker.py python/arclink_control.py python/arclink_sovereign_worker.py python/arclink_fleet.py python/arclink_ingress.py python/arclink_dashboard.py python/arclink_evidence.py python/arclink_live_runner.py python/arclink_notion_ssot.py python/arclink_memory_synthesizer.py python/arclink_provisioning.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` initially failed on the stale fleet
+  host status constraint, then passed after the schema repair.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_arclink_repo_sync.py` passed.
+
+Skipped live/broad gates:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion, Telegram, Discord,
+  Docker host mutation, deploy, upgrade, Docker install/upgrade, payment flow,
+  public bot mutation, or production ingress proof was run.
+- `./bin/ci-preflight.sh`, `./test.sh`, and web lint/test/build/browser proof
+  were not rerun in this slice.
+
+Known risks:
+
+- The local BUILD checklist is now source/test aligned, but production
+  completion still requires operator-authorized live provider/host proof.
+- Existing databases created with earlier local schema drafts may still need
+  operator-planned drift remediation if they contain `draining` or `disabled`
+  as fleet host statuses; current fleet writer paths do not create those
+  values.
+
+## 2026-05-11 Ralphie Build Recheck: Wave 1 Validation Floor
+
+Scope: executed the current Wave 1 validation floor from
+`IMPLEMENTATION_PLAN.md` against the dirty public worktree only. No private
+state, live secrets, production service, provider, payment, public bot, Docker
+install/upgrade, deploy, or upgrade activity was performed.
+
+- Fixed plan/test regression: restored the Sovereign Control Node
+  domain-or-Tailscale ingress contract wording in `IMPLEMENTATION_PLAN.md` so
+  the Docker documentation regression remains covered.
+- Marked Phase 0 and Phase 1 checklist items complete after source-grounded
+  inspection and focused validation.
+- Proved Wave 1 audit IDs locally: CR-1, CR-2, CR-6, CR-7, CR-8, CR-9,
+  CR-11, HI-1, HI-4, HI-7, ME-2, ME-3, ME-4, ME-12, ME-13, LOW-1, LOW-8, and
+  LOW-9.
+- Confirmed ME-11 and ME-25 remain FICTION/outdated regression-awareness items
+  per the audit ground truth.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` passed after the plan wording fix.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Local validation does not prove production provider credentials, public bot
+  mutation, Docker host behavior, or live ingress.
+- Later plan phases remain outside this recheck unless covered by prior local
+  completion notes or a future focused validation pass.
+
+## 2026-05-11 Ralphie Residual Closure: Final Local Proof
+
+Scope: closed the remaining residual closure checklist from
+`IMPLEMENTATION_PLAN.md` using local source inspection and focused tests only.
+No private state, live host, provider, payment, bot mutation, Docker
+install/upgrade, deploy, or upgrade activity was performed. Existing dirty-tree
+Wave 1-5 and residual implementation work was preserved.
+
+- Fixed/proved audit IDs: HI-8, ME-14, ME-15, ME-18, LOW-11, LOW-12, LOW-14,
+  and LOW-15.
+- Wave 1 checkpoint re-verification: source still shows Telegram webhook
+  secret enforcement, Discord timestamp validation plus interaction
+  reservation, provider-scoped webhook rate limits, hosted API body caps and
+  CIDR protection, auth-before-CSRF logout ordering, peppered session/CSRF
+  token hashing, and shared redaction through `arclink_secrets_regex`.
+- HI-8: `tests/test_arclink_executor.py` now proves materialized Compose
+  secret copies are cleaned after local runner failure and SSH compose failure
+  after remote sync.
+- ME-14: `tests/test_memory_synthesizer.py` proves source-content hashing,
+  secret redaction, and unsafe model-output rejection on untrusted synthesis
+  input.
+- ME-15: executor/worker tests prove SSH Docker execution is explicit
+  machine-mode work and requires a host allowlist.
+- ME-18 and LOW-11: action worker tests prove one-time schema/connection reuse,
+  action claim behavior, and safe executor-error codes.
+- LOW-12: evidence tests prove unset timestamps serialize as `null`, not
+  `0.0`, and zero durations remain explicit.
+- LOW-14: dashboard tests prove operator evidence-template readiness is
+  computed from the actual template file state.
+- LOW-15: focused dashboard/action/evidence tests cover the normalized
+  timestamp paths touched by this residual pass.
+- No explicit deferrals were recorded for the residual IDs in this slice.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_executor.py python/arclink_action_worker.py python/arclink_dashboard.py python/arclink_evidence.py python/arclink_memory_synthesizer.py python/arclink_telegram.py python/arclink_discord.py python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Broad release validation remains later work: `./bin/ci-preflight.sh`,
+  `./test.sh`, web lint/test/build/browser proof, and any operator-authorized
+  live provider/host proof were intentionally not run in this local residual
+  closure pass.
+- The repository remains a large pre-existing dirty worktree. This pass only
+  updated the plan and completion notes after proving the already-recorded
+  implementation/test slices.
+
+## 2026-05-11 Ralphie Residual Closure: Provisioning, Secret Materialization, Recovery
+
+Scope: closed the provisioning/materializer/recovery residual audit slice from
+`IMPLEMENTATION_PLAN.md` without live host, provider, payment, bot mutation,
+Docker install/upgrade, deploy, or upgrade activity. Existing dirty-tree Wave
+1-5, HI-12, and hosted API/auth work was preserved.
+
+- Fixed audit IDs: ME-7, ME-8, LOW-6, LOW-7, and LOW-10.
+- ME-7: Nextcloud Postgres database names now use a DB-identifier-safe
+  deployment-derived name for both Postgres and Nextcloud service env.
+- ME-8: Sovereign dashboard password hash sync now records the generated
+  password only when the dashboard secret did not already exist before apply,
+  avoiding per-apply rehash churn.
+- LOW-6 and LOW-7: file-backed secret materialization now chmods secret
+  directories to `0700`, writes secret files `0600`, and uses per-file locking
+  plus temp-file rename instead of direct basename writes. Sovereign generated
+  secret storage uses the same private/atomic pattern.
+- LOW-10: succeeded-job handoff recovery now prefers cached deployment
+  `access_urls` metadata before recomputing and persists recomputed URLs when
+  no cache exists.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_provisioning.py python/arclink_executor.py python/arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Residual closure is not complete. Executor/memory/worker/evidence/dashboard
+  and timestamp residuals (`ME-14`, `ME-15`, `ME-18`, `LOW-11`, `LOW-12`,
+  `LOW-14`, `LOW-15`) still need their own source pass or explicit deferral
+  before terminal audit completion.
+- Local tests cover SQLite/fake/injected executor behavior and filesystem
+  permission semantics only; live Docker/SSH/provider behavior remains gated.
+
+## 2026-05-11 Ralphie Residual Closure: Hosted API And Auth
+
+Scope: closed the hosted API/auth residual audit closure slice from
+`IMPLEMENTATION_PLAN.md` without live host, provider, payment, bot mutation,
+Docker install/upgrade, deploy, or upgrade activity. Existing dirty-tree Wave
+1-5 and HI-12 work was preserved.
+
+- Fixed audit IDs: ME-2, ME-3, ME-5, ME-6, LOW-2, and LOW-3.
+- Inventory note: CR-1, CR-7, and HI-7 remain recorded as fixed by the local
+  Wave 1C source/tests; ME-11 and ME-25 remain FICTION/outdated regression
+  awareness only.
+- Auth error cleanup: direct login helpers now collapse password-not-configured
+  into the same invalid-credentials path, and session lookup/token/status
+  failures share a generic authentication-failed detail while hosted responses
+  continue returning only `unauthorized`.
+- Session-kind enforcement remains in the shared auth helpers through
+  `usess_`/`asess_` prefix checks on creation, authentication, and CSRF.
+- Hosted API connection model: the WSGI app can now create and close a fresh
+  DB connection per request when no test/shared connection is injected; the
+  executable entrypoint uses that path instead of one process-wide SQLite
+  connection.
+- Stripe webhook duplicate handling: an already-recorded `received` event is
+  acknowledged as a replay/pending duplicate without applying entitlement side
+  effects again.
+- User provisioning status: an authenticated request for a missing explicit
+  deployment id now returns a clean 404 payload instead of falling through to a
+  broad user deployment list.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Residual closure is not complete. Provisioning/materializer/recovery
+  residuals (`ME-7`, `ME-8`, `LOW-6`, `LOW-7`, `LOW-10`) and the
+  executor/memory/worker/evidence/dashboard/timestamp residuals (`ME-14`,
+  `ME-15`, `ME-18`, `LOW-11`, `LOW-12`, `LOW-14`, `LOW-15`) still need their
+  own source pass or explicit deferral before terminal audit completion.
+- Per-request DB connections are now available to the WSGI entrypoint, but
+  alternate embedding code can still inject a shared connection for tests or
+  controlled single-thread use.
+
+## 2026-05-11 Ralphie Residual Closure: Admin Action Queueability
+
+Scope: closed the first residual audit closure implementation slice from
+`IMPLEMENTATION_PLAN.md` without live host, provider, payment, bot mutation,
+Docker install/upgrade, deploy, or upgrade activity. Existing dirty-tree Wave
+1-5 work was preserved.
+
+- Fixed audit IDs: HI-12. Backend admin action queueing now rejects modeled but
+  unwired action types (`reprovision`, `rollout`, `suspend`, `unsuspend`,
+  `force_resynth`, and `rotate_bot_key`) before creating action intents. Legacy
+  queued rows for those types fail safely as unsupported instead of remaining
+  in a `pending_not_implemented` backend path.
+- Inventory note: source still matches the Wave 1C trust-boundary fixes for
+  CR-1, CR-7, and HI-7: Telegram webhooks require
+  `TELEGRAM_WEBHOOK_SECRET` and `X-Telegram-Bot-Api-Secret-Token`, Discord
+  webhook handling enforces timestamp tolerance plus interaction reservation,
+  and hosted webhook routes call provider/IP rate limiting before JSON
+  dispatch.
+- ME-11 and ME-25 remain FICTION/outdated regression-awareness items only.
+- Rationale: removed backend queueability for unsupported actions instead of
+  adding placeholder implementations, because no real reprovision, rollout, or
+  agent-side integration contract exists yet.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_dashboard.py python/arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Residual closure is not complete. Hosted API/auth, provisioning/materializer,
+  executor, memory, evidence, worker, dashboard, and timestamp residual IDs
+  still need their own source pass or explicit deferral before terminal audit
+  completion.
+- Existing databases can still contain older queued unsupported action rows;
+  this pass makes those rows fail safely when processed.
+
+## 2026-05-11 Ralphie Wave 5 Follow-Up: Browser Boundary, Live Proof Opt-Ins, Teardown Revocation
+
+Scope: closed the remaining Wave 5 follow-up items from
+`IMPLEMENTATION_PLAN.md` without live host, provider, payment, bot mutation,
+Docker install/upgrade, deploy, or upgrade activity. Existing Wave 1-5 partial
+dirty-tree work was preserved.
+
+- Fixed audit IDs: HI-5 early unknown-route 404 CORS coverage, HI-6 route-aware
+  CORS preflight `Allow` handling, LOW-5 SameSite Strict cookie default with an
+  explicit `ARCLINK_COOKIE_SAMESITE=Lax` compatibility override, LOW-24
+  per-step external proof opt-in semantics in the live runner, and the CR-4
+  provider-artifact revocation follow-up for Sovereign teardown.
+- Inventory result: local notes already covered ME-1, ME-16, ME-17, ME-19,
+  ME-20, ME-21, ME-22, ME-23, ME-24, ME-27, ME-28, LOW-1, LOW-4, LOW-20,
+  LOW-21, LOW-22, and LOW-23. ME-11 and ME-25 remain FICTION/outdated
+  regression-awareness items per the audit plan.
+- Browser/API boundary rationale: defaulting ArcLink session/CSRF cookies to
+  SameSite Strict is compatible with the current first-party app/API flows and
+  public checkout cancel/status token paths. The `Lax` override remains for a
+  future external redirect route that demonstrably requires it.
+- Live-runner rationale: external proof rows now use the step's own
+  `ARCLINK_PROOF_*` flag once any external proof is selected; unselected proof
+  rows are marked skipped with an explicit opt-in reason rather than inheriting
+  global missing-env behavior.
+- Teardown rationale: Sovereign teardown now calls the existing Chutes key
+  executor with a deterministic revoke idempotency key and records
+  `chutes_status` alongside compose/DNS teardown status. Fake-client coverage
+  proves an existing provider key is revoked; real live Chutes deletion remains
+  fail-closed behind the existing live executor/client authorization boundary.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_dashboard.py python/arclink_control.py python/arclink_notion_ssot.py python/arclink_live_runner.py python/arclink_live_journey.py python/arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Full production audit completion still requires operator-authorized live
+  provider and host proof. Local tests prove SQLite, fake/injected provider,
+  and static API behavior only.
+- Live Chutes teardown revocation now has a fail-closed call site, but actual
+  provider deletion depends on the live Chutes key client/authorization lane
+  being configured for the executor.
+
+## 2026-05-11 Ralphie Wave 5 Partial: Web/API, Readiness, Runtime Hardening
+
+Scope: completed a focused Wave 5 BUILD slice from `IMPLEMENTATION_PLAN.md`
+without live host, provider, payment, public-bot mutation, Docker install,
+deploy, or upgrade activity. Existing Wave 1-4B dirty-tree work was preserved.
+
+- Fixed audit IDs: ME-1 and LOW-23 canonical web/API response-shape cleanup,
+  ME-16 fail-closed admin action readiness probes, ME-17 admin action
+  rate-limiting by admin and target, ME-19 browser CORS header reduction,
+  ME-20 explicit localhost HTTP cookie behavior, ME-21 checkout cancel backend
+  cancellation, ME-22 admin secondary fetch gating, ME-24 generated agent
+  systemd `Environment=` quoting, ME-28 qmd loopback binding, LOW-1 auth then
+  CSRF portal ordering coverage, LOW-4 normalized misconfigured webhook error
+  envelopes, LOW-20 Notion 409 conflict non-retry classification, LOW-21 git
+  protocol hardening for vault repo sync, LOW-22 action UI reset to a valid
+  executable action, and ME-27 parent-walk cache/bounds for live Notion scope
+  checks.
+- Confirmed/proved ME-23 branch default hardening remained in place through
+  deploy regressions.
+- Backend/admin response shapes are now canonical in the web admin surface:
+  audit rows read `action`, reconciliation reads `{reconciliation,
+  drift_count}`, and browser fixtures no longer mock inverse fields.
+- Admin readiness now reports no executable actions when the executor adapter
+  is disabled or required probes fail. The UI no longer falls back to hard-coded
+  executable actions once readiness is known.
+- Queueing admin actions now records rate-limit rows for both admin and target
+  scopes before creating more durable action-intent churn.
+- Runtime script hardening now forces qmd HTTP MCP to `127.0.0.1`, quotes
+  generated enrolled-agent user unit environment values, and adds git
+  `protocol.ext.allow=never` / `protocol.file.allow=never` defense by default.
+  Local filesystem remotes remain explicitly allowed only for local repo-sync
+  operations so existing local/operator checkouts and regression fixtures still
+  work.
+- Notion parent-walk scope decisions are cached in SQLite and the existing
+  bounded walk depth remains in force. Notion HTTP 409 conflicts now fail
+  without retry unless a future concrete retryable conflict case is proven.
+- Rationale: stayed within the existing hosted API, dashboard, control-plane
+  SQLite, shell wrapper, and Next.js surfaces instead of adding a new queue,
+  service discovery layer, or UI-only bypass.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_dashboard.py python/arclink_control.py python/arclink_notion_ssot.py python/arclink_live_runner.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_loopback_service_hardening.py` passed.
+- `python3 tests/test_arclink_repo_sync.py` passed.
+- `python3 tests/test_notion_ssot.py` passed.
+- `python3 tests/test_arclink_notion_knowledge.py` passed.
+- `python3 tests/test_arclink_product_surface.py` passed.
+- `python3 tests/test_arclink_e2e_fake.py` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run build` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Notion mutation, Docker host
+  mutation, deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, or production ingress proof was run.
+
+Known risks:
+
+- Full audit completion is not claimed. LOW-5 SameSite Strict migration and
+  LOW-24 live-runner opt-in semantics remain explicit Wave 5 follow-up unless
+  another local pass closes them.
+- Admin readiness probes are intentionally conservative first-pass checks:
+  executor adapter and required SSH key presence. A durable worker heartbeat or
+  socket probe would further improve operator fidelity.
+- Local tests prove SQLite, fake/injected behavior, and static/browser build
+  behavior only. Operator-authorized live provider and host proof remains
+  required before production completion claims.
+
+## 2026-05-11 Ralphie Wave 4B: Schema, Onboarding Expiry, Evidence, And Migration Hygiene
+
+Scope: completed the remaining Wave 4B implementation slice from
+`IMPLEMENTATION_PLAN.md` without live host, provider, payment, public-bot
+mutation, or deploy activity.
+
+- Fixed audit IDs: HI-18 first-pass high-value schema/status constraints and
+  drift checks, HI-19 centralized status validation expansion, HI-23 stale
+  public onboarding expiry, HI-25 duplicate active web onboarding by email,
+  LOW-18 evidence timestamp state semantics, and LOW-19 compatible migration
+  grouping hygiene for additive column migrations.
+- Added fresh-database SQL `CHECK` constraints for high-value public-control
+  statuses where the contract is already centralized: users, deployments,
+  subscriptions, refuel credits, credential handoffs, share grants,
+  provisioning jobs, user/admin sessions, TOTP factors, channel pairing,
+  action intents/attempts, operation idempotency, placements, rollouts, and
+  evidence runs. Existing databases avoid unsafe table rebuild churn.
+- Expanded centralized status constants and writer validation for action
+  intents/attempts while reusing central handoff/share/session status sets in
+  API auth.
+- Expanded `arclink_drift_checks` across high-risk relationships and invalid
+  status values for public owning/session/action/evidence rows.
+- Added `expires_at` for public onboarding sessions, a 24-hour default TTL,
+  stale active-session terminalization to `expired`, and deterministic active
+  web session reuse by email across duplicate browser identities.
+- Replaced evidence `0.0` persisted timestamp sentinels with blank-compatible
+  timestamp text plus explicit `started_at_state` / `finished_at_state`.
+- Rationale: kept fixes in the existing SQLite schema and writer paths. Full
+  table rebuilds and FK retrofits remain deferred because additive columns,
+  fresh-schema checks, writer validation, and drift reports reduce current risk
+  without forcing live public DB rewrite churn.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_api_auth.py python/arclink_onboarding.py python/arclink_hosted_api.py python/arclink_entitlements.py python/arclink_dashboard.py python/arclink_evidence.py python/arclink_live_runner.py python/arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Docker host mutation, deploy,
+  upgrade, Docker install/upgrade, payment flow, public bot mutation, or
+  production ingress proof was run.
+
+Known risks:
+
+- Full audit completion is not claimed. Wave 5 web/API cleanup, readiness
+  probes, admin action rate limits, CORS/dev-cookie/deploy-branch cleanup,
+  Notion/qmd loopback hardening, and remaining low cleanup remain backlog.
+- SQL `CHECK` constraints protect fresh databases; migrated existing databases
+  rely on writer validation plus drift reports until an operator-approved
+  rebuild migration is planned.
+- Local tests prove SQLite and fake/injected behavior only. Operator-authorized
+  live provider and host proof remains required before production completion
+  claims.
+
+## 2026-05-11 Ralphie Wave 4 Partial: Identity, Status, TTL, And Drift Hygiene
+
+Scope: completed the highest-priority Wave 4 implementation slice from
+`IMPLEMENTATION_PLAN.md` without live host, provider, payment, public-bot
+mutation, or deploy activity.
+
+- Fixed audit IDs: HI-3, HI-20, HI-21, HI-22/ME-26 first-pass handoff/share
+  TTL and one-time reveal semantics, HI-24, LOW-16, and LOW-17.
+- Added centralized first-pass status constants and writer validation for
+  touched user, deployment, and subscription status writers.
+- Replaced the Stripe-local email merge with a control-plane merge helper that
+  deterministically chooses a canonical email owner, repoints user-owned rows,
+  marks loser user rows as `merged`, clears loser email to preserve uniqueness,
+  and records event plus audit rows.
+- Changed `upsert_arclink_user` so `suspended` and `merged` statuses are not
+  overwritten by ordinary profile or entitlement upserts unless a privileged
+  `force_status_transition` is requested.
+- Added targeted indexes for Stripe customer lookups, webhook status, audit
+  action, provisioning requested time, and active TOTP uniqueness, with
+  migration cleanup for duplicate active TOTP factors.
+- Made staged session revocation (`commit=False`) require an existing explicit
+  transaction.
+- Added expiry columns and 7-day TTL defaults for credential handoffs and share
+  grants. Credential reveal is one-time for user API and public bot paths; later
+  reads require explicit rotation/reissue instead of returning raw material.
+- Split `past_due`/`unpaid` subscriptions into owed-service reconciliation
+  drift instead of deployment-without-subscription orphan drift.
+- Rationale: kept the repairs inside the existing SQLite control plane and API
+  writers rather than introducing a separate migration service, queue, or
+  UI-only state. SQL `CHECK`/FK rebuilds remain deferred because the public DB
+  already has many live tables without constraints and unsafe table rebuild
+  churn is not needed for this slice.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_api_auth.py python/arclink_onboarding.py python/arclink_hosted_api.py python/arclink_entitlements.py python/arclink_dashboard.py python/arclink_evidence.py python/arclink_live_runner.py python/arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Docker host mutation, deploy,
+  upgrade, Docker install/upgrade, payment flow, public bot mutation, or
+  production ingress proof was run.
+
+Known risks:
+
+- Wave 4 is not fully complete. HI-18 high-value SQL FK/CHECK rebuilds, HI-19
+  full status coverage, HI-23 stale onboarding expiry, HI-25 duplicate-email
+  onboarding UX, LOW-18 evidence timestamp cleanup, and LOW-19 broader
+  transaction grouping remain backlog.
+- TTL cleanup currently runs from API/public-bot touch paths for these
+  resources; a broader periodic cleanup remains a later hardening step.
+- Local tests prove SQLite and fake/injected behavior only. Operator-authorized
+  live provider and host proof remains required before production completion
+  claims.
+
+## 2026-05-11 Ralphie Wave 2E Server-Derived Metadata And Honest Live Proof
+
+Scope: completed Wave 2E from `IMPLEMENTATION_PLAN.md` for server-derived
+admin action metadata and requested-live proof blocked status without live host
+or provider mutations.
+
+- Fixed audit IDs: HI-15, HI-16, and HI-17.
+- Changed `dns_repair` execution to resolve the deployment target server-side,
+  derive desired DNS records from existing `arclink_dns_records` rows when
+  present, and fall back to deployment prefix/domain/metadata when DNS rows are
+  absent. Explicit DNS metadata is still accepted but must be structurally
+  valid and bound to the target deployment.
+- Changed refund and cancel action execution to resolve user, deployment,
+  subscription, Stripe customer, and Stripe subscription targets from control
+  DB rows. Executor idempotency now receives the queued action idempotency key,
+  and missing Stripe targets fail closed before provider dispatch.
+- Made comp actions target-idempotent by replaying an existing comp audit for
+  the same user/deployment target instead of writing duplicate entitlement
+  audit churn.
+- Changed requested live proof so missing credentials or missing registered
+  runners return non-zero, write blocked evidence artifacts, and persist
+  blocked evidence status through the evidence ledger. Dry-run blocked
+  readiness remains a zero-exit planning result.
+- Rationale: kept authority in the existing SQLite control rows and executor
+  request contracts instead of adding UI-only required metadata, a separate
+  reconciliation service, or synthetic live-proof success. This preserves the
+  current action-worker/executor split while making server state the source of
+  truth for side-effect targets.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_action_worker.py python/arclink_dashboard.py python/arclink_executor.py python/arclink_control.py python/arclink_live_runner.py python/arclink_evidence.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+
+Skipped live checks:
+
+- No live Stripe refund/cancel, Cloudflare DNS mutation, Chutes call, Docker
+  host mutation, deploy, upgrade, Docker install/upgrade, payment flow, public
+  bot mutation, or production ingress proof was run.
+
+Known risks:
+
+- Wave 3 cancellation/teardown lifecycle, DNS/fleet/port release, secret
+  cleanup, and honest compose/DNS status remain backlog.
+- Later schema/status, onboarding/session expiry, web/API cleanup, readiness,
+  rate-limit, CORS, deploy-branch, Notion/qmd, and lower-priority cleanup waves
+  remain unresolved.
+- This pass proves local SQLite and fake/injected execution behavior only;
+  operator-authorized live provider and host proof is still required before
+  claiming production end-to-end completion.
+
+## 2026-05-11 Ralphie Wave 2D Credits, Placement, And Entitlement Rechecks
+
+Scope: completed Wave 2D from `IMPLEMENTATION_PLAN.md` for refuel credit
+atomicity, active placement uniqueness, and Sovereign deployment-apply
+rechecks without live host or provider mutations.
+
+- Fixed audit IDs: CR-10, HI-10, and HI-11.
+- Wrapped refuel credit application in an immediate transaction covering credit
+  selection, guarded credit row updates, deployment metadata update, and audit
+  insertion. Each credit spend now predicates on the expected remaining
+  balance, active status, user, and applicable deployment scope.
+- Added migration cleanup plus a partial unique index so only one active
+  placement can exist per deployment.
+- Changed fleet placement to run as transactional place-or-existing logic,
+  returning an existing active placement under duplicate/concurrent attempts
+  without inflating host load.
+- Added Sovereign worker rechecks of deployment row, user row, status, and
+  entitlement readiness before placement, DNS persistence/apply, compose apply,
+  dashboard secret sync, and service-status side effects. Changed-status
+  failures no longer overwrite a non-provisioning deployment status with
+  `provisioning_failed`.
+- Rationale: kept concurrency control inside SQLite immediate transactions,
+  guarded writes, and schema constraints instead of introducing a new queue,
+  lock service, or host-level mutex. This matches the existing control-plane
+  substrate and gives local tests deterministic proof of the invariants.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_control.py python/arclink_fleet.py python/arclink_sovereign_worker.py python/arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `git diff --check` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Docker host mutation, deploy,
+  upgrade, Docker install/upgrade, payment flow, public bot mutation, or
+  production ingress proof was run.
+
+Known risks:
+
+- Wave 2E server-derived metadata and honest blocked live proof remain open.
+- Later cancellation/teardown lifecycle, DNS/fleet/port release, schema/status
+  cleanup, and web/API cleanup waves remain backlog.
+- This pass proves local SQLite serialization and fake/local executor behavior;
+  operator-authorized live provider and host proof is still required before
+  claiming production end-to-end completion.
+
+## 2026-05-11 Ralphie Wave 2C Action Queue And Audit Ordering
+
+Scope: completed Wave 2C from `IMPLEMENTATION_PLAN.md` for action-worker DB
+access, atomic claims, and audit-before-side-effect ordering without live
+external calls.
+
+- Fixed audit IDs: CR-5 and the action-worker ordering portion of HI-13.
+- Added `worker_id` and `claimed_at` metadata to `arclink_action_intents`, plus
+  a queued-action claim index.
+- Changed the worker to claim one queued action inside `BEGIN IMMEDIATE` with a
+  compare-and-swap update from `queued` to `running`; workers skip processing
+  if the CAS update does not affect a row.
+- Changed the CLI worker path to use control-plane `connect_db` and keep one
+  initialized DB connection for the worker lifecycle where feasible.
+- Persisted action attempt, event, and audit metadata before executor dispatch;
+  result/failure rows are updated after provider response.
+- Rationale: kept concurrency control in SQLite transactions instead of adding
+  an external queue or lock service. This matches the current control-plane DB
+  substrate, preserves no-new-infrastructure deployment, and gives tests a
+  deterministic CAS boundary.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_action_worker.py python/arclink_control.py tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `git diff --check` passed.
+
+Skipped live checks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Docker host mutation, deploy,
+  upgrade, Docker install/upgrade, payment flow, public bot mutation, or
+  production ingress proof was run.
+
+Known risks:
+
+- Wave 2D credit/placement/entitlement rechecks and Wave 2E server-derived
+  metadata plus honest blocked live proof remain open.
+- Live adapter side effects are now preceded by durable worker attempt/audit
+  rows, but concrete production Chutes/Stripe client wiring still requires an
+  operator-authorized live adapter pass.
+
+## 2026-05-11 Ralphie Wave 2B Live Provider Action Honesty
+
+Scope: completed Wave 2B from `IMPLEMENTATION_PLAN.md` for the executor
+provider-action surface without making live external calls.
+
+- Fixed audit IDs: CR-3 and the provider-action portion of HI-13.
+- Replaced non-fake Chutes key and Stripe admin action synthetic `applied`
+  responses with injected `ChutesKeyClient` and `StripeActionClient` calls.
+- Forwarded operation idempotency keys to provider clients and, when the
+  executor is given a control DB connection, reserve/complete/fail
+  `arclink_operation_idempotency` rows with provider refs and replay terminal
+  rows without repeating provider side effects.
+- Preserved the fake adapter as `live=False` with deterministic provider refs
+  for no-secret tests.
+- Rationale: used narrow injected client protocols instead of importing SDKs or
+  live Chutes/Stripe adapters directly into the executor. This keeps the
+  executor testable, fail-closed by default, and compatible with future
+  operator-provided live clients.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_executor.py tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_action_worker.py python/arclink_executor.py python/arclink_control.py tests/test_arclink_executor.py` passed.
+
+Skipped live checks:
+
+- No live Stripe refund/cancel/portal action, Chutes key mutation, deploy,
+  upgrade, Docker install/upgrade, payment flow, public bot mutation,
+  Cloudflare/Tailscale proof, or production ingress proof was run.
+
+Known risks:
+
+- Wave 2C action-worker CAS claims and audit-before-side-effect ordering remain
+  open.
+- Wave 2D credit/placement/entitlement rechecks and Wave 2E server-derived
+  metadata plus honest blocked live proof remain open.
+- The live Chutes/Stripe clients are now required injection points; concrete
+  production wiring still needs an operator-authorized live adapter pass.
+
+## 2026-05-11 Ralphie Wave 1 Validation And Wave 2A Operation Idempotency
+
+Scope: reran the Wave 1 validation floor for the current worktree, repaired one
+Docker documentation contract regression, and completed Wave 2A from
+`IMPLEMENTATION_PLAN.md`.
+
+- Fixed audit IDs: HI-2.
+- Added `arclink_operation_idempotency` to the control-plane schema, keyed by
+  `(operation_kind, idempotency_key)` with canonical intent digests, status,
+  provider refs, result/error fields, and terminal timestamps.
+- Added reserve, replay, complete, and fail helpers in
+  `python/arclink_control.py`; same-key changed-intent reuse fails closed, and
+  succeeded/failed terminal rows replay after process restart.
+- Restored the Sovereign `domain-or-Tailscale ingress` wording expected by the
+  Docker regression contract.
+- Rationale: kept idempotency durable in SQLite beside the existing control
+  state instead of adding Redis, provider-only idempotency, or private-state
+  sidecars. That preserves the no-new-infrastructure path and lets later
+  Stripe/Chutes/action-worker slices bind provider refs to the same durable
+  row before and after side effects.
+
+Verification run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_discord.py python/arclink_telegram.py python/arclink_public_bot_commands.py python/arclink_boundary.py python/arclink_provisioning.py python/arclink_memory_synthesizer.py python/arclink_secrets_regex.py python/arclink_action_worker.py python/arclink_executor.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_public_bot_commands.py` passed.
+- `python3 tests/test_arclink_docker.py` passed after the wording repair.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 -m py_compile python/arclink_control.py tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_entitlements.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_live_runner.py` passed.
+
+Skipped live checks:
+
+- No live deploy, upgrade, Docker install/upgrade, payment flow, public bot
+  mutation, external provider call, Cloudflare/Tailscale proof, or production
+  ingress proof was run; those remain gated by explicit operator authorization
+  and live credentials.
+
+Known risks:
+
+- Wave 2A only adds the durable idempotency substrate. Stripe/Chutes live
+  adapter calls, action-worker CAS claims, refuel credit atomicity, placement
+  uniqueness, entitlement rechecks, server-derived metadata, and honest blocked
+  live proof remain unresolved Wave 2 backlog.
+
+## 2026-05-11 Ralphie Wave 1D/1E Secret Redaction And Container Boundary Build
+
+Scope: completed Wave 1D and Wave 1E from `IMPLEMENTATION_PLAN.md`.
+
+- Fixed audit IDs: CR-2, HI-1, ME-12, ME-13, LOW-8, and LOW-9.
+- Added `python/arclink_secrets_regex.py` for shared detection/redaction of
+  OpenAI, Anthropic, AWS, PEM private key, JWT, Chutes, Discord, GitLab, and
+  existing token families, while allowing safe `secret://` and
+  `/run/secrets/*` references.
+- Replaced duplicated secret regex paths in boundary validation,
+  provisioning validation, action-worker errors, executor command/API errors,
+  memory synthesis snippets/cards/errors, and hosted webhook logging.
+- Changed redaction call sites to redact before truncation and replaced broad
+  path substring checks with structured path-segment/key checks.
+- Switched the shared Docker app image to `USER arclink`, moved fleet SSH
+  mounts under `/home/arclink/.ssh`, recorded `ARCLINK_DOCKER_SOCKET_GID`
+  during Docker bootstrap, and added explicit `group_add` only to writeable
+  Docker-socket lifecycle services. `control-ingress` remains read-only.
+- Updated Docker trust-boundary docs and static Docker tests for the socket
+  allowlist, read-only mount, socket gid, non-root user, SSH mount target, and
+  trusted write-mount comments.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_secrets_regex.py python/arclink_boundary.py python/arclink_provisioning.py python/arclink_action_worker.py python/arclink_executor.py python/arclink_memory_synthesizer.py python/arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_public_bot_commands.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `docker compose --env-file arclink-priv/config/docker.env config --quiet` passed.
+- `git diff --check` passed.
+
+Skipped live checks:
+
+- No live deploy, upgrade, Docker install/upgrade, public bot mutation,
+  provider call, payment flow, or production ingress proof was run; those
+  remain gated by explicit operator authorization and live credentials.
+
+Known risks:
+
+- Non-root Docker socket access now depends on the host socket gid recorded in
+  `ARCLINK_DOCKER_SOCKET_GID`; hosts that change Docker socket ownership after
+  bootstrap must refresh or set that value.
+- Writeable Docker socket services remain trusted-host boundaries with
+  host-root-equivalent capability by design.
+- Later Wave 2+ audit items remain unresolved.
+
+## 2026-05-11 Ralphie Wave 1B Session And Browser Auth Boundary
+
+Scope: completed the Wave 1B hosted API/session boundary from
+`IMPLEMENTATION_PLAN.md`.
+
+- Fixed audit IDs: CR-6, CR-11, and HI-4.
+- Added cookie-only browser session extraction and moved hosted user/admin
+  logout onto that path; logout now authenticates the session token before CSRF
+  validation or revocation.
+- Enforced `usess_` and `asess_` session-id prefixes for user/admin session
+  creation, authentication, CSRF validation, and revocation.
+- Changed new session and CSRF token storage to versioned
+  `hmac_sha256_v1$...` hashes using `ARCLINK_SESSION_HASH_PEPPER`, while
+  retaining successful legacy SHA-256 verification long enough to upgrade rows
+  in place.
+- User-facing hosted auth failures now return generic `unauthorized` responses
+  while private structured logs retain the specific failure reason.
+- Added Compose/config example pass-through for `ARCLINK_SESSION_HASH_PEPPER`
+  and `ARCLINK_SESSION_HASH_PEPPER_REQUIRED`; production-domain session
+  creation fails closed when the pepper is missing.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_api_auth.py python/arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Existing legacy SHA-256 session rows remain accepted only after successful
+  token proof and are upgraded immediately; compromised sessions still require
+  normal revocation/expiry. No live deploy, browser, Stripe, Telegram, Discord,
+  or production ingress proof was run because this slice is local and
+  no-secret.
+- Wave 1C-1E remain unresolved.
+
+## 2026-05-11 Ralphie Wave 1A Hosted API Request Boundary
+
+Scope: completed the Wave 1A hosted API ingress boundary from
+`IMPLEMENTATION_PLAN.md`.
+
+- Fixed audit IDs: CR-8, CR-9, and ME-4.
+- Added configurable hosted API body caps before JSON parsing, plus WSGI
+  rejection before `wsgi.input` reads for oversized requests.
+- Malformed JSON and non-object JSON on JSON-object routes now return
+  `400 invalid_json` instead of silently becoming `{}`.
+- Early 404, 413, and body/CIDR boundary responses now preserve configured
+  CORS headers.
+- Added CIDR enforcement for admin/control hosted API routes using the shared
+  control-plane IP/CIDR helpers. Forwarded client IPs are only trusted when the
+  direct peer is loopback or an allowed backend proxy; direct spoofed
+  `X-Forwarded-For` requests remain denied.
+- Public onboarding routes intentionally remain outside the admin/control CIDR
+  gate so customer-facing entrypoints continue to work.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+
+Known risks:
+
+- Wave 1B-1E remain unresolved; no live deploy, Docker, Stripe, Telegram, or
+  Discord proof was run because those are outside this local Wave 1A slice and
+  require explicit operator authorization for live side effects.
+
 ## 2026-05-11 Public Agent Gateway Backpressure
 
 Scope: tightened the Raven selected-agent live-trigger path so public
@@ -3414,3 +5002,180 @@ Known risks:
 - Nextcloud/WebDAV direct delete remains a legacy backend path; the native
   Drive/Code roots use local trash semantics and linked ArcLink resources use
   scoped read-only projections.
+
+## 2026-05-11 Ralphie Wave 1C Webhook Trust Boundary Build
+
+Scope: completed Wave 1C webhook trust-boundary repairs from
+`IMPLEMENTATION_PLAN.md`.
+
+Rationale:
+
+- Added `TELEGRAM_WEBHOOK_SECRET` as the public Telegram webhook secret-token
+  lane in config templates, Compose, deploy config rendering, Telegram config,
+  and Telegram `setWebhook` registration.
+- Hosted Telegram webhook handling now fails closed when the secret is absent
+  and uses constant-time comparison for `X-Telegram-Bot-Api-Secret-Token`
+  before update dispatch.
+- Discord interaction webhooks now enforce timestamp freshness and reserve
+  interaction IDs in `arclink_webhook_events`, rejecting duplicates as replay.
+- Stripe, Telegram, and Discord hosted webhook routes now share a provider-
+  scoped remote-subject rate-limit gate before expensive verification or
+  dispatch. Limits are configurable with `ARCLINK_WEBHOOK_RATE_LIMIT_*`.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_discord.py python/arclink_telegram.py python/arclink_public_bot_commands.py python/arclink_boundary.py python/arclink_provisioning.py python/arclink_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_public_bot_commands.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh ralphie.sh` passed.
+- `git diff --check` passed.
+
+Skipped live checks:
+
+- No live Telegram webhook registration, Discord interaction delivery, Stripe
+  webhook delivery, deploy, upgrade, Docker install/upgrade, or external
+  provider mutation was run; those remain gated by explicit operator
+  authorization and real credentials.
+
+Known risks:
+
+- Existing deployed Control Node configs must set `TELEGRAM_WEBHOOK_SECRET`
+  before Telegram webhooks will process; this is intentional fail-closed
+  behavior.
+- Discord replay protection reserves valid interaction IDs before dispatch;
+  an internal processing failure marks the row failed and still blocks a later
+  duplicate interaction ID.
+- Wave 1D unified secret redaction and Wave 1E container privilege/socket
+  scope remain open.
+
+## 2026-05-11 Ralphie Wave 3 Teardown Lifecycle Build
+
+Scope: completed the Wave 3 teardown lifecycle and cleanup slice from
+`IMPLEMENTATION_PLAN.md` without live host/provider mutation.
+
+Rationale:
+
+- Added an idempotent Sovereign teardown job path for `teardown_requested`,
+  retryable `teardown_failed`, and resource-bearing `cancelled` deployments.
+  The path runs Compose teardown, tears down persisted DNS, releases active
+  placement, reconciles fleet load, clears tailnet service ports, records
+  service health, writes events/audit, and transitions the deployment to
+  `torn_down`.
+- Kept destructive volume removal opt-in only through explicit
+  `metadata.teardown.remove_volumes: true`; the default Compose teardown uses
+  `down --remove-orphans` and preserves stateful volumes.
+- Added executor DNS teardown and Compose lifecycle replay metadata, propagated
+  lifecycle transport failures instead of hiding them, cleaned materialized
+  local and SSH runtime secret copies after successful Compose operations, and
+  validated SSH key paths as regular non-symlink files with private modes.
+- Made Compose health reconciliation project-scoped and records transport or
+  malformed status failures as failed service health instead of `starting`.
+- Preserved provisioned DNS status for unchanged desired tuples, records
+  provider DNS ids by hostname when available, and marks DNS rows torn down
+  only after provider teardown success.
+- Excluded cancelled/torn-down deployments from tailnet port allocation scans
+  and suppressed cancelled/torn-down DNS drift rows in the admin dashboard.
+
+Fixed audit IDs:
+
+- `CR-4`, `HI-8`, `HI-9`, `HI-14`, `ME-9`, `ME-10`, `LOW-13`.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_sovereign_worker.py python/arclink_executor.py python/arclink_ingress.py python/arclink_fleet.py python/arclink_provisioning.py python/arclink_control.py python/arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_ingress.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `git diff --check` passed.
+
+Skipped live checks:
+
+- No live Docker host teardown, Cloudflare DNS deletion, Tailscale mutation,
+  Stripe/Chutes action, deploy, upgrade, Docker install/upgrade, or production
+  service restart was run. Those remain gated by explicit operator
+  authorization and real credentials.
+
+Known risks:
+
+- Remote SSH secret cleanup is implemented for the materialized Compose
+  `config/secrets` root after successful SSH `up`/`down`, but it has only local
+  fake-runner coverage in this pass; live SSH behavior still needs an operator-
+  authorized proof window.
+- Teardown intentionally does not revoke Chutes/provider credentials yet;
+  provider artifact revocation remains a later lifecycle hardening task unless
+  the operator explicitly scopes it into the next build slice.
+- The full audit is not complete. Wave 4, Wave 5, and any remaining actionable
+  FACT/PARTIAL findings remain backlog.
+
+## 2026-05-11 Ralphie Residual Closure Build
+
+Scope: closed the remaining residual closure items from `IMPLEMENTATION_PLAN.md`
+without private-state access, live deploys, provider mutations, public bot
+mutations, or Hermes core edits.
+
+Fixed and verified:
+
+- `HI-8`: local Docker Compose apply now cleans materialized secret copies in a
+  `finally` path after runner failure, and SSH Compose runners clean the remote
+  `config/secrets` root after failed sync/compose paths as well as success.
+- `ME-14`: memory synthesis prompts now wrap source inventories in explicit
+  untrusted-data sentinels, and model outputs containing URLs or executable
+  imperatives are rejected from managed recall injection.
+- `ME-15`: SSH executor mode now requires explicit machine-mode opt-in plus a
+  host allowlist in action-worker and Sovereign provisioning paths.
+- `ME-18`: the worker main loop continues to initialize/connect once per worker
+  run and reuse that connection for the batch loop; regression coverage locks
+  that behavior.
+- `LOW-11`: action-worker failures now return and persist safe error codes
+  (`executor_error`, `action_validation_error`, etc.) while preserving redacted
+  human-readable messages.
+- `LOW-12`: evidence ledgers serialize unset record and run timestamps as JSON
+  `null` instead of `0.0`, while DB rows keep explicit `not_recorded` state.
+- `LOW-14`: operator evidence template readiness is computed from the template
+  file and required markers instead of hard-coded `True`.
+- `LOW-15`: UTC parsing now normalizes `Z` and offset forms before comparisons;
+  Notion claim expiry and notification retry due checks no longer compare mixed
+  timestamp strings directly.
+- `ME-11` and `ME-25`: left as FICTION/outdated regression awareness per the
+  current plan; no active remediation was taken.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_executor.py python/arclink_memory_synthesizer.py python/arclink_action_worker.py python/arclink_evidence.py python/arclink_dashboard.py python/arclink_control.py python/arclink_notification_delivery.py python/arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_memory_synthesizer.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_admin_actions.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `git diff --check` passed.
+
+Skipped live gates:
+
+- No live Docker apply/teardown, SSH host mutation, Cloudflare DNS change,
+  Tailscale change, Stripe or Chutes mutation, Notion live proof, Telegram or
+  Discord webhook mutation, deploy, upgrade, Docker install/upgrade, or
+  production service restart was run.
+
+Known risks:
+
+- SSH cleanup and machine-mode allowlisting have local fake-runner and unit
+  coverage only; real remote proof still requires an operator-authorized
+  maintenance window with disposable credentials/hosts.
+- The residual closure is local-code complete. Broad release validation and
+  live provider/host proof remain later, explicitly authorized work.

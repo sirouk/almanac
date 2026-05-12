@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import time
+
 from arclink_test_helpers import expect, load_module, memory_db, seed_active_public_bot_deployment
 
 
@@ -268,23 +270,25 @@ def test_discord_webhook_handler() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_webhook_test")
     conn = memory_db(control)
     config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="test_public_key", guild_id="g1")
+    timestamp = str(int(time.time()))
 
     # PING
-    ping_body = json.dumps({"type": 1})
+    ping_body = json.dumps({"id": "int_ping", "type": 1})
     result = dc.handle_discord_webhook_request(
-        conn, body=ping_body, signature="sig", timestamp="ts", config=config,
+        conn, body=ping_body, signature="sig", timestamp=timestamp, config=config,
     )
     expect(result["type"] == 1, f"expected PONG, got {result}")
 
     # Slash command
     cmd_body = json.dumps({
+        "id": "int_cmd",
         "type": 2,
         "channel_id": "ch_1",
         "member": {"user": {"id": "u_1"}},
         "data": {"name": "arclink", "options": [{"name": "message", "value": "/start"}]},
     })
     result = dc.handle_discord_webhook_request(
-        conn, body=cmd_body, signature="sig", timestamp="ts", config=config,
+        conn, body=cmd_body, signature="sig", timestamp=timestamp, config=config,
     )
     expect(result["type"] == 4, f"expected type 4, got {result}")
     expect("Raven" in result["data"]["content"], result["data"]["content"])
@@ -293,12 +297,30 @@ def test_discord_webhook_handler() -> None:
     bad_config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="bad_key", guild_id="g1")
     try:
         dc.handle_discord_webhook_request(
-            conn, body=cmd_body, signature="sig", timestamp="ts", config=bad_config,
+            conn, body=json.dumps({"id": "int_bad_sig", "type": 1}), signature="sig", timestamp=timestamp, config=bad_config,
         )
     except dc.ArcLinkDiscordError as exc:
         expect("signature" in str(exc), str(exc))
     else:
         raise AssertionError("expected signature error")
+
+    try:
+        dc.handle_discord_webhook_request(
+            conn, body=json.dumps({"id": "int_stale", "type": 1}), signature="sig", timestamp="1", config=config,
+        )
+    except dc.ArcLinkDiscordError as exc:
+        expect("stale" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected stale timestamp error")
+
+    try:
+        dc.handle_discord_webhook_request(
+            conn, body=cmd_body, signature="sig", timestamp=timestamp, config=config,
+        )
+    except dc.ArcLinkDiscordError as exc:
+        expect("duplicate" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected duplicate interaction error")
 
     print("PASS test_discord_webhook_handler")
 

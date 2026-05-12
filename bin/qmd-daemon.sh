@@ -13,7 +13,7 @@ loopback_port="${QMD_MCP_LOOPBACK_PORT:-${QMD_MCP_PORT:-8181}}"
 container_port="${QMD_MCP_CONTAINER_PORT:-$loopback_port}"
 
 if [[ "$loopback_port" == "$container_port" ]]; then
-  exec qmd --index "$QMD_INDEX_NAME" mcp --http --port "$loopback_port"
+  exec qmd --index "$QMD_INDEX_NAME" mcp --http --host 127.0.0.1 --port "$loopback_port"
 fi
 
 bind_host="${QMD_PROXY_BIND_HOST:-127.0.0.1}"
@@ -69,7 +69,7 @@ with Server((bind_host, listen_port), Handler) as server:
     server.serve_forever()
 PY
 proxy_pid="$!"
-qmd --index "$QMD_INDEX_NAME" mcp --http --port "$loopback_port" &
+qmd --index "$QMD_INDEX_NAME" mcp --http --host 127.0.0.1 --port "$loopback_port" &
 qmd_pid="$!"
 
 cleanup() {

@@ -79,7 +79,14 @@ def persist_arclink_dns_records(
               hostname = excluded.hostname,
               record_type = excluded.record_type,
               target = excluded.target,
-              status = excluded.status,
+              status = CASE
+                WHEN arclink_dns_records.hostname = excluded.hostname
+                 AND UPPER(arclink_dns_records.record_type) = UPPER(excluded.record_type)
+                 AND arclink_dns_records.target = excluded.target
+                 AND arclink_dns_records.status = 'provisioned'
+                THEN arclink_dns_records.status
+                ELSE excluded.status
+              END,
               last_checked_at = excluded.last_checked_at,
               updated_at = excluded.updated_at
             """,
@@ -149,6 +156,39 @@ def _mark_dns_status(
     )
 
 
+def mark_arclink_dns_torn_down(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    removed: list[str] | tuple[str, ...],
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    extra = dict(metadata or {})
+    extra["removed"] = list(removed)
+    _mark_dns_status(conn, deployment_id, "torn_down", "dns_teardown", extra)
+
+
+def arclink_dns_records_for_teardown(conn: sqlite3.Connection, *, deployment_id: str) -> tuple[dict[str, Any], ...]:
+    rows = conn.execute(
+        """
+        SELECT hostname, record_type, provider_record_id
+        FROM arclink_dns_records
+        WHERE deployment_id = ?
+          AND status != 'torn_down'
+        ORDER BY hostname, record_type
+        """,
+        (deployment_id,),
+    ).fetchall()
+    return tuple(
+        {
+            "hostname": str(row["hostname"] or ""),
+            "record_type": str(row["record_type"] or ""),
+            "provider_record_id": str(row["provider_record_id"] or ""),
+        }
+        for row in rows
+    )
+
+
 def teardown_arclink_dns(
     conn: sqlite3.Connection,
     *,
@@ -160,8 +200,7 @@ def teardown_arclink_dns(
     """Remove all DNS records for a deployment and mark them torn down."""
     hostnames = arclink_hostnames(prefix, base_domain)
     removed = cloudflare.teardown_records(list(hostnames.values()))
-    _mark_dns_status(conn, deployment_id, "torn_down", "dns_teardown",
-                     {"removed": removed, "prefix": prefix})
+    mark_arclink_dns_torn_down(conn, deployment_id=deployment_id, removed=removed, metadata={"prefix": prefix})
     return removed
 
 

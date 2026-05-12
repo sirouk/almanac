@@ -9,6 +9,7 @@ from arclink_control import (
     advance_arclink_entitlement_gates_for_user,
     append_arclink_audit,
     append_arclink_event,
+    merge_arclink_user_identity_by_email,
     set_arclink_user_entitlement,
     upsert_arclink_user,
     upsert_arclink_subscription_mirror,
@@ -24,9 +25,13 @@ class ArcLinkEntitlementError(ValueError):
 
 @dataclass(frozen=True)
 class ReconciliationDrift:
-    kind: str  # "subscription_without_deployment" or "deployment_without_subscription"
+    kind: str
     user_id: str
     detail: str
+
+
+SUBSCRIPTION_COVERAGE_STATUSES = frozenset({"active", "trialing", "paid"})
+SUBSCRIPTION_OWED_SERVICE_STATUSES = frozenset({"past_due", "unpaid"})
 
 
 def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[ReconciliationDrift]:
@@ -60,7 +65,7 @@ def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[Reconci
           AND NOT EXISTS (
             SELECT 1 FROM arclink_subscriptions s
             WHERE s.user_id = d.user_id
-              AND s.status IN ('active', 'trialing', 'paid')
+              AND s.status IN ('active', 'trialing', 'paid', 'past_due', 'unpaid')
           )
           AND NOT EXISTS (
             SELECT 1 FROM arclink_users u
@@ -74,6 +79,34 @@ def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[Reconci
             kind="deployment_without_subscription",
             user_id=row["user_id"],
             detail=f"deployment {row['deployment_id']} active but no subscription or comp",
+        ))
+    rows = conn.execute(
+        """
+        SELECT d.user_id, d.deployment_id, s.stripe_subscription_id, s.status
+        FROM arclink_deployments d
+        JOIN arclink_subscriptions s ON s.user_id = d.user_id
+        WHERE d.status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+          AND s.status IN ('past_due', 'unpaid')
+          AND NOT EXISTS (
+            SELECT 1 FROM arclink_subscriptions active_s
+            WHERE active_s.user_id = d.user_id
+              AND active_s.status IN ('active', 'trialing', 'paid')
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM arclink_users u
+            WHERE u.user_id = d.user_id
+              AND u.entitlement_state = 'comp'
+          )
+        """
+    ).fetchall()
+    for row in rows:
+        drift.append(ReconciliationDrift(
+            kind="deployment_subscription_owed_service",
+            user_id=row["user_id"],
+            detail=(
+                f"deployment {row['deployment_id']} has subscription "
+                f"{row['stripe_subscription_id']} in owed-service state {row['status']}"
+            ),
         ))
     return drift
 
@@ -388,6 +421,15 @@ def process_stripe_webhook(
                     entitlement_state="",
                     replayed=True,
                 )
+            if recorded_status == "received":
+                conn.rollback()
+                return StripeWebhookResult(
+                    event_id=event_id,
+                    event_type=event_type,
+                    user_id="",
+                    entitlement_state="",
+                    replayed=True,
+                )
             if recorded_status not in {"failed", "received"}:
                 conn.rollback()
                 raise ArcLinkEntitlementError(
@@ -424,45 +466,43 @@ def process_stripe_webhook(
         # Email-driven user merge: a single human can show up under multiple
         # user_ids (e.g. they started on Telegram earlier under one user_id,
         # then onboarded again on web under a fresh user_id). Stripe always
-        # carries the canonical email. If that email already belongs to a
-        # different user_id, treat that existing user_id as the real human
-        # and re-point this webhook's mutations there. Without this, the
-        # email unique index throws and the webhook fails.
+        # carries the canonical email, so the control plane deterministically
+        # picks the canonical row and repoints owned rows before user upsert.
         stripe_customer_email = _stripe_customer_email(obj)
         if stripe_customer_email:
-            existing_email_user = conn.execute(
-                "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?) AND user_id != ?",
-                (stripe_customer_email, user_id),
-            ).fetchone()
-            if existing_email_user is not None:
-                merged_user_id = str(existing_email_user["user_id"] or "").strip()
-                if merged_user_id:
-                    # Re-point any deployment owned by the duplicate user_id to
-                    # the canonical email-bound user_id. This is safe because
-                    # the duplicate was created mid-funnel and has not been
-                    # paid for under any other identity.
-                    conn.execute(
-                        "UPDATE arclink_deployments SET user_id = ? WHERE user_id = ?",
-                        (merged_user_id, user_id),
-                    )
-                    conn.execute(
-                        "UPDATE arclink_onboarding_sessions SET user_id = ? WHERE user_id = ?",
-                        (merged_user_id, user_id),
-                    )
-                    append_arclink_event(
-                        conn,
-                        subject_kind="user",
-                        subject_id=merged_user_id,
-                        event_type="stripe_user_merged",
-                        metadata={
-                            "merged_from_user_id": user_id,
-                            "stripe_customer_email": stripe_customer_email,
-                            "stripe_event_id": event_id,
-                            "stripe_event_type": event_type,
-                        },
-                        commit=False,
-                    )
-                    user_id = merged_user_id
+            merge_candidate_user_id = user_id
+            merged = merge_arclink_user_identity_by_email(
+                conn,
+                email=stripe_customer_email,
+                candidate_user_id=merge_candidate_user_id,
+                actor_id="stripe",
+                reason="Stripe webhook email identity merge",
+                metadata={
+                    "stripe_event_id": event_id,
+                    "stripe_event_type": event_type,
+                    "stripe_subscription_id": subscription_id,
+                    "stripe_customer_id": stripe_customer_id,
+                },
+                commit=False,
+            )
+            user_id = str(merged["user_id"] or user_id)
+            merged_ids = list(merged.get("merged_user_ids") or [])
+            if merged_ids:
+                append_arclink_event(
+                    conn,
+                    subject_kind="user",
+                    subject_id=user_id,
+                    event_type="stripe_user_merged",
+                    metadata={
+                        "merged_from_user_id": user_id if user_id in merged_ids else (merged_ids[0] if merged_ids else ""),
+                        "candidate_user_id": merge_candidate_user_id,
+                        "merged_user_ids": merged_ids,
+                        "stripe_customer_email": stripe_customer_email,
+                        "stripe_event_id": event_id,
+                        "stripe_event_type": event_type,
+                    },
+                    commit=False,
+                )
 
         if subscription_id:
             mirror_status = entitlement_state if event_type == "invoice.payment_failed" else str(obj.get("status") or entitlement_state)

@@ -367,6 +367,81 @@ def test_prepare_onboarding_reuses_existing_user_by_email() -> None:
     print("PASS test_prepare_onboarding_reuses_existing_user_by_email")
 
 
+def test_stale_onboarding_session_expires_and_allows_reentry() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_expiry_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_expiry_test")
+    conn = memory_db(control)
+    first = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="stale@example.test",
+        session_id="onb_stale",
+        email_hint="stale@example.test",
+        selected_plan_id="starter",
+    )
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET expires_at = '2026-01-01T00:00:00+00:00'
+        WHERE session_id = ?
+        """,
+        (first["session_id"],),
+    )
+    conn.commit()
+
+    replacement = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="stale@example.test",
+        session_id="onb_stale_retry",
+        email_hint="stale@example.test",
+        selected_plan_id="starter",
+    )
+
+    expect(replacement["session_id"] == "onb_stale_retry", str(replacement))
+    old = conn.execute("SELECT status FROM arclink_onboarding_sessions WHERE session_id = 'onb_stale'").fetchone()
+    expect(old["status"] == "expired", str(dict(old)))
+    event = conn.execute(
+        "SELECT event_type FROM arclink_onboarding_events WHERE session_id = 'onb_stale' AND event_type = 'expired'"
+    ).fetchone()
+    expect(event is not None, "expired event missing")
+    print("PASS test_stale_onboarding_session_expires_and_allows_reentry")
+
+
+def test_duplicate_active_web_onboarding_by_email_reuses_session() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_duplicate_email_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_duplicate_email_test")
+    conn = memory_db(control)
+    first = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="browser-one",
+        session_id="onb_email_one",
+        email_hint="same@example.test",
+        selected_plan_id="starter",
+    )
+    second = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="browser-two",
+        session_id="onb_email_two",
+        email_hint="SAME@example.test",
+        display_name_hint="Same User",
+    )
+
+    expect(second["session_id"] == first["session_id"], str((first, second)))
+    count = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM arclink_onboarding_sessions
+        WHERE LOWER(email_hint) = LOWER('same@example.test')
+          AND status IN ('started', 'collecting', 'checkout_open', 'payment_pending', 'paid', 'provisioning_ready', 'first_contacted')
+        """
+    ).fetchone()["count"]
+    expect(int(count) == 1, f"expected one active web onboarding session for duplicate email, got {count}")
+    print("PASS test_duplicate_active_web_onboarding_by_email_reuses_session")
+
+
 def test_web_telegram_discord_onboarding_parity() -> None:
     """Prove all three channels create identical session shapes through the shared contract."""
     control = load_module("arclink_control.py", "arclink_control_parity_test")
@@ -418,8 +493,10 @@ def main() -> int:
     test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens()
     test_prepare_onboarding_preserves_existing_entitlement()
     test_prepare_onboarding_reuses_existing_user_by_email()
+    test_stale_onboarding_session_expires_and_allows_reentry()
+    test_duplicate_active_web_onboarding_by_email_reuses_session()
     test_web_telegram_discord_onboarding_parity()
-    print("PASS all 8 ArcLink onboarding tests")
+    print("PASS all 10 ArcLink onboarding tests")
     return 0
 
 

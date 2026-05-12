@@ -70,7 +70,7 @@ describe("Page content smoke checks", () => {
     const cancel = readFileSync(resolve(ROOT, "src/app/checkout/cancel/page.tsx"), "utf-8");
     assert.ok(success.includes("Agent onboard ArcLink"), "missing success copy");
     assert.ok(cancel.includes("Checkout paused"), "missing cancel copy");
-    assert.ok(!cancel.includes("api.cancelOnboarding"), "Stripe cancel should pause/resume, not cancel the onboarding session");
+    assert.ok(cancel.includes("api.cancelOnboarding"), "Stripe cancel should call the backend cancel path when proof is available");
   });
 
   it("Dashboard page has all required tabs", () => {

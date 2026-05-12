@@ -54,6 +54,18 @@ def _api(hosted, conn, config, method, path, headers=None, body=None, stripe_cli
     return status, payload, resp_headers
 
 
+def browser_auth_headers(session: dict, *, csrf: bool = False) -> dict[str, str]:
+    cookie = (
+        f"arclink_user_session_id={session['session_id']}; "
+        f"arclink_user_session_token={session['session_token']}; "
+        f"arclink_user_csrf={session['csrf_token']}"
+    )
+    headers = {"Cookie": cookie}
+    if csrf:
+        headers["X-ArcLink-CSRF-Token"] = session["csrf_token"]
+    return headers
+
+
 # ---------------------------------------------------------------------------
 # Full journey test
 # ---------------------------------------------------------------------------
@@ -252,7 +264,7 @@ def test_full_fake_journey():
 
     # ---- 25. User logout -------------------------------------------------
     status, payload, _ = _api(hosted, conn, config, "POST", "/auth/user/logout",
-                              headers=auth_headers(user_session, csrf=True))
+                              headers=browser_auth_headers(user_session, csrf=True))
     expect(status == 200, f"user logout: expected 200 got {status}: {payload}")
 
     # ---- 26. Dashboard after logout returns 401 --------------------------

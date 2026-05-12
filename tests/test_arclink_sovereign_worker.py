@@ -6,6 +6,7 @@ import sys
 import tempfile
 import json
 import hashlib
+import stat
 from pathlib import Path
 
 from arclink_test_helpers import expect, load_module
@@ -223,9 +224,9 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     conn = memory_db(control)
     seed_ready_deployment(control, conn)
     rows = [
-        {"Service": "dashboard", "State": "running", "Health": "", "Status": "Up 1 second", "Name": "dashboard-1", "Project": "p"},
-        {"Service": "nextcloud", "State": "running", "Health": "healthy", "Status": "Up 1 second (healthy)", "Name": "nextcloud-1", "Project": "p"},
-        {"Service": "managed-context-install", "State": "exited", "Health": "", "ExitCode": 0, "Status": "Exited (0)", "Name": "managed-1", "Project": "p"},
+        {"Service": "dashboard", "State": "running", "Health": "", "Status": "Up 1 second", "Name": "dashboard-1", "Project": "arclink-dep_1"},
+        {"Service": "nextcloud", "State": "running", "Health": "healthy", "Status": "Up 1 second (healthy)", "Name": "nextcloud-1", "Project": "arclink-dep_1"},
+        {"Service": "managed-context-install", "State": "exited", "Health": "", "ExitCode": 0, "Status": "Exited (0)", "Name": "managed-1", "Project": "arclink-dep_1"},
     ]
     runner = ComposePsRunner("\n".join(json.dumps(row) for row in rows))
     executor = executor_mod.ArcLinkExecutor(
@@ -311,6 +312,100 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     print("PASS test_tailscale_sovereign_worker_skips_cloudflare_dns")
 
 
+def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_teardown")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_teardown")
+    import arclink_executor as executor_mod
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+            secret_resolver=executor_mod.FakeSecretResolver({}),
+        )
+        executor.chutes_key_apply(executor_mod.ChutesKeyApplyRequest(
+            deployment_id="dep_1",
+            action="create",
+            secret_ref="secret://arclink/chutes/dep_1",
+            idempotency_key="seed-chutes-key-dep-1",
+        ))
+        applied = worker_mod.process_sovereign_batch(conn, worker=cfg)
+        expect(applied[0]["status"] == "applied", str(applied))
+        conn.execute("UPDATE arclink_deployments SET status = 'teardown_requested' WHERE deployment_id = 'dep_1'")
+        conn.commit()
+        torn_down = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+        replay = worker_mod.process_sovereign_teardown(
+            conn,
+            deployment=dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()),
+            worker=cfg,
+            executor=executor,
+        )
+
+    expect(torn_down[0]["status"] == "torn_down", str(torn_down))
+    expect(torn_down[0]["chutes_status"] == "applied", str(torn_down))
+    expect(replay["status"] == "already_torn_down", str(replay))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(dep["status"] == "torn_down", str(dict(dep)))
+    active_placements = conn.execute(
+        "SELECT COUNT(*) AS c FROM arclink_deployment_placements WHERE deployment_id = 'dep_1' AND status = 'active'"
+    ).fetchone()["c"]
+    expect(int(active_placements) == 0, "expected active placement to be removed")
+    host = conn.execute("SELECT observed_load FROM arclink_fleet_hosts WHERE hostname = 'worker-1.example.test'").fetchone()
+    expect(int(host["observed_load"]) == 0, str(dict(host)))
+    dns_statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_dns_records").fetchall()}
+    expect(dns_statuses == {"torn_down"}, str(dns_statuses))
+    health_statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
+    expect(health_statuses == {"torn_down"}, str(health_statuses))
+    health_detail = json.loads(conn.execute("SELECT detail_json FROM arclink_service_health WHERE service_name = 'dashboard'").fetchone()["detail_json"])
+    expect(health_detail["chutes_status"] == "applied", str(health_detail))
+    event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
+    expect({"sovereign_teardown_started", "sovereign_teardown_completed", "dns_teardown"} <= event_types, str(event_types))
+    print("PASS test_sovereign_worker_tears_down_active_deployment_idempotently")
+
+
+def test_tailnet_port_allocation_ignores_released_deployments() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailnet_reuse")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailnet_reuse")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", email="user@example.test", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_old",
+        user_id="user_1",
+        prefix="old-agent",
+        base_domain="worker.example.test",
+        status="torn_down",
+        metadata={"tailnet_service_ports": {"hermes": 8443}},
+    )
+    seed_ready_deployment(control, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                    "ARCLINK_TAILNET_SERVICE_PORT_BASE": "8443",
+                },
+            }
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg)
+    expect(results[0]["status"] == "applied", str(results))
+    metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"])
+    expect(metadata["tailnet_service_ports"] == {"hermes": 8443}, str(metadata))
+    print("PASS test_tailnet_port_allocation_ignores_released_deployments")
+
+
 def test_sovereign_worker_is_disabled_until_explicitly_enabled() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_disabled")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_disabled")
@@ -339,6 +434,123 @@ def test_sovereign_worker_fails_closed_without_fleet_capacity() -> None:
     dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
     expect(dep["status"] == "provisioning_failed", str(dict(dep)))
     print("PASS test_sovereign_worker_fails_closed_without_fleet_capacity")
+
+
+def test_sovereign_worker_rechecks_lost_entitlement_before_placement() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_lost_entitlement")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_lost_entitlement")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    original_ports = worker_mod._ensure_tailnet_service_ports
+    original_place = worker_mod.place_deployment
+    placement_called = False
+
+    def revoke_entitlement(conn_arg, *, deployment, worker):
+        conn_arg.execute(
+            "UPDATE arclink_users SET entitlement_state = 'none', entitlement_updated_at = ? WHERE user_id = 'user_1'",
+            (control.utc_now_iso(),),
+        )
+        conn_arg.commit()
+        return dict(deployment)
+
+    def forbidden_place(*args, **kwargs):
+        nonlocal placement_called
+        placement_called = True
+        return original_place(*args, **kwargs)
+
+    worker_mod._ensure_tailnet_service_ports = revoke_entitlement
+    worker_mod.place_deployment = forbidden_place
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    finally:
+        worker_mod._ensure_tailnet_service_ports = original_ports
+        worker_mod.place_deployment = original_place
+
+    expect(results[0]["status"] == "failed", str(results))
+    expect("entitlement no longer permits" in results[0]["error"], str(results))
+    expect(not placement_called, "placement must not run after entitlement is revoked")
+    placements = conn.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements").fetchone()["c"]
+    dns = conn.execute("SELECT COUNT(*) AS c FROM arclink_dns_records").fetchone()["c"]
+    expect(int(placements) == 0 and int(dns) == 0, f"unexpected side effects: placements={placements}, dns={dns}")
+    print("PASS test_sovereign_worker_rechecks_lost_entitlement_before_placement")
+
+
+def test_sovereign_worker_rechecks_missing_user_before_placement() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_missing_user")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_missing_user")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    original_ports = worker_mod._ensure_tailnet_service_ports
+    original_place = worker_mod.place_deployment
+    placement_called = False
+
+    def delete_user(conn_arg, *, deployment, worker):
+        conn_arg.execute("DELETE FROM arclink_users WHERE user_id = 'user_1'")
+        conn_arg.commit()
+        return dict(deployment)
+
+    def forbidden_place(*args, **kwargs):
+        nonlocal placement_called
+        placement_called = True
+        return original_place(*args, **kwargs)
+
+    worker_mod._ensure_tailnet_service_ports = delete_user
+    worker_mod.place_deployment = forbidden_place
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    finally:
+        worker_mod._ensure_tailnet_service_ports = original_ports
+        worker_mod.place_deployment = original_place
+
+    expect(results[0]["status"] == "failed", str(results))
+    expect("deployment user missing" in results[0]["error"], str(results))
+    expect(not placement_called, "placement must not run after deployment user disappears")
+    placements = conn.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements").fetchone()["c"]
+    expect(int(placements) == 0, f"unexpected placement side effect: {placements}")
+    print("PASS test_sovereign_worker_rechecks_missing_user_before_placement")
+
+
+def test_sovereign_worker_rechecks_changed_status_before_placement() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_changed_status")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_changed_status")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    original_ports = worker_mod._ensure_tailnet_service_ports
+    original_place = worker_mod.place_deployment
+    placement_called = False
+
+    def cancel_deployment(conn_arg, *, deployment, worker):
+        conn_arg.execute(
+            "UPDATE arclink_deployments SET status = 'cancelled', updated_at = ? WHERE deployment_id = 'dep_1'",
+            (control.utc_now_iso(),),
+        )
+        conn_arg.commit()
+        return dict(deployment)
+
+    def forbidden_place(*args, **kwargs):
+        nonlocal placement_called
+        placement_called = True
+        return original_place(*args, **kwargs)
+
+    worker_mod._ensure_tailnet_service_ports = cancel_deployment
+    worker_mod.place_deployment = forbidden_place
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    finally:
+        worker_mod._ensure_tailnet_service_ports = original_ports
+        worker_mod.place_deployment = original_place
+
+    expect(results[0]["status"] == "failed", str(results))
+    expect("changed status before apply side effects" in results[0]["error"], str(results))
+    expect(not placement_called, "placement must not run after deployment status changes")
+    deployment = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    placements = conn.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements").fetchone()["c"]
+    expect(deployment["status"] == "cancelled", str(dict(deployment)))
+    expect(int(placements) == 0, f"unexpected placement side effect: {placements}")
+    print("PASS test_sovereign_worker_rechecks_changed_status_before_placement")
 
 
 def test_sovereign_worker_repairs_stale_local_host_load() -> None:
@@ -405,7 +617,16 @@ def test_sovereign_worker_recovers_succeeded_job_without_handoff() -> None:
     job = worker_mod._ensure_apply_job(conn, deployment_id="dep_1")
     control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running")
     control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="succeeded")
-    conn.execute("UPDATE arclink_deployments SET status = 'provisioning' WHERE deployment_id = 'dep_1'")
+    cached_urls = {
+        "dashboard": "https://cached.example.test",
+        "hermes": "https://cached.example.test/hermes",
+        "files": "https://cached.example.test/drive",
+        "code": "https://cached.example.test/code",
+    }
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'provisioning', metadata_json = ? WHERE deployment_id = 'dep_1'",
+        (json.dumps({"access_urls": cached_urls}, sort_keys=True),),
+    )
     conn.commit()
     with tempfile.TemporaryDirectory() as tmpdir:
         results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
@@ -415,11 +636,45 @@ def test_sovereign_worker_recovers_succeeded_job_without_handoff() -> None:
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
     expect("user_handoff_ready" in event_types, str(event_types))
     expect("public_bot:vessel_online_ping_queued" in event_types, str(event_types))
+    event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'user_handoff_ready'").fetchone()
+    expect(json.loads(event["metadata_json"])["urls"]["dashboard"] == "https://cached.example.test", event["metadata_json"])
     queued = conn.execute("SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()["c"]
     expect(int(queued) == 1, f"expected recovered handoff notification, got {queued}")
+    note = conn.execute("SELECT message FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()
+    expect("Dashboard: https://cached.example.test" in note["message"], note["message"])
     refreshed = fleet.get_fleet_host(conn, host_id=host["host_id"])
     expect(int(refreshed["observed_load"]) == 1, str(refreshed))
     print("PASS test_sovereign_worker_recovers_succeeded_job_without_handoff")
+
+
+def test_compose_ps_transport_failure_records_failed_health() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_ps_failure")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_ps_failure")
+    import arclink_executor as executor_mod
+
+    class FailingPsRunner(executor_mod.FakeDockerRunner):
+        def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+            self.runs.append({"args": args, "project_name": project_name, "env_file": env_file, "compose_file": compose_file})
+            if tuple(args) == ("ps", "--all", "--format", "json"):
+                raise executor_mod.ArcLinkExecutorError("transport unavailable")
+            return {"status": "ok", "stdout": ""}
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    runner = FailingPsRunner()
+    executor = executor_mod.ArcLinkExecutor(
+        config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+        secret_resolver=AnySecretResolver(executor_mod),
+        docker_runner=runner,
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        cfg = worker_mod.SovereignWorkerConfig(**{**cfg.__dict__, "ingress_mode": "tailscale"})
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+    expect(results[0]["status"] == "applied", str(results))
+    statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
+    expect(statuses == {"failed"}, str(statuses))
+    print("PASS test_compose_ps_transport_failure_records_failed_health")
 
 
 def test_notion_webhook_secret_is_generated_without_notion_token() -> None:
@@ -474,18 +729,66 @@ def test_dashboard_password_secret_is_generated_for_canonical_handoff_store() ->
         expect(user_secret.exists(), f"expected user-scoped dashboard password secret file: {user_secret}")
         expect(Path(user_first.source_path).read_text(encoding="utf-8") == Path(user_second.source_path).read_text(encoding="utf-8"), "same user ref must materialize the same dashboard password across deployments")
         expect(user_secret.read_text(encoding="utf-8").strip() == Path(user_first.source_path).read_text(encoding="utf-8").strip(), "materialized user secret must mirror canonical user store")
+        expect(stat.S_IMODE(user_secret.parent.stat().st_mode) == 0o700, oct(stat.S_IMODE(user_secret.parent.stat().st_mode)))
+        expect(stat.S_IMODE(user_secret.stat().st_mode) == 0o600, oct(stat.S_IMODE(user_secret.stat().st_mode)))
+        expect(stat.S_IMODE(materialized_secret.parent.stat().st_mode) == 0o700, oct(stat.S_IMODE(materialized_secret.parent.stat().st_mode)))
+        expect(stat.S_IMODE(materialized_secret.stat().st_mode) == 0o600, oct(stat.S_IMODE(materialized_secret.stat().st_mode)))
     print("PASS test_dashboard_password_secret_is_generated_for_canonical_handoff_store")
+
+
+def test_dashboard_password_hash_sync_only_when_secret_is_new() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_password_sync")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_sovereign_password_sync")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_password_sync")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    intent = {"secret_refs": {"dashboard_password": "secret://arclink/dashboard/users/user_1/password"}}
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone())
+        worker_mod._sync_dashboard_password_hash_from_secret(
+            conn,
+            deployment=deployment,
+            worker=cfg,
+            intent=intent,
+            password_secret_preexisted=False,
+        )
+        first = conn.execute("SELECT password_hash FROM arclink_users WHERE user_id = 'user_1'").fetchone()["password_hash"]
+        resolver = worker_mod.SovereignSecretResolver(
+            env={},
+            secret_store_dir=cfg.secret_store_dir / "dep_1",
+            materialization_root=Path(tmpdir) / "materialized",
+        )
+        password = resolver._generated_secret_value("secret://arclink/dashboard/users/user_1/password")
+        expect(api.verify_arclink_password(password, first), str(first))
+        worker_mod._sync_dashboard_password_hash_from_secret(
+            conn,
+            deployment=deployment,
+            worker=cfg,
+            intent=intent,
+            password_secret_preexisted=True,
+        )
+        second = conn.execute("SELECT password_hash FROM arclink_users WHERE user_id = 'user_1'").fetchone()["password_hash"]
+        expect(second == first, f"existing dashboard secret should not force a new password hash: {first} != {second}")
+    print("PASS test_dashboard_password_hash_sync_only_when_secret_is_new")
 
 
 if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
+    test_sovereign_worker_tears_down_active_deployment_idempotently()
+    test_tailnet_port_allocation_ignores_released_deployments()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
+    test_sovereign_worker_rechecks_lost_entitlement_before_placement()
+    test_sovereign_worker_rechecks_missing_user_before_placement()
+    test_sovereign_worker_rechecks_changed_status_before_placement()
     test_sovereign_worker_repairs_stale_local_host_load()
     test_sovereign_worker_recovers_stale_running_job()
     test_sovereign_worker_recovers_succeeded_job_without_handoff()
+    test_compose_ps_transport_failure_records_failed_health()
     test_notion_webhook_secret_is_generated_without_notion_token()
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
-    print("\nAll 10 Sovereign worker tests passed.")
+    test_dashboard_password_hash_sync_only_when_secret_is_new()
+    print("\nAll 17 Sovereign worker tests passed.")

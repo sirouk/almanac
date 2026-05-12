@@ -259,45 +259,66 @@ def place_deployment(
         raise ArcLinkFleetError("ArcLink placement requires a deployment id")
     _reject_secrets(required_tags, path="$.required_tags")
 
-    # Check for existing active placement
-    existing = conn.execute(
-        "SELECT * FROM arclink_deployment_placements WHERE deployment_id = ? AND status = 'active'",
-        (clean_deployment,),
-    ).fetchone()
-    if existing is not None:
-        return dict(existing)
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        existing = conn.execute(
+            "SELECT * FROM arclink_deployment_placements WHERE deployment_id = ? AND status = 'active'",
+            (clean_deployment,),
+        ).fetchone()
+        if existing is not None:
+            if own_txn:
+                conn.commit()
+            return dict(existing)
 
-    hosts = list_fleet_hosts(conn)
-    candidates = _filter_placement_candidates(hosts, region=region, required_tags=required_tags)
-    if not candidates:
-        raise ArcLinkFleetError(_placement_rejection_summary(hosts, region=region, required_tags=required_tags))
+        hosts = list_fleet_hosts(conn)
+        candidates = _filter_placement_candidates(hosts, region=region, required_tags=required_tags)
+        if not candidates:
+            raise ArcLinkFleetError(_placement_rejection_summary(hosts, region=region, required_tags=required_tags))
 
-    # Deterministic: pick host with most headroom, break ties by hostname.
-    best = sorted(candidates, key=lambda h: (-int(h["headroom"]), str(h["hostname"])))[0]
+        # Deterministic: pick host with most headroom, break ties by hostname.
+        best = sorted(candidates, key=lambda h: (-int(h["headroom"]), str(h["hostname"])))[0]
 
-    placement_id = _fleet_id("plc")
-    now = utc_now_iso()
-    conn.execute(
-        """
-        INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
-        VALUES (?, ?, ?, 'active', ?)
-        """,
-        (placement_id, clean_deployment, best["host_id"], now),
-    )
-    # Increment observed load
-    conn.execute(
-        "UPDATE arclink_fleet_hosts SET observed_load = observed_load + 1, updated_at = ? WHERE host_id = ?",
-        (now, best["host_id"]),
-    )
-    conn.commit()
-    append_arclink_event(
-        conn,
-        subject_kind="deployment",
-        subject_id=clean_deployment,
-        event_type="placement_assigned",
-        metadata={"host_id": best["host_id"], "hostname": best["hostname"], "placement_id": placement_id},
-    )
-    return dict(conn.execute("SELECT * FROM arclink_deployment_placements WHERE placement_id = ?", (placement_id,)).fetchone())
+        placement_id = _fleet_id("plc")
+        now = utc_now_iso()
+        try:
+            conn.execute(
+                """
+                INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
+                VALUES (?, ?, ?, 'active', ?)
+                """,
+                (placement_id, clean_deployment, best["host_id"], now),
+            )
+        except sqlite3.IntegrityError:
+            if own_txn:
+                conn.rollback()
+            existing = conn.execute(
+                "SELECT * FROM arclink_deployment_placements WHERE deployment_id = ? AND status = 'active'",
+                (clean_deployment,),
+            ).fetchone()
+            if existing is not None:
+                return dict(existing)
+            raise
+        conn.execute(
+            "UPDATE arclink_fleet_hosts SET observed_load = observed_load + 1, updated_at = ? WHERE host_id = ?",
+            (now, best["host_id"]),
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=clean_deployment,
+            event_type="placement_assigned",
+            metadata={"host_id": best["host_id"], "hostname": best["hostname"], "placement_id": placement_id},
+            commit=False,
+        )
+        if own_txn:
+            conn.commit()
+        return dict(conn.execute("SELECT * FROM arclink_deployment_placements WHERE placement_id = ?", (placement_id,)).fetchone())
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def remove_placement(

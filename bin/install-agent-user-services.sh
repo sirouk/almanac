@@ -24,6 +24,32 @@ mkdir -p "$TARGET_DIR"
 mkdir -p "$ARCLINK_AGENT_WORKSPACE_DIR"
 mkdir -p "$ARCLINK_AGENT_LINKED_DIR"
 
+reject_systemd_unit_value() {
+  local name="$1" value="$2"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    echo "Refusing to render systemd unit with control characters in $name" >&2
+    exit 1
+  fi
+  if [[ "$value" == *'$'* ]]; then
+    echo "Refusing to render systemd unit with dollar-sign substitution in $name" >&2
+    exit 1
+  fi
+}
+
+systemd_quote_value() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '"%s"' "$value"
+}
+
+systemd_env_line() {
+  local key="$1" value="$2"
+  reject_systemd_unit_value "$key" "$value"
+  printf 'Environment=%s\n' "$(systemd_quote_value "$key=$value")"
+}
+
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
   if command -v hermes >/dev/null 2>&1; then
     HERMES_BIN="$(command -v hermes)"
@@ -267,11 +293,11 @@ Description=ArcLink user-agent refresh for $AGENT_ID
 
 [Service]
 Type=oneshot
-Environment=ARCLINK_AGENT_ID=$AGENT_ID
-Environment=HERMES_HOME=$HERMES_HOME
-$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
-Environment=ARCLINK_SHARED_REPO_DIR=$SHARED_REPO_DIR
-Environment=ARCLINK_AGENTS_STATE_DIR=$ARCLINK_AGENTS_STATE_DIR
+$(systemd_env_line ARCLINK_AGENT_ID "$AGENT_ID")
+$(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
+$(systemd_env_line ARCLINK_SHARED_REPO_DIR "$SHARED_REPO_DIR")
+$(systemd_env_line ARCLINK_AGENTS_STATE_DIR "$ARCLINK_AGENTS_STATE_DIR")
 ExecStart="$SHARED_REPO_DIR/bin/user-agent-refresh.sh"
 EOF
 
@@ -294,8 +320,8 @@ Description=Run an immediate Hermes-home backup for $AGENT_ID
 
 [Service]
 Type=oneshot
-Environment=HERMES_HOME=$HERMES_HOME
-$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
+$(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 ExecStart="$SHARED_REPO_DIR/bin/backup-agent-home.sh" "$HERMES_HOME"
 EOF
 
@@ -337,11 +363,11 @@ if [[ "$enable_gateway" == "1" ]]; then
 Description=ArcLink user-agent messaging gateway for $AGENT_ID
 
 [Service]
-Environment=HERMES_HOME=$HERMES_HOME
-$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
-Environment=HERMES_CRON_SCRIPT_TIMEOUT=1800
-Environment=TELEGRAM_REACTIONS=true
-Environment=DISCORD_REACTIONS=true
+$(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
+$(systemd_env_line HERMES_CRON_SCRIPT_TIMEOUT "1800")
+$(systemd_env_line TELEGRAM_REACTIONS "true")
+$(systemd_env_line DISCORD_REACTIONS "true")
 WorkingDirectory=$HERMES_HOME
 # Use Hermes's replace semantics so stale PID files or pre-reboot gateway
 # ownership are reclaimed on startup rather than crash-looping on "race lost".
@@ -362,14 +388,14 @@ if [[ "$enable_access_surfaces" == "1" ]]; then
 Description=ArcLink Hermes dashboard for $AGENT_ID
 
 [Service]
-Environment=HERMES_HOME=$HERMES_HOME
-Environment=DRIVE_WORKSPACE_ROOT=$ARCLINK_AGENT_WORKSPACE_DIR
-Environment=CODE_WORKSPACE_ROOT=$ARCLINK_AGENT_WORKSPACE_DIR
-Environment=TERMINAL_WORKSPACE_ROOT=$ARCLINK_AGENT_WORKSPACE_DIR
-Environment=DRIVE_LINKED_ROOT=$ARCLINK_AGENT_LINKED_DIR
-Environment=CODE_LINKED_ROOT=$ARCLINK_AGENT_LINKED_DIR
-Environment=ARCLINK_LINKED_RESOURCES_ROOT=$ARCLINK_AGENT_LINKED_DIR
-$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then printf 'Environment=HERMES_BUNDLED_SKILLS=%s\n' "$HERMES_BUNDLED_SKILLS_DIR"; fi)
+$(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(systemd_env_line DRIVE_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
+$(systemd_env_line CODE_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
+$(systemd_env_line TERMINAL_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
+$(systemd_env_line DRIVE_LINKED_ROOT "$ARCLINK_AGENT_LINKED_DIR")
+$(systemd_env_line CODE_LINKED_ROOT "$ARCLINK_AGENT_LINKED_DIR")
+$(systemd_env_line ARCLINK_LINKED_RESOURCES_ROOT "$ARCLINK_AGENT_LINKED_DIR")
+$(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 WorkingDirectory=$HERMES_HOME
 ExecStart="$HERMES_BIN" dashboard --host 127.0.0.1 --port $dashboard_backend_port --no-open
 Restart=always
@@ -386,7 +412,7 @@ After=arclink-user-agent-dashboard.service
 Requires=arclink-user-agent-dashboard.service
 
 [Service]
-Environment=HERMES_HOME=$HERMES_HOME
+$(systemd_env_line HERMES_HOME "$HERMES_HOME")
 WorkingDirectory=$HERMES_HOME
 ExecStart="$PYTHON3_BIN" "$SHARED_REPO_DIR/python/arclink_dashboard_auth_proxy.py" --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file "$ACCESS_STATE_FILE" --realm "Hermes"
 Restart=always

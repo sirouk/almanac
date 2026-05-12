@@ -563,8 +563,10 @@ def test_repo_sync_git_disables_interactive_prompts_and_scopes_safe_directory() 
         call = calls[0]
         command = call["command"]
         env = call["env"]
-        expect(command[:3] == ["git", "-c", f"safe.directory={repo_dir.resolve(strict=False)}"], str(command))
-        expect(command[3:] == ["remote", "get-url", "origin"], str(command))
+        expect("protocol.ext.allow=never" in command, str(command))
+        expect("protocol.file.allow=never" in command, str(command))
+        expect(f"safe.directory={repo_dir.resolve(strict=False)}" in command, str(command))
+        expect(command[-3:] == ["remote", "get-url", "origin"], str(command))
         expect(call["cwd"] == str(repo_dir), str(call))
         expect(call["timeout"] == 12, str(call))
         expect(env["GIT_TERMINAL_PROMPT"] == "0", str(env))

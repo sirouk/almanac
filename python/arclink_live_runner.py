@@ -8,8 +8,8 @@ only; secret values are never printed, logged, or written.
 
 Statuses:
   blocked_missing_credentials - required env vars absent
+  blocked_no_registered_runner - live requested but no runner registered
   dry_run_ready               - all env vars present, live not requested
-  live_ready_pending_execution - live requested but no runners registered
   live_executed                - live run completed (passed or failed)
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ from arclink_live_journey import (
 @dataclass
 class LiveProofResult:
     """Result of a live proof orchestration run."""
-    status: str  # blocked_missing_credentials | dry_run_ready | live_ready_pending_execution | live_executed
+    status: str  # blocked_missing_credentials | blocked_no_registered_runner | dry_run_ready | live_executed
     journey: str = "hosted"
     missing_env: list[str] = field(default_factory=list)
     host_readiness: dict[str, Any] = field(default_factory=dict)
@@ -70,21 +70,41 @@ def _collect_missing_env(steps: list[JourneyStep], env: Mapping[str, str]) -> li
     """Return deduplicated list of missing env var names across all steps."""
     seen: set[str] = set()
     result: list[str] = []
-    any_opt_in_enabled = any(
-        env.get(key, "").strip()
-        for step in steps
-        for key in step.required_env
-        if key.startswith("ARCLINK_PROOF_")
-    )
+    any_opt_in_enabled = _any_step_proof_opt_in_enabled(steps, env)
     for step in steps:
-        proof_flags = [key for key in step.required_env if key.startswith("ARCLINK_PROOF_")]
-        if proof_flags and any_opt_in_enabled and not any(env.get(key, "").strip() for key in proof_flags):
+        if _step_is_unselected_proof_opt_in(step, env, any_opt_in_enabled=any_opt_in_enabled):
             continue
         for key in step.required_env:
             if key not in seen and not env.get(key, "").strip():
                 seen.add(key)
                 result.append(key)
     return result
+
+
+def _proof_opt_in_flags(step: JourneyStep) -> list[str]:
+    return [key for key in step.required_env if key.startswith("ARCLINK_PROOF_")]
+
+
+def _any_step_proof_opt_in_enabled(steps: list[JourneyStep], env: Mapping[str, str]) -> bool:
+    return any(env.get(key, "").strip() for step in steps for key in _proof_opt_in_flags(step))
+
+
+def _step_is_unselected_proof_opt_in(
+    step: JourneyStep,
+    env: Mapping[str, str],
+    *,
+    any_opt_in_enabled: bool,
+) -> bool:
+    proof_flags = _proof_opt_in_flags(step)
+    return bool(proof_flags and any_opt_in_enabled and not any(env.get(key, "").strip() for key in proof_flags))
+
+
+def _mark_unselected_proof_opt_in_steps(steps: list[JourneyStep], env: Mapping[str, str]) -> None:
+    any_opt_in_enabled = _any_step_proof_opt_in_enabled(steps, env)
+    for step in steps:
+        if _step_is_unselected_proof_opt_in(step, env, any_opt_in_enabled=any_opt_in_enabled):
+            step.status = "skipped"
+            step.skip_reason = f"proof opt-in not set: {', '.join(_proof_opt_in_flags(step))}"
 
 
 # ---------------------------------------------------------------------------
@@ -515,19 +535,20 @@ def run_live_proof(
         effective_runners = build_workspace_live_runners(source)
 
     # Determine status
-    live_requested = live and bool(source.get("ARCLINK_E2E_LIVE", "").strip())
+    live_requested = bool(live)
 
     if all_missing:
         status = "blocked_missing_credentials"
     elif not live_requested:
         status = "dry_run_ready"
     elif not effective_runners:
-        status = "live_ready_pending_execution"
+        status = "blocked_no_registered_runner"
     else:
         status = "live_executed"
 
     # Phase 4: Evaluate journey (runs step runners if live_executed)
     if status == "live_executed":
+        _mark_unselected_proof_opt_in_steps(steps, source)
         # evaluate_journey checks os.environ for credentials, so patch it
         old_env = os.environ.copy()
         os.environ.update(source)
@@ -537,21 +558,37 @@ def run_live_proof(
             os.environ.clear()
             os.environ.update(old_env)
     elif status == "blocked_missing_credentials":
+        any_opt_in_enabled = _any_step_proof_opt_in_enabled(steps, source)
         # Mark steps with their skip reasons
         for step in steps:
+            if _step_is_unselected_proof_opt_in(step, source, any_opt_in_enabled=any_opt_in_enabled):
+                step.status = "skipped"
+                step.skip_reason = f"proof opt-in not set: {', '.join(_proof_opt_in_flags(step))}"
+                continue
             m = [k for k in step.required_env if not source.get(k, "").strip()]
             if m:
                 step.status = "skipped"
                 step.skip_reason = f"missing env: {', '.join(m)}"
+    elif status == "blocked_no_registered_runner":
+        _mark_unselected_proof_opt_in_steps(steps, source)
+        for step in steps:
+            if step.status == "skipped" and step.skip_reason:
+                continue
+            step.status = "skipped"
+            step.skip_reason = "live proof requested but no runner is registered"
+    else:
+        _mark_unselected_proof_opt_in_steps(steps, source)
 
     # Phase 5: Build evidence ledger
     commit = get_commit_hash()
     run_id = generate_run_id(commit=commit)
     ledger = ledger_from_journey(steps, run_id=run_id, commit_hash=commit)
+    if status.startswith("blocked_") and live_requested:
+        ledger.status = status
 
     # Phase 6: Write artifact
     evidence_path = ""
-    if artifact_dir is not None or status in ("dry_run_ready", "live_executed"):
+    if artifact_dir is not None or status in ("dry_run_ready", "live_executed") or (live_requested and status.startswith("blocked_")):
         out_dir = Path(artifact_dir or "evidence")
         out_dir.mkdir(parents=True, exist_ok=True)
         artifact_file = out_dir / f"{run_id}.json"
@@ -561,7 +598,7 @@ def run_live_proof(
     # Determine exit code
     if status == "live_executed":
         exit_code = 0 if ledger.all_passed else 1
-    elif status in ("dry_run_ready", "blocked_missing_credentials", "live_ready_pending_execution"):
+    elif status == "dry_run_ready" or (status == "blocked_missing_credentials" and not live_requested):
         exit_code = 0
     else:
         exit_code = 1

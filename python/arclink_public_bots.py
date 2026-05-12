@@ -7,7 +7,13 @@ import secrets
 import sqlite3
 from typing import Any, Mapping
 
-from arclink_api_auth import check_arclink_rate_limit, _resolve_revealable_credential_secret, _stable_handoff_id
+from arclink_api_auth import (
+    ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS,
+    check_arclink_rate_limit,
+    expire_revealable_user_material,
+    _resolve_revealable_credential_secret,
+    _stable_handoff_id,
+)
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe
 from arclink_control import append_arclink_audit, append_arclink_event, queue_notification, utc_after_seconds_iso, utc_now_iso
@@ -1454,6 +1460,7 @@ def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str,
     if not deployment_id or not user_id:
         return None
     now = utc_now_iso()
+    expires_at = utc_after_seconds_iso(ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS)
     metadata = _metadata(deployment)
     refs = metadata.get("secret_refs") if isinstance(metadata.get("secret_refs"), Mapping) else {}
     secret_ref = str(refs.get("dashboard_password") or f"secret://arclink/dashboard/{deployment_id}/password").strip()
@@ -1462,10 +1469,14 @@ def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str,
         """
         INSERT INTO arclink_credential_handoffs (
           handoff_id, user_id, deployment_id, credential_kind, display_name,
-          secret_ref, delivery_hint, status, created_at, updated_at
-        ) VALUES (?, ?, ?, 'dashboard_password', 'Dashboard password', ?, ?, 'available', ?, ?)
+          secret_ref, delivery_hint, status, expires_at, created_at, updated_at
+        ) VALUES (?, ?, ?, 'dashboard_password', 'Dashboard password', ?, ?, 'available', ?, ?, ?)
         ON CONFLICT(deployment_id, credential_kind) DO UPDATE SET
           user_id = excluded.user_id,
+          expires_at = CASE
+            WHEN arclink_credential_handoffs.status = 'available' AND arclink_credential_handoffs.expires_at = '' THEN excluded.expires_at
+            ELSE arclink_credential_handoffs.expires_at
+          END,
           updated_at = excluded.updated_at
         """,
         (
@@ -1474,6 +1485,7 @@ def _dashboard_credential_row(conn: sqlite3.Connection, deployment: Mapping[str,
             deployment_id,
             secret_ref,
             "Copy this dashboard password into your password manager, then confirm storage.",
+            expires_at,
             now,
             now,
         ),
@@ -1531,6 +1543,22 @@ def _credentials_reply(
                 )
                 if button is not None
             ),
+        )
+    expire_revealable_user_material(conn)
+    refreshed = conn.execute("SELECT * FROM arclink_credential_handoffs WHERE handoff_id = ?", (row["handoff_id"],)).fetchone()
+    row = dict(refreshed) if refreshed is not None else None
+    if row is None or str(row["status"] or "") in {"removed", "expired"} or str(row["revealed_at"] or ""):
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="credentials_reveal_unavailable",
+            reply=(
+                "That credential handoff is no longer revealable. "
+                "Use the saved password, or ask Raven or the operator to rotate/reissue dashboard access."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
         )
     raw_secret = _resolve_revealable_credential_secret(row)
     if not raw_secret:

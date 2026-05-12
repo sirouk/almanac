@@ -797,6 +797,79 @@ def test_incremental_reindex_parent_walks_brand_new_page_under_known_root() -> N
             os.environ.update(old_env)
 
 
+def test_live_read_parent_walk_scope_is_cached() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_notion_parent_walk_cache_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = mod.Config.from_env()
+            conn = mod.connect_db(cfg)
+            root_page_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+            child_page_id = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+            roots = [
+                {
+                    "root_kind": "page",
+                    "root_id": root_page_id,
+                    "root_title": "Workspace Root",
+                    "root_page_id": root_page_id,
+                    "root_page_title": "Workspace Root",
+                }
+            ]
+            calls = {"pages": 0}
+
+            def fake_retrieve_page(**kwargs):
+                calls["pages"] += 1
+                page_id = kwargs["page_id"]
+                if page_id == child_page_id:
+                    return {
+                        "id": child_page_id,
+                        "parent": {"type": "page_id", "page_id": root_page_id},
+                        "properties": _title_property("Child"),
+                    }
+                if page_id == root_page_id:
+                    return {
+                        "id": root_page_id,
+                        "parent": {"type": "workspace", "workspace": True},
+                        "properties": _title_property("Workspace Root"),
+                    }
+                raise AssertionError(f"unexpected page lookup {page_id}")
+
+            mod.retrieve_notion_page = fake_retrieve_page
+            settings = {"token": "secret_test", "api_version": "2026-03-11"}
+            first = mod._notion_root_for_live_read(
+                conn,
+                target_id=child_page_id,
+                target_kind="page",
+                settings=settings,
+                roots=roots,
+                notion_kwargs={},
+            )
+            second = mod._notion_root_for_live_read(
+                conn,
+                target_id=child_page_id,
+                target_kind="page",
+                settings=settings,
+                roots=roots,
+                notion_kwargs={},
+            )
+            expect(first is not None and first[1] == "parent-walk", str(first))
+            expect(second is not None and second[1] == "parent-walk", str(second))
+            expect(calls["pages"] == 2, f"second scoped read should use cache, calls={calls}")
+            cache_row = conn.execute(
+                "SELECT decision, root_id FROM notion_parent_scope_cache WHERE target_id = ?",
+                (child_page_id,),
+            ).fetchone()
+            expect(cache_row is not None and cache_row["decision"] == "allow", str(dict(cache_row) if cache_row else {}))
+            print("PASS test_live_read_parent_walk_scope_is_cached")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_notion_reindex_queue_retries_unresolved_brand_new_page() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_notion_reindex_retry_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1268,6 +1341,7 @@ def main() -> int:
     test_consume_notion_reindex_queue_batches_targets_and_marks_notifications_delivered()
     test_process_pending_notion_events_queues_full_reindex_for_data_source_and_file_upload()
     test_incremental_reindex_parent_walks_brand_new_page_under_known_root()
+    test_live_read_parent_walk_scope_is_cached()
     test_notion_reindex_queue_retries_unresolved_brand_new_page()
     test_incremental_reindex_removes_trashed_page_docs()
     test_notion_index_cleanup_refuses_db_paths_outside_markdown_root()

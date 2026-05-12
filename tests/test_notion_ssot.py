@@ -258,6 +258,36 @@ def test_request_json_retries_rate_limit_and_honors_retry_after() -> None:
     print("PASS test_request_json_retries_rate_limit_and_honors_retry_after")
 
 
+def test_request_json_does_not_retry_notion_conflict() -> None:
+    mod = load_module(MODULE_PATH, "arclink_notion_ssot_conflict_retry_test")
+    attempts = {"count": 0}
+
+    def fake_urlopen(req, timeout=15):
+        attempts["count"] += 1
+        raise http_error(
+            req.full_url,
+            409,
+            {"message": "conflict", "code": "conflict_error"},
+        )
+
+    try:
+        mod._request_json(
+            "PATCH",
+            "/pages/11111111-2222-3333-4444-555555555555",
+            token="secret_test",
+            api_version=mod.DEFAULT_NOTION_API_VERSION,
+            payload={"archived": False},
+            urlopen_fn=fake_urlopen,
+            sleep_fn=lambda _seconds: (_ for _ in ()).throw(AssertionError("409 should not sleep/retry")),
+        )
+    except mod.NotionApiError as exc:
+        expect(exc.status == 409, str(exc))
+    else:
+        raise AssertionError("expected Notion conflict to raise")
+    expect(attempts["count"] == 1, str(attempts))
+    print("PASS test_request_json_does_not_retry_notion_conflict")
+
+
 def test_preflight_notion_root_children_creates_and_trashes_temp_objects() -> None:
     mod = load_module(MODULE_PATH, "arclink_notion_ssot_preflight_root_test")
     seen: list[tuple[str, str, dict]] = []
@@ -472,6 +502,7 @@ def main() -> int:
     test_create_notion_page_prefers_database_data_source_parent()
     test_update_notion_page_uses_patch_endpoint()
     test_request_json_retries_rate_limit_and_honors_retry_after()
+    test_request_json_does_not_retry_notion_conflict()
     test_preflight_notion_root_children_creates_and_trashes_temp_objects()
     test_update_notion_database_and_data_source_use_patch_endpoints()
     test_no_secret_notion_ssot_proof_harness_covers_callback_read_write_and_nonproof_email()

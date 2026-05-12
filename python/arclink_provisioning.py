@@ -19,6 +19,13 @@ from arclink_access import build_arclink_ssh_access_record
 from arclink_adapters import arclink_access_urls, arclink_hostnames, arclink_tailscale_hostnames
 from arclink_ingress import desired_arclink_ingress_records, render_traefik_dynamic_labels
 from arclink_product import chutes_base_url, chutes_default_model, model_reasoning_default, primary_provider
+from arclink_secrets_regex import (
+    contains_secret_material,
+    is_run_secret_path,
+    is_secret_ref,
+    path_allows_compose_secret_source,
+    path_requires_secret_ref,
+)
 
 
 ARCLINK_PROVISIONING_SERVICE_NAMES = (
@@ -44,20 +51,6 @@ CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
 CONTAINER_CODE_WORKSPACE_DIR = "/workspace"
 CONTAINER_LINKED_RESOURCES_DIR = "/linked-resources"
 
-_SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|client[_-]?secret)", re.I)
-_PLAINTEXT_SECRET_RE = re.compile(
-    r"(?i)("
-    r"sk_(live|test)_[a-z0-9]|"
-    r"whsec_[a-z0-9]|"
-    r"gh[pousr]_[a-z0-9]|"
-    r"xox[baprs]-|"
-    r"ntn_[a-z0-9]|"
-    r"cloudflare[a-z0-9_-]*token|"
-    r"\b\d{6,}:[a-z0-9_-]{20,}\b"
-    r")"
-)
-
-
 class ArcLinkProvisioningError(RuntimeError):
     pass
 
@@ -80,6 +73,19 @@ def _safe_segment(value: str) -> str:
     if not segment:
         raise ArcLinkProvisioningError("ArcLink provisioning path segment cannot be empty")
     return segment
+
+
+def _postgres_db_name(*, prefix: str, deployment_id: str) -> str:
+    clean = re.sub(r"[^a-z0-9_]+", "_", str(deployment_id or "").strip().lower()).strip("_")
+    if not clean:
+        digest = hashlib.sha256(str(deployment_id or "").encode("utf-8")).hexdigest()[:12]
+        clean = f"deployment_{digest}"
+    name = f"{prefix}_{clean}"
+    if len(name) <= 63:
+        return name
+    digest = hashlib.sha256(str(deployment_id or "").encode("utf-8")).hexdigest()[:12]
+    keep = max(1, 63 - len(prefix) - len(digest) - 2)
+    return f"{prefix}_{clean[:keep].rstrip('_')}_{digest}"
 
 
 def _job_id(idempotency_key: str) -> str:
@@ -421,6 +427,7 @@ def _render_services(
 ) -> dict[str, dict[str, Any]]:
     app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
+    nextcloud_db_name = _postgres_db_name(prefix="nextcloud", deployment_id=deployment_id)
 
     _limits = ARCLINK_DEFAULT_RESOURCE_LIMITS.get
     _hc = ARCLINK_DEFAULT_HEALTHCHECKS.get
@@ -491,7 +498,7 @@ def _render_services(
             image="${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}:${ARCLINK_POSTGRES_TAG:-16-alpine}",
             command=[],
             environment={
-                "POSTGRES_DB": f"nextcloud_{deployment_id}",
+                "POSTGRES_DB": nextcloud_db_name,
                 "POSTGRES_USER": "nextcloud",
                 "POSTGRES_PASSWORD_FILE": secret_target["nextcloud_db_password"],
             },
@@ -513,7 +520,7 @@ def _render_services(
             command=["apache2-foreground"],
             environment={
                 "POSTGRES_HOST": "nextcloud-db",
-                "POSTGRES_DB": f"nextcloud_{deployment_id}",
+                "POSTGRES_DB": nextcloud_db_name,
                 "POSTGRES_USER": "nextcloud",
                 "POSTGRES_PASSWORD_FILE": secret_target["nextcloud_db_password"],
                 "NEXTCLOUD_ADMIN_USER": "admin",
@@ -606,14 +613,14 @@ def validate_no_plaintext_secrets(value: Any, *, path: str = "$") -> None:
     text = value.strip()
     if not text:
         return
-    path_requires_secret_ref = _SECRET_KEY_RE.search(path) is not None
-    if path_requires_secret_ref and text.startswith("/run/secrets/"):
+    requires_secret_ref = path_requires_secret_ref(path)
+    if requires_secret_ref and is_run_secret_path(text):
         return
-    if path_requires_secret_ref and path.endswith(".source") and re.fullmatch(r"[a-z0-9][a-z0-9_.-]*", text):
+    if requires_secret_ref and path_allows_compose_secret_source(path, text):
         return
-    if path_requires_secret_ref and not text.startswith("secret://"):
+    if requires_secret_ref and not is_secret_ref(text):
         raise ArcLinkSecretReferenceError(f"plaintext-looking secret value in provisioning output at {path}")
-    if _PLAINTEXT_SECRET_RE.search(text):
+    if contains_secret_material(text):
         raise ArcLinkSecretReferenceError(f"plaintext-looking secret value in provisioning output at {path}")
 
 

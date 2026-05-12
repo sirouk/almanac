@@ -59,6 +59,12 @@ class TestEvidenceRecord(unittest.TestCase):
         d = r.to_dict()
         self.assertEqual(d["step_name"], "test")
         self.assertEqual(d["status"], "passed")
+        self.assertEqual(d["timestamp"], 1000.0)
+
+    def test_to_dict_uses_null_for_unset_timestamp(self):
+        r = evidence.EvidenceRecord(step_name="test", status="skipped")
+        d = r.to_dict()
+        self.assertIsNone(d["timestamp"])
 
     def test_to_dict_redacts_url_query_secret(self):
         r = evidence.EvidenceRecord(
@@ -111,6 +117,9 @@ class TestEvidenceLedger(unittest.TestCase):
     def test_ledger_duration_zero_when_not_set(self):
         ledger = evidence.EvidenceLedger()
         self.assertEqual(ledger.duration_ms, 0.0)
+        d = ledger.to_dict()
+        self.assertIsNone(d["started_at"])
+        self.assertIsNone(d["finished_at"])
 
 
 class TestRunIdGeneration(unittest.TestCase):
@@ -202,6 +211,18 @@ class TestEvidenceDBStorage(unittest.TestCase):
         ledger = evidence.EvidenceLedger(run_id="run_empty", commit_hash="x")
         stored = evidence.store_evidence_run(conn, ledger=ledger)
         self.assertEqual(stored["status"], "pending")
+        self.assertEqual(stored["started_at"], "")
+        self.assertEqual(stored["finished_at"], "")
+        self.assertEqual(stored["started_at_state"], "not_recorded")
+        self.assertEqual(stored["finished_at_state"], "not_recorded")
+
+    def test_blocked_status_persists_as_blocked(self):
+        conn = self._db()
+        ledger = self._sample_ledger(run_id="run_blocked", status="skipped")
+        ledger.status = "blocked_missing_credentials"
+        stored = evidence.store_evidence_run(conn, ledger=ledger)
+        self.assertEqual(stored["status"], "blocked")
+        self.assertIn("blocked_missing_credentials", stored["ledger_json"])
 
     def test_list_evidence_runs(self):
         conn = self._db()

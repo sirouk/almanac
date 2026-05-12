@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+import tempfile
+import threading
 
 from arclink_test_helpers import expect, load_module, memory_db, sign_stripe
 
@@ -618,6 +621,148 @@ def test_refuel_credit_uses_fair_local_accounting_without_live_purchase() -> Non
     print("PASS test_refuel_credit_uses_fair_local_accounting_without_live_purchase")
 
 
+def test_refuel_credit_concurrent_spend_does_not_overspend() -> None:
+    control = load_module("arclink_control.py", "arclink_control_refuel_credit_concurrent_test")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = f"{tmpdir}/control.sqlite3"
+        seed_conn = sqlite3.connect(db_path, timeout=15)
+        seed_conn.row_factory = sqlite3.Row
+        control.ensure_schema(seed_conn)
+        control.upsert_arclink_user(seed_conn, user_id="user_refuel", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            seed_conn,
+            deployment_id="dep_refuel",
+            user_id="user_refuel",
+            prefix="refuel-race",
+            status="active",
+            metadata={"chutes": {"monthly_budget_cents": 0}},
+        )
+        control.grant_arclink_refuel_credit(
+            seed_conn,
+            user_id="user_refuel",
+            actor_id="admin_refuel",
+            reason="race credit",
+            credit_cents=1500,
+            source_kind="test",
+        )
+        seed_conn.close()
+
+        barrier = threading.Barrier(2)
+        results: list[dict[str, object]] = []
+        errors: list[str] = []
+        lock = threading.Lock()
+
+        def spend() -> None:
+            conn = sqlite3.connect(db_path, timeout=15)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 15000")
+            try:
+                barrier.wait(timeout=5)
+                result = control.apply_arclink_refuel_credit_to_chutes_budget(
+                    conn,
+                    user_id="user_refuel",
+                    deployment_id="dep_refuel",
+                    requested_cents=1000,
+                    actor_id="admin_refuel",
+                    reason="parallel apply",
+                )
+                with lock:
+                    results.append(result)
+            except Exception as exc:  # noqa: BLE001 - test records any unexpected thread failure
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=spend), threading.Thread(target=spend)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        expect(errors == [], f"parallel spend errors: {errors}")
+        expect(sorted(int(r["applied_cents"]) for r in results) == [500, 1000], str(results))
+        check_conn = sqlite3.connect(db_path)
+        check_conn.row_factory = sqlite3.Row
+        credit = check_conn.execute("SELECT remaining_cents, status FROM arclink_refuel_credits").fetchone()
+        deployment = check_conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_refuel'").fetchone()
+        audit_count = check_conn.execute("SELECT COUNT(*) AS c FROM arclink_audit_log WHERE action = 'refuel_credit_applied'").fetchone()["c"]
+        metadata = json.loads(deployment["metadata_json"])
+        expect(int(credit["remaining_cents"]) == 0 and credit["status"] == "exhausted", str(dict(credit)))
+        expect(metadata["chutes"]["monthly_budget_cents"] == 1500, str(metadata))
+        expect(int(audit_count) == 2, f"expected two audited spend attempts, got {audit_count}")
+        check_conn.close()
+    print("PASS test_refuel_credit_concurrent_spend_does_not_overspend")
+
+
+def test_refuel_credit_rejects_empty_and_wrong_owner_targets() -> None:
+    control = load_module("arclink_control.py", "arclink_control_refuel_credit_guard_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_refuel", entitlement_state="paid")
+    control.upsert_arclink_user(conn, user_id="user_other", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_refuel",
+        user_id="user_refuel",
+        prefix="refuel-empty",
+        status="active",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_other",
+        user_id="user_other",
+        prefix="refuel-other",
+        status="active",
+    )
+    credit = control.grant_arclink_refuel_credit(
+        conn,
+        user_id="user_refuel",
+        actor_id="admin_refuel",
+        reason="small credit",
+        credit_cents=500,
+        source_kind="test",
+        deployment_id="dep_refuel",
+    )
+    exhausted = control.apply_arclink_refuel_credit_to_chutes_budget(
+        conn,
+        user_id="user_refuel",
+        deployment_id="dep_refuel",
+        requested_cents=500,
+        actor_id="admin_refuel",
+        reason="exhaust credit",
+    )
+    expect(exhausted["credits"][0]["credit_id"] == credit["credit_id"], str(exhausted))
+    refreshed = conn.execute("SELECT remaining_cents, status FROM arclink_refuel_credits WHERE credit_id = ?", (credit["credit_id"],)).fetchone()
+    expect(int(refreshed["remaining_cents"]) == 0 and refreshed["status"] == "exhausted", str(dict(refreshed)))
+    try:
+        control.apply_arclink_refuel_credit_to_chutes_budget(
+            conn,
+            user_id="user_refuel",
+            deployment_id="dep_refuel",
+            requested_cents=1,
+            actor_id="admin_refuel",
+            reason="empty credit",
+        )
+    except ValueError as exc:
+        expect("balance is empty" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected empty refuel balance to fail")
+    try:
+        control.apply_arclink_refuel_credit_to_chutes_budget(
+            conn,
+            user_id="user_refuel",
+            deployment_id="dep_other",
+            requested_cents=1,
+            actor_id="admin_refuel",
+            reason="wrong owner",
+        )
+    except ValueError as exc:
+        expect("does not belong to user" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected wrong-owner deployment to fail")
+    print("PASS test_refuel_credit_rejects_empty_and_wrong_owner_targets")
+
+
 def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_test")
@@ -841,6 +986,23 @@ def test_reconciliation_drift_detects_subscription_without_deployment_and_vice_v
     expect(len(dep_drifts) == 1, str(drift))
     expect(dep_drifts[0].user_id == "user_dep_only", str(dep_drifts[0]))
 
+    # Past-due subscriptions are owed-service drift, not orphaned deployment drift.
+    control.upsert_arclink_user(conn, user_id="user_past_due", entitlement_state="past_due")
+    control.reserve_arclink_deployment_prefix(
+        conn, deployment_id="dep_past_due", user_id="user_past_due",
+        prefix="past-due", status="provisioning_ready",
+    )
+    control.upsert_arclink_subscription_mirror(
+        conn, subscription_id="stripe:sub_past_due", user_id="user_past_due",
+        stripe_customer_id="cus_past_due", stripe_subscription_id="sub_past_due",
+        status="past_due", current_period_end="", raw={},
+    )
+    drift = entitlements.detect_stripe_reconciliation_drift(conn)
+    owed_drifts = [d for d in drift if d.kind == "deployment_subscription_owed_service" and d.user_id == "user_past_due"]
+    orphan_drifts = [d for d in drift if d.kind == "deployment_without_subscription" and d.user_id == "user_past_due"]
+    expect(len(owed_drifts) == 1, str(drift))
+    expect(len(orphan_drifts) == 0, str(drift))
+
     # Comp user with deployment should not show drift
     control.upsert_arclink_user(conn, user_id="user_comp", entitlement_state="comp")
     control.reserve_arclink_deployment_prefix(
@@ -870,12 +1032,14 @@ def main() -> int:
     test_new_user_without_explicit_entitlement_defaults_to_none()
     test_targeted_comp_advances_only_named_deployment_without_global_comp()
     test_refuel_credit_uses_fair_local_accounting_without_live_purchase()
+    test_refuel_credit_concurrent_spend_does_not_overspend()
+    test_refuel_credit_rejects_empty_and_wrong_owner_targets()
     test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding()
     test_subscription_created_sets_paid_and_mirrors_subscription()
     test_subscription_deleted_cancels_entitlement_and_audits()
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
     test_stripe_webhook_merges_users_when_email_matches_existing_account()
-    print("PASS all 18 ArcLink entitlement tests")
+    print("PASS all 22 ArcLink entitlement tests")
     return 0
 
 

@@ -275,6 +275,7 @@ def register_public_bot_commands(env: Mapping[str, str] | None = None) -> dict[s
             results["telegram"]["webhook"] = ensure_arclink_public_telegram_webhook(
                 telegram.bot_token,
                 telegram.webhook_url,
+                telegram.webhook_secret,
             )
             results["telegram"]["active_scopes"] = refresh_active_telegram_command_scopes(merged)
         except Exception as exc:  # noqa: BLE001 - keep registering other platforms

@@ -133,11 +133,25 @@ class TestCredentialPresentDryRun(unittest.TestCase):
             result = run_live_proof(env=_FULL_ENV, skip_ports=True, live=False, artifact_dir=tmpdir)
             self.assertNotEqual(result.status, "live_executed")
 
-    def test_live_ready_pending_without_runners(self):
+    def test_requested_live_without_runners_is_blocked_nonzero(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = run_live_proof(env=_FULL_ENV, skip_ports=True, live=True, artifact_dir=tmpdir)
-            self.assertEqual(result.status, "live_ready_pending_execution")
-            self.assertEqual(result.exit_code, 0)
+            self.assertEqual(result.status, "blocked_no_registered_runner")
+            self.assertEqual(result.exit_code, 1)
+            self.assertTrue(result.evidence_path)
+            with open(result.evidence_path) as f:
+                data = json.load(f)
+            self.assertEqual(data["status"], "blocked_no_registered_runner")
+
+    def test_requested_live_missing_credentials_is_blocked_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_live_proof(env=_BASE_ENV, skip_ports=True, live=True, artifact_dir=tmpdir)
+            self.assertEqual(result.status, "blocked_missing_credentials")
+            self.assertEqual(result.exit_code, 1)
+            self.assertTrue(result.evidence_path)
+            with open(result.evidence_path) as f:
+                data = json.load(f)
+            self.assertEqual(data["status"], "blocked_missing_credentials")
 
     def test_tailscale_ingress_dry_run_does_not_require_cloudflare(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -349,6 +363,21 @@ class TestExternalProofJourney(unittest.TestCase):
             with open(result.evidence_path) as f:
                 raw = json.dumps(json.load(f))
             self.assertNotIn(_EXTERNAL_CHUTES_OAUTH_ENV["ARCLINK_CHUTES_OAUTH_CLIENT_SECRET_REF"], raw)
+
+    def test_external_single_opt_in_skips_unselected_proof_steps(self):
+        result = run_live_proof(
+            env=_EXTERNAL_CHUTES_OAUTH_ENV,
+            skip_ports=True,
+            live=True,
+            runners={"chutes_oauth_connect_proof": lambda step: {"step": step.name}},
+            journey="external",
+        )
+        self.assertEqual(result.status, "live_executed")
+        self.assertEqual(result.missing_env, [])
+        steps = {step["name"]: step for step in result.journey_summary["steps"]}
+        self.assertEqual(steps["chutes_oauth_connect_proof"]["status"], "passed")
+        self.assertEqual(steps["stripe_checkout_webhook_proof"]["status"], "skipped")
+        self.assertIn("proof opt-in not set", steps["stripe_checkout_webhook_proof"]["skip_reason"])
 
 
 class TestFakeRunners(unittest.TestCase):

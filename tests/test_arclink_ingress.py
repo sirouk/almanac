@@ -159,13 +159,42 @@ def test_dns_provision_is_idempotent_on_retry() -> None:
     print("PASS test_dns_provision_is_idempotent_on_retry")
 
 
+def test_dns_persist_preserves_provisioned_status_for_unchanged_record() -> None:
+    control = load_module("arclink_control.py", "arclink_control_ingress_preserve_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_ingress_preserve_test")
+    ingress = load_module("arclink_ingress.py", "arclink_ingress_preserve_test")
+    conn = memory_db(control)
+    records = ingress.desired_arclink_dns_records(prefix="same", base_domain="example.test", target="edge.example.test")
+    ingress.persist_arclink_dns_records(conn, deployment_id="dep_same", records=records)
+    conn.execute("UPDATE arclink_dns_records SET status = 'provisioned' WHERE deployment_id = 'dep_same'")
+    conn.commit()
+    ingress.persist_arclink_dns_records(conn, deployment_id="dep_same", records=records)
+    statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_dns_records WHERE deployment_id = 'dep_same'").fetchall()}
+    expect(statuses == {"provisioned"}, str(statuses))
+    changed = dict(records)
+    changed["dashboard"] = adapters.DnsRecord(
+        hostname=records["dashboard"].hostname,
+        record_type=records["dashboard"].record_type,
+        target="edge2.example.test",
+        proxied=records["dashboard"].proxied,
+    )
+    ingress.persist_arclink_dns_records(conn, deployment_id="dep_same", records=changed)
+    changed_status = conn.execute(
+        "SELECT status FROM arclink_dns_records WHERE deployment_id = 'dep_same' AND hostname = ?",
+        (records["dashboard"].hostname,),
+    ).fetchone()["status"]
+    expect(changed_status == "desired", str(changed_status))
+    print("PASS test_dns_persist_preserves_provisioned_status_for_unchanged_record")
+
+
 def main() -> int:
     test_dns_reconciler_persists_desired_records_and_records_drift_events()
     test_traefik_dynamic_labels_match_golden_file_for_public_host_roles()
     test_dns_provision_creates_records_and_marks_provisioned()
     test_dns_teardown_removes_records_and_marks_torn_down()
     test_dns_provision_is_idempotent_on_retry()
-    print("PASS all 5 ArcLink ingress tests")
+    test_dns_persist_preserves_provisioned_status_for_unchanged_record()
+    print("PASS all 6 ArcLink ingress tests")
     return 0
 
 

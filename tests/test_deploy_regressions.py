@@ -3142,6 +3142,8 @@ def test_systemd_unit_paths_are_quoted() -> None:
            "install-system-services.sh ExecStart paths must use quoted values")
     # User units: ExecStart must also use quoted paths
     user_text = (REPO / "bin" / "install-agent-user-services.sh").read_text()
+    expect("systemd_env_line()" in user_text, "install-agent-user-services.sh must quote generated Environment values")
+    expect("reject_systemd_unit_value" in user_text, "user unit values must reject control characters and substitutions")
     import re as _re_local
     exec_lines = [l.strip() for l in user_text.splitlines() if l.strip().startswith("ExecStart=")]
     for line in exec_lines:

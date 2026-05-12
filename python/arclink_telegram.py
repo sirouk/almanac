@@ -574,12 +574,16 @@ def telegram_set_webhook(
     webhook_url: str,
     allowed_updates: tuple[str, ...] = ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES,
     drop_pending_updates: bool = False,
+    secret_token: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "url": str(webhook_url or "").strip(),
         "allowed_updates": list(allowed_updates),
         "drop_pending_updates": bool(drop_pending_updates),
     }
+    clean_secret = str(secret_token or "").strip()
+    if clean_secret:
+        payload["secret_token"] = clean_secret
     return _request_json(
         _telegram_url(bot_token, "setWebhook"),
         method="POST",
@@ -591,21 +595,27 @@ def telegram_set_webhook(
 def ensure_arclink_public_telegram_webhook(
     bot_token: str,
     webhook_url: str,
+    webhook_secret: str = "",
 ) -> dict[str, Any]:
     clean_token = str(bot_token or "").strip()
     clean_url = str(webhook_url or "").strip()
+    clean_secret = str(webhook_secret or "").strip()
     if not clean_url:
         return {"skipped": True}
     if not clean_token:
         raise ArcLinkTelegramError("TELEGRAM_BOT_TOKEN is required to configure the ArcLink Telegram webhook")
+    if not clean_secret:
+        raise ArcLinkTelegramError("TELEGRAM_WEBHOOK_SECRET is required to configure the ArcLink Telegram webhook")
     telegram_set_webhook(
         bot_token=clean_token,
         webhook_url=clean_url,
         allowed_updates=ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES,
+        secret_token=clean_secret,
     )
     return {
         "url": clean_url,
         "allowed_updates": list(ARCLINK_PUBLIC_TELEGRAM_ALLOWED_UPDATES),
+        "secret_configured": True,
     }
 
 
@@ -657,6 +667,7 @@ class TelegramConfig:
     bot_username: str
     webhook_url: str
     api_base: str = TELEGRAM_API_BASE
+    webhook_secret: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> TelegramConfig:
@@ -664,8 +675,15 @@ class TelegramConfig:
         token = str(e.get("TELEGRAM_BOT_TOKEN", "")).strip()
         username = str(e.get("TELEGRAM_BOT_USERNAME", "")).strip()
         webhook = str(e.get("TELEGRAM_WEBHOOK_URL", "")).strip()
+        webhook_secret = str(e.get("TELEGRAM_WEBHOOK_SECRET", "")).strip()
         api_base = str(e.get("TELEGRAM_API_BASE", TELEGRAM_API_BASE)).strip()
-        return cls(bot_token=token, bot_username=username, webhook_url=webhook, api_base=api_base)
+        return cls(
+            bot_token=token,
+            bot_username=username,
+            webhook_url=webhook,
+            api_base=api_base,
+            webhook_secret=webhook_secret,
+        )
 
     @property
     def is_live(self) -> bool:
@@ -678,6 +696,8 @@ class TelegramConfig:
             missing.append("TELEGRAM_BOT_TOKEN")
         if not self.bot_username:
             missing.append("TELEGRAM_BOT_USERNAME")
+        if self.webhook_url and not self.webhook_secret:
+            missing.append("TELEGRAM_WEBHOOK_SECRET")
         return missing
 
 

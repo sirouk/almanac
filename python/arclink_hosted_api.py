@@ -17,17 +17,26 @@ import secrets
 import sqlite3
 import threading
 import time
+import hmac
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 from wsgiref.simple_server import make_server
 
 from arclink_adapters import FakeStripeClient, StripeWebhookError, resolve_stripe_client
 from arclink_chutes import renewal_lifecycle_for_billing_state
-from arclink_control import Config, append_arclink_event, connect_db, queue_notification
+from arclink_control import (
+    Config,
+    append_arclink_event,
+    connect_db,
+    is_ip_in_cidrs,
+    is_loopback_ip,
+    queue_notification,
+)
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
     GENERIC_ARCLINK_API_ERROR,
+    GENERIC_ARCLINK_AUTH_ERROR,
     ArcLinkApiAuthError,
     ArcLinkRateLimitError,
     _header as _api_header,
@@ -36,12 +45,14 @@ from arclink_api_auth import (
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
     approve_user_share_grant_api,
+    check_arclink_rate_limit,
     create_arclink_admin_login_session_api,
     create_arclink_user_login_session_api,
     create_user_share_grant_api,
     create_user_portal_link_api,
     deny_user_share_grant_api,
     extract_arclink_csrf_token,
+    extract_arclink_browser_session_credentials,
     extract_arclink_session_credentials,
     open_public_onboarding_checkout_api,
     queue_admin_action_api,
@@ -57,6 +68,7 @@ from arclink_api_auth import (
     claim_session_from_onboarding_api,
     read_provider_state_api,
     read_user_credentials_api,
+    authenticate_arclink_user_session,
     read_user_billing_api,
     read_user_dashboard_api,
     read_user_linked_resources_api,
@@ -74,9 +86,14 @@ from arclink_discord import (
 )
 from arclink_notification_delivery import run_public_agent_turns_once
 from arclink_product import base_domain as default_base_domain
+from arclink_secrets_regex import redact_then_truncate
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
 logger = logging.getLogger("arclink.hosted_api")
+
+
+def _log_error_text(exc: Exception, *, limit: int) -> str:
+    return redact_then_truncate(exc, limit=limit)
 
 _PUBLIC_AGENT_LIVE_TRIGGER_LOCK = threading.Lock()
 _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR: ThreadPoolExecutor | None = None
@@ -89,15 +106,17 @@ _PUBLIC_AGENT_LIVE_TRIGGER_PENDING_LIMIT = 0
 HOSTED_API_PREFIX = "/api/v1"
 SESSION_COOKIE_SECURE = True
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SAMESITE = "Strict"
 CORS_ALLOWED_METHODS = "GET, POST, OPTIONS"
 CORS_ALLOWED_HEADERS = (
-    "Content-Type, Authorization, "
+    "Content-Type, "
     "X-ArcLink-Session-Id, X-ArcLink-Session-Token, X-ArcLink-CSRF-Token, "
     "X-ArcLink-Request-Id"
 )
 CORS_MAX_AGE = "86400"
 REQUEST_ID_HEADER = "x-arclink-request-id"
+DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+DEFAULT_WEBHOOK_MAX_BODY_BYTES = 2 * 1024 * 1024
 
 
 class HostedApiConfig:
@@ -109,9 +128,66 @@ class HostedApiConfig:
         self.base_domain: str = default_base_domain(e)
         self.cors_origin: str = str(e.get("ARCLINK_CORS_ORIGIN", "")).strip()
         self.cookie_domain: str = str(e.get("ARCLINK_COOKIE_DOMAIN", "")).strip()
-        self.cookie_secure: bool = str(e.get("ARCLINK_COOKIE_SECURE", "1")).strip() != "0"
+        self.cookie_samesite: str = _normalize_cookie_samesite(str(e.get("ARCLINK_COOKIE_SAMESITE", SESSION_COOKIE_SAMESITE)))
+        cookie_secure_raw = str(e.get("ARCLINK_COOKIE_SECURE", "")).strip()
+        self.cookie_secure: bool = (
+            cookie_secure_raw != "0"
+            if cookie_secure_raw
+            else not _is_local_http_origin(self.cors_origin)
+        )
         self.stripe_webhook_secret: str = str(e.get("STRIPE_WEBHOOK_SECRET", "")).strip()
+        self.telegram_webhook_secret: str = str(e.get("TELEGRAM_WEBHOOK_SECRET", "")).strip()
         self.log_level: str = str(e.get("ARCLINK_LOG_LEVEL", "INFO")).strip().upper()
+        self.max_body_bytes: int = _bounded_env_int(
+            e,
+            "ARCLINK_HOSTED_API_MAX_BODY_BYTES",
+            DEFAULT_MAX_BODY_BYTES,
+            minimum=1,
+            maximum=32 * 1024 * 1024,
+        )
+        self.webhook_max_body_bytes: int = _bounded_env_int(
+            e,
+            "ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES",
+            DEFAULT_WEBHOOK_MAX_BODY_BYTES,
+            minimum=1,
+            maximum=32 * 1024 * 1024,
+        )
+        self.backend_allowed_cidrs: str = str(e.get("ARCLINK_BACKEND_ALLOWED_CIDRS", "")).strip()
+        self.webhook_rate_limit_window_seconds: int = _bounded_env_int(
+            e,
+            "ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS",
+            60,
+            minimum=1,
+            maximum=3600,
+        )
+        self.webhook_rate_limit_default: int = _bounded_env_int(
+            e,
+            "ARCLINK_WEBHOOK_RATE_LIMIT_DEFAULT",
+            60,
+            minimum=1,
+            maximum=10000,
+        )
+        self.webhook_rate_limit_stripe: int = _bounded_env_int(
+            e,
+            "ARCLINK_WEBHOOK_RATE_LIMIT_STRIPE",
+            self.webhook_rate_limit_default,
+            minimum=1,
+            maximum=10000,
+        )
+        self.webhook_rate_limit_telegram: int = _bounded_env_int(
+            e,
+            "ARCLINK_WEBHOOK_RATE_LIMIT_TELEGRAM",
+            self.webhook_rate_limit_default,
+            minimum=1,
+            maximum=10000,
+        )
+        self.webhook_rate_limit_discord: int = _bounded_env_int(
+            e,
+            "ARCLINK_WEBHOOK_RATE_LIMIT_DISCORD",
+            self.webhook_rate_limit_default,
+            minimum=1,
+            maximum=10000,
+        )
         self.default_price_id: str = str(
             e.get("ARCLINK_FOUNDERS_PRICE_ID")
             or e.get("ARCLINK_DEFAULT_PRICE_ID")
@@ -137,6 +213,48 @@ class HostedApiConfig:
 # --- Request / Response helpers -----------------------------------------------
 
 
+class HostedApiBodyError(ValueError):
+    """Raised when the HTTP body fails the hosted API ingress contract."""
+
+    def __init__(self, status: int, code: str) -> None:
+        super().__init__(code)
+        self.status = status
+        self.code = code
+
+
+def _bounded_env_int(
+    env: Mapping[str, str],
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    raw = str(env.get(name, str(default))).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _is_local_http_origin(origin: str) -> bool:
+    parsed = urlparse(str(origin or "").strip())
+    if parsed.scheme != "http":
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _normalize_cookie_samesite(value: str) -> str:
+    clean = str(value or SESSION_COOKIE_SAMESITE).strip().lower()
+    if clean == "none":
+        return "None"
+    if clean == "lax":
+        return "Lax"
+    return "Strict"
+
+
 def _request_id(headers: Mapping[str, Any]) -> str:
     """Extract or generate a request ID."""
     candidate = _api_header(headers, REQUEST_ID_HEADER)[:64]
@@ -149,8 +267,10 @@ def _json_body(body: str) -> dict[str, Any]:
     try:
         parsed = json.loads(body)
     except json.JSONDecodeError:
-        return {}
-    return dict(parsed) if isinstance(parsed, dict) else {}
+        raise HostedApiBodyError(400, "invalid_json")
+    if not isinstance(parsed, dict):
+        raise HostedApiBodyError(400, "invalid_json")
+    return dict(parsed)
 
 
 def _form_body(body: str) -> dict[str, str]:
@@ -174,7 +294,7 @@ def _json_response(
 
 
 def _cookie_flags(config: HostedApiConfig, *, expire: bool = False, httponly: bool = True) -> str:
-    flags = "; Path=/; SameSite=Lax"
+    flags = f"; Path=/; SameSite={config.cookie_samesite}"
     if httponly:
         flags += "; HttpOnly"
     if expire:
@@ -230,6 +350,87 @@ def _cors_headers(config: HostedApiConfig) -> list[tuple[str, str]]:
         ("Access-Control-Allow-Credentials", "true"),
         ("Access-Control-Max-Age", CORS_MAX_AGE),
     ]
+
+
+def _response_with_cors(
+    result: tuple[int, dict[str, Any], list[tuple[str, str]]],
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    cors = _cors_headers(config)
+    if not cors:
+        return result
+    return (result[0], result[1], [*result[2], *cors])
+
+
+def _route_body_limit(config: HostedApiConfig, route_key: str | None) -> int:
+    if route_key in {"stripe_webhook", "telegram_webhook", "discord_webhook"}:
+        return config.webhook_max_body_bytes
+    return config.max_body_bytes
+
+
+def _body_size_bytes(body: str) -> int:
+    return len(body.encode("utf-8"))
+
+
+def _remote_ip_from_headers(
+    config: HostedApiConfig,
+    headers: Mapping[str, Any],
+    remote_addr: str = "",
+) -> str:
+    """Resolve the client IP used for CIDR decisions.
+
+    Forwarded headers are trusted only when the direct peer is already a
+    local/trusted backend peer. This preserves reverse-proxy behavior without
+    letting an arbitrary public client spoof an allowed source.
+    """
+    direct = str(remote_addr or "").strip() or _api_header(headers, "x-real-ip") or "127.0.0.1"
+    forwarded = _api_header(headers, "x-forwarded-for")
+    if forwarded and _backend_client_allowed(config, direct):
+        candidate = forwarded.split(",", 1)[0].strip()
+        if candidate:
+            return candidate
+    return direct
+
+
+def _backend_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
+    normalized = str(remote_ip or "").strip()
+    if is_loopback_ip(normalized):
+        return True
+    return is_ip_in_cidrs(normalized, config.backend_allowed_cidrs)
+
+
+def _webhook_provider_for_route(route_key: str) -> str:
+    return str(route_key or "").removesuffix("_webhook").strip().lower()
+
+
+def _webhook_rate_limit_for_provider(config: HostedApiConfig, provider: str) -> int:
+    return {
+        "stripe": config.webhook_rate_limit_stripe,
+        "telegram": config.webhook_rate_limit_telegram,
+        "discord": config.webhook_rate_limit_discord,
+    }.get(provider, config.webhook_rate_limit_default)
+
+
+def _check_webhook_rate_limit(
+    conn: sqlite3.Connection,
+    *,
+    config: HostedApiConfig,
+    route_key: str,
+    headers: Mapping[str, Any],
+    remote_addr: str,
+) -> None:
+    provider = _webhook_provider_for_route(route_key)
+    if not provider:
+        return
+    client_ip = _remote_ip_from_headers(config, headers, remote_addr)
+    subject = f"ip:{client_ip or 'unknown'}"
+    check_arclink_rate_limit(
+        conn,
+        scope=f"webhook:{provider}",
+        subject=subject,
+        limit=_webhook_rate_limit_for_provider(config, provider),
+        window_seconds=config.webhook_rate_limit_window_seconds,
+    )
 
 
 # --- Route handlers -----------------------------------------------------------
@@ -319,7 +520,7 @@ def _handle_stripe_webhook(
         )
         return _json_response(
             503,
-            {"status": "misconfigured", "error": "stripe_webhook_secret_unset", "request_id": request_id},
+            {"error": "stripe_webhook_secret_unset", "request_id": request_id},
             request_id=request_id,
         )
     sig = _api_header(headers, "stripe-signature")
@@ -553,7 +754,11 @@ def _handle_logout(
     config: HostedApiConfig,
     kind: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind=kind)
+    creds = extract_arclink_browser_session_credentials(headers, session_kind=kind)
+    if kind == "admin":
+        authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+    else:
+        authenticate_arclink_user_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     csrf = extract_arclink_csrf_token(headers, session_kind=kind)
     require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind=kind)
     result = revoke_arclink_session(
@@ -608,7 +813,7 @@ def _handle_admin_action(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="admin")
     csrf = extract_arclink_csrf_token(headers, session_kind="admin")
     result = queue_admin_action_api(
         conn,
@@ -644,7 +849,8 @@ def _handle_user_portal_link(
     config: HostedApiConfig,
     stripe_client: Any,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    authenticate_arclink_user_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind="user")
     result = create_user_portal_link_api(
@@ -694,7 +900,7 @@ def _handle_user_credential_ack(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     result = acknowledge_user_credential_api(
         conn,
@@ -713,7 +919,7 @@ def _handle_user_share_grant_create(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     result = create_user_share_grant_api(
         conn,
@@ -738,7 +944,7 @@ def _handle_user_share_grant_approve(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     result = approve_user_share_grant_api(
         conn,
@@ -757,7 +963,7 @@ def _handle_user_share_grant_deny(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     result = deny_user_share_grant_api(
         conn,
@@ -776,7 +982,7 @@ def _handle_user_share_grant_accept(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     result = accept_user_share_grant_api(
         conn,
@@ -795,7 +1001,7 @@ def _handle_user_share_grant_revoke(
     request_id: str,
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
-    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
     csrf = extract_arclink_csrf_token(headers, session_kind="user")
     result = revoke_user_share_grant_api(
         conn,
@@ -860,7 +1066,7 @@ def _handle_session_revoke(
     config: HostedApiConfig,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     session_kind = str(body.get("session_kind") or "").strip().lower()
-    creds = extract_arclink_session_credentials(headers, session_kind="admin")
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="admin")
     authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     csrf = extract_arclink_csrf_token(headers, session_kind="admin")
     require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind="admin")
@@ -1170,7 +1376,7 @@ def _kick_public_agent_live_trigger(
                 "public_agent_live_trigger_failed channel=%s target=%s error=%s request_id=%s",
                 clean_channel,
                 clean_target,
-                str(exc)[:240],
+                _log_error_text(exc, limit=240),
                 request_id,
             )
 
@@ -1182,7 +1388,7 @@ def _kick_public_agent_live_trigger(
             "public_agent_live_trigger_submit_failed channel=%s target=%s error=%s request_id=%s",
             clean_channel,
             clean_target,
-            str(exc)[:240],
+            _log_error_text(exc, limit=240),
             request_id,
         )
         return False
@@ -1209,8 +1415,22 @@ def _handle_telegram_webhook(
     config: HostedApiConfig,
     stripe_client: Any,
     telegram_transport: Any | None = None,
+    headers: Mapping[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Handle an incoming Telegram Bot API update (webhook mode)."""
+    if not config.telegram_webhook_secret:
+        logger.error(
+            "telegram_webhook_misconfigured: TELEGRAM_WEBHOOK_SECRET is not set; rejecting request_id=%s",
+            request_id,
+        )
+        return _json_response(
+            503,
+            {"error": "telegram_webhook_secret_unset", "request_id": request_id},
+            request_id=request_id,
+        )
+    supplied_secret = _api_header(headers or {}, "x-telegram-bot-api-secret-token")
+    if not supplied_secret or not hmac.compare_digest(supplied_secret, config.telegram_webhook_secret):
+        return _json_response(401, {"error": "invalid_telegram_webhook_secret"}, request_id=request_id)
     telegram_config = TelegramConfig.from_env(config.env)
     result = handle_telegram_update(
         conn, body,
@@ -1256,7 +1476,7 @@ def _handle_telegram_webhook(
                 "telegram_callback_message_edit_failed transport=%s action=%s error=%s",
                 transport_label,
                 result.get("action", ""),
-                str(exc)[:160],
+                _log_error_text(exc, limit=160),
             )
             return False
 
@@ -1266,7 +1486,7 @@ def _handle_telegram_webhook(
                 telegram_transport.answer_callback_query(callback_query_id)
                 callback_acknowledged = True
             except Exception as exc:  # noqa: BLE001 - webhook must acknowledge update even if callback ack fails
-                logger.warning("telegram_callback_ack_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
+                logger.warning("telegram_callback_ack_failed transport=injected action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
         edited = _try_edit_callback_message(telegram_transport, transport_label="injected")
         reply_text = str(result.get("text") or "").strip()
         if reply_text and not edited:
@@ -1274,7 +1494,7 @@ def _handle_telegram_webhook(
                 telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                 sent = True
             except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
-                logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), str(exc)[:160])
+                logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     else:
         if telegram_config.is_live:
             live_transport = LiveTelegramTransport(telegram_config)
@@ -1283,7 +1503,7 @@ def _handle_telegram_webhook(
                     live_transport.answer_callback_query(callback_query_id)
                     callback_acknowledged = True
                 except Exception as exc:  # noqa: BLE001 - still try to send the actual reply
-                    logger.warning("telegram_callback_ack_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
+                    logger.warning("telegram_callback_ack_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
             edited = _try_edit_callback_message(live_transport, transport_label="live")
             reply_text = str(result.get("text") or "").strip()
             if reply_text and not edited:
@@ -1291,7 +1511,7 @@ def _handle_telegram_webhook(
                     live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                     sent = True
                 except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
-                    logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), str(exc)[:160])
+                    logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     live_triggered = False
     if str(result.get("action") or "") == "agent_message_queued":
         live_triggered = _kick_public_agent_live_trigger(
@@ -1781,6 +2001,51 @@ _PUBLIC_ROUTES = frozenset({
     "openapi_spec",
 })
 
+_CIDR_PROTECTED_ROUTES = frozenset({
+    "admin_login",
+    "admin_logout",
+    "admin_dashboard",
+    "admin_service_health",
+    "admin_provisioning_jobs",
+    "admin_dns_drift",
+    "admin_audit",
+    "admin_events",
+    "admin_queued_actions",
+    "admin_action",
+    "admin_reconciliation",
+    "admin_provider_state",
+    "session_revoke",
+    "admin_operator_snapshot",
+    "admin_scale_operations",
+    "adapter_mode",
+})
+
+_JSON_OBJECT_ROUTES = frozenset({
+    "public_onboarding_start",
+    "public_onboarding_answer",
+    "public_onboarding_checkout",
+    "telegram_webhook",
+    "admin_login",
+    "user_login",
+    "user_logout",
+    "admin_logout",
+    "user_portal_link",
+    "user_credential_ack",
+    "user_share_grant_create",
+    "user_share_grant_approve",
+    "user_share_grant_deny",
+    "user_share_grant_accept",
+    "user_share_grant_revoke",
+    "admin_action",
+    "session_revoke",
+    "onboarding_claim_session",
+    "onboarding_cancel",
+})
+
+
+def _allowed_methods_for_path(route_path: str) -> list[str]:
+    return sorted(method for (method, path_suffix), _route_key in _ROUTES.items() if path_suffix == route_path)
+
 
 def route_arclink_hosted_api(
     conn: sqlite3.Connection,
@@ -1792,6 +2057,7 @@ def route_arclink_hosted_api(
     query: Mapping[str, str] | None = None,
     config: HostedApiConfig | None = None,
     stripe_client: Any | None = None,
+    remote_addr: str = "",
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Route a single API request and return (status, payload, headers).
 
@@ -1804,24 +2070,64 @@ def route_arclink_hosted_api(
     clean_path = str(path or "").rstrip("/")
     clean_query = dict(query or {})
 
-    # CORS preflight
-    if clean_method == "OPTIONS":
-        cors = _cors_headers(cfg)
-        return 204, {}, [("Content-Length", "0"), *cors]
-
     # Strip API prefix
     if clean_path.startswith(HOSTED_API_PREFIX):
         route_path = clean_path[len(HOSTED_API_PREFIX):]
     else:
         route_path = clean_path
 
+    # CORS preflight
+    if clean_method == "OPTIONS":
+        allowed_methods = _allowed_methods_for_path(route_path)
+        if not allowed_methods:
+            return _response_with_cors(
+                _json_response(404, {"error": "not_found"}, request_id=request_id),
+                cfg,
+            )
+        requested_method = _api_header(headers, "access-control-request-method").upper()
+        allow_value = ", ".join([*allowed_methods, "OPTIONS"])
+        preflight_headers = [("Content-Length", "0"), ("Allow", allow_value), *_cors_headers(cfg)]
+        if requested_method and requested_method not in allowed_methods:
+            return 405, {}, preflight_headers
+        return 204, {}, preflight_headers
+
     route_key = _ROUTES.get((clean_method, route_path))
     if route_key is None:
-        return _json_response(404, {"error": "not_found"}, request_id=request_id)
+        return _response_with_cors(
+            _json_response(404, {"error": "not_found"}, request_id=request_id),
+            cfg,
+        )
+
+    body_limit = _route_body_limit(cfg, route_key)
+    if body and _body_size_bytes(body) > body_limit:
+        return _response_with_cors(
+            _json_response(413, {"error": "body_too_large", "request_id": request_id}, request_id=request_id),
+            cfg,
+        )
+
+    if route_key in _CIDR_PROTECTED_ROUTES:
+        client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
+        if not _backend_client_allowed(cfg, client_ip):
+            logger.warning(
+                "api_cidr_denied method=%s path=%s route=%s remote_ip=%s request_id=%s",
+                clean_method, route_path, route_key, client_ip, request_id,
+            )
+            return _response_with_cors(
+                _json_response(403, {"error": "forbidden", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
 
     start = time.monotonic()
     try:
-        parsed_body = _json_body(body) if body else {}
+        if route_key in {"stripe_webhook", "telegram_webhook", "discord_webhook"}:
+            _check_webhook_rate_limit(
+                conn,
+                config=cfg,
+                route_key=route_key,
+                headers=headers,
+                remote_addr=remote_addr,
+            )
+        parsed_body = _json_body(body) if route_key in _JSON_OBJECT_ROUTES else {}
         stripe = stripe_client or resolve_stripe_client(cfg.env)
 
         if route_key == "public_onboarding_start":
@@ -1833,7 +2139,7 @@ def route_arclink_hosted_api(
         elif route_key == "stripe_webhook":
             result = _handle_stripe_webhook(conn, body, headers, request_id, cfg)
         elif route_key == "telegram_webhook":
-            result = _handle_telegram_webhook(conn, parsed_body, request_id, cfg, stripe)
+            result = _handle_telegram_webhook(conn, parsed_body, request_id, cfg, stripe, headers=headers)
         elif route_key == "discord_webhook":
             result = _handle_discord_webhook(conn, body, headers, request_id, cfg, None, stripe)
         elif route_key == "admin_login":
@@ -1905,12 +2211,18 @@ def route_arclink_hosted_api(
             clean_method, route_path, route_key, result[0], elapsed, request_id,
         )
 
-        # Append CORS headers
-        cors = _cors_headers(cfg)
-        if cors:
-            result = (result[0], result[1], [*result[2], *cors])
-        return result
+        return _response_with_cors(result, cfg)
 
+    except HostedApiBodyError as exc:
+        elapsed = time.monotonic() - start
+        logger.warning(
+            "api_body_error method=%s path=%s route=%s error=%s elapsed=%.3fs request_id=%s",
+            clean_method, route_path, route_key, exc.code, elapsed, request_id,
+        )
+        return _response_with_cors(
+            _json_response(exc.status, {"error": exc.code, "request_id": request_id}, request_id=request_id),
+            cfg,
+        )
     except ArcLinkRateLimitError as exc:
         elapsed = time.monotonic() - start
         reset_at = int(time.time()) + exc.reset_seconds
@@ -1936,7 +2248,7 @@ def route_arclink_hosted_api(
             clean_method, route_path, route_key, str(exc), elapsed, request_id,
         )
         cors = _cors_headers(cfg)
-        return _json_response(401, {"error": str(exc), "request_id": request_id}, request_id=request_id, extra_headers=cors)
+        return _json_response(401, {"error": GENERIC_ARCLINK_AUTH_ERROR, "request_id": request_id}, request_id=request_id, extra_headers=cors)
     except StripeWebhookError as exc:
         elapsed = time.monotonic() - start
         logger.warning(
@@ -1962,20 +2274,54 @@ def route_arclink_hosted_api(
 
 
 def make_arclink_hosted_api_wsgi(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection | None = None,
     *,
     config: HostedApiConfig | None = None,
     stripe_client: Any | None = None,
+    db_config: Config | None = None,
+    connect: Any | None = None,
 ) -> Any:
     """Return a WSGI application wrapping route_arclink_hosted_api."""
     cfg = config or HostedApiConfig()
+    control_config = db_config or Config.from_env()
+    connect_db_fn = connect or connect_db
 
     def app(environ: Mapping[str, Any], start_response: Any) -> list[bytes]:
         method = str(environ.get("REQUEST_METHOD", "GET"))
         path = str(environ.get("PATH_INFO", "/"))
         qs = str(environ.get("QUERY_STRING", ""))
         query = {k: v[0] for k, v in parse_qs(qs).items() if v}
-        length = int(str(environ.get("CONTENT_LENGTH") or "0") or 0)
+        clean_method = method.upper()
+        clean_path = path.rstrip("/")
+        route_path = clean_path[len(HOSTED_API_PREFIX):] if clean_path.startswith(HOSTED_API_PREFIX) else clean_path
+        route_key = _ROUTES.get((clean_method, route_path))
+        body_limit = _route_body_limit(cfg, route_key) if route_key else cfg.max_body_bytes
+        request_id = _request_id({
+            key[5:].replace("_", "-").lower(): str(value or "")
+            for key, value in dict(environ).items()
+            if key.startswith("HTTP_")
+        })
+
+        try:
+            length = int(str(environ.get("CONTENT_LENGTH") or "0") or 0)
+        except ValueError:
+            result = _response_with_cors(
+                _json_response(400, {"error": "invalid_content_length", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
+            status_code, payload, response_headers = result
+            response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
+            start_response(_status_text(status_code), response_headers)
+            return [response_body]
+        if length > body_limit:
+            result = _response_with_cors(
+                _json_response(413, {"error": "body_too_large", "request_id": request_id}, request_id=request_id),
+                cfg,
+            )
+            status_code, payload, response_headers = result
+            response_body = json.dumps(payload, sort_keys=True).encode("utf-8")
+            start_response(_status_text(status_code), response_headers)
+            return [response_body]
         body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
 
         # Build headers dict from CGI environ
@@ -1987,33 +2333,44 @@ def make_arclink_hosted_api_wsgi(
             elif key == "CONTENT_TYPE":
                 headers["content-type"] = str(value or "")
 
-        status_code, payload, response_headers = route_arclink_hosted_api(
-            conn,
-            method=method,
-            path=path,
-            headers=headers,
-            body=body,
-            query=query,
-            config=cfg,
-            stripe_client=stripe_client,
-        )
-        status_text = {
-            200: "200 OK",
-            201: "201 Created",
-            202: "202 Accepted",
-            204: "204 No Content",
-            400: "400 Bad Request",
-            401: "401 Unauthorized",
-            404: "404 Not Found",
-            429: "429 Too Many Requests",
-            500: "500 Internal Server Error",
-            503: "503 Service Unavailable",
-        }.get(status_code, f"{status_code} OK")
+        request_conn = conn or connect_db_fn(control_config)
+        try:
+            status_code, payload, response_headers = route_arclink_hosted_api(
+                request_conn,
+                method=method,
+                path=path,
+                headers=headers,
+                body=body,
+                query=query,
+                config=cfg,
+                stripe_client=stripe_client,
+                remote_addr=str(environ.get("REMOTE_ADDR") or ""),
+            )
+        finally:
+            if conn is None:
+                request_conn.close()
         response_body = json.dumps(payload, sort_keys=True).encode("utf-8") if payload else b""
-        start_response(status_text, response_headers)
+        start_response(_status_text(status_code), response_headers)
         return [response_body]
 
     return app
+
+
+def _status_text(status_code: int) -> str:
+    return {
+        200: "200 OK",
+        201: "201 Created",
+        202: "202 Accepted",
+        204: "204 No Content",
+        400: "400 Bad Request",
+        401: "401 Unauthorized",
+        403: "403 Forbidden",
+        404: "404 Not Found",
+        413: "413 Payload Too Large",
+        429: "429 Too Many Requests",
+        500: "500 Internal Server Error",
+        503: "503 Service Unavailable",
+    }.get(status_code, f"{status_code} OK")
 
 
 def main() -> int:
@@ -2028,8 +2385,7 @@ def main() -> int:
     cfg = Config.from_env()
     host = str(os.environ.get("ARCLINK_API_HOST") or "127.0.0.1").strip() or "127.0.0.1"
     port = int(str(os.environ.get("ARCLINK_API_PORT") or "8900"))
-    conn = connect_db(cfg)
-    app = make_arclink_hosted_api_wsgi(conn, config=hosted_config)
+    app = make_arclink_hosted_api_wsgi(None, config=hosted_config, db_config=cfg)
     logger.info("ArcLink hosted API listening on %s:%s", host, port)
     with make_server(host, port, app) as server:
         server.serve_forever()

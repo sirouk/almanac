@@ -8,10 +8,12 @@ to start. Uses fake mode (no network) when the token is absent.
 from __future__ import annotations
 
 import logging
+import json
 import os
 import pathlib
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -25,11 +27,13 @@ from arclink_public_bots import (
     handle_arclink_public_bot_turn,
 )
 from arclink_http import http_request, parse_json_object, parse_json_response
+from arclink_control import utc_now_iso
 
 logger = logging.getLogger("arclink.discord")
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 DISCORD_USER_AGENT = "ArcLinkDiscord/1.0 (+https://github.com/example/arclink)"
+DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS = 300
 
 
 class ArcLinkDiscordError(RuntimeError):
@@ -175,15 +179,27 @@ class DiscordConfig:
     app_id: str
     public_key: str
     guild_id: str
+    timestamp_tolerance_seconds: int = DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DiscordConfig:
         e = dict(env or os.environ)
+        try:
+            raw_tolerance = str(
+                e.get(
+                    "DISCORD_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS",
+                    str(DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS),
+                )
+            ).strip()
+            tolerance = int(raw_tolerance)
+        except ValueError:
+            tolerance = DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS
         return cls(
             bot_token=str(e.get("DISCORD_BOT_TOKEN", "")).strip(),
             app_id=str(e.get("DISCORD_APP_ID", "")).strip(),
             public_key=str(e.get("DISCORD_PUBLIC_KEY", "")).strip(),
             guild_id=str(e.get("DISCORD_TEST_GUILD_ID", "")).strip(),
+            timestamp_tolerance_seconds=max(1, min(3600, tolerance)),
         )
 
     @property
@@ -220,6 +236,54 @@ def verify_discord_signature(
         return True
     except Exception:
         return False
+
+
+def _validate_discord_timestamp(timestamp: str, *, tolerance_seconds: int) -> None:
+    clean = str(timestamp or "").strip()
+    try:
+        observed = int(clean)
+    except ValueError as exc:
+        raise ArcLinkDiscordError("invalid Discord interaction timestamp") from exc
+    now = int(time.time())
+    if abs(now - observed) > max(1, int(tolerance_seconds or DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS)):
+        raise ArcLinkDiscordError("stale Discord interaction timestamp")
+
+
+def _reserve_discord_interaction(conn: sqlite3.Connection, interaction: Mapping[str, Any], *, body: str) -> str:
+    del body
+    interaction_id = str(interaction.get("id") or "").strip()
+    if not interaction_id:
+        raise ArcLinkDiscordError("missing Discord interaction id")
+    now = utc_now_iso()
+    payload_json = json.dumps(
+        {"interaction_id": interaction_id, "interaction_type": str(interaction.get("type") or "")},
+        sort_keys=True,
+    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_webhook_events
+              (provider, event_id, event_type, received_at, processed_at, status, payload_json)
+            VALUES ('discord', ?, ?, ?, '', 'received', ?)
+            """,
+            (interaction_id, str(interaction.get("type") or ""), now, payload_json),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        raise ArcLinkDiscordError("duplicate Discord interaction") from exc
+    return interaction_id
+
+
+def _mark_discord_interaction_processed(conn: sqlite3.Connection, interaction_id: str, status: str) -> None:
+    conn.execute(
+        """
+        UPDATE arclink_webhook_events
+           SET processed_at = ?, status = ?
+         WHERE provider = 'discord' AND event_id = ?
+        """,
+        (utc_now_iso(), status, interaction_id),
+    )
+    conn.commit()
 
 
 def _discord_display_name(user: Mapping[str, Any]) -> str:
@@ -454,13 +518,15 @@ def handle_discord_webhook_request(
     Verifies the signature, processes the interaction, and returns
     the JSON response to send back to Discord.
     """
+    _validate_discord_timestamp(timestamp, tolerance_seconds=config.timestamp_tolerance_seconds)
     if not verify_discord_signature(body, signature, timestamp, config.public_key):
         raise ArcLinkDiscordError("invalid Discord interaction signature")
 
-    import json
     interaction = json.loads(body)
-    result = handle_discord_interaction(
-        conn, interaction,
+    interaction_id = _reserve_discord_interaction(conn, interaction, body=body)
+    try:
+        result = handle_discord_interaction(
+            conn, interaction,
             stripe_client=stripe_client,
             price_id=price_id,
             founders_price_id=founders_price_id,
@@ -469,7 +535,11 @@ def handle_discord_webhook_request(
             sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
             scale_agent_expansion_price_id=scale_agent_expansion_price_id,
             base_domain=base_domain,
-    )
+        )
+    except Exception:
+        _mark_discord_interaction_processed(conn, interaction_id, "failed")
+        raise
+    _mark_discord_interaction_processed(conn, interaction_id, "processed")
     if result is None:
         return {"type": 1}  # ACK with PONG as safe fallback
     return result

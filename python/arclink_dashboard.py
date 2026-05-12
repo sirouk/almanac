@@ -4,9 +4,10 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+from pathlib import Path
 from typing import Any, Mapping
 
-from arclink_control import append_arclink_audit, get_setting, utc_now_iso
+from arclink_control import ARCLINK_ACTION_INTENT_STATUSES, append_arclink_audit, get_setting, utc_now_iso
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_chutes import evaluate_chutes_deployment_boundary, renewal_lifecycle_for_billing_state
@@ -30,8 +31,7 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_ACTION_INTENT_STATUSES = frozenset({"queued", "running", "succeeded", "failed", "cancelled", "pending_not_implemented"})
-ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"})
 ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
 ARCLINK_USER_DASHBOARD_SECTIONS = (
     "deployment_health",
@@ -53,14 +53,46 @@ ARCLINK_USER_DASHBOARD_SECTIONS = (
 def admin_action_execution_readiness(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     source_env = env or os.environ
     executor_adapter = str(source_env.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower() or "disabled"
+    probes: list[dict[str, Any]] = [
+        {
+            "name": "executor_adapter",
+            "ok": executor_adapter in {"fake", "local", "ssh"},
+            "detail": executor_adapter,
+        }
+    ]
+    if executor_adapter == "ssh":
+        machine_enabled = _truthy(source_env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or source_env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED") or "")
+        host = str(source_env.get("ARCLINK_ACTION_WORKER_SSH_HOST") or source_env.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip().lower()
+        allowed_hosts = _csv_set(
+            str(source_env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or source_env.get("ARCLINK_ACTION_WORKER_SSH_HOST_ALLOWLIST") or "")
+        )
+        key_path = str(source_env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
+        probes.append({"name": "ssh_machine_mode", "ok": machine_enabled, "detail": "enabled" if machine_enabled else "disabled"})
+        probes.append({"name": "ssh_host", "ok": bool(host) and host in allowed_hosts, "detail": "allowlisted" if host and host in allowed_hosts else "missing_or_not_allowlisted"})
+        probes.append({"name": "ssh_key", "ok": bool(key_path), "detail": "configured" if key_path else "missing"})
+    executable = sorted(ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES) if all(bool(probe["ok"]) for probe in probes) else []
+    disabled = sorted(ARCLINK_ADMIN_ACTION_TYPES - set(executable))
     return {
-        "executable": sorted(ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES),
+        "executable": executable,
         "pending_not_implemented": sorted(ARCLINK_PENDING_ADMIN_ACTION_TYPES),
-        "disabled": sorted(ARCLINK_PENDING_ADMIN_ACTION_TYPES),
+        "disabled": disabled,
         "executor_adapter": executor_adapter,
+        "probes": probes,
         "queue_policy": "admin UI queues only modeled worker actions; pending actions stay disabled until worker wiring lands",
-        "note": "pending_not_implemented actions record honest pending status instead of fake success",
+        "note": (
+            "modeled actions are executable only when executor probes pass"
+            if executable
+            else "executor probes are not ready; admin actions fail closed in the UI"
+        ),
     }
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _csv_set(value: str) -> set[str]:
+    return {item.strip().lower() for item in str(value or "").split(",") if item.strip()}
 ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
     "onboarding_funnel",
     "users",
@@ -106,6 +138,7 @@ def build_operator_snapshot(
             journey_blockers.append({"step": step.name, "missing_env": missing})
 
     all_journey_creds_present = len(journey_blockers) == 0
+    template_state = operator_evidence_template_state(env_source)
 
     return {
         "host_readiness": readiness.to_dict(),
@@ -117,10 +150,29 @@ def build_operator_snapshot(
             "blockers": journey_blockers,
         },
         "evidence": {
-            "template_ready": True,
+            "template_ready": template_state["ready"],
+            "template": template_state,
             "credentialed_evidence": "missing" if not all_journey_creds_present else "pending_run",
             "live_proof": "blocked" if not all_journey_creds_present else "pending_credentialed_run",
         },
+    }
+
+
+def operator_evidence_template_state(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    source_env = env or os.environ
+    template_path = Path(
+        str(source_env.get("ARCLINK_LIVE_EVIDENCE_TEMPLATE") or Path(__file__).resolve().parents[1] / "docs" / "arclink" / "live-e2e-evidence-template.md")
+    )
+    try:
+        text = template_path.read_text(encoding="utf-8")[:12_000]
+    except OSError:
+        text = ""
+    required_markers = ("Evidence", "Run", "Credentials")
+    missing_markers = [marker for marker in required_markers if marker.casefold() not in text.casefold()]
+    return {
+        "ready": template_path.is_file() and not missing_markers,
+        "path": str(template_path),
+        "missing_markers": missing_markers,
     }
 
 
@@ -956,11 +1008,14 @@ def read_arclink_admin_dashboard(
     ]
 
     dns_args: list[Any] = []
-    dns_where = "WHERE event_type = 'dns_drift'"
+    dns_where = """
+    WHERE e.event_type = 'dns_drift'
+      AND COALESCE(d.status, '') NOT IN ('cancelled', 'torn_down', 'teardown_complete')
+    """
     if filters["deployment_id"]:
-        dns_where += " AND subject_id = ?"
+        dns_where += " AND e.subject_id = ?"
         dns_args.append(filters["deployment_id"])
-    dns_where += _time_filter("created_at", filters["since"], dns_args)
+    dns_where += _time_filter("e.created_at", filters["since"], dns_args)
     dns_drift = [
         {
             "deployment_id": str(row["subject_id"] or ""),
@@ -969,10 +1024,11 @@ def read_arclink_admin_dashboard(
         }
         for row in conn.execute(
             f"""
-            SELECT subject_id, metadata_json, created_at
-            FROM arclink_events
+            SELECT e.subject_id, e.metadata_json, e.created_at
+            FROM arclink_events e
+            LEFT JOIN arclink_deployments d ON d.deployment_id = e.subject_id
             {dns_where}
-            ORDER BY created_at DESC, event_id DESC
+            ORDER BY e.created_at DESC, e.event_id DESC
             LIMIT ?
             """,
             (*dns_args, limit),
@@ -1255,6 +1311,8 @@ def queue_arclink_admin_action(
         raise ArcLinkDashboardError("ArcLink admin actions require an admin id")
     if clean_action not in ARCLINK_ADMIN_ACTION_TYPES:
         raise ArcLinkDashboardError(f"unsupported ArcLink admin action type: {clean_action or 'blank'}")
+    if clean_action not in ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES:
+        raise ArcLinkDashboardError(f"ArcLink admin action type is not queueable until worker support lands: {clean_action}")
     if clean_target_kind not in ARCLINK_ADMIN_TARGET_KINDS or not clean_target_id:
         raise ArcLinkDashboardError("ArcLink admin actions require a supported target")
     if not clean_reason:

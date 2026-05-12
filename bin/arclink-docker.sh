@@ -227,6 +227,7 @@ bootstrap() {
   ensure_env_file_value ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "4"
   ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"
   ensure_env_file_value ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "/home/arclink/arclink/arclink-priv/secrets/ssh/known_hosts"
+  ensure_env_file_value ARCLINK_DOCKER_SOCKET_GID "$(stat -c %g /var/run/docker.sock 2>/dev/null || printf '0')"
   reserve_docker_ports
 }
 

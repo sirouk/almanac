@@ -1,189 +1,135 @@
 # Research Summary
 
-<confidence>96</confidence>
+<confidence>94</confidence>
 
 ## Scope
 
-This PLAN pass inspected the public ArcLink repository structure, runtime
-manifests, service topology, tests, steering files, and existing research
-artifacts. It did not inspect private state, user homes, secret files, deploy
-keys, OAuth material, bot tokens, `.env` values, or live provider accounts. It
-also did not run live deploys, upgrades, payment flows, public bot mutations,
-Docker install/upgrade flows, or external Chutes, Notion, Cloudflare, or
-Tailscale proof.
+This PLAN pass inspected the public ArcLink repository structure, stack
+manifests, runtime entrypoints, existing Ralphie artifacts, and the active
+Sovereign audit verification backlog:
 
-The active BUILD sources are:
+`research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md`
 
-- `research/RALPHIE_ARCLINK_PRODUCT_REALITY_AND_JOURNEY_STEERING.md`
-- `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`
-- `research/RALPHIE_MEMORY_SYSTEM_CHERRYPICK_STUDY.md`
-- `research/RALPHIE_END_TO_END_PROOF_AND_BUILD_SPEC_20260509.md`
-- `research/PRODUCT_REALITY_MATRIX.md`
-- `research/OPERATOR_POLICY_DECISIONS_20260508.md`
-- `consensus/build_gate.md`
-- `IMPLEMENTATION_PLAN.md`
+It did not inspect private state, live credentials, user Hermes homes, deploy
+keys, production services, payment/provider consoles, or external provider
+accounts.
 
-The ecosystem-gap steering file has its detailed checklist marked complete in
-the current public artifact. Treat it as a hardening-preservation baseline:
-future BUILD work must not reopen those security, host, Docker, qmd, Notion,
-SSOT, token, generated cleanup, onboarding, docs, or validation boundaries.
+## Source Of Truth
 
-## Current Product Reality
+The 2026-05-11 audit verification file is the active BUILD backlog.
 
-The product reality matrix currently contains 121 rows:
+| Severity | FACT | PARTIAL | FICTION |
+| --- | ---: | ---: | ---: |
+| Critical | 11 | 0 | 0 |
+| High | 23 | 2 | 0 |
+| Medium | 24 | 2 | 2 |
+| Low | 21 | 3 | 0 |
 
-| Status | Count |
-| --- | ---: |
-| `real` | 101 |
-| `partial` | 0 |
-| `gap` | 0 |
-| `proof-gated` | 15 |
-| `policy-question` | 5 |
+`ME-11` and `ME-25` are FICTION/outdated and should remain regression-awareness
+only. PARTIAL items must follow the corrected ground-truth wording in the audit
+file rather than the original overbroad audit wording.
 
-This is no longer the raw pre-decision snapshot. The 2026-05-08
-operator-policy addendum has been reconciled into the product matrix for Raven
-identity customization, shared-root SSOT membership, failed-renewal lifecycle,
-living linked resources, recipient copy/duplicate, exactly-one-operator
-behavior, Refuel Pod local credits, and the Chutes account/OAuth fallback.
-The 2026-05-10 Raven bridge update reclassifies public-channel direct-agent
-chat scope as implemented: slash commands remain Raven controls, and
-onboarded-user freeform messages route to the selected agent through Raven.
+## Immediate Wave
 
-Current `partial` rows: none. The 2026-05-09 Chutes proof packet is now
-represented in the matrix: silent Chutes account creation is not a product
-claim, browser-challenge bypass is rejected, and live OAuth/registration,
-personal usage sync, and balance-transfer behavior stay proof-gated.
+Wave 1 is the first BUILD checkpoint:
 
-Highest-risk remaining BUILD work after this PLAN refresh:
+- `CR-1`: Telegram webhook secret registration and verification.
+- `CR-2`: non-root container runtime and Docker socket scoping.
+- `CR-6` and `LOW-1`: auth-before-CSRF ordering for session mutations.
+- `CR-7`: Discord timestamp tolerance and replay protection.
+- `CR-8` and `ME-4`: hosted API body cap and malformed JSON handling.
+- `HI-5` and `HI-6`: CORS on early hosted API returns and route-checked
+  `OPTIONS` preflights.
+- `CR-9`: backend/admin CIDR enforcement or explicit contract removal.
+- `CR-11`: peppered session and CSRF token hashes.
+- `HI-1`, `ME-12`, `ME-13`, `LOW-8`, and `LOW-9`: unified secret
+  detection/redaction with redact-before-truncate behavior.
+- `HI-4`, `HI-7`, `ME-2`, and `ME-3`: browser/API auth extraction, webhook
+  rate limits, generic auth errors, and session-kind enforcement.
 
-- Preserve and extend user isolation across dashboard, provider, channel,
-  share, health, credential, billing, Notion/SSOT, and linked-resource
-  surfaces while adding tests for each touched path.
-- Reconcile the 2026-05-09 Chutes proof packet: account creation is assisted
-  or proof-gated rather than silently server-created; personal usage/billing
-  endpoints are real; provider-side per-API-key spend remains unproven; Sign
-  in with Chutes / per-user account connection is the recommended canonical
-  path.
-- Keep browser right-click Drive/Code share-link creation disabled until a live
-  shared backend exists or the operator chooses to build an ArcLink broker in
-  this repo.
-- Keep live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
-  Docker install/upgrade, and host deploy/upgrade proof gated until explicitly
-  authorized.
-- Resolve the remaining product-policy questions: scoped agent self-model or
-  peer-awareness cards, browser right-click sharing enablement, canonical
-  Chutes OAuth/provider path, public Chutes threshold-continuation copy, and
-  user self-service provider changes. Raven direct-agent chat scope is no
-  longer a policy question: onboarded-user freeform messages route to the
-  selected agent through Raven, while slash commands remain Raven controls.
+## Full Backlog Traceability
 
-## Stack Finding
+The BUILD plan and coverage matrix explicitly carry every active FACT or
+actionable PARTIAL audit ID. Later waves are planned as:
 
-ArcLink is a multi-runtime product platform, not a single Node.js app. The
-current public signals show:
+| Wave | Active IDs |
+| --- | --- |
+| Wave 2 | `CR-3`, `CR-5`, `CR-10`, `HI-2`, `HI-10`, `HI-11`, `HI-12`, `HI-13`, `HI-15`, `HI-16`, `HI-17`, `ME-6`, `ME-8`, `LOW-11` |
+| Wave 3 | `CR-4`, `HI-8`, `HI-9`, `HI-14`, `ME-7`, `ME-9`, `ME-10`, `LOW-6`, `LOW-7`, `LOW-13` |
+| Wave 4 | `HI-3`, `HI-18`, `HI-19`, `HI-20`, `HI-21`, `HI-22`, `HI-23`, `HI-24`, `HI-25`, `ME-14`, `ME-26`, `LOW-10`, `LOW-12`, `LOW-15`, `LOW-16`, `LOW-17`, `LOW-18`, `LOW-19` |
+| Wave 5 | `ME-1`, `ME-5`, `ME-15`, `ME-16`, `ME-17`, `ME-18`, `ME-19`, `ME-20`, `ME-21`, `ME-22`, `ME-23`, `ME-24`, `ME-27`, `ME-28`, `LOW-2`, `LOW-3`, `LOW-4`, `LOW-5`, `LOW-14`, `LOW-20`, `LOW-21`, `LOW-22`, `LOW-23`, `LOW-24` |
 
-- Python control plane, hosted API, public bots, provisioning, MCP, Notion,
-  memory synthesis, fleet, rollout, and plugin APIs.
-- Bash deploy, Docker, bootstrap, health, qmd, PDF, service, backup, and
-  upgrade wrappers.
-- Next.js, React, TypeScript, and Tailwind hosted web/dashboard application.
-- Docker Compose services and systemd units for Shared Host, Shared Host
-  Docker, and Sovereign Control Node lanes.
-- Pinned Hermes runtime, qmd retrieval, ArcLink Hermes plugins, hooks, and
-  skills for agent behavior without Hermes core edits.
+## Repository Finding
 
-Public source composition used by this handoff:
+ArcLink is a Python-led control platform with Bash operational orchestration,
+SQLite control state, Docker Compose runtime lanes, ArcLink-owned Hermes
+plugins/hooks, and a compact Next.js web/admin surface.
 
-| Signal | Count |
-| --- | ---: |
-| Python files | 172 |
-| Python regression tests | 101 |
-| Shell/script entrypoints | 82 |
-| Markdown files | 103 |
-| systemd unit/timer/path files | 29 |
-| Web TypeScript/JavaScript files | 17 |
-| Public JSON/YAML files | 22 |
+| Signal | Evidence |
+| --- | --- |
+| Python control plane | `python/` contains hosted API, auth, control DB, workers, provisioning, fleet, ingress, evidence, bots, Notion, memory, dashboard, and live-proof modules. |
+| SQLite state model | `python/arclink_control.py` owns schema/migration and is imported across auth, workers, fleet, provisioning, dashboard, and evidence paths. |
+| Operational shell | `deploy.sh`, `bin/deploy.sh`, `bin/arclink-docker.sh`, and many `bin/*.sh` wrappers are canonical host/container lifecycle entrypoints. |
+| Container runtime | `Dockerfile` and `compose.yaml` define Shared Host Docker and Sovereign Control Node service topology. |
+| Web surface | `web/package.json` uses Next.js 15, React 19, TypeScript 5, ESLint, Tailwind, and Playwright. |
+| Runtime pins | `config/pins.json` pins Python preferences, Node 22, qmd, Hermes runtime/docs, and service image lanes. |
+| Regression suite | `tests/` contains focused tests for control, hosted API, auth, Docker, bots, workers, provisioning, fleet, evidence, memory, and web-adjacent contracts. |
+
+## Worktree Context
+
+The worktree already contains broad modifications across public code, tests,
+web files, and research artifacts. Those edits must be preserved. BUILD should
+verify source and focused tests before treating any audit ID as closed; prior
+completion notes are context only.
+
+Some Wave 1 mechanisms appear to have local source/test signals already, such
+as webhook secret settings, hosted API body/CIDR settings, a shared secret
+regex module, Docker hardening tests, and Discord replay/timestamp tests. They
+still require direct verification before closure.
 
 ## Implementation Path Comparison
 
 | Path | Strengths | Weaknesses | Decision |
 | --- | --- | --- | --- |
-| Repair existing ArcLink Bash, Python, web, plugin, Compose, and systemd surfaces | Preserves operator workflows and current tests; respects Hermes-core boundary | Requires careful sequencing across many surfaces | Selected default |
-| Fail closed or label unavailable until provider proof or policy exists | Prevents false claims and keeps no-secret work safe | Leaves product gaps visible until policy/live proof is available | Use for external or policy-owned claims |
-| Rewrite as a new hosted web app first | Could simplify one browser journey | Does not repair Shared Host, Docker, agent runtime, qmd, Notion, public bot, or dashboard-plugin contracts | Rejected |
-| Documentation-only repair | Low implementation risk | Violates the mission requirement to fix behavior before docs | Rejected except for explicitly proof-gated or policy-only decisions |
-
-## Artifacts Updated
-
-- `research/RESEARCH_SUMMARY.md`: current scope, confidence, stack finding,
-  matrix summary, assumptions, and risks.
-- `research/CODEBASE_MAP.md`: portable map of directories, entrypoints,
-  runtime lanes, source composition, and architecture assumptions.
-- `research/DEPENDENCY_RESEARCH.md`: stack components, versions, alternatives,
-  dependency risks, and validation dependencies.
-- `research/COVERAGE_MATRIX.md`: goal coverage, required artifact coverage,
-  product matrix status semantics, and completion rules.
-- `research/STACK_SNAPSHOT.md`: ArcLink-specific multi-runtime stack
-  hypotheses, deterministic 96/100 confidence score, current component
-  signals, and rejected single-stack alternatives.
-- `research/PRODUCT_REALITY_MATRIX.md`: updated 121-row reality matrix for the
-  2026-05-09 Chutes proof and Raven policy scope.
-- `research/OPERATOR_POLICY_DECISIONS_20260508.md`: portable Chutes research
-  wording without local audit-checkout paths.
-- `research/RALPHIE_END_TO_END_PROOF_AND_BUILD_SPEC_20260509.md`: portable
-  Chutes research wording without local audit-checkout paths.
-- `IMPLEMENTATION_PLAN.md`: project-specific BUILD plan with validation
-  criteria and actionable tasks.
-- `consensus/build_gate.md`: no-secret build permission, blocked live flows,
-  and operator-policy questions.
-
-This refresh records the current post-policy matrix totals, corrects the stack
-snapshot to ArcLink's multi-runtime architecture, updates public source-count
-signals, and confirms there are no `partial` or `gap` rows.
-
-It also removes local audit-checkout paths from Chutes research artifacts so
-the handoff remains portable.
-
-Retry repair note: the build gate now names exactly the 15 proof-gated rows
-and exactly the six remaining policy-question rows from the matrix. Chutes
-account-registration execution, Refuel transfer, and day-14 purge execution are
-separate non-counted authorization/expansion confirmations. `IMPLEMENTATION_PLAN.md`
-must remain the newest active handoff artifact after this research refresh so
-BUILD does not loop on stale plan detection.
+| Wave-ordered verification and repair of current worktree | Honors risk order, preserves existing edits, starts with Wave 1, and supports small tested patches | Requires careful review because partial fixes may already exist | Selected. |
+| Clean Wave 1 reimplementation from audit text | Simple mental model | High risk of overwriting, duplicating, or fighting dirty-tree work | Rejected. |
+| Documentation-only triage | Fast and low runtime risk | Does not fix verified behavior defects | Rejected for FACT/actionable PARTIAL items. |
+| Broad smoke validation before focused review | Useful release signal | Can obscure specific boundary failures and may require host state | Deferred. |
+| Live provider/deploy proof | Strong production confidence | Blocked by no-secret/no-live-mutation constraints | Requires explicit operator authorization. |
 
 ## Assumptions
 
-- Public repository files are sufficient for PLAN-level stack and static
-  product classification.
-- Live provider capabilities require explicit operator authorization and cannot
-  be inferred from local code.
-- Code and focused tests should be treated as truth when docs disagree; docs
-  should be updated after behavior is repaired.
-- Shared Host, Shared Host Docker, and Sovereign Control Node are separate
-  lanes that need aligned but not collapsed contracts.
-- ArcLink behavior belongs in public repo wrappers, generated config, plugins,
-  hooks, service units, hosted API, public bots, web dashboards, and tests, not
-  in Hermes core.
+- Existing dirty-tree changes are user-owned or prior generated work and must
+  not be reverted.
+- BUILD may edit public ArcLink code, tests, web fixtures, and docs only when
+  directly tied to an audit fix.
+- Local fake-provider tests, temporary SQLite databases, command shims, and
+  static Compose checks are the default validation method.
+- Live Stripe, Chutes, DNS/Tailscale/Cloudflare, Telegram, Discord, Notion,
+  Docker host mutation, and production deploy proof require named operator
+  authorization.
 
-## Remaining Blockers And Risks
+## Risks
 
-- Live Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale,
-  Docker install/upgrade, and host deploy/upgrade proof is blocked without
-  operator authorization.
-- Product policy is still required for five current matrix rows: scoped agent
-  self-model or peer-awareness cards, browser right-click sharing enablement,
-  canonical Chutes OAuth/provider path, self-service provider changes, and
-  exact public threshold copy after Refuel Pod/provider-fallback rails exist.
-- Remaining decisions should be handled in dependency order: first isolation
-  and secrets, then billing/provider lifecycle, then sharing/knowledge, then
-  admin role/action behavior, then Raven and trust-signal presentation.
-- Existing local code has many repaired rows. BUILD must preserve those
-  boundaries and run focused validation before declaring terminal completion.
+- Broad dirty-tree edits increase the risk of mixing unrelated work into a
+  BUILD slice.
+- Shared auth, hosted API, and secret-redaction changes can affect many routes.
+- Container hardening must preserve the services that legitimately need Docker
+  socket access.
+- Live correctness remains unproved until authorized live proof runs.
+- Terminal audit completion is unavailable until every FACT and actionable
+  PARTIAL item is fixed or explicitly deferred with operator-facing rationale.
 
 ## Verdict
 
-PLAN is ready for no-secret BUILD handoff. Confidence is 96/100: repository
-shape, runtime stack, active artifacts, matrix coverage, and validation surfaces
-are clear; confidence is capped because live external proof and multiple
-remaining operator-policy presentation/scope decisions remain intentionally
-gated.
+PLAN is ready for no-secret BUILD handoff. The selected handoff is
+wave-ordered verification and repair, beginning with Wave 1 trust-boundary and
+secret-safety findings and continuing to later waves only after focused tests
+support the checkpoint.
+
+Retry repair note: `IMPLEMENTATION_PLAN.md` now keeps Phase 0, Wave 1, later
+BUILD phases, and validation checklist items open at PLAN handoff. The stack
+snapshot was also corrected from a generic Node-first detection to a
+repo-specific Python/Bash/Docker control-plane assessment. Prior local source
+signals or historical completion notes are not accepted as completed checklist
+state until BUILD re-verifies them.

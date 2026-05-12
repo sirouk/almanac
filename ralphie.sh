@@ -87,8 +87,10 @@ ok() { success "$@"; }
 log_reason_code() {
     local code="$1"
     local msg="$2"
+    local safe_msg
     mkdir -p "$(dirname "$REASON_LOG_FILE")"
-    echo "reason_code=$code message=\"$msg\"" >> "$REASON_LOG_FILE"
+    safe_msg="$(sanitize_text_for_log "$msg" | cut -c 1-2000 | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    echo "reason_code=$code message=\"$safe_msg\"" >> "$REASON_LOG_FILE"
 }
 
 path_for_display() {
@@ -316,6 +318,41 @@ extract_xml_value() {
     echo "$value"
 }
 
+xml_tag_count() {
+    local file="$1"
+    local tag="$2"
+    [ -f "$file" ] || { echo "0"; return 0; }
+    awk -v tag="$tag" '
+        BEGIN { open_tag = "<" tag ">"; count = 0 }
+        {
+            line = $0
+            while (length(line) > 0) {
+                start = index(line, open_tag)
+                if (start == 0) {
+                    break
+                }
+                count++
+                line = substr(line, start + length(open_tag))
+            }
+        }
+        END { print count }
+    ' "$file" 2>/dev/null || echo "0"
+}
+
+review_gaps_are_blocking() {
+    local gaps="${1:-}"
+    local normalized
+
+    normalized="$(sanitize_text_for_log "$gaps" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    normalized="$(printf '%s' "$normalized" | sed 's/[[:space:]]\+/ /g')"
+    case "$normalized" in
+        ""|none|n/a|na|"no gaps"|"no blockers"|"no blocking gaps"|"none blocking"|"none blocking;"|"no explicit gaps")
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 extract_review_score() {
     local file="$1"
     local score
@@ -363,13 +400,28 @@ file_looks_like_auth_or_html_challenge() {
 review_output_invalid_reason() {
     local file="$1"
     local mode="${2:-consensus}"
-    local score verdict next_phase
+    local score verdict next_phase gaps tag tag_count
 
     [ -s "$file" ] || { echo "missing reviewer output"; return 0; }
 
     if file_looks_like_auth_or_html_challenge "$file"; then
         echo "provider auth/challenge HTML or token error"
         return 0
+    fi
+
+    for tag in score verdict gaps; do
+        tag_count="$(xml_tag_count "$file" "$tag")"
+        if ! is_number "$tag_count" || [ "$tag_count" -ne 1 ]; then
+            echo "expected exactly one <$tag> tag, found ${tag_count:-0}"
+            return 0
+        fi
+    done
+    if [ "$mode" != "handoff" ]; then
+        tag_count="$(xml_tag_count "$file" "next_phase")"
+        if ! is_number "$tag_count" || [ "$tag_count" -ne 1 ]; then
+            echo "expected exactly one <next_phase> tag, found ${tag_count:-0}"
+            return 0
+        fi
     fi
 
     score="$(extract_xml_value "$file" "score" "")"
@@ -386,6 +438,12 @@ review_output_invalid_reason() {
             return 0
             ;;
     esac
+
+    gaps="$(extract_xml_value "$file" "gaps" "")"
+    if review_gaps_are_blocking "$gaps"; then
+        echo "blocking <gaps>: $(sanitize_text_for_log "$gaps" | cut -c 1-160)"
+        return 0
+    fi
 
     if [ "$mode" != "handoff" ]; then
         next_phase="$(extract_xml_value "$file" "next_phase" "")"
@@ -940,7 +998,7 @@ apply_phase_noop_profile() {
             [ "$PHASE_NOOP_POLICY_BUILD_EXPLICIT" != "true" ] && PHASE_NOOP_POLICY_BUILD="hard"
             [ "$PHASE_NOOP_POLICY_TEST_EXPLICIT" != "true" ] && PHASE_NOOP_POLICY_TEST="soft"
             [ "$PHASE_NOOP_POLICY_REFACTOR_EXPLICIT" != "true" ] && PHASE_NOOP_POLICY_REFACTOR="hard"
-            [ "$PHASE_NOOP_POLICY_LINT_EXPLICIT" != "true" ] && PHASE_NOOP_POLICY_LINT="hard"
+            [ "$PHASE_NOOP_POLICY_LINT_EXPLICIT" != "true" ] && PHASE_NOOP_POLICY_LINT="soft"
             [ "$PHASE_NOOP_POLICY_DOCUMENT_EXPLICIT" != "true" ] && PHASE_NOOP_POLICY_DOCUMENT="soft"
             ;;
         *)
@@ -1409,7 +1467,7 @@ DEFAULT_CLAUDE_ENDPOINT=""                    # empty = do not override ANTHROPI
 DEFAULT_CLAUDE_THINKING_OVERRIDE="high"       # none|off|low|medium|high|xhigh
 DEFAULT_AUTO_INIT_GIT_IF_MISSING="true"       # initialize git repo at startup when missing
 DEFAULT_AUTO_COMMIT_ON_PHASE_PASS="true"      # commit phase-approved local changes (no push)
-DEFAULT_YOLO="true"
+DEFAULT_YOLO="false"
 DEFAULT_AUTO_UPDATE="false"                  # check remote script and replace before startup
 DEFAULT_AUTO_UPDATE_URL=""                   # explicit raw ralphie.sh URL; derived from GitHub origin when empty
 DEFAULT_AUTO_UPDATE_ALLOW_DIRTY="false"      # refuse to overwrite local ralphie.sh edits by default
@@ -1438,7 +1496,7 @@ DEFAULT_PHASE_NOOP_POLICY_PLAN="none"
 DEFAULT_PHASE_NOOP_POLICY_BUILD="hard"
 DEFAULT_PHASE_NOOP_POLICY_TEST="soft"
 DEFAULT_PHASE_NOOP_POLICY_REFACTOR="hard"
-DEFAULT_PHASE_NOOP_POLICY_LINT="hard"
+DEFAULT_PHASE_NOOP_POLICY_LINT="soft"
 DEFAULT_PHASE_NOOP_POLICY_DOCUMENT="soft"
 DEFAULT_PHASE_NOOP_PROFILE="balanced"
 PHASE_NOOP_POLICY_PLAN_EXPLICIT=false
@@ -2101,6 +2159,10 @@ self_update_acquire_lock() {
             rm -rf "$lock_dir" 2>/dev/null || true
             continue
         fi
+        if [ -z "$owner_pid" ] && [ "$waited" -ge 3 ]; then
+            rm -rf "$lock_dir" 2>/dev/null || true
+            continue
+        fi
         if [ "$waited" -ge "$timeout_seconds" ]; then
             return 1
         fi
@@ -2579,9 +2641,9 @@ load_state() {
     local phase_transition_history_b64=""
 
     # Verify checksum if present
-    if grep -q "STATE_CHECKSUM=" "$STATE_FILE"; then
+    if grep -q "^STATE_CHECKSUM=" "$STATE_FILE"; then
         local expected actual state_body_file
-        expected="$(grep "STATE_CHECKSUM=" "$STATE_FILE" | head -n 1 | cut -d'"' -f2)"
+        expected="$(grep "^STATE_CHECKSUM=" "$STATE_FILE" | tail -n 1 | cut -d'"' -f2)"
         state_body_file="$(mktemp "$CONFIG_DIR/state-body.XXXXXX")" || {
             warn "Unable to create temp file for state checksum validation."
             return 1
@@ -3651,6 +3713,10 @@ EOF
             echo ""
         } >> "$target_prompt"
     fi
+}
+
+append_bootstrap_context_to_phase_prompt() {
+    append_bootstrap_context_to_plan_prompt "$@"
 }
 
 build_is_preapproved() {
@@ -6046,7 +6112,7 @@ run_swarm_consensus() {
     local total_score=0
     local go_votes=0
     local responded_votes=0
-    local required_votes=$((count / 2 + 1))
+    local required_votes="$count"
     local avg_score=0
     local next_phase_vote_reason=""
 
@@ -6155,7 +6221,20 @@ run_swarm_consensus() {
         done
 
         tie_count="${#tied_phases[@]}"
-        if [ "$tie_count" -eq 1 ]; then
+        local next_phase_required_votes
+        next_phase_required_votes=$((responded_votes / 2 + 1))
+        if [ "$next_phase_required_votes" -lt 1 ]; then
+            next_phase_required_votes=1
+        fi
+        if [ "$highest_next_votes" -lt "$next_phase_required_votes" ]; then
+            recommended_next="$default_next_phase"
+            warn "Consensus next-phase vote lacked majority (${highest_next_votes}/${responded_votes}); defaulting to $default_next_phase."
+            if [ -n "$next_phase_vote_reason" ]; then
+                next_phase_vote_reason="$next_phase_vote_reason (no majority: ${highest_next_votes}/${responded_votes} -> default $default_next_phase)"
+            else
+                next_phase_vote_reason="no majority on next_phase votes (${highest_next_votes}/${responded_votes}) -> defaulted to $default_next_phase"
+            fi
+        elif [ "$tie_count" -eq 1 ]; then
             recommended_next="${tied_phases[0]}"
         elif [ "$tie_count" -gt 1 ]; then
             recommended_next="$default_next_phase"
@@ -6544,6 +6623,27 @@ phase_noop_policy() {
     esac
 }
 
+phase_requires_command_evidence() {
+    case "${1:-}" in
+        test|lint) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+phase_output_has_command_evidence() {
+    local output_file="$1"
+    local log_file="$2"
+    local evidence_pattern='(`[^`]+`|(^|[[:space:]])(python3?|pytest|tox|nox|uv[[:space:]]+run|npm|pnpm|yarn|node|bash[[:space:]]+-n|shellcheck|ruff|mypy|pytest|go[[:space:]]+test|cargo[[:space:]]+test|make|cmake|gradle|mvn|dotnet[[:space:]]+test|git[[:space:]]+diff[[:space:]]+--check))'
+
+    if [ -f "$output_file" ] && grep -Eiq "$evidence_pattern" "$output_file" 2>/dev/null; then
+        return 0
+    fi
+    if [ -f "$log_file" ] && grep -Eiq "$evidence_pattern" "$log_file" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
 phase_manifest_delta_preview() {
     local before_file="$1"
     local after_file="$2"
@@ -6597,10 +6697,11 @@ consensus_clean_terminal_hold_reroute_allowed() {
 
     [ "$candidate_next" = "done" ] || return 1
     [ "$phase" != "done" ] || return 1
-    [ "${LAST_CONSENSUS_FAILURE_KIND:-}" = "quality" ] || return 1
+    is_true "${LAST_CONSENSUS_PASS:-false}" || return 1
+    [ "${LAST_CONSENSUS_FAILURE_KIND:-}" = "none" ] || return 1
     is_number "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" || return 1
     is_number "${LAST_CONSENSUS_NEXT_PHASE_VOTES:-0}" || return 1
-    [ "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" -gt 0 ] || return 1
+    [ "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" -eq "$(get_reviewer_count)" ] || return 1
     [ "${LAST_CONSENSUS_NEXT_PHASE_VOTES:-0}" -eq "${LAST_CONSENSUS_RESPONDED_VOTES:-0}" ] || return 1
 
     if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 && git_has_local_changes; then
@@ -6966,8 +7067,14 @@ phase_default_next() {
     case "$phase" in
         plan) echo "build" ;;
         build) echo "test" ;;
-        test) echo "refactor" ;;
-        refactor) echo "lint" ;;
+        test)
+            if phase_has_passed_in_history "refactor"; then
+                echo "lint"
+            else
+                echo "refactor"
+            fi
+            ;;
+        refactor) echo "test" ;;
         lint) echo "document" ;;
         document) echo "done" ;;
         *) echo "done" ;;
@@ -7007,6 +7114,57 @@ phase_has_passed_in_history() {
         fi
     done
 
+    return 1
+}
+
+phase_has_passed_after_phase() {
+    local target_phase="${1:-}"
+    local marker_phase="${2:-}"
+    local entry
+    local marker_seen=false
+
+    case "$target_phase" in
+        plan|build|test|refactor|lint|document) ;;
+        *) return 1 ;;
+    esac
+    case "$marker_phase" in
+        plan|build|test|refactor|lint|document) ;;
+        *) return 1 ;;
+    esac
+
+    for entry in "${PHASE_TRANSITION_HISTORY[@]+"${PHASE_TRANSITION_HISTORY[@]}"}"; do
+        if [[ "$entry" == *"${marker_phase}(attempt "* ]] && [[ "$entry" == *"|pass|"* ]]; then
+            marker_seen=true
+            continue
+        fi
+        if is_true "$marker_seen" && [[ "$entry" == *"${target_phase}(attempt "* ]] && [[ "$entry" == *"|pass|"* ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+phase_requirement_satisfied() {
+    local required_phase="${1:-}"
+    local current_phase="${2:-}"
+    local current_phase_passed="${3:-false}"
+
+    phase_has_passed_in_history "$required_phase" && return 0
+    if is_true "$current_phase_passed" && [ "$current_phase" = "$required_phase" ]; then
+        return 0
+    fi
+    return 1
+}
+
+post_refactor_test_satisfied() {
+    local current_phase="${1:-}"
+    local current_phase_passed="${2:-false}"
+
+    phase_has_passed_in_history "refactor" || return 1
+    phase_has_passed_after_phase "test" "refactor" && return 0
+    if is_true "$current_phase_passed" && [ "$current_phase" = "test" ] && phase_has_passed_in_history "refactor"; then
+        return 0
+    fi
     return 1
 }
 
@@ -7076,6 +7234,22 @@ collect_backlog_source_files() {
     printf '%s\n' "${resolved[@]}" | awk '!seen[$0]++'
 }
 
+collect_backlog_freshness_source_files() {
+    local source_file
+
+    while IFS= read -r source_file; do
+        [ -n "$source_file" ] || continue
+        # The plan file is the artifact PLAN produces, not an upstream source
+        # that should force PLAN to refresh itself. Keep it in the general
+        # backlog list so terminal unchecked-task guards still work, but omit it
+        # from freshness fingerprints and stale-source mtimes.
+        if [ -n "${PLAN_FILE:-}" ] && [ "$source_file" = "$PLAN_FILE" ]; then
+            continue
+        fi
+        printf '%s\n' "$source_file"
+    done < <(collect_backlog_source_files)
+}
+
 backlog_source_display_list() {
     local source_file rel_path
     local -a labels=()
@@ -7097,6 +7271,27 @@ backlog_source_display_list() {
     fi
 }
 
+backlog_freshness_source_display_list() {
+    local source_file rel_path
+    local -a labels=()
+
+    while IFS= read -r source_file; do
+        [ -n "$source_file" ] || continue
+        rel_path="$(path_relative_to_project "$source_file")"
+        if [ -n "$rel_path" ] && [ "$rel_path" != "$source_file" ]; then
+            labels+=("$(path_for_display "$rel_path")")
+        else
+            labels+=("$(path_for_display "$source_file")")
+        fi
+    done < <(collect_backlog_freshness_source_files)
+
+    if [ "${#labels[@]}" -eq 0 ]; then
+        printf '%s' "configured external backlog sources"
+    else
+        join_with_commas "${labels[@]}"
+    fi
+}
+
 backlog_sources_fingerprint() {
     local source_file rel_path file_hash
 
@@ -7112,7 +7307,7 @@ backlog_sources_fingerprint() {
             else
                 printf 'missing\t%s\n' "$rel_path"
             fi
-        done < <(collect_backlog_source_files)
+        done < <(collect_backlog_freshness_source_files)
     } | sha256_stream_sum
 }
 
@@ -7126,7 +7321,7 @@ record_plan_freshness_checkpoint() {
     fi
 
     PLAN_FRESHNESS_FINGERPRINT="$fingerprint"
-    info "Plan freshness checkpoint recorded for $(backlog_source_display_list)."
+    info "Plan freshness checkpoint recorded for $(backlog_freshness_source_display_list)."
     return 0
 }
 
@@ -7175,8 +7370,8 @@ backlog_sources_newer_than_plan() {
             if [ "$current_fingerprint" = "$PLAN_FRESHNESS_FINGERPRINT" ]; then
                 return 1
             fi
-            LAST_BACKLOG_STALE_SOURCES="$(backlog_source_display_list)"
-            [ -n "$LAST_BACKLOG_STALE_SOURCES" ] || LAST_BACKLOG_STALE_SOURCES="configured backlog sources"
+            LAST_BACKLOG_STALE_SOURCES="$(backlog_freshness_source_display_list)"
+            [ -n "$LAST_BACKLOG_STALE_SOURCES" ] || LAST_BACKLOG_STALE_SOURCES="configured external backlog sources"
             return 0
         fi
     fi
@@ -7200,7 +7395,7 @@ backlog_sources_newer_than_plan() {
                 stale_sources+=("$(path_for_display "$source_file")")
             fi
         fi
-    done < <(collect_backlog_source_files)
+    done < <(collect_backlog_freshness_source_files)
 
     if [ "${#stale_sources[@]}" -eq 0 ]; then
         return 1
@@ -7250,6 +7445,10 @@ enforce_phase_route_prerequisites() {
 enforce_terminal_done_requirements() {
     local current_phase="${1:-}"
     local candidate_next="${2:-done}"
+    local current_phase_passed="${3:-false}"
+    local test_satisfied=false
+    local refactor_satisfied=false
+    local post_refactor_test_ready=false
     local lint_satisfied=false
     local document_satisfied=false
     local -a missing_required=()
@@ -7263,13 +7462,31 @@ enforce_terminal_done_requirements() {
         return 0
     fi
 
-    if [ "$current_phase" = "lint" ] || phase_has_passed_in_history "lint"; then
+    if phase_requirement_satisfied "test" "$current_phase" "$current_phase_passed"; then
+        test_satisfied=true
+    fi
+    if phase_requirement_satisfied "refactor" "$current_phase" "$current_phase_passed"; then
+        refactor_satisfied=true
+    fi
+    if post_refactor_test_satisfied "$current_phase" "$current_phase_passed"; then
+        post_refactor_test_ready=true
+    fi
+    if phase_requirement_satisfied "lint" "$current_phase" "$current_phase_passed"; then
         lint_satisfied=true
     fi
-    if [ "$current_phase" = "document" ] || phase_has_passed_in_history "document"; then
+    if phase_requirement_satisfied "document" "$current_phase" "$current_phase_passed"; then
         document_satisfied=true
     fi
 
+    if [ "$test_satisfied" != "true" ]; then
+        missing_required+=("test")
+    fi
+    if [ "$refactor_satisfied" != "true" ]; then
+        missing_required+=("refactor")
+    fi
+    if [ "$refactor_satisfied" = "true" ] && [ "$post_refactor_test_ready" != "true" ]; then
+        missing_required+=("post_refactor_test")
+    fi
     if is_true "$REQUIRE_LINT_BEFORE_DONE" && [ "$lint_satisfied" != "true" ]; then
         missing_required+=("lint")
     fi
@@ -7286,7 +7503,13 @@ enforce_terminal_done_requirements() {
         return 0
     fi
 
-    if printf '%s\n' "${missing_required[@]}" | grep -Fxq "lint"; then
+    if printf '%s\n' "${missing_required[@]}" | grep -Fxq "test"; then
+        remap_target="test"
+    elif printf '%s\n' "${missing_required[@]}" | grep -Fxq "refactor"; then
+        remap_target="refactor"
+    elif printf '%s\n' "${missing_required[@]}" | grep -Fxq "post_refactor_test"; then
+        remap_target="test"
+    elif printf '%s\n' "${missing_required[@]}" | grep -Fxq "lint"; then
         remap_target="lint"
     elif printf '%s\n' "${missing_required[@]}" | grep -Fxq "document"; then
         remap_target="document"
@@ -8086,6 +8309,9 @@ Behavior
 - Prefer minimal diffs and avoid unrelated churn.
 - Update implementation and tests to satisfy plan acceptance criteria.
 - When external alternatives exist, record rationale in implementation notes.
+- Do not run live deploy, payment, provider, production infrastructure, or
+  credential-mutating commands unless the project bootstrap/goals explicitly
+  authorize that exact live operation for this run.
 - Provide a concise completion summary:
   - Files changed and why.
   - Verification actions you ran and outcomes.
@@ -8899,11 +9125,11 @@ main() {
                     fi
                 fi
 
-                if [ "$phase" = "plan" ]; then
-                    if append_bootstrap_context_to_plan_prompt "$pfile" "$bootstrap_prompt_file"; then
+                if [ "$phase" = "plan" ] || [ "$phase" = "build" ]; then
+                    if append_bootstrap_context_to_phase_prompt "$pfile" "$bootstrap_prompt_file"; then
                         active_prompt="$bootstrap_prompt_file"
                     else
-                        phase_failures+=("failed to assemble plan prompt with bootstrap context")
+                        phase_failures+=("failed to assemble $phase prompt with bootstrap context")
                     fi
                 fi
 
@@ -8965,10 +9191,32 @@ main() {
                     fi
                 fi
 
-                if [ "${#phase_failures[@]}" -eq 0 ] && run_agent_with_prompt "$active_prompt" "$lfile" "$ofile" "$YOLO" "$phase_attempt"; then
+                local agent_run_ok=false
+                if [ "${#phase_failures[@]}" -eq 0 ]; then
+                    local saved_command_timeout_for_phase="$COMMAND_TIMEOUT_SECONDS"
+                    if is_number "$PHASE_WALLCLOCK_LIMIT_SECONDS" && [ "$PHASE_WALLCLOCK_LIMIT_SECONDS" -gt 0 ] && is_number "${phase_attempt_started_at:-0}" && [ "${phase_attempt_started_at:-0}" -gt 0 ]; then
+                        local now_for_timeout elapsed_for_timeout remaining_for_timeout
+                        now_for_timeout="$(date +%s 2>/dev/null || echo 0)"
+                        elapsed_for_timeout=$(( now_for_timeout - phase_attempt_started_at ))
+                        remaining_for_timeout=$(( PHASE_WALLCLOCK_LIMIT_SECONDS - elapsed_for_timeout ))
+                        if [ "$remaining_for_timeout" -le 0 ]; then
+                            phase_failures+=("phase wall-clock limit reached before agent execution")
+                        elif ! is_number "$COMMAND_TIMEOUT_SECONDS" || [ "$COMMAND_TIMEOUT_SECONDS" -eq 0 ] || [ "$COMMAND_TIMEOUT_SECONDS" -gt "$remaining_for_timeout" ]; then
+                            COMMAND_TIMEOUT_SECONDS="$remaining_for_timeout"
+                        fi
+                    fi
+                    if [ "${#phase_failures[@]}" -eq 0 ] && run_agent_with_prompt "$active_prompt" "$lfile" "$ofile" "$YOLO" "$phase_attempt"; then
+                        agent_run_ok=true
+                    fi
+                    COMMAND_TIMEOUT_SECONDS="$saved_command_timeout_for_phase"
+                fi
+                if [ "${#phase_failures[@]}" -eq 0 ] && is_true "$agent_run_ok"; then
                     # Verify agent produced meaningful output
                     if [ ! -f "$ofile" ] || [ ! -s "$ofile" ]; then
                         phase_failures+=("agent completed with exit 0 but produced no output artifact")
+                    fi
+                    if [ "${#phase_failures[@]}" -eq 0 ] && phase_requires_command_evidence "$phase" && ! phase_output_has_command_evidence "$ofile" "$lfile"; then
+                        phase_failures+=("$phase output did not include deterministic command/check evidence")
                     fi
 
                     if [ -n "$previous_attempt_output_hash" ] && [ "${#phase_failures[@]}" -eq 0 ]; then
@@ -9414,7 +9662,7 @@ main() {
                         phase_route_reason="$route_guard_reason"
                     fi
                 fi
-                enforce_terminal_done_requirements "$phase" "$phase_requested_next" >/dev/null
+                enforce_terminal_done_requirements "$phase" "$phase_requested_next" true >/dev/null
                 phase_next_target="${LAST_DONE_GUARD_NEXT_PHASE:-$phase_requested_next}"
                 if [ "$phase_next_target" != "$phase_requested_next" ]; then
                     local done_guard_reason

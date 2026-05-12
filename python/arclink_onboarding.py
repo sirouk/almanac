@@ -12,6 +12,7 @@ from arclink_control import (
     advance_arclink_entitlement_gate,
     arclink_deployment_can_provision,
     reserve_arclink_deployment_prefix,
+    utc_after_seconds_iso,
     upsert_arclink_user,
     utc_now_iso,
 )
@@ -36,6 +37,7 @@ ARCLINK_ONBOARDING_TERMINAL_STATUSES = frozenset(
         "payment_failed",
         "completed",
         "abandoned",
+        "expired",
     }
 )
 ARCLINK_ONBOARDING_STATUSES = ARCLINK_ONBOARDING_ACTIVE_STATUSES | ARCLINK_ONBOARDING_TERMINAL_STATUSES
@@ -49,11 +51,13 @@ ARCLINK_ONBOARDING_EVENT_TYPES = frozenset(
         "payment_cancelled",
         "payment_expired",
         "abandoned",
+        "expired",
         "provisioning_requested",
         "first_agent_contact",
         "channel_handoff",
     }
 )
+ARCLINK_ONBOARDING_SESSION_TTL_SECONDS = 24 * 60 * 60
 
 _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
@@ -155,10 +159,95 @@ def _active_session_row(conn: sqlite3.Connection, *, channel: str, channel_ident
     ).fetchone()
 
 
+def _active_email_session_row(conn: sqlite3.Connection, *, channel: str, email_hint: str) -> sqlite3.Row | None:
+    clean_email = str(email_hint or "").strip()
+    if not clean_email:
+        return None
+    placeholders = ",".join("?" for _ in ARCLINK_ONBOARDING_ACTIVE_STATUSES)
+    return conn.execute(
+        f"""
+        SELECT *
+        FROM arclink_onboarding_sessions
+        WHERE LOWER(channel) = LOWER(?)
+          AND LOWER(email_hint) = LOWER(?)
+          AND status IN ({placeholders})
+        ORDER BY created_at, session_id
+        LIMIT 1
+        """,
+        (channel, clean_email, *sorted(ARCLINK_ONBOARDING_ACTIVE_STATUSES)),
+    ).fetchone()
+
+
+def expire_stale_arclink_onboarding_sessions(conn: sqlite3.Connection, *, now: str = "", commit: bool = True) -> int:
+    """Terminalize expired public onboarding sessions so identities can re-enter."""
+    now_iso = now or utc_now_iso()
+    backfill_expiry = utc_after_seconds_iso(ARCLINK_ONBOARDING_SESSION_TTL_SECONDS)
+    active_placeholders = ",".join("?" for _ in ARCLINK_ONBOARDING_ACTIVE_STATUSES)
+    conn.execute(
+        f"""
+        UPDATE arclink_onboarding_sessions
+        SET expires_at = ?, updated_at = ?
+        WHERE (expires_at IS NULL OR expires_at = '')
+          AND status IN ({active_placeholders})
+        """,
+        (backfill_expiry, now_iso, *sorted(ARCLINK_ONBOARDING_ACTIVE_STATUSES)),
+    )
+    cursor = conn.execute(
+        f"""
+        UPDATE arclink_onboarding_sessions
+        SET status = 'expired',
+            current_step = 'expired',
+            checkout_state = CASE WHEN checkout_state = 'open' THEN 'expired' ELSE checkout_state END,
+            updated_at = ?
+        WHERE expires_at != ''
+          AND expires_at <= ?
+          AND status IN ({active_placeholders})
+        """,
+        (now_iso, now_iso, *sorted(ARCLINK_ONBOARDING_ACTIVE_STATUSES)),
+    )
+    expired = int(cursor.rowcount or 0)
+    if expired:
+        rows = conn.execute(
+            """
+            SELECT session_id, channel, channel_identity
+            FROM arclink_onboarding_sessions
+            WHERE status = 'expired' AND updated_at = ?
+            """,
+            (now_iso,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO arclink_onboarding_events (
+                  event_id, session_id, event_type, channel, channel_identity, metadata_json, created_at
+                ) VALUES (?, ?, 'expired', ?, ?, ?, ?)
+                """,
+                (
+                    _stable_id("onbevt", str(row["session_id"] or ""), "expired", now_iso),
+                    str(row["session_id"] or ""),
+                    str(row["channel"] or ""),
+                    str(row["channel_identity"] or ""),
+                    _json({"reason": "session_ttl"}),
+                    now_iso,
+                ),
+            )
+    if commit:
+        conn.commit()
+    return expired
+
+
 def _session_row(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
     if row is None:
         raise KeyError(session_id)
+    return row
+
+
+def _active_session_or_error(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row:
+    expire_stale_arclink_onboarding_sessions(conn)
+    row = _session_row(conn, session_id)
+    if str(row["status"] or "") in ARCLINK_ONBOARDING_TERMINAL_STATUSES:
+        raise ArcLinkOnboardingError(f"ArcLink onboarding session is terminal: {row['status']}")
     return row
 
 
@@ -184,6 +273,7 @@ def _update_session(
         "stripe_customer_id",
         "metadata_json",
         "completed_at",
+        "expires_at",
     }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if "status" in updates and updates["status"] not in ARCLINK_ONBOARDING_STATUSES:
@@ -252,6 +342,7 @@ def create_or_resume_arclink_onboarding_session(
 ) -> dict[str, Any]:
     clean_channel = _clean_channel(channel)
     clean_identity = _clean_identity(channel_identity)
+    expire_stale_arclink_onboarding_sessions(conn)
     for key, value in {
         "email_hint": email_hint,
         "display_name_hint": display_name_hint,
@@ -260,6 +351,8 @@ def create_or_resume_arclink_onboarding_session(
     }.items():
         _reject_secret_material(value, path=f"$.{key}")
     existing = None if force_new else _active_session_row(conn, channel=clean_channel, channel_identity=clean_identity)
+    if existing is None and not force_new and clean_channel == "web":
+        existing = _active_email_session_row(conn, channel=clean_channel, email_hint=email_hint)
     if existing is not None:
         updates: dict[str, str] = {}
         for key, value in (
@@ -279,14 +372,15 @@ def create_or_resume_arclink_onboarding_session(
         return dict(existing)
 
     now = utc_now_iso()
+    expires_at = utc_after_seconds_iso(ARCLINK_ONBOARDING_SESSION_TTL_SECONDS)
     clean_session_id = session_id.strip() or _stable_id("onb", clean_channel, clean_identity, secrets.token_hex(8))
     conn.execute(
         """
         INSERT INTO arclink_onboarding_sessions (
           session_id, channel, channel_identity, status, current_step,
           email_hint, display_name_hint, selected_plan_id, selected_model_id,
-          checkout_state, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, 'started', ?, ?, ?, ?, ?, '', ?, ?, ?)
+          checkout_state, metadata_json, created_at, updated_at, expires_at
+        ) VALUES (?, ?, ?, 'started', ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
         """,
         (
             clean_session_id,
@@ -300,6 +394,7 @@ def create_or_resume_arclink_onboarding_session(
             _json(metadata),
             now,
             now,
+            expires_at,
         ),
     )
     record_arclink_onboarding_event(
@@ -324,6 +419,7 @@ def answer_arclink_onboarding_question(
     selected_plan_id: str = "",
     selected_model_id: str = "",
 ) -> dict[str, Any]:
+    _active_session_or_error(conn, session_id)
     updates: dict[str, str] = {"status": "collecting", "current_step": str(question_key or "").strip()}
     for key, value in (
         ("email_hint", email_hint),
@@ -353,7 +449,7 @@ def prepare_arclink_onboarding_deployment(
     base_domain: str = "",
     prefix: str = "",
 ) -> dict[str, Any]:
-    session = dict(_session_row(conn, session_id))
+    session = dict(_active_session_or_error(conn, session_id))
     email_hint = str(session.get("email_hint") or "")
     existing_user = None
     if email_hint:
@@ -568,7 +664,7 @@ def sync_arclink_onboarding_after_entitlement(
     stripe_customer_id: str = "",
     commit: bool = True,
 ) -> bool:
-    session = dict(_session_row(conn, session_id))
+    session = dict(_active_session_or_error(conn, session_id))
     deployment_id = str(session.get("deployment_id") or "")
     if not deployment_id or not arclink_deployment_can_provision(conn, deployment_id=deployment_id):
         return False
@@ -609,7 +705,7 @@ def handoff_arclink_onboarding_channel(
     target_channel: str,
     target_channel_identity: str,
 ) -> dict[str, Any]:
-    source = dict(_session_row(conn, source_session_id))
+    source = dict(_active_session_or_error(conn, source_session_id))
     target = create_or_resume_arclink_onboarding_session(
         conn,
         channel=target_channel,

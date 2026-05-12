@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { api } from "@/lib/api";
+
+const RESUME_KEY = "arclink_onboarding_resume";
 
 export default function CheckoutCancelPage() {
   return (
@@ -31,6 +34,28 @@ function CheckoutCancelFallback() {
 function CheckoutCancelContent() {
   const params = useSearchParams();
   const sessionId = params.get("session") || "";
+  const [cancelState, setCancelState] = useState<"idle" | "done" | "unavailable">("idle");
+
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelToken = params.get("cancel_token") || "";
+    if (!cancelToken) {
+      try {
+        const raw = window.localStorage.getItem(RESUME_KEY);
+        const parsed = raw ? JSON.parse(raw) as { sessionId?: string; cancelToken?: string } : {};
+        if (parsed.sessionId === sessionId) cancelToken = parsed.cancelToken || "";
+      } catch {
+        cancelToken = "";
+      }
+    }
+    if (!cancelToken) {
+      setCancelState("unavailable");
+      return;
+    }
+    api.cancelOnboarding(sessionId, cancelToken)
+      .then((res) => setCancelState(res.status === 200 ? "done" : "unavailable"))
+      .catch(() => setCancelState("unavailable"));
+  }, [params, sessionId]);
 
   // Resume link carries the session ID so the onboarding page can restore
   // the flow from localStorage (which persists) or start fresh.
@@ -46,7 +71,9 @@ function CheckoutCancelContent() {
         </p>
         <h1 className="font-display text-3xl font-bold">No charge completed</h1>
         <p className="mt-4 text-sm text-soft-white/65">
-          Your ArcLink onboarding session is preserved. Return when you are ready to bring the agent aboard.
+          {cancelState === "done"
+            ? "Your checkout was cancelled and ArcLink marked this onboarding session as payment-cancelled."
+            : "Your checkout was paused before payment completed. Return when you are ready to bring the agent aboard."}
         </p>
         {sessionId && (
           <p className="mt-2 text-xs text-soft-white/30">

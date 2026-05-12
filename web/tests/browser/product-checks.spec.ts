@@ -278,7 +278,7 @@ async function mockApi(
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ dns_drift: [] }) });
     }
     if (url.includes("/admin/audit")) {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ audit: [{ created_at: "2026-05-01", actor_id: "admin_1", action_type: "restart", target_id: "dep_001", reason: "test" }] }) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ audit: [{ created_at: "2026-05-01", actor_id: "admin_1", action: "restart", target_id: "dep_001", reason: "test" }] }) });
     }
     if (url.includes("/admin/events")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ events: [] }) });
@@ -293,7 +293,7 @@ async function mockApi(
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ stripe: "fake", cloudflare: "fake", chutes: "fake" }) });
     }
     if (url.includes("/admin/reconciliation")) {
-      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ drift: [], summary: { checked: 1, drifted: 0 } }) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ reconciliation: [], drift_count: 0 }) });
     }
     if (url.includes("/admin/sessions/revoke") && method === "POST") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });

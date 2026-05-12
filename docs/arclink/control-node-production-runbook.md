@@ -36,7 +36,8 @@ secret manager. Never commit them.
 | Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, product/price ids, portal configuration |
 | Domain ingress | Cloudflare zone id or discoverable zone plus scoped DNS/API token |
 | Tailscale ingress | Logged-in node, MagicDNS/HTTPS readiness, Serve/Funnel approval where used |
-| Public Telegram | Public onboarding bot token and webhook registration |
+| Hosted API | `ARCLINK_SESSION_HASH_PEPPER`, `ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`, CORS/cookie settings, and a narrowed `ARCLINK_BACKEND_ALLOWED_CIDRS` |
+| Public Telegram | Public onboarding bot token, `TELEGRAM_WEBHOOK_SECRET`, and webhook registration with the secret-token header |
 | Public Discord | Discord bot token/application credentials and interaction endpoint |
 | Model provider | Owner/admin API key for per-deployment key lifecycle |
 | Fleet host | Docker access, SSH/fleet key where remote execution is enabled, writable state root |
@@ -53,9 +54,13 @@ secret manager. Never commit them.
 3. Choose ingress mode: `domain` or `tailscale`.
 4. Choose provider adapter mode: `fake` for validation or explicit live mode
    only when credentials and operator approval are present.
-5. Configure Stripe price ids and webhook secret.
-6. Configure public bot webhook URLs through the generated control host.
-7. Run `./deploy.sh control health`.
+5. Configure the hosted API boundary: session hash pepper, cookie/CORS values,
+   and the admin/control CIDR allow-list.
+6. Configure Stripe price ids and webhook secret.
+7. Configure public bot webhook URLs through the generated control host. The
+   Telegram webhook must use `TELEGRAM_WEBHOOK_SECRET`; requests without the
+   matching `X-Telegram-Bot-Api-Secret-Token` fail closed.
+8. Run `./deploy.sh control health`.
 
 If a value changes, use `./deploy.sh control reconfigure` and then rerun health.
 
@@ -68,6 +73,12 @@ needed provider gates. `control-action-worker` consumes durable admin intents;
 an action only proves live Docker, Stripe, Cloudflare, Tailscale, model-provider,
 Discord, Telegram, or Notion mutation when the recorded executor result is
 live and succeeded.
+
+Provisioning, provider actions, DNS changes, rollbacks, and admin actions use
+idempotency keys. Reusing a key with the same inputs should replay the recorded
+result; reusing a key with different inputs is an operator error and is rejected.
+Action-worker claims are atomic, so multiple workers should not run the same
+queued action concurrently.
 
 Before enabling live mutation paths, verify:
 
@@ -90,6 +101,32 @@ unset, the hosted API returns a misconfigured error and 503 so Stripe retries;
 it does not silently accept or skip the event.
 
 Webhook rows are stored in `arclink_webhook_events`.
+
+## Public Bot Webhooks
+
+Telegram webhook handling is intentionally fail-closed. Production must set
+`TELEGRAM_WEBHOOK_SECRET`, and webhook registration must send that value as the
+Telegram secret token. The API rejects missing or mismatched secret-token
+headers before dispatching the update.
+
+Discord interaction handling verifies the Discord signature, enforces timestamp
+tolerance, and records interaction ids so replayed interactions do not run
+twice. Stripe, Telegram, and Discord webhook routes all pass through hosted API
+rate limits before expensive verification work.
+
+## Teardown
+
+Cancellation and teardown are explicit lifecycle states, not implicit deletion.
+The worker handles `teardown_requested`, retryable teardown failure, and
+resource-bearing cancelled deployments by stopping Compose, removing managed
+DNS where applicable, revoking provider artifacts when configured, releasing
+fleet placement and ports, and recording audited timeline events before moving
+the deployment to `torn_down`.
+
+Compose volume deletion is off by default. It requires explicit teardown
+metadata, and operators should treat it as a data-destructive action requiring a
+separate approval trail. Local and remote materialized secret files are cleaned
+after Compose operations, but private source secrets remain in private state.
 
 ## Evidence Capture
 

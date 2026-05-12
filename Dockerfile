@@ -84,5 +84,7 @@ RUN pin_value() { \
      fi \
   && chown -R arclink:arclink /home/arclink /opt/arclink
 
+USER arclink
+
 ENTRYPOINT ["/usr/bin/tini", "--", "/home/arclink/arclink/bin/docker-entrypoint.sh"]
 CMD ["./bin/arclink-docker.sh", "health"]

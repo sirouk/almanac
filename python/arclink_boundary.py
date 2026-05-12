@@ -3,21 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from typing import Any, Mapping
 
-_SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
-_PLAINTEXT_SECRET_RE = re.compile(
-    r"(?i)("
-    r"sk_(live|test)_[a-z0-9]|"
-    r"whsec_[a-z0-9]|"
-    r"gh[pousr]_[a-z0-9]|"
-    r"xox[baprs]-|"
-    r"ntn_[a-z0-9]|"
-    r"cloudflare[a-z0-9_-]*token|"
-    r"\b\d{6,}:[a-z0-9_-]{20,}\b"
-    r")"
+from arclink_secrets_regex import (
+    contains_secret_material,
+    path_requires_secret_ref,
+    is_safe_secret_value,
 )
 
 
@@ -51,9 +43,9 @@ def reject_secret_material(
     text = value.strip()
     if not text:
         return
-    if _SECRET_KEY_RE.search(path) and not text.startswith("secret://"):
+    if path_requires_secret_ref(path) and not is_safe_secret_value(text):
         raise error_cls(f"{label} cannot store plaintext secret material at {path}")
-    if _PLAINTEXT_SECRET_RE.search(text):
+    if contains_secret_material(text):
         raise error_cls(f"{label} cannot store plaintext secret material at {path}")
 
 

@@ -116,6 +116,30 @@ def test_admin_action_idempotency_reuses_intent_without_duplicate_audit() -> Non
     print("PASS test_admin_action_idempotency_reuses_intent_without_duplicate_audit")
 
 
+def test_admin_action_rejects_unwired_action_types() -> None:
+    control = load_module("arclink_control.py", "arclink_control_admin_action_unwired_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_unwired_test")
+    conn = memory_db(control)
+    for action_type in ("reprovision", "rollout", "force_resynth", "rotate_bot_key", "suspend", "unsuspend"):
+        try:
+            dashboard.queue_arclink_admin_action(
+                conn,
+                admin_id="admin_1",
+                action_type=action_type,
+                target_kind="deployment",
+                target_id=f"dep_{action_type}",
+                reason="operator requested unsupported action",
+                idempotency_key=f"{action_type}-1",
+            )
+        except dashboard.ArcLinkDashboardError as exc:
+            expect("not queueable" in str(exc), str(exc))
+        else:
+            raise AssertionError(f"expected {action_type} to be rejected before queueing")
+    queued = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+    expect(queued == 0, str(queued))
+    print("PASS test_admin_action_rejects_unwired_action_types")
+
+
 def test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects() -> None:
     control = load_module("arclink_control.py", "arclink_control_admin_action_secret_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_secret_test")
@@ -218,22 +242,32 @@ def test_admin_dashboard_exposes_action_execution_readiness() -> None:
     conn = memory_db(control)
     view = dashboard.read_arclink_admin_dashboard(conn)
     readiness = view["action_execution_readiness"]
-    expect("restart" in readiness["executable"], str(readiness))
-    expect("dns_repair" in readiness["executable"], str(readiness))
-    expect("rollout" in readiness["pending_not_implemented"], str(readiness))
-    expect("force_resynth" in readiness["disabled"], str(readiness))
-    expect("fake success" in readiness["note"], str(readiness))
-    expect(set(readiness["executable"]).isdisjoint(set(readiness["pending_not_implemented"])), str(readiness))
+    expect(readiness["executable"] == [], str(readiness))
+    expect("restart" in readiness["disabled"], str(readiness))
+    expect("fail closed" in readiness["note"], str(readiness))
+
+    ready = dashboard.admin_action_execution_readiness(env={"ARCLINK_EXECUTOR_ADAPTER": "fake"})
+    expect("restart" in ready["executable"], str(ready))
+    expect("dns_repair" in ready["executable"], str(ready))
+    expect("comp" in ready["executable"], str(ready))
+    expect("rollout" in ready["pending_not_implemented"], str(ready))
+    expect("force_resynth" in ready["disabled"], str(ready))
+    expect(ready["probes"][0]["ok"] is True, str(ready))
+    expect(set(ready["executable"]).isdisjoint(set(ready["pending_not_implemented"])), str(ready))
+    ssh_blocked = dashboard.admin_action_execution_readiness(env={"ARCLINK_EXECUTOR_ADAPTER": "ssh"})
+    expect(ssh_blocked["executable"] == [], str(ssh_blocked))
+    expect(any(probe["name"] == "ssh_key" and not probe["ok"] for probe in ssh_blocked["probes"]), str(ssh_blocked))
     print("PASS test_admin_dashboard_exposes_action_execution_readiness")
 
 
 def main() -> int:
     test_admin_action_requires_reason_and_queues_audited_intent()
     test_admin_action_idempotency_reuses_intent_without_duplicate_audit()
+    test_admin_action_rejects_unwired_action_types()
     test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects()
     test_admin_refund_and_cancel_actions_record_audited_notes()
     test_admin_dashboard_exposes_action_execution_readiness()
-    print("PASS all 5 ArcLink admin action tests")
+    print("PASS all 6 ArcLink admin action tests")
     return 0
 
 

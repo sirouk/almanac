@@ -98,7 +98,7 @@ def _data_source_title(payload: dict[str, Any]) -> str:
 
 
 def _retryable_notion_http_status(status: int) -> bool:
-    return int(status) in {409, 429, 500, 502, 503, 504}
+    return int(status) in {429, 500, 502, 503, 504}
 
 
 def _retry_delay_seconds_for_attempt(

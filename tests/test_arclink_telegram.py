@@ -6,9 +6,15 @@ from arclink_test_helpers import expect, load_module, memory_db, seed_active_pub
 
 def test_telegram_config_from_env() -> None:
     tg = load_module("arclink_telegram.py", "arclink_telegram_config_test")
-    cfg = tg.TelegramConfig.from_env({"TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_BOT_USERNAME": "testbot"})
+    cfg = tg.TelegramConfig.from_env({
+        "TELEGRAM_BOT_TOKEN": "123:abc",
+        "TELEGRAM_BOT_USERNAME": "testbot",
+        "TELEGRAM_WEBHOOK_URL": "https://example.test/api/v1/webhooks/telegram",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+    })
     expect(cfg.is_live, "should be live with token")
     expect(cfg.bot_token == "123:abc", cfg.bot_token)
+    expect(cfg.webhook_secret == "tg_secret", cfg.webhook_secret)
     empty = tg.TelegramConfig.from_env({})
     expect(not empty.is_live, "should not be live without token")
     print("PASS test_telegram_config_from_env")
@@ -304,14 +310,26 @@ def test_telegram_webhook_registration_allows_buttons() -> None:
     calls: list[dict[str, object]] = []
     tg.telegram_set_webhook = lambda **kwargs: calls.append(kwargs) or {"result": True}
 
-    result = tg.ensure_arclink_public_telegram_webhook("123:abc", "https://example.test/api/v1/webhooks/telegram")
+    result = tg.ensure_arclink_public_telegram_webhook(
+        "123:abc",
+        "https://example.test/api/v1/webhooks/telegram",
+        "tg_secret",
+    )
 
     expect(calls, "expected setWebhook call")
     expect(calls[0]["webhook_url"] == "https://example.test/api/v1/webhooks/telegram", str(calls))
     expect("callback_query" in calls[0]["allowed_updates"], str(calls))
+    expect(calls[0]["secret_token"] == "tg_secret", str(calls))
     expect(result["allowed_updates"] == ["message", "edited_message", "callback_query"], str(result))
+    expect(result["secret_configured"] is True, str(result))
     skipped = tg.ensure_arclink_public_telegram_webhook("123:abc", "")
     expect(skipped.get("skipped") is True, str(skipped))
+    try:
+        tg.ensure_arclink_public_telegram_webhook("123:abc", "https://example.test/api/v1/webhooks/telegram")
+    except tg.ArcLinkTelegramError as exc:
+        expect("TELEGRAM_WEBHOOK_SECRET" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected missing Telegram webhook secret to fail")
     print("PASS test_telegram_webhook_registration_allows_buttons")
 
 
@@ -346,7 +364,12 @@ def test_live_transport_requires_token() -> None:
 
 def test_telegram_validate_live_readiness() -> None:
     tg = load_module("arclink_telegram.py", "arclink_telegram_readiness_test")
-    full = tg.TelegramConfig.from_env({"TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_BOT_USERNAME": "testbot"})
+    full = tg.TelegramConfig.from_env({
+        "TELEGRAM_BOT_TOKEN": "123:abc",
+        "TELEGRAM_BOT_USERNAME": "testbot",
+        "TELEGRAM_WEBHOOK_URL": "https://example.test/api/v1/webhooks/telegram",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+    })
     expect(full.validate_live_readiness() == [], f"expected empty, got {full.validate_live_readiness()}")
     missing_token = tg.TelegramConfig.from_env({})
     missing = missing_token.validate_live_readiness()

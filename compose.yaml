@@ -39,11 +39,14 @@ x-arclink-app: &arclink-app
     ARCLINK_DOCKER_HOST_PRIV_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:-}
     ARCLINK_DOCKER_IMAGE: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
     ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}
+    ARCLINK_DOCKER_SOCKET_GID: ${ARCLINK_DOCKER_SOCKET_GID:-0}
     ARCLINK_API_HOST: ${ARCLINK_API_HOST:-0.0.0.0}
     ARCLINK_API_PORT: ${ARCLINK_API_CONTAINER_PORT:-8900}
     ARCLINK_WEB_PORT: ${ARCLINK_WEB_CONTAINER_PORT:-3000}
     ARCLINK_CORS_ORIGIN: ${ARCLINK_CORS_ORIGIN:-}
     ARCLINK_COOKIE_DOMAIN: ${ARCLINK_COOKIE_DOMAIN:-}
+    ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}
+    ARCLINK_SESSION_HASH_PEPPER_REQUIRED: ${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-0}
     ARCLINK_DEFAULT_PRICE_ID: ${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_founders}
     ARCLINK_FOUNDERS_PRICE_ID: ${ARCLINK_FOUNDERS_PRICE_ID:-price_arclink_founders}
     ARCLINK_SOVEREIGN_PRICE_ID: ${ARCLINK_SOVEREIGN_PRICE_ID:-price_arclink_sovereign}
@@ -67,6 +70,7 @@ x-arclink-app: &arclink-app
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
     DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
     DISCORD_APP_ID: ${DISCORD_APP_ID:-}
     DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
@@ -275,11 +279,13 @@ services:
 
   control-provisioner:
     <<: *arclink-app
+    group_add:
+      - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
       - ./arclink-priv:/home/arclink/arclink/arclink-priv
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
-      - ./arclink-priv/secrets/ssh:/root/.ssh
+      - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
       # Intentional trusted-host boundary: the Sovereign provisioner needs
       # Docker API access when ARCLINK_EXECUTOR_ADAPTER=local.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -294,12 +300,14 @@ services:
 
   control-action-worker:
     <<: *arclink-app
+    group_add:
+      - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
       - ./arclink-priv:/home/arclink/arclink/arclink-priv
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
-      - ./arclink-priv/secrets/ssh:/root/.ssh
-      # Trusted-host boundary: restart/teardown/admin lifecycle actions call
-      # Docker Compose when ARCLINK_EXECUTOR_ADAPTER=local.
+      - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
+      # Intentional trusted-host boundary: restart/teardown/admin lifecycle
+      # actions call Docker Compose when ARCLINK_EXECUTOR_ADAPTER=local.
       - /var/run/docker.sock:/var/run/docker.sock
     command:
       - ./bin/docker-job-loop.sh
@@ -322,6 +330,8 @@ services:
 
   agent-supervisor:
     <<: *arclink-job
+    group_add:
+      - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     environment:
       <<: *arclink-env
       ARCLINK_CONTAINER_RUNTIME: docker
@@ -343,12 +353,15 @@ services:
 
   notification-delivery:
     <<: *arclink-job
+    group_add:
+      - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
       - ./arclink-priv:/home/arclink/arclink/arclink-priv
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
-      # Trusted delivery boundary: Raven-mediated public-channel agent turns
-      # execute the selected deployment's Hermes gateway container.
+      # Intentional trusted-host delivery boundary: Raven-mediated
+      # public-channel agent turns execute the selected deployment's Hermes
+      # gateway container.
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["./bin/docker-job-loop.sh", "notification-delivery", "1", "./bin/arclink-notification-delivery.sh"]
 
@@ -361,6 +374,8 @@ services:
 
   curator-refresh:
     <<: *arclink-job
+    group_add:
+      - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
       - .:/home/arclink/arclink
       - ./arclink-priv:/home/arclink/arclink/arclink-priv

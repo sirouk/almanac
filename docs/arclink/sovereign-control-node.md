@@ -1,9 +1,9 @@
 # ArcLink Sovereign Control Node
 
 The Sovereign Control Node is the paid self-serve ArcLink control plane. It is
-the path for a machine like `s1396`: users arrive through the website, Telegram,
-or Discord, answer onboarding questions, complete Stripe checkout, and receive a
-separate ArcLink pod deployed onto the fleet.
+the path for a dedicated control host: users arrive through the website,
+Telegram, or Discord, answer onboarding questions, complete Stripe checkout,
+and receive a separate ArcLink pod deployed onto the fleet.
 
 ## Deploy Path
 
@@ -54,7 +54,9 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
    Telegram must be registered with `callback_query` allowed updates so Raven's
    inline buttons can deliver taps back to the control API. The deploy flow
    writes `TELEGRAM_WEBHOOK_URL` to the public Telegram endpoint and public bot
-   registration refreshes both commands and webhook allowed updates.
+   registration refreshes both commands and webhook allowed updates. Production
+   Telegram webhooks must also use `TELEGRAM_WEBHOOK_SECRET`; the hosted API
+   rejects webhook updates when the secret-token header is absent or wrong.
 
 2. **Public onboarding**
    - `python/arclink_hosted_api.py` routes to `arclink_api_auth.py`.
@@ -75,7 +77,9 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
    - `python/arclink_fleet.py` records worker hosts, observed load, capacity
      slots, status, region, and tags.
    - Placement chooses an active host with the most headroom and records one
-     active placement per deployment.
+     active placement per deployment. Placement and provider mutations are
+     guarded by durable idempotency records so retries replay matching work
+     instead of double-applying side effects.
 
 5. **Provisioning intent**
    - `python/arclink_provisioning.py` renders the per-user pod intent:
@@ -120,6 +124,13 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
    - `control-api` exposes admin health, DNS drift, reconciliation, actions,
      payments, bots, security, and scale-operation views.
 
+   Cancellation is handled as an explicit teardown lifecycle. The worker stops
+   Compose, removes managed DNS where applicable, revokes provider artifacts
+   when configured, releases placement and port reservations, cleans
+   materialized secret files, and records audit events before marking the
+   deployment `torn_down`. Compose volumes are preserved unless teardown
+   metadata explicitly requests removal.
+
 8. **Handoff**
    - The user dashboard reads `/api/v1/user/dashboard`,
      `/api/v1/user/billing`, and `/api/v1/user/provisioning`.
@@ -151,9 +162,16 @@ are present in `arclink-priv/config/docker.env`:
 - `CHUTES_API_KEY`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_BOT_USERNAME`
+- `TELEGRAM_WEBHOOK_SECRET`
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_APP_ID`
 - `DISCORD_PUBLIC_KEY`
+- `ARCLINK_SESSION_HASH_PEPPER` with
+  `ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1` for production session and CSRF
+  token hashes.
+- `ARCLINK_BACKEND_ALLOWED_CIDRS`, narrowed to the reverse-proxy, Docker
+  private network, or tailnet source ranges that should reach admin/control
+  API routes.
 - `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`
 - `ARCLINK_CONTROL_DEPLOYMENT_STYLE=single-machine`, `hetzner`, or
   `akamai-linode`; `deploy.sh control install` asks this before ingress so the
@@ -185,7 +203,8 @@ The control node starts the hosted API, web control center, and provisioner loop
 from `deploy.sh control`. The worker-host path now exists for local and SSH
 Docker Compose execution, with Cloudflare DNS upserts in domain mode,
 Tailscale-safe DNS skipping in Tailscale mode, per-deployment Notion callback
-intent, and secret-file materialization. Live proof is still gated by real
-provider credentials, registered fleet capacity, SSH reachability to worker
-hosts, ingress publication, customer Notion connection proof, and service health
+intent, secret-file materialization and cleanup, durable operation
+idempotency, and audited teardown. Live proof is still gated by real provider
+credentials, registered fleet capacity, SSH reachability to worker hosts,
+ingress publication, customer Notion connection proof, and service health
 checks against the deployed pods.

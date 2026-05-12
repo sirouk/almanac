@@ -30,6 +30,8 @@ from arclink_control import (
     has_pending_curator_brief_fanout,
     mark_notification_delivered,
     mark_notification_error,
+    parse_utc_iso,
+    utc_now,
     utc_after_seconds_iso,
     utc_now_iso,
 )
@@ -223,7 +225,10 @@ def _int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1800) 
 
 def _notification_due_now(row: dict[str, Any]) -> bool:
     next_attempt_at = str(row.get("next_attempt_at") or "").strip()
-    return not next_attempt_at or next_attempt_at <= utc_now_iso()
+    if not next_attempt_at:
+        return True
+    parsed = parse_utc_iso(next_attempt_at)
+    return parsed is not None and parsed <= utc_now()
 
 
 def _compose_project_name(deployment_id: str) -> str:

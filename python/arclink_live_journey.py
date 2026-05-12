@@ -338,6 +338,9 @@ def evaluate_journey(
     failed = False
 
     for step in steps:
+        if step.status == "skipped" and step.skip_reason:
+            continue
+
         if failed and stop_on_failure:
             step.status = "skipped"
             step.skip_reason = "prior step failed"

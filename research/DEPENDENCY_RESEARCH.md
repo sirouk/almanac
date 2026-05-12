@@ -2,141 +2,101 @@
 
 ## Scope
 
-This document uses public dependency manifests, runtime pins, service
-definitions, and tests only. It does not assert live account capabilities for
-Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale, Docker
-install/upgrade, or production deploy flows.
-
-PLAN conclusion: ArcLink should be treated as a multi-runtime product platform.
-Dependency decisions must preserve the existing Bash, Python, Next.js,
-Docker/systemd, Hermes plugin, qmd, Notion/SSOT, and SQLite boundaries instead
-of collapsing the project into a single web-app or single-service stack.
+This document records public dependency and runtime signals relevant to the
+Sovereign audit remediation. It does not assert live account capability for
+Stripe, Telegram, Discord, Chutes, Notion, Cloudflare, Tailscale, Docker host
+mutation, or production deploy flows.
 
 ## Stack Components
 
-| Component | Evidence | Role | BUILD decision |
+| Component | Evidence | Mission relevance | Decision |
 | --- | --- | --- | --- |
-| Bash | `deploy.sh`, `bin/*.sh`, `test.sh` | Host lifecycle, Docker wrapper, bootstrap, health, qmd/PDF jobs, service installation, upgrades | Keep canonical host mutations in scripts; validate with shell syntax and focused tests. |
-| Python 3 | `python/*.py`, `bin/*.py`, `tests/test_*.py` | Control DB, hosted API, auth, onboarding, provisioning, public bots, action worker, MCP, Notion/SSOT, memory, diagnostics, plugin APIs | Primary behavior-fix surface. |
-| SQLite | `python/arclink_control.py` and callers | Durable control-plane state for users, deployments, sessions, subscriptions, events, actions, health, shares, pairing, and provisioning | Preserve migrations and DB tests for state transitions. |
-| Docker Compose | `compose.yaml`, `Dockerfile`, `bin/arclink-docker.sh` | Shared Host Docker and hosted Control Node substrate | Preserve boundary clarity; do not run install/upgrade without authorization. |
-| systemd | `systemd/user/*`, install scripts | Bare-metal user services, timers, and paths | Preserve loopback/default safety, env generation, and service health. |
-| Next.js App Router | `web/package.json`, `web/src/app/*` | Hosted website, onboarding, checkout, login, user dashboard, admin dashboard | Repair journey truth in place. |
-| React and TypeScript | `web/src/**/*.tsx`, web tests | Browser UI and validation | Preserve existing component and test setup. |
-| Tailwind CSS | `web/package.json`, `web/src/app/globals.css` | Web styling system | Keep dashboard UX work inside the current Tailwind setup. |
-| Hermes runtime | `config/pins.json`, install/refresh scripts | Agent runtime, gateways, dashboard host, skills, cron | Do not edit Hermes core; use ArcLink plugin/hook/config surfaces. |
-| ArcLink Hermes plugins | `plugins/hermes-agent/*` | Managed context, Drive, Code, Terminal | Preserve root containment, secret exclusions, and read-only linked roots. |
-| qmd | `config/pins.json`, `bin/qmd-*.sh`, `python/arclink_mcp_server.py` | Retrieval over vault, PDF sidecars, and shared Notion markdown | Preserve loopback/default scope and collection freshness. |
-| Notion and SSOT | `python/arclink_notion_*.py`, `python/arclink_ssot_batcher.py`, SSOT skills | Shared Notion indexing and brokered writes | Preserve scoped exact reads and destructive-payload rejection. |
-| Memory synthesis | `python/arclink_memory_synthesizer.py`, managed-context plugin | Bounded awareness cards and recall-stub injection | Preserve source scoping, local fallback, trust/conflict metadata, and retrieval guidance. |
-| Nextcloud | Compose service and access helpers | Shared file service and possible future sharing adapter | Do not imply cross-user Drive sharing until grants/UI/projection are complete. |
-| Stripe | Hosted API, onboarding, entitlement tests | Checkout and entitlement source of record | Use local/fake tests; live checkout/webhook proof requires authorization. |
-| Telegram and Discord | `python/arclink_telegram.py`, `python/arclink_discord.py`, public bot engine | Public Raven and private Curator channels | Use adapter tests; live registration/delivery is gated. |
-| Chutes | `config/model-providers.yaml`, `python/arclink_chutes.py`, provider auth/provisioning | Default OpenAI-compatible model provider plus account/OAuth/usage/refuel integration target | Keep fail-closed local boundary; model official registration/OAuth/usage APIs with fake fixtures first; live key management, OAuth, balance transfer, and usage proof are gated. |
-| Cloudflare and Tailscale | Ingress/provisioning modules, docs, live proof runner | Domain and tailnet routing | Fake/static tests only unless operator authorizes live proof. |
-| Playwright | `web/package.json`, `web/tests/browser` | Browser proof for hosted/dashboard flows | Run for touched web surfaces when dependencies and browsers are available. |
+| Python 3.11+ | `python/*.py`, `tests/test_*.py`, `requirements-dev.txt`, `config/pins.json` | Control DB, hosted API, auth, workers, provisioning, entitlements, evidence, dashboard, bots, Notion, memory, live proof | Primary repair surface. |
+| SQLite | `python/arclink_control.py` and its callers | Sessions, CSRF, rate limits, jobs, deployments, entitlements, evidence, drift, migrations | Use existing `connect_db`, migrations, transactions, constraints, and DB tests. |
+| Bash | `deploy.sh`, `bin/*.sh`, `test.sh`, `ralphie.sh` | Canonical host lifecycle, Docker wrappers, health, qmd/PDF/runtime jobs | Keep scripts canonical; run syntax checks when touched. |
+| Docker Compose | `Dockerfile`, `compose.yaml`, Docker tests | Container privilege, socket scope, service topology, Control Node runtime | Use static/fake tests locally; no live Docker mutation without authorization. |
+| WSGI/hosted API runtime | `python/arclink_hosted_api.py`, hosted API tests | Body limits, CORS/preflight behavior, CIDR checks, route auth, and SQLite connection scope | Prefer server-side middleware/helper fixes and either document single-thread SQLite use or move to per-request connections. |
+| Next.js / React / TypeScript | `web/package.json`, `web/src/*` | Product/admin/onboarding response-shape and UX fixes | Touch only with matching backend contract tests. |
+| Hermes runtime/plugins | `config/pins.json`, `plugins/hermes-agent`, `hooks/hermes-agent` | Agent runtime integration | Use ArcLink wrappers/plugins/hooks; do not edit Hermes core. |
+| qmd | `config/pins.json`, qmd scripts | Vault/Notion/PDF retrieval MCP | Preserve pin and loopback bindings. |
+| Stripe / Chutes / DNS / bots / Notion | Provider adapters and live proof files | Later side-effect correctness and live proof | Local fake clients only unless explicitly authorized. |
 
-## Version And Pin Snapshot
+## Version Snapshot
 
-| Lane | Current public signal | Planning note |
+| Lane | Public signal | Planning note |
 | --- | --- | --- |
-| Next.js | `web/package.json`: `next` `^15.3.2` | Keep the App Router project. |
-| React | `react` and `react-dom` `^19.1.0` | Preserve React 19 assumptions. |
-| TypeScript | `typescript` `^5.8.0` | Web validation uses TypeScript and ESLint 9. |
-| Tailwind | `tailwindcss` and `@tailwindcss/postcss` `^4.1.0` | Keep current styling pipeline. |
-| Playwright | `@playwright/test` `^1.59.1` | Browser proof needs installed browsers. |
-| Python validation | `requirements-dev.txt`: `jsonschema`, `PyYAML`, `pyflakes`, `ruff` | Local validation should not require live provider SDKs unless specifically needed. |
-| Hermes runtime/docs | `config/pins.json`: pinned `hermes-agent` commit for runtime and docs | Upgrades must go through ArcLink pins and upgrade rails. |
-| qmd | `config/pins.json`: `@tobilu/qmd` `2.1.0` | Retrieval semantics are pinned. |
-| Node runtime | `config/pins.json`: Node major `22` | Patch selection is resolved by bootstrap tooling. |
-| Python runtime | `config/pins.json`: preferred `3.12`, `3.11`; minimum `3.11` | Keep code compatible with Python 3.11+. |
-| Nextcloud/Postgres/Redis | Nextcloud `31-apache`, Postgres `16-alpine`, Redis `7-alpine` | Docker health and secrets handling must preserve these service assumptions. |
-| Chutes default model | `config/model-providers.yaml`: `moonshotai/Kimi-K2.6-TEE` | Keep pricing/provider copy aligned with model provider config. |
+| Python | `config/pins.json`: preferred `3.12`, `3.11`; minimum `3.11` | New code should remain Python 3.11 compatible. |
+| Node | `config/pins.json`: Node major `22`; `Dockerfile` uses Node 22 base image | Preserve current runtime line. |
+| Next.js | `web/package.json`: `next` `^15.3.2` | App Router web lane. |
+| React | `web/package.json`: `react` and `react-dom` `^19.1.0` | Preserve current UI assumptions. |
+| TypeScript | `web/package.json`: `typescript` `^5.8.0` | Needed for web/API client changes. |
+| Playwright | `web/package.json`: `@playwright/test` `^1.59.1`; Python dev requirements also include Playwright | Browser proof only when web behavior changes or release validation is requested. |
+| qmd | `config/pins.json`: `@tobilu/qmd` `2.1.0` | Keep retrieval semantics stable. |
+| Hermes | pinned `hermes-agent` runtime/docs commit | Do not drift docs/runtime or edit core. |
+| Service images | Nextcloud 31, Postgres 16, Redis 7, Traefik v3 | Preserve Compose compatibility. |
+| Python dev validation | `requirements-dev.txt` lists jsonschema, discord.py, PyNaCl, PyYAML, requests, Playwright, pyflakes, and ruff | Use for local no-secret tests and lint. |
 
 ## Alternatives Compared
 
 | Decision area | Preferred path | Alternatives | Reason |
 | --- | --- | --- | --- |
-| Product repair | Repair current Bash, Python, web, plugin, Compose, and systemd surfaces | New hosted app rewrite; docs-only repair | Current product spans host, agents, qmd, Notion, public bots, and dashboards. |
-| Channel linking | Keep `/link-channel` and platform-safe aliases over pairing codes | Account-password login in chat; separate per-channel accounts | Pairing code model exists and avoids chat credential handling. |
-| Drive sharing | Living ArcLink grants backed by live linked resources; prefer Nextcloud/WebDAV/OCS where enabled, otherwise keep browser sharing disabled | Copied projections; public Nextcloud links; unmanaged filesystem copies | Operator policy rejects copied snapshots as the completed product promise. |
-| Notion setup | Brokered shared-root membership with scoped claims | User OAuth/integration token; page shared to integration/control identity | Operator policy makes shared-root membership canonical; other models remain research/proof-gated alternatives. |
-| Chutes credentials | Per-user Chutes OAuth/delegated account as the canonical candidate, with operator-metered scoped keys only as a labeled fallback | Shared key with attribution; silent server-created accounts; provider disabled until supplied | Public Chutes proof shows registration requires token/hotkey/funding and may need human proof; per-key provider-side spend is unproven. |
-| Chutes account registration | Official registration-token/hotkey path plus guided assist only | Browser/TLS impersonation or Cloudflare/hCaptcha bypass; silent server account creation | Browser-challenge bypass is out of bounds; the local product row is `real` because ArcLink rejects silent creation, while live registration execution remains authorization-gated. |
-| Chutes usage/refuel | Personal/account endpoints for usage/quota/billing plus ArcLink internal Refuel Pod credits first | Platform-wide invocation exports as personal spend; direct Chutes balance transfer as default | Public docs identify personal endpoints and warn that several exports are platform-wide; balance transfer needs live proof before shipped copy can claim it. |
-| Memory | Keep ArcLink governed qmd/SSOT recall stubs; document optional conversational-memory siblings | Replace managed context with generic chat memory | ArcLink's product contract is governed knowledge routing, not unconstrained chat capture. |
-| Renewal failure | Immediate provider suspension, immediate and daily Raven notices, day-7 account/data-removal warning, and day-14 audited purge queue | Infer purge from billing defaults; keep only dashboard labels | Operator policy now defines the cadence; BUILD must implement it locally before public claims. |
-| One-operator mode | Enforce exactly one operator or make multi-admin mechanics internal-only/subordinate to singleton policy | Let docs and code diverge | Operator policy now defines the singleton operator model. |
+| Wave 1 trust-boundary work | Patch existing Python/API/bot/auth/container surfaces with focused tests | New gateway service; proxy-only fixes | Existing code owns the boundaries and already has tests. |
+| Secret detection | Shared `python/arclink_secrets_regex.py` imported by all redaction call sites | Fragmented per-module regexes | Centralization closes several audit IDs and prevents redaction order drift. |
+| Session token hashing | HMAC-SHA256 with server-side pepper and migration-compatible reads | Plain SHA-256; password-hash library | HMAC preserves the current token lookup model while adding a server secret. |
+| Body/CIDR/CORS enforcement | Hosted API middleware/helpers | Rely only on ingress | Server must enforce its own documented env contract. |
+| Hosted API SQLite connection scope | Per-request connections if threaded serving is supported; otherwise explicit single-thread contract plus health-route guard | Shared app connection without documentation | `ME-5` and `LOW-3` require the runtime contract to be explicit and tested. |
+| Docker socket hardening | Non-root image plus explicit socket-bound services | Remove all socket access; root containers | Some services intentionally need Docker; scope and document that boundary. |
+| Executor workspace boundaries | Keep shell mode bounded and document or allowlist broader SSH/machine mode | Treat all executor modes as equivalent | `ME-15` is a corrected PARTIAL item; behavior must match an explicit permission model. |
+| Live provider proof | Fake/injected clients until authorized | Run live provider mutations during BUILD | No-secret plan constraints block live mutation. |
 
 ## External Integration Posture
 
 | Integration | Local-test posture | Live-proof posture |
 | --- | --- | --- |
-| Stripe | Fake clients and webhook payload tests can prove local entitlement transitions | Live checkout/webhook requires explicit authorization and credentials. |
-| Telegram/Discord | Adapter tests can prove command routing, catalogs, channel linking, and copy | Live command registration, webhooks, or delivery proof is gated. |
-| Chutes | Fake utilization/key-management/OAuth/registration-assist tests and fail-closed boundaries can be local | OAuth connect, per-key usage, key creation, rotation, removal, account registration, balance transfer, and spend/refuel proof are gated. |
-| Notion | Broker, scoped exact reads, SSOT payload validation, indexing tests can be local | Live workspace/page permissions and user OAuth models are gated and partly policy-owned. |
-| Cloudflare/Tailscale | Fake clients, static ingress tests, and docs/health assertions can be local | Live domain/tailnet verification is gated. |
-| Docker/host deploy | Static Docker, shell, health, and Compose tests can be local | Install/upgrade, production smoke, and restart are gated. |
+| SQLite control DB | Temporary DBs and migration tests | No private runtime DB reads. |
+| Stripe/Chutes | Fake/injected clients, idempotency checks, adapter tests | Blocked until named authorization. |
+| Telegram/Discord | Local signature/webhook tests | Webhook registration, command sync, and delivery blocked until authorized. |
+| Docker/Cloudflare/Tailscale | Static Compose checks, fake runners, local command shims | Host/network mutation blocked until authorized. |
+| Notion | Local/mock tests for cache and error handling | Workspace mutation blocked until authorized. |
 
 ## Dependency Risks
 
-- Docker services mount trusted host resources in some modes; docs, health, and
-  tests must not hide that boundary.
-- Web validation needs Node dependencies and Playwright browsers.
-- Live provider SDKs or credentials should not become a default local test
-  requirement.
-- qmd, Hermes, Nextcloud, Postgres, Redis, Node, and Python are pinned or
-  version-resolved components; upgrade claims must go through ArcLink rails.
-- Chutes Refuel Pod is now an approved product direction, but public purchase,
-  direct Chutes balance application, and exact continuation copy remain gated
-  until the live payment/provider path is authorized and proven.
-- Chutes account registration must use authorized registration token, hotkey,
-  funding, OAuth, or partner-approved mechanics. Browser/TLS impersonation,
-  hCaptcha bypass, and silent server-side registration are rejected paths; live
-  execution is authorization-gated but not counted as an extra product-matrix
-  proof-gated row.
-- Private manifests and generated database paths can influence destructive
-  operations; BUILD must preserve path validation before reset, unlink, move,
-  or cleanup behavior.
-
-## Current Proof And Policy Targets
-
-The dependency stack is sufficiently identified for BUILD. The current matrix
-has no `partial` or `gap` rows after the 2026-05-08 policy reclassification
-and 2026-05-09 Chutes continuation pass. BUILD should preserve the local
-implementation rows and focus remaining work on proof and policy boundaries:
-
-- Live Stripe checkout/webhook, live Hermes dashboard landing, live Notion
-  permission models, live Cloudflare/Tailscale checks, live Chutes OAuth,
-  registration, key/usage operations, and live Refuel Pod purchase/provider
-  balance proof remain proof-gated.
-- Scoped agent self-model or peer-awareness cards remain policy-gated.
-- Browser right-click Drive/Code share-link creation remains disabled until a
-  live ArcLink broker or approved Nextcloud/WebDAV/OCS adapter exists.
-- Chutes threshold continuation copy, canonical Chutes provider path, and
-  self-service provider changes remain policy-gated.
+- The dirty worktree may contain partial fixes; tests must prove behavior.
+- Wave 1 touches shared request/auth/secret helpers, so a small patch can have
+  broad blast radius.
+- Container hardening must preserve services that legitimately need Docker
+  socket access.
+- Web/API response changes require fixture and browser test alignment.
+- Live proof remains outside local BUILD and must be reported separately from
+  local validation.
 
 ## Validation Dependencies
 
-Use the narrowest relevant checks during BUILD:
+Minimum Wave 1 validation after relevant edits:
 
 ```bash
 git diff --check
-bash -n deploy.sh bin/*.sh test.sh
-python3 -m py_compile <touched python files>
-python3 tests/<nearest focused test>.py
+python3 -m py_compile python/arclink_hosted_api.py python/arclink_api_auth.py python/arclink_telegram.py python/arclink_discord.py python/arclink_secrets_regex.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_telegram.py
+python3 tests/test_arclink_discord.py
+python3 tests/test_arclink_secrets_regex.py
+python3 tests/test_arclink_docker.py
+python3 tests/test_loopback_service_hardening.py
 ```
 
-For web changes:
+If shell files change:
+
+```bash
+bash -n deploy.sh bin/*.sh test.sh ralphie.sh
+```
+
+If web files change:
 
 ```bash
 cd web
 npm test
 npm run lint
-npm run test:browser
+npm run build
 ```
-
-Current MCP validation surfaces are `tests/test_arclink_mcp_schemas.py` and
-`tests/test_arclink_mcp_http_compat.py` unless BUILD adds a more specific
-server suite.

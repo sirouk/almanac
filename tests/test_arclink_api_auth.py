@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -80,6 +81,8 @@ def test_sessions_store_hashes_and_user_api_is_scoped_to_principal() -> None:
     stored = conn.execute("SELECT * FROM arclink_user_sessions WHERE session_id = 'usess_api'").fetchone()
     expect(session["session_token"] not in json.dumps(dict(stored)), str(dict(stored)))
     expect(session["csrf_token"] not in json.dumps(dict(stored)), str(dict(stored)))
+    expect(str(stored["session_token_hash"]).startswith("hmac_sha256_v1$"), str(dict(stored)))
+    expect(str(stored["csrf_token_hash"]).startswith("hmac_sha256_v1$"), str(dict(stored)))
 
     view = api.read_user_dashboard_api(
         conn,
@@ -250,6 +253,58 @@ def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> No
     print("PASS test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema")
 
 
+def test_admin_action_api_rate_limits_by_admin_and_target() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_admin_action_rate_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_admin_action_rate_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_admin_action_rate_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    api.upsert_arclink_admin(conn, admin_id="admin_rate", email="rate@example.test", role="ops", role_scope={"deployments": ["*"]})
+    api.enroll_arclink_admin_totp_factor(
+        conn,
+        admin_id="admin_rate",
+        factor_id="totp_rate",
+        secret_ref="secret://arclink/admin/admin_rate/totp",
+    )
+    api.verify_arclink_admin_totp_factor(conn, factor_id="totp_rate")
+    session = api.create_arclink_admin_session(conn, admin_id="admin_rate", session_id="asess_rate", mfa_verified=True)
+    for index in range(12):
+        response = api.queue_admin_action_api(
+            conn,
+            session_id=session["session_id"],
+            session_token=session["session_token"],
+            csrf_token=session["csrf_token"],
+            action_type="restart",
+            target_kind="deployment",
+            target_id=prepared["deployment_id"],
+            reason=f"rate limit test {index}",
+            idempotency_key=f"rate-{index}",
+        )
+        expect(response.status == 202, str(response))
+    try:
+        api.queue_admin_action_api(
+            conn,
+            session_id=session["session_id"],
+            session_token=session["session_token"],
+            csrf_token=session["csrf_token"],
+            action_type="restart",
+            target_kind="deployment",
+            target_id=prepared["deployment_id"],
+            reason="rate limit overflow",
+            idempotency_key="rate-overflow",
+        )
+    except api.ArcLinkRateLimitError as exc:
+        expect("rate limit exceeded" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected admin target rate limit to fail")
+    scopes = {
+        row["scope"]
+        for row in conn.execute("SELECT DISTINCT scope FROM rate_limits WHERE scope LIKE 'arclink:admin_action:%'")
+    }
+    expect(scopes == {"arclink:admin_action:admin", "arclink:admin_action:target"}, str(scopes))
+    print("PASS test_admin_action_api_rate_limits_by_admin_and_target")
+
+
 def test_admin_passwords_are_hashed_and_required_for_login() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_admin_password_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_admin_password_test")
@@ -310,7 +365,7 @@ def test_user_passwords_are_hashed_and_required_for_login() -> None:
                 login_subject="api-user@example.test",
             )
         except api.ArcLinkApiAuthError as exc:
-            expect("Invalid ArcLink user credentials" in str(exc) or "password is not configured" in str(exc), str(exc))
+            expect(str(exc) == "Invalid ArcLink user credentials", str(exc))
         else:
             raise AssertionError("expected wrong user password to fail")
     response = api.create_arclink_user_login_session_api(
@@ -353,6 +408,20 @@ def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> No
     )
     cookie_creds = api.extract_arclink_session_credentials({"Cookie": cookie}, session_kind="user")
     expect(cookie_creds == header_creds, str(cookie_creds))
+    browser_creds = api.extract_arclink_browser_session_credentials({"Cookie": cookie}, session_kind="user")
+    expect(browser_creds == header_creds, str(browser_creds))
+    try:
+        api.extract_arclink_browser_session_credentials(
+            {
+                "Authorization": f"Bearer {session['session_token']}",
+                "X-ArcLink-Session-Id": session["session_id"],
+            },
+            session_kind="user",
+        )
+    except api.ArcLinkApiAuthError as exc:
+        expect("browser session cookies" in str(exc), str(exc))
+    else:
+        raise AssertionError("browser session extraction should reject header credentials")
     try:
         api.extract_arclink_csrf_token({"Cookie": cookie}, session_kind="user")
     except api.ArcLinkApiAuthError as exc:
@@ -370,10 +439,167 @@ def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> No
 
     domain_error = api.arclink_api_error_response(api.ArcLinkApiAuthError("ArcLink session token mismatch"), request_id="req_1")
     generic_error = api.arclink_api_error_response(RuntimeError("internal database detail should stay private"), request_id="req_2")
-    expect(domain_error.status == 401 and domain_error.payload["error"] == "ArcLink session token mismatch", str(domain_error))
+    expect(domain_error.status == 401 and domain_error.payload["error"] == "unauthorized", str(domain_error))
     expect(generic_error.status == 400 and "internal database detail" not in json.dumps(generic_error.payload), str(generic_error))
     expect(generic_error.payload["request_id"] == "req_2", str(generic_error))
     print("PASS test_api_transport_helpers_extract_credentials_and_shape_safe_errors")
+
+
+def test_session_hashes_upgrade_legacy_sha256_after_successful_verification() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_hash_migration_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_hash_migration_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hash_migration_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_legacy_hash")
+    legacy_session_hash = api._hash_token(session["session_token"])
+    legacy_csrf_hash = api._hash_token(session["csrf_token"])
+    conn.execute(
+        "UPDATE arclink_user_sessions SET session_token_hash = ?, csrf_token_hash = ? WHERE session_id = ?",
+        (legacy_session_hash, legacy_csrf_hash, session["session_id"]),
+    )
+    conn.commit()
+
+    authenticated = api.authenticate_arclink_user_session(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+    )
+    expect(authenticated["session_id"] == session["session_id"], str(authenticated))
+    api.require_arclink_csrf(
+        conn,
+        session_id=session["session_id"],
+        csrf_token=session["csrf_token"],
+        session_kind="user",
+    )
+    stored = conn.execute(
+        "SELECT session_token_hash, csrf_token_hash FROM arclink_user_sessions WHERE session_id = ?",
+        (session["session_id"],),
+    ).fetchone()
+    expect(str(stored["session_token_hash"]).startswith("hmac_sha256_v1$"), str(dict(stored)))
+    expect(str(stored["csrf_token_hash"]).startswith("hmac_sha256_v1$"), str(dict(stored)))
+    expect(str(stored["session_token_hash"]) != legacy_session_hash, str(dict(stored)))
+    expect(str(stored["csrf_token_hash"]) != legacy_csrf_hash, str(dict(stored)))
+    print("PASS test_session_hashes_upgrade_legacy_sha256_after_successful_verification")
+
+
+def test_session_kind_prefixes_are_enforced() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_prefix_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_prefix_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_prefix_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    user_session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_prefix_user")
+    api.upsert_arclink_admin(conn, admin_id="admin_prefix", email="prefix-admin@example.test", role="ops")
+    admin_session = api.create_arclink_admin_session(conn, admin_id="admin_prefix", session_id="asess_prefix_admin")
+
+    for call, message in (
+        (
+            lambda: api.authenticate_arclink_user_session(
+                conn,
+                session_id=admin_session["session_id"],
+                session_token=admin_session["session_token"],
+            ),
+            "user auth accepted admin-prefixed session id",
+        ),
+        (
+            lambda: api.authenticate_arclink_admin_session(
+                conn,
+                session_id=user_session["session_id"],
+                session_token=user_session["session_token"],
+            ),
+            "admin auth accepted user-prefixed session id",
+        ),
+        (
+            lambda: api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="sess_bad"),
+            "user session creation accepted bad prefix",
+        ),
+    ):
+        try:
+            call()
+        except api.ArcLinkApiAuthError as exc:
+            expect("prefix" in str(exc), str(exc))
+        else:
+            raise AssertionError(message)
+    print("PASS test_session_kind_prefixes_are_enforced")
+
+
+def test_session_auth_failures_use_generic_error_detail() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_generic_session_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_generic_session_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_generic_session_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_generic_auth")
+
+    messages = []
+    for call in (
+        lambda: api.authenticate_arclink_user_session(
+            conn,
+            session_id="usess_missing_generic",
+            session_token=session["session_token"],
+        ),
+        lambda: api.authenticate_arclink_user_session(
+            conn,
+            session_id=session["session_id"],
+            session_token="wrong-token",
+        ),
+    ):
+        try:
+            call()
+        except api.ArcLinkApiAuthError as exc:
+            messages.append(str(exc))
+        else:
+            raise AssertionError("expected generic session auth failure")
+    conn.execute(
+        "UPDATE arclink_user_sessions SET status = 'revoked', revoked_at = '2026-05-11T00:00:00+00:00' WHERE session_id = ?",
+        (session["session_id"],),
+    )
+    conn.commit()
+    try:
+        api.authenticate_arclink_user_session(
+            conn,
+            session_id=session["session_id"],
+            session_token=session["session_token"],
+        )
+    except api.ArcLinkApiAuthError as exc:
+        messages.append(str(exc))
+    else:
+        raise AssertionError("expected revoked session auth failure")
+    expect(set(messages) == {"ArcLink user session authentication failed"}, str(messages))
+    print("PASS test_session_auth_failures_use_generic_error_detail")
+
+
+def test_production_session_creation_requires_pepper() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_pepper_required_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_pepper_required_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_pepper_required_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    old_domain = os.environ.get("ARCLINK_BASE_DOMAIN")
+    old_pepper = os.environ.get("ARCLINK_SESSION_HASH_PEPPER")
+    try:
+        os.environ["ARCLINK_BASE_DOMAIN"] = "arclink.online"
+        os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+        try:
+            api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_no_pepper")
+        except api.ArcLinkApiAuthError as exc:
+            expect("pepper" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected production session creation without pepper to fail")
+        os.environ["ARCLINK_SESSION_HASH_PEPPER"] = "test-pepper"
+        session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_with_pepper")
+        expect(session["session_id"] == "usess_with_pepper", str(session))
+    finally:
+        if old_domain is None:
+            os.environ.pop("ARCLINK_BASE_DOMAIN", None)
+        else:
+            os.environ["ARCLINK_BASE_DOMAIN"] = old_domain
+        if old_pepper is None:
+            os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+        else:
+            os.environ["ARCLINK_SESSION_HASH_PEPPER"] = old_pepper
+    print("PASS test_production_session_creation_requires_pepper")
 
 
 def test_revoke_session_rejects_invalid_kind_before_update_or_audit() -> None:
@@ -455,6 +681,47 @@ def test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit() 
     print("PASS test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit")
 
 
+def test_staged_revoke_requires_explicit_transaction() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_staged_revoke_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_staged_revoke_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_staged_revoke_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_staged_revoke")
+
+    try:
+        api.revoke_arclink_session(
+            conn,
+            session_id=session["session_id"],
+            session_kind="user",
+            actor_id="admin_api",
+            reason="staged revoke without transaction",
+            commit=False,
+        )
+    except api.ArcLinkApiAuthError as exc:
+        expect("explicit transaction" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected staged revoke without an explicit transaction to fail")
+
+    row = conn.execute("SELECT status FROM arclink_user_sessions WHERE session_id = ?", (session["session_id"],)).fetchone()
+    expect(row["status"] == "active", str(dict(row)))
+
+    conn.execute("BEGIN IMMEDIATE")
+    revoked = api.revoke_arclink_session(
+        conn,
+        session_id=session["session_id"],
+        session_kind="user",
+        actor_id="admin_api",
+        reason="staged revoke with transaction",
+        commit=False,
+    )
+    expect(revoked["status"] == "revoked", str(revoked))
+    conn.rollback()
+    row = conn.execute("SELECT status FROM arclink_user_sessions WHERE session_id = ?", (session["session_id"],)).fetchone()
+    expect(row["status"] == "active", str(dict(row)))
+    print("PASS test_staged_revoke_requires_explicit_transaction")
+
+
 def test_single_operator_policy_rejects_second_active_owner() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_single_operator_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_single_operator_test")
@@ -481,18 +748,41 @@ def test_single_operator_policy_rejects_second_active_owner() -> None:
     print("PASS test_single_operator_policy_rejects_second_active_owner")
 
 
+def test_proof_token_hashes_use_hmac_and_accept_legacy() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_proof_hash_test")
+    import secrets as _secrets
+    token = _secrets.token_urlsafe(32)
+    peppered = api._hash_proof_token(token)
+    expect(peppered.startswith("hmac_sha256_v1$"), f"proof hash should be peppered: {peppered}")
+    expect(api._verify_proof_token_hash(token, peppered), "peppered proof hash should verify")
+    legacy = api._hash_token(token)
+    expect(not legacy.startswith("hmac_sha256_v1$"), f"legacy hash should be plain SHA-256: {legacy}")
+    expect(api._verify_proof_token_hash(token, legacy), "legacy SHA-256 proof hash should still verify")
+    expect(not api._verify_proof_token_hash("wrong_token", peppered), "wrong token should not verify (peppered)")
+    expect(not api._verify_proof_token_hash("wrong_token", legacy), "wrong token should not verify (legacy)")
+    expect(not api._verify_proof_token_hash(token, ""), "empty stored hash should not verify")
+    print("PASS test_proof_token_hashes_use_hmac_and_accept_legacy")
+
+
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
     test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema()
+    test_admin_action_api_rate_limits_by_admin_and_target()
     test_admin_passwords_are_hashed_and_required_for_login()
     test_user_passwords_are_hashed_and_required_for_login()
     test_api_transport_helpers_extract_credentials_and_shape_safe_errors()
+    test_session_hashes_upgrade_legacy_sha256_after_successful_verification()
+    test_session_kind_prefixes_are_enforced()
+    test_session_auth_failures_use_generic_error_detail()
+    test_production_session_creation_requires_pepper()
     test_revoke_session_rejects_invalid_kind_before_update_or_audit()
     test_revoke_session_rejects_missing_user_and_admin_before_update_or_audit()
+    test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
-    print("PASS all 10 ArcLink API/auth tests")
+    test_proof_token_hashes_use_hmac_and_accept_legacy()
+    print("PASS all 16 ArcLink API/auth tests")
     return 0
 
 

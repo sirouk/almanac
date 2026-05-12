@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -77,7 +77,7 @@ export default function AdminPage() {
   const [actions, setActions] = useState<{ actions?: Record<string, string>[] } | null>(null);
   const [events, setEvents] = useState<{ events?: Record<string, string>[] } | null>(null);
   const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
-  const [reconciliation, setReconciliation] = useState<{ reconciliation?: Record<string, string>[]; drift_count?: number; drift?: Record<string, string>[]; summary?: Record<string, unknown> } | null>(null);
+  const [reconciliation, setReconciliation] = useState<{ reconciliation?: Record<string, string>[]; drift_count?: number } | null>(null);
   const [operatorSnapshot, setOperatorSnapshot] = useState<Record<string, unknown> | null>(null);
   const [scaleOperations, setScaleOperations] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState("");
@@ -97,6 +97,7 @@ export default function AdminPage() {
   }, [router]);
 
   useEffect(() => {
+    if (data === null) return;
     if (tab === "health") api.adminServiceHealth().then((r) => { if (r.status === 200) setHealth(r.data as typeof health); });
     if (tab === "provisioning") api.adminProvisioningJobs().then((r) => { if (r.status === 200) setJobs(r.data as typeof jobs); });
     if (tab === "dns") api.adminDnsDrift().then((r) => { if (r.status === 200) setDrift(r.data as typeof drift); });
@@ -109,7 +110,7 @@ export default function AdminPage() {
       api.adminOperatorSnapshot().then((r) => { if (r.status === 200) setOperatorSnapshot(r.data as typeof operatorSnapshot); });
       api.adminScaleOperations().then((r) => { if (r.status === 200) setScaleOperations(r.data as typeof scaleOperations); });
     }
-  }, [tab]);
+  }, [tab, data]);
 
   const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
   const deploymentCounts = statusCounts(data?.deployments || []);
@@ -408,7 +409,7 @@ export default function AdminPage() {
                         <tr key={i} className="border-b border-border/50">
                           <td className="px-3 py-2 text-soft-white/40 text-xs">{a.created_at || "-"}</td>
                           <td className="px-3 py-2 font-mono text-xs">{a.actor_id || "-"}</td>
-                          <td className="px-3 py-2">{a.action || a.action_type || "-"}</td>
+                          <td className="px-3 py-2">{a.action || "-"}</td>
                           <td className="px-3 py-2 font-mono text-xs">{a.target_id || "-"}</td>
                           <td className="px-3 py-2 text-soft-white/60">{a.reason || "-"}</td>
                         </tr>
@@ -596,10 +597,10 @@ export default function AdminPage() {
           {tab === "reconciliation" && (
             <div className="space-y-6">
               <h1 className="font-display text-2xl font-bold">Reconciliation</h1>
-              {(reconciliation?.reconciliation?.length || reconciliation?.drift?.length) ? (
+              {reconciliation?.reconciliation?.length ? (
                 <>
                   <p className="text-sm text-soft-white/60">
-                    {reconciliation.drift_count ?? (reconciliation.reconciliation || reconciliation.drift || []).length} drift item(s) detected.
+                    {reconciliation.drift_count ?? reconciliation.reconciliation.length} drift item(s) detected.
                   </p>
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -611,10 +612,10 @@ export default function AdminPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {(reconciliation.reconciliation || reconciliation.drift || []).map((d, i) => (
+                        {reconciliation.reconciliation.map((d, i) => (
                           <tr key={i} className="border-b border-border/50">
-                            <td className="px-3 py-2 font-mono text-xs">{d.user_id || d.customer_id || "-"}</td>
-                            <td className="px-3 py-2">{d.kind || d.field || "-"}</td>
+                            <td className="px-3 py-2 font-mono text-xs">{d.user_id || "-"}</td>
+                            <td className="px-3 py-2">{d.kind || "-"}</td>
                             <td className="px-3 py-2 text-soft-white/60">{d.detail || "-"}</td>
                           </tr>
                         ))}
@@ -1067,7 +1068,10 @@ function OperatorSection({ title, ready, checks }: { title: string; ready: boole
 }
 
 function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadiness; onQueued: () => void }) {
-  const executableActions = readiness?.executable?.length ? readiness.executable : ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"];
+  const executableActions = useMemo(
+    () => readiness?.executable ?? ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel"],
+    [readiness?.executable],
+  );
   const disabledActions = readiness?.pending_not_implemented || readiness?.disabled || [];
   const [actionType, setActionType] = useState(executableActions[0] || "restart");
   const [targetKind, setTargetKind] = useState("deployment");
@@ -1076,6 +1080,17 @@ function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadi
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState("");
   const actionIsExecutable = executableActions.includes(actionType);
+  const executableKey = executableActions.join("|");
+
+  useEffect(() => {
+    if (executableActions.length === 0) {
+      if (actionType) setActionType("");
+      return;
+    }
+    if (!executableActions.includes(actionType)) {
+      setActionType(executableActions[0]);
+    }
+  }, [actionType, executableActions, executableKey]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1095,7 +1110,7 @@ function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadi
       });
       if (res.status === 202) {
         setResult("Action queued.");
-        setActionType("");
+        setActionType(executableActions[0] || "");
         setTargetId("");
         setReason("");
         onQueued();

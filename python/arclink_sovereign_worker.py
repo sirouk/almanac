@@ -9,12 +9,14 @@ health, audit, and events.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 import secrets
 import socket
 import sqlite3
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -24,6 +26,7 @@ from arclink_control import (
     Config,
     append_arclink_audit,
     append_arclink_event,
+    arclink_deployment_can_provision,
     connect_db,
     create_arclink_provisioning_job,
     parse_utc_iso,
@@ -37,18 +40,21 @@ from arclink_executor import (
     ArcLinkExecutor,
     ArcLinkExecutorConfig,
     ArcLinkSecretResolutionError,
+    ChutesKeyApplyRequest,
     CloudflareDnsApplyRequest,
     CloudflareDnsApplyResult,
+    CloudflareDnsTeardownRequest,
     DockerComposeApplyRequest,
     DockerComposeApplyResult,
+    DockerComposeLifecycleRequest,
     FakeSecretResolver,
     FileMaterializingSecretResolver,
     ResolvedSecretFile,
     SshDockerComposeRunner,
     SubprocessDockerComposeRunner,
 )
-from arclink_fleet import ArcLinkFleetError, place_deployment, reconcile_fleet_observed_loads, register_fleet_host
-from arclink_ingress import persist_arclink_dns_records
+from arclink_fleet import ArcLinkFleetError, place_deployment, reconcile_fleet_observed_loads, register_fleet_host, remove_placement
+from arclink_ingress import arclink_dns_records_for_teardown, mark_arclink_dns_torn_down, persist_arclink_dns_records
 from arclink_provisioning import (
     ARCLINK_PROVISIONING_SERVICE_NAMES,
     render_arclink_provisioning_intent,
@@ -63,7 +69,10 @@ class ArcLinkSovereignWorkerError(RuntimeError):
 
 
 SOLO_JOB_KIND = "sovereign_pod_apply"
+TEARDOWN_JOB_KIND = "sovereign_pod_teardown"
 TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
+TEARDOWN_REQUEST_STATUSES = {"teardown_requested", "teardown_failed", "cancelled"}
+TEARDOWN_TERMINAL_STATUSES = {"torn_down", "teardown_complete"}
 
 
 @dataclass(frozen=True)
@@ -111,17 +120,47 @@ class SovereignSecretResolver(FileMaterializingSecretResolver):
             if not value:
                 raise ArcLinkSecretResolutionError(f"missing ArcLink secret material for {secret_ref}: set {provider_env}")
             return value
-        return self._generated_secret_value(secret_ref)
+        value, _created = self._generated_secret_value_with_created(secret_ref)
+        return value
 
     def _generated_secret_value(self, secret_ref: str) -> str:
+        value, _created = self._generated_secret_value_with_created(secret_ref)
+        return value
+
+    def _generated_secret_value_with_created(self, secret_ref: str) -> tuple[str, bool]:
         path = self._generated_secret_path(secret_ref)
         path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            return path.read_text(encoding="utf-8").strip()
-        value = f"arc_{secrets.token_urlsafe(36)}"
-        path.write_text(value + "\n", encoding="utf-8")
-        path.chmod(0o600)
-        return value
+        path.parent.chmod(0o700)
+        lock_path = path.with_name(f".{path.name}.lock")
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        tmp_name = ""
+        try:
+            with os.fdopen(lock_fd, "w") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                if path.exists():
+                    return path.read_text(encoding="utf-8").strip(), False
+                value = f"arc_{secrets.token_urlsafe(36)}"
+                with tempfile.NamedTemporaryFile(
+                    "w",
+                    encoding="utf-8",
+                    dir=path.parent,
+                    prefix=f".{path.name}.",
+                    delete=False,
+                ) as tmp:
+                    tmp_name = tmp.name
+                    tmp.write(value + "\n")
+                    tmp.flush()
+                    os.fsync(tmp.fileno())
+                os.chmod(tmp_name, 0o600)
+                os.replace(tmp_name, path)
+                return value, True
+        except Exception:
+            if tmp_name:
+                try:
+                    Path(tmp_name).unlink()
+                except OSError:
+                    pass
+            raise
 
     def _generated_secret_path(self, secret_ref: str) -> Path:
         if secret_ref.startswith("secret://arclink/dashboard/users/"):
@@ -213,6 +252,41 @@ def process_sovereign_batch(
     reconcile_fleet_observed_loads(conn)
     recover_stale_sovereign_jobs(conn, stale_seconds=worker.running_stale_seconds)
     recover_succeeded_sovereign_handoffs(conn, worker=worker)
+    teardown_rows = conn.execute(
+        """
+        SELECT d.*
+        FROM arclink_deployments d
+        LEFT JOIN arclink_provisioning_jobs j
+          ON j.deployment_id = d.deployment_id
+         AND j.job_kind = ?
+        WHERE d.status IN ('teardown_requested', 'teardown_failed')
+           OR (
+             d.status = 'cancelled'
+             AND (
+               EXISTS (
+                 SELECT 1 FROM arclink_deployment_placements p
+                 WHERE p.deployment_id = d.deployment_id AND p.status = 'active'
+               )
+               OR EXISTS (
+                 SELECT 1 FROM arclink_dns_records r
+                 WHERE r.deployment_id = d.deployment_id AND r.status != 'torn_down'
+               )
+             )
+           )
+           OR (
+             d.status = 'teardown_failed'
+             AND j.status = 'failed'
+             AND COALESCE(j.attempt_count, 0) < ?
+           )
+        ORDER BY d.updated_at ASC, d.deployment_id ASC
+        LIMIT ?
+        """,
+        (TEARDOWN_JOB_KIND, worker.max_attempts, worker.batch_size),
+    ).fetchall()
+    teardown_results = [
+        process_sovereign_teardown(conn, deployment=dict(row), worker=worker, executor=executor)
+        for row in teardown_rows
+    ]
     rows = conn.execute(
         """
         SELECT d.*
@@ -231,7 +305,7 @@ def process_sovereign_batch(
         """,
         (SOLO_JOB_KIND, worker.max_attempts, worker.batch_size),
     ).fetchall()
-    results = []
+    results = list(teardown_results)
     for row in rows:
         results.append(process_sovereign_deployment(conn, deployment=dict(row), worker=worker, executor=executor))
     return results
@@ -302,7 +376,7 @@ def recover_succeeded_sovereign_handoffs(
         job_id = str(deployment["job_id"])
         if str(deployment.get("status") or "") != "active":
             _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
-        urls = _access_urls_for_deployment(conn, deployment=deployment, worker=worker)
+        urls = _handoff_urls_for_recovery(conn, deployment=deployment, worker=worker)
         _queue_vessel_online_notifications(conn, deployment_id=deployment_id, urls=urls)
         append_arclink_event(
             conn,
@@ -373,13 +447,80 @@ def process_sovereign_deployment(
     except Exception as exc:
         error = _safe_error(exc)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="failed", error=error)
-        _mark_deployment_status(conn, deployment_id=deployment_id, status="provisioning_failed")
+        _mark_deployment_failed_if_still_provisioning(conn, deployment_id=deployment_id)
         _record_service_status(conn, deployment_id=deployment_id, status="failed", detail={"error": error})
         append_arclink_event(
             conn,
             subject_kind="deployment",
             subject_id=deployment_id,
             event_type="sovereign_provisioning_failed",
+            metadata={"job_id": str(job["job_id"]), "error": error},
+        )
+        return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "failed", "error": error}
+
+
+def process_sovereign_teardown(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    executor: ArcLinkExecutor | None = None,
+) -> dict[str, Any]:
+    deployment_id = str(deployment["deployment_id"])
+    current_status = str(deployment.get("status") or "").strip()
+    if current_status in TEARDOWN_TERMINAL_STATUSES:
+        return {"deployment_id": deployment_id, "status": "already_torn_down"}
+    job = _ensure_teardown_job(conn, deployment_id=deployment_id)
+    if str(job["status"]) in TERMINAL_JOB_STATUSES:
+        _mark_deployment_status(conn, deployment_id=deployment_id, status="torn_down")
+        return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_torn_down"}
+    if str(job["status"]) == "running":
+        return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_running"}
+    if str(job["status"]) == "failed":
+        if int(job["attempt_count"] or 0) >= worker.max_attempts:
+            return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
+        transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
+
+    transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="running")
+    _mark_deployment_status(conn, deployment_id=deployment_id, status="teardown_running")
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="sovereign_teardown_started",
+        metadata={"job_id": str(job["job_id"]), "previous_status": current_status},
+    )
+    try:
+        result = _teardown_deployment(conn, deployment=dict(deployment), job=job, worker=worker, executor=executor)
+        transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
+        _mark_deployment_status(conn, deployment_id=deployment_id, status="torn_down")
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="sovereign_teardown_completed",
+            metadata={"job_id": str(job["job_id"]), **result},
+        )
+        append_arclink_audit(
+            conn,
+            action="sovereign_pod_teardown",
+            actor_id="system:sovereign_worker",
+            target_kind="deployment",
+            target_id=deployment_id,
+            reason="deployment teardown lifecycle completed",
+            metadata={"job_id": str(job["job_id"]), **result},
+        )
+        return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "torn_down", **result}
+    except Exception as exc:
+        error = _safe_error(exc)
+        transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="failed", error=error)
+        _mark_deployment_status(conn, deployment_id=deployment_id, status="teardown_failed")
+        _record_service_status(conn, deployment_id=deployment_id, status="failed", detail={"error": error, "lifecycle": "teardown"})
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="sovereign_teardown_failed",
             metadata={"job_id": str(job["job_id"]), "error": error},
         )
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "failed", "error": error}
@@ -417,7 +558,13 @@ def _ensure_tailnet_service_ports(
         return dict(deployment)
 
     used: set[int] = set()
-    for row in conn.execute("SELECT deployment_id, metadata_json FROM arclink_deployments").fetchall():
+    for row in conn.execute(
+        """
+        SELECT deployment_id, metadata_json
+        FROM arclink_deployments
+        WHERE status NOT IN ('cancelled', 'torn_down', 'teardown_complete')
+        """
+    ).fetchall():
         if str(row["deployment_id"]) == deployment_id:
             continue
         used.update(_tailnet_ports_from_metadata(json_loads_safe(str(row["metadata_json"] or "{}"))).values())
@@ -463,6 +610,7 @@ def _apply_deployment(
     executor: ArcLinkExecutor | None,
 ) -> dict[str, Any]:
     deployment_id = str(deployment["deployment_id"])
+    deployment = _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
     placement = place_deployment(
         conn,
@@ -470,6 +618,7 @@ def _apply_deployment(
         region=str(metadata.get("region") or ""),
         required_tags=metadata.get("required_tags") if isinstance(metadata.get("required_tags"), Mapping) else None,
     )
+    deployment = _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     host = _host_for_placement(conn, placement)
     host_meta = json_loads_safe(str(host.get("metadata_json") or "{}"))
     edge_target = str(host_meta.get("edge_target") or worker.edge_target)
@@ -486,10 +635,13 @@ def _apply_deployment(
         tailscale_notion_path=worker.tailscale_notion_path,
         env=worker.env,
     )
+    _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_deployment_access_urls(conn, deployment_id=deployment_id, urls=intent["access"]["urls"])
+    _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
     selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
     if worker.ingress_mode == "domain" and intent["dns"]:
+        _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
         dns_result = selected_executor.cloudflare_dns_apply(
             CloudflareDnsApplyRequest(
                 deployment_id=deployment_id,
@@ -498,7 +650,7 @@ def _apply_deployment(
                 idempotency_key=f"arclink:sovereign:dns:{deployment_id}",
             )
         )
-        _mark_dns_provisioned(conn, deployment_id=deployment_id)
+        _mark_dns_provisioned(conn, deployment_id=deployment_id, dns_result=dns_result)
     else:
         dns_result = CloudflareDnsApplyResult(
             deployment_id=deployment_id,
@@ -511,6 +663,12 @@ def _apply_deployment(
                 "reason": "cloudflare_dns_not_used_for_tailscale_ingress",
             },
         )
+    _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
+    dashboard_password_preexisted = _dashboard_password_secret_preexisted(
+        deployment=deployment,
+        worker=worker,
+        intent=intent,
+    )
     docker_result = selected_executor.docker_compose_apply(
         DockerComposeApplyRequest(
             deployment_id=deployment_id,
@@ -518,7 +676,15 @@ def _apply_deployment(
             idempotency_key=f"arclink:sovereign:compose:{deployment_id}",
         )
     )
-    _sync_dashboard_password_hash_from_secret(conn, deployment=deployment, worker=worker, intent=intent)
+    deployment = _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
+    _sync_dashboard_password_hash_from_secret(
+        conn,
+        deployment=deployment,
+        worker=worker,
+        intent=intent,
+        password_secret_preexisted=dashboard_password_preexisted,
+    )
+    _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _record_service_status_after_compose(
         conn,
         deployment_id=deployment_id,
@@ -546,6 +712,203 @@ def _apply_deployment(
         "dns_records": list(dns_result.records),
         "urls": dict(intent["access"]["urls"]),
     }
+
+
+def _teardown_deployment(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    job: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    executor: ArcLinkExecutor | None,
+) -> dict[str, Any]:
+    deployment_id = str(deployment["deployment_id"])
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    remove_volumes = _teardown_removes_volumes(metadata)
+    placement = _active_placement_with_host(conn, deployment_id=deployment_id)
+    selected_executor = executor
+    intent = _minimal_teardown_intent(deployment_id=deployment_id, worker=worker)
+    if selected_executor is None and placement is not None:
+        selected_executor = _executor_for_host(worker=worker, host=placement["host"], intent=intent)
+    if selected_executor is None:
+        selected_executor = ArcLinkExecutor(
+            config=ArcLinkExecutorConfig(live_enabled=True, adapter_name=worker.executor_adapter),
+        )
+
+    compose_status = "skipped"
+    if placement is not None or executor is not None:
+        compose_result = selected_executor.docker_compose_lifecycle(
+            DockerComposeLifecycleRequest(
+                deployment_id=deployment_id,
+                action="teardown",
+                env_file=str(Path(worker.state_root_base) / deployment_id / "config" / "arclink.env"),
+                compose_file=str(Path(worker.state_root_base) / deployment_id / "config" / "compose.yaml"),
+                idempotency_key=f"arclink:sovereign:compose-teardown:{deployment_id}",
+                remove_volumes=remove_volumes,
+            )
+        )
+        compose_status = compose_result.status
+
+    dns_records = arclink_dns_records_for_teardown(conn, deployment_id=deployment_id)
+    dns_status = "skipped"
+    removed_dns: list[str] = []
+    if worker.ingress_mode == "domain" and dns_records:
+        dns_result = selected_executor.cloudflare_dns_teardown(
+            CloudflareDnsTeardownRequest(
+                deployment_id=deployment_id,
+                records=dns_records,
+                zone_id=worker.cloudflare_zone_id,
+                idempotency_key=f"arclink:sovereign:dns-teardown:{deployment_id}",
+            )
+        )
+        dns_status = dns_result.status
+        removed_dns = list(dns_result.records)
+        mark_arclink_dns_torn_down(
+            conn,
+            deployment_id=deployment_id,
+            removed=removed_dns,
+            metadata={"provider_status": dns_status, "job_id": str(job["job_id"])},
+        )
+    elif dns_records:
+        mark_arclink_dns_torn_down(
+            conn,
+            deployment_id=deployment_id,
+            removed=[],
+            metadata={"provider_status": "skipped", "ingress_mode": worker.ingress_mode, "job_id": str(job["job_id"])},
+        )
+
+    chutes_status = "skipped"
+    chutes_secret_ref = _chutes_secret_ref_for_teardown(metadata, deployment_id=deployment_id)
+    if chutes_secret_ref and worker.executor_adapter in {"fake", "local", "ssh"}:
+        chutes_result = selected_executor.chutes_key_apply(
+            ChutesKeyApplyRequest(
+                deployment_id=deployment_id,
+                action="revoke",
+                secret_ref=chutes_secret_ref,
+                idempotency_key=f"arclink:sovereign:chutes-revoke:{deployment_id}",
+            )
+        )
+        chutes_status = chutes_result.status
+
+    removed_placement = remove_placement(conn, deployment_id=deployment_id)
+    repaired_loads = reconcile_fleet_observed_loads(conn)
+    _release_tailnet_service_ports(conn, deployment_id=deployment_id)
+    _record_service_status(
+        conn,
+        deployment_id=deployment_id,
+        status="torn_down",
+        detail={
+            "job_id": str(job["job_id"]),
+            "compose_status": compose_status,
+            "dns_status": dns_status,
+            "chutes_status": chutes_status,
+            "remove_volumes": remove_volumes,
+        },
+    )
+    return {
+        "compose_status": compose_status,
+        "dns_status": dns_status,
+        "chutes_status": chutes_status,
+        "dns_records": removed_dns,
+        "placement_removed": removed_placement is not None,
+        "repaired_fleet_loads": repaired_loads,
+        "remove_volumes": remove_volumes,
+    }
+
+
+def _minimal_teardown_intent(*, deployment_id: str, worker: SovereignWorkerConfig) -> dict[str, Any]:
+    root = Path(worker.state_root_base) / deployment_id
+    return {
+        "deployment": {"deployment_id": deployment_id},
+        "state_roots": {"root": str(root), "config": str(root / "config")},
+        "compose": {"secrets": {}},
+    }
+
+
+def _active_placement_with_host(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT
+          p.placement_id,
+          p.deployment_id,
+          p.host_id,
+          p.status,
+          p.placed_at,
+          h.hostname,
+          h.metadata_json
+        FROM arclink_deployment_placements p
+        JOIN arclink_fleet_hosts h ON h.host_id = p.host_id
+        WHERE p.deployment_id = ?
+          AND p.status = 'active'
+        ORDER BY p.placed_at DESC
+        LIMIT 1
+        """,
+        (deployment_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    placement = dict(row)
+    host = {
+        "host_id": str(placement["host_id"]),
+        "hostname": str(placement["hostname"]),
+        "metadata_json": str(placement["metadata_json"] or "{}"),
+    }
+    return {"placement": placement, "host": host}
+
+
+def _teardown_removes_volumes(metadata: Mapping[str, Any]) -> bool:
+    teardown = metadata.get("teardown") if isinstance(metadata.get("teardown"), Mapping) else {}
+    return bool(teardown.get("remove_volumes") is True)
+
+
+def _chutes_secret_ref_for_teardown(metadata: Mapping[str, Any], *, deployment_id: str) -> str:
+    explicit = str(metadata.get("chutes_secret_ref") or "").strip()
+    if explicit:
+        return explicit
+    return f"secret://arclink/chutes/{deployment_id}"
+
+
+def _release_tailnet_service_ports(conn: sqlite3.Connection, *, deployment_id: str) -> None:
+    row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
+    if row is None:
+        return
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if metadata.get("tailnet_service_ports"):
+        metadata["tailnet_service_ports"] = {}
+        metadata["tailnet_service_ports_released_at"] = utc_now_iso()
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+            (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
+        )
+        conn.commit()
+
+
+def _reload_apply_ready_deployment(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT d.*, u.user_id AS joined_user_id
+        FROM arclink_deployments d
+        LEFT JOIN arclink_users u
+          ON u.user_id = d.user_id
+        WHERE d.deployment_id = ?
+        """,
+        (deployment_id,),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkSovereignWorkerError(f"ArcLink deployment not found before apply: {deployment_id}")
+    result = dict(row)
+    if not str(result.get("joined_user_id") or "").strip():
+        raise ArcLinkSovereignWorkerError(f"ArcLink deployment user missing before apply: {deployment_id}")
+    status = str(result.get("status") or "")
+    if status != "provisioning":
+        raise ArcLinkSovereignWorkerError(
+            f"ArcLink deployment changed status before apply side effects: {deployment_id} is {status or 'unknown'}"
+        )
+    if not arclink_deployment_can_provision(conn, deployment_id=deployment_id):
+        raise ArcLinkSovereignWorkerError(f"ArcLink deployment entitlement no longer permits provisioning: {deployment_id}")
+    return result
 
 
 def _persist_deployment_access_urls(
@@ -591,26 +954,52 @@ def _executor_for_host(
     if adapter == "local":
         runner = SubprocessDockerComposeRunner(docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"))
     elif adapter == "ssh":
+        host_name = str(host_meta.get("ssh_host") or host["hostname"]).strip()
+        if not _truthy(str(worker.env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or "")):
+            raise ArcLinkSovereignWorkerError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1")
+        allowed_hosts = _csv_values(str(worker.env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or ""))
+        if not allowed_hosts:
+            raise ArcLinkSovereignWorkerError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
         ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
         key_path = str(worker.env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
         known_hosts = str(worker.env.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
         if key_path:
+            _validate_ssh_key_path(key_path)
             ssh_options.extend(("-i", key_path))
         if known_hosts:
             ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
         runner = SshDockerComposeRunner(
-            host=str(host_meta.get("ssh_host") or host["hostname"]),
+            host=host_name,
             user=str(host_meta.get("ssh_user") or "arclink"),
             ssh_binary=str(worker.env.get("ARCLINK_SSH_BINARY") or "ssh"),
             rsync_binary=str(worker.env.get("ARCLINK_RSYNC_BINARY") or "rsync"),
             docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"),
             ssh_options=tuple(ssh_options),
+            allowed_hosts=tuple(allowed_hosts),
         )
     else:
         raise ArcLinkSovereignWorkerError(
             "set ARCLINK_EXECUTOR_ADAPTER to fake, local, or ssh before enabling the Sovereign provisioner"
         )
     return ArcLinkExecutor(config=config, secret_resolver=resolver, docker_runner=runner)
+
+
+def _validate_ssh_key_path(key_path: str) -> None:
+    path = Path(key_path).expanduser()
+    try:
+        stat_result = path.lstat()
+    except OSError as exc:
+        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key path is not readable") from exc
+    if path.is_symlink():
+        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key path must not be a symlink")
+    if not path.is_file():
+        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key path must be a regular file")
+    if stat_result.st_mode & 0o077:
+        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key file must not be group/world accessible")
+
+
+def _csv_values(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 
 def _access_urls_for_deployment(
@@ -651,6 +1040,24 @@ def _access_urls_for_deployment(
     return {str(k): str(v) for k, v in urls.items()}
 
 
+def _handoff_urls_for_recovery(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+) -> dict[str, str]:
+    deployment_id = str(deployment["deployment_id"])
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    cached = metadata.get("access_urls") if isinstance(metadata.get("access_urls"), Mapping) else {}
+    urls = {str(k): str(v) for k, v in cached.items() if str(v or "").strip()}
+    if urls:
+        return urls
+    urls = _access_urls_for_deployment(conn, deployment=deployment, worker=worker)
+    if urls:
+        _persist_deployment_access_urls(conn, deployment_id=deployment_id, urls=urls)
+    return urls
+
+
 def _secret_refs(intent: Mapping[str, Any]) -> list[str]:
     refs = []
     compose = intent.get("compose") if isinstance(intent.get("compose"), Mapping) else {}
@@ -666,12 +1073,15 @@ def _sync_dashboard_password_hash_from_secret(
     deployment: Mapping[str, Any],
     worker: SovereignWorkerConfig,
     intent: Mapping[str, Any],
+    password_secret_preexisted: bool = False,
 ) -> None:
     secret_refs = intent.get("secret_refs") if isinstance(intent.get("secret_refs"), Mapping) else {}
     secret_ref = str(secret_refs.get("dashboard_password") or "").strip()
     user_id = str(deployment.get("user_id") or "").strip()
     deployment_id = str(deployment.get("deployment_id") or "").strip()
     if not secret_ref or not user_id or not deployment_id:
+        return
+    if password_secret_preexisted:
         return
     resolver = SovereignSecretResolver(
         env=worker.env,
@@ -680,6 +1090,27 @@ def _sync_dashboard_password_hash_from_secret(
     )
     password = resolver._value_for_ref(secret_ref)
     set_arclink_user_password(conn, user_id=user_id, password=password)
+
+
+def _dashboard_password_secret_preexisted(
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    intent: Mapping[str, Any],
+) -> bool:
+    secret_refs = intent.get("secret_refs") if isinstance(intent.get("secret_refs"), Mapping) else {}
+    secret_ref = str(secret_refs.get("dashboard_password") or "").strip()
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    if not secret_ref or not deployment_id:
+        return True
+    if _provider_env_for_ref(secret_ref):
+        return True
+    resolver = SovereignSecretResolver(
+        env=worker.env,
+        secret_store_dir=worker.secret_store_dir / deployment_id,
+        materialization_root=Path("/tmp/arclink-dashboard-password-check"),
+    )
+    return resolver._generated_secret_path(secret_ref).exists()
 
 
 def _ensure_apply_job(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any]:
@@ -693,6 +1124,22 @@ def _ensure_apply_job(conn: sqlite3.Connection, *, deployment_id: str) -> dict[s
             job_kind=SOLO_JOB_KIND,
             idempotency_key=key,
             metadata={"deployment_id": deployment_id, "worker": "sovereign"},
+        )
+        row = conn.execute("SELECT * FROM arclink_provisioning_jobs WHERE idempotency_key = ?", (key,)).fetchone()
+    return dict(row)
+
+
+def _ensure_teardown_job(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any]:
+    key = f"arclink:sovereign:teardown:{deployment_id}"
+    row = conn.execute("SELECT * FROM arclink_provisioning_jobs WHERE idempotency_key = ?", (key,)).fetchone()
+    if row is None:
+        create_arclink_provisioning_job(
+            conn,
+            job_id=f"job_{hashlib.sha256(key.encode('utf-8')).hexdigest()[:24]}",
+            deployment_id=deployment_id,
+            job_kind=TEARDOWN_JOB_KIND,
+            idempotency_key=key,
+            metadata={"deployment_id": deployment_id, "worker": "sovereign", "lifecycle": "teardown"},
         )
         row = conn.execute("SELECT * FROM arclink_provisioning_jobs WHERE idempotency_key = ?", (key,)).fetchone()
     return dict(row)
@@ -719,12 +1166,35 @@ def _persist_dns_from_intent(conn: sqlite3.Connection, *, deployment_id: str, dn
     persist_arclink_dns_records(conn, deployment_id=deployment_id, records=records)
 
 
-def _mark_dns_provisioned(conn: sqlite3.Connection, *, deployment_id: str) -> None:
+def _mark_dns_provisioned(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    dns_result: CloudflareDnsApplyResult | None = None,
+) -> None:
     now = utc_now_iso()
     conn.execute(
         "UPDATE arclink_dns_records SET status = 'provisioned', updated_at = ?, last_checked_at = ? WHERE deployment_id = ?",
         (now, now, deployment_id),
     )
+    provider_ids = ()
+    if dns_result is not None and isinstance(dns_result.metadata, Mapping):
+        raw_ids = dns_result.metadata.get("provider_record_ids")
+        if isinstance(raw_ids, (list, tuple)):
+            provider_ids = tuple(str(item or "").strip() for item in raw_ids)
+    if provider_ids:
+        hostnames = tuple(str(hostname or "").strip().lower() for hostname in (dns_result.records if dns_result is not None else ()))
+        for hostname, provider_id in zip(hostnames, provider_ids):
+            if hostname and provider_id:
+                conn.execute(
+                    """
+                    UPDATE arclink_dns_records
+                    SET provider_record_id = ?
+                    WHERE deployment_id = ?
+                      AND LOWER(hostname) = ?
+                    """,
+                    (provider_id, deployment_id, hostname),
+                )
     conn.commit()
 
 
@@ -755,7 +1225,7 @@ def _record_service_status_after_compose(
         _record_service_status(
             conn,
             deployment_id=deployment_id,
-            status="starting",
+            status="failed",
             detail={**detail_base, "reconcile_error": "docker_runner_not_available"},
         )
         return
@@ -767,12 +1237,12 @@ def _record_service_status_after_compose(
             compose_file=docker_result.compose_file,
         )
         rows = _parse_docker_compose_ps_json(str(ps_result.get("stdout") or ""))
-        statuses = _docker_compose_service_statuses(rows)
+        statuses = _docker_compose_service_statuses(rows, project_name=docker_result.project_name)
     except Exception as exc:  # noqa: BLE001 - service health reconciliation must not undo a successful apply
         _record_service_status(
             conn,
             deployment_id=deployment_id,
-            status="starting",
+            status="failed",
             detail={**detail_base, "reconcile_error": _safe_error(exc)},
         )
         return
@@ -833,9 +1303,12 @@ def _parse_docker_compose_ps_json(stdout: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _docker_compose_service_statuses(rows: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+def _docker_compose_service_statuses(rows: list[Mapping[str, Any]], *, project_name: str = "") -> dict[str, dict[str, Any]]:
     statuses: dict[str, dict[str, Any]] = {}
     for row in rows:
+        project = str(row.get("Project") or row.get("project") or "").strip()
+        if project_name and project and project != project_name:
+            continue
         service_name = str(row.get("Service") or row.get("service") or "").strip()
         if not service_name:
             continue
@@ -845,7 +1318,7 @@ def _docker_compose_service_statuses(rows: list[Mapping[str, Any]]) -> dict[str,
         status = _docker_compose_row_status(service_name=service_name, state=state, health=health, exit_code=exit_code)
         statuses[service_name] = {
             "status": status,
-            "project": str(row.get("Project") or row.get("project") or ""),
+            "project": project,
             "container": str(row.get("Name") or row.get("Names") or row.get("ID") or ""),
             "state": state,
             "health": health,
@@ -1024,6 +1497,14 @@ def _queue_vessel_online_notifications(
 
 def _mark_deployment_status(conn: sqlite3.Connection, *, deployment_id: str, status: str) -> None:
     conn.execute("UPDATE arclink_deployments SET status = ?, updated_at = ? WHERE deployment_id = ?", (status, utc_now_iso(), deployment_id))
+    conn.commit()
+
+
+def _mark_deployment_failed_if_still_provisioning(conn: sqlite3.Connection, *, deployment_id: str) -> None:
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'provisioning_failed', updated_at = ? WHERE deployment_id = ? AND status = 'provisioning'",
+        (utc_now_iso(), deployment_id),
+    )
     conn.commit()
 
 

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -220,6 +221,22 @@ def test_user_dashboard_projects_local_notion_ssot_verification_without_secret_t
     print("PASS test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token")
 
 
+def test_operator_evidence_template_state_is_computed_from_template_file() -> None:
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_template_state_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        template = Path(tmp) / "evidence.md"
+        missing = dashboard.operator_evidence_template_state({"ARCLINK_LIVE_EVIDENCE_TEMPLATE": str(template)})
+        expect(missing["ready"] is False, str(missing))
+        template.write_text("# Evidence\n\n## Run\n\n## Credentials\n\n## Result\n", encoding="utf-8")
+        ready = dashboard.operator_evidence_template_state({"ARCLINK_LIVE_EVIDENCE_TEMPLATE": str(template)})
+        expect(ready["ready"] is True, str(ready))
+        template.write_text("# Evidence\n\n## Run\n", encoding="utf-8")
+        incomplete = dashboard.operator_evidence_template_state({"ARCLINK_LIVE_EVIDENCE_TEMPLATE": str(template)})
+        expect(incomplete["ready"] is False, str(incomplete))
+        expect("Credentials" in incomplete["missing_markers"], str(incomplete))
+    print("PASS test_operator_evidence_template_state_is_computed_from_template_file")
+
+
 def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_test")
@@ -333,6 +350,21 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
         event_type="dns_drift",
         metadata={"kind": "missing", "hostname": "u-amber-vault-1a2b.example.test"},
     )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_cancelled_drift",
+        user_id=prepared["user_id"],
+        prefix="cancelled-drift",
+        base_domain="example.test",
+        status="torn_down",
+    )
+    control.append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id="dep_cancelled_drift",
+        event_type="dns_drift",
+        metadata={"kind": "missing", "hostname": "u-cancelled-drift.example.test"},
+    )
     dashboard.queue_arclink_admin_action(
         conn,
         admin_id="admin_1",
@@ -343,6 +375,8 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
         idempotency_key="dashboard-restart-1",
     )
 
+    all_view = dashboard.read_arclink_admin_dashboard(conn, channel="web")
+    expect(all(item["deployment_id"] != "dep_cancelled_drift" for item in all_view["dns_drift"]), str(all_view["dns_drift"]))
     view = dashboard.read_arclink_admin_dashboard(conn, channel="web", deployment_id=prepared["deployment_id"])
     section_index = {section["section"]: section for section in view["sections"]}
     expect(
@@ -440,11 +474,12 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
     test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token()
+    test_operator_evidence_template_state_is_computed_from_template_file()
     test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 6 ArcLink dashboard tests")
+    print("PASS all 7 ArcLink dashboard tests")
     return 0
 
 

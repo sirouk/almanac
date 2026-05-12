@@ -2,17 +2,22 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
+
+from arclink_secrets_regex import redact_then_truncate
 
 
 class ArcLinkExecutorError(RuntimeError):
@@ -93,9 +98,7 @@ class FileMaterializingSecretResolver:
         if not str(value):
             raise ArcLinkSecretResolutionError(f"empty ArcLink secret material: {clean_ref}")
         output = self.materialization_root / Path(clean_target).name
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(str(value), encoding="utf-8")
-        output.chmod(0o600)
+        _write_private_file_atomic(output, str(value), trailing_newline=False)
         return ResolvedSecretFile(secret_ref=clean_ref, target_path=clean_target, source_path=str(output))
 
 
@@ -133,6 +136,23 @@ class CloudflareDnsApplyRequest:
 
 @dataclass(frozen=True)
 class CloudflareDnsApplyResult:
+    deployment_id: str
+    live: bool
+    status: str
+    records: tuple[str, ...]
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CloudflareDnsTeardownRequest:
+    deployment_id: str
+    records: tuple[Mapping[str, Any], ...] = ()
+    zone_id: str = ""
+    idempotency_key: str = ""
+
+
+@dataclass(frozen=True)
+class CloudflareDnsTeardownResult:
     deployment_id: str
     live: bool
     status: str
@@ -219,6 +239,7 @@ class DockerComposeLifecycleRequest:
     env_file: str = ""
     compose_file: str = ""
     idempotency_key: str = ""
+    remove_volumes: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,6 +254,74 @@ class DockerComposeLifecycleResult:
 class DockerRunner(Protocol):
     """Injectable interface for real Docker command execution."""
     def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+        ...
+
+
+class ChutesKeyClient(Protocol):
+    """Injectable interface for live Chutes key mutations."""
+
+    def create_key(
+        self,
+        *,
+        deployment_id: str,
+        label: str,
+        secret_ref: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        ...
+
+    def rotate_key(
+        self,
+        *,
+        deployment_id: str,
+        label: str,
+        secret_ref: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        ...
+
+    def revoke_key(
+        self,
+        *,
+        deployment_id: str,
+        label: str,
+        secret_ref: str,
+        idempotency_key: str,
+    ) -> Mapping[str, Any]:
+        ...
+
+
+class StripeActionClient(Protocol):
+    """Injectable interface for live Stripe administrative mutations."""
+
+    def refund(
+        self,
+        *,
+        deployment_id: str,
+        customer_ref: str,
+        idempotency_key: str,
+        metadata: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        ...
+
+    def cancel(
+        self,
+        *,
+        deployment_id: str,
+        customer_ref: str,
+        idempotency_key: str,
+        metadata: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        ...
+
+    def portal(
+        self,
+        *,
+        deployment_id: str,
+        customer_ref: str,
+        idempotency_key: str,
+        metadata: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
         ...
 
 
@@ -286,17 +375,21 @@ class SshDockerComposeRunner:
     rsync_binary: str = "rsync"
     docker_binary: str = "docker"
     ssh_options: tuple[str, ...] = ("-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new")
+    allowed_hosts: tuple[str, ...] = ()
 
     def _target(self) -> str:
         clean_host = str(self.host or "").strip()
         if not clean_host:
             raise ArcLinkExecutorError("ArcLink SSH Docker runner requires a worker host")
+        _require_allowed_ssh_host(clean_host, self.allowed_hosts)
         clean_user = str(self.user or "root").strip() or "root"
         return f"{clean_user}@{clean_host}"
 
     def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
         target = self._target()
         root = str(Path(compose_file).resolve().parents[1])
+        cleanup_required = bool(args and args[0] in {"up", "down"})
+        secrets_root = str((Path(compose_file).parent / "secrets").resolve())
         mkdir = subprocess.run(
             (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", root),
             check=False,
@@ -312,7 +405,15 @@ class SshDockerComposeRunner:
             capture_output=True,
         )
         if sync.returncode != 0:
-            raise ArcLinkExecutorError(_safe_command_error("rsync deployment root", sync.stderr or sync.stdout))
+            cleanup_error = (
+                self._cleanup_remote_secrets(target=target, secrets_root=secrets_root)
+                if cleanup_required
+                else ""
+            )
+            message = _safe_command_error("rsync deployment root", sync.stderr or sync.stdout)
+            if cleanup_error:
+                message = f"{message}; {cleanup_error}"
+            raise ArcLinkExecutorError(message)
         remote_cmd = " ".join(
             _shell_quote(part)
             for part in (
@@ -333,9 +434,26 @@ class SshDockerComposeRunner:
             text=True,
             capture_output=True,
         )
+        cleanup_error = self._cleanup_remote_secrets(target=target, secrets_root=secrets_root) if cleanup_required else ""
         if run.returncode != 0:
-            raise ArcLinkExecutorError(_safe_command_error("ssh docker compose", run.stderr or run.stdout))
+            message = _safe_command_error("ssh docker compose", run.stderr or run.stdout)
+            if cleanup_error:
+                message = f"{message}; {cleanup_error}"
+            raise ArcLinkExecutorError(message)
+        if cleanup_error:
+            raise ArcLinkExecutorError(cleanup_error)
         return {"status": "ok", "returncode": run.returncode, "stdout": _runner_stdout(args, run.stdout), "worker_host": self.host}
+
+    def _cleanup_remote_secrets(self, *, target: str, secrets_root: str) -> str:
+        cleanup = subprocess.run(
+            (self.ssh_binary, *self.ssh_options, target, f"rm -rf -- {_shell_quote(secrets_root)}"),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if cleanup.returncode != 0:
+            return _safe_command_error("ssh cleanup compose secrets", cleanup.stderr or cleanup.stdout)
+        return ""
 
 
 def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:
@@ -361,15 +479,25 @@ class ArcLinkExecutor:
         config: ArcLinkExecutorConfig | None = None,
         secret_resolver: SecretResolver | None = None,
         docker_runner: DockerRunner | None = None,
+        chutes_client: ChutesKeyClient | None = None,
+        stripe_client: StripeActionClient | None = None,
+        operation_conn: sqlite3.Connection | None = None,
     ) -> None:
         self.config = config or ArcLinkExecutorConfig()
         self.secret_resolver = secret_resolver
         self.docker_runner = docker_runner
+        self.chutes_client = chutes_client
+        self.stripe_client = stripe_client
+        self.operation_conn = operation_conn
         self._fake_docker_runs: dict[str, dict[str, Any]] = {}
         self._fake_dns_runs: dict[str, dict[str, Any]] = {}
+        self._fake_dns_teardown_runs: dict[str, dict[str, Any]] = {}
         self._fake_access_runs: dict[str, dict[str, Any]] = {}
         self._fake_chutes_runs: dict[str, dict[str, Any]] = {}
         self._fake_chutes_keys: dict[str, dict[str, Any]] = {}
+        self._fake_stripe_runs: dict[str, dict[str, Any]] = {}
+        self._live_chutes_runs: dict[str, dict[str, Any]] = {}
+        self._live_stripe_runs: dict[str, dict[str, Any]] = {}
         self._fake_rollback_runs: dict[str, dict[str, Any]] = {}
         self._fake_lifecycle_runs: dict[str, dict[str, Any]] = {}
 
@@ -403,14 +531,17 @@ class ArcLinkExecutor:
         if self.docker_runner is None:
             raise ArcLinkExecutorError("ArcLink live Docker execution requires an injectable DockerRunner")
         resolved = self._materialize_compose_secrets(compose_secrets)
-        if not isinstance(self.docker_runner, FakeDockerRunner):
-            _materialize_docker_compose_files(intent=intent, plan=plan, resolved_secrets=resolved)
-        self.docker_runner.run(
-            ("up", "-d", "--remove-orphans"),
-            project_name=str(plan["project_name"]),
-            env_file=str(plan["env_file"]),
-            compose_file=str(plan["compose_file"]),
-        )
+        try:
+            if not isinstance(self.docker_runner, FakeDockerRunner):
+                _materialize_docker_compose_files(intent=intent, plan=plan, resolved_secrets=resolved)
+            self.docker_runner.run(
+                ("up", "-d", "--remove-orphans"),
+                project_name=str(plan["project_name"]),
+                env_file=str(plan["env_file"]),
+                compose_file=str(plan["compose_file"]),
+            )
+        finally:
+            _cleanup_materialized_secret_files(resolved.values())
         return DockerComposeApplyResult(
             deployment_id=request.deployment_id,
             project_name=str(plan["project_name"]),
@@ -438,17 +569,44 @@ class ArcLinkExecutor:
             raise ArcLinkExecutorError(f"unsupported Docker Compose lifecycle action: {action}")
         if self.config.adapter_name == "fake":
             key = request.idempotency_key or f"{request.deployment_id}:{action}"
-            self._fake_lifecycle_runs[key] = {
+            operation_digest = _operation_digest(
+                "docker_compose_lifecycle",
+                request.deployment_id,
+                {"action": action, "project_name": request.project_name, "remove_volumes": request.remove_volumes},
+            )
+            existing = self._fake_lifecycle_runs.get(key)
+            if existing is not None:
+                _require_matching_operation_digest(
+                    existing=existing,
+                    operation="docker_compose_lifecycle",
+                    key=key,
+                    operation_digest=operation_digest,
+                )
+                idempotent_replay = True
+            else:
+                self._fake_lifecycle_runs[key] = {
+                    "operation_digest": operation_digest,
+                    "deployment_id": request.deployment_id,
+                    "action": action,
+                    "status": "completed",
+                }
+                idempotent_replay = False
+            self._fake_lifecycle_runs[key].update({
                 "deployment_id": request.deployment_id,
                 "action": action,
                 "status": "completed",
-            }
+            })
             return DockerComposeLifecycleResult(
                 deployment_id=request.deployment_id,
                 live=False,
                 status="completed",
                 action=action,
-                metadata={"adapter": "fake", "idempotency_key": key},
+                metadata={
+                    "adapter": "fake",
+                    "idempotency_key": key,
+                    "preserve_volumes": not request.remove_volumes,
+                    "idempotent_replay": idempotent_replay,
+                },
             )
         if self.docker_runner is None:
             raise ArcLinkExecutorError("ArcLink live Docker lifecycle requires an injectable DockerRunner")
@@ -460,7 +618,7 @@ class ArcLinkExecutor:
             "stop": ("stop",),
             "restart": ("restart",),
             "inspect": ("ps", "--format", "json"),
-            "teardown": ("down", "--remove-orphans"),
+            "teardown": ("down", "--remove-orphans", *(("--volumes",) if request.remove_volumes else ())),
         }[action]
         runner_result = self.docker_runner.run(
             compose_args,
@@ -468,6 +626,8 @@ class ArcLinkExecutor:
             env_file=env_file,
             compose_file=compose_file,
         )
+        if action == "teardown":
+            _cleanup_materialized_secret_root(Path(compose_file).parent / "secrets")
         return DockerComposeLifecycleResult(
             deployment_id=request.deployment_id,
             live=True,
@@ -478,6 +638,26 @@ class ArcLinkExecutor:
                 "idempotency_key": request.idempotency_key,
                 "project_name": project_name,
                 "runner_status": str(runner_result.get("status") or ""),
+                "preserve_volumes": not request.remove_volumes,
+            },
+        )
+
+    def cloudflare_dns_teardown(self, request: CloudflareDnsTeardownRequest) -> CloudflareDnsTeardownResult:
+        self._require_live_enabled("cloudflare_dns_teardown")
+        records = tuple(_clean_cloudflare_teardown_record(record) for record in request.records)
+        if self.config.adapter_name == "fake":
+            return self._fake_cloudflare_dns_teardown(request=request, records=records)
+        provider_records = _cloudflare_delete_dns_records(records=records, zone_id=request.zone_id)
+        return CloudflareDnsTeardownResult(
+            deployment_id=request.deployment_id,
+            live=True,
+            status="applied",
+            records=tuple(record["hostname"] for record in records),
+            metadata={
+                "adapter": self.config.adapter_name,
+                "zone_id": request.zone_id,
+                "idempotency_key": request.idempotency_key,
+                "provider_record_ids": tuple(provider_records),
             },
         )
 
@@ -627,15 +807,112 @@ class ArcLinkExecutor:
         secret_ref = _require_secret_ref(request.secret_ref or f"secret://arclink/chutes/{request.deployment_id}")
         if self.config.adapter_name == "fake":
             return self._fake_chutes_key_apply(request=request, action=action, secret_ref=secret_ref)
-        digest = hashlib.sha256(f"{request.deployment_id}:{action}:{request.idempotency_key}".encode("utf-8")).hexdigest()[:18]
+        if self.chutes_client is None:
+            raise ArcLinkExecutorError("ArcLink live Chutes key execution requires an injectable ChutesKeyClient")
+        operation = "chutes_key_apply"
+        operation_inputs = {"action": action, "label": request.label, "secret_ref": secret_ref}
+        operation_digest = _operation_digest(operation, request.deployment_id, operation_inputs)
+        key = request.idempotency_key or _stable_execution_key(operation, request.deployment_id, operation_inputs)
+        durable_replay = _replay_operation_idempotency(
+            self.operation_conn,
+            operation_kind=operation,
+            idempotency_key=key,
+            intent={"deployment_id": request.deployment_id, **operation_inputs},
+        )
+        if durable_replay is not None:
+            return _chutes_result_from_idempotency_row(request=request, row=durable_replay)
+        existing_run = self._live_chutes_runs.get(key)
+        if existing_run is not None:
+            _require_matching_operation_digest(
+                existing=existing_run,
+                operation=operation,
+                key=key,
+                operation_digest=operation_digest,
+            )
+            return ChutesKeyApplyResult(
+                deployment_id=request.deployment_id,
+                live=True,
+                status=str(existing_run["status"]),
+                action=str(existing_run["action"]),
+                key_id=str(existing_run["key_id"]),
+                secret_ref=str(existing_run["secret_ref"]),
+                metadata=dict(existing_run["metadata"], idempotent_replay=True),
+            )
+        _reserve_operation_idempotency(
+            self.operation_conn,
+            operation_kind=operation,
+            idempotency_key=key,
+            intent={"deployment_id": request.deployment_id, **operation_inputs},
+        )
+        try:
+            provider_result = _call_chutes_key_client(
+                self.chutes_client,
+                action=action,
+                deployment_id=request.deployment_id,
+                label=request.label,
+                secret_ref=secret_ref,
+                idempotency_key=key,
+            )
+            key_id = _provider_ref(provider_result, "key_id", "api_key_id", "id")
+            if not key_id:
+                raise ArcLinkExecutorError("ArcLink live Chutes key response did not include a provider key id")
+        except Exception as exc:
+            _fail_operation_idempotency(
+                self.operation_conn,
+                operation_kind=operation,
+                idempotency_key=key,
+                intent={"deployment_id": request.deployment_id, **operation_inputs},
+                error=str(exc),
+                result={
+                    "deployment_id": request.deployment_id,
+                    "status": "failed",
+                    "action": action,
+                    "key_id": "",
+                    "secret_ref": secret_ref,
+                    "metadata": {"adapter": self.config.adapter_name, "idempotency_key": key},
+                },
+            )
+            raise
+        status = str(provider_result.get("status") or "applied")
+        metadata = {
+            "adapter": self.config.adapter_name,
+            "label": request.label,
+            "idempotency_key": key,
+            "provider_refs": {"chutes_key_id": key_id},
+            "idempotent_replay": False,
+        }
+        run = {
+            "operation_digest": operation_digest,
+            "status": status,
+            "action": action,
+            "key_id": key_id,
+            "secret_ref": secret_ref,
+            "metadata": metadata,
+        }
+        self._live_chutes_runs[key] = run
+        _complete_operation_idempotency(
+            self.operation_conn,
+            operation_kind=operation,
+            idempotency_key=key,
+            intent={"deployment_id": request.deployment_id, **operation_inputs},
+            provider_refs={"chutes_key_id": key_id},
+            result={
+                "deployment_id": request.deployment_id,
+                "status": status,
+                "action": action,
+                "key_id": key_id,
+                "secret_ref": secret_ref,
+                "metadata": metadata,
+            },
+        )
         return ChutesKeyApplyResult(
             deployment_id=request.deployment_id,
             live=True,
-            status="applied",
+            status=status,
             action=action,
-            key_id=f"chutes_key_{digest}",
+            key_id=key_id,
             secret_ref=secret_ref,
-            metadata={"adapter": self.config.adapter_name, "label": request.label, "idempotency_key": request.idempotency_key},
+            metadata=metadata,
         )
 
     def stripe_action_apply(self, request: StripeActionApplyRequest) -> StripeActionApplyResult:
@@ -643,12 +920,114 @@ class ArcLinkExecutor:
         action = str(request.action or "").strip()
         if action not in {"refund", "cancel", "portal"}:
             raise ArcLinkExecutorError("unsupported ArcLink Stripe action")
+        operation = "stripe_action_apply"
         metadata = dict(request.metadata)
         if request.customer_ref:
             metadata["customer_ref"] = _require_secret_ref(request.customer_ref)
-        metadata["adapter"] = self.config.adapter_name
-        metadata["idempotency_key"] = request.idempotency_key
-        return StripeActionApplyResult(deployment_id=request.deployment_id, live=True, status="applied", action=action, metadata=metadata)
+        if self.config.adapter_name == "fake":
+            return self._fake_stripe_action_apply(
+                request=request,
+                action=action,
+                metadata=metadata,
+            )
+        if self.stripe_client is None:
+            raise ArcLinkExecutorError("ArcLink live Stripe action execution requires an injectable StripeActionClient")
+        operation_inputs = {"action": action, "customer_ref": metadata.get("customer_ref", ""), "metadata": metadata}
+        operation_digest = _operation_digest(operation, request.deployment_id, operation_inputs)
+        key = request.idempotency_key or _stable_execution_key(operation, request.deployment_id, operation_inputs)
+        durable_replay = _replay_operation_idempotency(
+            self.operation_conn,
+            operation_kind=operation,
+            idempotency_key=key,
+            intent={"deployment_id": request.deployment_id, **operation_inputs},
+        )
+        if durable_replay is not None:
+            return _stripe_result_from_idempotency_row(request=request, row=durable_replay)
+        existing_run = self._live_stripe_runs.get(key)
+        if existing_run is not None:
+            _require_matching_operation_digest(
+                existing=existing_run,
+                operation=operation,
+                key=key,
+                operation_digest=operation_digest,
+            )
+            return StripeActionApplyResult(
+                deployment_id=request.deployment_id,
+                live=True,
+                status=str(existing_run["status"]),
+                action=str(existing_run["action"]),
+                metadata=dict(existing_run["metadata"], idempotent_replay=True),
+            )
+        _reserve_operation_idempotency(
+            self.operation_conn,
+            operation_kind=operation,
+            idempotency_key=key,
+            intent={"deployment_id": request.deployment_id, **operation_inputs},
+        )
+        try:
+            provider_result = _call_stripe_action_client(
+                self.stripe_client,
+                action=action,
+                deployment_id=request.deployment_id,
+                customer_ref=str(metadata.get("customer_ref") or ""),
+                idempotency_key=key,
+                metadata=metadata,
+            )
+            provider_id = _provider_ref(provider_result, "refund_id", "cancellation_id", "session_id", "subscription_id", "id")
+            if not provider_id:
+                raise ArcLinkExecutorError("ArcLink live Stripe response did not include a provider reference id")
+        except Exception as exc:
+            _fail_operation_idempotency(
+                self.operation_conn,
+                operation_kind=operation,
+                idempotency_key=key,
+                intent={"deployment_id": request.deployment_id, **operation_inputs},
+                error=str(exc),
+                result={
+                    "deployment_id": request.deployment_id,
+                    "status": "failed",
+                    "action": action,
+                    "metadata": {"adapter": self.config.adapter_name, "idempotency_key": key},
+                },
+            )
+            raise
+        status = str(provider_result.get("status") or "applied")
+        result_metadata = dict(metadata)
+        result_metadata.update(
+            {
+                "adapter": self.config.adapter_name,
+                "idempotency_key": key,
+                "provider_refs": {"stripe_action_id": provider_id},
+                "idempotent_replay": False,
+            }
+        )
+        run = {
+            "operation_digest": operation_digest,
+            "status": status,
+            "action": action,
+            "metadata": result_metadata,
+        }
+        self._live_stripe_runs[key] = run
+        _complete_operation_idempotency(
+            self.operation_conn,
+            operation_kind=operation,
+            idempotency_key=key,
+            intent={"deployment_id": request.deployment_id, **operation_inputs},
+            provider_refs={"stripe_action_id": provider_id},
+            result={
+                "deployment_id": request.deployment_id,
+                "status": status,
+                "action": action,
+                "metadata": result_metadata,
+            },
+        )
+        return StripeActionApplyResult(
+            deployment_id=request.deployment_id,
+            live=True,
+            status=status,
+            action=action,
+            metadata=result_metadata,
+        )
 
     def rollback_apply(self, request: RollbackApplyRequest) -> RollbackApplyResult:
         self._require_live_enabled("rollback_apply")
@@ -709,6 +1088,46 @@ class ArcLinkExecutor:
                 "idempotency_key": request.idempotency_key,
                 "desired_records": tuple(existing["desired_records"]),
                 "proxied_count": int(existing["proxied_count"]),
+                "idempotent_replay": bool(existing["idempotent_replay"]),
+            },
+        )
+
+    def _fake_cloudflare_dns_teardown(
+        self,
+        *,
+        request: CloudflareDnsTeardownRequest,
+        records: tuple[dict[str, Any], ...],
+    ) -> CloudflareDnsTeardownResult:
+        operation = "cloudflare_dns_teardown"
+        operation_digest = _operation_digest(operation, request.deployment_id, {"records": records, "zone_id": request.zone_id})
+        key = request.idempotency_key or _stable_execution_key(operation, request.deployment_id, {"records": records, "zone_id": request.zone_id})
+        existing = self._fake_dns_teardown_runs.get(key)
+        if existing is None:
+            existing = {
+                "operation_digest": operation_digest,
+                "status": "applied",
+                "records": tuple(record["hostname"] for record in records),
+                "idempotent_replay": False,
+            }
+            self._fake_dns_teardown_runs[key] = existing
+        else:
+            _require_matching_operation_digest(
+                existing=existing,
+                operation=operation,
+                key=key,
+                operation_digest=operation_digest,
+            )
+            existing = dict(existing)
+            existing["idempotent_replay"] = True
+        return CloudflareDnsTeardownResult(
+            deployment_id=request.deployment_id,
+            live=False,
+            status=str(existing["status"]),
+            records=tuple(existing["records"]),
+            metadata={
+                "adapter": self.config.adapter_name,
+                "zone_id": request.zone_id,
+                "idempotency_key": request.idempotency_key,
                 "idempotent_replay": bool(existing["idempotent_replay"]),
             },
         )
@@ -841,6 +1260,57 @@ class ArcLinkExecutor:
             metadata=metadata,
         )
 
+    def _fake_stripe_action_apply(
+        self,
+        *,
+        request: StripeActionApplyRequest,
+        action: str,
+        metadata: Mapping[str, Any],
+    ) -> StripeActionApplyResult:
+        operation = "stripe_action_apply"
+        operation_inputs = {"action": action, "customer_ref": metadata.get("customer_ref", ""), "metadata": metadata}
+        operation_digest = _operation_digest(operation, request.deployment_id, operation_inputs)
+        key = request.idempotency_key or _stable_execution_key(operation, request.deployment_id, operation_inputs)
+        existing = self._fake_stripe_runs.get(key)
+        if existing is not None:
+            _require_matching_operation_digest(
+                existing=existing,
+                operation=operation,
+                key=key,
+                operation_digest=operation_digest,
+            )
+            return StripeActionApplyResult(
+                deployment_id=request.deployment_id,
+                live=False,
+                status=str(existing["status"]),
+                action=str(existing["action"]),
+                metadata=dict(existing["metadata"], idempotent_replay=True),
+            )
+        provider_id = _fake_stripe_action_id(request.deployment_id, action, key)
+        result_metadata = dict(metadata)
+        result_metadata.update(
+            {
+                "adapter": self.config.adapter_name,
+                "idempotency_key": request.idempotency_key,
+                "provider_refs": {"stripe_action_id": provider_id},
+                "idempotent_replay": False,
+            }
+        )
+        run = {
+            "operation_digest": operation_digest,
+            "status": "applied",
+            "action": action,
+            "metadata": result_metadata,
+        }
+        self._fake_stripe_runs[key] = run
+        return StripeActionApplyResult(
+            deployment_id=request.deployment_id,
+            live=False,
+            status="applied",
+            action=action,
+            metadata=result_metadata,
+        )
+
     def _fake_rollback_apply(
         self,
         *,
@@ -906,6 +1376,34 @@ def _compose_project_name(deployment_id: str) -> str:
     if not clean:
         raise ArcLinkExecutorError("ArcLink Docker Compose project name requires a deployment id")
     return f"arclink-{clean}"
+
+
+def _write_private_file_atomic(path: Path, value: str, *, trailing_newline: bool = False) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    tmp_name = ""
+    try:
+        with os.fdopen(lock_fd, "w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as tmp:
+                tmp_name = tmp.name
+                tmp.write(value)
+                if trailing_newline:
+                    tmp.write("\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.chmod(tmp_name, 0o600)
+            os.replace(tmp_name, path)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink()
+            except OSError:
+                pass
+        raise
 
 
 def _plan_docker_compose_apply(
@@ -1023,6 +1521,54 @@ def _compose_secret_file_path(*, name: str, resolved: ResolvedSecretFile) -> str
     raise ArcLinkSecretResolutionError(f"ArcLink live compose secret {name!r} was not materialized to a source file")
 
 
+def _cleanup_materialized_secret_files(resolved: Any) -> None:
+    touched_roots: set[Path] = set()
+    for item in resolved:
+        source_path = str(getattr(item, "source_path", "") or "").strip()
+        if not source_path:
+            continue
+        path = Path(source_path)
+        touched_roots.add(path.parent)
+        try:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+        except OSError as exc:
+            raise ArcLinkSecretResolutionError(f"failed to clean materialized ArcLink secret copy: {path}") from exc
+    for root in touched_roots:
+        _cleanup_materialized_secret_root(root)
+
+
+def _cleanup_materialized_secret_root(root: Path) -> None:
+    try:
+        clean_root = root.resolve()
+    except OSError:
+        clean_root = root
+    if not str(clean_root).strip() or str(clean_root) in {"/", "/run/secrets"}:
+        raise ArcLinkSecretResolutionError(f"refusing unsafe ArcLink secret cleanup path: {clean_root}")
+    if not clean_root.exists():
+        return
+    for child in clean_root.iterdir():
+        try:
+            if child.is_dir() and not child.is_symlink():
+                continue
+            child.unlink()
+        except OSError as exc:
+            raise ArcLinkSecretResolutionError(f"failed to clean materialized ArcLink secret copy: {child}") from exc
+    try:
+        clean_root.rmdir()
+    except OSError:
+        pass
+
+
+def _require_allowed_ssh_host(host: str, allowed_hosts: tuple[str, ...]) -> None:
+    clean_host = str(host or "").strip().lower()
+    allowed = {str(item or "").strip().lower() for item in allowed_hosts if str(item or "").strip()}
+    if not allowed:
+        raise ArcLinkExecutorError("ArcLink SSH Docker runner requires an explicit host allowlist")
+    if clean_host not in allowed:
+        raise ArcLinkExecutorError("ArcLink SSH Docker runner host is not in the explicit allowlist")
+
+
 def _ensure_volume_roots(services: Mapping[str, Any]) -> None:
     for source in _compose_source_volumes(services):
         if source.startswith("/"):
@@ -1043,12 +1589,8 @@ def _shell_quote(value: str) -> str:
 
 
 def _safe_command_error(operation: str, output: str) -> str:
-    redacted = re.sub(
-        r"(?i)(\b(?:token|api[_-]?key|password|passwd|secret|authorization|cookie)\b\s*[:=]\s*)([^\s'\";,]+)",
-        r"\1[REDACTED]",
-        str(output or ""),
-    )
-    return f"{operation} failed: {redacted[-2000:]}"
+    redacted = redact_then_truncate(output, limit=2000, tail=True)
+    return f"{operation} failed: {redacted}"
 
 
 def _compose_source_volumes(services: Mapping[str, Any]) -> tuple[str, ...]:
@@ -1152,6 +1694,18 @@ def _plan_cloudflare_dns_records(dns: Mapping[str, Mapping[str, Any]]) -> tuple[
     return tuple(records)
 
 
+def _clean_cloudflare_teardown_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    hostname = str(record.get("hostname") or "").strip().lower()
+    record_type = str(record.get("record_type") or "CNAME").strip().upper()
+    if not hostname:
+        raise ArcLinkExecutorError("ArcLink DNS teardown record requires a hostname")
+    return {
+        "hostname": hostname,
+        "record_type": record_type,
+        "provider_record_id": str(record.get("provider_record_id") or "").strip(),
+    }
+
+
 def _dns_record_summary(record: Mapping[str, Any]) -> str:
     proxied = " proxied" if bool(record.get("proxied")) else ""
     return f"{record['record_type']} {record['hostname']} -> {record['target']}{proxied}"
@@ -1188,6 +1742,26 @@ def _cloudflare_upsert_dns_records(*, records: tuple[dict[str, Any], ...], zone_
     return tuple(provider_ids)
 
 
+def _cloudflare_delete_dns_records(*, records: tuple[dict[str, Any], ...], zone_id: str) -> tuple[str, ...]:
+    clean_zone = str(zone_id or os.environ.get("CLOUDFLARE_ZONE_ID") or "").strip()
+    token = str(os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    if not clean_zone:
+        raise ArcLinkExecutorError("ArcLink Cloudflare DNS teardown requires CLOUDFLARE_ZONE_ID")
+    if not token:
+        raise ArcLinkExecutorError("ArcLink Cloudflare DNS teardown requires CLOUDFLARE_API_TOKEN")
+    removed: list[str] = []
+    for record in records:
+        provider_id = str(record.get("provider_record_id") or "").strip()
+        if not provider_id:
+            found = _cloudflare_find_dns_record(zone_id=clean_zone, token=token, record=record)
+            provider_id = str(found.get("id") or "")
+        if not provider_id:
+            continue
+        _cloudflare_request("DELETE", f"/zones/{clean_zone}/dns_records/{provider_id}", token=token)
+        removed.append(provider_id)
+    return tuple(removed)
+
+
 def _cloudflare_find_dns_record(*, zone_id: str, token: str, record: Mapping[str, Any]) -> dict[str, Any]:
     query = urllib.parse.urlencode({
         "type": str(record["record_type"]).upper(),
@@ -1215,10 +1789,11 @@ def _cloudflare_request(method: str, path: str, *, token: str, body: Mapping[str
         with urllib.request.urlopen(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[-1000:]
+        detail = redact_then_truncate(exc.read().decode("utf-8", errors="replace"), limit=1000, tail=True)
         raise ArcLinkExecutorError(f"Cloudflare API request failed with HTTP {exc.code}: {detail}") from exc
     if not isinstance(payload, dict) or not payload.get("success"):
-        raise ArcLinkExecutorError(f"Cloudflare API request failed: {json.dumps(payload, sort_keys=True)[-1000:]}")
+        detail = redact_then_truncate(json.dumps(payload, sort_keys=True), limit=1000, tail=True)
+        raise ArcLinkExecutorError(f"Cloudflare API request failed: {detail}")
     return payload
 
 
@@ -1239,6 +1814,214 @@ def _plan_cloudflare_access(access: Mapping[str, Any]) -> dict[str, Any]:
 def _fake_chutes_key_id(deployment_id: str, secret_ref: str, generation: int) -> str:
     digest = hashlib.sha256(f"{deployment_id}:{secret_ref}:{generation}".encode("utf-8")).hexdigest()[:18]
     return f"chutes_key_{digest}"
+
+
+def _fake_stripe_action_id(deployment_id: str, action: str, key: str) -> str:
+    digest = hashlib.sha256(f"{deployment_id}:{action}:{key}".encode("utf-8")).hexdigest()[:18]
+    return f"stripe_{action}_{digest}"
+
+
+def _provider_ref(result: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = str(result.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _operation_result_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = str(row.get("result_json") or "{}")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ArcLinkExecutorError("ArcLink operation idempotency row contains invalid result JSON") from exc
+    if not isinstance(parsed, Mapping):
+        raise ArcLinkExecutorError("ArcLink operation idempotency row result must be an object")
+    return dict(parsed)
+
+
+def _replay_operation_idempotency(
+    conn: sqlite3.Connection | None,
+    *,
+    operation_kind: str,
+    idempotency_key: str,
+    intent: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if conn is None:
+        return None
+    from arclink_control import replay_arclink_operation_idempotency
+
+    try:
+        return replay_arclink_operation_idempotency(
+            conn,
+            operation_kind=operation_kind,
+            idempotency_key=idempotency_key,
+            intent=dict(intent),
+        )
+    except ValueError as exc:
+        raise ArcLinkExecutorError(str(exc)) from exc
+
+
+def _reserve_operation_idempotency(
+    conn: sqlite3.Connection | None,
+    *,
+    operation_kind: str,
+    idempotency_key: str,
+    intent: Mapping[str, Any],
+) -> None:
+    if conn is None:
+        return
+    from arclink_control import reserve_arclink_operation_idempotency
+
+    try:
+        reserve_arclink_operation_idempotency(
+            conn,
+            operation_kind=operation_kind,
+            idempotency_key=idempotency_key,
+            intent=dict(intent),
+            status="running",
+        )
+    except ValueError as exc:
+        raise ArcLinkExecutorError(str(exc)) from exc
+
+
+def _complete_operation_idempotency(
+    conn: sqlite3.Connection | None,
+    *,
+    operation_kind: str,
+    idempotency_key: str,
+    intent: Mapping[str, Any],
+    provider_refs: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> None:
+    if conn is None:
+        return
+    from arclink_control import complete_arclink_operation_idempotency
+
+    try:
+        complete_arclink_operation_idempotency(
+            conn,
+            operation_kind=operation_kind,
+            idempotency_key=idempotency_key,
+            intent=dict(intent),
+            provider_refs=dict(provider_refs),
+            result=dict(result),
+        )
+    except (KeyError, ValueError) as exc:
+        raise ArcLinkExecutorError(str(exc)) from exc
+
+
+def _fail_operation_idempotency(
+    conn: sqlite3.Connection | None,
+    *,
+    operation_kind: str,
+    idempotency_key: str,
+    intent: Mapping[str, Any],
+    error: str,
+    result: Mapping[str, Any],
+) -> None:
+    if conn is None:
+        return
+    from arclink_control import fail_arclink_operation_idempotency
+
+    try:
+        fail_arclink_operation_idempotency(
+            conn,
+            operation_kind=operation_kind,
+            idempotency_key=idempotency_key,
+            intent=dict(intent),
+            error=redact_then_truncate(error, limit=1000),
+            result=dict(result),
+        )
+    except (KeyError, ValueError) as exc:
+        raise ArcLinkExecutorError(str(exc)) from exc
+
+
+def _chutes_result_from_idempotency_row(
+    *,
+    request: ChutesKeyApplyRequest,
+    row: Mapping[str, Any],
+) -> ChutesKeyApplyResult:
+    payload = _operation_result_payload(row)
+    metadata = dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), Mapping) else {}
+    metadata["idempotent_replay"] = True
+    return ChutesKeyApplyResult(
+        deployment_id=str(payload.get("deployment_id") or request.deployment_id),
+        live=True,
+        status=str(payload.get("status") or row.get("status") or "succeeded"),
+        action=str(payload.get("action") or request.action),
+        key_id=str(payload.get("key_id") or ""),
+        secret_ref=str(payload.get("secret_ref") or request.secret_ref),
+        metadata=metadata,
+    )
+
+
+def _stripe_result_from_idempotency_row(
+    *,
+    request: StripeActionApplyRequest,
+    row: Mapping[str, Any],
+) -> StripeActionApplyResult:
+    payload = _operation_result_payload(row)
+    metadata = dict(payload.get("metadata") or {}) if isinstance(payload.get("metadata"), Mapping) else {}
+    metadata["idempotent_replay"] = True
+    return StripeActionApplyResult(
+        deployment_id=str(payload.get("deployment_id") or request.deployment_id),
+        live=True,
+        status=str(payload.get("status") or row.get("status") or "succeeded"),
+        action=str(payload.get("action") or request.action),
+        metadata=metadata,
+    )
+
+
+def _call_chutes_key_client(
+    client: ChutesKeyClient,
+    *,
+    action: str,
+    deployment_id: str,
+    label: str,
+    secret_ref: str,
+    idempotency_key: str,
+) -> Mapping[str, Any]:
+    method_name = {
+        "create": "create_key",
+        "rotate": "rotate_key",
+        "revoke": "revoke_key",
+    }[action]
+    method = getattr(client, method_name, None)
+    if method is None:
+        raise ArcLinkExecutorError(f"ArcLink live Chutes client does not implement {method_name}")
+    result = method(
+        deployment_id=deployment_id,
+        label=label,
+        secret_ref=secret_ref,
+        idempotency_key=idempotency_key,
+    )
+    if not isinstance(result, Mapping):
+        raise ArcLinkExecutorError("ArcLink live Chutes client returned a non-object result")
+    return result
+
+
+def _call_stripe_action_client(
+    client: StripeActionClient,
+    *,
+    action: str,
+    deployment_id: str,
+    customer_ref: str,
+    idempotency_key: str,
+    metadata: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    method = getattr(client, action, None)
+    if method is None:
+        raise ArcLinkExecutorError(f"ArcLink live Stripe client does not implement {action}")
+    result = method(
+        deployment_id=deployment_id,
+        customer_ref=customer_ref,
+        idempotency_key=idempotency_key,
+        metadata=metadata,
+    )
+    if not isinstance(result, Mapping):
+        raise ArcLinkExecutorError("ArcLink live Stripe client returned a non-object result")
+    return result
 
 
 def _plan_rollback_apply(plan: Mapping[str, Any]) -> dict[str, Any]:

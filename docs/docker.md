@@ -118,12 +118,18 @@ the source of truth after successful publication.
 
 ## Privilege Boundary
 
-Docker mode intentionally mounts `/var/run/docker.sock` into the
-`agent-supervisor` container. That supervisor is the Docker-mode replacement for
-per-user systemd units, so it needs Docker API access to create, update, and
-remove per-agent gateway, dashboard proxy, cron, and workspace containers. User
-dashboard backends are bound to agent-specific internal Docker network
-addresses; only the dashboard auth-proxy sidecar is published to host loopback.
+Docker mode runs the shared ArcLink app image as the `arclink` Unix user, then
+grants the small set of Docker-lifecycle services supplemental access to the
+host Docker socket group through `ARCLINK_DOCKER_SOCKET_GID`. The bootstrap path
+records the host socket gid when it can inspect `/var/run/docker.sock`; set it
+manually in `arclink-priv/config/docker.env` if the host socket group changes.
+
+The writeable Docker socket services remain trusted-host services. The
+`agent-supervisor` container is the Docker-mode replacement for per-user systemd
+units, so it needs Docker API access to create, update, and remove per-agent
+gateway, dashboard proxy, cron, and workspace containers. User dashboard
+backends are bound to agent-specific internal Docker network addresses; only
+the dashboard auth-proxy sidecar is published to host loopback.
 
 Treat Docker mode as a trusted-host deployment. Do not expose the Docker socket
 or the agent-supervisor service publicly, and do not publish raw dashboard
@@ -248,8 +254,9 @@ read-only socket mount and does not receive `arclink-priv/`.
 **Implications:**
 
 - Any process with writeable Docker socket access has host-root-equivalent capabilities.
-  `control-provisioner`, `agent-supervisor`, and `curator-refresh` are trusted
-  equivalents of the host operator.
+  `control-provisioner`, `control-action-worker`, `agent-supervisor`,
+  `notification-delivery`, and `curator-refresh` are trusted equivalents of the
+  host operator for their bounded lifecycle jobs.
 - `control-ingress` has read-only socket access for route discovery, but it is
   still part of the trusted host boundary and must remain loopback-first.
 - Secrets enter container env via `docker.env` passthrough. They are not baked

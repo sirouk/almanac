@@ -4,6 +4,8 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import sys
+import tempfile
+import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -195,6 +197,95 @@ def test_placement_idempotent() -> None:
     print("PASS test_placement_idempotent")
 
 
+def test_active_placement_unique_index_migrates_existing_duplicates() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_unique_migration")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE arclink_deployment_placements (
+          placement_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL,
+          host_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          placed_at TEXT NOT NULL,
+          removed_at TEXT NOT NULL DEFAULT ''
+        );
+        INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
+        VALUES
+          ('plc_old_1', 'dep_1', 'host_1', 'active', '2026-05-11T00:00:00+00:00'),
+          ('plc_old_2', 'dep_1', 'host_2', 'active', '2026-05-11T00:00:01+00:00');
+        """
+    )
+    control.ensure_schema(conn)
+    active = conn.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements WHERE deployment_id = 'dep_1' AND status = 'active'").fetchone()["c"]
+    removed = conn.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements WHERE deployment_id = 'dep_1' AND status = 'removed'").fetchone()["c"]
+    expect(int(active) == 1 and int(removed) == 1, f"expected duplicate migration to leave one active, got active={active}, removed={removed}")
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
+            VALUES ('plc_old_3', 'dep_1', 'host_3', 'active', '2026-05-11T00:00:02+00:00')
+            """
+        )
+    except sqlite3.IntegrityError:
+        pass
+    else:
+        raise AssertionError("expected active placement unique index to reject duplicates")
+    print("PASS test_active_placement_unique_index_migrates_existing_duplicates")
+
+
+def test_concurrent_placement_returns_one_active_row() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_concurrent")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_concurrent")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = f"{tmpdir}/control.sqlite3"
+        seed = sqlite3.connect(db_path, timeout=15)
+        seed.row_factory = sqlite3.Row
+        control.ensure_schema(seed)
+        fleet.register_fleet_host(seed, hostname="h1.test", capacity_slots=2)
+        seed.close()
+
+        barrier = threading.Barrier(2)
+        results: list[dict[str, object]] = []
+        errors: list[str] = []
+        lock = threading.Lock()
+
+        def place() -> None:
+            conn = sqlite3.connect(db_path, timeout=15)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 15000")
+            try:
+                barrier.wait(timeout=5)
+                placement = fleet.place_deployment(conn, deployment_id="dep_1")
+                with lock:
+                    results.append(placement)
+            except Exception as exc:  # noqa: BLE001 - test records any unexpected thread failure
+                with lock:
+                    errors.append(str(exc))
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=place), threading.Thread(target=place)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        expect(errors == [], f"parallel placement errors: {errors}")
+        expect(len({str(row["placement_id"]) for row in results}) == 1, str(results))
+        check = sqlite3.connect(db_path)
+        check.row_factory = sqlite3.Row
+        active = check.execute("SELECT COUNT(*) AS c FROM arclink_deployment_placements WHERE deployment_id = 'dep_1' AND status = 'active'").fetchone()["c"]
+        host = check.execute("SELECT observed_load FROM arclink_fleet_hosts").fetchone()
+        events = check.execute("SELECT COUNT(*) AS c FROM arclink_events WHERE event_type = 'placement_assigned'").fetchone()["c"]
+        expect(int(active) == 1, f"expected one active placement, got {active}")
+        expect(int(host["observed_load"]) == 1, str(dict(host)))
+        expect(int(events) == 1, f"expected one placement event, got {events}")
+        check.close()
+    print("PASS test_concurrent_placement_returns_one_active_row")
+
+
 def test_remove_placement() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_rm")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_rm")
@@ -244,7 +335,9 @@ if __name__ == "__main__":
     test_place_deployment_rejects_draining_hosts()
     test_place_deployment_rejects_unhealthy_hosts()
     test_placement_idempotent()
+    test_active_placement_unique_index_migrates_existing_duplicates()
+    test_concurrent_placement_returns_one_active_row()
     test_remove_placement()
     test_region_filter()
     test_placement_rejects_secret_required_tags()
-    print(f"\nAll 14 fleet tests passed.")
+    print(f"\nAll 16 fleet tests passed.")

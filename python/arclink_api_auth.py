@@ -16,6 +16,9 @@ import tempfile
 from typing import Any, Mapping
 
 from arclink_control import (
+    ARCLINK_CREDENTIAL_HANDOFF_STATUSES,
+    ARCLINK_SESSION_STATUSES,
+    ARCLINK_SHARE_GRANT_STATUSES,
     append_arclink_audit,
     append_arclink_event,
     parse_utc_iso,
@@ -45,22 +48,25 @@ from arclink_chutes import (
 
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
 ARCLINK_ADMIN_MUTATION_ROLES = frozenset({"owner", "admin", "ops"})
-ARCLINK_SESSION_STATUSES = frozenset({"active", "revoked"})
 ARCLINK_CREDENTIAL_HANDOFF_KINDS = frozenset({"dashboard_password", "chutes_api_key", "notion_token"})
-ARCLINK_CREDENTIAL_HANDOFF_STATUSES = frozenset({"available", "removed"})
 ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code"})
 ARCLINK_SHARE_RESOURCE_ROOTS = frozenset({"vault", "workspace"})
 ARCLINK_SHARE_ACCESS_MODES = frozenset({"read"})
-ARCLINK_SHARE_STATUSES = frozenset({"pending_owner_approval", "approved", "accepted", "revoked", "denied"})
+ARCLINK_SHARE_STATUSES = ARCLINK_SHARE_GRANT_STATUSES
+ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS = 7 * 24 * 60 * 60
+ARCLINK_SHARE_GRANT_TTL_SECONDS = 7 * 24 * 60 * 60
 ARCLINK_LINKED_RESOURCE_MANIFEST = ".arclink-linked-resources.json"
 ARCLINK_SESSION_ID_HEADER = "x-arclink-session-id"
 ARCLINK_SESSION_TOKEN_HEADER = "x-arclink-session-token"
 ARCLINK_CSRF_HEADER = "x-arclink-csrf-token"
 GENERIC_ARCLINK_API_ERROR = "Request blocked. Check input and try again."
+GENERIC_ARCLINK_AUTH_ERROR = "unauthorized"
 ARCLINK_PASSWORD_ALGORITHM = "pbkdf2_sha256"
 ARCLINK_PASSWORD_ITERATIONS = 390_000
 ARCLINK_ADMIN_PASSWORD_ALGORITHM = ARCLINK_PASSWORD_ALGORITHM
 ARCLINK_ADMIN_PASSWORD_ITERATIONS = ARCLINK_PASSWORD_ITERATIONS
+ARCLINK_SESSION_HASH_ALGORITHM = "hmac_sha256_v1"
+ARCLINK_LEGACY_SESSION_HASH_ALGORITHM = "sha256_legacy"
 
 
 class ArcLinkApiAuthError(ValueError):
@@ -133,6 +139,19 @@ def extract_arclink_session_credentials(
     return {"session_id": session_id, "session_token": session_token}
 
 
+def extract_arclink_browser_session_credentials(
+    headers: Mapping[str, Any],
+    *,
+    session_kind: str,
+) -> dict[str, str]:
+    clean_kind = _validate_session_kind(session_kind, operation="browser session credential extraction")
+    session_id = _cookie(headers, f"arclink_{clean_kind}_session_id")
+    session_token = _cookie(headers, f"arclink_{clean_kind}_session_token")
+    if not session_id or not session_token:
+        raise ArcLinkApiAuthError("ArcLink browser session cookies are required")
+    return {"session_id": session_id, "session_token": session_token}
+
+
 def extract_arclink_csrf_token(headers: Mapping[str, Any], *, session_kind: str) -> str:
     _validate_session_kind(session_kind, operation="CSRF token extraction")
     csrf_token = _header(headers, ARCLINK_CSRF_HEADER)
@@ -145,7 +164,7 @@ def arclink_api_error_response(exc: BaseException, *, request_id: str = "") -> A
     payload: dict[str, Any]
     if isinstance(exc, ArcLinkApiAuthError):
         status = 401
-        payload = {"error": str(exc)}
+        payload = {"error": GENERIC_ARCLINK_AUTH_ERROR}
     elif isinstance(exc, KeyError):
         status = 404
         payload = {"error": "not_found"}
@@ -170,7 +189,76 @@ def _reject_secret_material(value: Any, *, path: str = "$") -> None:
 
 
 def _hash_token(token: str) -> str:
+    """Legacy plain SHA-256 hash.  Kept only for back-compat verification."""
     return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _hash_proof_token(token: str) -> str:
+    """HMAC-SHA256 peppered hash for onboarding proof tokens."""
+    digest = hmac.new(
+        _session_hash_pepper().encode("utf-8"),
+        str(token or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{ARCLINK_SESSION_HASH_ALGORITHM}${digest}"
+
+
+def _verify_proof_token_hash(token: str, stored_hash: str) -> bool:
+    """Verify a proof token hash, accepting both HMAC-peppered and legacy SHA-256."""
+    stored = str(stored_hash or "").strip()
+    if not stored:
+        return False
+    current = _hash_proof_token(token)
+    if stored.startswith(f"{ARCLINK_SESSION_HASH_ALGORITHM}$"):
+        return hmac.compare_digest(stored, current)
+    legacy = _hash_token(token)
+    return hmac.compare_digest(stored, legacy)
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _session_hash_pepper() -> str:
+    pepper = str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip()
+    if pepper:
+        return pepper
+    base_domain = str(os.environ.get("ARCLINK_BASE_DOMAIN") or "").strip().lower()
+    production_domain = bool(
+        base_domain
+        and base_domain not in {"localhost", "127.0.0.1", "example.test"}
+        and not base_domain.endswith(".test")
+    )
+    if _truthy_env("ARCLINK_SESSION_HASH_PEPPER_REQUIRED") or production_domain:
+        raise ArcLinkApiAuthError("ArcLink session hash pepper is not configured")
+    return "arclink-dev-session-hash-pepper"
+
+
+def _hash_session_token(token: str) -> str:
+    digest = hmac.new(
+        _session_hash_pepper().encode("utf-8"),
+        str(token or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{ARCLINK_SESSION_HASH_ALGORITHM}${digest}"
+
+
+def _verify_session_token_hash(token: str, stored_hash: str) -> tuple[bool, str]:
+    stored = str(stored_hash or "").strip()
+    current = _hash_session_token(token)
+    if stored.startswith(f"{ARCLINK_SESSION_HASH_ALGORITHM}$"):
+        return hmac.compare_digest(stored, current), ARCLINK_SESSION_HASH_ALGORITHM
+    legacy = _hash_token(token)
+    return hmac.compare_digest(stored, legacy), ARCLINK_LEGACY_SESSION_HASH_ALGORITHM
+
+
+def _require_session_id_prefix(session_id: str, *, kind: str) -> str:
+    clean_kind = _validate_session_kind(kind, operation="session id prefix validation")
+    clean_session = str(session_id or "").strip()
+    expected = "asess_" if clean_kind == "admin" else "usess_"
+    if not clean_session.startswith(expected):
+        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session id prefix is invalid")
+    return clean_session
 
 
 def _public_onboarding_session(session: Mapping[str, Any]) -> dict[str, Any]:
@@ -239,10 +327,10 @@ def _new_token(prefix: str) -> str:
 
 def _require_active_time(row: Mapping[str, Any], *, kind: str) -> None:
     if str(row.get("status") or "") != "active" or str(row.get("revoked_at") or ""):
-        raise ArcLinkApiAuthError(f"ArcLink {kind} session is not active")
+        raise ArcLinkApiAuthError(f"ArcLink {kind} session authentication failed")
     expires_at = parse_utc_iso(str(row.get("expires_at") or ""))
     if expires_at is None or expires_at <= utc_now():
-        raise ArcLinkApiAuthError(f"ArcLink {kind} session is expired")
+        raise ArcLinkApiAuthError(f"ArcLink {kind} session authentication failed")
 
 
 def mask_secret_ref(value: str) -> str:
@@ -569,6 +657,7 @@ def create_arclink_user_session(
     token = _new_token("aus")
     csrf = _new_token("csrf")
     clean_session = str(session_id or "").strip() or _new_id("usess")
+    clean_session = _require_session_id_prefix(clean_session, kind="user")
     now = utc_now_iso()
     conn.execute(
         """
@@ -577,7 +666,7 @@ def create_arclink_user_session(
           metadata_json, created_at, last_seen_at, expires_at
         ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
         """,
-        (clean_session, user_id, _hash_token(token), _hash_token(csrf), _json(metadata), now, now, utc_after_seconds_iso(ttl_seconds)),
+        (clean_session, user_id, _hash_session_token(token), _hash_session_token(csrf), _json(metadata), now, now, utc_after_seconds_iso(ttl_seconds)),
     )
     conn.commit()
     record = rowdict(conn.execute("SELECT * FROM arclink_user_sessions WHERE session_id = ?", (clean_session,)).fetchone())
@@ -601,6 +690,7 @@ def create_arclink_admin_session(
     token = _new_token("aas")
     csrf = _new_token("csrf")
     clean_session = str(session_id or "").strip() or _new_id("asess")
+    clean_session = _require_session_id_prefix(clean_session, kind="admin")
     now = utc_now_iso()
     conn.execute(
         """
@@ -613,8 +703,8 @@ def create_arclink_admin_session(
             clean_session,
             admin_id,
             str(admin["role"] or ""),
-            _hash_token(token),
-            _hash_token(csrf),
+            _hash_session_token(token),
+            _hash_session_token(csrf),
             now if mfa_verified else "",
             _json(metadata),
             now,
@@ -648,7 +738,7 @@ def create_arclink_admin_login_session_api(
     if row is None:
         raise ArcLinkApiAuthError("Invalid ArcLink admin credentials")
     if not str(row["password_hash"] or "").strip():
-        raise ArcLinkApiAuthError("ArcLink admin password is not configured")
+        raise ArcLinkApiAuthError("Invalid ArcLink admin credentials")
     if not verify_arclink_admin_password(str(password or ""), str(row["password_hash"] or "")):
         raise ArcLinkApiAuthError("Invalid ArcLink admin credentials")
     session = create_arclink_admin_session(
@@ -680,7 +770,7 @@ def create_arclink_user_login_session_api(
     if row is None:
         raise ArcLinkApiAuthError("Invalid ArcLink user credentials")
     if not str(row["password_hash"] or "").strip():
-        raise ArcLinkApiAuthError("ArcLink user password is not configured")
+        raise ArcLinkApiAuthError("Invalid ArcLink user credentials")
     if not verify_arclink_password(str(password or ""), str(row["password_hash"] or "")):
         raise ArcLinkApiAuthError("Invalid ArcLink user credentials")
     session = create_arclink_user_session(
@@ -706,14 +796,22 @@ def _authenticate_session(
 ) -> dict[str, Any]:
     clean_kind = _validate_session_kind(kind, operation="session authentication")
     table = "arclink_admin_sessions" if clean_kind == "admin" else "arclink_user_sessions"
-    row = conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (session_id,)).fetchone()
+    clean_session = _require_session_id_prefix(session_id, kind=clean_kind)
+    row = conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (clean_session,)).fetchone()
     if row is None:
-        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session not found")
+        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session authentication failed")
     record = dict(row)
     _require_active_time(record, kind=clean_kind)
-    if not hmac.compare_digest(str(record["session_token_hash"] or ""), _hash_token(session_token)):
-        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session token mismatch")
-    conn.execute(f"UPDATE {table} SET last_seen_at = ? WHERE session_id = ?", (utc_now_iso(), session_id))
+    verified, algorithm = _verify_session_token_hash(session_token, str(record["session_token_hash"] or ""))
+    if not verified:
+        raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session authentication failed")
+    if algorithm == ARCLINK_LEGACY_SESSION_HASH_ALGORITHM:
+        conn.execute(
+            f"UPDATE {table} SET session_token_hash = ?, last_seen_at = ? WHERE session_id = ?",
+            (_hash_session_token(session_token), utc_now_iso(), clean_session),
+        )
+    else:
+        conn.execute(f"UPDATE {table} SET last_seen_at = ? WHERE session_id = ?", (utc_now_iso(), clean_session))
     conn.commit()
     return _public_session(record)
 
@@ -729,9 +827,19 @@ def authenticate_arclink_admin_session(conn: sqlite3.Connection, *, session_id: 
 def require_arclink_csrf(conn: sqlite3.Connection, *, session_id: str, csrf_token: str, session_kind: str) -> bool:
     clean_kind = _validate_session_kind(session_kind, operation="CSRF check")
     table = "arclink_admin_sessions" if clean_kind == "admin" else "arclink_user_sessions"
-    row = conn.execute(f"SELECT csrf_token_hash FROM {table} WHERE session_id = ?", (session_id,)).fetchone()
-    if row is None or not hmac.compare_digest(str(row["csrf_token_hash"] or ""), _hash_token(csrf_token)):
+    clean_session = _require_session_id_prefix(session_id, kind=clean_kind)
+    row = conn.execute(f"SELECT csrf_token_hash FROM {table} WHERE session_id = ?", (clean_session,)).fetchone()
+    if row is None:
         raise ArcLinkApiAuthError("ArcLink CSRF check failed")
+    verified, algorithm = _verify_session_token_hash(csrf_token, str(row["csrf_token_hash"] or ""))
+    if not verified:
+        raise ArcLinkApiAuthError("ArcLink CSRF check failed")
+    if algorithm == ARCLINK_LEGACY_SESSION_HASH_ALGORITHM:
+        conn.execute(
+            f"UPDATE {table} SET csrf_token_hash = ? WHERE session_id = ?",
+            (_hash_session_token(csrf_token), clean_session),
+        )
+        conn.commit()
     return True
 
 
@@ -775,8 +883,8 @@ def start_public_onboarding_api(
     cancel_token = secrets.token_urlsafe(32)
     session_metadata = _json_loads(str(session.get("metadata_json") or "{}"))
     session_metadata.update({
-        "browser_claim_proof_hash": _hash_token(claim_token),
-        "browser_cancel_proof_hash": _hash_token(cancel_token),
+        "browser_claim_proof_hash": _hash_proof_token(claim_token),
+        "browser_cancel_proof_hash": _hash_proof_token(cancel_token),
         "browser_proofs_issued_at": utc_now_iso(),
         "browser_proofs_channel": clean_channel,
     })
@@ -936,7 +1044,9 @@ def read_user_provisioning_status_api(
             "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
             (clean_deployment_id,),
         ).fetchone()
-        if row is not None and str(row["user_id"] or "") != target_user:
+        if row is None:
+            return ArcLinkApiResponse(status=404, payload={"error": "deployment_not_found", "deployments": []})
+        if str(row["user_id"] or "") != target_user:
             raise ArcLinkApiAuthError("ArcLink user session cannot read another user deployment")
     dashboard = read_arclink_user_dashboard(conn, user_id=target_user, deployment_id=deployment_id)
     from arclink_product import launch_phrase  # local import to avoid cycle
@@ -1051,6 +1161,7 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
         raise ArcLinkApiAuthError("ArcLink user session cannot read another user deployment")
     metadata = _json_loads(str(row["metadata_json"] or "{}"))
     now = utc_now_iso()
+    expires_at = utc_after_seconds_iso(ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS)
     for kind, secret_ref in _deployment_secret_refs(deployment_id, metadata, user_id=user_id).items():
         if kind not in ARCLINK_CREDENTIAL_HANDOFF_KINDS:
             continue
@@ -1064,13 +1175,17 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
             """
             INSERT INTO arclink_credential_handoffs (
               handoff_id, user_id, deployment_id, credential_kind, display_name,
-              secret_ref, delivery_hint, status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)
+              secret_ref, delivery_hint, status, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?, ?, ?)
             ON CONFLICT(deployment_id, credential_kind) DO UPDATE SET
               user_id = excluded.user_id,
               secret_ref = CASE
                 WHEN arclink_credential_handoffs.status = 'available' THEN excluded.secret_ref
                 ELSE arclink_credential_handoffs.secret_ref
+              END,
+              expires_at = CASE
+                WHEN arclink_credential_handoffs.status = 'available' AND arclink_credential_handoffs.expires_at = '' THEN excluded.expires_at
+                ELSE arclink_credential_handoffs.expires_at
               END,
               updated_at = excluded.updated_at
             """,
@@ -1082,6 +1197,7 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
                 _credential_label(kind),
                 secret_ref,
                 delivery_hint,
+                expires_at,
                 now,
                 now,
             ),
@@ -1089,10 +1205,44 @@ def _ensure_credential_handoffs(conn: sqlite3.Connection, *, user_id: str, deplo
     conn.commit()
 
 
+def expire_revealable_user_material(conn: sqlite3.Connection, *, commit: bool = True) -> dict[str, int]:
+    now = utc_now_iso()
+    handoff_cursor = conn.execute(
+        """
+        UPDATE arclink_credential_handoffs
+        SET status = 'expired',
+            removed_at = CASE WHEN removed_at = '' THEN ? ELSE removed_at END,
+            updated_at = ?
+        WHERE status = 'available'
+          AND expires_at != ''
+          AND expires_at <= ?
+        """,
+        (now, now, now),
+    )
+    share_cursor = conn.execute(
+        """
+        UPDATE arclink_share_grants
+        SET status = 'expired',
+            revoked_at = CASE WHEN revoked_at = '' THEN ? ELSE revoked_at END,
+            updated_at = ?
+        WHERE status IN ('pending_owner_approval', 'approved')
+          AND expires_at != ''
+          AND expires_at <= ?
+        """,
+        (now, now, now),
+    )
+    if commit:
+        conn.commit()
+    return {"credential_handoffs": handoff_cursor.rowcount, "share_grants": share_cursor.rowcount}
+
+
 def _public_credential_handoff(row: Mapping[str, Any], *, raw_secret: str = "") -> dict[str, Any]:
     status = str(row.get("status") or "")
-    removed = status == "removed" or bool(str(row.get("removed_at") or ""))
-    revealable = bool(raw_secret) and not removed
+    expires_at = str(row.get("expires_at") or "")
+    expired = status == "expired" or bool(expires_at and (parse_utc_iso(expires_at) or utc_now()) <= utc_now())
+    removed = status in {"removed", "expired"} or bool(str(row.get("removed_at") or ""))
+    allow_reveal = bool(row.get("_allow_reveal"))
+    revealable = bool(raw_secret) and not removed and not expired and (allow_reveal or not str(row.get("revealed_at") or ""))
     payload = {
         "handoff_id": str(row.get("handoff_id") or ""),
         "deployment_id": str(row.get("deployment_id") or ""),
@@ -1100,6 +1250,7 @@ def _public_credential_handoff(row: Mapping[str, Any], *, raw_secret: str = "") 
         "display_name": str(row.get("display_name") or ""),
         "status": status,
         "revealed_at": str(row.get("revealed_at") or ""),
+        "expires_at": expires_at,
         "acknowledged_at": str(row.get("acknowledged_at") or ""),
         "removed_at": str(row.get("removed_at") or ""),
         "delivery_hint": "" if removed else str(row.get("delivery_hint") or ""),
@@ -1120,6 +1271,7 @@ def read_user_credentials_api(
     deployment_id: str = "",
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    expire_revealable_user_material(conn)
     target_user = str(session["user_id"] or "")
     deployment_args: list[Any] = [target_user]
     deployment_filter = ""
@@ -1153,10 +1305,11 @@ def read_user_credentials_api(
     now = utc_now_iso()
     for row in rows:
         row_data = rowdict(row)
-        if str(row_data.get("status") or "") == "removed":
+        if str(row_data.get("status") or "") in {"removed", "expired"}:
             continue
         raw_secret = _resolve_revealable_credential_secret(row_data)
         if raw_secret and not str(row_data.get("revealed_at") or ""):
+            row_data["_allow_reveal"] = True
             row_data["revealed_at"] = now
             revealed_ids.append(str(row_data.get("handoff_id") or ""))
         credentials.append(_public_credential_handoff(row_data, raw_secret=raw_secret))
@@ -1171,7 +1324,7 @@ def read_user_credentials_api(
             [(now, now, hid) for hid in revealed_ids],
         )
         conn.commit()
-    removed_count = sum(1 for row in rows if str(row["status"] or "") == "removed")
+    removed_count = sum(1 for row in rows if str(row["status"] or "") in {"removed", "expired"})
     return ArcLinkApiResponse(
         status=200,
         payload={
@@ -1529,6 +1682,7 @@ def _public_share_grant(row: Mapping[str, Any]) -> dict[str, Any]:
         "display_name": str(row.get("display_name") or ""),
         "access_mode": str(row.get("access_mode") or ""),
         "status": str(row.get("status") or ""),
+        "expires_at": str(row.get("expires_at") or ""),
         "reshare_allowed": False,
         "linked_root": projection["linked_root"],
         "linked_path": projection["linked_path"],
@@ -1871,13 +2025,14 @@ def create_user_share_grant_for_owner(
         safe_metadata["requested_by_agent_id"] = clean_agent
     _reject_secret_material(safe_metadata)
     now = utc_now_iso()
+    expires_at = utc_after_seconds_iso(ARCLINK_SHARE_GRANT_TTL_SECONDS)
     grant_id = _new_id("share")
     conn.execute(
         """
         INSERT INTO arclink_share_grants (
           grant_id, owner_user_id, recipient_user_id, resource_kind, resource_root,
-          resource_path, display_name, access_mode, status, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_owner_approval', ?, ?, ?)
+          resource_path, display_name, access_mode, status, expires_at, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending_owner_approval', ?, ?, ?, ?)
         """,
         (
             grant_id,
@@ -1888,6 +2043,7 @@ def create_user_share_grant_for_owner(
             clean_path,
             str(display_name or "").strip()[:160],
             mode,
+            expires_at,
             _json(safe_metadata),
             now,
             now,
@@ -1962,6 +2118,7 @@ def approve_user_share_grant_api(
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
     require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
     owner_user = str(session["user_id"] or "")
     clean_grant = str(grant_id or "").strip()
     row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
@@ -2002,6 +2159,7 @@ def deny_user_share_grant_api(
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
     require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
     owner_user = str(session["user_id"] or "")
     clean_grant = str(grant_id or "").strip()
     row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
@@ -2042,6 +2200,7 @@ def accept_user_share_grant_api(
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
     require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
     recipient = str(session["user_id"] or "")
     clean_grant = str(grant_id or "").strip()
     row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
@@ -2083,6 +2242,7 @@ def revoke_user_share_grant_api(
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
     require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
     owner_user = str(session["user_id"] or "")
     clean_grant = str(grant_id or "").strip()
     row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
@@ -2348,9 +2508,18 @@ def queue_admin_action_api(
     session = authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
     require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="admin")
     _admin_mutation_allowed(conn, session)
+    admin_id = str(session["admin_id"] or "")
+    check_arclink_rate_limit(conn, scope="admin_action:admin", subject=admin_id, limit=30, window_seconds=60)
+    check_arclink_rate_limit(
+        conn,
+        scope="admin_action:target",
+        subject=f"{str(target_kind or '').strip().lower()}:{str(target_id or '').strip()}",
+        limit=12,
+        window_seconds=60,
+    )
     action = queue_arclink_admin_action(
         conn,
-        admin_id=str(session["admin_id"] or ""),
+        admin_id=admin_id,
         action_type=action_type,
         target_kind=target_kind,
         target_id=target_id,
@@ -2371,8 +2540,10 @@ def revoke_arclink_session(
     commit: bool = True,
 ) -> dict[str, Any]:
     clean_kind = _validate_session_kind(session_kind, operation="session revoke")
+    if not commit and not conn.in_transaction:
+        raise ArcLinkApiAuthError("ArcLink staged session revocation requires an explicit transaction")
     table = "arclink_admin_sessions" if clean_kind == "admin" else "arclink_user_sessions"
-    clean_session = str(session_id or "").strip()
+    clean_session = _require_session_id_prefix(session_id, kind=clean_kind)
     existing = conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (clean_session,)).fetchone()
     if existing is None:
         raise ArcLinkApiAuthError(f"ArcLink {clean_kind} session not found")
@@ -2423,7 +2594,7 @@ def claim_session_from_onboarding_api(
     session_dict = dict(row)
     session_metadata = _json_loads(str(session_dict.get("metadata_json") or "{}"))
     expected_hash = str(session_metadata.get("browser_claim_proof_hash") or "").strip()
-    if not expected_hash or not hmac.compare_digest(expected_hash, _hash_token(browser_claim_token)):
+    if not _verify_proof_token_hash(browser_claim_token, expected_hash):
         raise ArcLinkApiAuthError("Onboarding claim proof failed")
     user_id = str(session_dict.get("user_id") or "").strip()
     if not user_id:
@@ -2481,7 +2652,7 @@ def cancel_onboarding_session_api(
     if row is None:
         return ArcLinkApiResponse(status=404, payload={"error": "session_not_found"})
     current_status = str(row["status"] or "").strip()
-    if current_status in {"completed", "payment_cancelled", "payment_expired", "payment_failed", "abandoned"}:
+    if current_status in {"completed", "payment_cancelled", "payment_expired", "payment_failed", "abandoned", "expired"}:
         return ArcLinkApiResponse(status=200, payload={
             "session_id": clean_id,
             "status": current_status,
@@ -2489,7 +2660,7 @@ def cancel_onboarding_session_api(
         })
     session_metadata = _json_loads(str(row["metadata_json"] or "{}"))
     expected_hash = str(session_metadata.get("browser_cancel_proof_hash") or "").strip()
-    if not expected_hash or not hmac.compare_digest(expected_hash, _hash_token(browser_cancel_token)):
+    if not _verify_proof_token_hash(browser_cancel_token, expected_hash):
         raise ArcLinkApiAuthError("Onboarding cancel proof failed")
     cancelled = cancel_arclink_onboarding_session(
         conn,

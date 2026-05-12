@@ -766,6 +766,20 @@ def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> No
     print("PASS test_public_agent_bridge_enables_gateway_streaming_without_reasoning")
 
 
+def test_notification_due_now_normalizes_z_and_offset_timestamps() -> None:
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_due_timestamp_test")
+    fixed_now = datetime(2026, 5, 11, 12, 0, 0, tzinfo=timezone.utc)
+    original_now = delivery.utc_now
+    try:
+        delivery.utc_now = lambda: fixed_now
+        expect(delivery._notification_due_now({"next_attempt_at": "2026-05-11T12:00:00Z"}) is True, "Z timestamp at now should be due")
+        expect(delivery._notification_due_now({"next_attempt_at": "2026-05-11T12:00:01+00:00"}) is False, "+00:00 future should not be due")
+        expect(delivery._notification_due_now({"next_attempt_at": "bad timestamp"}) is False, "invalid timestamp should fail closed")
+    finally:
+        delivery.utc_now = original_now
+    print("PASS test_notification_due_now_normalizes_z_and_offset_timestamps")
+
+
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
@@ -777,7 +791,8 @@ def main() -> int:
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_enables_gateway_streaming_without_reasoning()
-    print("PASS all 10 notification delivery regression tests")
+    test_notification_due_now_normalizes_z_and_offset_timestamps()
+    print("PASS all 11 notification delivery regression tests")
     return 0
 
 

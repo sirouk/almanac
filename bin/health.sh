@@ -67,6 +67,9 @@ check_service_user_failed_units() {
     return 0
   fi
   output="$(systemctl --user --failed --no-legend --plain 2>/dev/null || true)"
+  if [[ -n "${BACKUP_GIT_REMOTE:-}" && -n "$output" ]]; then
+    output="$(printf '%s\n' "$output" | awk '$1 != "arclink-github-backup.service"')"
+  fi
   if [[ -z "$output" ]]; then
     pass "no failed service-user units"
     return 0
@@ -2141,7 +2144,7 @@ if set_user_systemd_bus_env; then
   fi
   check_unit_state arclink-github-backup.timer required
   if [[ -n "$BACKUP_GIT_REMOTE" ]]; then
-    check_user_timer_job_result arclink-github-backup.service required
+    check_user_timer_job_result arclink-github-backup.service optional
   fi
 
   if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then

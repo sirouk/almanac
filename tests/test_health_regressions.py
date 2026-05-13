@@ -126,6 +126,15 @@ check_user_timer_job_result arclink-github-backup.service required
     print("PASS test_backup_timer_job_result_reports_success_and_failure")
 
 
+def test_backup_failure_is_non_blocking_when_remote_key_needs_repair() -> None:
+    text = HEALTH_SH.read_text()
+    expect("check_user_timer_job_result arclink-github-backup.service optional" in text,
+           "backup push failures should warn without blocking strict deploy health")
+    expect('$1 != "arclink-github-backup.service"' in text,
+           "failed-unit scan should defer backup service failure reporting to the backup job result warning")
+    print("PASS test_backup_failure_is_non_blocking_when_remote_key_needs_repair")
+
+
 def test_activation_trigger_write_probe_reports_writable_and_unwritable_states() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, "check_arclink_mcp_status() {", "check_vault_definition_health() {")
@@ -1133,6 +1142,7 @@ check_upgrade_state
 def main() -> int:
     test_placeholder_secret_detection_and_reporting()
     test_backup_timer_job_result_reports_success_and_failure()
+    test_backup_failure_is_non_blocking_when_remote_key_needs_repair()
     test_activation_trigger_write_probe_reports_writable_and_unwritable_states()
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
     test_required_loopback_bind_probe_fails_unsafe_listeners()
@@ -1150,7 +1160,7 @@ def main() -> int:
     test_active_agent_health_fails_when_agent_backup_cron_last_run_failed()
     test_active_agent_health_allows_clean_zero_user_enrollment_state()
     test_health_db_python_probe_command_failures_fail_closed()
-    print("PASS all 19 health regression tests")
+    print("PASS all 20 health regression tests")
     return 0
 
 

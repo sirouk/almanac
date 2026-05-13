@@ -3264,6 +3264,10 @@ def test_systemd_unit_paths_are_quoted() -> None:
 
 def test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions() -> None:
     text = DEPLOY_SH.read_text()
+    expect("nextcloud_effectively_enabled()" in text,
+           "deploy.sh must define nextcloud_effectively_enabled for standalone stable-copy execution")
+    expect("nextcloud_runtime_available()" in text,
+           "deploy.sh must define the Nextcloud runtime probe used by nextcloud_effectively_enabled")
     expect("if nextcloud_effectively_enabled; then\n      run_as_user_systemd" in text,
            "shared service restart must use effective Nextcloud enablement")
     expect('if nextcloud_effectively_enabled; then\n    wait_for_port 127.0.0.1 "$NEXTCLOUD_PORT"' in text,
@@ -3273,6 +3277,19 @@ def test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions() -> Non
     expect("no Nextcloud runtime is available; install podman or docker compose before rotating credentials" in text,
            "credential rotation must fail before starting a missing Nextcloud runtime")
     print("PASS test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions")
+
+
+def test_nextcloud_startup_repairs_persisted_runtime_config() -> None:
+    text = (REPO / "bin" / "nextcloud-up.sh").read_text()
+    expect("repair_podman_nextcloud_config_file()" in text,
+           "Podman Nextcloud startup must repair compose-era persisted config values")
+    expect("\"s/'dbhost'[[:space:]]*=>[[:space:]]*'(db|postgres)'/'dbhost' => '127.0.0.1'/\"" in text,
+           "Podman Nextcloud startup must migrate existing DB hostnames to loopback")
+    expect("ensure_nextcloud_system_config()" in text,
+           "Nextcloud startup must enforce trusted domains and overwrite URL after occ is ready")
+    expect('config:system:set trusted_domains 2 --value="$NEXTCLOUD_TRUSTED_DOMAIN"' in text,
+           "Nextcloud startup must add the configured trusted domain to persisted config")
+    print("PASS test_nextcloud_startup_repairs_persisted_runtime_config")
 
 
 def main() -> int:
@@ -3378,6 +3395,7 @@ def main() -> int:
         test_health_db_probe_failures_cause_fail,
         test_systemd_unit_paths_are_quoted,
         test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions,
+        test_nextcloud_startup_repairs_persisted_runtime_config,
     ]
     for test in tests:
         test()

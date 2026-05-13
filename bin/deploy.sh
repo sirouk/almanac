@@ -328,6 +328,31 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+have_compose_runtime() {
+  if command_exists docker && docker compose version >/dev/null 2>&1; then
+    return 0
+  fi
+
+  command_exists podman-compose
+}
+
+nextcloud_runtime_available() {
+  if [[ "${ARCLINK_CONTAINER_RUNTIME:-}" == "docker" || "${ARCLINK_DOCKER_MODE:-0}" == "1" ]]; then
+    have_compose_runtime
+    return $?
+  fi
+
+  if command_exists podman; then
+    return 0
+  fi
+
+  have_compose_runtime
+}
+
+nextcloud_effectively_enabled() {
+  [[ "${ENABLE_NEXTCLOUD:-0}" == "1" ]] && nextcloud_runtime_available
+}
+
 host_uname_s() {
   uname -s 2>/dev/null || printf '%s\n' "unknown"
 }

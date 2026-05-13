@@ -132,6 +132,23 @@ find "$NEXTCLOUD_DATA_DIR" -type f -name '.htaccess' -exec chmod 644 {} +
 EOF
 }
 
+repair_podman_nextcloud_config_file() {
+  local config_file="$NEXTCLOUD_HTML_DIR/config/config.php"
+
+  if ! nextcloud_using_podman || [[ ! -f "$config_file" ]] || ! command -v podman >/dev/null 2>&1; then
+    return 0
+  fi
+
+  podman unshare sh -eu <<EOF
+config_file="$config_file"
+if [ -f "\$config_file" ]; then
+  sed -i -E "s/'dbhost'[[:space:]]*=>[[:space:]]*'(db|postgres)'/'dbhost' => '127.0.0.1'/" "\$config_file"
+  chown 33:33 "\$config_file"
+  chmod 640 "\$config_file" || true
+fi
+EOF
+}
+
 nextcloud_occ() {
   if nextcloud_using_podman; then
     podman exec -u 33:33 "$(nextcloud_app_container_name)" php /var/www/html/occ "$@"
@@ -409,6 +426,16 @@ ensure_nextcloud_vault_mount() {
   fi
 }
 
+ensure_nextcloud_system_config() {
+  nextcloud_occ config:system:set trusted_domains 0 --value="localhost" >/dev/null
+  nextcloud_occ config:system:set trusted_domains 1 --value="127.0.0.1" >/dev/null
+  if [[ -n "${NEXTCLOUD_TRUSTED_DOMAIN:-}" ]]; then
+    nextcloud_occ config:system:set trusted_domains 2 --value="$NEXTCLOUD_TRUSTED_DOMAIN" >/dev/null
+    nextcloud_occ config:system:set overwrite.cli.url --value="https://$NEXTCLOUD_TRUSTED_DOMAIN" >/dev/null
+  fi
+  nextcloud_occ config:system:set overwriteprotocol --value="https" >/dev/null
+}
+
 run_podman_nextcloud() {
   local pod_name=""
   local db_name=""
@@ -426,6 +453,7 @@ run_podman_nextcloud() {
   write_nextcloud_custom_config
   write_nextcloud_hook_scripts
   normalize_nextcloud_permissions
+  repair_podman_nextcloud_config_file
   cleanup_legacy_compose_stack
 
   if ! pod_exists "$pod_name"; then
@@ -498,6 +526,7 @@ run_podman_nextcloud() {
   fi
 
   wait_for_nextcloud_occ 180 2
+  ensure_nextcloud_system_config
   ensure_nextcloud_vault_mount
   normalize_nextcloud_permissions
   wait_for_nextcloud_http 180 2
@@ -517,6 +546,7 @@ run_compose_nextcloud() {
   write_nextcloud_hook_scripts
   with_nextcloud_compose_env run_compose "$COMPOSE_FILE" up -d
   wait_for_nextcloud_occ 180 2
+  ensure_nextcloud_system_config
   ensure_nextcloud_vault_mount
   normalize_nextcloud_permissions
   wait_for_nextcloud_http 180 2

@@ -784,6 +784,7 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
         "type": "checkout.session.completed",
         "data": {"object": {
             "id": "cs_test_checkout",
+            "status": "complete",
             "customer": "cus_checkout",
             "subscription": "sub_checkout",
             "client_reference_id": prepared["user_id"],
@@ -807,7 +808,12 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
     dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = ?", (prepared["deployment_id"],)).fetchone()
     expect(dep["status"] == "provisioning_ready", str(dict(dep)))
     # Onboarding session should be synced
-    onb = conn.execute("SELECT checkout_session_id, stripe_customer_id FROM arclink_onboarding_sessions WHERE session_id = ?", (session["session_id"],)).fetchone()
+    sub = conn.execute("SELECT status FROM arclink_subscriptions WHERE stripe_subscription_id = ?", ("sub_checkout",)).fetchone()
+    expect(sub["status"] == "paid", str(dict(sub)))
+    onb = conn.execute("SELECT status, current_step, checkout_state, checkout_session_id, stripe_customer_id FROM arclink_onboarding_sessions WHERE session_id = ?", (session["session_id"],)).fetchone()
+    expect(onb["status"] == "provisioning_ready", str(dict(onb)))
+    expect(onb["current_step"] == "provisioning_requested", str(dict(onb)))
+    expect(onb["checkout_state"] == "paid", str(dict(onb)))
     expect(onb["checkout_session_id"] == "cs_test_checkout", str(dict(onb)))
     expect(onb["stripe_customer_id"] == "cus_checkout", str(dict(onb)))
     print("PASS test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding")

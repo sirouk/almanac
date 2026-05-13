@@ -67,6 +67,7 @@ ARCLINK_ADMIN_PASSWORD_ALGORITHM = ARCLINK_PASSWORD_ALGORITHM
 ARCLINK_ADMIN_PASSWORD_ITERATIONS = ARCLINK_PASSWORD_ITERATIONS
 ARCLINK_SESSION_HASH_ALGORITHM = "hmac_sha256_v1"
 ARCLINK_LEGACY_SESSION_HASH_ALGORITHM = "sha256_legacy"
+ARCLINK_ONBOARDING_CLAIM_REPLAY_SECONDS = 10 * 60
 
 
 class ArcLinkApiAuthError(ValueError):
@@ -2594,7 +2595,18 @@ def claim_session_from_onboarding_api(
     session_dict = dict(row)
     session_metadata = _json_loads(str(session_dict.get("metadata_json") or "{}"))
     expected_hash = str(session_metadata.get("browser_claim_proof_hash") or "").strip()
-    if not _verify_proof_token_hash(browser_claim_token, expected_hash):
+    replay_hash = str(session_metadata.get("browser_claim_proof_used_hash") or "").strip()
+    replay_until = parse_utc_iso(str(session_metadata.get("browser_claim_replay_until") or ""))
+    proof_hash_for_replay = ""
+    if expected_hash:
+        if not _verify_proof_token_hash(browser_claim_token, expected_hash):
+            raise ArcLinkApiAuthError("Onboarding claim proof failed")
+        proof_hash_for_replay = expected_hash
+    elif replay_hash and replay_until and replay_until > utc_now():
+        if not _verify_proof_token_hash(browser_claim_token, replay_hash):
+            raise ArcLinkApiAuthError("Onboarding claim proof failed")
+        proof_hash_for_replay = replay_hash
+    else:
         raise ArcLinkApiAuthError("Onboarding claim proof failed")
     user_id = str(session_dict.get("user_id") or "").strip()
     if not user_id:
@@ -2617,7 +2629,9 @@ def claim_session_from_onboarding_api(
         metadata={"source": "onboarding_claim", "onboarding_session_id": clean_id},
     )
     session_metadata.pop("browser_claim_proof_hash", None)
+    session_metadata["browser_claim_proof_used_hash"] = proof_hash_for_replay
     session_metadata["browser_claim_proof_used_at"] = utc_now_iso()
+    session_metadata["browser_claim_replay_until"] = utc_after_seconds_iso(ARCLINK_ONBOARDING_CLAIM_REPLAY_SECONDS)
     conn.execute(
         "UPDATE arclink_onboarding_sessions SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
         (_json(session_metadata), utc_now_iso(), clean_id),

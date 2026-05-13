@@ -3533,6 +3533,20 @@ def test_onboarding_claim_session_creates_user_session_after_payment() -> None:
     )
     expect(status == 200, f"claimed session dashboard expected 200 got {status}")
 
+    # If the browser loses the 201 response during a Stripe redirect/network
+    # handoff, retrying with the same proof token should mint a replacement
+    # session for the same user during the short replay window.
+    status, replay_payload, replay_headers = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/onboarding/claim-session",
+        headers={}, body=json.dumps({"session_id": "onb_hosted", "claim_token": claim_token}),
+        config=config,
+    )
+    expect(status == 201, f"expected idempotent claim replay 201 got {status}: {replay_payload}")
+    expect(replay_payload["user_id"] == prepared["user_id"], str(replay_payload))
+    expect(replay_payload["session"]["session_id"] != session["session_id"], str(replay_payload))
+    replay_cookie_headers = [v for k, v in replay_headers if k == "Set-Cookie"]
+    expect(any("arclink_user_session_token=" in value for value in replay_cookie_headers), str(replay_cookie_headers))
+
     print("PASS test_onboarding_claim_session_creates_user_session_after_payment")
 
 

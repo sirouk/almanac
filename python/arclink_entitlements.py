@@ -32,6 +32,31 @@ class ReconciliationDrift:
 
 SUBSCRIPTION_COVERAGE_STATUSES = frozenset({"active", "trialing", "paid"})
 SUBSCRIPTION_OWED_SERVICE_STATUSES = frozenset({"past_due", "unpaid"})
+SUBSCRIPTION_MIRROR_STATUSES = frozenset({
+    "active",
+    "trialing",
+    "paid",
+    "past_due",
+    "unpaid",
+    "canceled",
+    "cancelled",
+    "incomplete",
+    "incomplete_expired",
+    "paused",
+})
+
+
+def _stripe_subscription_mirror_status(
+    *,
+    event_type: str,
+    obj: Mapping[str, Any],
+    entitlement_state: str,
+) -> str:
+    if event_type.startswith("customer.subscription."):
+        candidate = str(obj.get("status") or entitlement_state).strip().lower()
+    else:
+        candidate = str(entitlement_state or "").strip().lower()
+    return candidate if candidate in SUBSCRIPTION_MIRROR_STATUSES else entitlement_state
 
 
 def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[ReconciliationDrift]:
@@ -505,7 +530,11 @@ def process_stripe_webhook(
                 )
 
         if subscription_id:
-            mirror_status = entitlement_state if event_type == "invoice.payment_failed" else str(obj.get("status") or entitlement_state)
+            mirror_status = _stripe_subscription_mirror_status(
+                event_type=event_type,
+                obj=obj,
+                entitlement_state=entitlement_state,
+            )
             upsert_arclink_subscription_mirror(
                 conn,
                 subscription_id=f"stripe:{subscription_id}",

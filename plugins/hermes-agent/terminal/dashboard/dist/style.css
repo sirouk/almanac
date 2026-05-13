@@ -155,6 +155,14 @@
   padding: 2px 4px;
 }
 
+.hermes-terminal-session-name-row {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 2rem;
+  width: 100%;
+}
+
 .hermes-terminal-session-top {
   align-items: center;
   display: flex;
@@ -163,11 +171,18 @@
 }
 
 .hermes-terminal-session-close {
+  align-items: center;
   color: #9aa4b2;
-  flex: 0 0 auto;
-  font-size: 13px;
-  opacity: 0.58;
-  padding: 0 3px;
+  display: inline-flex;
+  font-size: 18px;
+  height: 1.75rem;
+  justify-content: center;
+  justify-self: end;
+  line-height: 1;
+  opacity: 0.66;
+  padding: 0;
+  width: 1.75rem;
+  white-space: nowrap;
 }
 
 .hermes-terminal-session-close:hover {

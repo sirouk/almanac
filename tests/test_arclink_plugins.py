@@ -429,6 +429,8 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(root_map["linked"]["read_only"] is True, str(root_map["linked"]))
             expect(root_map["vault"]["capabilities"]["sharing"] is False, str(root_map["vault"]))
             expect(root_map["linked"]["capabilities"]["upload"] is False, str(root_map["linked"]))
+            expect(root_map["workspace"]["capabilities"]["folder_upload"] is True, str(root_map["workspace"]))
+            expect(root_map["linked"]["capabilities"]["folder_upload"] is False, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["trash"] is True, str(root_map["workspace"]))
             expect(knowledge["capabilities"]["drag_drop_upload"] is True, str(knowledge))
             _assert_no_secret_status(knowledge, "Drive")
@@ -965,6 +967,47 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
             kept_path = kept["uploaded"][0]["path"]
             expect(kept_path != "/Docs/report.md", str(kept))
             expect((vault / kept_path.lstrip("/")).read_text(encoding="utf-8") == "copy\n", str(kept))
+            folder_upload = asyncio.run(
+                drive_api.upload(
+                    path="/Docs",
+                    root="vault",
+                    relative_paths=json.dumps(["Project/readme.md", "Project/src/main.py"]),
+                    directories=json.dumps(["Project", "Project/src", "Project/empty"]),
+                    files=[
+                        MemoryUpload("readme.md", b"# Project\n"),
+                        MemoryUpload("main.py", b"print('hi')\n"),
+                    ],
+                )
+            )
+            expect({item["path"] for item in folder_upload["uploaded"]} == {"/Docs/Project/readme.md", "/Docs/Project/src/main.py"}, str(folder_upload))
+            expect((docs / "Project" / "empty").is_dir(), "folder upload should preserve empty dropped directories when the browser reports them")
+            expect((docs / "Project" / "src" / "main.py").read_text(encoding="utf-8") == "print('hi')\n", str(folder_upload))
+            kept_folder = asyncio.run(
+                drive_api.upload(
+                    path="/Docs",
+                    root="vault",
+                    conflict="keep-both",
+                    relative_paths=json.dumps(["Project/readme.md"]),
+                    directories=json.dumps(["Project"]),
+                    files=[MemoryUpload("readme.md", b"# Copy\n")],
+                )
+            )
+            kept_folder_path = kept_folder["uploaded"][0]["path"]
+            expect(kept_folder_path.startswith("/Docs/Project copy"), str(kept_folder))
+            expect((vault / kept_folder_path.lstrip("/")).read_text(encoding="utf-8") == "# Copy\n", str(kept_folder))
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        relative_paths=json.dumps(["Project/../escape.md"]),
+                        files=[MemoryUpload("escape.md", b"blocked\n")],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 400, f"expected upload relative path traversal rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected upload relative path traversal to be rejected")
             try:
                 asyncio.run(
                     drive_api.upload(
@@ -1028,6 +1071,10 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect('function restoreSelected()' in body and 'state.location === "trash"' in body, "Drive UI should support trash selection state")
     expect("const visibleItems = sortedItems();" in body and "visibleItems.map" in body, "Trash view should render sorted trash items")
     expect('state.location !== "trash" && hasFiles(event)' in body, "Trash view should not advertise or accept uploads")
+    expect("function collectDroppedUploadItems(dataTransfer)" in body and "webkitGetAsEntry" in body, "Drive drag/drop should traverse browser-exposed folders")
+    expect("webkitdirectory" in body and "folderInput" in body, "Drive upload button should expose browser folder selection")
+    expect('body.append("relative_paths"' in body and 'body.append("directories"' in body, "Drive uploads should preserve folder relative paths")
+    expect("Drop files or folders to upload" in body, "Drive drop overlay should advertise folder uploads")
     expect("hermes-drive-confirm" in body and "expectedText" in body, "Risky Drive actions should use in-app typed confirmations")
     expect('requestJSON("/batch", { action: "restore"' in body, "Drive UI should use batch restore so partial failures are visible")
     expect('function copySelectedWithPrompt()' in body and 'action: "copy"' in body, "Drive UI should expose selected batch copy")
@@ -1516,7 +1563,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["xtermjs_terminal_emulator"] is True, str(status))
             expect(status["capabilities"]["background_pty_reader"] is True, str(status))
             expect(status["capabilities"]["control_key_input"] is True, str(status))
-            expect(status["limits"]["scrollback_lines"] == 10000, str(status))
+            expect(status["limits"]["scrollback_lines"] == 50000, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
 
             created = asyncio.run(
@@ -1640,10 +1687,12 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect('addEventListener("keydown", onNativeKeyDown)' not in body, "Terminal UI should not double-send keystrokes")
     expect('"New machine terminal"' in body and "+SSH" in body, "Terminal UI should use +SSH for a local machine shell")
     expect("startRenameSession" in body and "editingSessionId" in body, "Terminal UI should support inline session renaming")
+    expect("hermes-terminal-session-name-row" in body and '"aria-label": "Close "' in body, "Terminal close control should be separated from the session name")
     expect("window.prompt(\"SSH target\"" not in body and "target: \"\"" in body, "Terminal UI should not prompt for an SSH target")
     expect("+TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
     expect("scrollback" in body and "hermes-terminal-screen" in body, "Terminal UI should render bounded scrollback")
     expect("syncTerminalOutput" in body and "scrollToBottom" in body, "Terminal UI should stream scrollback into xterm")
+    expect("suffixPrefixOverlapLength" in body and "previous.endsWith(raw)" in body, "Terminal UI should not reset a cached TUI when the backend scrollback tail is bounded")
     expect("terminalCache" in body and "detachTerminal" in body, "Terminal UI should keep xterm buffers warm when the page is revisited")
     expect("onScroll" in body and "SESSION_VIEWPORT_STORAGE_PREFIX" in body, "Terminal UI should remember scroll viewport per session")
     expect("attachCustomKeyEventHandler" in body and '\\x03' in body and "controlInputForKey" in body, "Terminal UI should forward Ctrl+C and related control keys to the PTY")
@@ -1660,6 +1709,7 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("_DEFAULT_TUI_DIR" in api_body and "HERMES_TUI_DIR" in api_body and "_tui_dist_available" in api_body, "Terminal API should only advertise Hermes TUI when bundled assets are ready")
     expect("_CPR_QUERY" in api_body and "browser_cpr_response" in api_body and "xtermjs_terminal_emulator" in api_body, "Terminal API should preserve cursor-position requests for browser-side response")
     expect("_DEFAULT_SCROLLBACK_LINES" in api_body and "TERMINAL_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded browser scrollback limit")
+    expect("_DEFAULT_SCROLLBACK_BYTES = 8_000_000" in api_body and "_DEFAULT_SCROLLBACK_LINES = 50_000" in api_body, "Terminal API should keep enough durable scrollback for TUI reconnects")
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
@@ -1673,6 +1723,8 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect(".hermes-terminal-confirm" in style and ".hermes-terminal-confirm-card" in style, "Terminal CSS should style close confirmation")
     expect(".hermes-terminal-context" in style, "Terminal CSS should style the session right-click menu")
     expect(".hermes-terminal-session-rename" in style, "Terminal CSS should style inline rename")
+    expect(".hermes-terminal-session-name-row" in style and "grid-template-columns: minmax(0, 1fr) 2rem" in style, "Terminal session close affordance should sit at the far right of the tile")
+    expect(".hermes-terminal-session-close" in style and "font-size: 18px" in style and "justify-self: end" in style, "Terminal session close affordance should be larger and right-aligned")
     expect("text-transform: none" in style and "font-variant-caps: normal" in style, "Terminal CSS should preserve shell output casing")
     expect(".xterm-viewport" in style and "overflow: hidden;" in style, "Terminal CSS should leave terminal layout and scrolling to xterm")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")

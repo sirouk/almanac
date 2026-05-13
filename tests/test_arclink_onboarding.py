@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from arclink_test_helpers import expect, load_module, memory_db, sign_stripe
 
@@ -107,6 +108,45 @@ def test_plan_agent_counts_are_applied_before_entitlement_gate() -> None:
         )
 
     print("PASS test_plan_agent_counts_are_applied_before_entitlement_gate")
+
+
+def test_onboarding_uses_readable_random_unique_prefixes() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_prefix_pool_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_prefix_pool_test")
+    conn = memory_db(control)
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="prefix-pool@example.test",
+        session_id="onb_prefix_pool",
+        email_hint="prefix-pool@example.test",
+        selected_plan_id="scale",
+    )
+
+    prepared = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=session["session_id"],
+        base_domain="example.test",
+    )
+    resumed = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=session["session_id"],
+        base_domain="example.test",
+    )
+
+    rows = conn.execute(
+        "SELECT prefix FROM arclink_deployments WHERE user_id = ? ORDER BY deployment_id",
+        (prepared["user_id"],),
+    ).fetchall()
+    prefixes = [row["prefix"] for row in rows]
+    expect(resumed["deployment_id"] == prepared["deployment_id"], str((prepared, resumed)))
+    expect(len(prefixes) == 3 and len(set(prefixes)) == 3, str(prefixes))
+    for prefix in prefixes:
+        expect(re.match(r"^[a-z0-9]+-[a-z0-9]+-[a-z0-9]{4}$", prefix) is not None, prefix)
+        expect(not re.match(r"^arc-[0-9a-f]{12}$", prefix), prefix)
+        control.normalize_arclink_deployment_prefix(prefix)
+
+    print("PASS test_onboarding_uses_readable_random_unique_prefixes")
 
 
 def test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked() -> None:
@@ -488,6 +528,7 @@ def test_web_telegram_discord_onboarding_parity() -> None:
 def main() -> int:
     test_public_onboarding_sessions_resume_without_duplicate_active_rows()
     test_plan_agent_counts_are_applied_before_entitlement_gate()
+    test_onboarding_uses_readable_random_unique_prefixes()
     test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked()
     test_successful_checkout_uses_entitlement_gate_before_provisioning_ready()
     test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens()
@@ -496,7 +537,7 @@ def main() -> int:
     test_stale_onboarding_session_expires_and_allows_reentry()
     test_duplicate_active_web_onboarding_by_email_reuses_session()
     test_web_telegram_discord_onboarding_parity()
-    print("PASS all 10 ArcLink onboarding tests")
+    print("PASS all 11 ArcLink onboarding tests")
     return 0
 
 

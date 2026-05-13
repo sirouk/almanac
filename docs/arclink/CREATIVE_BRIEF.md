@@ -404,14 +404,15 @@ Change Package
 Triggered by `/checkout`.
 
 ```text
-Checkout is ready. Complete the Stripe handoff here; when payment clears, I move your first ArcLink agent into the launch queue.
+Checkout is ready.
+
+Finish the secure Stripe checkout below. Once payment clears, I launch your ArcLink agent and report back here with the working links and credential handoff.
 ```
 
 Buttons:
 
 ```text
 Hire Founders - $149/month
-Check Status
 ```
 
 ### Status

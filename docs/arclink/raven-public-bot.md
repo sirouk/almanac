@@ -115,7 +115,7 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 - `Sovereign / Scale` opens the standard package lane.
 - `Sovereign - $199/month` chooses the Sovereign path quickly.
 - `Scale - $275/month` chooses the Scale path quickly.
-- `Hire Founders - $149/month`, `Hire Sovereign - $199/month`, or `Hire Scale - $275/month` opens package checkout.
+- `Hire Founders - $149/month`, `Hire Sovereign - $199/month`, or `Hire Scale - $275/month` opens package checkout. The checkout handoff should be a single-step message with only the checkout button; Raven reports back automatically after Stripe and provisioning events.
 - `Show My Crew` opens the account-aware `/agents` roster.
 - `Link Channel` opens the `/link-channel` pairing-code lane.
 - `Add Agent` opens Agentic Expansion checkout after the first deployment exists.

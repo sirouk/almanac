@@ -91,6 +91,10 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
 
 6. **Ingress**
    - `./deploy.sh control install` asks for `domain` or `tailscale`.
+   - New deployments reserve a random readable prefix such as
+     `orbital-beacon-7xq2`. The pool uses generic hard-SF/frontier language,
+     not show-specific proper nouns, and the control DB enforces
+     case-insensitive uniqueness.
    - In `domain` mode, `python/arclink_ingress.py` computes Cloudflare DNS
      records and Traefik labels for:
      - `u-<prefix>.<base-domain>`

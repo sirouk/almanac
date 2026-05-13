@@ -957,14 +957,11 @@ def _open_first_agent_checkout_turn(
         action="open_checkout",
         reply=(
             f"{plan_label} checkout is ready.\n\n"
-            "Stage 1: finish the Stripe handoff at the link below.\n"
-            "Stage 2: I watch for Stripe confirmation and report back in this same channel.\n"
-            "Stage 3: once payment clears, I launch provisioning and keep you posted while Drive, Code, Terminal, memory, and health come online.\n"
-            "Stage 4: when the agent is ready, I bring back the working links and credential handoff."
+            "Finish the secure Stripe checkout below. Once payment clears, I launch your ArcLink agent "
+            "and report back here with the working links and credential handoff."
         ),
         buttons=(
             _button(_plan_checkout_label(selected_plan), url=str(session.get("checkout_url") or "")),
-            _button("Check Status", command="/status", style="secondary"),
         ),
         bot_display_name=bot_display_name,
     )

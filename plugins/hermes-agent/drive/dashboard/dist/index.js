@@ -55,6 +55,128 @@
     return transferTypes(event).indexOf("Files") !== -1;
   }
 
+  function normalizeUploadRelativePath(rawPath, fallbackName) {
+    const fallback = String(fallbackName || "upload").replace(/\\/g, "/").split("/").filter(Boolean).pop() || "upload";
+    const text = String(rawPath || fallback).replace(/\\/g, "/").replace(/^\/+/, "");
+    const parts = text
+      .split("/")
+      .map(function (part) {
+        return part.trim();
+      })
+      .filter(function (part) {
+        return part && part !== "." && part !== "..";
+      });
+    return parts.join("/") || fallback;
+  }
+
+  function normalizeUploadEntries(filesOrEntries) {
+    return Array.prototype.slice.call(filesOrEntries || [])
+      .map(function (entry) {
+        const file = entry && entry.file ? entry.file : entry;
+        if (!file) return null;
+        const path = (entry && entry.relativePath) || file.webkitRelativePath || file.name;
+        return {
+          file: file,
+          relativePath: normalizeUploadRelativePath(path, file.name),
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function uploadTopName(entry) {
+    return String((entry && entry.relativePath) || (entry && entry.file && entry.file.name) || "")
+      .split("/")[0];
+  }
+
+  function flattenUploadGroups(groups) {
+    const payload = { files: [], directories: [] };
+    (groups || []).forEach(function (group) {
+      (group.files || []).forEach(function (entry) {
+        payload.files.push(entry);
+      });
+      (group.directories || []).forEach(function (directory) {
+        payload.directories.push(directory);
+      });
+    });
+    payload.directories = Array.from(new Set(payload.directories.filter(Boolean)));
+    return payload;
+  }
+
+  function readDirectoryEntries(reader) {
+    return new Promise(function (resolve, reject) {
+      const entries = [];
+      function readNextBatch() {
+        reader.readEntries(
+          function (batch) {
+            if (!batch.length) {
+              resolve(entries);
+              return;
+            }
+            entries.push.apply(entries, batch);
+            readNextBatch();
+          },
+          reject
+        );
+      }
+      readNextBatch();
+    });
+  }
+
+  function collectEntryUploads(entry, parentPath) {
+    const currentPath = normalizeUploadRelativePath(parentPath ? parentPath + "/" + entry.name : entry.name, entry.name);
+    if (entry.isFile) {
+      return new Promise(function (resolve, reject) {
+        entry.file(
+          function (file) {
+            resolve({
+              files: [{ file: file, relativePath: currentPath }],
+              directories: [],
+            });
+          },
+          reject
+        );
+      });
+    }
+    if (entry.isDirectory) {
+      return readDirectoryEntries(entry.createReader()).then(function (children) {
+        return Promise.all(
+          children.map(function (child) {
+            return collectEntryUploads(child, currentPath);
+          })
+        ).then(function (groups) {
+          const payload = flattenUploadGroups(groups);
+          payload.directories.unshift(currentPath);
+          return payload;
+        });
+      });
+    }
+    return Promise.resolve({ files: [], directories: [] });
+  }
+
+  function collectDroppedUploadItems(dataTransfer) {
+    const items = Array.prototype.slice.call((dataTransfer && dataTransfer.items) || []);
+    const files = Array.prototype.slice.call((dataTransfer && dataTransfer.files) || []);
+    const entries = items
+      .map(function (item) {
+        if (!item) return null;
+        if (typeof item.getAsEntry === "function") return item.getAsEntry();
+        if (typeof item.webkitGetAsEntry === "function") return item.webkitGetAsEntry();
+        return null;
+      })
+      .filter(Boolean);
+    if (!entries.length) {
+      return Promise.resolve({
+        files: normalizeUploadEntries(files),
+        directories: [],
+      });
+    }
+    return Promise.all(
+      entries.map(function (entry) {
+        return collectEntryUploads(entry, "");
+      })
+    ).then(flattenUploadGroups);
+  }
+
   function fetchJSON(url, options) {
     return fetch(url, Object.assign({ credentials: "same-origin" }, options || {})).then(function (response) {
       if (!response.ok) {
@@ -68,6 +190,7 @@
 
   function DrivePage() {
     const fileInput = useRef(null);
+    const folderInput = useRef(null);
     const confirmResolver = useRef(null);
     const statePair = useState({
       loading: true,
@@ -95,6 +218,7 @@
       contextMenu: null,
       draggingItem: null,
       dropActive: false,
+      uploadMenuOpen: false,
       errorMessage: "",
       confirmDialog: null,
     });
@@ -401,9 +525,22 @@
       });
     }
 
-    function uploadFiles(files, targetPath, targetRoot) {
-      if (!files || !files.length) return;
-      const fileList = Array.prototype.slice.call(files);
+    function openUploadFiles() {
+      patch({ uploadMenuOpen: false, contextMenu: null });
+      fileInput.current && fileInput.current.click();
+    }
+
+    function openUploadFolder() {
+      patch({ uploadMenuOpen: false, contextMenu: null });
+      folderInput.current && folderInput.current.click();
+    }
+
+    function uploadFiles(files, targetPath, targetRoot, options) {
+      const uploadEntries = normalizeUploadEntries(files);
+      const directories = ((options && options.directories) || []).map(function (directory) {
+        return normalizeUploadRelativePath(directory, directory);
+      });
+      if (!uploadEntries.length && !directories.length) return;
       const targetFolder = normalizeFolder(targetPath || state.path);
       const rootId = targetRoot || state.root;
       let conflict = "reject";
@@ -412,34 +549,51 @@
         (state.items || []).forEach(function (item) {
           existingNames[item.name] = true;
         });
-        const conflicts = fileList.filter(function (file) {
-          return existingNames[file.name];
+        const conflictEntries = uploadEntries.concat(
+          directories.map(function (directory) {
+            return { relativePath: directory };
+          })
+        );
+        const conflicts = conflictEntries.filter(function (entry) {
+          return existingNames[uploadTopName(entry)];
         });
         if (conflicts.length) {
           askConfirm({
             title: "Keep both uploads?",
-            message: conflicts.length + " uploaded file(s) already exist in " + targetFolder + ". Drive can keep both copies with safe copy names.",
+            message: conflicts.length + " uploaded item(s) already exist in " + targetFolder + ". Drive can keep both copies with safe copy names.",
             confirmLabel: "Keep Both",
           }).then(function (confirmed) {
             if (!confirmed) {
               patch({ dropActive: false, contextMenu: null });
               return;
             }
-            startUpload(fileList, targetFolder, "keep-both", rootId);
+            startUpload(uploadEntries, targetFolder, "keep-both", rootId, directories);
           });
           return;
         }
       }
-      startUpload(fileList, targetFolder, conflict, rootId);
+      startUpload(uploadEntries, targetFolder, conflict, rootId, directories);
     }
 
-    function startUpload(fileList, targetFolder, conflict, rootId) {
+    function uploadDroppedItems(dataTransfer, targetPath, targetRoot) {
+      collectDroppedUploadItems(dataTransfer)
+        .then(function (payload) {
+          uploadFiles(payload.files, targetPath, targetRoot, { directories: payload.directories });
+        })
+        .catch(function (error) {
+          patch({ busy: false, dropActive: false, errorMessage: (error && error.message) || "Upload failed" });
+        });
+    }
+
+    function startUpload(uploadEntries, targetFolder, conflict, rootId, directories) {
       const body = new FormData();
       body.append("path", targetFolder);
       if (rootId) body.append("root", rootId);
       body.append("conflict", conflict);
-      fileList.forEach(function (file) {
-        body.append("files", file, file.name);
+      body.append("relative_paths", JSON.stringify(uploadEntries.map(function (entry) { return entry.relativePath; })));
+      body.append("directories", JSON.stringify(directories || []));
+      uploadEntries.forEach(function (entry) {
+        body.append("files", entry.file, entry.file.name);
       });
       patch({ busy: true, dropActive: false, errorMessage: "" });
       fetchJSON(api("/upload"), { method: "POST", body: body })
@@ -1095,7 +1249,7 @@
     useEffect(function () {
       function closeMenu(event) {
         if (event.key === "Escape") {
-          patch({ contextMenu: null, confirmDialog: null });
+          patch({ contextMenu: null, confirmDialog: null, uploadMenuOpen: false });
           if (confirmResolver.current) {
             const resolver = confirmResolver.current;
             confirmResolver.current = null;
@@ -1124,7 +1278,7 @@
       {
         className: "hermes-drive" + (state.dropActive ? " dropping" : ""),
         onClick: function () {
-          if (state.contextMenu) patch({ contextMenu: null });
+          if (state.contextMenu || state.uploadMenuOpen) patch({ contextMenu: null, uploadMenuOpen: false });
         },
       },
       h(
@@ -1142,12 +1296,41 @@
           { className: "hermes-drive-actions" },
           h("button", { type: "button", onClick: createFolder, disabled: !canWrite }, "New Folder"),
           h("button", { type: "button", onClick: createFile, disabled: !canWrite }, "New File"),
-          h("button", { type: "button", onClick: function () { fileInput.current && fileInput.current.click(); }, disabled: !canWrite }, "Upload"),
+          h(
+            "div",
+            {
+              className: "hermes-drive-upload-control",
+              onClick: function (event) {
+                event.stopPropagation();
+              },
+            },
+            h("button", { type: "button", onClick: function () { patch({ uploadMenuOpen: !state.uploadMenuOpen, contextMenu: null }); }, disabled: !canWrite }, "Upload"),
+            state.uploadMenuOpen
+              ? h(
+                  "div",
+                  { className: "hermes-drive-upload-menu", role: "menu" },
+                  h("button", { type: "button", role: "menuitem", onClick: openUploadFiles, disabled: !canWrite }, "Files"),
+                  h("button", { type: "button", role: "menuitem", onClick: openUploadFolder, disabled: !canWrite }, "Folder")
+                )
+              : null
+          ),
           h("button", { type: "button", onClick: function () { loadItems(state.path, "", false, state.root); }, disabled: !status.available }, "Refresh"),
           h("input", {
             ref: fileInput,
             type: "file",
             multiple: true,
+            className: "hermes-drive-hidden",
+            onChange: function (event) {
+              uploadFiles(event.target.files, state.path, state.root);
+              event.target.value = "";
+            },
+          }),
+          h("input", {
+            ref: folderInput,
+            type: "file",
+            multiple: true,
+            webkitdirectory: "true",
+            directory: "true",
             className: "hermes-drive-hidden",
             onChange: function (event) {
               uploadFiles(event.target.files, state.path, state.root);
@@ -1234,7 +1417,7 @@
                     moveDraggedPath(sourcePath, state.path, sourceRoot);
                     return;
                   }
-                  uploadFiles(event.dataTransfer.files, state.path, state.root);
+                  uploadDroppedItems(event.dataTransfer, state.path, state.root);
                 },
               },
               h(
@@ -1304,9 +1487,9 @@
                               patch({ draggingItem: null, dropActive: false });
                             },
                             onDragOver: function (event) {
-                              if (item.kind === "folder" && state.draggingItem) {
+                              if (item.kind === "folder" && (state.draggingItem || hasFiles(event))) {
                                 event.preventDefault();
-                                event.dataTransfer.dropEffect = "move";
+                                event.dataTransfer.dropEffect = hasFiles(event) ? "copy" : "move";
                               }
                             },
                             onDrop: function (event) {
@@ -1323,7 +1506,8 @@
                                 moveDraggedPath(sourcePath, item.path, sourceRoot);
                                 return;
                               }
-                              uploadFiles(event.dataTransfer.files, item.path, itemRoot(item));
+                              patch({ dropActive: false });
+                              uploadDroppedItems(event.dataTransfer, item.path, itemRoot(item));
                             },
                           },
                           renderFileIcon(item),
@@ -1341,7 +1525,7 @@
             )
           )
         : h("div", { className: "hermes-drive-empty full" }, "Drive is not available"),
-      state.dropActive ? h("div", { className: "hermes-drive-drop-overlay" }, "Drop to upload") : null,
+      state.dropActive ? h("div", { className: "hermes-drive-drop-overlay" }, "Drop files or folders to upload") : null,
       renderFullscreenPreview(),
       confirmDialog
         ? h(
@@ -1400,7 +1584,8 @@
                   h("span", { className: "hermes-drive-context-label" }, currentRoot.label || "Drive"),
                   h("button", { type: "button", role: "menuitem", onClick: createFolder, disabled: !canWrite }, "New Folder"),
                   h("button", { type: "button", role: "menuitem", onClick: createFile, disabled: !canWrite }, "New File"),
-                  h("button", { type: "button", role: "menuitem", onClick: function () { fileInput.current && fileInput.current.click(); patch({ contextMenu: null }); }, disabled: !canWrite }, "Upload"),
+                  h("button", { type: "button", role: "menuitem", onClick: openUploadFiles, disabled: !canWrite }, "Upload Files"),
+                  h("button", { type: "button", role: "menuitem", onClick: openUploadFolder, disabled: !canWrite }, "Upload Folder"),
                   h("button", { type: "button", role: "menuitem", onClick: function () { loadItems(state.path); } }, "Refresh")
                 )
               : state.contextMenu.mode === "selection"

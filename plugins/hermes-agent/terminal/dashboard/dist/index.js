@@ -188,6 +188,23 @@
     return info.viewportY >= Math.max(0, info.baseY - 1);
   }
 
+  function suffixPrefixOverlapLength(previous, next) {
+    if (!previous || !next) return 0;
+    const max = Math.min(previous.length, next.length, 65536);
+    if (max <= 0) return 0;
+    const pattern = next.slice(0, max);
+    const text = previous.slice(-max);
+    const combined = pattern + "\u0000" + text;
+    const table = new Array(combined.length).fill(0);
+    for (let index = 1; index < combined.length; index += 1) {
+      let cursor = table[index - 1];
+      while (cursor > 0 && combined[index] !== combined[cursor]) cursor = table[cursor - 1];
+      if (combined[index] === combined[cursor]) cursor += 1;
+      table[index] = cursor;
+    }
+    return Math.min(table[combined.length - 1] || 0, max);
+  }
+
   function scrollbackLines(status) {
     const value = Number(status && status.limits && status.limits.scrollback_lines);
     return Number.isFinite(value) && value > 0 ? value : 10000;
@@ -458,6 +475,16 @@
         const delta = raw.slice(previous.length);
         if (delta) {
           writeTerminalOutput(current, delta, current.allowInitialReports || !!previous, finishSync);
+        } else if (current.needsViewportRestore) {
+          finishSync();
+        }
+      } else if (previous && previous.endsWith(raw)) {
+        if (current.needsViewportRestore) finishSync();
+      } else if (previous) {
+        const overlap = suffixPrefixOverlapLength(previous, raw);
+        const delta = raw.slice(overlap);
+        if (delta) {
+          writeTerminalOutput(current, delta, true, finishSync);
         } else if (current.needsViewportRestore) {
           finishSync();
         }
@@ -984,6 +1011,7 @@
                               "span",
                               {
                                 className: "hermes-terminal-session-close",
+                                "aria-label": "Close " + (session.name || "Terminal"),
                                 title: "Close session",
                                 onClick: function (event) {
                                   event.preventDefault();

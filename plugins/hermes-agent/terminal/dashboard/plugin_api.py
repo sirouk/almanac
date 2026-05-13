@@ -54,8 +54,8 @@ _STATE_VERSION = 1
 _MAX_INPUT_BYTES = 8_000
 _MAX_READ_BYTES = 64_000
 _DEFAULT_MAX_SESSIONS = 6
-_DEFAULT_SCROLLBACK_BYTES = 1_000_000
-_DEFAULT_SCROLLBACK_LINES = 10_000
+_DEFAULT_SCROLLBACK_BYTES = 8_000_000
+_DEFAULT_SCROLLBACK_LINES = 50_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
 _SENSITIVE_DIR_NAMES = {".ssh"}
@@ -221,11 +221,11 @@ def _max_sessions() -> int:
 
 
 def _scrollback_limit() -> int:
-    return _clean_int(_env_first("TERMINAL_SCROLLBACK_BYTES"), _DEFAULT_SCROLLBACK_BYTES, 4_000, 10_000_000)
+    return _clean_int(_env_first("TERMINAL_SCROLLBACK_BYTES"), _DEFAULT_SCROLLBACK_BYTES, 4_000, 50_000_000)
 
 
 def _scrollback_lines() -> int:
-    return _clean_int(_env_first("TERMINAL_SCROLLBACK_LINES"), _DEFAULT_SCROLLBACK_LINES, 500, 100_000)
+    return _clean_int(_env_first("TERMINAL_SCROLLBACK_LINES"), _DEFAULT_SCROLLBACK_LINES, 500, 200_000)
 
 
 def _runtime_user_safe() -> bool:

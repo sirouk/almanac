@@ -12,6 +12,7 @@ from arclink_control import (
     advance_arclink_entitlement_gate,
     arclink_deployment_can_provision,
     reserve_arclink_deployment_prefix,
+    reserve_generated_arclink_deployment_prefix,
     utc_after_seconds_iso,
     upsert_arclink_user,
     utc_now_iso,
@@ -132,10 +133,6 @@ def normalize_arclink_public_onboarding_contact(*, channel: str, channel_identit
 def _stable_id(prefix: str, *parts: str, length: int = 24) -> str:
     digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:length]
     return f"{prefix}_{digest}"
-
-
-def _stable_prefix(session_id: str) -> str:
-    return f"arc-{hashlib.sha256(session_id.encode('utf-8')).hexdigest()[:12]}"
 
 
 def _plan_agent_count(plan_id: str) -> int:
@@ -477,24 +474,35 @@ def prepare_arclink_onboarding_deployment(
         existing = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (current_deployment_id,)).fetchone()
         if existing is not None:
             continue
-        prefix_seed = session_id if idx == 1 else f"{session_id}:agent:{idx}"
-        reserve_arclink_deployment_prefix(
-            conn,
-            deployment_id=current_deployment_id,
-            user_id=user_id,
-            prefix=(prefix if idx == 1 else "") or _stable_prefix(prefix_seed),
-            base_domain=base_domain,
-            status="entitlement_required",
-            metadata={
-                "onboarding_session_id": session_id,
-                "onboarding_channel": str(session.get("channel") or ""),
-                "selected_plan_id": selected_plan_id,
-                "selected_model_id": str(session.get("selected_model_id") or ""),
-                "bundle_agent_count": agent_count,
-                "bundle_agent_index": idx,
-                "bundle_primary_deployment_id": deployment_id,
-            },
-        )
+        deployment_metadata = {
+            "onboarding_session_id": session_id,
+            "onboarding_channel": str(session.get("channel") or ""),
+            "selected_plan_id": selected_plan_id,
+            "selected_model_id": str(session.get("selected_model_id") or ""),
+            "bundle_agent_count": agent_count,
+            "bundle_agent_index": idx,
+            "bundle_primary_deployment_id": deployment_id,
+        }
+        explicit_prefix = str(prefix or "").strip() if idx == 1 else ""
+        if explicit_prefix:
+            reserve_arclink_deployment_prefix(
+                conn,
+                deployment_id=current_deployment_id,
+                user_id=user_id,
+                prefix=explicit_prefix,
+                base_domain=base_domain,
+                status="entitlement_required",
+                metadata=deployment_metadata,
+            )
+        else:
+            reserve_generated_arclink_deployment_prefix(
+                conn,
+                deployment_id=current_deployment_id,
+                user_id=user_id,
+                base_domain=base_domain,
+                status="entitlement_required",
+                metadata=deployment_metadata,
+            )
     session = _update_session(
         conn,
         session_id=session_id,

@@ -325,6 +325,7 @@ def _root_capabilities(
             "drag_drop_upload": False,
             "duplicate": local,
             "favorites": False,
+            "folder_upload": False,
             "folders": local,
             "move": False,
             "new_file": False,
@@ -345,6 +346,7 @@ def _root_capabilities(
         "drag_drop_upload": local or backend == "nextcloud-webdav",
         "duplicate": local,
         "favorites": False,
+        "folder_upload": local or backend == "nextcloud-webdav",
         "folders": local or backend == "nextcloud-webdav",
         "move": local or backend == "nextcloud-webdav",
         "new_file": local,
@@ -518,6 +520,96 @@ def _sanitized_name(raw_name: Any) -> str:
     if not name or name in {".", ".."}:
         raise HTTPException(status_code=400, detail="Name cannot be blank")
     return name
+
+
+def _json_list_form(raw_value: Any) -> list[Any]:
+    if raw_value is None or raw_value == "":
+        return []
+    if isinstance(raw_value, list):
+        return raw_value
+    try:
+        value = json.loads(str(raw_value))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Upload path metadata is invalid") from exc
+    if not isinstance(value, list):
+        raise HTTPException(status_code=400, detail="Upload path metadata must be a list")
+    return value
+
+
+def _clean_upload_relative_path(raw_path: Any, fallback_name: Any = "") -> str:
+    candidate = str(raw_path or fallback_name or "").replace("\\", "/").strip().lstrip("/")
+    parts: list[str] = []
+    for part in candidate.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise HTTPException(status_code=400, detail="Upload path traversal is not allowed")
+        parts.append(_sanitized_name(part))
+    if not parts:
+        parts.append(_sanitized_name(fallback_name))
+    if len(parts) > 48:
+        raise HTTPException(status_code=400, detail="Upload folder nesting is too deep")
+    return "/".join(parts)
+
+
+def _top_level_upload_folder(relative_path: str, directory_paths: set[str]) -> str:
+    top = relative_path.split("/", 1)[0]
+    if "/" in relative_path or relative_path in directory_paths:
+        return top
+    return ""
+
+
+def _rewrite_keep_both_folder_uploads(
+    root_path: Path,
+    target_dir_path: str,
+    relative_paths: list[str],
+    directory_paths: list[str],
+    *,
+    policy: str,
+    root_id: str,
+) -> tuple[list[str], list[str]]:
+    if policy != "keep-both":
+        return relative_paths, directory_paths
+    directory_set = set(directory_paths)
+    top_folders = sorted(
+        {
+            folder
+            for folder in [_top_level_upload_folder(path, directory_set) for path in [*relative_paths, *directory_paths]]
+            if folder
+        }
+    )
+    if not top_folders:
+        return relative_paths, directory_paths
+    rewrites: dict[str, str] = {}
+    for folder in top_folders:
+        target, _relative = _resolve_local(root_path, _join_display(target_dir_path, folder), root_id=root_id)
+        rewritten = _resolve_conflict_destination(target, conflict="keep-both")
+        rewrites[folder] = rewritten.name
+
+    def rewrite(path: str) -> str:
+        if not path:
+            return path
+        top, separator, rest = path.partition("/")
+        replacement = rewrites.get(top)
+        if not replacement:
+            return path
+        return replacement + (separator + rest if separator else "")
+
+    return [rewrite(path) for path in relative_paths], [rewrite(path) for path in directory_paths]
+
+
+def _webdav_ensure_collections(profile: dict[str, Any], raw_path: Any) -> None:
+    relative = _clean_relative_path(raw_path)
+    if not relative:
+        return
+    cursor = ""
+    for part in relative.split("/"):
+        cursor = posixpath.join(cursor, part) if cursor else part
+        try:
+            _dav_request(profile, "MKCOL", _display_path(cursor))
+        except HTTPException as exc:
+            if getattr(exc, "status_code", None) not in {405, 409}:
+                raise
 
 
 def _assert_accessible_path(root: Path, target: Path, *, root_id: str = "") -> None:
@@ -1346,7 +1438,9 @@ async def upload(
     path: str = Form("/"),
     root: str = Form(""),
     conflict: str = Form("reject"),
-    files: list[UploadFile] = File(...),
+    relative_paths: str = Form(""),
+    directories: str = Form(""),
+    files: list[UploadFile] | None = File(None),
 ) -> dict[str, Any]:
     ctx: dict[str, Any] | None = _root_context(root) if root else None
     if ctx is not None:
@@ -1357,9 +1451,55 @@ async def upload(
     policy = str(conflict or "reject").strip().lower()
     if policy not in {"reject", "keep-both"}:
         raise HTTPException(status_code=400, detail="Unsupported conflict policy")
-    for upload_file in files:
-        name = _sanitized_name(upload_file.filename)
-        display = _join_display(target_dir_path, name)
+    file_items = list(files or [])
+    relative_path_metadata = _json_list_form(relative_paths)
+    uploaded_paths = [
+        _clean_upload_relative_path(
+            relative_path_metadata[index] if index < len(relative_path_metadata) else "",
+            upload_file.filename,
+        )
+        for index, upload_file in enumerate(file_items)
+    ]
+    directory_paths = [
+        _clean_upload_relative_path(item, item)
+        for item in _json_list_form(directories)
+        if str(item or "").strip()
+    ]
+    if len(uploaded_paths) != len(file_items):
+        raise HTTPException(status_code=400, detail="Upload file metadata is inconsistent")
+    if not uploaded_paths and not directory_paths:
+        raise HTTPException(status_code=400, detail="Upload is empty")
+    if ctx is not None:
+        uploaded_paths, directory_paths = _rewrite_keep_both_folder_uploads(
+            Path(ctx["path"]),
+            target_dir_path,
+            uploaded_paths,
+            directory_paths,
+            policy=policy,
+            root_id=ctx["id"],
+        )
+        for directory_path in directory_paths:
+            target, _relative = _resolve_local(Path(ctx["path"]), _join_display(target_dir_path, directory_path), root_id=ctx["id"])
+            target.mkdir(parents=True, exist_ok=True)
+    elif backend["name"] == "local-vault":
+        uploaded_paths, directory_paths = _rewrite_keep_both_folder_uploads(
+            backend["root"],
+            target_dir_path,
+            uploaded_paths,
+            directory_paths,
+            policy=policy,
+            root_id="vault",
+        )
+        for directory_path in directory_paths:
+            target, _relative = _resolve_local(backend["root"], _join_display(target_dir_path, directory_path), root_id="vault")
+            target.mkdir(parents=True, exist_ok=True)
+    elif backend["name"] == "nextcloud-webdav":
+        if policy == "keep-both":
+            raise HTTPException(status_code=400, detail="Keep-both upload conflict policy is only available for local Drive roots")
+        for directory_path in directory_paths:
+            _webdav_ensure_collections(backend["profile"], _join_display(target_dir_path, directory_path))
+    for upload_file, relative_upload_path in zip(file_items, uploaded_paths, strict=True):
+        display = _join_display(target_dir_path, relative_upload_path)
         content_bytes = await upload_file.read()
         if ctx is not None:
             target, relative = _resolve_local(Path(ctx["path"]), display, root_id=ctx["id"])
@@ -1376,9 +1516,9 @@ async def upload(
             target.write_bytes(content_bytes)
             uploaded.append({"root": "vault", "path": _display_path(relative), "size": len(content_bytes)})
         elif backend["name"] == "nextcloud-webdav":
-            if policy == "keep-both":
-                raise HTTPException(status_code=400, detail="Keep-both upload conflict policy is only available for local Drive roots")
             headers = {"If-None-Match": "*"} if policy == "reject" else {}
+            parent = posixpath.dirname(_clean_relative_path(display))
+            _webdav_ensure_collections(backend["profile"], _display_path(parent))
             _dav_request(backend["profile"], "PUT", display, body=content_bytes, headers=headers)
             uploaded.append({"path": display, "size": len(content_bytes)})
         else:

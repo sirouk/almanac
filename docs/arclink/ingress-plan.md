@@ -17,8 +17,10 @@ and audit state before any live executor is allowed to mutate infrastructure.
 ## Domain Mode
 
 Domain mode is the public SaaS shape for a root domain such as
-`arclink.online`. Each deployment gets an obscure prefix derived from its
-deployment ID. Hostnames follow the current code shape:
+`arclink.online`. Each deployment gets a random, readable prefix from the
+ArcLink deployment-prefix word pool, with a short ambiguity-safe code suffix
+and a case-insensitive DB reservation to prevent collisions. Hostnames follow
+the current code shape:
 
 | Hostname | Service |
 |----------|---------|
@@ -27,6 +29,11 @@ deployment ID. Hostnames follow the current code shape:
 
 `ARCLINK_BASE_DOMAIN` sets the base domain. `ARCLINK_EDGE_TARGET` sets the
 Cloudflare CNAME target, usually the control edge or worker edge host.
+
+The word pool intentionally uses generic orbital, frontier, station, and
+survival language rather than third-party show names, character names, faction
+names, or other recognizable proper nouns. Example prefix shape:
+`orbital-beacon-7xq2`.
 
 ## Tailscale Mode
 

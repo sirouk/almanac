@@ -68,6 +68,31 @@
   justify-content: flex-end;
 }
 
+.hermes-drive-upload-control {
+  display: inline-flex;
+  position: relative;
+}
+
+.hermes-drive-upload-menu {
+  background: color-mix(in srgb, var(--background-base) 96%, #111);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 22%, transparent);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 0.28);
+  display: flex;
+  flex-direction: column;
+  min-width: 8rem;
+  padding: 0.25rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 14;
+}
+
+.hermes-drive-upload-menu button {
+  border: 0;
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .hermes-drive button,
 .hermes-drive a,
 .hermes-drive select,

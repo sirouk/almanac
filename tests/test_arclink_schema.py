@@ -126,6 +126,43 @@ def test_generated_deployment_prefixes_validate_denylist_and_retry_collisions() 
     print("PASS test_generated_deployment_prefixes_validate_denylist_and_retry_collisions")
 
 
+def test_generated_deployment_prefix_pool_is_large_and_public_safe() -> None:
+    mod = load_control()
+    namespace_size = (
+        len(mod.ARCLINK_PREFIX_ADJECTIVES)
+        * len(mod.ARCLINK_PREFIX_NOUNS)
+        * (len(mod.ARCLINK_PREFIX_CODE_ALPHABET) ** mod.ARCLINK_PREFIX_CODE_LENGTH)
+    )
+    expect(namespace_size > 1_000_000_000, str(namespace_size))
+    longest = max(
+        len(adjective) + len(noun) + mod.ARCLINK_PREFIX_CODE_LENGTH + 2
+        for adjective in mod.ARCLINK_PREFIX_ADJECTIVES
+        for noun in mod.ARCLINK_PREFIX_NOUNS
+    )
+    expect(longest <= 32, str(longest))
+    recognizable_media_terms = {
+        "rocinante",
+        "protomolecule",
+        "beltalowda",
+        "skaikru",
+        "wanheda",
+        "nightblood",
+        "azgeda",
+        "heda",
+    }
+    pool_terms = set(mod.ARCLINK_PREFIX_ADJECTIVES) | set(mod.ARCLINK_PREFIX_NOUNS)
+    expect(not (pool_terms & recognizable_media_terms), str(pool_terms & recognizable_media_terms))
+
+    generated = [mod.generate_arclink_deployment_prefix(rng=random.Random(seed)) for seed in range(250)]
+    expect(len(set(generated)) == len(generated), str(generated))
+    for prefix in generated:
+        expect(mod.ARCLINK_DEPLOYMENT_PREFIX_PATTERN.match(prefix) is not None, prefix)
+        expect(not prefix.startswith("arc-"), prefix)
+        mod.normalize_arclink_deployment_prefix(prefix)
+
+    print("PASS test_generated_deployment_prefix_pool_is_large_and_public_safe")
+
+
 def test_events_and_audit_are_append_only_by_primary_key() -> None:
     mod = load_control()
     conn = memory_db(mod)
@@ -248,10 +285,11 @@ def main() -> int:
     test_arclink_schema_creates_expected_tables_and_is_idempotent()
     test_deployment_prefix_reservation_is_unique()
     test_generated_deployment_prefixes_validate_denylist_and_retry_collisions()
+    test_generated_deployment_prefix_pool_is_large_and_public_safe()
     test_events_and_audit_are_append_only_by_primary_key()
     test_subscription_health_and_provisioning_helpers()
     test_arclink_drift_detection_reports_missing_linked_rows()
-    print("PASS all 6 ArcLink schema tests")
+    print("PASS all 7 ArcLink schema tests")
     return 0
 
 

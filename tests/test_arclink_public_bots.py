@@ -340,8 +340,10 @@ def test_public_bot_plan_selection_opens_checkout_when_stripe_is_available() -> 
     )
     expect(opened.action == "open_checkout", str(opened))
     expect(opened.checkout_url.startswith("https://stripe.test/checkout/"), str(opened))
-    expect("Stage 1" in opened.reply and "Stage 4" in opened.reply, opened.reply)
+    expect("Finish the secure Stripe checkout below" in opened.reply, opened.reply)
+    expect("Stage " not in opened.reply, opened.reply)
     expect(opened.buttons and opened.buttons[0].url == opened.checkout_url, str(opened.buttons))
+    expect([button.label for button in opened.buttons] == ["Hire Founders - $149/month"], str(opened.buttons))
     checkout_session = stripe.checkout_sessions[opened.checkout_url.rsplit("/", 1)[1]]
     expect(checkout_session["price_id"] == "price_founders_test", str(checkout_session))
     row = conn.execute(

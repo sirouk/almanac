@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import stat
 import sqlite3
 import sys
@@ -734,6 +735,42 @@ def test_cloudflare_dns_apply_rejects_unsupported_record_types() -> None:
     print("PASS test_cloudflare_dns_apply_rejects_unsupported_record_types")
 
 
+def test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_cloudflare_token_ref_test")
+    intent = sample_intent()
+    original_find = mod._cloudflare_find_dns_record
+    original_request = mod._cloudflare_request
+    old_env = os.environ.copy()
+    calls: list[tuple[str, str]] = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "materialized"
+            resolver = mod.FileMaterializingSecretResolver(
+                lambda ref: "cf_token_from_secret_ref" if ref == "secret://arclink/cloudflare/api-token" else "",
+                root,
+            )
+            os.environ.pop("CLOUDFLARE_API_TOKEN", None)
+            os.environ["CLOUDFLARE_API_TOKEN_REF"] = "secret://arclink/cloudflare/api-token"
+            mod._cloudflare_find_dns_record = lambda *, zone_id, token, record: calls.append(("find", token)) or {}
+            mod._cloudflare_request = lambda method, path, *, token, body=None: calls.append((method, token)) or {"result": {"id": "dns_1"}}
+            executor = mod.ArcLinkExecutor(
+                config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+                secret_resolver=resolver,
+            )
+            result = executor.cloudflare_dns_apply(
+                mod.CloudflareDnsApplyRequest(deployment_id="dep_1", dns=intent["dns"], zone_id="zone_test")
+            )
+            expect(result.records == ("u-amber-vault.example.test",), str(result))
+            expect(calls == [("find", "cf_token_from_secret_ref"), ("POST", "cf_token_from_secret_ref")], str(calls))
+            expect(not root.exists() or not any(root.iterdir()), f"expected materialized token copy to be cleaned: {root}")
+    finally:
+        mod._cloudflare_find_dns_record = original_find
+        mod._cloudflare_request = original_request
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy")
+
+
 def test_fake_rollback_executor_is_idempotent_and_preserves_state_roots() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_fake_rollback_test")
     executor = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"))
@@ -1190,6 +1227,7 @@ def main() -> int:
     test_live_stripe_client_receives_idempotency_key_and_replays_result()
     test_live_stripe_client_missing_fails_closed()
     test_cloudflare_dns_apply_rejects_unsupported_record_types()
+    test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy()
     test_fake_rollback_executor_is_idempotent_and_preserves_state_roots()
     test_fake_rollback_rejects_idempotency_key_reuse_with_changed_plan()
     test_fake_docker_compose_rejects_missing_depends_on_service()
@@ -1204,7 +1242,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 32 ArcLink executor tests")
+    print("PASS all 33 ArcLink executor tests")
     return 0
 
 

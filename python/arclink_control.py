@@ -1280,6 +1280,16 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           failed_at TEXT NOT NULL DEFAULT '',
           PRIMARY KEY (operation_kind, idempotency_key)
         );
+
+        CREATE TABLE IF NOT EXISTS arclink_action_operation_links (
+          action_id TEXT NOT NULL,
+          operation_kind TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          target_kind TEXT NOT NULL DEFAULT '',
+          target_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (action_id, operation_kind, idempotency_key)
+        );
         """
     )
     _migrate_notion_identity_claims_remove_legacy_nonce(conn)
@@ -1733,6 +1743,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_operation_idempotency_status
         ON arclink_operation_idempotency (operation_kind, status, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_action_operation_links_operation
+        ON arclink_action_operation_links (operation_kind, idempotency_key, action_id)
         """
     )
     conn.execute(
@@ -2462,6 +2478,49 @@ def fail_arclink_operation_idempotency(
         )
         _arclink_commit(conn, commit=commit)
     return dict(_operation_idempotency_row(conn, clean_kind, clean_key))
+
+
+def link_arclink_action_operation(
+    conn: sqlite3.Connection,
+    *,
+    action_id: str,
+    operation_kind: str,
+    idempotency_key: str,
+    target_kind: str = "",
+    target_id: str = "",
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_action_id = str(action_id or "").strip()
+    if not clean_action_id:
+        raise ValueError("ArcLink action operation link requires an action id")
+    clean_kind, clean_key = _clean_operation_idempotency_parts(operation_kind, idempotency_key)
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO arclink_action_operation_links (
+          action_id, operation_kind, idempotency_key, target_kind, target_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_action_id,
+            clean_kind,
+            clean_key,
+            str(target_kind or "").strip(),
+            str(target_id or "").strip(),
+            now,
+        ),
+    )
+    _arclink_commit(conn, commit=commit)
+    row = conn.execute(
+        """
+        SELECT * FROM arclink_action_operation_links
+        WHERE action_id = ? AND operation_kind = ? AND idempotency_key = ?
+        """,
+        (clean_action_id, clean_kind, clean_key),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("ArcLink action operation link failed")
+    return dict(row)
 
 
 def normalize_arclink_deployment_prefix(prefix: str) -> str:

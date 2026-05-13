@@ -62,7 +62,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ARCLINK_CONTROL_PROVISIONER_ENABLED:" in body and "ARCLINK_EXECUTOR_ADAPTER:" in body, body)
     expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:" in body, body)
     expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:" in body, body)
-    expect("STRIPE_WEBHOOK_SECRET:" in body and "CLOUDFLARE_API_TOKEN:" in body and "CHUTES_API_KEY:" in body, body)
+    expect("STRIPE_WEBHOOK_SECRET:" in body and "CLOUDFLARE_API_TOKEN:" in body and "CLOUDFLARE_API_TOKEN_REF:" in body and "CHUTES_API_KEY:" in body, body)
     expect("ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}" in body, body)
     expect("QMD_MCP_HOST_PORT:" in body, body)
     expect("QMD_MCP_CONTAINER_PORT:" in body, body)

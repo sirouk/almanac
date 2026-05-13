@@ -50,8 +50,15 @@ class JourneyStep:
 # Credential checking
 # ---------------------------------------------------------------------------
 
+_ENV_ALTERNATES = {
+    "CLOUDFLARE_API_TOKEN": ("CLOUDFLARE_API_TOKEN_REF",),
+}
+
+
 def _env_present(key: str) -> bool:
-    return bool(os.environ.get(key, "").strip())
+    return bool(os.environ.get(key, "").strip()) or any(
+        bool(os.environ.get(alt, "").strip()) for alt in _ENV_ALTERNATES.get(key, ())
+    )
 
 
 def check_step_credentials(step: JourneyStep) -> bool:

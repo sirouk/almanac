@@ -72,6 +72,10 @@ Sovereign pod Docker volumes follow the naming convention:
 - No plaintext secret values in database, logs, API responses, or Compose intent.
 - Shared Host and Shared Host Docker secrets belong in private `arclink-priv/`
   config/state, not public docs or git history.
+- Docker socket writers are trusted-host services. In Docker mode,
+  `agent-supervisor` intentionally runs as root inside its container so it can
+  create per-agent Unix users and launch sibling runtime/proxy containers; it
+  must stay inside the private host boundary.
 
 ## Knowledge And Memory Rails
 

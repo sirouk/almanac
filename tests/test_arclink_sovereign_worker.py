@@ -306,16 +306,16 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
 
     expect(results[0]["status"] == "applied", str(results))
     expect(results[0]["dns_records"] == [], str(results))
-    expect(results[0]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1234", str(results))
-    expect(results[0]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1234/hermes", str(results))
-    expect(results[0]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1234/drive", str(results))
-    expect(results[0]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1234/code", str(results))
+    expect(results[0]["urls"]["dashboard"] == "https://worker.example.test:8443", str(results))
+    expect(results[0]["urls"]["hermes"] == "https://worker.example.test:8443", str(results))
+    expect(results[0]["urls"]["files"] == "https://worker.example.test:8443/drive", str(results))
+    expect(results[0]["urls"]["code"] == "https://worker.example.test:8443/code", str(results))
     metadata = json.loads(
         conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
     )
     expect(metadata["tailnet_service_ports"] == {"hermes": 8443}, str(metadata))
-    expect(metadata["access_urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1234/hermes", str(metadata))
-    expect(metadata["access_urls"]["files"] == "https://worker.example.test/u/amber-vault-1234/drive", str(metadata))
+    expect(metadata["access_urls"]["hermes"] == "https://worker.example.test:8443", str(metadata))
+    expect(metadata["access_urls"]["files"] == "https://worker.example.test:8443/drive", str(metadata))
     dns_count = conn.execute("SELECT COUNT(*) AS c FROM arclink_dns_records").fetchone()["c"]
     expect(dns_count == 0, str(dns_count))
     event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'sovereign_pod_applied'").fetchone()
@@ -344,9 +344,13 @@ def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
         ))
         applied = worker_mod.process_sovereign_batch(conn, worker=cfg)
         expect(applied[0]["status"] == "applied", str(applied))
+        deployment_secret_dir = cfg.secret_store_dir / "dep_1"
+        deployment_secret_dir.mkdir(parents=True, exist_ok=True)
+        (deployment_secret_dir / "generated.secret").write_text("arc_generated_secret_should_be_removed\n", encoding="utf-8")
         conn.execute("UPDATE arclink_deployments SET status = 'teardown_requested' WHERE deployment_id = 'dep_1'")
         conn.commit()
         torn_down = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+        expect(not deployment_secret_dir.exists(), f"expected deployment secret dir removed: {deployment_secret_dir}")
         replay = worker_mod.process_sovereign_teardown(
             conn,
             deployment=dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()),
@@ -371,6 +375,8 @@ def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
     expect(health_statuses == {"torn_down"}, str(health_statuses))
     health_detail = json.loads(conn.execute("SELECT detail_json FROM arclink_service_health WHERE service_name = 'dashboard'").fetchone()["detail_json"])
     expect(health_detail["chutes_status"] == "applied", str(health_detail))
+    expect(health_detail["secret_cleanup_status"] == "removed", str(health_detail))
+    expect(torn_down[0]["secret_cleanup"]["status"] == "removed", str(torn_down))
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
     expect({"sovereign_teardown_started", "sovereign_teardown_completed", "dns_teardown"} <= event_types, str(event_types))
     print("PASS test_sovereign_worker_tears_down_active_deployment_idempotently")

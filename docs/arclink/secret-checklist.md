@@ -9,7 +9,7 @@ Store in `.env` files, a secret manager, or interactive deploy prompts.
 |--------|---------|------------|
 | `STRIPE_SECRET_KEY` | Billing API, portal links, subscription reads | `arclink_adapters.py`, `arclink_entitlements.py` |
 | `STRIPE_WEBHOOK_SECRET` | Webhook signature verification | `arclink_hosted_api.py`, `arclink_entitlements.py` |
-| `CLOUDFLARE_API_TOKEN` | DNS record create/update/delete | `arclink_ingress.py` |
+| `CLOUDFLARE_API_TOKEN_REF` or `CLOUDFLARE_API_TOKEN` | DNS record create/update/delete; prefer `secret://` ref | `arclink_executor.py` |
 | `CLOUDFLARE_ZONE_ID` | Target DNS zone | `arclink_ingress.py` |
 | `CHUTES_API_KEY` | Model catalog, per-deployment key lifecycle | `arclink_chutes.py`, `arclink_executor.py` |
 | `TELEGRAM_BOT_TOKEN` | Public onboarding bot | `arclink_telegram.py` |

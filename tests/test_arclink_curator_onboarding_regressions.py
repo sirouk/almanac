@@ -149,6 +149,67 @@ def test_telegram_operator_approve_callback_replaces_message_and_clears_buttons(
             os.environ.update(old_env)
 
 
+def test_telegram_operator_approval_code_blocks_single_step_approve() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_curator_approval_code_test")
+    curator = load_module(CURATOR_ONBOARDING_PY, "arclink_curator_approval_code_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = base_config_values(root)
+        values["ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE"] = "approve-4242"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            session = control.start_onboarding_session(
+                conn,
+                cfg,
+                platform="telegram",
+                chat_id="100",
+                sender_id="100",
+                sender_username="alex",
+                sender_display_name="Alex",
+            )
+            session = control.save_onboarding_session(
+                conn,
+                session_id=str(session["session_id"]),
+                state="awaiting-operator-approval",
+                answers={"full_name": "Alex"},
+            )
+
+            outbound: list[str] = []
+            curator.notify_session_state = lambda cfg, updated: None
+            curator.send_text = lambda bot_token, chat_id, text, **kwargs: outbound.append(text)
+            message = {"chat": {"id": "42", "type": "private"}, "from": {"id": "42", "username": "operator"}}
+
+            curator._handle_operator_command(
+                cfg=cfg,
+                bot_token="test-token",
+                text=f"/approve {session['session_id']}",
+                message=message,
+            )
+            blocked = control.get_onboarding_session(conn, str(session["session_id"]))
+            expect(str(blocked.get("state") or "") == "awaiting-operator-approval", str(blocked))
+            expect(any("Approval code required" in item for item in outbound), str(outbound))
+
+            curator._handle_operator_command(
+                cfg=cfg,
+                bot_token="test-token",
+                text=f"/approve {session['session_id']} approve-4242",
+                message=message,
+            )
+            refreshed = control.get_onboarding_session(conn, str(session["session_id"]))
+            expect(str(refreshed.get("state") or "") == "awaiting-bot-token", str(refreshed))
+            print("PASS test_telegram_operator_approval_code_blocks_single_step_approve")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_stale_telegram_request_callback_clears_buttons_with_status() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -657,6 +718,7 @@ def test_telegram_command_registration_includes_user_and_operator_commands() -> 
 
 def main() -> int:
     test_telegram_operator_approve_callback_replaces_message_and_clears_buttons()
+    test_telegram_operator_approval_code_blocks_single_step_approve()
     test_stale_telegram_request_callback_clears_buttons_with_status()
     test_telegram_backup_callback_reopens_completed_lane_backup_setup()
     test_telegram_operator_retry_contact_queues_discord_handoff()
@@ -665,7 +727,7 @@ def main() -> int:
     test_retry_contact_refuses_missing_confirmation_code()
     test_discord_onboarding_user_retry_contact_queues_own_handoff()
     test_telegram_command_registration_includes_user_and_operator_commands()
-    print("PASS all 9 curator onboarding regression tests")
+    print("PASS all 10 curator onboarding regression tests")
     return 0
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import os
 import re
 import sys
@@ -14,6 +15,7 @@ from arclink_control import (
     approve_request,
     approve_onboarding_session,
     clear_onboarding_update_failure,
+    config_env_value,
     connect_db,
     deny_request,
     deny_ssot_pending_write,
@@ -223,6 +225,44 @@ def _operator_command_requested(text: str) -> bool:
     return command in {"/approve", "/deny", "/upgrade", "/retry-contact", "/retry_contact"} or command.startswith("/retry")
 
 
+def _operator_approval_code() -> str:
+    return (
+        config_env_value("ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE", "").strip()
+        or config_env_value("ARCLINK_OPERATOR_APPROVAL_CODE", "").strip()
+    )
+
+
+def _operator_approval_tail(*, command: str, text: str, bot_token: str, operator_chat_id: str) -> str | None:
+    code = _operator_approval_code()
+    if not code:
+        parts = text.strip().split(maxsplit=2)
+        return parts[2].strip() if len(parts) > 2 and command == "/deny" else ""
+    parts = text.strip().split(maxsplit=2)
+    tail = parts[2].strip() if len(parts) > 2 else ""
+    code_parts = tail.split(maxsplit=1)
+    if not code_parts or not hmac.compare_digest(code_parts[0], code):
+        send_text(
+            bot_token,
+            operator_chat_id,
+            "Approval code required. Use /approve <target> <operator-code> or /deny <target> <operator-code> optional reason.",
+        )
+        return None
+    return code_parts[1].strip() if len(code_parts) > 1 and command == "/deny" else ""
+
+
+def _operator_command_code_ok(*, command: str, text: str, bot_token: str, operator_chat_id: str) -> bool:
+    code = _operator_approval_code()
+    if not code:
+        return True
+    parts = text.strip().split()
+    supplied = parts[-1] if len(parts) > 1 else ""
+    if hmac.compare_digest(supplied, code):
+        return True
+    usage = "/upgrade <operator-code>" if command == "/upgrade" else f"{command} <target> <operator-code>"
+    send_text(bot_token, operator_chat_id, f"Operator code required. Use {usage}.")
+    return False
+
+
 def _user_command_requested(text: str) -> bool:
     parts = text.strip().split(maxsplit=1)
     command = _telegram_command_token(parts[0] if parts else "").lstrip("/")
@@ -255,6 +295,8 @@ def _handle_operator_command(
     command = _telegram_command_token(parts[0] if parts else "")
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
     if command == "/upgrade":
+        if not _operator_command_code_ok(command=command, text=text, bot_token=bot_token, operator_chat_id=operator_chat_id):
+            return
         actor = _format_actor_label(message)
         try:
             with connect_db(cfg) as conn:
@@ -281,9 +323,11 @@ def _handle_operator_command(
         return
 
     if command in {"/retry-contact", "/retry_contact"}:
-        retry_parts = text.strip().split(maxsplit=1)
+        retry_parts = text.strip().split(maxsplit=2)
         if len(retry_parts) < 2 or not retry_parts[1].strip():
             send_text(bot_token, operator_chat_id, "Use /retry_contact <unixusername|discordname>.")
+            return
+        if not _operator_command_code_ok(command="/retry_contact", text=text, bot_token=bot_token, operator_chat_id=operator_chat_id):
             return
         actor = _format_actor_label(message)
         try:
@@ -309,6 +353,9 @@ def _handle_operator_command(
             )
         return
     target_id = parts[1].strip()
+    operator_reason = _operator_approval_tail(command=command, text=text, bot_token=bot_token, operator_chat_id=operator_chat_id)
+    if operator_reason is None:
+        return
     actor = _format_actor_label(message)
     with connect_db(cfg) as conn:
         if target_id.startswith("onb_"):
@@ -325,8 +372,7 @@ def _handle_operator_command(
                 )
                 notify_session_state(cfg, updated)
                 return
-            reason = parts[2].strip() if len(parts) > 2 else ""
-            updated = deny_onboarding_session(conn, session_id=target_id, actor=actor, reason=reason)
+            updated = deny_onboarding_session(conn, session_id=target_id, actor=actor, reason=operator_reason)
             send_text(bot_token, operator_chat_id, f"Denied {target_id}.")
             notify_session_state(cfg, updated)
             return
@@ -355,7 +401,7 @@ def _handle_operator_command(
                 pending_id=target_id,
                 surface="curator-channel",
                 actor=actor,
-                reason=parts[2].strip() if len(parts) > 2 else "",
+                reason=operator_reason,
             )
             send_text(bot_token, operator_chat_id, f"Denied {target_id}.")
             return
@@ -646,6 +692,14 @@ def _handle_operator_callback(
             bot_token=bot_token,
             callback_query_id=callback_query_id,
             text="Malformed approval action.",
+            show_alert=True,
+        )
+        return
+    if _operator_approval_code() and action in {"approve", "deny", "install"}:
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text="Use the typed operator command with the approval code for this action.",
             show_alert=True,
         )
         return

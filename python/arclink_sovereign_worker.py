@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import socket
 import sqlite3
 import tempfile
@@ -808,6 +809,7 @@ def _teardown_deployment(
         )
         chutes_status = chutes_result.status
 
+    secret_cleanup = _cleanup_deployment_secret_store(worker=worker, deployment_id=deployment_id)
     removed_placement = remove_placement(conn, deployment_id=deployment_id)
     repaired_loads = reconcile_fleet_observed_loads(conn)
     _release_tailnet_service_ports(conn, deployment_id=deployment_id)
@@ -820,6 +822,7 @@ def _teardown_deployment(
             "compose_status": compose_status,
             "dns_status": dns_status,
             "chutes_status": chutes_status,
+            "secret_cleanup_status": secret_cleanup["status"],
             "remove_volumes": remove_volumes,
         },
     )
@@ -827,11 +830,35 @@ def _teardown_deployment(
         "compose_status": compose_status,
         "dns_status": dns_status,
         "chutes_status": chutes_status,
+        "secret_cleanup": secret_cleanup,
         "dns_records": removed_dns,
         "placement_removed": removed_placement is not None,
         "repaired_fleet_loads": repaired_loads,
         "remove_volumes": remove_volumes,
     }
+
+
+def _cleanup_deployment_secret_store(*, worker: SovereignWorkerConfig, deployment_id: str) -> dict[str, str]:
+    clean_id = str(deployment_id or "").strip()
+    if not clean_id or clean_id in {".", ".."} or "/" in clean_id or "\\" in clean_id:
+        raise ArcLinkSovereignWorkerError(f"refusing unsafe ArcLink deployment secret cleanup id: {clean_id!r}")
+    base = worker.secret_store_dir.resolve()
+    path = worker.secret_store_dir / clean_id
+    if path.parent.resolve() != base:
+        raise ArcLinkSovereignWorkerError(f"refusing ArcLink secret cleanup outside secret store: {path}")
+    if not path.exists() and not path.is_symlink():
+        return {"status": "missing", "path": str(path)}
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+        return {"status": "removed", "path": str(path)}
+    if not path.is_dir():
+        raise ArcLinkSovereignWorkerError(f"refusing unsupported ArcLink secret cleanup path: {path}")
+    try:
+        path.resolve().relative_to(base)
+    except ValueError as exc:
+        raise ArcLinkSovereignWorkerError(f"refusing ArcLink secret cleanup outside secret store: {path}") from exc
+    shutil.rmtree(path)
+    return {"status": "removed", "path": str(path)}
 
 
 def _minimal_teardown_intent(*, deployment: Mapping[str, Any], worker: SovereignWorkerConfig) -> dict[str, Any]:

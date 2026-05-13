@@ -135,6 +135,15 @@ def test_ingress_strategy_cloudflare() -> None:
     print("PASS test_ingress_strategy_cloudflare")
 
 
+def test_ingress_strategy_cloudflare_accepts_token_ref() -> None:
+    mod = load_module("arclink_host_readiness.py", "arclink_host_readiness_ingress_cf_ref")
+    env = {"CLOUDFLARE_API_TOKEN_REF": "secret://arclink/cloudflare/api-token", "CLOUDFLARE_ZONE_ID": "zone"}
+    check = mod.check_ingress_strategy(env=env)
+    expect(check.ok, f"expected ok: {check}")
+    expect(check.detail == "cloudflare", check.detail)
+    print("PASS test_ingress_strategy_cloudflare_accepts_token_ref")
+
+
 def test_ingress_strategy_traefik_fallback() -> None:
     mod = load_module("arclink_host_readiness.py", "arclink_host_readiness_ingress_traefik")
     check = mod.check_ingress_strategy(env={})
@@ -207,11 +216,12 @@ def main() -> int:
     test_env_vars_present()
     test_secret_env_redaction()
     test_ingress_strategy_cloudflare()
+    test_ingress_strategy_cloudflare_accepts_token_ref()
     test_ingress_strategy_traefik_fallback()
     test_full_readiness_machine_readable()
     test_full_readiness_fails_without_docker()
     test_full_readiness_fails_on_unavailable_port()
-    print("PASS all 14 ArcLink host readiness tests")
+    print("PASS all 15 ArcLink host readiness tests")
     return 0
 
 

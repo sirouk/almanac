@@ -79,6 +79,12 @@ class TestNoSecretDryRun(unittest.TestCase):
         self.assertIn("DISCORD_BOT_TOKEN", result.missing_env)
         self.assertEqual(result.exit_code, 0)
 
+    def test_cloudflare_secret_ref_satisfies_cloudflare_token_gate(self):
+        env = {**_BASE_ENV, "CLOUDFLARE_API_TOKEN_REF": "secret://arclink/cloudflare/api-token"}
+        result = run_live_proof(env=env, skip_ports=True)
+        self.assertNotIn("CLOUDFLARE_API_TOKEN", result.missing_env)
+        self.assertIn("CLOUDFLARE_ZONE_ID", result.missing_env)
+
     def test_missing_env_never_contains_values(self):
         result = run_live_proof(env=_BASE_ENV, skip_ports=True)
         for name in result.missing_env:

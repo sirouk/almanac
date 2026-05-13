@@ -29,6 +29,7 @@ _OPTIONAL_SECRET_ENV_VARS = (
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_API_TOKEN_REF",
     "CLOUDFLARE_ZONE_ID",
     "CHUTES_API_KEY",
     "TELEGRAM_BOT_TOKEN",
@@ -152,7 +153,7 @@ def check_secret_env_presence(env: Mapping[str, str] | None = None) -> list[Read
 
 def check_ingress_strategy(env: Mapping[str, str] | None = None) -> ReadinessCheck:
     source = env if env is not None else os.environ
-    has_cf_token = bool(source.get("CLOUDFLARE_API_TOKEN", ""))
+    has_cf_token = bool(source.get("CLOUDFLARE_API_TOKEN", "") or source.get("CLOUDFLARE_API_TOKEN_REF", ""))
     has_cf_zone = bool(source.get("CLOUDFLARE_ZONE_ID", ""))
     if has_cf_token and has_cf_zone:
         return ReadinessCheck(name="ingress_strategy", ok=True, detail="cloudflare")

@@ -21,6 +21,11 @@ Use:
 ./deploy.sh control reconfigure
 ```
 
+`./deploy.sh control upgrade` refuses dirty checkouts, fetches the configured
+branch upstream, and fast-forwards before rebuilding. Use
+`ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1` only for an intentional local
+build window.
+
 Shared Host commands such as `./deploy.sh install` are the operator-led
 systemd/shared-user path. Shared Host Docker commands such as
 `./deploy.sh docker install` validate the shared-host substrate, not paid

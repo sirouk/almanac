@@ -82,6 +82,12 @@ notifications redact that password by default; only set
 `ARCLINK_OPERATOR_NOTIFICATION_INCLUDE_CREDENTIALS=1` for an explicitly
 credential-bearing private operator channel.
 
+Telegram operator approvals can require a typed second factor by setting
+`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or the shared
+`ARCLINK_OPERATOR_APPROVAL_CODE`. When set, `/approve`, `/deny`, `/upgrade`,
+and `/retry_contact` commands must include the code, and approval/install
+buttons are refused with guidance to use the typed command.
+
 Hosted user sessions expose credential handoff state through
 `GET /api/v1/user/credentials` and acknowledge storage through
 `POST /api/v1/user/credentials/acknowledge`. These responses use masked secret
@@ -90,6 +96,10 @@ and records audit/event rows.
 
 The reconciler invokes `bin/sync-dashboard-user-passwords.py` inside the
 provisioner context so it can read deployment state roots and update hashes.
+Deployments rendered before the managed-lifecycle guard existed should be
+reprovisioned or re-rendered before production use so
+`ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS=1` is present in the pod proxy
+environment.
 
 **Linked resources:** Cross-user Drive/Code sharing is modeled as read-only
 share grants. A user session creates a pending grant for a recipient, Raven
@@ -152,7 +162,7 @@ their authenticated hosted API session.
 **Domain-mode env vars:**
 | Var | Purpose |
 |-----|---------|
-| `CLOUDFLARE_API_TOKEN` | Scoped API token for zone writes |
+| `CLOUDFLARE_API_TOKEN_REF` or `CLOUDFLARE_API_TOKEN` | Scoped API token for zone writes; prefer the `secret://` ref form |
 | `CLOUDFLARE_ZONE_ID` | Target zone |
 
 **Tailscale-mode env vars:**
@@ -167,9 +177,9 @@ their authenticated hosted API session.
 **Fake mode:** Default. Records and intent are persisted to SQLite but no
 provider API calls are made. Drift reconciliation reports local-only state.
 
-**Domain live mode:** Enabled when both `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ZONE_ID` are set. Creates real DNS records. Teardown deletes records
-from Cloudflare.
+**Domain live mode:** Enabled when `CLOUDFLARE_ZONE_ID` is set with either
+`CLOUDFLARE_API_TOKEN_REF` or the legacy `CLOUDFLARE_API_TOKEN` env value.
+Creates real DNS records. Teardown deletes records from Cloudflare.
 
 **Tailscale live mode:** `deploy.sh control install` keeps the control node
 Dockerized, then uses the host Tailscale CLI as the network edge. It publishes

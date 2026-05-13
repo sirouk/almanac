@@ -100,6 +100,28 @@ def test_dns_repair_through_fake_executor() -> None:
     print("PASS test_dns_repair_through_fake_executor")
 
 
+def test_action_worker_links_admin_action_to_executor_operation() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_operation_link")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_operation_link")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_operation_link")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_operation_link")
+    conn = memory_db(control)
+    action = _queue_action(dashboard, conn, action_type="restart", target_id="dep_link", key="operator-restart-link-1")
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["result"]["operation_kind"] == "docker_compose_lifecycle", str(result))
+    row = conn.execute(
+        """
+        SELECT * FROM arclink_action_operation_links
+        WHERE action_id = ? AND operation_kind = ? AND idempotency_key = ?
+        """,
+        (action["action_id"], "docker_compose_lifecycle", "operator-restart-link-1"),
+    ).fetchone()
+    expect(row is not None, "expected action-operation link")
+    expect(row["target_kind"] == "deployment" and row["target_id"] == "dep_link", str(dict(row)))
+    print("PASS test_action_worker_links_admin_action_to_executor_operation")
+
+
 def test_dns_repair_derives_records_from_control_rows() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_dns_derive")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_dns_derive")
@@ -786,6 +808,7 @@ def test_action_worker_main_reuses_single_db_connection_for_once_batch() -> None
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
+    test_action_worker_links_admin_action_to_executor_operation()
     test_dns_repair_derives_records_from_control_rows()
     test_dns_repair_missing_deployment_fails_closed()
     test_dns_repair_validation_error_redacts_secret_material()
@@ -811,4 +834,4 @@ if __name__ == "__main__":
     test_disabled_action_worker_cli_exits_cleanly()
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 28 action worker tests passed.")
+    print(f"\nAll 29 action worker tests passed.")

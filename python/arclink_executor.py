@@ -649,7 +649,11 @@ class ArcLinkExecutor:
         records = tuple(_clean_cloudflare_teardown_record(record) for record in request.records)
         if self.config.adapter_name == "fake":
             return self._fake_cloudflare_dns_teardown(request=request, records=records)
-        provider_records = _cloudflare_delete_dns_records(records=records, zone_id=request.zone_id)
+        provider_records = _cloudflare_delete_dns_records(
+            records=records,
+            zone_id=request.zone_id,
+            secret_resolver=self.secret_resolver,
+        )
         return CloudflareDnsTeardownResult(
             deployment_id=request.deployment_id,
             live=True,
@@ -768,7 +772,11 @@ class ArcLinkExecutor:
         records = _plan_cloudflare_dns_records(request.dns)
         if self.config.adapter_name == "fake":
             return self._fake_cloudflare_dns_apply(request=request, records=records)
-        provider_records = _cloudflare_upsert_dns_records(records=records, zone_id=request.zone_id)
+        provider_records = _cloudflare_upsert_dns_records(
+            records=records,
+            zone_id=request.zone_id,
+            secret_resolver=self.secret_resolver,
+        )
         return CloudflareDnsApplyResult(
             deployment_id=request.deployment_id,
             live=True,
@@ -1724,13 +1732,16 @@ def _dns_record_summary(record: Mapping[str, Any]) -> str:
     return f"{record['record_type']} {record['hostname']} -> {record['target']}{proxied}"
 
 
-def _cloudflare_upsert_dns_records(*, records: tuple[dict[str, Any], ...], zone_id: str) -> tuple[str, ...]:
+def _cloudflare_upsert_dns_records(
+    *,
+    records: tuple[dict[str, Any], ...],
+    zone_id: str,
+    secret_resolver: SecretResolver | None = None,
+) -> tuple[str, ...]:
     clean_zone = str(zone_id or os.environ.get("CLOUDFLARE_ZONE_ID") or "").strip()
-    token = str(os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    token = _cloudflare_api_token(secret_resolver=secret_resolver, action="apply")
     if not clean_zone:
         raise ArcLinkExecutorError("ArcLink Cloudflare DNS apply requires CLOUDFLARE_ZONE_ID")
-    if not token:
-        raise ArcLinkExecutorError("ArcLink Cloudflare DNS apply requires CLOUDFLARE_API_TOKEN")
     provider_ids: list[str] = []
     for record in records:
         existing = _cloudflare_find_dns_record(zone_id=clean_zone, token=token, record=record)
@@ -1755,13 +1766,16 @@ def _cloudflare_upsert_dns_records(*, records: tuple[dict[str, Any], ...], zone_
     return tuple(provider_ids)
 
 
-def _cloudflare_delete_dns_records(*, records: tuple[dict[str, Any], ...], zone_id: str) -> tuple[str, ...]:
+def _cloudflare_delete_dns_records(
+    *,
+    records: tuple[dict[str, Any], ...],
+    zone_id: str,
+    secret_resolver: SecretResolver | None = None,
+) -> tuple[str, ...]:
     clean_zone = str(zone_id or os.environ.get("CLOUDFLARE_ZONE_ID") or "").strip()
-    token = str(os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    token = _cloudflare_api_token(secret_resolver=secret_resolver, action="teardown")
     if not clean_zone:
         raise ArcLinkExecutorError("ArcLink Cloudflare DNS teardown requires CLOUDFLARE_ZONE_ID")
-    if not token:
-        raise ArcLinkExecutorError("ArcLink Cloudflare DNS teardown requires CLOUDFLARE_API_TOKEN")
     removed: list[str] = []
     for record in records:
         provider_id = str(record.get("provider_record_id") or "").strip()
@@ -1773,6 +1787,34 @@ def _cloudflare_delete_dns_records(*, records: tuple[dict[str, Any], ...], zone_
         _cloudflare_request("DELETE", f"/zones/{clean_zone}/dns_records/{provider_id}", token=token)
         removed.append(provider_id)
     return tuple(removed)
+
+
+def _cloudflare_api_token(*, secret_resolver: SecretResolver | None, action: str) -> str:
+    secret_ref = str(os.environ.get("CLOUDFLARE_API_TOKEN_REF") or "").strip()
+    if secret_ref:
+        if secret_resolver is None:
+            raise ArcLinkExecutorError(
+                f"ArcLink Cloudflare DNS {action} requires a secret resolver for CLOUDFLARE_API_TOKEN_REF"
+            )
+        resolved = secret_resolver.materialize(secret_ref, "/run/secrets/cloudflare_api_token")
+        try:
+            source_path = str(resolved.source_path or "").strip()
+            if not source_path:
+                raise ArcLinkExecutorError(
+                    f"ArcLink Cloudflare DNS {action} requires file-backed resolution for CLOUDFLARE_API_TOKEN_REF"
+                )
+            token = Path(source_path).read_text(encoding="utf-8").strip()
+        finally:
+            _cleanup_materialized_secret_files((resolved,))
+        if not token:
+            raise ArcLinkExecutorError(f"ArcLink Cloudflare DNS {action} resolved an empty CLOUDFLARE_API_TOKEN_REF")
+        return token
+    token = str(os.environ.get("CLOUDFLARE_API_TOKEN") or "").strip()
+    if not token:
+        raise ArcLinkExecutorError(
+            f"ArcLink Cloudflare DNS {action} requires CLOUDFLARE_API_TOKEN_REF or CLOUDFLARE_API_TOKEN"
+        )
+    return token
 
 
 def _cloudflare_find_dns_record(*, zone_id: str, token: str, record: Mapping[str, Any]) -> dict[str, Any]:

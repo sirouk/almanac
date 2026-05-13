@@ -75,7 +75,8 @@ tailnet.
 
 **Domain-mode credentials:**
 
-- `CLOUDFLARE_API_TOKEN` with `Zone:DNS:Edit` scope.
+- `CLOUDFLARE_API_TOKEN_REF` (preferred) or `CLOUDFLARE_API_TOKEN` with
+  `Zone:DNS:Edit` scope.
 - `CLOUDFLARE_ZONE_ID` for the target zone.
 
 **Tailscale-mode requirements:**

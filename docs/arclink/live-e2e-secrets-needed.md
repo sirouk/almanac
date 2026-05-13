@@ -59,7 +59,7 @@ supplied through environment.
 | `STRIPE_SECRET_KEY` | Checkout, webhook | Stripe test-mode key (sk_test_*) |
 | `STRIPE_WEBHOOK_SECRET` | Webhook delivery | Stripe webhook signature |
 | `ARCLINK_INGRESS_MODE` | Ingress selection | `domain` or `tailscale` |
-| `CLOUDFLARE_API_TOKEN` | Domain ingress DNS health | Scoped zone DNS token |
+| `CLOUDFLARE_API_TOKEN_REF` or `CLOUDFLARE_API_TOKEN` | Domain ingress DNS health | Scoped zone DNS token; prefer `secret://` ref |
 | `CLOUDFLARE_ZONE_ID` | Domain ingress DNS health | Target zone ID |
 | `ARCLINK_TAILSCALE_DNS_NAME` | Tailscale ingress health | Control or worker node FQDN |
 | `ARCLINK_E2E_DOCKER` | Docker check | Opt-in for Docker access |
@@ -129,7 +129,7 @@ rows and skips unrelated provider rows.
 | `ARCLINK_SSOT_NOTION_ROOT_PAGE_ID` | Notion shared-root SSOT | Shared root page id |
 | `ARCLINK_SSOT_NOTION_TOKEN` | Notion shared-root SSOT | Notion integration token supplied outside tracked files |
 | `ARCLINK_PROOF_CLOUDFLARE` | Cloudflare ingress | Enables zone/DNS proof |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare ingress | Scoped zone DNS token |
+| `CLOUDFLARE_API_TOKEN_REF` or `CLOUDFLARE_API_TOKEN` | Cloudflare ingress | Scoped zone DNS token; prefer `secret://` ref |
 | `CLOUDFLARE_ZONE_ID` | Cloudflare ingress | Target zone id |
 | `ARCLINK_PROOF_TAILSCALE` | Tailscale ingress | Enables Serve/certificate proof |
 | `ARCLINK_TAILSCALE_DNS_NAME` | Tailscale ingress | Tailnet DNS name to verify |

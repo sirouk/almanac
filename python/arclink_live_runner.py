@@ -75,10 +75,18 @@ def _collect_missing_env(steps: list[JourneyStep], env: Mapping[str, str]) -> li
         if _step_is_unselected_proof_opt_in(step, env, any_opt_in_enabled=any_opt_in_enabled):
             continue
         for key in step.required_env:
-            if key not in seen and not env.get(key, "").strip():
+            if key not in seen and not _required_env_present(key, env):
                 seen.add(key)
                 result.append(key)
     return result
+
+
+def _required_env_present(key: str, env: Mapping[str, str]) -> bool:
+    if env.get(key, "").strip():
+        return True
+    if key == "CLOUDFLARE_API_TOKEN":
+        return bool(env.get("CLOUDFLARE_API_TOKEN_REF", "").strip())
+    return False
 
 
 def _proof_opt_in_flags(step: JourneyStep) -> list[str]:
@@ -565,7 +573,7 @@ def run_live_proof(
                 step.status = "skipped"
                 step.skip_reason = f"proof opt-in not set: {', '.join(_proof_opt_in_flags(step))}"
                 continue
-            m = [k for k in step.required_env if not source.get(k, "").strip()]
+            m = [k for k in step.required_env if not _required_env_present(k, source)]
             if m:
                 step.status = "skipped"
                 step.skip_reason = f"missing env: {', '.join(m)}"

@@ -20,6 +20,7 @@ from arclink_control import (
     append_arclink_event,
     comp_arclink_subscription,
     connect_db,
+    link_arclink_action_operation,
     utc_now_iso,
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
@@ -493,6 +494,7 @@ def _execute_action(
         result = _dispatch_action(
             conn=conn,
             executor=executor,
+            action_id=action_id,
             action_type=action_type,
             target_kind=target_kind,
             target_id=target_id,
@@ -572,6 +574,7 @@ def _dispatch_action(
     *,
     conn: sqlite3.Connection,
     executor: ArcLinkExecutor,
+    action_id: str,
     action_type: str,
     target_kind: str,
     target_id: str,
@@ -581,15 +584,24 @@ def _dispatch_action(
     """Route action type to executor call. Returns redacted result metadata."""
     if action_type == "restart":
         lifecycle_meta = _deployment_lifecycle_metadata(conn, deployment_id=target_id)
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="docker_compose_lifecycle",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
         result = executor.docker_compose_lifecycle(DockerComposeLifecycleRequest(
             deployment_id=target_id,
             action="restart",
             project_name=str(metadata.get("project_name") or lifecycle_meta.get("project_name") or ""),
             env_file=str(metadata.get("env_file") or lifecycle_meta.get("env_file") or ""),
             compose_file=str(metadata.get("compose_file") or lifecycle_meta.get("compose_file") or ""),
-            idempotency_key=str(metadata.get("idempotency_key") or idempotency_key),
+            idempotency_key=operation_key,
         ))
-        return {"live": result.live, "status": result.status, "action": result.action}
+        return {"live": result.live, "status": result.status, "action": result.action, "operation_kind": "docker_compose_lifecycle", "operation_idempotency_key": operation_key}
 
     if action_type == "dns_repair":
         deployment_id, dns, zone_id = _resolve_dns_repair(
@@ -598,24 +610,42 @@ def _dispatch_action(
             target_id=target_id,
             metadata=metadata,
         )
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="cloudflare_dns_apply",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
         result = executor.cloudflare_dns_apply(CloudflareDnsApplyRequest(
             deployment_id=deployment_id,
             dns=dns,
             zone_id=zone_id,
-            idempotency_key=str(metadata.get("idempotency_key") or idempotency_key),
+            idempotency_key=operation_key,
         ))
-        return {"live": result.live, "status": result.status, "deployment_id": deployment_id, "records": list(result.records)}
+        return {"live": result.live, "status": result.status, "deployment_id": deployment_id, "records": list(result.records), "operation_kind": "cloudflare_dns_apply", "operation_idempotency_key": operation_key}
 
     if action_type == "rotate_chutes_key":
         secret_ref = metadata.get("secret_ref", f"secret://arclink/chutes/{target_id}")
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="chutes_key_apply",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
         result = executor.chutes_key_apply(ChutesKeyApplyRequest(
             deployment_id=target_id,
             action="rotate",
             secret_ref=secret_ref,
             label=metadata.get("label", "action_worker_rotate"),
-            idempotency_key=str(metadata.get("idempotency_key") or idempotency_key),
+            idempotency_key=operation_key,
         ))
-        return {"live": result.live, "status": result.status, "action": result.action, "key_id": result.key_id}
+        return {"live": result.live, "status": result.status, "action": result.action, "key_id": result.key_id, "operation_kind": "chutes_key_apply", "operation_idempotency_key": operation_key}
 
     if action_type in ("refund", "cancel"):
         deployment_or_target_id, customer_ref, stripe_metadata = _resolve_stripe_action(
@@ -625,16 +655,35 @@ def _dispatch_action(
             target_id=target_id,
             metadata=metadata,
         )
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        stripe_metadata["arclink_action_id"] = action_id
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="stripe_action_apply",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
         result = executor.stripe_action_apply(StripeActionApplyRequest(
             deployment_id=deployment_or_target_id,
             action=action_type,
             customer_ref=customer_ref,
-            idempotency_key=str(metadata.get("idempotency_key") or idempotency_key),
+            idempotency_key=operation_key,
             metadata=stripe_metadata,
         ))
-        return {"live": result.live, "status": result.status, "action": result.action, "target_resolved_by": "control_db"}
+        return {"live": result.live, "status": result.status, "action": result.action, "target_resolved_by": "control_db", "operation_kind": "stripe_action_apply", "operation_idempotency_key": operation_key}
 
     if action_type == "comp":
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="control_db_comp",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
         user_id = str(metadata.get("user_id") or (target_id if target_kind == "user" else "")).strip()
         if not user_id and target_kind == "deployment":
             row = conn.execute("SELECT user_id FROM arclink_deployments WHERE deployment_id = ?", (target_id,)).fetchone()
@@ -648,9 +697,30 @@ def _dispatch_action(
             actor_id=str(metadata.get("actor_id") or "system:action_worker"),
             reason=str(metadata.get("reason") or "operator queued comp action"),
         )
-        return {"status": "applied", "action": "comp", "user_id": user_id}
+        return {"status": "applied", "action": "comp", "user_id": user_id, "operation_kind": "control_db_comp", "operation_idempotency_key": operation_key}
 
     raise ArcLinkActionWorkerError(f"unsupported action type: {action_type}")
+
+
+def _link_action_operation(
+    conn: sqlite3.Connection,
+    *,
+    action_id: str,
+    operation_kind: str,
+    idempotency_key: str,
+    target_kind: str,
+    target_id: str,
+) -> None:
+    if not str(idempotency_key or "").strip():
+        return
+    link_arclink_action_operation(
+        conn,
+        action_id=action_id,
+        operation_kind=operation_kind,
+        idempotency_key=idempotency_key,
+        target_kind=target_kind,
+        target_id=target_id,
+    )
 
 
 def _deployment_lifecycle_metadata(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, str]:

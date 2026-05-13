@@ -65,6 +65,7 @@ def test_arclink_schema_creates_expected_tables_and_is_idempotent() -> None:
         "arclink_onboarding_sessions",
         "arclink_onboarding_events",
         "arclink_action_intents",
+        "arclink_action_operation_links",
     }
     expect(expected <= names, f"missing ArcLink tables: {sorted(expected - names)}")
     print("PASS test_arclink_schema_creates_expected_tables_and_is_idempotent")

@@ -104,9 +104,10 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `POST /onboarding/start` | None | Start or resume public onboarding |
 | `POST /onboarding/answer` | None | Record onboarding answer |
 | `POST /onboarding/checkout` | None | Create Stripe checkout session |
+| `GET /onboarding/public-bot-checkout` | Signed public-bot token | Redirect a Telegram/Discord direct checkout button to Stripe |
 | `POST /webhooks/stripe` | Stripe signature | Entitlement webhook processing |
-| `POST /webhooks/telegram` | None | Telegram Bot API webhook |
-| `POST /webhooks/discord` | None | Discord interaction webhook |
+| `POST /webhooks/telegram` | Telegram secret-token header | Telegram Bot API webhook |
+| `POST /webhooks/discord` | Discord Ed25519 signature | Discord interaction webhook |
 | `POST /auth/admin/login` | None | Admin session creation, sets cookies |
 | `POST /auth/user/login` | None | User session creation, sets cookies |
 | `POST /auth/user/logout` | User + CSRF | Revoke user session |
@@ -216,7 +217,9 @@ managed deployment:
   active, non-draining hosts with the most headroom and breaks ties by hostname.
 - `arclink_action_worker.py` owns execution of queued admin actions. It records
   attempts, updates intent status, writes events/audit rows, redacts executor
-  errors, and can return stale running actions to the queue.
+  errors, links each dispatched executor operation in
+  `arclink_action_operation_links`, and can return stale running actions to the
+  queue.
 - `arclink_rollout.py` owns durable rollout records. Rollouts advance in
   canary waves, can pause/fail/rollback, and rollback plans must include
   `preserve_state_roots`.

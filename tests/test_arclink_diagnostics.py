@@ -76,6 +76,15 @@ def test_cloudflare_missing() -> None:
     print("PASS test_cloudflare_missing")
 
 
+def test_cloudflare_secret_ref_counts_as_token_present() -> None:
+    mod = load_module("arclink_diagnostics.py", "arclink_diag_cf_ref")
+    checks = mod.diagnose_cloudflare(env={"CLOUDFLARE_API_TOKEN_REF": "secret://arclink/cloudflare/api-token"})
+    by_name = {check.name: check for check in checks}
+    expect(by_name["credential_CLOUDFLARE_API_TOKEN"].ok, str(checks))
+    expect(not by_name["credential_CLOUDFLARE_ZONE_ID"].ok, str(checks))
+    print("PASS test_cloudflare_secret_ref_counts_as_token_present")
+
+
 def test_chutes_missing() -> None:
     mod = load_module("arclink_diagnostics.py", "arclink_diag_chutes_missing")
     checks = mod.diagnose_chutes(env={})
@@ -177,6 +186,7 @@ def main() -> int:
     test_stripe_credentials_present()
     test_credential_values_never_in_output()
     test_cloudflare_missing()
+    test_cloudflare_secret_ref_counts_as_token_present()
     test_chutes_missing()
     test_tailscale_ingress_diagnostics_skip_cloudflare()
     test_telegram_missing()
@@ -185,7 +195,7 @@ def main() -> int:
     test_full_diagnostics_machine_readable()
     test_full_diagnostics_all_present()
     test_diagnostics_noop_without_live_flag()
-    print("PASS all 12 ArcLink diagnostics tests")
+    print("PASS all 13 ArcLink diagnostics tests")
     return 0
 
 

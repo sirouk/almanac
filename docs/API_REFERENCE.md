@@ -86,6 +86,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/onboarding/start` | Begin onboarding flow |
 | POST | `/onboarding/answer` | Answer onboarding question |
 | POST | `/onboarding/checkout` | Open Stripe checkout |
+| GET | `/onboarding/public-bot-checkout` | Redirect a signed public-bot checkout button to Stripe |
 | POST | `/webhooks/stripe` | Stripe webhook receiver |
 | POST | `/webhooks/telegram` | Telegram Bot API webhook; requires `X-Telegram-Bot-Api-Secret-Token` matching `TELEGRAM_WEBHOOK_SECRET` |
 | POST | `/webhooks/discord` | Discord interaction webhook; verifies signature timestamp tolerance and interaction replay |
@@ -157,7 +158,7 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_COOKIE_SECURE` | auto | Set Secure flag on cookies; defaults off only for plain HTTP localhost origins |
 | `ARCLINK_COOKIE_SAMESITE` | `Strict` | Session and CSRF cookie SameSite value |
 | `ARCLINK_SESSION_HASH_PEPPER` | dev fallback | HMAC pepper for session and CSRF token hashes |
-| `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `0` | Require a configured pepper before issuing sessions |
+| `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `1` | Require a configured pepper before issuing sessions |
 | `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
 | `ARCLINK_HOSTED_API_MAX_BODY_BYTES` | `1048576` | General request body cap |
 | `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES` | `2097152` | Webhook request body cap |

@@ -146,6 +146,7 @@ ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
 STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
 STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+CLOUDFLARE_API_TOKEN_REF="${CLOUDFLARE_API_TOKEN_REF:-}"
 CLOUDFLARE_ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
 CHUTES_API_KEY="${CHUTES_API_KEY:-}"
 ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}"
@@ -2228,8 +2229,9 @@ emit_runtime_config() {
     write_kv STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
     write_kv STRIPE_WEBHOOK_SECRET "${STRIPE_WEBHOOK_SECRET:-}"
     write_kv ARCLINK_SESSION_HASH_PEPPER "${ARCLINK_SESSION_HASH_PEPPER:-}"
-    write_kv ARCLINK_SESSION_HASH_PEPPER_REQUIRED "${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-0}"
+    write_kv ARCLINK_SESSION_HASH_PEPPER_REQUIRED "${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-1}"
     write_kv CLOUDFLARE_API_TOKEN "${CLOUDFLARE_API_TOKEN:-}"
+    write_kv CLOUDFLARE_API_TOKEN_REF "${CLOUDFLARE_API_TOKEN_REF:-}"
     write_kv CLOUDFLARE_ZONE_ID "${CLOUDFLARE_ZONE_ID:-}"
     write_kv CHUTES_API_KEY "${CHUTES_API_KEY:-}"
     write_kv ARCLINK_NOTION_WEBHOOK_HOST "$ARCLINK_NOTION_WEBHOOK_HOST"
@@ -9375,6 +9377,60 @@ verify_control_upgrade_checkout_clean() {
   return 1
 }
 
+sync_control_upgrade_checkout_from_upstream() {
+  local branch="" upstream="" remote="" before="" after="" upstream_commit=""
+
+  if [[ "${ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY:-0}" == "1" ]]; then
+    echo "Skipping upstream sync because ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY=1."
+    return 0
+  fi
+  if [[ "${ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC:-${ARCLINK_CONTROL_UPGRADE_SKIP_FETCH:-0}}" == "1" ]]; then
+    echo "Skipping upstream sync because ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1."
+    return 0
+  fi
+  if ! git -C "$BOOTSTRAP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  branch="$(git -C "$BOOTSTRAP_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [[ -z "$branch" ]]; then
+    echo "Control upgrade checkout is detached; building current commit without upstream sync." >&2
+    return 0
+  fi
+  upstream="$(git -C "$BOOTSTRAP_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  if [[ -z "$upstream" ]]; then
+    echo "Control upgrade branch '$branch' has no upstream; building current checkout without git fetch." >&2
+    echo "Set an upstream or run git pull manually before ./deploy.sh control upgrade." >&2
+    return 0
+  fi
+  remote="$(git -C "$BOOTSTRAP_DIR" config "branch.$branch.remote" 2>/dev/null || true)"
+  if [[ -z "$remote" ]]; then
+    remote="${upstream%%/*}"
+  fi
+
+  echo "Checking upstream for control upgrade ($branch -> $upstream)..."
+  git -C "$BOOTSTRAP_DIR" fetch --prune "$remote"
+  before="$(git -C "$BOOTSTRAP_DIR" rev-parse HEAD)"
+  upstream_commit="$(git -C "$BOOTSTRAP_DIR" rev-parse "$upstream")"
+  if [[ "$before" == "$upstream_commit" ]]; then
+    echo "Control upgrade checkout is current at $(git -C "$BOOTSTRAP_DIR" rev-parse --short HEAD)."
+    return 0
+  fi
+  if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$before" "$upstream_commit"; then
+    git -C "$BOOTSTRAP_DIR" merge --ff-only "$upstream"
+    after="$(git -C "$BOOTSTRAP_DIR" rev-parse HEAD)"
+    echo "Fast-forwarded control upgrade checkout from ${before:0:12} to ${after:0:12}."
+    return 0
+  fi
+  if git -C "$BOOTSTRAP_DIR" merge-base --is-ancestor "$upstream_commit" "$before"; then
+    echo "Control upgrade checkout is ahead of upstream $upstream; building local ahead commit ${before:0:12}." >&2
+    return 0
+  fi
+  echo "Refusing control upgrade: branch '$branch' has diverged from upstream '$upstream'." >&2
+  echo "Resolve the divergence with git merge/rebase, then rerun ./deploy.sh control upgrade." >&2
+  return 1
+}
+
 run_control_install_flow() {
   local run_interactive="${1:-1}"
   local operation="control-upgrade"
@@ -9392,6 +9448,7 @@ run_control_install_flow() {
   fi
   if [[ "$run_interactive" != "1" ]]; then
     verify_control_upgrade_checkout_clean
+    sync_control_upgrade_checkout_from_upstream
   fi
   run_arclink_docker build
   run_arclink_docker up
@@ -9833,6 +9890,7 @@ tables = [
     "arclink_webhook_events",
     "notification_outbox",
     "arclink_action_attempts",
+    "arclink_action_operation_links",
     "arclink_action_intents",
     "arclink_rollouts",
     "rate_limits",

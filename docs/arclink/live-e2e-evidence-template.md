@@ -21,7 +21,7 @@ Template for recording live journey evidence. Fill in after a credentialed run.
 | 3 | stripe_webhook_delivery | pending | - | Requires STRIPE_WEBHOOK_SECRET |
 | 4 | entitlement_activation | pending | - | |
 | 5 | provisioning_request | pending | - | |
-| 6 | dns_health_check | pending | - | Requires CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID |
+| 6 | dns_health_check | pending | - | Requires CLOUDFLARE_API_TOKEN_REF or CLOUDFLARE_API_TOKEN, plus CLOUDFLARE_ZONE_ID |
 | 7 | docker_deployment_check | pending | - | Requires ARCLINK_E2E_DOCKER |
 | 8 | chutes_key_provisioning | pending | - | Requires CHUTES_API_KEY |
 | 9 | user_dashboard_verification | pending | - | |
@@ -57,7 +57,7 @@ the artifact from the `evidence/` directory:
 - [ ] ARCLINK_E2E_LIVE
 - [ ] STRIPE_SECRET_KEY (test mode: sk_test_*)
 - [ ] STRIPE_WEBHOOK_SECRET
-- [ ] CLOUDFLARE_API_TOKEN
+- [ ] CLOUDFLARE_API_TOKEN_REF or CLOUDFLARE_API_TOKEN
 - [ ] CLOUDFLARE_ZONE_ID
 - [ ] CHUTES_API_KEY
 - [ ] ARCLINK_E2E_DOCKER

@@ -61,8 +61,14 @@ def diagnose_stripe(env: Mapping[str, str] | None = None) -> list[DiagnosticChec
 
 def diagnose_cloudflare(env: Mapping[str, str] | None = None) -> list[DiagnosticCheck]:
     source = env if env is not None else os.environ
+    token_ok = bool(source.get("CLOUDFLARE_API_TOKEN", "") or source.get("CLOUDFLARE_API_TOKEN_REF", ""))
     return [
-        _credential_check("cloudflare", "CLOUDFLARE_API_TOKEN", source),
+        DiagnosticCheck(
+            provider="cloudflare",
+            name="credential_CLOUDFLARE_API_TOKEN",
+            ok=token_ok,
+            detail="present" if token_ok else "missing: CLOUDFLARE_API_TOKEN_REF or CLOUDFLARE_API_TOKEN",
+        ),
         _credential_check("cloudflare", "CLOUDFLARE_ZONE_ID", source),
     ]
 

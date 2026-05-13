@@ -2201,7 +2201,26 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper() -> None:
         "ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}" in compose,
         "Compose should pass the session hash pepper into hosted API containers",
     )
+    expect(
+        "ARCLINK_SESSION_HASH_PEPPER_REQUIRED: ${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-1}" in compose,
+        "Compose should fail closed when a raw control stack lacks a session hash pepper",
+    )
     print("PASS test_control_docker_bootstrap_seeds_session_hash_pepper")
+
+
+def test_control_upgrade_syncs_checkout_from_upstream_before_build() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    sync = extract(text, "sync_control_upgrade_checkout_from_upstream() {", "run_control_install_flow() {")
+    flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
+    expect("git -C \"$BOOTSTRAP_DIR\" fetch --prune \"$remote\"" in sync, sync)
+    expect("git -C \"$BOOTSTRAP_DIR\" merge --ff-only \"$upstream\"" in sync, sync)
+    expect("ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC" in sync, sync)
+    expect("merge-base --is-ancestor" in sync, sync)
+    expect(
+        flow.index("verify_control_upgrade_checkout_clean") < flow.index("sync_control_upgrade_checkout_from_upstream") < flow.index("run_arclink_docker build"),
+        "control upgrade should verify a clean tree, sync upstream, then build",
+    )
+    print("PASS test_control_upgrade_syncs_checkout_from_upstream_before_build")
 
 
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
@@ -3329,6 +3348,7 @@ def main() -> int:
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,
         test_control_docker_bootstrap_seeds_session_hash_pepper,
+        test_control_upgrade_syncs_checkout_from_upstream_before_build,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,

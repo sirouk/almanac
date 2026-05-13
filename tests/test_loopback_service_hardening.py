@@ -100,6 +100,7 @@ def test_qmd_daemon_defaults_to_loopback_without_docker_forwarder_env() -> None:
     expect('container_port="${QMD_MCP_CONTAINER_PORT:-$loopback_port}"' in body, body)
     expect('QMD_MCP_INTERNAL_PORT' in body and 'container_port + 20000' in body, body)
     expect("QMD MCP TCP forwarder listening" in body, body)
+    expect('socket.create_connection(("localhost", target_port)' in body, body)
     expect("mcp --http --host 127.0.0.1 --port" in body, body)
     expect("QMD_MCP_CONTAINER_PORT" not in service, service)
     print("PASS test_qmd_daemon_defaults_to_loopback_without_docker_forwarder_env")

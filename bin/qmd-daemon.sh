@@ -52,7 +52,7 @@ def pipe(src, dst):
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         try:
-            upstream = socket.create_connection(("127.0.0.1", target_port), timeout=5)
+            upstream = socket.create_connection(("localhost", target_port), timeout=5)
         except OSError:
             return
         left = threading.Thread(target=pipe, args=(self.request, upstream), daemon=True)
@@ -69,7 +69,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 with Server((bind_host, listen_port), Handler) as server:
-    print(f"QMD MCP TCP forwarder listening on {bind_host}:{listen_port} -> 127.0.0.1:{target_port}", flush=True)
+    print(f"QMD MCP TCP forwarder listening on {bind_host}:{listen_port} -> localhost:{target_port}", flush=True)
     server.serve_forever()
 PY
 proxy_pid="$!"

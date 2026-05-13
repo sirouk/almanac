@@ -12,6 +12,7 @@ DOCKER_REQUIRED_STATE_DIRS=(
   "$REPO_DIR/arclink-priv/state/nextcloud"
   "$REPO_DIR/arclink-priv/state/pdf-ingest/markdown"
   "$REPO_DIR/arclink-priv/state/notion-index/markdown"
+  "$REPO_DIR/arclink-priv/secrets/container"
   "$REPO_DIR/arclink-priv/secrets/ssh"
 )
 DOCKER_REQUIRED_RUNNING_SERVICES=(
@@ -274,7 +275,7 @@ ensure_docker_app_bind_permissions() {
     return 1
   fi
 
-  mkdir -p "$REPO_DIR/arclink-priv/config" "$REPO_DIR/arclink-priv/state"
+  mkdir -p "$REPO_DIR/arclink-priv/config" "$REPO_DIR/arclink-priv/state" "$REPO_DIR/arclink-priv/secrets/container"
   chown "$uid:$gid" "$REPO_DIR/arclink-priv" "$REPO_DIR/arclink-priv/config" "$REPO_DIR/arclink-priv/state" 2>/dev/null || true
   [[ -e "$DOCKER_ENV_FILE" ]] && chown "$uid:$gid" "$DOCKER_ENV_FILE" 2>/dev/null || true
   [[ -e "$DOCKER_ENV_FILE" ]] && chmod 600 "$DOCKER_ENV_FILE" 2>/dev/null || true
@@ -282,7 +283,7 @@ ensure_docker_app_bind_permissions() {
   for path in \
     "$REPO_DIR/arclink-priv/published" \
     "$REPO_DIR/arclink-priv/quarto" \
-    "$REPO_DIR/arclink-priv/secrets" \
+    "$REPO_DIR/arclink-priv/secrets/container" \
     "$REPO_DIR/arclink-priv/vault"; do
     [[ -e "$path" ]] && chown -R "$uid:$gid" "$path" 2>/dev/null || true
   done

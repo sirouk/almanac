@@ -102,6 +102,7 @@ x-arclink-app: &arclink-app
     - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
     - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
     - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+    - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
     - arclink-qmd:/home/arclink/.qmd
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -246,6 +247,7 @@ services:
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
     ports:
@@ -314,6 +316,8 @@ services:
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
+      - ./arclink-priv/secrets/ssh:/home/arclink/arclink/arclink-priv/secrets/ssh
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
@@ -341,6 +345,8 @@ services:
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
+      - ./arclink-priv/secrets/ssh:/home/arclink/arclink/arclink-priv/secrets/ssh
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
       # Intentional trusted-host boundary: restart/teardown/admin lifecycle
@@ -384,6 +390,7 @@ services:
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Intentional trusted-host boundary: the supervisor needs Docker API
@@ -408,6 +415,7 @@ services:
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       # Intentional trusted-host delivery boundary: Raven-mediated
@@ -434,6 +442,7 @@ services:
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
       - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Trusted operator-action boundary: Curator refresh consumes queued

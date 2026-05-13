@@ -2022,14 +2022,23 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("deploy.sh control install" in text, "expected Sovereign Control Node install command in deploy usage")
     expect("deploy.sh control backup" in text, "expected Sovereign Control Node runtime backup command in deploy usage")
     expect("deploy.sh control reset-runtime" in text, "expected Sovereign Control Node runtime reset command in deploy usage")
+    expect("deploy.sh control reset-sandbox" in text, "expected Sovereign sandbox reset command in deploy usage")
+    expect("deploy.sh control reset-production" in text, "expected Sovereign production reset command in deploy usage")
+    expect("deploy.sh control fleet-key" in text, "expected Sovereign fleet public key command in deploy usage")
+    expect("deploy.sh control register-worker" in text, "expected Sovereign remote worker registration command in deploy usage")
     expect("ArcLink Sovereign Control Node control center" in text, "expected Sovereign Control Node submenu")
     expect("Backup runtime state and generated pod data" in text, "expected Sovereign submenu to expose runtime backup")
-    expect("Reset test/client runtime data after backup" in text, "expected Sovereign submenu to expose guarded runtime reset")
+    expect("Reset sandbox/test user data after backup" in text, "expected Sovereign submenu to expose guarded sandbox reset")
+    expect("Reset production user data after double confirmation" in text, "expected Sovereign submenu to expose guarded production reset")
+    expect("Show fleet SSH public key" in text, "expected Sovereign submenu to expose fleet public key")
+    expect("Register remote fleet worker" in text, "expected Sovereign submenu to expose remote worker registration")
     expect('MODE="control"' in text and 'CONTROL_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to control submenu")
     expect("run_control_install_flow()" in text, "expected idempotent control install flow")
     expect("run_control_runtime_backup()" in text, "expected first-class control runtime backup flow")
     expect("run_control_runtime_reset()" in text, "expected first-class control runtime reset flow")
     expect("ARCLINK_CONFIRM_RUNTIME_RESET=RESET" in text, "expected non-interactive reset confirmation guard")
+    expect("ARCLINK_CONFIRM_PRODUCTION_RESET" in text, "expected production reset to require explicit first confirmation")
+    expect("ARCLINK_CONFIRM_PRODUCTION_RESET_HOST" in text, "expected production reset to require host confirmation")
     expect('"arclink_credential_handoffs"' in text, "runtime reset must clear credential handoffs")
     expect("remove_control_generated_secret_refs()" in text, "runtime reset must clear generated per-deployment secret refs")
     expect("sovereign-secrets" in text and "-name 'arcdep_*'" in text, "runtime reset must target generated deployment secret dirs only")
@@ -2053,6 +2062,10 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("Create/repair local fleet Unix user and authorize this key now" in text, "expected local fleet bootstrap helper prompt")
     expect("ensure_local_fleet_ssh_access()" in text, "expected idempotent local fleet authorized_keys helper")
     expect("test_local_fleet_ssh_access()" in text, "expected local fleet SSH smoke test helper")
+    expect("run_control_fleet_ssh_key()" in text, "expected a first-class fleet public key command")
+    expect("register_control_remote_fleet_worker()" in text, "expected interactive remote fleet worker registration")
+    expect("register_fleet_host(" in text, "expected remote worker registration to persist fleet inventory")
+    expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" in text, "expected remote worker registration to update SSH executor allowlist")
     expect("usermod -aG docker" in text, "expected local fleet user to be granted Docker group access when available")
     expect("I have added this public key to the starter/fleet node authorized_keys" in text, "expected idempotent fleet SSH key handoff prompt")
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
@@ -2102,8 +2115,13 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
         "expected reset to back up before touching the database",
     )
     expect("confirm_control_runtime_reset" in reset, "expected reset to require confirmation")
+    expect('confirm_control_runtime_reset "$scope"' in reset, "expected reset confirmation to receive sandbox/production scope")
     expect("ARCLINK_CONFIRM_RUNTIME_RESET" in text, "expected reset to support explicit non-interactive confirmation")
-    expect("Type RESET to continue" in text, "expected reset prompt to require a typed acknowledgement")
+    expect("ARCLINK_CONFIRM_SANDBOX_RESET" in text, "expected sandbox reset to support explicit non-interactive confirmation")
+    expect("ARCLINK_CONFIRM_PRODUCTION_RESET" in text, "expected production reset to support explicit non-interactive confirmation")
+    expect("ARCLINK_CONFIRM_PRODUCTION_RESET_HOST" in text, "expected production reset to require host-specific confirmation")
+    expect("Type RESET SANDBOX to continue" in text, "expected sandbox reset prompt to require a typed acknowledgement")
+    expect("First type RESET PRODUCTION" in text, "expected production reset prompt to require a production acknowledgement")
     expect("down --remove-orphans --volumes" in text, "expected reset to remove generated pod stacks and named volumes")
     expect("/arcdata/deployments" in text, "expected reset to remove generated pod state")
     expect("arclink-priv.tgz" in backup, "expected backup to snapshot private state")
@@ -2116,6 +2134,49 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     expect("DELETE FROM arclink_admins" not in text, "reset must not delete admin accounts")
     expect("DELETE FROM arclink_fleet_hosts" not in text, "reset must not delete fleet hosts")
     print("PASS test_control_runtime_reset_is_backup_first_and_guarded")
+
+
+def test_control_reset_modes_have_separate_confirmations() -> None:
+    text = DEPLOY_SH.read_text()
+    chooser = extract(text, "choose_control_mode() {", "detect_tailscale() {")
+    commands = extract(text, "control_command_from_mode() {", "run_control_deploy_flow() {")
+    dispatch = extract(text, "run_control_deploy_flow() {", "run_docker_reconfigure_flow() {")
+    confirm = extract(text, "confirm_control_runtime_reset() {", "stop_control_runtime_writers() {")
+    expect('CONTROL_DEPLOY_COMMAND="reset-sandbox"' in chooser, "menu should route sandbox reset explicitly")
+    expect('CONTROL_DEPLOY_COMMAND="reset-production"' in chooser, "menu should route production reset explicitly")
+    expect('control-reset-runtime) printf' in commands and '"reset-runtime"' in commands, "legacy reset-runtime alias should remain")
+    expect('control-reset-sandbox) printf' in commands and '"reset-sandbox"' in commands, "sandbox reset shortcut should be present")
+    expect('control-reset-production) printf' in commands and '"reset-production"' in commands, "production reset shortcut should be present")
+    expect("reset-runtime|reset-sandbox)" in dispatch, "reset-runtime should dispatch through the sandbox reset path")
+    expect("run_control_runtime_reset sandbox" in dispatch, "sandbox reset should pass sandbox scope")
+    expect("run_control_runtime_reset production" in dispatch, "production reset should pass production scope")
+    expect("RESET SANDBOX" in confirm, "sandbox reset should require the sandbox phrase")
+    expect("RESET PRODUCTION" in confirm, "production reset should require the production phrase")
+    expect("control_runtime_reset_host_name" in text, "production reset should use a concrete host confirmation")
+    print("PASS test_control_reset_modes_have_separate_confirmations")
+
+
+def test_control_fleet_worker_registration_is_first_class() -> None:
+    text = DEPLOY_SH.read_text()
+    register = extract(text, "register_control_remote_fleet_worker() {", "publish_control_tailscale_ingress() {")
+    expect("deploy.sh control fleet-key" in text, "usage should expose fleet-key")
+    expect("deploy.sh control register-worker" in text, "usage should expose register-worker")
+    expect("run_control_fleet_ssh_key()" in text, "expected first-class public key command")
+    expect("ensure_control_fleet_ssh_key" in register, "worker registration should reuse the Sovereign control SSH key")
+    expect("Fleet inventory hostname" in register, "worker registration should ask for placement hostname")
+    expect("SSH host" in register and "SSH user" in register, "worker registration should ask for SSH target")
+    expect("Remote deployment state root base" in register, "worker registration should collect per-worker state root")
+    expect("Fleet capacity slots" in register, "worker registration should collect capacity")
+    expect("Placement tags, comma-separated key=value" in register, "worker registration should collect placement tags")
+    expect("test_remote_fleet_ssh_access" in register, "worker registration should smoke-test SSH executor readiness")
+    expect("ARCLINK_EXECUTOR_ADAPTER=\"ssh\"" in register, "worker registration should be able to enable SSH execution")
+    expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=\"1\"" in register, "worker registration should enable machine-mode guard")
+    expect("append_control_csv_value" in register, "worker registration should append hosts to the allowlist")
+    expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" in register, "worker registration should update SSH host allowlist")
+    expect("register_fleet_host(" in register, "worker registration should persist a fleet host row")
+    expect('"ssh_host": ssh_host' in register and '"ssh_user": ssh_user' in register, "worker registration should store SSH metadata")
+    expect("run_arclink_docker up control-provisioner control-action-worker control-api" in register, "worker registration should refresh control workers")
+    print("PASS test_control_fleet_worker_registration_is_first_class")
 
 
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
@@ -3240,6 +3301,8 @@ def main() -> int:
         test_deploy_sh_exposes_docker_control_center,
         test_control_deployment_style_aliases_are_normalized,
         test_control_runtime_reset_is_backup_first_and_guarded,
+        test_control_reset_modes_have_separate_confirmations,
+        test_control_fleet_worker_registration_is_first_class,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,

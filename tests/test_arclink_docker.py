@@ -60,6 +60,8 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ARCLINK_BASE_DOMAIN:" in body and "ARCLINK_PRIMARY_PROVIDER:" in body, body)
     expect("ARCLINK_INGRESS_MODE:" in body and "ARCLINK_TAILSCALE_DNS_NAME:" in body, body)
     expect("ARCLINK_CONTROL_PROVISIONER_ENABLED:" in body and "ARCLINK_EXECUTOR_ADAPTER:" in body, body)
+    expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:" in body, body)
+    expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:" in body, body)
     expect("STRIPE_WEBHOOK_SECRET:" in body and "CLOUDFLARE_API_TOKEN:" in body and "CHUTES_API_KEY:" in body, body)
     expect("ARCLINK_SQLITE_JOURNAL_MODE: ${ARCLINK_SQLITE_JOURNAL_MODE:-DELETE}" in body, body)
     expect("QMD_MCP_HOST_PORT:" in body, body)
@@ -115,6 +117,8 @@ def test_compose_defines_full_stack_services() -> None:
     expect("./arclink-priv/secrets/ssh:/root/.ssh" not in body, body)
     expect("./arclink-priv/secrets/ssh:/home/arclink/.ssh" in body, body)
     expect("ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}" in body, body)
+    expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED: ${ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:-0}" in body, body)
+    expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST: ${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" in body, body)
     expect(
         "ARCLINK_FLEET_SSH_KEY_PATH: ${ARCLINK_FLEET_SSH_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519}"
         in body,
@@ -206,6 +210,8 @@ def test_docker_operator_commands_are_present() -> None:
     expect("http://127.0.0.1:8900/api/v1/health" in body and "http://127.0.0.1:3000" in body, body)
     expect("docker_provision_once()" in body and "arclink_sovereign_worker.py" in body, body)
     expect('ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_USER "arclink"' in body, body)
+    expect('ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED "0"' in body, body)
+    expect('ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST ""' in body, body)
     expect(
         'ensure_env_file_value ARCLINK_FLEET_SSH_KEY_PATH "/home/arclink/arclink/arclink-priv/secrets/ssh/id_ed25519"'
         in body,
@@ -503,6 +509,8 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     )
     expect("POSTGRES_PASSWORD=$postgres_password" in body, body)
     expect("NEXTCLOUD_ADMIN_PASSWORD=$nextcloud_admin_password" in body, body)
+    expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=0" in body, body)
+    expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST=" in body, body)
     expect("POSTGRES_PASSWORD=change-me" not in body, body)
     expect("NEXTCLOUD_ADMIN_PASSWORD=change-me" not in body, body)
     expect(

@@ -130,6 +130,8 @@ ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS="${ARCLINK_CONTROL_PROVISIONER_INTE
 ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE="${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
 ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS="${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}"
 ARCLINK_EXECUTOR_ADAPTER="${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
+ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="${ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:-0}"
+ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}"
 ARCLINK_EDGE_TARGET="${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
 ARCLINK_STATE_ROOT_BASE="${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
 ARCLINK_SECRET_STORE_DIR="${ARCLINK_SECRET_STORE_DIR:-}"
@@ -481,6 +483,10 @@ Usage:
   deploy.sh control ports
   deploy.sh control backup
   deploy.sh control reset-runtime
+  deploy.sh control reset-sandbox
+  deploy.sh control reset-production
+  deploy.sh control fleet-key
+  deploy.sh control register-worker
   deploy.sh install
   deploy.sh upgrade
   deploy.sh notion-ssot
@@ -506,7 +512,10 @@ Sovereign Control Node:
   deploy.sh control logs [SERVICE]
   deploy.sh control ps
   deploy.sh control backup          # private backup of control DB, private state, and generated pods
-  deploy.sh control reset-runtime   # backup, then clear customer/test runtime data and generated pods
+  deploy.sh control reset-sandbox   # backup, then clear sandbox/test users and generated pods
+  deploy.sh control reset-production # backup, then clear production users after double confirmation
+  deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
+  deploy.sh control register-worker # interactively add a remote SSH fleet worker
 
 Shared Host Docker control center:
   deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
@@ -541,6 +550,10 @@ Control and Docker shortcut aliases:
   deploy.sh control-ports
   deploy.sh control-backup
   deploy.sh control-reset-runtime
+  deploy.sh control-reset-sandbox
+  deploy.sh control-reset-production
+  deploy.sh control-fleet-key
+  deploy.sh control-register-worker
   deploy.sh docker-install
   deploy.sh docker-upgrade
   deploy.sh docker-reconfigure
@@ -592,7 +605,7 @@ while [[ $# -gt 0 ]]; do
       CONTROL_DEPLOY_ARGS=("$@")
       break
       ;;
-    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-teardown|control-write-config|control-remove)
+    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-teardown|control-write-config|control-remove)
       MODE="$1"
       shift
       CONTROL_DEPLOY_ARGS=("$@")
@@ -1161,7 +1174,11 @@ Usage:
   deploy.sh control logs [SERVICE]
   deploy.sh control health
   deploy.sh control backup          # backup control DB, private state, and generated pods
-  deploy.sh control reset-runtime   # backup, then clear customer/test runtime data
+  deploy.sh control reset-runtime   # compatibility alias for reset-sandbox
+  deploy.sh control reset-sandbox   # backup, then clear sandbox/test user data
+  deploy.sh control reset-production # backup, then clear production user data after double confirmation
+  deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
+  deploy.sh control register-worker # interactively register a remote SSH fleet worker
   deploy.sh control provision-once # run one provisioner batch now
 
 Shortcut aliases:
@@ -1172,6 +1189,10 @@ Shortcut aliases:
   deploy.sh control-ports
   deploy.sh control-backup
   deploy.sh control-reset-runtime
+  deploy.sh control-reset-sandbox
+  deploy.sh control-reset-production
+  deploy.sh control-fleet-key
+  deploy.sh control-register-worker
 EOF
 }
 
@@ -1284,10 +1305,13 @@ ArcLink Sovereign Control Node control center
   6) Show control node service state
   7) Show control node logs
   8) Backup runtime state and generated pod data
-  9) Reset test/client runtime data after backup
- 10) Stop control node stack
- 11) Teardown control node stack and named volumes
- 12) Exit
+  9) Reset sandbox/test user data after backup
+ 10) Reset production user data after double confirmation
+ 11) Show fleet SSH public key
+ 12) Register remote fleet worker
+ 13) Stop control node stack
+ 14) Teardown control node stack and named volumes
+ 15) Exit
 EOF
 
   while true; do
@@ -1301,11 +1325,14 @@ EOF
       6) CONTROL_DEPLOY_COMMAND="ps"; return 0 ;;
       7) CONTROL_DEPLOY_COMMAND="logs"; return 0 ;;
       8) CONTROL_DEPLOY_COMMAND="backup"; return 0 ;;
-      9) CONTROL_DEPLOY_COMMAND="reset-runtime"; return 0 ;;
-      10) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
-      11) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
-      12) exit 0 ;;
-      *) echo "Please choose 1 through 12." ;;
+      9) CONTROL_DEPLOY_COMMAND="reset-sandbox"; return 0 ;;
+      10) CONTROL_DEPLOY_COMMAND="reset-production"; return 0 ;;
+      11) CONTROL_DEPLOY_COMMAND="fleet-key"; return 0 ;;
+      12) CONTROL_DEPLOY_COMMAND="register-worker"; return 0 ;;
+      13) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
+      14) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
+      15) exit 0 ;;
+      *) echo "Please choose 1 through 15." ;;
     esac
   done
 }
@@ -2185,6 +2212,8 @@ emit_runtime_config() {
     write_kv ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}"
     write_kv ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS "${ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS:-5}"
     write_kv ARCLINK_EXECUTOR_ADAPTER "${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
+    write_kv ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED "${ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:-0}"
+    write_kv ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}"
     write_kv ARCLINK_EDGE_TARGET "${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
     write_kv ARCLINK_STATE_ROOT_BASE "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
     write_kv ARCLINK_SECRET_STORE_DIR "${ARCLINK_SECRET_STORE_DIR:-$STATE_DIR/sovereign-secrets}"
@@ -8590,6 +8619,68 @@ $(cat "$key_path.pub")
 EOF
 }
 
+trim_control_value() {
+  local value="${1:-}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+is_safe_control_fleet_host_value() {
+  local value="${1:-}"
+  [[ "$value" =~ ^[A-Za-z0-9_.:-]+$ ]]
+}
+
+append_control_csv_value() {
+  local list="${1:-}"
+  local value="${2:-}"
+  local item="" clean_item="" clean_value="" out="" lower_item="" lower_value="" found=0
+  local -a items=()
+
+  clean_value="$(trim_control_value "$value")"
+  if [[ -z "$clean_value" ]]; then
+    printf '%s' "$list"
+    return 0
+  fi
+  lower_value="$(printf '%s' "$clean_value" | tr '[:upper:]' '[:lower:]')"
+  IFS=',' read -r -a items <<<"$list"
+  for item in "${items[@]}"; do
+    clean_item="$(trim_control_value "$item")"
+    [[ -z "$clean_item" ]] && continue
+    lower_item="$(printf '%s' "$clean_item" | tr '[:upper:]' '[:lower:]')"
+    if [[ "$lower_item" == "$lower_value" ]]; then
+      found=1
+    fi
+    if [[ -n "$out" ]]; then
+      out+=","
+    fi
+    out+="$clean_item"
+  done
+  if [[ "$found" != "1" ]]; then
+    if [[ -n "$out" ]]; then
+      out+=","
+    fi
+    out+="$clean_value"
+  fi
+  printf '%s' "$out"
+}
+
+run_control_fleet_ssh_key() {
+  local docker_env=""
+
+  docker_env="$(docker_env_file_path)"
+  if [[ ! -r "$docker_env" ]]; then
+    echo "Bootstrapping Sovereign Control Node config so the fleet key has a durable home..."
+    run_arclink_docker bootstrap
+  fi
+  load_docker_runtime_config
+  ensure_control_fleet_ssh_key
+  write_docker_runtime_config "$docker_env"
+  CONFIG_TARGET="$docker_env"
+  print_control_fleet_ssh_key_guidance
+  echo "Sovereign fleet SSH key path: ${ARCLINK_FLEET_SSH_KEY_PATH:-}"
+}
+
 is_safe_local_fleet_user() {
   local user="${1:-}"
   [[ "$user" =~ ^[a-z_][a-z0-9_-]*$ ]]
@@ -8715,6 +8806,239 @@ test_local_fleet_ssh_access() {
   echo "Could not verify local fleet SSH connectivity for $user@$host." >&2
   echo "Install/enable OpenSSH server on this host, then rerun ./deploy.sh control install or reconfigure." >&2
   return 1
+}
+
+test_remote_fleet_ssh_access() {
+  local host="$1"
+  local user="$2"
+  local state_root="$3"
+  local key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
+  local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE:-${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}}"
+  local quoted_state_root="" remote_cmd="" output=""
+  local -a ssh_opts=()
+
+  if [[ -z "$key_path" || ! -r "$key_path" ]]; then
+    echo "Skipping remote fleet SSH smoke test: missing private key." >&2
+    return 1
+  fi
+  if ! command -v ssh >/dev/null 2>&1; then
+    echo "Skipping remote fleet SSH smoke test: ssh client is not installed." >&2
+    return 1
+  fi
+  if [[ -n "$known_hosts" ]]; then
+    mkdir -p "$(dirname "$known_hosts")"
+    touch "$known_hosts"
+    chmod 0600 "$known_hosts" 2>/dev/null || true
+    if command -v ssh-keyscan >/dev/null 2>&1; then
+      ssh-keyscan -H "$host" >>"$known_hosts" 2>/dev/null || true
+      sort -u -o "$known_hosts" "$known_hosts" 2>/dev/null || true
+    fi
+  fi
+
+  ssh_opts=(
+    -i "$key_path"
+    -o BatchMode=yes
+    -o ConnectTimeout=8
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=accept-new
+  )
+  if [[ -n "$known_hosts" ]]; then
+    ssh_opts+=(-o "UserKnownHostsFile=$known_hosts")
+  fi
+
+  printf -v quoted_state_root '%q' "$state_root"
+  remote_cmd="set -e; docker --version >/dev/null; docker compose version >/dev/null; mkdir -p $quoted_state_root; test -w $quoted_state_root; printf 'cpu_count=%s\n' \"\$(nproc 2>/dev/null || printf unknown)\"; df -Pk $quoted_state_root 2>/dev/null | awk 'NR==2 {printf \"state_root_available_kb=%s\\n\", \$4}' || true"
+  if output="$(ssh "${ssh_opts[@]}" "$user@$host" "$remote_cmd" 2>&1)"; then
+    echo "Verified remote fleet worker over SSH: $user@$host"
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" | sed 's/^/  /'
+    fi
+    return 0
+  fi
+  echo "Could not verify remote fleet worker over SSH: $user@$host" >&2
+  if [[ -n "$output" ]]; then
+    printf '%s\n' "$output" | sed 's/^/  /' >&2
+  fi
+  return 1
+}
+
+register_control_remote_fleet_worker() {
+  local docker_env="" db_path="" hostname="" ssh_host="" ssh_user="" region="" capacity_slots=""
+  local state_root_base="" edge_target="" tags="" setup_ssh="" enable_ssh="" smoke_status="skipped"
+  local result_json=""
+
+  if [[ ! -t 0 ]]; then
+    echo "Remote fleet worker registration is interactive. Run ./deploy.sh control register-worker from a terminal." >&2
+    return 1
+  fi
+
+  docker_env="$(docker_env_file_path)"
+  if [[ ! -r "$docker_env" ]]; then
+    echo "Bootstrapping Sovereign Control Node config before worker registration..."
+    run_arclink_docker bootstrap
+  fi
+  load_docker_runtime_config
+  ensure_control_fleet_ssh_key
+
+  cat <<'EOF'
+ArcLink Sovereign remote fleet worker registration
+
+Before continuing, install Docker Engine and the Docker Compose plugin on the
+remote machine, create the SSH user ArcLink should use, and add this public
+key to that user's authorized_keys:
+EOF
+  print_control_fleet_ssh_key_guidance
+
+  hostname="$(normalize_optional_answer "$(ask "Fleet inventory hostname" "")")"
+  hostname="$(trim_control_value "$hostname")"
+  if [[ -z "$hostname" ]]; then
+    echo "Fleet inventory hostname is required." >&2
+    return 1
+  fi
+  if ! is_safe_control_fleet_host_value "$hostname"; then
+    echo "Fleet inventory hostname may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
+    return 1
+  fi
+  ssh_host="$(normalize_optional_answer "$(ask "SSH host" "$hostname")")"
+  ssh_host="$(trim_control_value "$ssh_host")"
+  [[ -z "$ssh_host" ]] && ssh_host="$hostname"
+  if ! is_safe_control_fleet_host_value "$ssh_host"; then
+    echo "SSH host may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
+    return 1
+  fi
+  ssh_user="$(normalize_optional_answer "$(ask "SSH user" "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}")")"
+  ssh_user="$(trim_control_value "$ssh_user")"
+  [[ -z "$ssh_user" ]] && ssh_user="arclink"
+  if ! is_safe_local_fleet_user "$ssh_user"; then
+    echo "Refusing unsafe SSH user: $ssh_user" >&2
+    return 1
+  fi
+  region="$(normalize_optional_answer "$(ask "Fleet region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
+  region="$(trim_control_value "$region")"
+  capacity_slots="$(ask "Fleet capacity slots" "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
+  capacity_slots="$(trim_control_value "$capacity_slots")"
+  if [[ ! "$capacity_slots" =~ ^[0-9]+$ || "$capacity_slots" -lt 1 ]]; then
+    echo "Fleet capacity slots must be a positive integer." >&2
+    return 1
+  fi
+  state_root_base="$(normalize_optional_answer "$(ask "Remote deployment state root base" "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")")"
+  state_root_base="$(trim_control_value "$state_root_base")"
+  [[ -z "$state_root_base" ]] && state_root_base="/arcdata/deployments"
+  if [[ "$state_root_base" != /* || "$state_root_base" == "/" ]]; then
+    echo "Remote deployment state root base must be an absolute non-root path." >&2
+    return 1
+  fi
+  edge_target="$(normalize_optional_answer "$(ask "Worker edge target override (type none to clear)" "${ARCLINK_EDGE_TARGET:-}")")"
+  edge_target="$(trim_control_value "$edge_target")"
+  tags="$(normalize_optional_answer "$(ask "Placement tags, comma-separated key=value (type none to clear)" "")")"
+  tags="$(trim_control_value "$tags")"
+
+  setup_ssh="$(ask_yes_no "Smoke-test SSH, Docker Compose, and state-root writability now" "1")"
+  if [[ "$setup_ssh" == "1" ]]; then
+    if test_remote_fleet_ssh_access "$ssh_host" "$ssh_user" "$state_root_base"; then
+      smoke_status="passed"
+    else
+      smoke_status="failed"
+      echo "Registering anyway; this worker will not accept SSH executor work until the smoke test passes." >&2
+    fi
+  fi
+
+  if [[ "${ARCLINK_EXECUTOR_ADAPTER:-disabled}" != "ssh" ]]; then
+    echo "Current Sovereign executor adapter is '${ARCLINK_EXECUTOR_ADAPTER:-disabled}'."
+    enable_ssh="$(ask_yes_no "Switch the Sovereign executor adapter to ssh for remote workers" "1")"
+    if [[ "$enable_ssh" == "1" ]]; then
+      ARCLINK_EXECUTOR_ADAPTER="ssh"
+    fi
+  fi
+  ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="1"
+  ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" "$ssh_host")"
+  ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$hostname")"
+
+  write_docker_runtime_config "$docker_env"
+  CONFIG_TARGET="$docker_env"
+  db_path="$(control_host_db_path)"
+  result_json="$(
+    ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$ssh_host" "$ssh_user" "$state_root_base" "$edge_target" "$tags" "$smoke_status" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+from arclink_control import ensure_schema
+from arclink_fleet import register_fleet_host
+
+
+def parse_tags(raw: str) -> dict[str, object]:
+    tags: dict[str, object] = {}
+    for part in raw.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "=" in item:
+            key, value = item.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key:
+                tags[key] = value
+        else:
+            tags[item.lower()] = True
+    return tags
+
+
+db_path = Path(sys.argv[1])
+hostname = sys.argv[2].strip().lower()
+region = sys.argv[3].strip().lower()
+capacity_slots = int(sys.argv[4])
+ssh_host = sys.argv[5].strip()
+ssh_user = sys.argv[6].strip()
+state_root_base = sys.argv[7].strip()
+edge_target = sys.argv[8].strip()
+tags = parse_tags(sys.argv[9])
+smoke_status = sys.argv[10].strip() or "skipped"
+
+metadata = {
+    "executor": "ssh",
+    "ssh_host": ssh_host,
+    "ssh_user": ssh_user,
+    "state_root_base": state_root_base,
+    "registered_by": "deploy.sh control register-worker",
+    "registration_smoke": {"status": smoke_status},
+}
+if edge_target:
+    metadata["edge_target"] = edge_target
+
+db_path.parent.mkdir(parents=True, exist_ok=True)
+conn = sqlite3.connect(str(db_path), timeout=15.0)
+conn.row_factory = sqlite3.Row
+try:
+    conn.execute("PRAGMA busy_timeout = 15000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    ensure_schema(conn)
+    row = register_fleet_host(
+        conn,
+        hostname=hostname,
+        region=region,
+        tags=tags,
+        capacity_slots=capacity_slots,
+        metadata=metadata,
+    )
+    print(json.dumps({"host_id": row["host_id"], "hostname": row["hostname"], "capacity_slots": row["capacity_slots"]}, sort_keys=True))
+finally:
+    conn.close()
+PY
+  )"
+
+  echo "Registered Sovereign fleet worker: $result_json"
+  echo "Updated SSH executor host allowlist: ${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}"
+  if command -v docker >/dev/null 2>&1; then
+    echo "Refreshing control workers so they pick up the updated executor allowlist..."
+    if ! run_arclink_docker up control-provisioner control-action-worker control-api; then
+      echo "Warning: could not refresh control workers automatically. Run ./deploy.sh control up control-provisioner control-action-worker control-api after the stack is built." >&2
+    fi
+  fi
 }
 
 publish_control_tailscale_ingress() {
@@ -9253,22 +9577,30 @@ run_control_runtime_backup() {
   trap 'arclink_deploy_stable_copy_cleanup' EXIT
 }
 
+control_runtime_reset_host_name() {
+  hostname -f 2>/dev/null || hostname 2>/dev/null || printf '%s\n' "arclink-control"
+}
+
 confirm_control_runtime_reset() {
-  local answer=""
+  local scope="${1:-sandbox}"
+  local answer="" host_answer="" control_host=""
 
-  if [[ "${ARCLINK_CONFIRM_RUNTIME_RESET:-}" == "RESET" ]]; then
-    return 0
-  fi
-  if [[ ! -t 0 ]]; then
-    echo "Refusing runtime reset without interactive confirmation." >&2
-    echo "Set ARCLINK_CONFIRM_RUNTIME_RESET=RESET to run non-interactively." >&2
-    return 1
-  fi
+  case "$scope" in
+    production)
+      control_host="$(control_runtime_reset_host_name)"
+      if [[ "${ARCLINK_CONFIRM_PRODUCTION_RESET:-}" == "RESET PRODUCTION" && "${ARCLINK_CONFIRM_PRODUCTION_RESET_HOST:-}" == "$control_host" ]]; then
+        return 0
+      fi
+      if [[ ! -t 0 ]]; then
+        echo "Refusing production user-data reset without double confirmation." >&2
+        echo "Set ARCLINK_CONFIRM_PRODUCTION_RESET='RESET PRODUCTION' and ARCLINK_CONFIRM_PRODUCTION_RESET_HOST='$control_host' to run non-interactively." >&2
+        return 1
+      fi
 
-  cat <<'EOF'
-ArcLink Sovereign runtime reset
+      cat <<EOF
+ArcLink Sovereign PRODUCTION user-data reset
 
-This will back up first, then clear customer/test runtime data:
+This will back up first, then clear production user/customer runtime data on this control node:
   - public Raven onboarding sessions and channel pairing codes
   - users, subscriptions, deployments, provisioning jobs, service health
   - generated Sovereign pod containers, named volumes, and /arcdata/deployments entries
@@ -9278,10 +9610,51 @@ This will back up first, then clear customer/test runtime data:
 It preserves:
   - deploy config, provider credentials, fleet hosts, admin accounts, and source checkout
 
-Type RESET to continue.
+Double confirmation is required.
+First type RESET PRODUCTION.
+Then type this control host name exactly: $control_host
 EOF
-  read -r -p "Confirm reset [RESET]: " answer
-  [[ "$answer" == "RESET" ]]
+      read -r -p "Confirm production reset [RESET PRODUCTION]: " answer
+      if [[ "$answer" != "RESET PRODUCTION" ]]; then
+        return 1
+      fi
+      read -r -p "Confirm host [$control_host]: " host_answer
+      [[ "$host_answer" == "$control_host" ]]
+      ;;
+    sandbox|runtime)
+      if [[ "${ARCLINK_CONFIRM_SANDBOX_RESET:-}" == "RESET SANDBOX" || "${ARCLINK_CONFIRM_RUNTIME_RESET:-}" == "RESET" ]]; then
+        return 0
+      fi
+      if [[ ! -t 0 ]]; then
+        echo "Refusing sandbox runtime reset without interactive confirmation." >&2
+        echo "Set ARCLINK_CONFIRM_SANDBOX_RESET='RESET SANDBOX' to run non-interactively." >&2
+        echo "Compatibility: ARCLINK_CONFIRM_RUNTIME_RESET=RESET is still accepted." >&2
+        return 1
+      fi
+
+      cat <<'EOF'
+ArcLink Sovereign sandbox user-data reset
+
+This will back up first, then clear sandbox/test user runtime data on this control node:
+  - public Raven onboarding sessions and channel pairing codes
+  - users, subscriptions, deployments, provisioning jobs, service health
+  - generated Sovereign pod containers, named volumes, and /arcdata/deployments entries
+  - generated per-deployment secret-store directories
+  - notification, webhook, audit, action, rate-limit, and event rows
+
+It preserves:
+  - deploy config, provider credentials, fleet hosts, admin accounts, and source checkout
+
+Type RESET SANDBOX to continue.
+EOF
+      read -r -p "Confirm sandbox reset [RESET SANDBOX]: " answer
+      [[ "$answer" == "RESET SANDBOX" ]]
+      ;;
+    *)
+      echo "Unknown control runtime reset scope: $scope" >&2
+      return 2
+      ;;
+  esac
 }
 
 stop_control_runtime_writers() {
@@ -9557,12 +9930,13 @@ PY
 }
 
 run_control_runtime_reset() {
+  local scope="${1:-sandbox}"
   local state_dir="$BOOTSTRAP_DIR/arclink-priv/state"
   local backup_dir="" db_path="" docker_env=""
 
-  confirm_control_runtime_reset
+  confirm_control_runtime_reset "$scope"
 
-  begin_deploy_operation "control-reset-runtime" "$state_dir"
+  begin_deploy_operation "control-reset-$scope" "$state_dir"
   trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
 
   docker_env="$(docker_env_file_path)"
@@ -9580,7 +9954,11 @@ run_control_runtime_reset() {
   remove_control_generated_secret_refs
   echo "Resetting Telegram active-agent command scopes..."
   reset_control_telegram_active_command_scopes "$db_path"
-  echo "Clearing customer/test runtime rows from control database..."
+  if [[ "$scope" == "production" ]]; then
+    echo "Clearing production user/customer runtime rows from control database..."
+  else
+    echo "Clearing sandbox/test user runtime rows from control database..."
+  fi
   reset_control_runtime_database "$db_path"
   echo "Runtime counts after reset:"
   print_control_runtime_counts "$db_path"
@@ -9594,7 +9972,7 @@ run_control_runtime_reset() {
   run_arclink_docker ports
   run_arclink_docker health
 
-  echo "ArcLink Sovereign runtime reset complete."
+  echo "ArcLink Sovereign $scope runtime reset complete."
   echo "Backup kept at: $backup_dir"
 
   finish_deploy_operation
@@ -9617,6 +9995,10 @@ control_command_from_mode() {
     control-health) printf '%s\n' "health" ;;
     control-backup) printf '%s\n' "backup" ;;
     control-reset-runtime) printf '%s\n' "reset-runtime" ;;
+    control-reset-sandbox) printf '%s\n' "reset-sandbox" ;;
+    control-reset-production) printf '%s\n' "reset-production" ;;
+    control-fleet-key|control-show-fleet-key) printf '%s\n' "fleet-key" ;;
+    control-register-worker|control-register-fleet-worker|control-fleet-add) printf '%s\n' "register-worker" ;;
     control-provision-once) printf '%s\n' "provision-once" ;;
     control-teardown) printf '%s\n' "teardown" ;;
     control-write-config) printf '%s\n' "write-config" ;;
@@ -9656,8 +10038,17 @@ run_control_deploy_flow() {
     backup)
       run_control_runtime_backup
       ;;
-    reset-runtime)
-      run_control_runtime_reset
+    reset-runtime|reset-sandbox)
+      run_control_runtime_reset sandbox
+      ;;
+    reset-production)
+      run_control_runtime_reset production
+      ;;
+    fleet-key|show-fleet-key)
+      run_control_fleet_ssh_key
+      ;;
+    register-worker|register-fleet-worker|fleet-add)
+      register_control_remote_fleet_worker
       ;;
     bootstrap|write-config|config|build|up|down|ps|ports|logs|health|record-release|provision-once|teardown|remove)
       run_arclink_docker "$command" ${CONTROL_DEPLOY_ARGS[@]+"${CONTROL_DEPLOY_ARGS[@]}"}
@@ -9805,7 +10196,7 @@ if [[ -z "$MODE" || "$MODE" == "menu" ]]; then
 fi
 
 case "$MODE" in
-  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-teardown|control-write-config|control-remove)
+  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-teardown|control-write-config|control-remove)
     run_control_deploy_flow
     ;;
   docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)

@@ -247,6 +247,8 @@ bootstrap() {
   ensure_env_file_value ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE "5"
   ensure_env_file_value ARCLINK_SOVEREIGN_PROVISION_MAX_ATTEMPTS "5"
   ensure_env_file_value ARCLINK_EXECUTOR_ADAPTER "disabled"
+  ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED "0"
+  ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST ""
   ensure_env_file_value ARCLINK_EDGE_TARGET "edge.arclink.online"
   ensure_env_file_value ARCLINK_STATE_ROOT_BASE "/arcdata/deployments"
   ensure_env_file_value ARCLINK_SECRET_STORE_DIR "$REPO_DIR/arclink-priv/state/sovereign-secrets"

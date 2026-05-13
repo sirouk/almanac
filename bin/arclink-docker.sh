@@ -753,7 +753,7 @@ PY
     [[ -n "$deployment_id" && -n "$prefix" ]] || continue
     local status="published"
     local successful_roles=()
-    if tailscale serve --bg --yes --https="$hermes_port" "http://127.0.0.1:$web_port/u/$prefix/hermes" >/dev/null; then
+    if tailscale serve --bg --yes --https="$hermes_port" "http://127.0.0.1:$hermes_port" >/dev/null; then
       successful_roles+=(hermes)
     else
       status="unavailable"
@@ -836,11 +836,12 @@ with sqlite3.connect(db_path) as conn:
         "failed_roles": [role for role in roles if role not in successful],
     }
     if published:
+        hermes_url = f"https://{host}:{ports['hermes']}"
         metadata["access_urls"] = {
-            "dashboard": f"https://{host}/u/{prefix}",
-            "hermes": f"https://{host}/u/{prefix}/hermes",
-            "files": f"https://{host}/u/{prefix}/drive",
-            "code": f"https://{host}/u/{prefix}/code",
+            "dashboard": hermes_url,
+            "hermes": hermes_url,
+            "files": f"{hermes_url}/drive",
+            "code": f"{hermes_url}/code",
             "notion": f"https://{host}/u/{prefix}/notion/webhook",
         }
     else:

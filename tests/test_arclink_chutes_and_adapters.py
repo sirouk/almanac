@@ -191,14 +191,29 @@ def test_tailscale_path_access_urls_stay_on_public_path_routes() -> None:
         ingress_mode="tailscale",
         tailscale_dns_name="worker.example.test",
         tailscale_host_strategy="path",
-        tailnet_service_ports={"hermes": "8443", "files": 8444, "code": 8445},
     )
     expect(urls["dashboard"] == "https://worker.example.test/u/abc123", str(urls))
     expect(urls["hermes"] == "https://worker.example.test/u/abc123/hermes", str(urls))
     expect(urls["files"] == "https://worker.example.test/u/abc123/drive", str(urls))
     expect(urls["code"] == "https://worker.example.test/u/abc123/code", str(urls))
-    expect(":8443" not in "\n".join(urls.values()), str(urls))
     print("PASS test_tailscale_path_access_urls_stay_on_public_path_routes")
+
+
+def test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded() -> None:
+    mod = load_module("arclink_adapters.py", "arclink_adapters_tailnet_port_root_test")
+    urls = mod.arclink_access_urls(
+        prefix="abc123",
+        base_domain="worker.example.test",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker.example.test",
+        tailscale_host_strategy="path",
+        tailnet_service_ports={"hermes": "8443", "files": 8444, "code": 8445},
+    )
+    expect(urls["dashboard"] == "https://worker.example.test:8443", str(urls))
+    expect(urls["hermes"] == "https://worker.example.test:8443", str(urls))
+    expect(urls["files"] == "https://worker.example.test:8443/drive", str(urls))
+    expect(urls["code"] == "https://worker.example.test:8443/code", str(urls))
+    print("PASS test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded")
 
 
 def test_chutes_key_rotate_and_state_tracking() -> None:
@@ -660,6 +675,7 @@ def main() -> int:
     test_fake_stripe_billing_portal_session()
     test_fake_cloudflare_propagation_check_after_provision()
     test_chutes_catalog_refresh_picks_up_new_models()
+    test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded()
     test_chutes_boundary_fails_closed_without_scoped_secret_or_budget()
     test_chutes_boundary_publishes_defined_credential_lifecycle()
     test_chutes_boundary_warns_and_blocks_at_budget_limit()
@@ -668,7 +684,7 @@ def main() -> int:
     test_fake_inference_enforces_chutes_boundary()
     test_chutes_usage_ingestion_updates_budget_boundary_without_secrets()
     test_chutes_usage_ingestion_blocks_after_hard_limit()
-    print("PASS all 21 ArcLink Chutes/adapter tests")
+    print("PASS all 22 ArcLink Chutes/adapter tests")
     return 0
 
 

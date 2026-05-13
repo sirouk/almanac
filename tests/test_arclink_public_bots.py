@@ -1304,7 +1304,7 @@ def test_public_bot_canonicalizes_tailscale_path_resource_urls() -> None:
                         "dashboard": "https://worker.example.ts.net/u/arc-tailscale",
                         "files": "https://worker.example.ts.net/u/arc-tailscale/drive",
                         "code": "https://worker.example.ts.net/u/arc-tailscale/code",
-                        "hermes": "https://worker.example.ts.net:8443/",
+                        "hermes": "https://worker.example.ts.net/u/arc-tailscale/hermes",
                     },
                     "ingress_mode": "tailscale",
                     "tailscale_dns_name": "worker.example.ts.net",
@@ -1320,11 +1320,10 @@ def test_public_bot_canonicalizes_tailscale_path_resource_urls() -> None:
     conn.commit()
     deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (seeded["deployment_id"],)).fetchone())
     access = bots._deployment_access(deployment)
-    expect(access["dashboard"] == "https://worker.example.ts.net/u/arc-tailscale", str(access))
-    expect(access["files"] == "https://worker.example.ts.net/u/arc-tailscale/drive", str(access))
-    expect(access["code"] == "https://worker.example.ts.net/u/arc-tailscale/code", str(access))
-    expect(access["hermes"] == "https://worker.example.ts.net/u/arc-tailscale/hermes", str(access))
-    expect(":8443" not in "\n".join(access.values()), str(access))
+    expect(access["dashboard"] == "https://worker.example.ts.net:8443", str(access))
+    expect(access["files"] == "https://worker.example.ts.net:8443/drive", str(access))
+    expect(access["code"] == "https://worker.example.ts.net:8443/code", str(access))
+    expect(access["hermes"] == "https://worker.example.ts.net:8443", str(access))
     print("PASS test_public_bot_canonicalizes_tailscale_path_resource_urls")
 
 

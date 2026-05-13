@@ -111,10 +111,11 @@ and recreate `hermes-dashboard` so `Drive`, `Code`, and the
 managed-pty `Terminal` tab stay visible without Hermes core patches.
 
 When Tailscale path mode is selected, Docker reconcile/health can publish
-per-deployment Hermes, files, and code surfaces on stable tailnet HTTPS ports
-starting at `ARCLINK_TAILNET_SERVICE_PORT_BASE`. If the host Tailscale CLI is
-missing, publication is skipped and health continues; deployment metadata remains
-the source of truth after successful publication.
+per-deployment Helm/Hermes on stable root-mounted tailnet HTTPS ports starting
+at `ARCLINK_TAILNET_SERVICE_PORT_BASE`; Drive, Code, and Terminal live under
+that dashboard URL. If the host Tailscale CLI is missing, publication is skipped
+and health continues; deployment metadata remains the source of truth after
+successful publication.
 
 ## Privilege Boundary
 

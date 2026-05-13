@@ -247,7 +247,7 @@ def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
         "dashboard": "https://worker.example.test/u/amber-vault-1a2b",
         "files": "https://worker.example.test/u/amber-vault-1a2b/drive",
         "code": "https://worker.example.test/u/amber-vault-1a2b/code",
-        "hermes": "https://worker.example.test:8443/",
+        "hermes": "https://worker.example.test/u/amber-vault-1a2b/hermes",
         "notion": "https://worker.example.test/u/amber-vault-1a2b/notion/webhook",
     }
     conn.execute(
@@ -275,11 +275,11 @@ def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
     view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
     deployment = view["deployments"][0]
     section_index = {section["section"]: section for section in deployment["sections"]}
-    expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(deployment))
-    expect(section_index["files"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(section_index["files"]))
-    expect(section_index["code"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(section_index["code"]))
-    expect(section_index["terminal"]["url"] == "https://worker.example.test/u/amber-vault-1a2b/hermes/terminal", str(section_index["terminal"]))
-    expect(":8443" not in json.dumps(deployment["access"]["urls"], sort_keys=True), str(deployment["access"]["urls"]))
+    expect(deployment["access"]["urls"]["dashboard"] == "https://worker.example.test:8443", str(deployment))
+    expect(deployment["access"]["urls"]["hermes"] == "https://worker.example.test:8443", str(deployment))
+    expect(section_index["files"]["url"] == "https://worker.example.test:8443/drive", str(section_index["files"]))
+    expect(section_index["code"]["url"] == "https://worker.example.test:8443/code", str(section_index["code"]))
+    expect(section_index["terminal"]["url"] == "https://worker.example.test:8443/terminal", str(section_index["terminal"]))
     print("PASS test_user_dashboard_canonicalizes_tailnet_path_app_urls")
 
 

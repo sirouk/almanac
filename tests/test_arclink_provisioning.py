@@ -593,12 +593,14 @@ def test_tailscale_ingress_uses_dedicated_app_ports_when_recorded() -> None:
     )
     env = intent["environment"]
     services = intent["compose"]["services"]
-    expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test/u/amber-vault-1a2b", str(intent["access"]))
-    expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(intent["access"]))
-    expect(intent["access"]["urls"]["files"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(intent["access"]))
-    expect(intent["access"]["urls"]["code"] == "https://worker.example.test/u/amber-vault-1a2b/code", str(intent["access"]))
-    expect(env["ARCLINK_HERMES_URL"] == "https://worker.example.test/u/amber-vault-1a2b/hermes", str(env))
-    expect(env["ARCLINK_FILES_URL"] == "https://worker.example.test/u/amber-vault-1a2b/drive", str(env))
+    expect(intent["access"]["urls"]["dashboard"] == "https://worker.example.test:8443", str(intent["access"]))
+    expect(intent["access"]["urls"]["hermes"] == "https://worker.example.test:8443", str(intent["access"]))
+    expect(intent["access"]["urls"]["files"] == "https://worker.example.test:8443/drive", str(intent["access"]))
+    expect(intent["access"]["urls"]["code"] == "https://worker.example.test:8443/code", str(intent["access"]))
+    expect(intent["access"]["urls"]["notion"] == "https://worker.example.test/u/amber-vault-1a2b/notion/webhook", str(intent["access"]))
+    expect(env["ARCLINK_HERMES_URL"] == "https://worker.example.test:8443", str(env))
+    expect(env["ARCLINK_FILES_URL"] == "https://worker.example.test:8443/drive", str(env))
+    expect(services["hermes-dashboard"]["ports"] == ["127.0.0.1:8443:3210"], str(services["hermes-dashboard"]))
     nextcloud_env = services["nextcloud"]["environment"]
     expect("OVERWRITEPROTOCOL" not in nextcloud_env, str(nextcloud_env))
     expect("OVERWRITEHOST" not in nextcloud_env, str(nextcloud_env))

@@ -99,11 +99,12 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      - `hermes-<prefix>.<base-domain>`
    - In `tailscale` mode, Cloudflare DNS is skipped. The control host is
      published with Tailscale Funnel on `ARCLINK_TAILSCALE_HTTPS_PORT`, default
-     `443`. Per-pod URLs default to path-based routes under the worker
-     Tailscale FQDN, for example
-     `https://worker.tailnet.ts.net/u/<prefix>/code`. `subdomain` can be
-     selected only for environments that really provide resolvable/certified
-     sub-subdomains under the Tailscale name.
+     `443`. Control-plane callbacks stay path-based under the worker Tailscale
+     FQDN, while published per-pod Helm/Hermes URLs use a stable tailnet HTTPS
+     port such as `https://worker.tailnet.ts.net:8443/` so Hermes can run at
+     the root path. `subdomain` can be selected only for environments that
+     really provide resolvable/certified sub-subdomains under the Tailscale
+     name.
    - Each pod reserves a per-deployment Notion callback URL and webhook secret
      reference. Domain mode renders
      `https://u-<prefix>.<base-domain>/notion/webhook`. Tailscale path mode

@@ -262,6 +262,23 @@ def _notion_callback_url(access_urls: Mapping[str, str]) -> str:
     return f"{dashboard_url}/notion/webhook"
 
 
+def _notion_callback_url_for_ingress(
+    access_urls: Mapping[str, str],
+    *,
+    prefix: str,
+    ingress_mode: str,
+    tailscale_dns_name: str,
+    tailscale_host_strategy: str,
+) -> str:
+    if ingress_mode == "tailscale" and tailscale_host_strategy == "path":
+        host = str(tailscale_dns_name or "").strip().lower().strip(".")
+        if not host:
+            raise ArcLinkProvisioningError("ArcLink Tailscale DNS name is required for Notion callback intent")
+        clean_prefix = str(prefix or "").strip().lower()
+        return f"https://{host}/u/{clean_prefix}/notion/webhook"
+    return _notion_callback_url(access_urls)
+
+
 def _clean_tailnet_service_ports(value: Any) -> dict[str, int]:
     if not isinstance(value, Mapping):
         return {}
@@ -361,6 +378,7 @@ def _service(
     entrypoint: list[str] | None = None,
     environment: Mapping[str, str],
     volumes: list[dict[str, str]] | None = None,
+    ports: list[str] | None = None,
     labels: Mapping[str, str] | None = None,
     depends_on: list[str] | None = None,
     secrets: list[dict[str, str]] | None = None,
@@ -377,6 +395,8 @@ def _service(
         "depends_on": list(depends_on or []),
         "secrets": list(secrets or []),
     }
+    if ports:
+        svc["ports"] = list(ports)
     if entrypoint:
         svc["entrypoint"] = list(entrypoint)
     if deploy:
@@ -424,11 +444,20 @@ def _render_services(
     env: Mapping[str, str],
     labels: Mapping[str, Mapping[str, str]],
     compose_secrets: Mapping[str, Mapping[str, str]],
+    tailnet_service_ports: Mapping[str, int] | None = None,
 ) -> dict[str, dict[str, Any]]:
     app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
     nextcloud_db_name = _postgres_db_name(prefix="nextcloud", deployment_id=deployment_id)
     memory_volume = {"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR}
+    hermes_host_ports: list[str] = []
+    if (
+        str(env.get("ARCLINK_INGRESS_MODE") or "").strip().lower() == "tailscale"
+        and str(env.get("ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY") or "").strip().lower() == "path"
+    ):
+        hermes_tailnet_port = int(dict(tailnet_service_ports or {}).get("hermes") or 0)
+        if 0 < hermes_tailnet_port < 65536:
+            hermes_host_ports.append(f"127.0.0.1:{hermes_tailnet_port}:3210")
 
     _limits = ARCLINK_DEFAULT_RESOURCE_LIMITS.get
     _hc = ARCLINK_DEFAULT_HEALTHCHECKS.get
@@ -460,6 +489,7 @@ def _render_services(
                 {"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR},
                 {"source": roots["linked_resources"], "target": CONTAINER_LINKED_RESOURCES_DIR, "read_only": True},
             ],
+            ports=hermes_host_ports,
             labels=labels["hermes"],
             depends_on=["managed-context-install"],
             secrets=[{"source": "chutes_api_key", "target": secret_target["chutes_api_key"]}],
@@ -708,7 +738,13 @@ def render_arclink_provisioning_intent(
         ingress_mode=clean_ingress_mode,
         tailscale_host_strategy=clean_tailscale_strategy,
     )
-    notion_callback_url = _notion_callback_url(access_urls)
+    notion_callback_url = _notion_callback_url_for_ingress(
+        access_urls,
+        prefix=prefix,
+        ingress_mode=clean_ingress_mode,
+        tailscale_dns_name=clean_tailscale_dns_name,
+        tailscale_host_strategy=clean_tailscale_strategy,
+    )
     labels = dict(labels)
     labels["notion"] = _render_notion_webhook_labels(
         prefix=prefix,
@@ -784,6 +820,7 @@ def render_arclink_provisioning_intent(
         env=deployment_env,
         labels=labels,
         compose_secrets=compose_secrets,
+        tailnet_service_ports=tailnet_service_ports,
     )
     nextcloud_hostport = _url_hostport(access_urls["files"])
     if nextcloud_hostport:

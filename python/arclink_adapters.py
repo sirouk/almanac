@@ -277,6 +277,19 @@ def arclink_access_urls(
             strategy=strategy,
         )
         if strategy == "path":
+            hermes_port = 0
+            try:
+                hermes_port = int((tailnet_service_ports or {}).get("hermes") or 0)
+            except (TypeError, ValueError):
+                hermes_port = 0
+            if 0 < hermes_port < 65536:
+                dashboard = f"https://{hostnames['dashboard']}:{hermes_port}"
+                return {
+                    "dashboard": dashboard,
+                    "files": f"{dashboard.rstrip('/')}/drive",
+                    "code": f"{dashboard.rstrip('/')}/code",
+                    "hermes": dashboard,
+                }
             prefixes = arclink_role_path_prefixes(prefix)
             dashboard = f"https://{hostnames['dashboard']}{prefixes['dashboard']}"
             urls = {

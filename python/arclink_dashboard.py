@@ -383,12 +383,38 @@ def _deployment_urls(prefix: str, base_domain: str, metadata: Mapping[str, Any] 
                 "dashboard": f"https://{host}/u/{prefix}",
                 "notion": f"https://{host}/u/{prefix}/notion/webhook",
             }
+        tailnet_ports = meta.get("tailnet_service_ports") if isinstance(meta.get("tailnet_service_ports"), Mapping) else None
+        try:
+            hermes_port = int((tailnet_ports or {}).get("hermes") or 0)
+        except (TypeError, ValueError):
+            hermes_port = 0
+        if 0 < hermes_port < 65536:
+            urls = arclink_access_urls(
+                prefix=prefix,
+                base_domain=base_domain,
+                ingress_mode=ingress_mode,
+                tailscale_dns_name=tailscale_dns_name,
+                tailscale_host_strategy=tailscale_host_strategy,
+                tailnet_service_ports=tailnet_ports,
+            )
+            urls["notion"] = f"https://{tailscale_dns_name or base_domain}/u/{prefix}/notion/webhook"
+            return urls
+        stored_urls = meta.get("access_urls")
+        if isinstance(stored_urls, Mapping):
+            safe_urls = {
+                str(role): str(url).strip()
+                for role, url in stored_urls.items()
+                if str(role).strip() and str(url).strip().startswith("https://")
+            }
+            if {"dashboard", "files", "code", "hermes"} <= set(safe_urls):
+                return safe_urls
         return arclink_access_urls(
             prefix=prefix,
             base_domain=base_domain,
             ingress_mode=ingress_mode,
             tailscale_dns_name=tailscale_dns_name,
             tailscale_host_strategy=tailscale_host_strategy,
+            tailnet_service_ports=tailnet_ports,
         )
     stored_urls = meta.get("access_urls")
     if isinstance(stored_urls, Mapping):

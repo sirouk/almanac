@@ -695,10 +695,11 @@ Use the canonical Docker path rather than editing generated Compose by hand:
 When `ARCLINK_INGRESS_MODE=tailscale` and
 `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY=path`, Docker health/reconcile
 assigns stable tailnet HTTPS ports starting at
-`ARCLINK_TAILNET_SERVICE_PORT_BASE` for the per-deployment `hermes`, `files`,
-and `code` roles. It stores those ports and `access_urls` in deployment
-metadata, then calls `tailscale serve --https=<port>` for each role when the
-host has the Tailscale CLI.
+`ARCLINK_TAILNET_SERVICE_PORT_BASE` for per-deployment Helm/Hermes. It stores
+those ports and root-mounted `access_urls` in deployment metadata, then calls
+`tailscale serve --https=<port>` to publish the local dashboard proxy when the
+host has the Tailscale CLI. Drive, Code, and Terminal are dashboard-native tabs
+under that same root URL.
 
 If the host lacks the Tailscale CLI, publishing is skipped with a warning and
 health continues. The deployment metadata remains the source for the dashboard

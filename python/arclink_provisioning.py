@@ -770,6 +770,7 @@ def render_arclink_provisioning_intent(
         "ARCLINK_BACKEND_ALLOWED_CIDRS": str(source_env.get("ARCLINK_BACKEND_ALLOWED_CIDRS") or "172.16.0.0/12"),
         "ARCLINK_DASHBOARD_HOST": hostnames["dashboard"],
         "ARCLINK_DASHBOARD_USERNAME": str(user.get("email") or deployment["user_id"]),
+        "ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS": "1",
         "ARCLINK_FILES_HOST": hostnames["files"],
         "ARCLINK_CODE_HOST": hostnames["code"],
         "ARCLINK_HERMES_HOST": hostnames["hermes"],

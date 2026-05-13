@@ -5,6 +5,7 @@ import http.client
 import http.server
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -460,6 +461,46 @@ def test_proxy_mount_rewrites_root_absolute_dashboard_assets() -> None:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
+def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_managed_lifecycle_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        previous = os.environ.get("ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS")
+        os.environ["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] = "1"
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            cookie = login(proxy.server_port)
+            status, headers, body = request(proxy.server_port, "/", headers={"Cookie": cookie})
+            expect(status == 200, f"expected managed dashboard response, saw {status} {headers}")
+            expect("data-arclink-managed-lifecycle-controls" in body, body)
+            expect("Restart Gateway" in body and "Update Hermes" in body, body)
+
+            same_origin = f"http://127.0.0.1:{proxy.server_port}"
+            for endpoint in ("/api/gateway/restart", "/api/hermes/update"):
+                status, headers, body = request(
+                    proxy.server_port,
+                    endpoint,
+                    method="POST",
+                    body="{}",
+                    headers={"Cookie": cookie, "Origin": same_origin},
+                )
+                expect(status == 409, f"expected managed lifecycle block for {endpoint}, saw {status} {headers} {body!r}")
+                parsed = json.loads(body)
+                expect(parsed.get("arclink_managed") is True, parsed)
+            print("PASS test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations")
+        finally:
+            if previous is None:
+                os.environ.pop("ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS", None)
+            else:
+                os.environ["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] = previous
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
@@ -468,7 +509,8 @@ def main() -> int:
     test_proxy_rejects_cross_origin_dashboard_mutations()
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
-    print("PASS all 7 dashboard-auth-proxy regression tests")
+    test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
+    print("PASS all 8 dashboard-auth-proxy regression tests")
     return 0
 
 

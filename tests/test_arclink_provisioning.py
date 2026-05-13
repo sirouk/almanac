@@ -136,6 +136,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["DISCORD_REACTIONS"] == "true", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/chutes_api_key", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] == "1", str(intent["environment"]))
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_CONTAINER_PORT"] == "8181", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_LOOPBACK_PORT"] == "18181", str(intent["environment"]))

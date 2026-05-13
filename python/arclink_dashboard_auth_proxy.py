@@ -9,6 +9,7 @@ import html
 import http.client
 import http.server
 import json
+import os
 import re
 import secrets
 import socketserver
@@ -36,6 +37,8 @@ PLUGIN_DEEPLINK_PATHS = {"/drive", "/code", "/terminal"}
 LOGIN_PATH = "/__arclink/login"
 LOGOUT_PATH = "/__arclink/logout"
 MUTATING_METHODS = {"DELETE", "PATCH", "POST", "PUT"}
+MANAGED_LIFECYCLE_ENDPOINTS = {"/api/gateway/restart", "/api/hermes/update"}
+TRUE_VALUES = {"1", "true", "yes", "on"}
 MOUNTED_HTML_ATTR_RE = re.compile(
     r"(?P<name>\b(?:action|href|poster|src)\s*=\s*)(?P<quote>[\"'])(?P<path>/(?!/)[^\"']*)(?P=quote)",
     re.IGNORECASE,
@@ -241,6 +244,44 @@ def _mount_runtime_script(prefix: str) -> str:
     )
 
 
+def _env_bool(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in TRUE_VALUES
+
+
+def _managed_lifecycle_controls_enabled() -> bool:
+    return _env_bool("ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS")
+
+
+def _managed_lifecycle_controls_script() -> str:
+    labels_json = json.dumps(["Restart Gateway", "Update Hermes"])
+    reason_json = json.dumps("ArcLink manages this deployment from the Sovereign Control Node.")
+    return (
+        '<script data-arclink-managed-lifecycle-controls>(function(){'
+        f"var labels={labels_json};"
+        f"var reason={reason_json};"
+        "function clean(value){return String(value||'').replace(/\\s+/g,' ').trim();}"
+        "function isManagedControl(node){"
+        "var text=clean(node&&node.textContent);"
+        "return labels.indexOf(text)!==-1;"
+        "}"
+        "function hideManagedControl(node){"
+        "if(!node||node.dataset&&node.dataset.arclinkManagedLifecycleHidden)return;"
+        "if(node.dataset)node.dataset.arclinkManagedLifecycleHidden='1';"
+        "try{node.disabled=true;}catch(e){}"
+        "try{node.setAttribute('aria-disabled','true');node.setAttribute('aria-hidden','true');node.setAttribute('title',reason);}catch(e){}"
+        "try{node.style.display='none';}catch(e){}"
+        "}"
+        "function patch(){"
+        "document.querySelectorAll('button,[role=\"button\"]').forEach(function(node){"
+        "if(isManagedControl(node))hideManagedControl(node);"
+        "});"
+        "}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',patch);else patch();"
+        "try{new MutationObserver(patch).observe(document.documentElement,{childList:true,subtree:true,characterData:true});}catch(e){}"
+        "})();</script>"
+    )
+
+
 def _is_login_path(value: str) -> bool:
     path = urlsplit(str(value or "")).path.rstrip("/") or "/"
     return path == LOGIN_PATH or path.endswith(LOGIN_PATH)
@@ -401,6 +442,30 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             "}else{setTimeout(run,50);}"
             "})();</script>"
         )
+        marker = "</body>"
+        if marker in body:
+            body = body.replace(marker, script + marker, 1)
+        else:
+            body += script
+        return body.encode("utf-8")
+
+    def _maybe_inject_managed_lifecycle_controls(self, payload: bytes, response_headers: list[tuple[str, str]]) -> bytes:
+        if self.command != "GET" or not _managed_lifecycle_controls_enabled():
+            return payload
+
+        header_map = {key.lower(): value for key, value in response_headers}
+        content_type = header_map.get("content-type", "")
+        if "text/html" not in content_type.lower() or header_map.get("content-encoding"):
+            return payload
+
+        try:
+            body = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return payload
+        if "data-arclink-managed-lifecycle-controls" in body:
+            return payload
+
+        script = _managed_lifecycle_controls_script()
         marker = "</body>"
         if marker in body:
             body = body.replace(marker, script + marker, 1)
@@ -625,6 +690,22 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if not self._csrf_origin_ok():
             self._send_body(403, b"Cross-origin dashboard mutation rejected.\n")
             return
+        if (
+            self.command.upper() == "POST"
+            and _managed_lifecycle_controls_enabled()
+            and path.rstrip("/") in MANAGED_LIFECYCLE_ENDPOINTS
+        ):
+            payload = {
+                "ok": False,
+                "arclink_managed": True,
+                "detail": "ArcLink manages Hermes gateway and runtime lifecycle through the Sovereign Control Node.",
+            }
+            self._send_body(
+                409,
+                json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+                content_type="application/json; charset=utf-8",
+            )
+            return
 
         target = urlsplit(self.target)
         connection = http.client.HTTPConnection(target.hostname, target.port, timeout=30)
@@ -665,6 +746,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             payload = self._rewrite_mounted_html_paths(payload, response_headers)
             payload = self._rewrite_mounted_css_paths(payload, response_headers)
             payload = self._rewrite_mounted_json_paths(payload, response_headers)
+            payload = self._maybe_inject_managed_lifecycle_controls(payload, response_headers)
             payload = self._maybe_inject_plugin_deeplink(payload, response_headers)
 
         self.send_response(status, reason)

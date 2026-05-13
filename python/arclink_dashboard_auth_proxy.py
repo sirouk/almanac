@@ -9,6 +9,7 @@ import html
 import http.client
 import http.server
 import json
+import re
 import secrets
 import socketserver
 import time
@@ -35,6 +36,14 @@ PLUGIN_DEEPLINK_PATHS = {"/drive", "/code", "/terminal"}
 LOGIN_PATH = "/__arclink/login"
 LOGOUT_PATH = "/__arclink/logout"
 MUTATING_METHODS = {"DELETE", "PATCH", "POST", "PUT"}
+MOUNTED_HTML_ATTR_RE = re.compile(
+    r"(?P<name>\b(?:action|href|poster|src)\s*=\s*)(?P<quote>[\"'])(?P<path>/(?!/)[^\"']*)(?P=quote)",
+    re.IGNORECASE,
+)
+MOUNTED_SRCSET_ATTR_RE = re.compile(r"(?P<name>\bsrcset\s*=\s*)(?P<quote>[\"'])(?P<value>[^\"']*)(?P=quote)", re.IGNORECASE)
+MOUNTED_CSS_URL_RE = re.compile(r"url\(\s*(?P<quote>[\"']?)(?P<path>/(?!/)[^)\"']+)(?P=quote)\s*\)", re.IGNORECASE)
+MOUNTED_QUOTED_PATH_RE = re.compile(r"(?P<quote>\")(?P<path>/(?!/)[^\"\\]*(?:\\.[^\"\\]*)*)(?P=quote)")
+MOUNTED_PUBLIC_PATH_ROOTS = ("/api/", "/assets/", "/dashboard-plugins/", "/ds-assets/", "/fonts/")
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -130,6 +139,106 @@ def _join_mount_path(prefix: str, path: str) -> str:
     if clean_path == "/":
         return f"{clean_prefix}/"
     return f"{clean_prefix}{clean_path}"
+
+
+def _mount_browser_path(prefix: str, path: str) -> str:
+    clean_prefix = _safe_mount_prefix(prefix)
+    candidate = str(path or "")
+    if not clean_prefix or not candidate.startswith("/") or candidate.startswith("//"):
+        return candidate
+    if candidate == clean_prefix or candidate.startswith(f"{clean_prefix}/"):
+        return candidate
+    return f"{clean_prefix}{candidate}"
+
+
+def _is_mounted_public_path(path: str) -> bool:
+    candidate = str(path or "")
+    return any(candidate.startswith(root) for root in MOUNTED_PUBLIC_PATH_ROOTS) or candidate in {
+        "/api",
+        "/assets",
+        "/dashboard-plugins",
+        "/ds-assets",
+        "/fonts",
+    }
+
+
+def _mount_srcset(prefix: str, value: str) -> str:
+    parts = []
+    for raw_part in str(value or "").split(","):
+        leading = raw_part[: len(raw_part) - len(raw_part.lstrip())]
+        trailing = raw_part[len(raw_part.rstrip()) :]
+        inner = raw_part.strip()
+        if not inner:
+            parts.append(raw_part)
+            continue
+        url, sep, descriptor = inner.partition(" ")
+        mounted = _mount_browser_path(prefix, url)
+        parts.append(f"{leading}{mounted}{sep}{descriptor}{trailing}")
+    return ",".join(parts)
+
+
+def _mount_runtime_script(prefix: str) -> str:
+    prefix_json = json.dumps(_safe_mount_prefix(prefix))
+    return (
+        '<script data-arclink-mount-prefix>(function(){'
+        f"var prefix={prefix_json};"
+        "if(!prefix||window.__arclinkMountPrefixInstalled)return;"
+        "window.__arclinkMountPrefixInstalled=true;"
+        "function mountPath(value){"
+        "if(typeof value!=='string'||value.charAt(0)!=='/'||value.indexOf('//')===0)return value;"
+        "if(value===prefix||value.indexOf(prefix+'/')===0)return value;"
+        "return prefix+value;"
+        "}"
+        "function mountURL(value){"
+        "if(typeof value==='string')return mountPath(value);"
+        "try{var url=value instanceof URL?value:new URL(String(value),window.location.href);"
+        "if(url.origin===window.location.origin){"
+        "var mounted=mountPath(url.pathname+url.search+url.hash);"
+        "if(mounted!==url.pathname+url.search+url.hash)return mounted;"
+        "}}catch(e){}"
+        "return value;"
+        "}"
+        "var originalFetch=window.fetch;"
+        "if(originalFetch){window.fetch=function(input,init){"
+        "if(typeof input==='string'||input instanceof URL)return originalFetch.call(this,mountURL(input),init);"
+        "try{if(input&&input.url){var mounted=mountURL(input.url);"
+        "if(mounted!==input.url)return originalFetch.call(this,new Request(mounted,input),init);}}catch(e){}"
+        "return originalFetch.call(this,input,init);};}"
+        "if(window.XMLHttpRequest&&XMLHttpRequest.prototype.open){"
+        "var originalOpen=XMLHttpRequest.prototype.open;"
+        "XMLHttpRequest.prototype.open=function(method,url){"
+        "arguments[1]=mountURL(url);return originalOpen.apply(this,arguments);};}"
+        "function patchAttr(proto,name){try{var desc=Object.getOwnPropertyDescriptor(proto,name);"
+        "if(desc&&desc.set){Object.defineProperty(proto,name,{get:desc.get,set:function(value){return desc.set.call(this,mountURL(value));}});}}catch(e){}}"
+        "if(window.HTMLAnchorElement)patchAttr(HTMLAnchorElement.prototype,'href');"
+        "if(window.HTMLFormElement)patchAttr(HTMLFormElement.prototype,'action');"
+        "if(window.HTMLImageElement)patchAttr(HTMLImageElement.prototype,'src');"
+        "if(window.HTMLLinkElement)patchAttr(HTMLLinkElement.prototype,'href');"
+        "if(window.HTMLScriptElement)patchAttr(HTMLScriptElement.prototype,'src');"
+        "if(window.HTMLSourceElement)patchAttr(HTMLSourceElement.prototype,'src');"
+        "var originalSetAttribute=Element.prototype.setAttribute;"
+        "Element.prototype.setAttribute=function(name,value){"
+        "var key=String(name||'').toLowerCase();"
+        "if(key==='href'||key==='src'||key==='action'||key==='poster')value=mountURL(value);"
+        "else if(key==='srcset'&&typeof value==='string')value=value.split(',').map(function(part){"
+        "var trimmed=part.trim();if(!trimmed)return part;"
+        "var pieces=trimmed.split(/\\s+/);pieces[0]=mountPath(pieces[0]);"
+        "return part.match(/^\\s*/)[0]+pieces.join(' ')+part.match(/\\s*$/)[0];}).join(',');"
+        "return originalSetAttribute.call(this,name,value);};"
+        "if(window.history&&history.pushState){var originalPushState=history.pushState;"
+        "history.pushState=function(state,title,url){if(arguments.length>2&&url!=null)arguments[2]=mountURL(url);"
+        "return originalPushState.apply(this,arguments);};}"
+        "if(window.history&&history.replaceState){var originalReplaceState=history.replaceState;"
+        "history.replaceState=function(state,title,url){if(arguments.length>2&&url!=null)arguments[2]=mountURL(url);"
+        "return originalReplaceState.apply(this,arguments);};}"
+        "if(window.EventSource){var OriginalEventSource=window.EventSource;"
+        "window.EventSource=function(url,config){return new OriginalEventSource(mountURL(url),config);};"
+        "window.EventSource.prototype=OriginalEventSource.prototype;}"
+        "if(window.WebSocket){var OriginalWebSocket=window.WebSocket;"
+        "window.WebSocket=function(url,protocols){return new OriginalWebSocket(mountURL(url),protocols);};"
+        "window.WebSocket.prototype=OriginalWebSocket.prototype;}"
+        "})();</script>"
+    )
 
 
 def _is_login_path(value: str) -> bool:
@@ -298,6 +407,87 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         else:
             body += script
         return body.encode("utf-8")
+
+    def _rewrite_mounted_html_paths(self, payload: bytes, response_headers: list[tuple[str, str]]) -> bytes:
+        mount_prefix = self._mount_prefix()
+        if self.command != "GET" or not mount_prefix:
+            return payload
+
+        header_map = {key.lower(): value for key, value in response_headers}
+        content_type = header_map.get("content-type", "")
+        if "text/html" not in content_type.lower() or header_map.get("content-encoding"):
+            return payload
+
+        try:
+            body = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return payload
+
+        def replace_attr(match: re.Match[str]) -> str:
+            path = match.group("path")
+            return f"{match.group('name')}{match.group('quote')}{_mount_browser_path(mount_prefix, path)}{match.group('quote')}"
+
+        def replace_srcset(match: re.Match[str]) -> str:
+            value = match.group("value")
+            return f"{match.group('name')}{match.group('quote')}{_mount_srcset(mount_prefix, value)}{match.group('quote')}"
+
+        body = MOUNTED_HTML_ATTR_RE.sub(replace_attr, body)
+        body = MOUNTED_SRCSET_ATTR_RE.sub(replace_srcset, body)
+        if "data-arclink-mount-prefix" not in body:
+            script = _mount_runtime_script(mount_prefix)
+            marker = "</head>"
+            if marker in body:
+                body = body.replace(marker, script + marker, 1)
+            else:
+                body = script + body
+        return body.encode("utf-8")
+
+    def _rewrite_mounted_css_paths(self, payload: bytes, response_headers: list[tuple[str, str]]) -> bytes:
+        mount_prefix = self._mount_prefix()
+        if self.command != "GET" or not mount_prefix:
+            return payload
+
+        header_map = {key.lower(): value for key, value in response_headers}
+        content_type = header_map.get("content-type", "")
+        if "text/css" not in content_type.lower() or header_map.get("content-encoding"):
+            return payload
+
+        try:
+            body = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return payload
+
+        def replace_url(match: re.Match[str]) -> str:
+            path = match.group("path")
+            if not _is_mounted_public_path(path):
+                return match.group(0)
+            quote = match.group("quote")
+            return f"url({quote}{_mount_browser_path(mount_prefix, path)}{quote})"
+
+        return MOUNTED_CSS_URL_RE.sub(replace_url, body).encode("utf-8")
+
+    def _rewrite_mounted_json_paths(self, payload: bytes, response_headers: list[tuple[str, str]]) -> bytes:
+        mount_prefix = self._mount_prefix()
+        if self.command != "GET" or not mount_prefix:
+            return payload
+
+        header_map = {key.lower(): value for key, value in response_headers}
+        content_type = header_map.get("content-type", "")
+        if "application/json" not in content_type.lower() or header_map.get("content-encoding"):
+            return payload
+
+        try:
+            body = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return payload
+
+        def replace_path(match: re.Match[str]) -> str:
+            path = match.group("path")
+            if not _is_mounted_public_path(path):
+                return match.group(0)
+            return f'{match.group("quote")}{_mount_browser_path(mount_prefix, path)}{match.group("quote")}'
+
+        return MOUNTED_QUOTED_PATH_RE.sub(replace_path, body).encode("utf-8")
 
     def _send_body(
         self,
@@ -472,6 +662,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         finally:
             connection.close()
         if status == 200:
+            payload = self._rewrite_mounted_html_paths(payload, response_headers)
+            payload = self._rewrite_mounted_css_paths(payload, response_headers)
+            payload = self._rewrite_mounted_json_paths(payload, response_headers)
             payload = self._maybe_inject_plugin_deeplink(payload, response_headers)
 
         self.send_response(status, reason)

@@ -45,6 +45,20 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/mounted-spa":
+            body = (
+                b'<!doctype html><html><head><link rel="stylesheet" href="/assets/index.css">'
+                b'<script type="module" src="/assets/index.js"></script></head>'
+                b'<body><img src="/assets/logo.png" srcset="/assets/logo.png 1x, /assets/logo@2x.png 2x">'
+                b'<a href="/drive">Drive</a><form action="/api/mutate"></form>'
+                b'<script>fetch("/api/status");</script></body></html>'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/api/private":
             if self.headers.get("Authorization") != "Bearer hermes-session-token":
                 body = b'{"detail":"Unauthorized"}'
@@ -57,6 +71,33 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
             body = b'{"ok":true}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/dashboard/plugins":
+            body = json.dumps(
+                {
+                    "plugins": [
+                        {
+                            "id": "code",
+                            "script": "/dashboard-plugins/code/dist/index.js",
+                            "style": "/dashboard-plugins/code/dist/style.css",
+                        }
+                    ],
+                    "server_path": "/home/arc-test/not-a-browser-url",
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/assets/index.css":
+            body = b'@font-face{src:url("/fonts/font.woff2")}body{background:url(/ds-assets/bg.jpg)}'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -358,6 +399,67 @@ def test_proxy_login_is_safe_behind_stripped_mount_prefix() -> None:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
+def test_proxy_mount_rewrites_root_absolute_dashboard_assets() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_mount_assets_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "arc-test", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            prefix = "/u/arc-test"
+            cookie = login(proxy.server_port, username="arc-test")
+            status, _headers, body = request(
+                proxy.server_port,
+                "/mounted-spa",
+                headers={
+                    "Cookie": cookie,
+                    "X-Forwarded-Prefix": prefix,
+                },
+            )
+            expect(status == 200, f"expected mounted dashboard HTML, saw {status}")
+            expect('href="/u/arc-test/assets/index.css"' in body, body)
+            expect('src="/u/arc-test/assets/index.js"' in body, body)
+            expect('src="/u/arc-test/assets/logo.png"' in body, body)
+            expect('srcset="/u/arc-test/assets/logo.png 1x, /u/arc-test/assets/logo@2x.png 2x"' in body, body)
+            expect('href="/u/arc-test/drive"' in body, body)
+            expect('action="/u/arc-test/api/mutate"' in body, body)
+            expect("data-arclink-mount-prefix" in body and 'var prefix="/u/arc-test";' in body, body)
+            expect("window.fetch=function" in body and "XMLHttpRequest.prototype.open" in body, body)
+            expect("Element.prototype.setAttribute" in body and "history.pushState=function" in body, body)
+
+            status, _headers, css_body = request(
+                proxy.server_port,
+                "/assets/index.css",
+                headers={
+                    "Cookie": cookie,
+                    "X-Forwarded-Prefix": prefix,
+                },
+            )
+            expect(status == 200, f"expected mounted dashboard CSS, saw {status}")
+            expect('url("/u/arc-test/fonts/font.woff2")' in css_body, css_body)
+            expect("url(/u/arc-test/ds-assets/bg.jpg)" in css_body, css_body)
+
+            status, _headers, json_body = request(
+                proxy.server_port,
+                "/api/dashboard/plugins",
+                headers={
+                    "Cookie": cookie,
+                    "X-Forwarded-Prefix": prefix,
+                },
+            )
+            expect(status == 200, f"expected mounted dashboard plugin JSON, saw {status}")
+            expect('"/u/arc-test/dashboard-plugins/code/dist/index.js"' in json_body, json_body)
+            expect('"/u/arc-test/dashboard-plugins/code/dist/style.css"' in json_body, json_body)
+            expect('"/home/arc-test/not-a-browser-url"' in json_body, json_body)
+            print("PASS test_proxy_mount_rewrites_root_absolute_dashboard_assets")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
@@ -365,7 +467,8 @@ def main() -> int:
     test_proxy_can_run_dashboard_helpers_without_auth()
     test_proxy_rejects_cross_origin_dashboard_mutations()
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
-    print("PASS all 6 dashboard-auth-proxy regression tests")
+    test_proxy_mount_rewrites_root_absolute_dashboard_assets()
+    print("PASS all 7 dashboard-auth-proxy regression tests")
     return 0
 
 

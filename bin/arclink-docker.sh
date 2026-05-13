@@ -227,6 +227,8 @@ bootstrap() {
   ensure_env_file_value ARCLINK_API_HOST "0.0.0.0"
   ensure_env_file_value ARCLINK_CORS_ORIGIN ""
   ensure_env_file_value ARCLINK_COOKIE_DOMAIN ""
+  ensure_env_file_value ARCLINK_SESSION_HASH_PEPPER "$(random_secret)"
+  ensure_env_file_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED "1"
   ensure_env_file_value ARCLINK_DEFAULT_PRICE_ID "price_arclink_founders"
   ensure_env_file_value ARCLINK_FOUNDERS_PRICE_ID "price_arclink_founders"
   ensure_env_file_value ARCLINK_SOVEREIGN_PRICE_ID "price_arclink_sovereign"

@@ -2965,6 +2965,17 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
     )
     expect(status == 201, f"public onboarding should bypass admin CIDR got {status}: {payload}")
 
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/adapter-mode",
+        headers={},
+        config=config,
+        remote_addr="198.51.100.9",
+    )
+    expect(status == 200, f"public adapter-mode should bypass admin CIDR got {status}: {payload}")
+    expect("fake_mode" in payload and "fake_stripe" in payload, str(payload))
+
     print("PASS test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes")
 
 

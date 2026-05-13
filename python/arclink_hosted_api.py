@@ -2063,7 +2063,6 @@ _CIDR_PROTECTED_ROUTES = frozenset({
     "session_revoke",
     "admin_operator_snapshot",
     "admin_scale_operations",
-    "adapter_mode",
 })
 
 _JSON_OBJECT_ROUTES = frozenset({

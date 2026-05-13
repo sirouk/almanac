@@ -122,12 +122,16 @@ repair_placeholder_secret() {
 write_default_docker_config() {
   local postgres_password="${POSTGRES_PASSWORD:-}"
   local nextcloud_admin_password="${NEXTCLOUD_ADMIN_PASSWORD:-}"
+  local session_hash_pepper="${ARCLINK_SESSION_HASH_PEPPER:-}"
 
   if [[ -z "$postgres_password" || "$postgres_password" == "change-me" ]]; then
     postgres_password="$(generate_secret)"
   fi
   if [[ -z "$nextcloud_admin_password" || "$nextcloud_admin_password" == "change-me" ]]; then
     nextcloud_admin_password="$(generate_secret)"
+  fi
+  if [[ -z "$session_hash_pepper" || "$session_hash_pepper" == "change-me" ]]; then
+    session_hash_pepper="$(generate_secret)"
   fi
 
   cat >"$CONFIG_FILE" <<EOF
@@ -176,6 +180,8 @@ ARCLINK_API_PORT=8900
 ARCLINK_WEB_PORT=3000
 ARCLINK_CORS_ORIGIN=
 ARCLINK_COOKIE_DOMAIN=
+ARCLINK_SESSION_HASH_PEPPER=$session_hash_pepper
+ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1
 ARCLINK_DEFAULT_PRICE_ID=price_arclink_founders
 ARCLINK_FOUNDERS_PRICE_ID=price_arclink_founders
 ARCLINK_SOVEREIGN_PRICE_ID=price_arclink_sovereign
@@ -354,6 +360,12 @@ fi
 
 repair_placeholder_secret POSTGRES_PASSWORD "$PRIV_DIR/state/nextcloud/db/PG_VERSION"
 repair_placeholder_secret NEXTCLOUD_ADMIN_PASSWORD "$PRIV_DIR/state/nextcloud/html/config/config.php"
+if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER 2>/dev/null || true)" || "$(config_value ARCLINK_SESSION_HASH_PEPPER 2>/dev/null || true)" == "change-me" ]]; then
+  set_config_value ARCLINK_SESSION_HASH_PEPPER "$(generate_secret)"
+fi
+if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED 2>/dev/null || true)" ]]; then
+  set_config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED "1"
+fi
 
 ensure_nextcloud_config
 ensure_nextcloud_data_dir

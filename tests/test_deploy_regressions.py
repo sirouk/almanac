@@ -2179,6 +2179,31 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     print("PASS test_control_fleet_worker_registration_is_first_class")
 
 
+def test_control_docker_bootstrap_seeds_session_hash_pepper() -> None:
+    deploy = DEPLOY_SH.read_text(encoding="utf-8")
+    docker_helper = (REPO / "bin" / "arclink-docker.sh").read_text(encoding="utf-8")
+    entrypoint = (REPO / "bin" / "docker-entrypoint.sh").read_text(encoding="utf-8")
+    compose = (REPO / "compose.yaml").read_text(encoding="utf-8")
+
+    expect(
+        'ARCLINK_SESSION_HASH_PEPPER="$(preserve_or_randomize_secret "${ARCLINK_SESSION_HASH_PEPPER:-}")"' in deploy,
+        "control/docker runtime config should generate a durable session hash pepper before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_SESSION_HASH_PEPPER "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing session hash pepper before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_SESSION_HASH_PEPPER=$session_hash_pepper" in entrypoint,
+        "fresh Docker config generation should include the session hash pepper",
+    )
+    expect(
+        "ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}" in compose,
+        "Compose should pass the session hash pepper into hosted API containers",
+    )
+    print("PASS test_control_docker_bootstrap_seeds_session_hash_pepper")
+
+
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
     cleanup = extract(text, "notion_migration_clear_workspace_state() {", "run_notion_migrate_flow() {")
@@ -3303,6 +3328,7 @@ def main() -> int:
         test_control_runtime_reset_is_backup_first_and_guarded,
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,
+        test_control_docker_bootstrap_seeds_session_hash_pepper,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,

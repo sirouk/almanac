@@ -34,10 +34,12 @@ def expect(condition: bool, message: str) -> None:
 class TestBackend(http.server.BaseHTTPRequestHandler):
     last_authorization: str | None = None
     last_cookie: str | None = None
+    last_accept_encoding: str | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         type(self).last_authorization = self.headers.get("Authorization")
         type(self).last_cookie = self.headers.get("Cookie")
+        type(self).last_accept_encoding = self.headers.get("Accept-Encoding")
         if self.path in {"/", "/drive"}:
             body = b"<html><body>dashboard</body></html>"
             self.send_response(200)
@@ -108,6 +110,7 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         type(self).last_authorization = self.headers.get("Authorization")
         type(self).last_cookie = self.headers.get("Cookie")
+        type(self).last_accept_encoding = self.headers.get("Accept-Encoding")
         if self.path == "/api/mutate":
             body = b'{"ok":true}'
             self.send_response(200)
@@ -479,6 +482,14 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
             expect(status == 200, f"expected managed dashboard response, saw {status} {headers}")
             expect("data-arclink-managed-lifecycle-controls" in body, body)
             expect("Restart Gateway" in body and "Update Hermes" in body, body)
+            status, headers, body = request(
+                proxy.server_port,
+                "/",
+                headers={"Cookie": cookie, "Accept-Encoding": "gzip, br"},
+            )
+            expect(status == 200, f"expected managed dashboard response with browser encoding, saw {status} {headers}")
+            expect(TestBackend.last_accept_encoding == "identity", str(TestBackend.last_accept_encoding))
+            expect("data-arclink-managed-lifecycle-controls" in body, body)
 
             same_origin = f"http://127.0.0.1:{proxy.server_port}"
             for endpoint in ("/api/gateway/restart", "/api/hermes/update"):

@@ -731,6 +731,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if lowered in HOP_BY_HOP_HEADERS or lowered in {"authorization", "cookie"}:
                 continue
             headers[key] = value
+        # We rewrite/inject small HTML/CSS/JSON payloads below. Ask the local
+        # dashboard for identity encoding so browser-requested gzip/br does not
+        # hide those payloads from the proxy.
+        headers["Accept-Encoding"] = "identity"
         forwarded_cookie = self._proxy_cookie_header()
         if forwarded_cookie:
             headers["Cookie"] = forwarded_cookie

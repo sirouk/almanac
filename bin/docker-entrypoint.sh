@@ -49,7 +49,9 @@ ensure_docker_state_dirs() {
 ensure_docker_state_dirs
 
 if [[ -d "$TEMPLATE_DIR" ]]; then
-  rsync -a --no-owner --no-group --ignore-existing "$TEMPLATE_DIR"/ "$PRIV_DIR"/
+  rsync -a --no-owner --no-group --no-perms --omit-dir-times --ignore-existing \
+    --exclude='/.gitignore' \
+    "$TEMPLATE_DIR"/ "$PRIV_DIR"/
 fi
 
 generate_secret() {

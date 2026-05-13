@@ -355,10 +355,13 @@ test.describe("Brand system", () => {
     expect(content!.length).toBeGreaterThan(50);
   });
 
-  test("landing page features grid renders all 6 items", async ({ page }) => {
+  test("landing page renders the imported marketing sections", async ({ page }) => {
     await page.goto("/");
-    const cards = page.locator("section h3");
-    await expect(cards).toHaveCount(6);
+    await expect(page.getByRole("heading", { name: /Raven runs your operations/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Hire Raven, an agent/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /From idea to operating/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /One agent. Clear price./i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Questions answered./i })).toBeVisible();
   });
 });
 

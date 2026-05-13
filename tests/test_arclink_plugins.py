@@ -1077,8 +1077,12 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("Drop files or folders to upload" in body, "Drive drop overlay should advertise folder uploads")
     expect("hermes-drive-confirm" in body and "expectedText" in body, "Risky Drive actions should use in-app typed confirmations")
     expect('requestJSON("/batch", { action: "restore"' in body, "Drive UI should use batch restore so partial failures are visible")
-    expect('function copySelectedWithPrompt()' in body and 'action: "copy"' in body, "Drive UI should expose selected batch copy")
-    expect('function moveSelectedWithPrompt()' in body and 'action: "move"' in body, "Drive UI should expose selected batch move")
+    expect('function copySelectedWithPrompt()' in body and 'openDestinationDialog("copy"' in body, "Drive UI should expose selected batch copy")
+    expect('function moveSelectedWithPrompt()' in body and 'openDestinationDialog("move"' in body, "Drive UI should expose selected batch move")
+    expect("function openDestinationDialog" in body and "function renderDestinationDialog" in body, "Drive copy/move should use an in-app destination picker")
+    expect("destination_root" in body and "destination_folder" in body, "Drive destination picker should preserve root-aware copy/move")
+    expect('window.prompt("Copy' not in body and 'window.prompt("Move' not in body, "Drive copy/move should not use browser prompt text boxes")
+    expect("Copy To..." not in body and "Move To..." not in body, "Drive copy/move labels should be concise")
     expect("function openBackgroundContextMenu(event)" in body, "Drive UI should expose a background context menu")
     expect('mode: "background"' in body and "New Folder" in body and "Upload" in body, "Drive background context menu should expose folder/file/upload actions")
     expect('"selection"' in body and "Trash Selected" in body and "Restore Selected" in body, "Drive selected group context menu should expose batch actions")
@@ -1102,6 +1106,9 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect(".hermes-drive-content.has-selection .hermes-drive-items" in style, "Drive CSS should keep selected-item previews visible")
     expect("z-index: 10000" in style, "Drive fullscreen preview should sit above the Hermes nav")
     expect(".hermes-drive-pdf-preview" in style and ".hermes-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
+    expect(".hermes-drive-selection-actions" in style and "flex-wrap: nowrap" in style, "Drive selected actions should stay on one row under the count")
+    expect(".hermes-drive-destination" in style and ".hermes-drive-destination-body" in style, "Drive CSS should style the destination picker modal")
+    expect("@media (max-width: 900px)" in style and ".hermes-drive-destination-body" in style and "grid-template-columns: 1fr;" in style, "Drive destination picker should collapse on mobile")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
 
 
@@ -1564,6 +1571,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["background_pty_reader"] is True, str(status))
             expect(status["capabilities"]["control_key_input"] is True, str(status))
             expect(status["limits"]["scrollback_lines"] == 50000, str(status))
+            expect(status["limits"]["reattach_scrollback_lines"] == 4000, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
 
             created = asyncio.run(
@@ -1602,6 +1610,24 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(any(item["id"] == session_id for item in sessions["sessions"]), str(sessions))
             revisited = asyncio.run(terminal_api.get_session(session_id=session_id))
             expect("terminal-proof" in revisited["session"]["scrollback"], revisited["session"]["scrollback"])
+            tui_payload = terminal_api._session_payload(
+                {
+                    "id": "term-tui-proof",
+                    "name": "Hermes TUI",
+                    "folder": "",
+                    "order": 0,
+                    "cwd": "",
+                    "mode": "tui",
+                    "target": "",
+                    "state": "running",
+                    "created_at": "2026-05-06T00:00:00Z",
+                    "updated_at": "2026-05-06T00:00:00Z",
+                    "scrollback": "\x1b[?1049hHermes\r\n\x1b[31mready\x1b[0m\r\n",
+                }
+            )
+            expect("reattach_scrollback" in tui_payload, str(tui_payload))
+            expect("\x1b" not in tui_payload["reattach_scrollback"], repr(tui_payload["reattach_scrollback"]))
+            expect("Hermes" in tui_payload["reattach_scrollback"] and "ready" in tui_payload["reattach_scrollback"], tui_payload["reattach_scrollback"])
             asyncio.run(
                 terminal_api.send_input(session_id, JsonRequest({"input": "sleep 0.2; printf 'background-proof\\n'\n"}))
             )
@@ -1628,6 +1654,17 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             cleared = asyncio.run(terminal_api.clear_closed_sessions())
             expect(cleared["removed"] >= 1, str(cleared))
             expect(not any(item["id"] == session_id for item in cleared["sessions"]), str(cleared))
+
+            machine_default = asyncio.run(terminal_api.create_session(JsonRequest({"mode": "ssh"})))
+            machine_default_session = machine_default["session"]
+            default_runtime = terminal_api._runtime(machine_default_session["id"])
+            default_process = default_runtime.get("process") if default_runtime else None
+            expect(default_process is not None, str(machine_default_session))
+            default_cwd = Path(os.readlink(f"/proc/{default_process.pid}/cwd")).resolve()
+            expect(default_cwd == workspace.resolve(), f"expected machine terminal to start in workspace, got {default_cwd}")
+            expect(machine_default_session["cwd"] == "/", str(machine_default_session))
+            asyncio.run(terminal_api.close_session(machine_default_session["id"], JsonRequest({"confirm": True})))
+            asyncio.run(terminal_api.clear_closed_sessions())
 
             machine = asyncio.run(terminal_api.create_session(JsonRequest({"mode": "ssh", "cwd": "/"})))
             machine_session = machine["session"]
@@ -1692,6 +1729,7 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("+TUI" in body and '"/sessions/clear-closed"' in body, "Terminal UI should expose TUI creation and closed cleanup")
     expect("scrollback" in body and "hermes-terminal-screen" in body, "Terminal UI should render bounded scrollback")
     expect("syncTerminalOutput" in body and "scrollToBottom" in body, "Terminal UI should stream scrollback into xterm")
+    expect("initialScrollbackForSession" in body and "reattach_scrollback" in body, "Terminal UI should use a clean TUI reattach transcript instead of replaying stale control sequences")
     expect("suffixPrefixOverlapLength" in body and "previous.endsWith(raw)" in body, "Terminal UI should not reset a cached TUI when the backend scrollback tail is bounded")
     expect("terminalCache" in body and "detachTerminal" in body, "Terminal UI should keep xterm buffers warm when the page is revisited")
     expect("onScroll" in body and "SESSION_VIEWPORT_STORAGE_PREFIX" in body, "Terminal UI should remember scroll viewport per session")
@@ -1705,11 +1743,15 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("isMissingSessionError" in body and "Terminal session was not found" in body, "Terminal UI should quietly recover from cleared or missing selected sessions")
     expect("explicitSelection" in body and "hasRequested" in body, "Terminal UI should reconcile selected sessions against the live session list")
     expect('selected: null, selectedId: "", errorMessage: ""' in body, "Terminal clear-closed should not leave a ghost selected terminal")
+    expect('cwd: sessionMode === "ssh" ? "" : "/"' in body, "Terminal machine sessions should default to the agent workspace")
+    expect('role: "button"' in body and "sessionMeta(session)" in body, "Terminal session rows should be selectable without nesting close controls in buttons")
+    expect('state.showClosed ? h("button", { type: "button", onClick: clearClosedSessions }, "Clear Closed") : null' in body, "Terminal clear-closed should be hidden until closed sessions are visible")
     api_body = (PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
     expect("_DEFAULT_TUI_DIR" in api_body and "HERMES_TUI_DIR" in api_body and "_tui_dist_available" in api_body, "Terminal API should only advertise Hermes TUI when bundled assets are ready")
     expect("_CPR_QUERY" in api_body and "browser_cpr_response" in api_body and "xtermjs_terminal_emulator" in api_body, "Terminal API should preserve cursor-position requests for browser-side response")
     expect("_DEFAULT_SCROLLBACK_LINES" in api_body and "TERMINAL_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded browser scrollback limit")
     expect("_DEFAULT_SCROLLBACK_BYTES = 8_000_000" in api_body and "_DEFAULT_SCROLLBACK_LINES = 50_000" in api_body, "Terminal API should keep enough durable scrollback for TUI reconnects")
+    expect("_DEFAULT_REATTACH_SCROLLBACK_LINES" in api_body and "TERMINAL_REATTACH_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded TUI reattach transcript")
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
@@ -1723,8 +1765,9 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect(".hermes-terminal-confirm" in style and ".hermes-terminal-confirm-card" in style, "Terminal CSS should style close confirmation")
     expect(".hermes-terminal-context" in style, "Terminal CSS should style the session right-click menu")
     expect(".hermes-terminal-session-rename" in style, "Terminal CSS should style inline rename")
-    expect(".hermes-terminal-session-name-row" in style and "grid-template-columns: minmax(0, 1fr) 2rem" in style, "Terminal session close affordance should sit at the far right of the tile")
-    expect(".hermes-terminal-session-close" in style and "font-size: 18px" in style and "justify-self: end" in style, "Terminal session close affordance should be larger and right-aligned")
+    expect(".hermes-terminal-session-name-row" in style and "grid-template-columns: minmax(0, 1fr) 2.25rem" in style, "Terminal session close affordance should sit at the far right of the tile")
+    expect(".hermes-terminal-session-close" in style and "font-size: 20px" in style and "justify-self: end" in style, "Terminal session close affordance should be larger and right-aligned")
+    expect("margin-top: auto" in style and "border-top" in style, "Terminal closed-session controls should live at the bottom of the session list")
     expect("text-transform: none" in style and "font-variant-caps: normal" in style, "Terminal CSS should preserve shell output casing")
     expect(".xterm-viewport" in style and "overflow: hidden;" in style, "Terminal CSS should leave terminal layout and scrolling to xterm")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")

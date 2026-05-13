@@ -7,9 +7,11 @@
 
 ## Authentication
 
-Sessions are issued via `/auth/admin/login` and `/auth/user/login`. Both
-routes require email plus password and return generic auth errors to callers.
-Credentials are delivered as cookies
+Sessions are issued via `/auth/login`, which resolves whether the supplied
+credentials belong to a user or admin account and sets the matching session
+cookies. Legacy `/auth/admin/login` and `/auth/user/login` routes remain for
+API compatibility. Login routes require email plus password and return generic
+auth errors to callers. Credentials are delivered as cookies
 (`arclink_{kind}_session_id`, `arclink_{kind}_session_token`,
 `arclink_{kind}_csrf`). The session id/token cookies are `HttpOnly`; the CSRF
 cookie is readable by the browser so the web client can echo it in
@@ -38,6 +40,7 @@ Rate limits are enforced per-scope using a sliding window stored in the `rate_li
 
 | Scope | Limit | Window |
 |-------|-------|--------|
+| `login` | 10 requests | 15 min |
 | `admin_login` | 5 requests | 15 min |
 | `user_login` | 10 requests | 15 min |
 | `onboarding:{channel}` | 5 requests | 15 min |
@@ -90,8 +93,9 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/webhooks/stripe` | Stripe webhook receiver |
 | POST | `/webhooks/telegram` | Telegram Bot API webhook; requires `X-Telegram-Bot-Api-Secret-Token` matching `TELEGRAM_WEBHOOK_SECRET` |
 | POST | `/webhooks/discord` | Discord interaction webhook; verifies signature timestamp tolerance and interaction replay |
-| POST | `/auth/admin/login` | Create admin session |
-| POST | `/auth/user/login` | Create user session with email plus the user-scoped dashboard password |
+| POST | `/auth/login` | Create a user or admin session based on credentials |
+| POST | `/auth/admin/login` | Legacy route to create admin session |
+| POST | `/auth/user/login` | Legacy route to create user session with email plus the user-scoped dashboard password |
 | GET | `/health` | Liveness check (DB connectivity) |
 | GET | `/openapi.json` | OpenAPI 3.1 spec (machine-readable route catalog) |
 
@@ -106,7 +110,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/provisioning` | Deployment provisioning status |
 | GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
 | POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |
-| POST | `/user/share-grants` | Request a read-only Drive/Code share grant (CSRF) |
+| POST | `/user/share-grants` | Request a read-only Drive/Code share grant (CSRF). Same-account agent-to-agent shares require `owner_deployment_id` plus a different `recipient_deployment_id` and auto-accept into the target agent's Linked root. |
 | POST | `/user/share-grants/approve` | Owner-approve a pending share grant (CSRF) |
 | POST | `/user/share-grants/deny` | Owner-deny a pending share grant (CSRF) |
 | POST | `/user/share-grants/accept` | Recipient accepts an approved share grant (CSRF) |
@@ -229,6 +233,10 @@ approve, deny, accept, revoke, and linked-resource reads; the current Next.js
 dashboard intentionally wires only credential acknowledgement, linked-resource
 listing, and read-only share status until full share creation, approval,
 acceptance, and revocation UI is built.
+Same-account multi-agent shares use the same API surface but are deployment
+scoped: the source deployment provides Vault/Workspace, the target deployment
+receives a read-only Linked projection, and no owner-notification approval loop
+is needed because the authenticated user owns both agents.
 
 ## Assumptions and Ownership
 

@@ -11,9 +11,13 @@
     "test:browser": "npx playwright test"
   },
   "dependencies": {
+    "lucide-react": "^1.14.0",
     "next": "^15.3.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",

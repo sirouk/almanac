@@ -107,8 +107,11 @@ export const api = {
   queueAdminAction: (body: Record<string, string>) =>
     request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
 
-  login: (kind: "user" | "admin", body: Record<string, string>) =>
-    request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }, kind),
+  login: (body: Record<string, string>) =>
+    request<{ session?: Record<string, unknown>; session_kind?: "user" | "admin"; role?: string; error?: string }>(
+      "/auth/login",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 
   logout: (kind: "user" | "admin") =>
     request(`/auth/${kind}/logout`, { method: "POST" }, kind),

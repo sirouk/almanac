@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "ArcLink",
     short_name: "ArcLink",
-    description: "Private AI infrastructure with Raven as the launch guide.",
+    description: "Raven deploys autonomous ArcLink agents that run recurring operations.",
     start_url: "/",
     scope: "/",
     display: "standalone",
@@ -12,15 +12,15 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#080808",
     icons: [
       {
-        src: "/brand/raven/raven_pfp.webp",
+        src: "/marketing/Favicon.png",
         sizes: "512x512",
-        type: "image/webp",
+        type: "image/png",
         purpose: "maskable",
       },
       {
-        src: "/brand/raven/raven_card.webp",
-        sizes: "512x512",
-        type: "image/webp",
+        src: "/marketing/Arclink-share.png",
+        sizes: "1200x630",
+        type: "image/png",
       },
     ],
   };

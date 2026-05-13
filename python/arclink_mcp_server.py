@@ -331,6 +331,7 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "token": AGENT_TOKEN_PROP,
             "recipient_user_id": {"type": "string", "description": "ArcLink recipient user id. Use this when already known."},
             "recipient_email": {"type": "string", "description": "Recipient ArcLink account email. Used only to resolve an existing user."},
+            "recipient_deployment_id": {"type": "string", "description": "Target deployment id. Required for same-account agent-to-agent shares."},
             "resource_kind": {"type": "string", "enum": ["drive", "code"], "description": "Surface that owns the named resource."},
             "resource_root": {"type": "string", "enum": ["vault", "workspace"], "description": "Origin root. Linked resources cannot be reshared."},
             "resource_path": {"type": "string", "minLength": 1, "description": "Named file or directory path under the selected root."},
@@ -927,6 +928,16 @@ def _share_recipient_user_id(conn: sqlite3.Connection, arguments: dict[str, Any]
             raise PermissionError("recipient ArcLink user was not found")
         return str(row["user_id"] or "")
 
+    recipient_deployment = str(arguments.get("recipient_deployment_id") or "").strip()
+    if recipient_deployment:
+        row = conn.execute(
+            "SELECT user_id FROM arclink_deployments WHERE deployment_id = ? AND user_id != ''",
+            (recipient_deployment,),
+        ).fetchone()
+        if row is None:
+            raise PermissionError("recipient ArcLink deployment was not found")
+        return str(row["user_id"] or "")
+
     recipient_email = str(arguments.get("recipient_email") or "").strip()
     if recipient_email:
         row = conn.execute(
@@ -948,6 +959,7 @@ def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, A
     metadata = {
         "requested_via": "arclink-mcp",
         "deployment_id": owner["deployment_id"],
+        "owner_deployment_id": owner["deployment_id"],
         "actor": str(arguments.get("actor") or agent_id),
     }
     result = create_user_share_grant_for_owner(
@@ -957,6 +969,8 @@ def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, A
         resource_kind=str(arguments.get("resource_kind") or ""),
         resource_root=str(arguments.get("resource_root") or ""),
         resource_path=str(arguments.get("resource_path") or ""),
+        owner_deployment_id=owner["deployment_id"],
+        recipient_deployment_id=str(arguments.get("recipient_deployment_id") or ""),
         display_name=str(arguments.get("display_name") or ""),
         access_mode="read",
         metadata=metadata,

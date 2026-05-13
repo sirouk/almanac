@@ -80,7 +80,7 @@ const api = {
   adminEvents: () => request("/admin/events", {}, "admin"),
   adminActions: () => request("/admin/actions", {}, "admin"),
   queueAdminAction: (body) => request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
-  login: (kind, body) => request(`/auth/${kind}/login`, { method: "POST", body: JSON.stringify(body) }, kind),
+  login: (body) => request("/auth/login", { method: "POST", body: JSON.stringify(body) }),
   logout: (kind) => request(`/auth/${kind}/logout`, { method: "POST" }, kind),
   userPortal: (body) => request("/user/portal", { method: "POST", body: JSON.stringify(body) }, "user"),
   revokeSession: (body) => request("/admin/sessions/revoke", { method: "POST", body: JSON.stringify(body) }, "admin"),
@@ -243,11 +243,9 @@ describe("API client route construction", () => {
     assert.equal(lastFetchOpts.method, "POST");
   });
 
-  it("login POSTs to /auth/{kind}/login", async () => {
-    await api.login("user", { email: "u@t.com" });
-    assert.ok(lastFetchUrl.endsWith("/auth/user/login"));
-    await api.login("admin", { email: "a@t.com" });
-    assert.ok(lastFetchUrl.endsWith("/auth/admin/login"));
+  it("login POSTs to /auth/login", async () => {
+    await api.login({ email: "u@t.com" });
+    assert.ok(lastFetchUrl.endsWith("/auth/login"));
   });
 
   it("logout POSTs to /auth/{kind}/logout", async () => {

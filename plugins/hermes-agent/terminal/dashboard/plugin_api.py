@@ -56,8 +56,14 @@ _MAX_READ_BYTES = 64_000
 _DEFAULT_MAX_SESSIONS = 6
 _DEFAULT_SCROLLBACK_BYTES = 8_000_000
 _DEFAULT_SCROLLBACK_LINES = 50_000
+_DEFAULT_REATTACH_SCROLLBACK_LINES = 4_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
 _SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
+_ANSI_ESCAPE_RE = re.compile(
+    r"(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P^_].*?\x1b\\|\x1b[@-Z\\-_])",
+    re.DOTALL,
+)
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
     "arclink-bootstrap-token",
@@ -228,6 +234,15 @@ def _scrollback_lines() -> int:
     return _clean_int(_env_first("TERMINAL_SCROLLBACK_LINES"), _DEFAULT_SCROLLBACK_LINES, 500, 200_000)
 
 
+def _reattach_scrollback_lines() -> int:
+    return _clean_int(
+        _env_first("TERMINAL_REATTACH_SCROLLBACK_LINES"),
+        _DEFAULT_REATTACH_SCROLLBACK_LINES,
+        100,
+        50_000,
+    )
+
+
 def _runtime_user_safe() -> bool:
     if not hasattr(os, "geteuid"):
         return True
@@ -300,7 +315,8 @@ def _resolve_machine_cwd(raw_path: Any) -> tuple[Path, str]:
     _assert_not_sensitive(target)
     if not target.exists() or not target.is_dir():
         raise HTTPException(status_code=404, detail="Terminal cwd does not exist")
-    display = "/" if str(target) == "/" else str(target)
+    workspace_root = _workspace_root()
+    display = "" if target == workspace_root else "/" if str(target) == "/" else str(target)
     return target, display
 
 
@@ -334,10 +350,28 @@ def _redact_text(value: Any) -> str:
 def _sanitize_scrollback(value: Any) -> str:
     text = str(value or "")
     limit = _scrollback_limit()
-    if len(text.encode("utf-8", errors="ignore")) <= limit:
-        return text
-    encoded = text.encode("utf-8", errors="ignore")[-limit:]
-    return encoded.decode("utf-8", errors="ignore")
+    encoded = text.encode("utf-8", errors="ignore")
+    if len(encoded) > limit:
+        text = encoded[-limit:].decode("utf-8", errors="ignore")
+    line_limit = _scrollback_lines()
+    lines = text.splitlines(keepends=True)
+    if len(lines) > line_limit:
+        text = "".join(lines[-line_limit:])
+    return text
+
+
+def _plain_reattach_scrollback(value: Any) -> str:
+    text = _sanitize_scrollback(value)
+    if not text:
+        return ""
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _CONTROL_CHARS_RE.sub("", text)
+    lines = text.splitlines()
+    line_limit = _reattach_scrollback_lines()
+    if len(lines) > line_limit:
+        lines = lines[-line_limit:]
+    return ("\n".join(lines) + "\n") if lines else ""
 
 
 def _set_pty_size(fd: int, rows: int = _DEFAULT_ROWS, cols: int = _DEFAULT_COLS) -> None:
@@ -370,6 +404,7 @@ def _save_sessions(payload: dict[str, Any]) -> None:
 
 
 def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) -> dict[str, Any]:
+    mode = _clean_session_mode(entry.get("mode"))
     payload = {
         "id": str(entry.get("id") or ""),
         "name": _clean_name(entry.get("name"), "Terminal"),
@@ -378,7 +413,7 @@ def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) 
         "cwd": _display_path(str(entry.get("cwd") or "")),
         "shell": _shell_name(),
         "backend": "managed-pty",
-        "mode": _clean_session_mode(entry.get("mode")),
+        "mode": mode,
         "target": _clean_name(entry.get("target"), ""),
         "state": str(entry.get("state") or "closed"),
         "rows": _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200),
@@ -388,7 +423,10 @@ def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) 
         "exit_code": entry.get("exit_code"),
     }
     if include_scrollback:
-        payload["scrollback"] = _sanitize_scrollback(entry.get("scrollback") or "")
+        scrollback = _sanitize_scrollback(entry.get("scrollback") or "")
+        payload["scrollback"] = scrollback
+        if mode == "tui":
+            payload["reattach_scrollback"] = _plain_reattach_scrollback(scrollback)
     return payload
 
 
@@ -560,7 +598,10 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     argv, label = _runtime_argv(entry)
     del label
     mode = _clean_session_mode(entry.get("mode"))
-    cwd, cwd_display = _resolve_session_cwd(mode, entry.get("cwd") or "/")
+    raw_cwd = entry.get("cwd")
+    if not str(raw_cwd or "").strip():
+        raw_cwd = str(_workspace_root()) if mode == "ssh" else "/"
+    cwd, cwd_display = _resolve_session_cwd(mode, raw_cwd)
     entry["cwd"] = cwd_display
     session_id = str(entry.get("id") or "")
     rows = _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200)
@@ -639,6 +680,7 @@ def _status_payload() -> dict[str, Any]:
             "max_sessions": _max_sessions(),
             "scrollback_bytes": _scrollback_limit(),
             "scrollback_lines": _scrollback_lines(),
+            "reattach_scrollback_lines": _reattach_scrollback_lines(),
             "input_bytes": _MAX_INPUT_BYTES,
         },
         "backend_candidates": {
@@ -703,7 +745,10 @@ async def create_session(request: Request) -> dict[str, Any]:
         if len(_active_sessions(payload)) >= _max_sessions():
             raise HTTPException(status_code=429, detail="Terminal session limit reached")
         mode = _clean_session_mode(body.get("mode"))
-        cwd_path, cwd_relative = _resolve_session_cwd(mode, body.get("cwd") or "/")
+        raw_cwd = body.get("cwd")
+        if not str(raw_cwd or "").strip():
+            raw_cwd = str(_workspace_root()) if mode == "ssh" else "/"
+        cwd_path, cwd_relative = _resolve_session_cwd(mode, raw_cwd)
         del cwd_path
         session_id = "term-" + uuid.uuid4().hex[:16]
         now = _now()

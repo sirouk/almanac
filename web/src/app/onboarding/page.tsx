@@ -49,6 +49,7 @@ export default function OnboardingPage() {
   const [email, setEmail] = useState("");
   const [planId, setPlanId] = useState<PlanId>("founders");
   const [showStandardPlans, setShowStandardPlans] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState("web");
   const [sessionId, setSessionId] = useState("");
   const [claimToken, setClaimToken] = useState("");
   const [cancelToken, setCancelToken] = useState("");
@@ -62,6 +63,19 @@ export default function OnboardingPage() {
     api.adapterMode().then((r) => {
       if (r.status === 200) setFakeMode((r.data as { fake_mode?: boolean }).fake_mode ?? null);
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const requestedPlan = params.get("plan");
+    const requestedChannel = params.get("channel");
+    if (requestedPlan === "founders" || requestedPlan === "sovereign" || requestedPlan === "scale") {
+      setPlanId(requestedPlan);
+      if (requestedPlan !== "founders") setShowStandardPlans(true);
+    }
+    if (requestedChannel === "telegram" || requestedChannel === "discord") {
+      setSelectedChannel(requestedChannel);
+    }
   }, []);
 
   // Restore mid-flow state on refresh / Stripe cancel return.
@@ -193,186 +207,241 @@ export default function OnboardingPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-6">
-      <Link href="/" className="mb-8 font-display text-xl font-bold tracking-wide">
-        <span className="text-signal-orange">ARC</span>LINK
-      </Link>
+    <div className="relative min-h-screen overflow-hidden bg-[#080808] px-6 py-8">
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          backgroundImage:
+            "linear-gradient(rgba(251,80,5,0.032) 1px, transparent 1px), linear-gradient(90deg, rgba(251,80,5,0.026) 1px, transparent 1px)",
+          backgroundSize: "80px 80px",
+        }}
+      />
+      <div className="scan-line-hero" style={{ animationDelay: "1s" }} />
 
-      <div className="w-full max-w-md rounded-lg border border-border bg-surface p-8">
-        <Image
-          src="/brand/raven/raven_pfp.webp"
-          alt=""
-          width={64}
-          height={64}
-          className="mb-5 h-16 w-16 rounded-full border border-border object-cover"
-          unoptimized
-          priority
-        />
-        <p className="mb-2 text-xs uppercase tracking-[0.22em] text-soft-white/40">
-          {step === "start" && "Step 1 of 3 - First contact"}
-          {step === "questions" && "Step 2 of 3 - Name and contact"}
-          {step === "checkout" && "Step 3 of 3 - Stripe handoff"}
-          {step === "done" && "Step 3 of 3 - Stripe handoff"}
-        </p>
-        <h1 className="font-display text-2xl font-bold">
-          {step === "start" && "Choose ArcLink Onboarding"}
-          {step === "questions" && "Name The Agent"}
-          {step === "checkout" && PLAN_COPY[planId].checkout}
-          {step === "done" && "Stripe Handoff Ready"}
-        </h1>
+      <header className="relative z-10 mx-auto flex max-w-7xl items-center justify-between">
+        <Link href="/" aria-label="ArcLink home">
+          <Image
+            src="/marketing/Arclink_v3--orange_symbol_white_text.svg"
+            alt="ArcLink"
+            width={154}
+            height={32}
+            className="h-8 w-auto"
+            priority
+          />
+        </Link>
+        <Link
+          href="/login"
+          className="rounded border border-white/10 px-4 py-2 font-mono text-xs font-semibold tracking-widest text-[#E7E6E6]/60 transition hover:border-[#FB5005]/35 hover:text-[#E7E6E6]"
+        >
+          LOGIN
+        </Link>
+      </header>
 
-        {error && <ErrorAlert message={error} className="mt-4" />}
-
-        {resumed && step !== "start" && step !== "done" && (
-          <p className="mt-4 rounded border border-border bg-carbon/60 px-3 py-2 text-xs text-soft-white/70">
-            Welcome back. I held your place - pick up where you left off.
+      <main className="relative z-10 mx-auto grid min-h-[calc(100vh-96px)] max-w-6xl items-center gap-10 py-14 lg:grid-cols-[0.9fr_1.1fr]">
+        <section className="hidden lg:block">
+          <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#FB5005]/70">Raven onboarding</p>
+          <h1 className="font-heading mt-5 max-w-xl text-5xl font-normal leading-[1.04] text-[#E7E6E6]">
+            Pick the first agent. Raven handles the handoff.
+          </h1>
+          <p className="font-body mt-6 max-w-lg text-base leading-relaxed text-[#E7E6E6]/50">
+            The web flow keeps the Stripe and dashboard pieces in one place, then Raven continues the setup in your preferred channel.
           </p>
-        )}
+          <div className="mt-8 grid max-w-lg grid-cols-3 gap-px overflow-hidden rounded-lg bg-white/5">
+            {[
+              ["01", "Plan"],
+              ["02", "Identity"],
+              ["03", "Stripe"],
+            ].map(([num, label]) => (
+              <div key={num} className="bg-[#0F0F0E] px-5 py-4">
+                <p className="font-heading text-2xl font-bold text-[#FB5005]/70">{num}</p>
+                <p className="font-mono mt-1 text-[10px] uppercase tracking-widest text-[#E7E6E6]/35">{label}</p>
+              </div>
+            ))}
+          </div>
+        </section>
 
-        {step === "start" && (
-          <div className="mt-6 space-y-4">
-            <p className="text-sm text-soft-white/60">
-              I can take you from a few answers to agent onboard ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
+        <section className="mx-auto w-full max-w-md rounded-lg border border-white/8 bg-[#0F0F0E]/95 p-8 shadow-[0_0_70px_rgba(251,80,5,0.08)] backdrop-blur">
+          <Image
+            src="/marketing/Favicon.png"
+            alt=""
+            width={64}
+            height={64}
+            className="mb-5 h-16 w-16 rounded-lg border border-white/10 object-cover"
+            unoptimized
+            priority
+          />
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-[#E7E6E6]/35">
+            {step === "start" && "Step 1 of 3 - First contact"}
+            {step === "questions" && "Step 2 of 3 - Name and contact"}
+            {step === "checkout" && "Step 3 of 3 - Stripe handoff"}
+            {step === "done" && "Step 3 of 3 - Stripe handoff"}
+          </p>
+          <h2 className="font-heading text-3xl font-normal text-[#E7E6E6]">
+            {step === "start" && "Choose ArcLink Onboarding"}
+            {step === "questions" && "Name The Agent"}
+            {step === "checkout" && PLAN_COPY[planId].checkout}
+            {step === "done" && "Stripe Handoff Ready"}
+          </h2>
+
+          {selectedChannel !== "web" && step === "start" && (
+            <p className="mt-3 rounded border border-[#FB5005]/20 bg-[#FB5005]/5 px-3 py-2 font-body text-xs text-[#E7E6E6]/55">
+              Preferred channel: <span className="capitalize text-[#FB5005]">{selectedChannel}</span>. Raven will continue there after checkout.
             </p>
-            <div className="grid gap-3">
-              {!showStandardPlans ? (
+          )}
+
+          {error && <ErrorAlert message={error} className="mt-4" />}
+
+          {resumed && step !== "start" && step !== "done" && (
+            <p className="mt-4 rounded border border-white/10 bg-[#080808]/60 px-3 py-2 text-xs text-[#E7E6E6]/70">
+              Welcome back. I held your place - pick up where you left off.
+            </p>
+          )}
+
+          {step === "start" && (
+            <div className="mt-6 space-y-4">
+              <p className="font-body text-sm leading-relaxed text-[#E7E6E6]/55">
+                I can take you from a few answers to agent onboard ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
+              </p>
+              <div className="grid gap-3">
+                {!showStandardPlans ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleStart("founders")}
+                      disabled={loading}
+                      className="rounded border border-[#FB5005] bg-[#FB5005] px-4 py-3 text-left font-body font-semibold text-white transition hover:bg-[#e04504] disabled:opacity-50"
+                    >
+                      Founders - $149/month
+                      <span className="mt-1 block text-xs font-normal text-white/70">Limited to the first 100. Agent onboard ArcLink.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowStandardPlans(true)}
+                      disabled={loading}
+                      className="rounded border border-white/10 bg-[#080808] px-4 py-3 text-left font-body font-semibold text-[#E7E6E6] transition hover:border-[#FB5005]/40 disabled:opacity-50"
+                    >
+                      Sovereign / Scale
+                      <span className="mt-1 block text-xs font-normal text-[#E7E6E6]/50">Compare agent onboarding options.</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => handleStart("sovereign")}
+                      disabled={loading}
+                      className="rounded border border-[#FB5005] bg-[#FB5005] px-4 py-3 text-left font-body font-semibold text-white transition hover:bg-[#e04504] disabled:opacity-50"
+                    >
+                      Sovereign - $199/month
+                      <span className="mt-1 block text-xs font-normal text-white/70">Agent onboard ArcLink.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleStart("scale")}
+                      disabled={loading}
+                      className="rounded border border-white/10 bg-[#080808] px-4 py-3 text-left font-body font-semibold text-[#E7E6E6] transition hover:border-[#FB5005]/40 disabled:opacity-50"
+                    >
+                      Scale - $275/month
+                      <span className="mt-1 block text-xs font-normal text-[#E7E6E6]/50">Agents onboard ArcLink with Federation.</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {step === "questions" && (
+            <form onSubmit={handleAnswer} className="mt-6 space-y-4">
+              <div>
+                <label htmlFor="name" className="font-body block text-sm text-[#E7E6E6]/55">Display Name</label>
+                <input
+                  id="name"
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/10 bg-[#080808] px-3 py-2 text-[#E7E6E6] outline-none transition focus:border-[#FB5005]"
+                  placeholder="Your name or org"
+                />
+              </div>
+              <div>
+                <label htmlFor="email" className="font-body block text-sm text-[#E7E6E6]/55">Email</label>
+                <input
+                  id="email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/10 bg-[#080808] px-3 py-2 text-[#E7E6E6] outline-none transition focus:border-[#FB5005]"
+                  placeholder="you@company.com"
+                />
+                <p className="mt-1 text-xs text-[#E7E6E6]/30">Used for login and status after checkout.</p>
+              </div>
+              <p className="font-body text-sm text-[#E7E6E6]/40">
+                {PLAN_COPY[planId].name} is on deck at <span className="text-[#FB5005]">{PLAN_COPY[planId].price}</span>. {PLAN_COPY[planId].summary} Agentic Expansion is $99/month on Sovereign and $79/month on Scale.
+              </p>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded bg-[#FB5005] px-4 py-3 font-body font-semibold text-white transition hover:bg-[#e04504] disabled:opacity-50"
+              >
+                {loading ? "Preparing Stripe..." : "Continue To Stripe"}
+              </button>
+            </form>
+          )}
+
+          {step === "checkout" && (
+            <div className="mt-6 space-y-4">
+              <p className="font-body text-sm text-[#E7E6E6]/55">
+                I will hand you to Stripe, watch for confirmation, then move your ArcLink onboarding into the launch queue.
+              </p>
+              <button
+                onClick={() => openCheckoutForSession()}
+                disabled={loading}
+                className="w-full rounded bg-[#FB5005] px-4 py-3 font-body font-semibold text-white transition hover:bg-[#e04504] disabled:opacity-50"
+              >
+                {loading ? "Preparing..." : PLAN_COPY[planId].checkout}
+              </button>
+            </div>
+          )}
+
+          {step === "done" && (
+            <div className="mt-6 space-y-4">
+              {checkoutUrl ? (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => handleStart("founders")}
-                    disabled={loading}
-                    className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
+                  <p className="font-body text-sm text-[#E7E6E6]/55">
+                    Stage 1 is ready: finish the Stripe handoff. When payment clears, Raven starts provisioning and reports the result with your working links.
+                  </p>
+                  <a
+                    href={checkoutUrl}
+                    className="block w-full rounded bg-[#FB5005] px-4 py-3 text-center font-body font-semibold text-white transition hover:bg-[#e04504]"
                   >
-                    Founders - $149/month
-                    <span className="mt-1 block text-xs font-normal text-jet/70">Limited to the first 100. Agent onboard ArcLink.</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowStandardPlans(true)}
-                    disabled={loading}
-                    className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
-                  >
-                    Sovereign / Scale
-                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Compare agent onboarding options.</span>
-                  </button>
+                    Complete The Hire
+                  </a>
                 </>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => handleStart("sovereign")}
-                    disabled={loading}
-                    className="rounded border border-signal-orange bg-signal-orange px-4 py-3 text-left font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
+                  <p className="font-body text-sm text-[#1AC153]">
+                    Onboarding complete. I am preparing your deployment.
+                  </p>
+                  <Link
+                    href="/dashboard"
+                    className="block w-full rounded bg-[#FB5005] px-4 py-3 text-center font-body font-semibold text-white transition hover:bg-[#e04504]"
                   >
-                    Sovereign - $199/month
-                    <span className="mt-1 block text-xs font-normal text-jet/70">Agent onboard ArcLink.</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleStart("scale")}
-                    disabled={loading}
-                    className="rounded border border-border bg-carbon px-4 py-3 text-left font-semibold text-soft-white transition hover:border-signal-orange disabled:opacity-50"
-                  >
-                    Scale - $275/month
-                    <span className="mt-1 block text-xs font-normal text-soft-white/60">Agents onboard ArcLink with Federation.</span>
-                  </button>
+                    Open Dashboard
+                  </Link>
                 </>
               )}
             </div>
-          </div>
-        )}
+          )}
 
-        {step === "questions" && (
-          <form onSubmit={handleAnswer} className="mt-6 space-y-4">
-            <div>
-              <label htmlFor="name" className="block text-sm text-soft-white/60">Display Name</label>
-              <input
-                id="name"
-                type="text"
-                required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-soft-white outline-none focus:border-signal-orange"
-                placeholder="Your name or org"
-              />
-            </div>
-            <div>
-              <label htmlFor="email" className="block text-sm text-soft-white/60">Email</label>
-              <input
-                id="email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-soft-white outline-none focus:border-signal-orange"
-                placeholder="you@company.com"
-              />
-              <p className="mt-1 text-xs text-soft-white/30">Used for login and status after checkout.</p>
-            </div>
-            <p className="text-sm text-soft-white/40">
-              {PLAN_COPY[planId].name} is on deck at <span className="text-signal-orange">{PLAN_COPY[planId].price}</span>. {PLAN_COPY[planId].summary} Agentic Expansion is $99/month on Sovereign and $79/month on Scale.
+          {fakeMode === true && (
+            <p className="mt-6 font-body text-xs text-[#E7E6E6]/30">
+              Fake adapters active in development. No live charges.
             </p>
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Preparing Stripe..." : "Continue To Stripe"}
-            </button>
-          </form>
-        )}
-
-        {step === "checkout" && (
-          <div className="mt-6 space-y-4">
-            <p className="text-sm text-soft-white/60">
-              I will hand you to Stripe, watch for confirmation, then move your ArcLink onboarding into the launch queue.
-            </p>
-            <button
-              onClick={() => openCheckoutForSession()}
-              disabled={loading}
-              className="w-full rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? "Preparing..." : PLAN_COPY[planId].checkout}
-            </button>
-          </div>
-        )}
-
-        {step === "done" && (
-          <div className="mt-6 space-y-4">
-            {checkoutUrl ? (
-              <>
-                <p className="text-sm text-soft-white/60">
-                  Stage 1 is ready: finish the Stripe handoff. When payment clears, Raven starts provisioning and reports the result with your working links.
-                </p>
-                <a
-                  href={checkoutUrl}
-                  className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
-                >
-                  Complete The Hire
-                </a>
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-neon-green">
-                  Onboarding complete. I am preparing your deployment.
-                </p>
-                <Link
-                  href="/dashboard"
-                  className="block w-full rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
-                >
-                  Open Dashboard
-                </Link>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {fakeMode === true && (
-        <p className="mt-6 text-xs text-soft-white/30">
-          Fake adapters active in development. No live charges.
-        </p>
-      )}
+          )}
+        </section>
+      </main>
     </div>
   );
 }

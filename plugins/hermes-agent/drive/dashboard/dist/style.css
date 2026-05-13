@@ -318,13 +318,26 @@
 
 .hermes-drive-selection {
   border: 1px solid color-mix(in srgb, var(--accent-base, #ff6a3d) 36%, transparent);
-  flex-wrap: wrap;
+  align-items: stretch;
+  display: grid;
+  gap: 0.45rem;
   padding: 0.45rem;
 }
 
-.hermes-drive-selection span {
+.hermes-drive-selection-count {
   font-size: 0.78rem;
   font-weight: 700;
+}
+
+.hermes-drive-selection-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  overflow-x: auto;
+}
+
+.hermes-drive-selection-actions button {
+  flex: 0 0 auto;
 }
 
 .hermes-drive-tree-tools {
@@ -606,6 +619,159 @@
   min-height: 0;
 }
 
+.hermes-drive-destination-backdrop {
+  align-items: center;
+  background: rgb(0 0 0 / 0.58);
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  padding: 1rem;
+  position: fixed;
+  right: 0;
+  top: 0;
+  z-index: 20;
+}
+
+.hermes-drive-destination {
+  background: color-mix(in srgb, var(--background-base) 96%, #111);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 26%, transparent);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.42);
+  color: var(--midground);
+  display: flex;
+  flex-direction: column;
+  max-height: min(42rem, calc(100dvh - 2rem));
+  max-width: min(46rem, 100%);
+  min-height: 24rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.hermes-drive-destination-head,
+.hermes-drive-destination-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.85rem;
+}
+
+.hermes-drive-destination-head {
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+}
+
+.hermes-drive-destination-head h2 {
+  font-size: 1rem;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.hermes-drive-destination-head p,
+.hermes-drive-destination-actions span,
+.hermes-drive-destination-empty {
+  color: color-mix(in srgb, var(--midground-base) 66%, transparent);
+  font-size: 0.8rem;
+}
+
+.hermes-drive-destination-head p {
+  margin: 0.2rem 0 0;
+}
+
+.hermes-drive-destination-body {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(8.5rem, 12rem) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.hermes-drive-destination-roots {
+  border-right: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.65rem;
+}
+
+.hermes-drive-destination-roots button,
+.hermes-drive-destination-path button,
+.hermes-drive-destination-row {
+  text-align: left;
+}
+
+.hermes-drive-destination-roots button.active,
+.hermes-drive-destination-path button.active,
+.hermes-drive-destination-row:hover {
+  background: color-mix(in srgb, var(--midground-base) 10%, transparent);
+}
+
+.hermes-drive-destination-picker {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+}
+
+.hermes-drive-destination-path {
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.55rem 0.65rem;
+}
+
+.hermes-drive-destination-path span {
+  color: color-mix(in srgb, var(--midground-base) 42%, transparent);
+}
+
+.hermes-drive-destination-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.65rem;
+}
+
+.hermes-drive-destination-row {
+  align-items: center;
+  border: 0 !important;
+  display: flex;
+  gap: 0.45rem;
+  min-height: 2rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.hermes-drive-destination-row span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-drive-destination-empty {
+  display: grid;
+  min-height: 8rem;
+  place-items: center;
+}
+
+.hermes-drive-destination-actions {
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.hermes-drive-destination-actions span {
+  flex: 1 1 auto;
+  min-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hermes-drive-drop-overlay {
   align-items: center;
   background: color-mix(in srgb, var(--background-base) 72%, transparent);
@@ -750,6 +916,16 @@
 
   .hermes-drive-browser {
     max-height: 18rem;
+  }
+
+  .hermes-drive-destination-body {
+    grid-template-columns: 1fr;
+  }
+
+  .hermes-drive-destination-roots {
+    border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 14%, transparent);
+    border-right: 0;
+    flex-direction: row;
   }
 }
 

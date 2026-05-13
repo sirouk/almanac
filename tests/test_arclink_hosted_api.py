@@ -351,6 +351,75 @@ def test_admin_login_sets_session_cookies() -> None:
     print("PASS test_admin_login_sets_session_cookies")
 
 
+def test_unified_login_resolves_user_or_admin_session() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_unified_login_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_unified_login_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_unified_login_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_unified_login_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
+    })
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_unified_login",
+        email="unified-user@example.test",
+    )
+    api.set_arclink_user_password(conn, user_id=prepared["user_id"], password="user-unified-password")
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_unified_login",
+        email="unified-admin@example.test",
+        role="ops",
+        password="admin-unified-password",
+    )
+
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/login",
+        headers={},
+        body=json.dumps({"email": "unified-user@example.test", "password": "user-unified-password"}),
+        config=config,
+    )
+    expect(status == 201, f"user unified login expected 201 got {status}: {payload}")
+    expect(payload["session_kind"] == "user", str(payload))
+    cookie_text = " ".join(v for k, v in headers if k == "Set-Cookie")
+    expect("arclink_user_session_id=" in cookie_text, cookie_text)
+    expect("arclink_admin_session_id=;" in cookie_text, cookie_text)
+
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/login",
+        headers={},
+        body=json.dumps({"email": "unified-admin@example.test", "password": "admin-unified-password"}),
+        config=config,
+    )
+    expect(status == 201, f"admin unified login expected 201 got {status}: {payload}")
+    expect(payload["session_kind"] == "admin", str(payload))
+    expect(payload["role"] == "ops", str(payload))
+    cookie_text = " ".join(v for k, v in headers if k == "Set-Cookie")
+    expect("arclink_admin_session_id=" in cookie_text, cookie_text)
+    expect("arclink_user_session_id=;" in cookie_text, cookie_text)
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/login",
+        headers={},
+        body=json.dumps({"email": "unified-admin@example.test", "password": "admin-unified-password"}),
+        config=config,
+        remote_addr="198.51.100.9",
+    )
+    expect(status == 401, f"admin unified login outside backend CIDR expected 401 got {status}: {payload}")
+
+    print("PASS test_unified_login_resolves_user_or_admin_session")
+
+
 def test_admin_login_ignores_client_asserted_mfa() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_login_mfa_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_login_mfa_test")
@@ -843,8 +912,26 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             )
         conn.commit()
 
+        same_recipient_linked = state_root / "owner-second" / "linked-resources"
+        same_recipient_deployment = control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id="arcdep_share_owner_second",
+            user_id=owner["user_id"],
+            prefix="share-owner-second",
+            base_domain="example.test",
+            status="active",
+            metadata={
+                "state_roots": {
+                    "vault": str(state_root / "owner-second" / "vault"),
+                    "code_workspace": str(state_root / "owner-second" / "workspace"),
+                    "linked_resources": str(same_recipient_linked),
+                }
+            },
+        )
+
         body = {
             "recipient_user_id": recipient["user_id"],
+            "owner_deployment_id": owner["deployment_id"],
             "resource_kind": "drive",
             "resource_root": "vault",
             "resource_path": "/Projects/brief",
@@ -1070,6 +1157,62 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
             config=config,
         )
         expect(status == 401, f"accept denied share expected 401 got {status}: {payload}")
+
+        same_body = {
+            "recipient_user_id": owner["user_id"],
+            "owner_deployment_id": owner["deployment_id"],
+            "recipient_deployment_id": same_recipient_deployment["deployment_id"],
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/brief",
+            "display_name": "Brief for second agent",
+        }
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=browser_auth_headers(owner_session, csrf=True),
+            body=json.dumps(same_body),
+            config=config,
+        )
+        expect(status == 201, f"same-account share create expected 201 got {status}: {payload}")
+        same_grant = payload["grant"]
+        same_grant_id = same_grant["grant_id"]
+        expect(same_grant["owner_user_id"] == same_grant["recipient_user_id"] == owner["user_id"], str(same_grant))
+        expect(same_grant["status"] == "accepted", str(same_grant))
+        expect(same_grant["approved_at"] and same_grant["accepted_at"], str(same_grant))
+        expect(same_grant["owner_deployment_id"] == owner["deployment_id"], str(same_grant))
+        expect(same_grant["recipient_deployment_id"] == same_recipient_deployment["deployment_id"], str(same_grant))
+        expect(payload["owner_notification"]["reason"] == "same_account_auto_accepted", str(payload["owner_notification"]))
+        same_projection = same_grant["projection"]
+        expect(same_projection["status"] == "materialized", str(same_projection))
+        same_projected_dir = same_recipient_linked / same_projection["linked_path"].strip("/")
+        expect(same_projected_dir.is_symlink(), "same-account linked directory should be a living link")
+        expect("Updated at source" in (same_projected_dir / "overview.md").read_text(encoding="utf-8"), str(same_projection))
+
+        bad_same_body = dict(same_body)
+        bad_same_body.pop("recipient_deployment_id")
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=browser_auth_headers(owner_session, csrf=True),
+            body=json.dumps(bad_same_body),
+            config=config,
+        )
+        expect(status == 401, f"same-account share without recipient deployment expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/revoke",
+            headers=browser_auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": same_grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"same-account owner revoke expected 200 got {status}: {payload}")
+        expect(payload["grant"]["status"] == "revoked", str(payload))
+        expect(not same_projected_dir.exists(), "same-account revoked linked projection should be removed")
 
     print("PASS test_user_share_grants_create_approved_accepted_linked_resources")
 
@@ -3783,6 +3926,7 @@ def main() -> int:
     test_safe_error_shapes_never_leak_internal_details()
     test_request_id_propagation_and_cors()
     test_admin_login_sets_session_cookies()
+    test_unified_login_resolves_user_or_admin_session()
     test_admin_login_ignores_client_asserted_mfa()
     test_session_revoke_requires_admin_auth_and_csrf()
     test_stripe_webhook_route_rejects_without_secret()

@@ -309,6 +309,15 @@ def test_agent_share_request_tool_creates_scoped_pending_grant() -> None:
     )
     control.reserve_arclink_deployment_prefix(
         conn,
+        deployment_id="arcdep_share_owner_second",
+        user_id="arcusr_share_owner",
+        prefix="share-owner-second",
+        base_domain="example.test",
+        agent_id="agent-share-second",
+        status="active",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
         deployment_id="arcdep_foreign",
         user_id="arcusr_foreign_owner",
         prefix="foreign-owner-1a2b",
@@ -352,6 +361,25 @@ def test_agent_share_request_tool_creates_scoped_pending_grant() -> None:
     metadata = json.loads(stored["metadata_json"])
     expect(metadata["requested_via"] == "arclink-mcp", metadata)
     expect(metadata["requested_by_agent_id"] == "agent-share", metadata)
+    expect(metadata["owner_deployment_id"] == "arcdep_share_owner", metadata)
+
+    same_account = mod._create_agent_share_request(
+        conn,
+        {
+            "token": token_payload["raw_token"],
+            "recipient_deployment_id": "arcdep_share_owner_second",
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/brief.md",
+            "display_name": "Brief for second agent",
+        },
+    )
+    same_grant = same_account["grant"]
+    expect(same_grant["owner_user_id"] == same_grant["recipient_user_id"] == "arcusr_share_owner", str(same_grant))
+    expect(same_grant["status"] == "accepted", str(same_grant))
+    expect(same_grant["owner_deployment_id"] == "arcdep_share_owner", str(same_grant))
+    expect(same_grant["recipient_deployment_id"] == "arcdep_share_owner_second", str(same_grant))
+    expect(same_account["owner_notification"]["reason"] == "same_account_auto_accepted", str(same_account))
 
     try:
         mod._create_agent_share_request(

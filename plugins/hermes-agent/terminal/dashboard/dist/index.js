@@ -210,6 +210,20 @@
     return Number.isFinite(value) && value > 0 ? value : 10000;
   }
 
+  function initialScrollbackForSession(session, raw, allowInitialReports) {
+    if (allowInitialReports) return raw;
+    if (session && session.mode === "tui" && Object.prototype.hasOwnProperty.call(session, "reattach_scrollback")) {
+      return String(session.reattach_scrollback || "");
+    }
+    return raw;
+  }
+
+  function sessionMeta(session) {
+    const state = String((session && session.state) || "closed");
+    const cwd = String((session && session.cwd) || "");
+    return !cwd || cwd === "/" ? state : state + " · " + cwd;
+  }
+
   function terminalTheme() {
     return {
       background: "#05090d",
@@ -491,7 +505,9 @@
       } else {
         current.term.reset();
         current.needsViewportRestore = true;
-        if (raw) writeTerminalOutput(current, raw, !!current.allowInitialReports, finishSync);
+        const initialText = initialScrollbackForSession(session, raw, !!current.allowInitialReports);
+        if (initialText) writeTerminalOutput(current, initialText, !!current.allowInitialReports && initialText === raw, finishSync);
+        else if (current.needsViewportRestore) finishSync();
       }
       current.allowInitialReports = false;
       current.written = raw;
@@ -768,7 +784,7 @@
       const current = terminalRef.current || {};
       postJSON("/sessions", {
         name: sessionMode === "ssh" ? "Machine Terminal" : sessionMode === "tui" ? "Hermes TUI" : "Terminal",
-        cwd: "/",
+        cwd: sessionMode === "ssh" ? "" : "/",
         mode: sessionMode,
         target: "",
         rows: current.term ? current.term.rows : 32,
@@ -968,7 +984,7 @@
                   },
                   state.showClosed ? "Hide Closed" : "Show Closed"
                 ),
-                h("button", { type: "button", onClick: clearClosedSessions }, "Clear Closed")
+                state.showClosed ? h("button", { type: "button", onClick: clearClosedSessions }, "Clear Closed") : null
               ),
               grouped.length
                 ? grouped.map(function (group) {
@@ -978,17 +994,23 @@
                       group.folder && group.folder !== "Sessions" ? h("div", { className: "hermes-terminal-group-label" }, group.folder) : null,
                       group.sessions.map(function (session) {
                         return h(
-                          "button",
+                          "div",
                           {
                             key: session.id,
-                            type: "button",
+                            role: "button",
+                            tabIndex: 0,
                             className: "hermes-terminal-session" + (session.id === state.selectedId ? " selected" : ""),
                             onContextMenu: function (event) {
                               openSessionMenu(event, session);
                             },
-	                            onClick: function () {
-	                              selectSession(session.id, { focus: true });
-	                            },
+                            onClick: function () {
+                              selectSession(session.id, { focus: true });
+                            },
+                            onKeyDown: function (event) {
+                              if (event.key !== "Enter" && event.key !== " ") return;
+                              event.preventDefault();
+                              selectSession(session.id, { focus: true });
+                            },
                           },
                           h(
                             "span",
@@ -1008,8 +1030,9 @@
                                 })
                               : h("strong", null, session.name || "Terminal"),
                             h(
-                              "span",
+                              "button",
                               {
+                                type: "button",
                                 className: "hermes-terminal-session-close",
                                 "aria-label": "Close " + (session.name || "Terminal"),
                                 title: "Close session",
@@ -1022,7 +1045,7 @@
                               "x"
                             )
                           ),
-                          h("span", { className: "hermes-terminal-session-meta" }, (session.state || "closed") + " · " + (session.cwd || "/"))
+                          h("span", { className: "hermes-terminal-session-meta" }, sessionMeta(session))
                         );
                       })
                     );

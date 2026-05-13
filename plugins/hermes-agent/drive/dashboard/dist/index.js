@@ -221,6 +221,7 @@
       uploadMenuOpen: false,
       errorMessage: "",
       confirmDialog: null,
+      destinationDialog: null,
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -314,6 +315,19 @@
       })[0] || {};
     }
 
+    function rootCanReceiveCopy(root) {
+      return !!(root && root.available && !root.read_only && (!root.capabilities || root.capabilities.copy !== false));
+    }
+
+    function destinationRootsFor(action, sourceRoot) {
+      if (action === "copy" && sourceRoot === "linked") {
+        return orderedRoots(state.roots).filter(rootCanReceiveCopy);
+      }
+      return orderedRoots(state.roots).filter(function (root) {
+        return root.id === sourceRoot;
+      });
+    }
+
     function treeKey(rootId, path) {
       return String(rootId || "") + ":" + normalizeFolder(path || "/");
     }
@@ -380,6 +394,20 @@
       });
       loadTreeNode(rootId, folder);
       loadItems(folder, "", false, rootId);
+    }
+
+    function setDestinationFolder(rootId, path) {
+      const folder = normalizeFolder(path || "/");
+      patch(function (current) {
+        if (!current.destinationDialog) return {};
+        return {
+          destinationDialog: Object.assign({}, current.destinationDialog, {
+            root: rootId,
+            path: folder,
+          }),
+        };
+      });
+      loadTreeNode(rootId, folder);
     }
 
     function refreshFolder(rootId, path) {
@@ -659,6 +687,39 @@
       });
     }
 
+    function openDestinationDialog(action, options) {
+      const subject = options || {};
+      const item = subject.item || null;
+      const paths = subject.paths || (item ? [item.path] : selectedPathList());
+      if (!paths.length) return;
+      const sourceRoot = subject.root || (item ? itemRoot(item) : state.root);
+      const roots = destinationRootsFor(action, sourceRoot);
+      if (!roots.length) {
+        patch({ errorMessage: "No writable destination is available.", contextMenu: null });
+        return;
+      }
+      const initialRoot = roots[0].id;
+      const initialPath = normalizeFolder(initialRoot === sourceRoot && item ? parentPath(item.path) : state.path || "/");
+      patch({
+        contextMenu: null,
+        destinationDialog: {
+          action: action,
+          mode: item ? "item" : "selection",
+          item: item,
+          paths: paths,
+          sourceRoot: sourceRoot,
+          root: initialRoot,
+          path: initialPath,
+        },
+      });
+      loadTreeNode(initialRoot, "/");
+      loadTreeNode(initialRoot, initialPath);
+    }
+
+    function closeDestinationDialog() {
+      patch({ destinationDialog: null });
+    }
+
     function duplicateItem(item) {
       requestJSON("/duplicate", { root: itemRoot(item), path: item.path }).then(function (data) {
         if (data) refreshFolder(itemRoot(item), parentPath(item.path));
@@ -666,23 +727,11 @@
     }
 
     function copyItemWithPrompt(item) {
-      const destination = window.prompt("Copy to path", joinPath(parentPath(item.path), nameFromPath(item.path)));
-      if (destination === null) {
-        patch({ contextMenu: null });
-        return;
-      }
-      requestJSON("/copy", { root: itemRoot(item), path: item.path, destination_path: destination, conflict: "keep-both" }).then(function (data) {
-        if (data) refreshFolder(itemRoot(item), parentPath(destination));
-      });
+      openDestinationDialog("copy", { item: item, root: itemRoot(item), paths: [item.path] });
     }
 
     function moveItemWithPrompt(item) {
-      const folder = window.prompt("Move to folder path", parentPath(item.path));
-      if (folder === null) {
-        patch({ contextMenu: null });
-        return;
-      }
-      moveItemToFolder(item, folder);
+      openDestinationDialog("move", { item: item, root: itemRoot(item), paths: [item.path] });
     }
 
     function moveDraggedPath(sourcePath, destinationFolder, sourceRoot) {
@@ -808,39 +857,61 @@
       });
     }
 
+    function confirmDestinationDialog() {
+      const dialog = state.destinationDialog;
+      if (!dialog) return;
+      const action = dialog.action === "move" ? "move" : "copy";
+      const targetRoot = dialog.root;
+      const targetFolder = normalizeFolder(dialog.path || "/");
+      const sourceRoot = dialog.sourceRoot || state.root;
+      const item = dialog.item || null;
+      const paths = dialog.paths || [];
+      if (item && action === "move" && item.kind === "folder" && (targetFolder === item.path || targetFolder.indexOf(item.path + "/") === 0)) {
+        patch({ errorMessage: "A folder cannot be moved into itself.", destinationDialog: null });
+        return;
+      }
+      patch({ destinationDialog: null });
+      if (item) {
+        const destination = joinPath(targetFolder, item.name || nameFromPath(item.path));
+        const payload = {
+          root: sourceRoot,
+          path: item.path,
+          destination_root: targetRoot,
+          destination_path: destination,
+        };
+        if (action === "copy") payload.conflict = "keep-both";
+        requestJSON(action === "copy" ? "/copy" : "/move", payload).then(function (data) {
+          if (data) refreshFolder(state.root, state.path);
+        });
+        return;
+      }
+      requestJSON("/batch", {
+        action: action,
+        root: sourceRoot,
+        paths: paths,
+        destination_root: targetRoot,
+        destination_folder: targetFolder,
+        conflict: "keep-both",
+      }).then(function (data) {
+        if (data) {
+          const message = batchFailureMessage(data, action);
+          refreshFolder(state.root, state.path);
+          if (message) patch({ errorMessage: message });
+          if (action === "move" && !message) patch({ selectedPaths: {} });
+        }
+      });
+    }
+
     function copySelectedWithPrompt() {
       const paths = selectedPathList();
       if (!paths.length) return;
-      const folder = window.prompt("Copy selected item(s) to folder path", state.path);
-      if (folder === null) return;
-      requestJSON("/batch", { action: "copy", root: state.root, paths: paths, destination_folder: folder, conflict: "keep-both" }).then(function (data) {
-        if (data) {
-          const message = batchFailureMessage(data, "copy");
-          refreshFolder(state.root, state.path);
-          if (message) patch({ errorMessage: message });
-        }
-      });
+      openDestinationDialog("copy", { root: state.root, paths: paths });
     }
 
     function moveSelectedWithPrompt() {
       const paths = selectedPathList();
       if (!paths.length) return;
-      const folder = window.prompt("Move selected item(s) to folder path", state.path);
-      if (folder === null) return;
-      askConfirm({
-        title: "Move selected?",
-        message: "Move " + paths.length + " selected item(s) to " + folder + "?",
-        confirmLabel: "Move",
-      }).then(function (confirmed) {
-        if (!confirmed) return;
-        requestJSON("/batch", { action: "move", root: state.root, paths: paths, destination_folder: folder }).then(function (data) {
-          if (data) {
-            const message = batchFailureMessage(data, "move");
-            refreshFolder(state.root, state.path);
-            if (message) patch({ errorMessage: message, selectedPaths: {} });
-          }
-        });
-      });
+      openDestinationDialog("move", { root: state.root, paths: paths });
     }
 
     function switchRoot(rootId) {
@@ -1054,6 +1125,146 @@
           h("button", { type: "button", onClick: function () { patch({ previewFullscreen: false }); } }, "Close")
         ),
         renderPreviewBody(preview)
+      );
+    }
+
+    function renderDestinationBreadcrumbs(dialog) {
+      const parts = normalizeFolder(dialog.path || "/").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+      const nodes = [
+        h(
+          "button",
+          {
+            key: "root",
+            type: "button",
+            className: dialog.path === "/" ? "active" : "",
+            onClick: function () { setDestinationFolder(dialog.root, "/"); },
+          },
+          rootById(dialog.root).label || dialog.root || "Drive"
+        ),
+      ];
+      let cursor = "";
+      parts.forEach(function (part) {
+        cursor = joinPath(cursor || "/", part);
+        nodes.push(h("span", { key: cursor + "-sep" }, "/"));
+        nodes.push(
+          h(
+            "button",
+            {
+              key: cursor,
+              type: "button",
+              className: cursor === dialog.path ? "active" : "",
+              onClick: function () { setDestinationFolder(dialog.root, cursor); },
+            },
+            part
+          )
+        );
+      });
+      return nodes;
+    }
+
+    function renderDestinationDialog() {
+      const dialog = state.destinationDialog;
+      if (!dialog) return null;
+      const action = dialog.action === "move" ? "move" : "copy";
+      const actionLabel = action === "copy" ? "Copy" : "Move";
+      const roots = destinationRootsFor(action, dialog.sourceRoot);
+      const currentRoot = rootById(dialog.root);
+      const folderKey = treeKey(dialog.root, dialog.path || "/");
+      const children = state.treeNodes[folderKey];
+      const folders = children
+        ? children.filter(function (item) { return item.kind === "folder"; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); })
+        : null;
+      const count = dialog.mode === "item" ? 1 : (dialog.paths || []).length;
+      const subject = dialog.mode === "item" && dialog.item ? dialog.item.name : count + " selected item" + (count === 1 ? "" : "s");
+      return h(
+        "div",
+        {
+          className: "hermes-drive-destination-backdrop",
+          role: "presentation",
+          onClick: closeDestinationDialog,
+        },
+        h(
+          "section",
+          {
+            className: "hermes-drive-destination",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": actionLabel + " destination",
+            onClick: function (event) { event.stopPropagation(); },
+          },
+          h(
+            "div",
+            { className: "hermes-drive-destination-head" },
+            h(
+              "div",
+              null,
+              h("h2", null, actionLabel + " destination"),
+              h("p", null, subject)
+            ),
+            h("button", { type: "button", onClick: closeDestinationDialog }, "Close")
+          ),
+          h(
+            "div",
+            { className: "hermes-drive-destination-body" },
+            h(
+              "aside",
+              { className: "hermes-drive-destination-roots", "aria-label": "Destination roots" },
+              roots.map(function (root) {
+                return h(
+                  "button",
+                  {
+                    key: root.id,
+                    type: "button",
+                    className: root.id === dialog.root ? "active" : "",
+                    onClick: function () { setDestinationFolder(root.id, "/"); },
+                  },
+                  root.label || root.id
+                );
+              })
+            ),
+            h(
+              "div",
+              { className: "hermes-drive-destination-picker" },
+              h("div", { className: "hermes-drive-destination-path" }, renderDestinationBreadcrumbs(dialog)),
+              h(
+                "div",
+                { className: "hermes-drive-destination-list" },
+                dialog.path !== "/"
+                  ? h(
+                      "button",
+                      { type: "button", className: "hermes-drive-destination-row", onClick: function () { setDestinationFolder(dialog.root, parentPath(dialog.path)); } },
+                      renderFileIcon({ kind: "folder", name: ".." }),
+                      h("span", null, "Up")
+                    )
+                  : null,
+                folders === null
+                  ? h("div", { className: "hermes-drive-destination-empty" }, "Loading")
+                  : folders.length
+                    ? folders.map(function (folder) {
+                        return h(
+                          "button",
+                          {
+                            key: folder.path,
+                            type: "button",
+                            className: "hermes-drive-destination-row",
+                            onClick: function () { setDestinationFolder(dialog.root, folder.path); },
+                          },
+                          renderFileIcon(folder),
+                          h("span", null, folder.name)
+                        );
+                      })
+                    : h("div", { className: "hermes-drive-destination-empty" }, "No folders here")
+              )
+            )
+          ),
+          h(
+            "div",
+            { className: "hermes-drive-destination-actions" },
+            h("span", null, (currentRoot.label || dialog.root || "Drive") + " " + normalizeFolder(dialog.path || "/")),
+            h("button", { type: "button", onClick: closeDestinationDialog }, "Cancel"),
+            h("button", { type: "button", onClick: confirmDestinationDialog, disabled: state.busy }, actionLabel)
+          )
+        )
       );
     }
 
@@ -1366,15 +1577,19 @@
               h("div", { className: "hermes-drive-tree" }, orderedRoots(state.roots).map(renderRootTree)),
               selectedCount
                 ? h("div", { className: "hermes-drive-selection" },
-                    h("span", null, selectedCount + " selected"),
-                    state.location === "trash"
-                      ? h("button", { type: "button", onClick: restoreSelected }, "Restore")
-                      : h(React.Fragment, null,
-                          h("button", { type: "button", onClick: copySelectedWithPrompt }, "Copy To..."),
-                          h("button", { type: "button", onClick: moveSelectedWithPrompt }, "Move To..."),
-                          h("button", { type: "button", onClick: trashSelected }, "Trash")
-                        ),
-                    h("button", { type: "button", onClick: function () { patch({ selectedPaths: {} }); } }, "Clear")
+                    h("span", { className: "hermes-drive-selection-count" }, selectedCount + " selected"),
+                    h(
+                      "div",
+                      { className: "hermes-drive-selection-actions" },
+                      state.location === "trash"
+                        ? h("button", { type: "button", onClick: restoreSelected }, "Restore")
+                        : h(React.Fragment, null,
+                            h("button", { type: "button", onClick: copySelectedWithPrompt }, "Copy"),
+                            h("button", { type: "button", onClick: moveSelectedWithPrompt }, "Move"),
+                            h("button", { type: "button", onClick: trashSelected }, "Trash")
+                          ),
+                      h("button", { type: "button", onClick: function () { patch({ selectedPaths: {} }); } }, "Clear")
+                    )
                   )
                 : null,
               h(
@@ -1527,6 +1742,7 @@
         : h("div", { className: "hermes-drive-empty full" }, "Drive is not available"),
       state.dropActive ? h("div", { className: "hermes-drive-drop-overlay" }, "Drop files or folders to upload") : null,
       renderFullscreenPreview(),
+      renderDestinationDialog(),
       confirmDialog
         ? h(
             "div",
@@ -1594,8 +1810,8 @@
                     state.location === "trash"
                       ? h("button", { type: "button", role: "menuitem", onClick: restoreSelected }, "Restore Selected")
                       : h(React.Fragment, null,
-                          h("button", { type: "button", role: "menuitem", onClick: copySelectedWithPrompt }, "Copy Selected To..."),
-                          h("button", { type: "button", role: "menuitem", onClick: moveSelectedWithPrompt }, "Move Selected To..."),
+                          h("button", { type: "button", role: "menuitem", onClick: copySelectedWithPrompt }, "Copy"),
+                          h("button", { type: "button", role: "menuitem", onClick: moveSelectedWithPrompt }, "Move"),
                           h("button", { type: "button", role: "menuitem", onClick: trashSelected }, "Trash Selected")
                         ),
                     h("button", { type: "button", role: "menuitem", onClick: function () { patch({ selectedPaths: {}, contextMenu: null }); } }, "Clear Selection")
@@ -1607,8 +1823,8 @@
                       : null,
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { renameItem(contextItem); } }, "Rename"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { duplicateItem(contextItem); } }, "Duplicate"),
-                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { copyItemWithPrompt(contextItem); } }, "Copy To..."),
-                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { moveItemWithPrompt(contextItem); } }, "Move To..."),
+                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { copyItemWithPrompt(contextItem); } }, "Copy"),
+                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { moveItemWithPrompt(contextItem); } }, "Move"),
                     !contextItem.trashed && contextItem.kind === "file"
                       ? h("a", { role: "menuitem", href: api("/download?path=" + encodeURIComponent(contextItem.path) + "&root=" + encodeURIComponent(itemRoot(contextItem) || "")), target: "_blank", rel: "noreferrer" }, "Download")
                       : null,

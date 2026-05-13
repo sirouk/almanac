@@ -18,18 +18,24 @@ const spaceGrotesk = Space_Grotesk({
 });
 
 export const metadata: Metadata = {
-  title: "ArcLink - Agents Onboard ArcLink",
-  description: "Agents onboard ArcLink with memory, files, code workspace, and model access.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_ARCLINK_SITE_URL || "https://arclink.online"),
+  title: "ArcLink - Raven Runs Your Operations",
+  description: "Deploy autonomous ArcLink agents with Raven for research, data movement, reporting, follow-up, and operational workflows.",
   applicationName: "ArcLink",
   manifest: "/manifest.webmanifest",
+  openGraph: {
+    title: "ArcLink - Raven Runs Your Operations",
+    description: "Deploy autonomous ArcLink agents that connect to your tools and handle recurring operations.",
+    images: ["/marketing/Arclink-share.png"],
+  },
   appleWebApp: {
     capable: true,
     title: "ArcLink",
     statusBarStyle: "black-translucent",
   },
   icons: {
-    icon: "/brand/raven/raven_pfp.webp",
-    apple: "/brand/raven/raven_pfp.webp",
+    icon: "/marketing/Favicon.png",
+    apple: "/marketing/Favicon.png",
   },
 };
 

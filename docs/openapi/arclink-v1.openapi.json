@@ -602,6 +602,55 @@
         ]
       }
     },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "email": {
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "login_subject": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  },
+                  "password": {
+                    "format": "password",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User or admin session created with Set-Cookie"
+          },
+          "401": {
+            "description": "Unknown email or invalid password"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          }
+        },
+        "summary": "Login and resolve user or admin role",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/user/login": {
       "post": {
         "operationId": "user_login",
@@ -815,6 +864,43 @@
         ]
       }
     },
+    "/api/v1/onboarding/claim-session": {
+      "post": {
+        "operationId": "onboarding_claim_session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User session created with Set-Cookie"
+          },
+          "402": {
+            "description": "Entitlement not yet paid"
+          },
+          "404": {
+            "description": "Onboarding session not found"
+          }
+        },
+        "summary": "Claim user session after paid onboarding",
+        "tags": [
+          "onboarding"
+        ]
+      }
+    },
     "/api/v1/onboarding/public-bot-checkout": {
       "get": {
         "operationId": "public_bot_onboarding_checkout",
@@ -859,43 +945,6 @@
           }
         },
         "summary": "Redirect a public bot checkout button to Stripe",
-        "tags": [
-          "onboarding"
-        ]
-      }
-    },
-    "/api/v1/onboarding/claim-session": {
-      "post": {
-        "operationId": "onboarding_claim_session",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "session_id": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "session_id"
-                ],
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "User session created with Set-Cookie"
-          },
-          "402": {
-            "description": "Entitlement not yet paid"
-          },
-          "404": {
-            "description": "Onboarding session not found"
-          }
-        },
-        "summary": "Claim user session after paid onboarding",
         "tags": [
           "onboarding"
         ]
@@ -1243,6 +1292,12 @@
                   "display_name": {
                     "type": "string"
                   },
+                  "owner_deployment_id": {
+                    "type": "string"
+                  },
+                  "recipient_deployment_id": {
+                    "type": "string"
+                  },
                   "recipient_user_id": {
                     "type": "string"
                   },
@@ -1265,7 +1320,6 @@
                   }
                 },
                 "required": [
-                  "recipient_user_id",
                   "resource_kind",
                   "resource_root",
                   "resource_path"

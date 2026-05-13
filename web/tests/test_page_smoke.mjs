@@ -41,18 +41,27 @@ describe("Page files exist and export default", () => {
 
 describe("Page content smoke checks", () => {
   it("Landing page has ArcLink brand and onboarding CTA", () => {
-    const content = readFileSync(resolve(ROOT, "src/app/page.tsx"), "utf-8");
+    const content = [
+      readFileSync(resolve(ROOT, "src/app/page.tsx"), "utf-8"),
+      readFileSync(resolve(ROOT, "src/components/marketing/marketing-home.tsx"), "utf-8"),
+      readFileSync(resolve(ROOT, "src/components/marketing/nav.tsx"), "utf-8"),
+    ].join("\n");
     assert.ok(content.includes("ARCLINK") || content.includes("ArcLink"), "missing brand");
     assert.ok(content.includes("/onboarding"), "missing onboarding link");
-    assert.ok(content.includes("signal-orange"), "missing brand color");
+    assert.ok(content.includes("#FB5005"), "missing brand color");
   });
 
-  it("Login page has user and admin mode", () => {
+  it("Login page uses unified role-resolving sign in", () => {
     const content = readFileSync(resolve(ROOT, "src/app/login/page.tsx"), "utf-8");
-    assert.ok(content.includes("user"), "missing user mode");
-    assert.ok(content.includes("admin"), "missing admin mode");
-    assert.ok(content.includes("type=\"password\""), "missing admin password input");
+    assert.ok(content.includes("Raven opens the right console"), "missing unified login copy");
+    assert.ok(content.includes("session_kind"), "missing session kind redirect handling");
+    assert.ok(content.includes("type=\"password\""), "missing password input");
     assert.ok(content.includes("api.login"), "missing login API call");
+    assert.ok(!content.includes("LoginKind"), "login page should not expose a role mode type");
+    assert.ok(!content.includes("setKind"), "login page should not let users choose a role mode");
+    assert.ok(!content.includes("Sign In as"), "login submit should not include a selected role");
+    assert.ok(!content.includes("Dashboard password"), "login placeholder should not imply a user-only mode");
+    assert.ok(!content.includes("Admin password"), "login placeholder should not imply an admin-only mode");
   });
 
   it("Onboarding page has step flow", () => {
@@ -109,6 +118,7 @@ describe("Page content smoke checks", () => {
   it("No page claims live provisioning with fake adapters", () => {
     const pages = [
       "src/app/page.tsx",
+      "src/components/marketing/marketing-home.tsx",
       "src/app/onboarding/page.tsx",
       "src/app/dashboard/page.tsx",
       "src/app/admin/page.tsx",
@@ -159,7 +169,7 @@ describe("API client route parity with hosted API", () => {
       "/admin/operator-snapshot",
       "/admin/scale-operations",
       "/admin/sessions/revoke",
-      "/auth/${kind}/login",
+      "/auth/login",
       "/auth/${kind}/logout",
       "/health",
       "/adapter-mode",

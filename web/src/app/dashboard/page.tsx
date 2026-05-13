@@ -127,6 +127,8 @@ interface LinkedResource {
   grant_id: string;
   owner_user_id: string;
   resource_kind: string;
+  owner_deployment_id?: string;
+  recipient_deployment_id?: string;
   resource_root: string;
   resource_path: string;
   linked_root?: string;
@@ -1354,6 +1356,11 @@ function LinkedResourcesPanel({ resources, loadError = "" }: { resources: Linked
                   <p className="break-all font-mono text-xs text-soft-white/40">
                     Linked: {resource.linked_root || "linked"}:{resource.projection?.linked_path || resource.linked_path || "pending"}
                   </p>
+                  {(resource.owner_deployment_id || resource.recipient_deployment_id) && (
+                    <p className="break-all font-mono text-xs text-soft-white/35">
+                      Agent path: {resource.owner_deployment_id || "owner"} -&gt; {resource.recipient_deployment_id || "recipient"}
+                    </p>
+                  )}
                   <p className="mt-1 text-xs text-soft-white/35">Owner: {resource.owner_user_id}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">

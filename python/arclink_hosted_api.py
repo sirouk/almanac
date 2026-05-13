@@ -49,6 +49,7 @@ from arclink_api_auth import (
     approve_user_share_grant_api,
     check_arclink_rate_limit,
     create_arclink_admin_login_session_api,
+    create_arclink_login_session_api,
     create_arclink_user_login_session_api,
     create_user_share_grant_api,
     create_user_portal_link_api,
@@ -832,6 +833,33 @@ def _handle_user_login(
     return _json_response(result.status, result.payload, request_id=request_id, extra_headers=cookies)
 
 
+def _handle_login(
+    conn: sqlite3.Connection,
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    *,
+    allow_admin: bool,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    result = create_arclink_login_session_api(
+        conn,
+        email=str(body.get("email") or ""),
+        password=str(body.get("password") or ""),
+        login_subject=str(body.get("login_subject") or body.get("email") or ""),
+        metadata=body.get("metadata"),
+        allow_admin=allow_admin,
+    )
+    session_kind = str(result.payload.get("session_kind") or "").strip().lower()
+    if session_kind not in {"user", "admin"}:
+        raise ArcLinkApiAuthError("ArcLink login could not resolve a supported session kind")
+    alternate_kind = "admin" if session_kind == "user" else "user"
+    cookies = [
+        *_clear_session_cookies(alternate_kind, config=config),
+        *_session_cookies(result.payload.get("session", {}), kind=session_kind, config=config),
+    ]
+    return _json_response(result.status, result.payload, request_id=request_id, extra_headers=cookies)
+
+
 def _handle_logout(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1015,6 +1043,8 @@ def _handle_user_share_grant_create(
         resource_kind=str(body.get("resource_kind") or "drive"),
         resource_root=str(body.get("resource_root") or "vault"),
         resource_path=str(body.get("resource_path") or ""),
+        owner_deployment_id=str(body.get("owner_deployment_id") or body.get("deployment_id") or ""),
+        recipient_deployment_id=str(body.get("recipient_deployment_id") or ""),
         display_name=str(body.get("display_name") or ""),
         access_mode=str(body.get("access_mode") or "read"),
         metadata=body.get("metadata"),
@@ -1801,6 +1831,21 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "requestBody": _WEBHOOK_BODY,
         "responses": {"200": {"description": "Interaction handled"}, "401": {"description": "Invalid signature"}},
     },
+    "login": {
+        "summary": "Login and resolve user or admin role",
+        "tags": ["auth"],
+        "requestBody": _openapi_json_body({
+            "email": {"type": "string", "format": "email"},
+            "password": {"type": "string", "format": "password"},
+            "login_subject": {"type": "string"},
+            "metadata": {"type": "object"},
+        }, required=["email", "password"]),
+        "responses": {
+            "201": {"description": "User or admin session created with Set-Cookie"},
+            "401": {"description": "Unknown email or invalid password"},
+            "429": {"description": "Rate limit exceeded"},
+        },
+    },
     "admin_login": {
         "summary": "Admin login (creates session)",
         "tags": ["auth"],
@@ -1874,12 +1919,14 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["user"],
         "requestBody": _openapi_json_body({
             "recipient_user_id": {"type": "string"},
+            "owner_deployment_id": {"type": "string"},
+            "recipient_deployment_id": {"type": "string"},
             "resource_kind": {"type": "string", "enum": ["drive", "code"]},
             "resource_root": {"type": "string", "enum": ["vault", "workspace"]},
             "resource_path": {"type": "string"},
             "display_name": {"type": "string"},
             "access_mode": {"type": "string", "enum": ["read"]},
-        }, required=["recipient_user_id", "resource_kind", "resource_root", "resource_path"]),
+        }, required=["resource_kind", "resource_root", "resource_path"]),
         "responses": {"201": {"description": "Share grant requested"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "user_share_grant_approve": {
@@ -2093,6 +2140,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/webhooks/stripe"): "stripe_webhook",
     ("POST", "/webhooks/telegram"): "telegram_webhook",
     ("POST", "/webhooks/discord"): "discord_webhook",
+    ("POST", "/auth/login"): "login",
     ("POST", "/auth/admin/login"): "admin_login",
     ("POST", "/auth/user/login"): "user_login",
     ("POST", "/auth/user/logout"): "user_logout",
@@ -2144,6 +2192,7 @@ _PUBLIC_ROUTES = frozenset({
     "stripe_webhook",
     "telegram_webhook",
     "discord_webhook",
+    "login",
     "admin_login",
     "user_login",
     "health",
@@ -2173,6 +2222,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "public_onboarding_answer",
     "public_onboarding_checkout",
     "telegram_webhook",
+    "login",
     "admin_login",
     "user_login",
     "user_logout",
@@ -2292,6 +2342,15 @@ def route_arclink_hosted_api(
             result = _handle_telegram_webhook(conn, parsed_body, request_id, cfg, stripe, headers=headers)
         elif route_key == "discord_webhook":
             result = _handle_discord_webhook(conn, body, headers, request_id, cfg, None, stripe)
+        elif route_key == "login":
+            login_client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
+            result = _handle_login(
+                conn,
+                parsed_body,
+                request_id,
+                cfg,
+                allow_admin=_backend_client_allowed(cfg, login_client_ip),
+            )
         elif route_key == "admin_login":
             result = _handle_admin_login(conn, parsed_body, request_id, cfg)
         elif route_key == "user_login":

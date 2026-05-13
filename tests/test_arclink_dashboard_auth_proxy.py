@@ -492,6 +492,27 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
                 expect(status == 409, f"expected managed lifecycle block for {endpoint}, saw {status} {headers} {body!r}")
                 parsed = json.loads(body)
                 expect(parsed.get("arclink_managed") is True, parsed)
+
+            connection = http.client.HTTPConnection("127.0.0.1", proxy.server_port, timeout=5)
+            try:
+                headers = {
+                    "Cookie": cookie,
+                    "Origin": same_origin,
+                    "Content-Type": "application/json",
+                }
+                connection.request("POST", "/api/gateway/restart", body=b"{}", headers=headers)
+                response = connection.getresponse()
+                first_body = response.read().decode("utf-8", "replace")
+                expect(response.status == 409, f"expected first keep-alive block, saw {response.status} {first_body!r}")
+
+                connection.request("POST", "/api/hermes/update", body=b"{}", headers=headers)
+                response = connection.getresponse()
+                second_body = response.read().decode("utf-8", "replace")
+                expect(response.status == 409, f"expected second keep-alive block, saw {response.status} {second_body!r}")
+                parsed = json.loads(second_body)
+                expect(parsed.get("arclink_managed") is True, parsed)
+            finally:
+                connection.close()
             print("PASS test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations")
         finally:
             if previous is None:

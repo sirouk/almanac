@@ -571,6 +571,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _drain_request_body(self) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            content_length = 0
+        if content_length > 0:
+            self.rfile.read(content_length)
+
     def _login_form(self, *, status: int = 401, error: str = "", next_path: str = "") -> None:
         raw_next = next_path or parse_qs(urlsplit(self.path).query).get("next", [self.path])[0]
         next_path = _safe_next(raw_next)
@@ -695,6 +703,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             and _managed_lifecycle_controls_enabled()
             and path.rstrip("/") in MANAGED_LIFECYCLE_ENDPOINTS
         ):
+            self._drain_request_body()
             payload = {
                 "ok": False,
                 "arclink_managed": True,

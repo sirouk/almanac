@@ -253,13 +253,13 @@ def _managed_lifecycle_controls_enabled() -> bool:
 
 
 def _managed_lifecycle_controls_script() -> str:
-    labels_json = json.dumps(["Restart Gateway", "Update Hermes"])
+    labels_json = json.dumps(["restart gateway", "update hermes"])
     reason_json = json.dumps("ArcLink manages this deployment from the Sovereign Control Node.")
     return (
         '<script data-arclink-managed-lifecycle-controls>(function(){'
         f"var labels={labels_json};"
         f"var reason={reason_json};"
-        "function clean(value){return String(value||'').replace(/\\s+/g,' ').trim();}"
+        "function clean(value){return String(value||'').replace(/\\s+/g,' ').trim().toLowerCase();}"
         "function isManagedControl(node){"
         "var text=clean(node&&node.textContent);"
         "return labels.indexOf(text)!==-1;"

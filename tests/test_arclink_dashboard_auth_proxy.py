@@ -41,7 +41,7 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
         type(self).last_cookie = self.headers.get("Cookie")
         type(self).last_accept_encoding = self.headers.get("Accept-Encoding")
         if self.path in {"/", "/drive"}:
-            body = b"<html><body>dashboard</body></html>"
+            body = b"<html><body>dashboard<button>RESTART GATEWAY</button><button>UPDATE HERMES</button></body></html>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -481,7 +481,8 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
             status, headers, body = request(proxy.server_port, "/", headers={"Cookie": cookie})
             expect(status == 200, f"expected managed dashboard response, saw {status} {headers}")
             expect("data-arclink-managed-lifecycle-controls" in body, body)
-            expect("Restart Gateway" in body and "Update Hermes" in body, body)
+            expect("RESTART GATEWAY" in body and "UPDATE HERMES" in body, body)
+            expect("toLowerCase()" in body, body)
             status, headers, body = request(
                 proxy.server_port,
                 "/",

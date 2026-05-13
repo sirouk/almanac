@@ -290,6 +290,7 @@ services:
       - "--entrypoints.web.address=:8080"
       - "--api.dashboard=false"
       - "--ping=true"
+      - "--ping.entrypoint=web"
       - "--log.level=INFO"
     ports:
       - "127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080"

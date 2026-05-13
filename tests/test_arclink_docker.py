@@ -506,8 +506,8 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     expect("POSTGRES_PASSWORD=change-me" not in body, body)
     expect("NEXTCLOUD_ADMIN_PASSWORD=change-me" not in body, body)
     expect(
-        "rsync -a --no-owner --no-group --ignore-existing" in body,
-        "rootless Docker entrypoint rsync must not preserve owner/group on bind mounts",
+        "rsync -a --no-owner --no-group --no-perms --omit-dir-times --ignore-existing" in body,
+        "rootless Docker entrypoint rsync must not preserve owner/group/perms or dir times on split bind mounts",
     )
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
@@ -531,6 +531,8 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect("check_docker_agent_mcp_auth" in body, body)
     expect('"control-ingress" "8080" "Traefik ingress (HTTP)"' in body, body)
     expect("check_control_ingress_https()" in body, body)
+    compose_body = read("compose.yaml")
+    expect("--ping=true" in compose_body and "--ping.entrypoint=web" in compose_body, compose_body)
     expect('ARCLINK_INGRESS_MODE:-domain' in body, body)
     expect('ARCLINK_TAILSCALE_CONTROL_URL:-' in body, body)
     expect("configured Tailscale/Funnel route" in body, body)

@@ -891,6 +891,46 @@ def test_injectable_docker_runner_receives_commands() -> None:
     print("PASS test_injectable_docker_runner_receives_commands")
 
 
+def test_live_docker_compose_file_preserves_service_ports() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_compose_ports_test")
+    intent = sample_intent()
+    secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "deployment"
+        intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
+        intent["compose"]["services"]["dashboard"]["ports"] = ["127.0.0.1:8443:3210"]
+
+        class RecordingRunner:
+            def __init__(self) -> None:
+                self.runs: list[dict[str, str | tuple[str, ...]]] = []
+
+            def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+                self.runs.append(
+                    {
+                        "args": tuple(args),
+                        "project_name": project_name,
+                        "env_file": env_file,
+                        "compose_file": compose_file,
+                    }
+                )
+
+        runner = RecordingRunner()
+        executor = mod.ArcLinkExecutor(
+            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+            secret_resolver=mod.FileMaterializingSecretResolver(
+                value_provider=lambda ref: "sk_test_secret" if ref == secret_ref else "",
+                materialization_root=root / "materialized",
+            ),
+            docker_runner=runner,
+        )
+        executor.docker_compose_apply(
+            mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="ports-1")
+        )
+        compose_doc = json.loads((root / "config" / "compose.yaml").read_text(encoding="utf-8"))
+        expect(compose_doc["services"]["dashboard"]["ports"] == ["127.0.0.1:8443:3210"], str(compose_doc))
+    print("PASS test_live_docker_compose_file_preserves_service_ports")
+
+
 def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_secret_restart_test")
     intent = sample_intent()
@@ -1155,6 +1195,7 @@ def main() -> int:
     test_fake_docker_compose_rejects_missing_depends_on_service()
     test_dry_run_output_is_secret_free()
     test_injectable_docker_runner_receives_commands()
+    test_live_docker_compose_file_preserves_service_ports()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
@@ -1163,7 +1204,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 31 ArcLink executor tests")
+    print("PASS all 32 ArcLink executor tests")
     return 0
 
 

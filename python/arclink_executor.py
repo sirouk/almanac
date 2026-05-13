@@ -1485,7 +1485,18 @@ def _materialize_docker_compose_files(
 
 def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    for key in ("image", "entrypoint", "command", "environment", "labels", "depends_on", "deploy", "healthcheck", "networks"):
+    for key in (
+        "image",
+        "entrypoint",
+        "command",
+        "environment",
+        "labels",
+        "depends_on",
+        "deploy",
+        "healthcheck",
+        "networks",
+        "ports",
+    ):
         value = service.get(key)
         if value not in (None, {}, []):
             out[key] = value

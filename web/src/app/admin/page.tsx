@@ -1069,7 +1069,7 @@ function OperatorSection({ title, ready, checks }: { title: string; ready: boole
 
 function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadiness; onQueued: () => void }) {
   const executableActions = useMemo(
-    () => readiness?.executable ?? ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"],
+    () => readiness?.executable ?? [],
     [readiness?.executable],
   );
   const disabledActions = [

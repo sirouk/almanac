@@ -222,7 +222,7 @@ check_docker_job_status_files() {
     memory-synth
     hermes-docs-sync
   )
-  local job_name="" status="" last_exit="" finished_at=""
+  local job_name="" status="" last_exit="" finished_at="" started_at="" interval_seconds="" age_status=""
   for job_name in "${required_jobs[@]}"; do
     local status_file="$job_status_dir/$job_name.json"
     if [[ ! -f "$status_file" ]]; then
@@ -231,6 +231,7 @@ check_docker_job_status_files() {
     fi
     local fields=""
     if ! fields="$(python3 - "$status_file" <<'PY'
+import datetime as dt
 import json
 import sys
 from pathlib import Path
@@ -239,24 +240,75 @@ path = Path(sys.argv[1])
 try:
     data = json.loads(path.read_text(encoding="utf-8"))
 except Exception:
-    print("unknown\terror\t1\t")
+    print("unknown\terror\t1\t\t\t0\tinvalid_json")
     raise SystemExit(0)
 job_name = str(data.get("job_name") or data.get("job") or path.stem)
 status = str(data.get("status") or "unknown")
 last_exit = str(data.get("exit_code") if "exit_code" in data else data.get("returncode", 0))
 finished_at = str(data.get("finished_at") or data.get("last_run_at") or "")
-print("\t".join((job_name, status, last_exit, finished_at)))
+started_at = str(data.get("started_at") or "")
+try:
+    interval = int(data.get("interval_seconds") or 0)
+except Exception:
+    interval = 0
+threshold = max(600, interval * 3 + 120) if interval else int(__import__("os").environ.get("ARCLINK_DOCKER_JOB_STALE_SECONDS", "7200"))
+
+def parse_ts(value: str):
+    clean = value.strip()
+    if not clean:
+        return None
+    if clean.endswith("Z"):
+        clean = clean[:-1] + "+00:00"
+    try:
+        observed = dt.datetime.fromisoformat(clean)
+    except ValueError:
+        return None
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=dt.timezone.utc)
+    return observed.astimezone(dt.timezone.utc)
+
+now = dt.datetime.now(dt.timezone.utc)
+age_status = "fresh"
+if status == "running":
+    started = parse_ts(started_at)
+    if started is None:
+        age_status = "running_unknown_age"
+    elif (now - started).total_seconds() > threshold:
+        age_status = "running_stale"
+elif status in {"ok", "success", "skipped"}:
+    finished = parse_ts(finished_at)
+    if finished is None:
+        age_status = "finished_unknown_age"
+    elif (now - finished).total_seconds() > threshold:
+        age_status = "finished_stale"
+print("\t".join((job_name, status, last_exit, finished_at, started_at, str(interval), age_status)))
 PY
     )"; then
       fail "Docker job $job_name status file could not be parsed"
       continue
     fi
-    IFS=$'\t' read -r job_name status last_exit finished_at <<<"$fields"
+    IFS=$'\t' read -r job_name status last_exit finished_at started_at interval_seconds age_status <<<"$fields"
     case "$status" in
       ok|success)
-        pass "Docker job $job_name: $status${finished_at:+ at $finished_at}" ;;
+        if [[ "$age_status" == "finished_stale" ]]; then
+          fail "Docker job $job_name: stale success at $finished_at"
+        elif [[ "$age_status" == "finished_unknown_age" ]]; then
+          warn "Docker job $job_name: $status with unknown finish time"
+        else
+          pass "Docker job $job_name: $status${finished_at:+ at $finished_at}"
+        fi ;;
       skipped)
-        pass "Docker job $job_name: skipped${finished_at:+ at $finished_at}" ;;
+        if [[ "$age_status" == "finished_stale" ]]; then
+          fail "Docker job $job_name: stale skipped status at $finished_at"
+        else
+          pass "Docker job $job_name: skipped${finished_at:+ at $finished_at}"
+        fi ;;
+      running)
+        if [[ "$age_status" == "running_stale" ]]; then
+          fail "Docker job $job_name: running since $started_at"
+        else
+          warn "Docker job $job_name: currently running${started_at:+ since $started_at}"
+        fi ;;
       error|failed|fail)
         fail "Docker job $job_name: $status (exit $last_exit)" ;;
       *)

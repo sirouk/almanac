@@ -2418,12 +2418,12 @@ def test_discord_webhook_route() -> None:
         os.environ.pop("DISCORD_BOT_TOKEN", None)
         os.environ.pop("DISCORD_APP_ID", None)
 
-    # No public key configured → 500
+    # No public key configured → fail closed so Discord retries and operators notice.
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/webhooks/discord",
         headers={}, body=json.dumps({"type": 1}), config=config,
     )
-    expect(status == 500, f"expected 500 without config got {status}")
+    expect(status == 503, f"expected 503 without config got {status}")
     expect(payload.get("error") == "discord_not_configured", str(payload))
 
     print("PASS test_discord_webhook_route")

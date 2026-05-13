@@ -1590,7 +1590,7 @@ def _handle_discord_webhook(
     """Handle an incoming Discord interaction webhook."""
     dc = discord_config or DiscordConfig.from_env()
     if not dc.public_key:
-        return _json_response(500, {"error": "discord_not_configured"}, request_id=request_id)
+        return _json_response(503, {"error": "discord_not_configured"}, request_id=request_id)
     sig = _api_header(headers, "x-signature-ed25519")
     ts = _api_header(headers, "x-signature-timestamp")
     try:
@@ -1610,6 +1610,8 @@ def _handle_discord_webhook(
             base_domain=config.base_domain,
         )
     except ArcLinkDiscordError as exc:
+        if str(exc) == "duplicate Discord interaction":
+            return _json_response(200, {"type": 5}, request_id=request_id)
         return _json_response(401, {"error": str(exc)}, request_id=request_id)
     if str(response.get("action") or "") == "agent_message_queued":
         _kick_public_agent_live_trigger(

@@ -13,6 +13,8 @@ x-healthcheck-http: &healthcheck-http
 x-arclink-app: &arclink-app
   image: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
   restart: *restart-unless-stopped
+  security_opt:
+    - no-new-privileges:true
   environment: &arclink-env
     ARCLINK_DOCKER_MODE: "1"
     ARCLINK_PRODUCT_NAME: ${ARCLINK_PRODUCT_NAME:-ArcLink}
@@ -62,18 +64,6 @@ x-arclink-app: &arclink-app
     ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS: ${ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS:-9900}
     ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS: ${ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS:-7900}
     ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS: ${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-9900}
-    STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-    STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-    CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
-    CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
-    CHUTES_API_KEY: ${CHUTES_API_KEY:-}
-    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
-    TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
-    TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
-    DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
-    DISCORD_APP_ID: ${DISCORD_APP_ID:-}
-    DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
     ARCLINK_API_INTERNAL_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}
     ARCLINK_CONTROL_PROVISIONER_ENABLED: ${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}
     ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS: ${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}
@@ -107,10 +97,28 @@ x-arclink-app: &arclink-app
     ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT: ${ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}
     ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE: ${ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE:-1}
   volumes:
-    - ./arclink-priv:/home/arclink/arclink/arclink-priv
+    - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+    - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+    - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+    - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+    - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
     - arclink-qmd:/home/arclink/.qmd
   extra_hosts:
     - "host.docker.internal:host-gateway"
+
+x-arclink-control-secret-env: &arclink-control-secret-env
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+  CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
+  CHUTES_API_KEY: ${CHUTES_API_KEY:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+  TELEGRAM_WEBHOOK_URL: ${TELEGRAM_WEBHOOK_URL:-}
+  TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+  DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+  DISCORD_APP_ID: ${DISCORD_APP_ID:-}
+  DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
 
 x-arclink-job: &arclink-job
   <<: *arclink-app
@@ -134,6 +142,7 @@ services:
       args:
         ARCLINK_UID: ${ARCLINK_DOCKER_UID:-1000}
         ARCLINK_GID: ${ARCLINK_DOCKER_GID:-1000}
+        ARCLINK_IMAGE_REVISION: ${ARCLINK_IMAGE_REVISION:-unknown}
     image: ${ARCLINK_DOCKER_IMAGE:-arclink/app:local}
     profiles: ["build"]
     command: ["true"]
@@ -228,9 +237,15 @@ services:
 
   control-api:
     <<: *arclink-app
+    environment:
+      <<: [*arclink-env, *arclink-control-secret-env]
     command: ["python3", "python/arclink_hosted_api.py"]
     volumes:
-      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
     ports:
@@ -247,6 +262,7 @@ services:
 
   control-web:
     <<: *arclink-app
+    volumes: []
     command: ["sh", "-lc", "cd web && npm run start -- --hostname 0.0.0.0 --port 3000"]
     depends_on:
       control-api:
@@ -264,11 +280,14 @@ services:
   control-ingress:
     image: ${ARCLINK_TRAEFIK_IMAGE:-docker.io/library/traefik:v3}
     restart: *restart-unless-stopped
+    security_opt:
+      - no-new-privileges:true
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:8080"
       - "--api.dashboard=false"
+      - "--ping=true"
       - "--log.level=INFO"
     ports:
       - "127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080"
@@ -279,13 +298,22 @@ services:
         condition: service_healthy
       control-api:
         condition: service_healthy
+    healthcheck:
+      <<: *healthcheck-http
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
 
   control-provisioner:
     <<: *arclink-app
+    environment:
+      <<: [*arclink-env, *arclink-control-secret-env]
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
-      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
@@ -303,10 +331,16 @@ services:
 
   control-action-worker:
     <<: *arclink-app
+    environment:
+      <<: [*arclink-env, *arclink-control-secret-env]
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
-      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
       # Intentional trusted-host boundary: restart/teardown/admin lifecycle
@@ -333,6 +367,10 @@ services:
 
   agent-supervisor:
     <<: *arclink-job
+    # This supervisor creates local Unix users inside the container before it
+    # runuser's into their Hermes homes. It already has the Docker socket, so
+    # the root boundary is explicit instead of accidentally broken.
+    user: "0:0"
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     environment:
@@ -341,7 +379,11 @@ services:
       ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor
     volumes:
       - .:/home/arclink/arclink
-      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Intentional trusted-host boundary: the supervisor needs Docker API
@@ -356,10 +398,16 @@ services:
 
   notification-delivery:
     <<: *arclink-job
+    environment:
+      <<: [*arclink-env, *arclink-control-secret-env]
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
-      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       # Intentional trusted-host delivery boundary: Raven-mediated
@@ -381,7 +429,11 @@ services:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
       - .:/home/arclink/arclink
-      - ./arclink-priv:/home/arclink/arclink/arclink-priv
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Trusted operator-action boundary: Curator refresh consumes queued

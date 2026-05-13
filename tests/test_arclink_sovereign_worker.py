@@ -228,10 +228,17 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     conn = memory_db(control)
     seed_ready_deployment(control, conn)
     rows = [
-        {"Service": "dashboard", "State": "running", "Health": "", "Status": "Up 1 second", "Name": "dashboard-1", "Project": "arclink-dep_1"},
-        {"Service": "nextcloud", "State": "running", "Health": "healthy", "Status": "Up 1 second (healthy)", "Name": "nextcloud-1", "Project": "arclink-dep_1"},
-        {"Service": "managed-context-install", "State": "exited", "Health": "", "ExitCode": 0, "Status": "Exited (0)", "Name": "managed-1", "Project": "arclink-dep_1"},
+        {"Service": service, "State": "running", "Health": "", "Status": "Up 1 second", "Name": f"{service}-1", "Project": "arclink-dep_1"}
+        for service in worker_mod.ARCLINK_PROVISIONING_SERVICE_NAMES
     ]
+    for row in rows:
+        if row["Service"] == "nextcloud":
+            row["Health"] = "healthy"
+            row["Status"] = "Up 1 second (healthy)"
+        if row["Service"] == "managed-context-install":
+            row["State"] = "exited"
+            row["ExitCode"] = 0
+            row["Status"] = "Exited (0)"
     runner = ComposePsRunner("\n".join(json.dumps(row) for row in rows))
     executor = executor_mod.ArcLinkExecutor(
         config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
@@ -266,7 +273,7 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     expect(statuses["dashboard"] == "healthy", str(statuses))
     expect(statuses["nextcloud"] == "healthy", str(statuses))
     expect(statuses["managed-context-install"] == "healthy", str(statuses))
-    expect(statuses["notification-delivery"] == "missing", str(statuses))
+    expect(statuses["notification-delivery"] == "healthy", str(statuses))
     expect(("ps", "--all", "--format", "json") in [tuple(run["args"]) for run in runner.runs], str(runner.runs))
     print("PASS test_live_sovereign_worker_reconciles_compose_ps_health")
 
@@ -675,7 +682,7 @@ def test_compose_ps_transport_failure_records_failed_health() -> None:
         cfg = worker_config(worker_mod, tmpdir)
         cfg = worker_mod.SovereignWorkerConfig(**{**cfg.__dict__, "ingress_mode": "tailscale"})
         results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
-    expect(results[0]["status"] == "applied", str(results))
+    expect(results[0]["status"] == "failed", str(results))
     statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
     expect(statuses == {"failed"}, str(statuses))
     print("PASS test_compose_ps_transport_failure_records_failed_health")

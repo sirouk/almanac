@@ -1,5 +1,8 @@
 FROM node:22-bookworm-slim
 
+ARG ARCLINK_IMAGE_REVISION=unknown
+LABEL org.opencontainers.image.revision=$ARCLINK_IMAGE_REVISION
+
 ENV DEBIAN_FRONTEND=noninteractive \
     ARCLINK_REPO_DIR=/home/arclink/arclink \
     ARCLINK_PRIV_DIR=/home/arclink/arclink/arclink-priv \
@@ -70,6 +73,8 @@ COPY . /home/arclink/arclink
 RUN pin_value() { \
       python3 -c 'import json, sys; print(json.load(open("config/pins.json"))["components"][sys.argv[1]][sys.argv[2]])' "$1" "$2"; \
     } \
+  && uv_version="$(pin_value uv version)" \
+  && if [ "$uv_version" != "latest" ]; then export UV_VERSION="$uv_version"; fi \
   && curl -LsSf https://astral.sh/uv/install.sh | sh \
   && qmd_version="$(pin_value qmd version)" \
   && npm install -g "@tobilu/qmd@${qmd_version}" \

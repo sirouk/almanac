@@ -1774,7 +1774,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           rollout_id TEXT PRIMARY KEY,
           deployment_id TEXT NOT NULL DEFAULT '',
           version_tag TEXT NOT NULL DEFAULT '',
-          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'running', 'succeeded', 'failed', 'rolled_back')),
+          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'in_progress', 'paused', 'completed', 'failed', 'rolled_back')),
           wave_count INTEGER NOT NULL DEFAULT 1,
           current_wave INTEGER NOT NULL DEFAULT 0,
           waves_json TEXT NOT NULL DEFAULT '[]',
@@ -1830,6 +1830,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON arclink_action_attempts (action_id, started_at)
         """
     )
+    _migrate_arclink_rollouts_status_schema(conn)
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_rollouts_deployment_status
@@ -1869,6 +1870,57 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [str(row["name"]) for row in rows]
+
+
+def _migrate_arclink_rollouts_status_schema(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_rollouts'",
+    ).fetchone()
+    ddl = str(row["sql"] or "") if row is not None else ""
+    if all(status in ddl for status in ("in_progress", "paused", "completed")):
+        return
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS arclink_rollouts__new;
+        CREATE TABLE arclink_rollouts__new (
+          rollout_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL DEFAULT '',
+          version_tag TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'in_progress', 'paused', 'completed', 'failed', 'rolled_back')),
+          wave_count INTEGER NOT NULL DEFAULT 1,
+          current_wave INTEGER NOT NULL DEFAULT 0,
+          waves_json TEXT NOT NULL DEFAULT '[]',
+          rollback_plan_json TEXT NOT NULL DEFAULT '{}',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO arclink_rollouts__new (
+          rollout_id, deployment_id, version_tag, status, wave_count, current_wave,
+          waves_json, rollback_plan_json, metadata_json, created_at, updated_at
+        )
+        SELECT
+          rollout_id,
+          deployment_id,
+          version_tag,
+          CASE status
+            WHEN 'running' THEN 'in_progress'
+            WHEN 'succeeded' THEN 'completed'
+            ELSE status
+          END,
+          wave_count,
+          current_wave,
+          waves_json,
+          rollback_plan_json,
+          metadata_json,
+          created_at,
+          updated_at
+        FROM arclink_rollouts;
+        DROP TABLE arclink_rollouts;
+        ALTER TABLE arclink_rollouts__new RENAME TO arclink_rollouts;
+        """
+    )
+    conn.commit()
 
 
 def _migrate_notion_identity_claims_remove_legacy_nonce(conn: sqlite3.Connection) -> None:
@@ -2036,7 +2088,7 @@ ARCLINK_ACTION_ATTEMPT_STATUSES = {"running", "succeeded", "failed"}
 ARCLINK_EVIDENCE_RUN_STATUSES = {"pending", "skipped", "passed", "failed", "blocked"}
 ARCLINK_FLEET_HOST_STATUSES = {"active", "degraded", "offline"}
 ARCLINK_DEPLOYMENT_PLACEMENT_STATUSES = {"active", "removed"}
-ARCLINK_ROLLOUT_STATUSES = {"planned", "running", "succeeded", "failed", "rolled_back"}
+ARCLINK_ROLLOUT_STATUSES = {"planned", "in_progress", "paused", "completed", "failed", "rolled_back"}
 ARCLINK_PROVISIONING_JOB_TRANSITIONS = {
     "queued": {"running", "cancelled"},
     "running": {"succeeded", "failed", "cancelled"},
@@ -3350,6 +3402,7 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
         ("action_attempt_status_invalid", "arclink_action_attempts", "attempt_id", "status", ARCLINK_ACTION_ATTEMPT_STATUSES),
         ("fleet_host_status_invalid", "arclink_fleet_hosts", "host_id", "status", ARCLINK_FLEET_HOST_STATUSES),
         ("placement_status_invalid", "arclink_deployment_placements", "placement_id", "status", ARCLINK_DEPLOYMENT_PLACEMENT_STATUSES),
+        ("rollout_status_invalid", "arclink_rollouts", "rollout_id", "status", ARCLINK_ROLLOUT_STATUSES),
         ("evidence_status_invalid", "arclink_evidence_runs", "run_id", "status", ARCLINK_EVIDENCE_RUN_STATUSES),
     ]
     drift: list[dict[str, str]] = []

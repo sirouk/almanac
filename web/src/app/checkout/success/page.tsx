@@ -240,12 +240,6 @@ function CheckoutSuccessContent() {
               Open Helm
             </a>
           )}
-          <Link
-            href="/onboarding"
-            className="rounded border border-border px-4 py-2 font-semibold text-soft-white transition hover:bg-carbon"
-          >
-            Add Another Agent
-          </Link>
           {sessionClaimed && (
             <Link
               href="/dashboard"

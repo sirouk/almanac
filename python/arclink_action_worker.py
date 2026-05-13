@@ -37,6 +37,7 @@ from arclink_executor import (
     SubprocessDockerComposeRunner,
     SshDockerComposeRunner,
 )
+from arclink_provisioning import render_arclink_state_roots
 
 
 class ArcLinkActionWorkerError(ValueError):
@@ -579,12 +580,13 @@ def _dispatch_action(
 ) -> dict[str, Any]:
     """Route action type to executor call. Returns redacted result metadata."""
     if action_type == "restart":
+        lifecycle_meta = _deployment_lifecycle_metadata(conn, deployment_id=target_id)
         result = executor.docker_compose_lifecycle(DockerComposeLifecycleRequest(
             deployment_id=target_id,
             action="restart",
-            project_name=metadata.get("project_name", ""),
-            env_file=metadata.get("env_file", ""),
-            compose_file=metadata.get("compose_file", ""),
+            project_name=str(metadata.get("project_name") or lifecycle_meta.get("project_name") or ""),
+            env_file=str(metadata.get("env_file") or lifecycle_meta.get("env_file") or ""),
+            compose_file=str(metadata.get("compose_file") or lifecycle_meta.get("compose_file") or ""),
             idempotency_key=str(metadata.get("idempotency_key") or idempotency_key),
         ))
         return {"live": result.live, "status": result.status, "action": result.action}
@@ -649,6 +651,33 @@ def _dispatch_action(
         return {"status": "applied", "action": "comp", "user_id": user_id}
 
     raise ArcLinkActionWorkerError(f"unsupported action type: {action_type}")
+
+
+def _deployment_lifecycle_metadata(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, str]:
+    row = conn.execute(
+        "SELECT deployment_id, prefix, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (str(deployment_id or "").strip(),),
+    ).fetchone()
+    if row is None:
+        return {}
+    deployment = dict(row)
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    raw_roots = metadata.get("state_roots")
+    if isinstance(raw_roots, Mapping):
+        roots = {str(key): str(value) for key, value in raw_roots.items() if str(value or "").strip()}
+    else:
+        roots = {}
+    if not roots.get("root") or not roots.get("config"):
+        roots = render_arclink_state_roots(
+            deployment_id=str(deployment.get("deployment_id") or deployment_id),
+            prefix=str(deployment.get("prefix") or ""),
+            state_root_base=str(metadata.get("state_root_base") or os.environ.get("ARCLINK_STATE_ROOT_BASE") or "/arcdata/deployments"),
+        )
+    config_root = Path(str(roots["config"]))
+    return {
+        "env_file": str(config_root / "arclink.env"),
+        "compose_file": str(config_root / "compose.yaml"),
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ from arclink_ingress import arclink_dns_records_for_teardown, mark_arclink_dns_t
 from arclink_provisioning import (
     ARCLINK_PROVISIONING_SERVICE_NAMES,
     render_arclink_provisioning_intent,
+    render_arclink_state_roots,
 )
 from arclink_adapters import DnsRecord
 from arclink_onboarding import record_arclink_onboarding_first_agent_contact
@@ -636,7 +637,13 @@ def _apply_deployment(
         env=worker.env,
     )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
-    _persist_deployment_access_urls(conn, deployment_id=deployment_id, urls=intent["access"]["urls"])
+    _persist_deployment_runtime_metadata(
+        conn,
+        deployment_id=deployment_id,
+        urls=intent["access"]["urls"],
+        state_roots=intent["state_roots"],
+        state_root_base=state_root_base,
+    )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
     selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
@@ -685,13 +692,24 @@ def _apply_deployment(
         password_secret_preexisted=dashboard_password_preexisted,
     )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
-    _record_service_status_after_compose(
+    service_statuses = _record_service_status_after_compose(
         conn,
         deployment_id=deployment_id,
         job_id=str(job["job_id"]),
         executor=selected_executor,
         docker_result=docker_result,
     )
+    if _truthy(str(worker.env.get("ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HEALTHY_SERVICES") or "1")):
+        blockers = {
+            service: status
+            for service, status in service_statuses.items()
+            if status in {"failed", "unhealthy", "missing"}
+        }
+        if blockers:
+            raise ArcLinkSovereignWorkerError(
+                "ArcLink deployment compose services are not ready for handoff: "
+                + ", ".join(f"{service}={status}" for service, status in sorted(blockers.items()))
+            )
     append_arclink_event(
         conn,
         subject_kind="deployment",
@@ -727,7 +745,7 @@ def _teardown_deployment(
     remove_volumes = _teardown_removes_volumes(metadata)
     placement = _active_placement_with_host(conn, deployment_id=deployment_id)
     selected_executor = executor
-    intent = _minimal_teardown_intent(deployment_id=deployment_id, worker=worker)
+    intent = _minimal_teardown_intent(deployment=deployment, worker=worker)
     if selected_executor is None and placement is not None:
         selected_executor = _executor_for_host(worker=worker, host=placement["host"], intent=intent)
     if selected_executor is None:
@@ -741,8 +759,8 @@ def _teardown_deployment(
             DockerComposeLifecycleRequest(
                 deployment_id=deployment_id,
                 action="teardown",
-                env_file=str(Path(worker.state_root_base) / deployment_id / "config" / "arclink.env"),
-                compose_file=str(Path(worker.state_root_base) / deployment_id / "config" / "compose.yaml"),
+                env_file=str(Path(str(intent["state_roots"]["config"])) / "arclink.env"),
+                compose_file=str(Path(str(intent["state_roots"]["config"])) / "compose.yaml"),
                 idempotency_key=f"arclink:sovereign:compose-teardown:{deployment_id}",
                 remove_volumes=remove_volumes,
             )
@@ -816,11 +834,24 @@ def _teardown_deployment(
     }
 
 
-def _minimal_teardown_intent(*, deployment_id: str, worker: SovereignWorkerConfig) -> dict[str, Any]:
-    root = Path(worker.state_root_base) / deployment_id
+def _minimal_teardown_intent(*, deployment: Mapping[str, Any], worker: SovereignWorkerConfig) -> dict[str, Any]:
+    deployment_id = str(deployment["deployment_id"])
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    raw_roots = metadata.get("state_roots")
+    if isinstance(raw_roots, Mapping):
+        roots = {str(key): str(value) for key, value in raw_roots.items() if str(value or "").strip()}
+    else:
+        roots = {}
+    if not roots.get("root") or not roots.get("config"):
+        state_root_base = str(metadata.get("state_root_base") or worker.state_root_base)
+        roots = render_arclink_state_roots(
+            deployment_id=deployment_id,
+            prefix=str(deployment.get("prefix") or ""),
+            state_root_base=state_root_base,
+        )
     return {
         "deployment": {"deployment_id": deployment_id},
-        "state_roots": {"root": str(root), "config": str(root / "config")},
+        "state_roots": roots,
         "compose": {"secrets": {}},
     }
 
@@ -911,11 +942,13 @@ def _reload_apply_ready_deployment(conn: sqlite3.Connection, *, deployment_id: s
     return result
 
 
-def _persist_deployment_access_urls(
+def _persist_deployment_runtime_metadata(
     conn: sqlite3.Connection,
     *,
     deployment_id: str,
     urls: Mapping[str, Any],
+    state_roots: Mapping[str, Any],
+    state_root_base: str,
 ) -> None:
     row = conn.execute(
         "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
@@ -925,6 +958,8 @@ def _persist_deployment_access_urls(
         raise ArcLinkSovereignWorkerError(f"ArcLink deployment not found: {deployment_id}")
     metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
     metadata["access_urls"] = {str(role): str(url) for role, url in dict(urls).items() if str(url or "").strip()}
+    metadata["state_roots"] = {str(key): str(value) for key, value in dict(state_roots).items() if str(value or "").strip()}
+    metadata["state_root_base"] = str(state_root_base or "").strip()
     conn.execute(
         "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
         (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
@@ -1054,7 +1089,21 @@ def _handoff_urls_for_recovery(
         return urls
     urls = _access_urls_for_deployment(conn, deployment=deployment, worker=worker)
     if urls:
-        _persist_deployment_access_urls(conn, deployment_id=deployment_id, urls=urls)
+        metadata_roots = metadata.get("state_roots") if isinstance(metadata.get("state_roots"), Mapping) else {}
+        state_root_base = str(metadata.get("state_root_base") or worker.state_root_base)
+        if not metadata_roots:
+            metadata_roots = render_arclink_state_roots(
+                deployment_id=deployment_id,
+                prefix=str(deployment.get("prefix") or ""),
+                state_root_base=state_root_base,
+            )
+        _persist_deployment_runtime_metadata(
+            conn,
+            deployment_id=deployment_id,
+            urls=urls,
+            state_roots=metadata_roots,
+            state_root_base=state_root_base,
+        )
     return urls
 
 
@@ -1216,11 +1265,11 @@ def _record_service_status_after_compose(
     job_id: str,
     executor: ArcLinkExecutor,
     docker_result: DockerComposeApplyResult,
-) -> None:
+) -> dict[str, str]:
     detail_base = {"job_id": job_id, "executor": executor.config.adapter_name}
     if executor.config.adapter_name == "fake":
         _record_service_status(conn, deployment_id=deployment_id, status="healthy", detail=detail_base)
-        return
+        return {service_name: "healthy" for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES}
     if executor.docker_runner is None:
         _record_service_status(
             conn,
@@ -1228,7 +1277,7 @@ def _record_service_status_after_compose(
             status="failed",
             detail={**detail_base, "reconcile_error": "docker_runner_not_available"},
         )
-        return
+        return {service_name: "failed" for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES}
     try:
         ps_result = executor.docker_runner.run(
             ("ps", "--all", "--format", "json"),
@@ -1245,11 +1294,13 @@ def _record_service_status_after_compose(
             status="failed",
             detail={**detail_base, "reconcile_error": _safe_error(exc)},
         )
-        return
+        return {service_name: "failed" for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES}
 
+    recorded: dict[str, str] = {}
     for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:
         service = statuses.get(service_name)
         if service is None:
+            recorded[service_name] = "missing"
             upsert_arclink_service_health(
                 conn,
                 deployment_id=deployment_id,
@@ -1275,6 +1326,8 @@ def _record_service_status_after_compose(
             status=str(service["status"]),
             detail=detail,
         )
+        recorded[service_name] = str(service["status"])
+    return recorded
 
 
 def _parse_docker_compose_ps_json(stdout: str) -> list[dict[str, Any]]:

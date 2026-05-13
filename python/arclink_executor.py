@@ -398,8 +398,9 @@ class SshDockerComposeRunner:
         )
         if mkdir.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("ssh mkdir", mkdir.stderr or mkdir.stdout))
+        rsync_ssh = " ".join(_shell_quote(part) for part in (self.ssh_binary, *self.ssh_options))
         sync = subprocess.run(
-            (self.rsync_binary, "-a", "--delete", f"{root}/", f"{target}:{root}/"),
+            (self.rsync_binary, "-a", "--delete", "-e", rsync_ssh, f"{root}/", f"{target}:{root}/"),
             check=False,
             text=True,
             capture_output=True,

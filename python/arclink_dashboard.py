@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -60,6 +62,9 @@ def admin_action_execution_readiness(env: Mapping[str, str] | None = None) -> di
             "detail": executor_adapter,
         }
     ]
+    require_worker = env is None and str(source_env.get("ARCLINK_ADMIN_ACTION_REQUIRE_WORKER_READY") or "1").strip().lower() not in {"0", "false", "no", "off"}
+    if require_worker:
+        probes.append(_action_worker_liveness_probe(source_env))
     if executor_adapter == "ssh":
         machine_enabled = _truthy(source_env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or source_env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED") or "")
         host = str(source_env.get("ARCLINK_ACTION_WORKER_SSH_HOST") or source_env.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip().lower()
@@ -93,6 +98,62 @@ def _truthy(value: str | None) -> bool:
 
 def _csv_set(value: str) -> set[str]:
     return {item.strip().lower() for item in str(value or "").split(",") if item.strip()}
+
+
+def _action_worker_liveness_probe(env: Mapping[str, str]) -> dict[str, Any]:
+    status_dir = str(env.get("ARCLINK_DOCKER_JOB_STATUS_DIR") or "").strip()
+    if not status_dir:
+        state_dir = str(env.get("STATE_DIR") or env.get("ARCLINK_STATE_DIR") or "").strip()
+        if not state_dir:
+            priv_dir = str(env.get("ARCLINK_PRIV_DIR") or "/home/arclink/arclink/arclink-priv").strip()
+            state_dir = str(Path(priv_dir) / "state")
+        status_dir = str(Path(state_dir) / "docker" / "jobs")
+    status_file = Path(status_dir) / "control-action-worker.json"
+    if not status_file.is_file():
+        return {"name": "control_action_worker", "ok": False, "detail": "missing_status_file"}
+    try:
+        data = json.loads(status_file.read_text(encoding="utf-8"))
+    except Exception:
+        return {"name": "control_action_worker", "ok": False, "detail": "invalid_status_file"}
+    status = str(data.get("status") or "").strip().lower()
+    finished = _parse_probe_time(str(data.get("finished_at") or ""))
+    started = _parse_probe_time(str(data.get("started_at") or ""))
+    try:
+        interval = int(data.get("interval_seconds") or 0)
+    except Exception:
+        interval = 0
+    stale_after = max(600, interval * 3 + 120) if interval else 7200
+    now = datetime.now(timezone.utc)
+    if status in {"ok", "success", "skipped"} and finished is not None:
+        age = (now - finished).total_seconds()
+        return {
+            "name": "control_action_worker",
+            "ok": age <= stale_after,
+            "detail": f"{status}:{int(age)}s",
+        }
+    if status == "running" and started is not None:
+        age = (now - started).total_seconds()
+        return {
+            "name": "control_action_worker",
+            "ok": age <= stale_after,
+            "detail": f"running:{int(age)}s",
+        }
+    return {"name": "control_action_worker", "ok": False, "detail": status or "unknown"}
+
+
+def _parse_probe_time(value: str) -> datetime | None:
+    clean = str(value or "").strip()
+    if not clean:
+        return None
+    if clean.endswith("Z"):
+        clean = clean[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(clean)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
     "onboarding_funnel",
     "users",

@@ -78,8 +78,8 @@
     "uv": {
       "kind": "installer-url",
       "url": "https://astral.sh/uv/install.sh",
-      "version": "latest",
-      "description": "Python package + venv manager. Currently floats on the astral.sh install script; Phase 3 will pin via UV_VERSION env."
+      "version": "0.10.12",
+      "description": "Python package + venv manager. Docker builds export UV_VERSION from this pin before running the installer."
     },
     "tailscale": {
       "kind": "installer-url",

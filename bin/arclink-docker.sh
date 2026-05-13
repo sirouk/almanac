@@ -21,6 +21,7 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   arclink-mcp
   qmd-mcp
   notion-webhook
+  control-ingress
   control-api
   control-web
   control-provisioner
@@ -539,6 +540,20 @@ retry_compose_exec_quiet() {
   return 1
 }
 
+retry_host_http_quiet() {
+  local url="$1"
+  local attempt=0
+
+  for attempt in $(seq 1 20); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
 repair_running_nextcloud_data_dir() {
   if ! compose_service_running nextcloud; then
     return 0
@@ -610,10 +625,14 @@ health() {
     return 1
   fi
 
+  local web_port=""
+  web_port="$(configured_or_default ARCLINK_WEB_PORT 3000)"
   retry_compose_exec_quiet arclink-mcp curl -fsS http://127.0.0.1:8282/health
   retry_compose_exec_quiet notion-webhook curl -fsS http://127.0.0.1:8283/health
   retry_compose_exec_quiet control-api curl -fsS http://127.0.0.1:8900/api/v1/health
   retry_compose_exec_quiet control-web curl -fsS http://127.0.0.1:3000
+  retry_host_http_quiet "http://127.0.0.1:$web_port/api/v1/health"
+  retry_host_http_quiet "http://127.0.0.1:$web_port/"
   repair_running_nextcloud_data_dir
   retry_compose_exec_quiet nextcloud curl -fsS http://127.0.0.1/status.php || {
     diagnose_nextcloud_health_failure
@@ -1229,6 +1248,12 @@ docker_refresh_deployment_managed_plugins() {
       --filter "label=com.docker.compose.service=code-server" \
       --format '{{.Names}}' 2>/dev/null)
 
+    # Keep these literal service names visible for regression tests and for
+    # operators scanning the refresh surface:
+    # --force-recreate hermes-dashboard
+    # --force-recreate dashboard
+    # --force-recreate nextcloud
+    # --force-recreate memory-synth
     for service_name in \
       hermes-dashboard \
       dashboard \
@@ -2041,6 +2066,7 @@ main() {
       ;;
     build)
       prepare_compose
+      export ARCLINK_IMAGE_REVISION="${ARCLINK_IMAGE_REVISION:-$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || printf unknown)}"
       if [[ "$#" -eq 0 ]]; then
         compose build arclink-app
       else

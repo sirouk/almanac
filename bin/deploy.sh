@@ -9027,6 +9027,26 @@ register_control_public_bot_actions() {
   fi
 }
 
+verify_control_upgrade_checkout_clean() {
+  local dirty="" branch="" commit=""
+
+  if [[ "${ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY:-0}" == "1" ]]; then
+    return 0
+  fi
+  if ! git -C "$BOOTSTRAP_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+  dirty="$(git -C "$BOOTSTRAP_DIR" status --porcelain 2>/dev/null | head -1 || true)"
+  if [[ -z "$dirty" ]]; then
+    return 0
+  fi
+  branch="$(git -C "$BOOTSTRAP_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  commit="$(git -C "$BOOTSTRAP_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  echo "Refusing control upgrade from a dirty checkout (${branch:-detached} ${commit:-unknown})." >&2
+  echo "Commit/stash local edits, or set ARCLINK_CONTROL_UPGRADE_ALLOW_DIRTY=1 for an intentional local build." >&2
+  return 1
+}
+
 run_control_install_flow() {
   local run_interactive="${1:-1}"
   local operation="control-upgrade"
@@ -9041,6 +9061,9 @@ run_control_install_flow() {
   run_arclink_docker bootstrap
   if [[ "$run_interactive" == "1" && "${ARCLINK_CONTROL_SKIP_CONFIG:-0}" != "1" && -t 0 ]]; then
     collect_control_install_answers
+  fi
+  if [[ "$run_interactive" != "1" ]]; then
+    verify_control_upgrade_checkout_clean
   fi
   run_arclink_docker build
   run_arclink_docker up
@@ -9096,6 +9119,11 @@ control_host_db_path() {
   esac
 }
 
+control_host_state_root_base() {
+  load_docker_runtime_config
+  printf '%s\n' "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
+}
+
 new_control_runtime_backup_dir() {
   local host_priv="" root="" stamp="" target="" suffix="0"
 
@@ -9113,10 +9141,11 @@ new_control_runtime_backup_dir() {
 create_control_runtime_backup() {
   local backup_dir="$1"
   local host_priv="" db_path="" counts_path="" db_backup="" inventory_path=""
-  local arcdata_root="/arcdata/deployments"
+  local arcdata_root=""
   local tar_rc="0"
 
   host_priv="$(control_host_priv_dir)"
+  arcdata_root="$(control_host_state_root_base)"
   db_path="$(control_host_db_path)"
   counts_path="$backup_dir/table-counts.tsv"
   db_backup="$backup_dir/arclink-control.sqlite3"
@@ -9136,7 +9165,7 @@ Contents:
   arclink-control.sqlite3      Consistent SQLite backup of the control DB when present
   table-counts.tsv            Table row counts at backup time
   arclink-priv.tgz            Private config/state/vault snapshot, excluding reset-backups
-  arcdata-deployments.tgz     Generated Sovereign pod data when present
+  arcdata-deployments.tgz     Generated Sovereign pod data from ARCLINK_STATE_ROOT_BASE when present
   docker-containers.jsonl      Docker container inventory when Docker is available
 EOF
 
@@ -9196,7 +9225,7 @@ PY
 
   if [[ -d "$arcdata_root" ]] && find "$arcdata_root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
     set +e
-    tar -czf "$backup_dir/arcdata-deployments.tgz" -C /arcdata deployments
+    tar -czf "$backup_dir/arcdata-deployments.tgz" -C "$(dirname "$arcdata_root")" "$(basename "$arcdata_root")"
     tar_rc=$?
     set -e
     if [[ "$tar_rc" -eq 1 ]]; then
@@ -9259,10 +9288,21 @@ stop_control_runtime_writers() {
   local -a containers=(
     arclink-control-api-1
     arclink-control-provisioner-1
+    arclink-control-action-worker-1
     arclink-control-web-1
+    arclink-arclink-mcp-1
+    arclink-qmd-mcp-1
+    arclink-notion-webhook-1
+    arclink-vault-watch-1
+    arclink-ssot-batcher-1
     arclink-notification-delivery-1
     arclink-health-watch-1
     arclink-agent-supervisor-1
+    arclink-curator-refresh-1
+    arclink-qmd-refresh-1
+    arclink-pdf-ingest-1
+    arclink-memory-synth-1
+    arclink-hermes-docs-sync-1
   )
 
   if command -v docker >/dev/null 2>&1; then
@@ -9271,17 +9311,23 @@ stop_control_runtime_writers() {
 }
 
 remove_control_generated_pods() {
-  local compose_file="" deployment_dir="" project="" container_names=""
+  local compose_file="" deployment_dir="" project="" container_names="" state_root=""
   local -a compose_files=()
 
   if ! command -v docker >/dev/null 2>&1; then
     return 0
   fi
 
-  if [[ -d /arcdata/deployments ]]; then
+  state_root="$(control_host_state_root_base)"
+  if [[ -z "$state_root" || "$state_root" == "/" ]]; then
+    echo "Refusing to remove generated pods with unsafe ARCLINK_STATE_ROOT_BASE: ${state_root:-blank}" >&2
+    return 1
+  fi
+
+  if [[ -d "$state_root" ]]; then
     while IFS= read -r compose_file; do
       compose_files+=("$compose_file")
-    done < <(find /arcdata/deployments -mindepth 2 -maxdepth 4 -type f \( -name compose.yaml -o -name docker-compose.yaml \) 2>/dev/null | sort -u)
+    done < <(find "$state_root" -mindepth 2 -maxdepth 4 -type f \( -name compose.yaml -o -name docker-compose.yaml \) 2>/dev/null | sort -u)
   fi
 
   for compose_file in "${compose_files[@]}"; do
@@ -9300,8 +9346,8 @@ remove_control_generated_pods() {
     docker rm -f $container_names >/dev/null 2>&1 || true
   fi
 
-  if [[ -d /arcdata/deployments ]]; then
-    find /arcdata/deployments -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' \) -exec rm -rf {} +
+  if [[ -d "$state_root" ]]; then
+    find "$state_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' \) -exec rm -rf {} +
   fi
 }
 
@@ -9315,7 +9361,7 @@ remove_control_generated_secret_refs() {
     return 0
   fi
 
-  find "$secret_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' \) -exec rm -rf {} +
+  find "$secret_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' -o -name 'users' \) -exec rm -rf {} +
 }
 
 reset_control_telegram_active_command_scopes() {

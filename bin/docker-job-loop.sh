@@ -58,7 +58,8 @@ write_status() {
   local status="$1"
   local rc="$2"
   local output_file="$3"
-  python3 - "$STATUS_FILE" "$JOB_NAME" "$status" "$rc" "$output_file" <<'PY'
+  local started_at="$4"
+  python3 - "$STATUS_FILE" "$JOB_NAME" "$status" "$rc" "$output_file" "$started_at" "$INTERVAL_SECONDS" <<'PY'
 import datetime as dt
 import json
 import re
@@ -81,8 +82,33 @@ payload = {
     "job": sys.argv[2],
     "status": sys.argv[3],
     "returncode": int(sys.argv[4]),
+    "started_at": sys.argv[6],
     "finished_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "interval_seconds": int(sys.argv[7]),
     "output_tail": output[-4000:],
+}
+status_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+}
+
+write_running_status() {
+  local started_at="$1"
+  python3 - "$STATUS_FILE" "$JOB_NAME" "$started_at" "$INTERVAL_SECONDS" <<'PY'
+import datetime as dt
+import json
+import sys
+from pathlib import Path
+
+status_file = Path(sys.argv[1])
+payload = {
+    "job": sys.argv[2],
+    "status": "running",
+    "returncode": 0,
+    "started_at": sys.argv[3],
+    "finished_at": "",
+    "interval_seconds": int(sys.argv[4]),
+    "updated_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "output_tail": "",
 }
 status_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
@@ -99,12 +125,15 @@ status_for_return_code() {
 
 run_job_once() {
   output_file="$(mktemp)"
+  local started_at=""
   local rc=0
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  write_running_status "$started_at"
   "$@" >"$output_file" 2>&1 || rc=$?
   if [[ "$rc" != "0" ]]; then
     redact_output "$output_file" >&2
   fi
-  write_status "$(status_for_return_code "$rc")" "$rc" "$output_file"
+  write_status "$(status_for_return_code "$rc")" "$rc" "$output_file" "$started_at"
   cleanup
   output_file=""
 }

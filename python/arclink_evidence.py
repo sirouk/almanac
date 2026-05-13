@@ -244,7 +244,8 @@ def ledger_from_journey(
 # DB storage / retrieval
 # ---------------------------------------------------------------------------
 
-EVIDENCE_STATUSES = frozenset({"pending", "skipped", "passed", "failed", "blocked", "blocked_missing_credentials", "blocked_no_registered_runner"})
+EVIDENCE_STATUSES = frozenset({"pending", "skipped", "passed", "failed", "blocked"})
+EVIDENCE_LEDGER_STATUSES = EVIDENCE_STATUSES | frozenset({"blocked_missing_credentials", "blocked_no_registered_runner"})
 
 
 def _evidence_status_from_ledger(ledger: EvidenceLedger) -> str:

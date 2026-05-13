@@ -630,6 +630,16 @@ PY
   fi
 }
 
+check_retired_tailscale_nextcloud_routes() {
+  if [[ -x "$SCRIPT_DIR/tailscale-nextcloud-serve.sh" ]] \
+    && grep -q "no longer publishes Nextcloud or internal MCP routes" "$SCRIPT_DIR/tailscale-nextcloud-serve.sh"; then
+    pass "legacy Tailscale Serve routes for Nextcloud and internal MCP are intentionally retired"
+    return 0
+  fi
+
+  check_tailscale_serve_routes
+}
+
 check_activation_trigger_write_access() {
   local trigger_dir="$STATE_DIR/activation-triggers"
   local probe_path=""
@@ -2248,7 +2258,7 @@ if nextcloud_effectively_enabled; then
   fi
 
   if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    check_tailscale_serve_routes
+    check_retired_tailscale_nextcloud_routes
   fi
 fi
 

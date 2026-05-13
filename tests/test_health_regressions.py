@@ -261,6 +261,17 @@ def test_health_uses_effective_nextcloud_enablement() -> None:
     print("PASS test_health_uses_effective_nextcloud_enablement")
 
 
+def test_health_accepts_retired_tailscale_nextcloud_routes() -> None:
+    text = HEALTH_SH.read_text()
+    expect("check_retired_tailscale_nextcloud_routes()" in text,
+           "health should recognize that raw Nextcloud/MCP Tailscale routes are retired")
+    expect("legacy Tailscale Serve routes for Nextcloud and internal MCP are intentionally retired" in text,
+           "health should pass when the deploy script intentionally retires legacy routes")
+    expect("check_retired_tailscale_nextcloud_routes" in text and "check_tailscale_serve_routes" in text,
+           "health should keep the old route verifier as fallback for older deployments")
+    print("PASS test_health_accepts_retired_tailscale_nextcloud_routes")
+
+
 def test_shared_notion_without_webhook_reports_sweep_fallback_warning() -> None:
     text = HEALTH_SH.read_text()
     snippet = extract(text, 'if [[ -n "${ARCLINK_SSOT_NOTION_SPACE_URL:-}" ]]; then', "check_vault_definition_health")
@@ -1126,6 +1137,7 @@ def main() -> int:
     test_loopback_bind_probe_reports_safe_and_unsafe_listeners()
     test_required_loopback_bind_probe_fails_unsafe_listeners()
     test_health_uses_effective_nextcloud_enablement()
+    test_health_accepts_retired_tailscale_nextcloud_routes()
     test_shared_notion_without_webhook_reports_sweep_fallback_warning()
     test_shared_notion_with_public_webhook_but_no_token_warns_not_ready()
     test_shared_notion_with_installed_token_but_unconfirmed_verification_warns()
@@ -1138,7 +1150,7 @@ def main() -> int:
     test_active_agent_health_fails_when_agent_backup_cron_last_run_failed()
     test_active_agent_health_allows_clean_zero_user_enrollment_state()
     test_health_db_python_probe_command_failures_fail_closed()
-    print("PASS all 18 health regression tests")
+    print("PASS all 19 health regression tests")
     return 0
 
 

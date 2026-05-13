@@ -148,7 +148,7 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
 
     started = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:42", text="/start")
     expect(started.action == "prompt_name", str(started))
-    expect("Founders, Sovereign, or Scale" in started.reply, started.reply)
+    expect("Founders or Scale" in started.reply, started.reply)
     named = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -246,7 +246,8 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     package = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="Scale Buyer",
     )
-    expect([b.label for b in package.buttons] == ["Founders - $149/month", "Sovereign / Scale"], str(package.buttons))
+    expect([b.label for b in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
+    expect(all(button.url and "/api/v1/onboarding/public-bot-checkout" in button.url for button in package.buttons), str(package.buttons))
     standard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="/packages standard",
     )
@@ -1754,7 +1755,7 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         display_name_hint="Chris",
     )
     expect("Welcome aboard, Chris" in started.reply, f"expected greeting by name, got: {started.reply}")
-    expect("Founders, Sovereign, or Scale" in started.reply, started.reply)
+    expect("Founders or Scale" in started.reply, started.reply)
     labels = [b.label for b in started.buttons]
     expect(labels == ["Take Me Aboard", "Update Name"], f"unexpected buttons: {labels}")
     expect("Check Status" not in labels, "no status-check on cold-open greeting")
@@ -1766,7 +1767,8 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         text="/packages", display_name_hint="Chris",
     )
     expect(aboard.action == "prompt_package", str(aboard.action))
-    expect([b.label for b in aboard.buttons] == ["Founders - $149/month", "Sovereign / Scale"], str(aboard.buttons))
+    expect([b.label for b in aboard.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(aboard.buttons))
+    expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in aboard.buttons), str(aboard.buttons))
     standard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:9001",
         text="/packages standard", display_name_hint="Chris",
@@ -1788,10 +1790,11 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         display_name_hint="Chris",
     )
     expect("Welcome aboard, Sirouk" in renamed.reply, renamed.reply)
-    expect("$149/month" in renamed.reply, renamed.reply)
-    expect("$199/month" in renamed.reply, renamed.reply)
-    expect("$275/month" in renamed.reply, renamed.reply)
-    expect([b.label for b in renamed.buttons] == ["Founders - $149/month", "Sovereign / Scale"], str(renamed.buttons))
+    expect("$149/mo" in renamed.reply, renamed.reply)
+    expect("$275/mo" in renamed.reply, renamed.reply)
+    expect("Sovereign-equivalent" in renamed.reply, renamed.reply)
+    expect([b.label for b in renamed.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(renamed.buttons))
+    expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in renamed.buttons), str(renamed.buttons))
     expect(len(renamed.buttons) == 2, str(renamed.buttons))
 
     # If no display name was provided by the channel, the greeting falls back

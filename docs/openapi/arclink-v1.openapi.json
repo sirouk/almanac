@@ -815,6 +815,55 @@
         ]
       }
     },
+    "/api/v1/onboarding/public-bot-checkout": {
+      "get": {
+        "operationId": "public_bot_onboarding_checkout",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "session",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plan",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to Stripe Checkout"
+          },
+          "400": {
+            "description": "Invalid or already-open checkout"
+          },
+          "403": {
+            "description": "Invalid checkout token"
+          },
+          "404": {
+            "description": "Onboarding session not found"
+          },
+          "503": {
+            "description": "Stripe checkout unavailable"
+          }
+        },
+        "summary": "Redirect a public bot checkout button to Stripe",
+        "tags": [
+          "onboarding"
+        ]
+      }
+    },
     "/api/v1/onboarding/claim-session": {
       "post": {
         "operationId": "onboarding_claim_session",

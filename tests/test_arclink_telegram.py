@@ -119,8 +119,9 @@ def test_telegram_fake_transport_polling() -> None:
     expect(len(transport.sent_messages) == 2, f"expected 2 replies, got {len(transport.sent_messages)}")
     expect("Raven" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
     expect("Welcome aboard, Test Buyer" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
-    expect("Founders - $149/month" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
-    expect("Sovereign / Scale" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
+    expect("Founders $149/mo" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
+    expect("Scale $275/mo" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
+    expect("/api/v1/onboarding/public-bot-checkout" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
     expect("reply_markup" in transport.sent_messages[1], str(transport.sent_messages[1]))
     print("PASS test_telegram_fake_transport_polling")
 

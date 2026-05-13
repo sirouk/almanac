@@ -7,6 +7,7 @@ import os
 import tempfile
 from concurrent.futures import Future
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from arclink_test_helpers import auth_headers, expect, load_module, memory_db
 
@@ -1545,6 +1546,83 @@ def test_public_onboarding_checkout_maps_package_price_ids() -> None:
         expect(status == 200, f"expected 200 got {status}: {payload}")
         expect(calls[-1]["price_id"] == price_id, str(calls[-1]))
     print("PASS test_public_onboarding_checkout_maps_package_price_ids")
+
+
+def test_public_bot_checkout_button_redirects_to_stripe() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_public_bot_checkout_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_public_bot_checkout_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_hosted_checkout_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_public_bot_checkout_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_FOUNDERS_PRICE_ID": "price_founders_live",
+        "ARCLINK_SCALE_PRICE_ID": "price_scale_live",
+    })
+
+    bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:direct-checkout",
+        text="/start",
+        display_name_hint="Direct Buyer",
+    )
+    package = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:direct-checkout",
+        text="/packages",
+        base_domain="example.test",
+    )
+    expect([button.label for button in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
+    expect(all(button.url for button in package.buttons), str(package.buttons))
+
+    scale_url = package.buttons[1].url
+    parsed = urlparse(scale_url)
+    query = {key: values[0] for key, values in parse_qs(parsed.query).items() if values}
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path=parsed.path,
+        headers={},
+        query=query,
+        config=config,
+        stripe_client=stripe,
+    )
+    expect(status == 303, f"expected redirect got {status}: {payload}")
+    location = dict(headers).get("Location", "")
+    expect(location.startswith("https://stripe.test/checkout/"), str(headers))
+    checkout_session = stripe.checkout_sessions[location.rsplit("/", 1)[1]]
+    expect(checkout_session["price_id"] == "price_scale_live", str(checkout_session))
+    expect(checkout_session["success_url"] == "https://example.test/checkout/success?session=" + package.session_id, str(checkout_session))
+
+    row = conn.execute(
+        "SELECT user_id, selected_plan_id, selected_model_id, checkout_state FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (package.session_id,),
+    ).fetchone()
+    expect(row["selected_plan_id"] == "scale", str(dict(row)))
+    expect(row["selected_model_id"], str(dict(row)))
+    expect(row["checkout_state"] == "open", str(dict(row)))
+    deployments = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_deployments WHERE user_id = ?",
+        (row["user_id"],),
+    ).fetchone()
+    expect(deployments["n"] == 3, str(dict(deployments)))
+
+    status2, payload2, headers2 = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path=parsed.path,
+        headers={},
+        query=query,
+        config=config,
+        stripe_client=stripe,
+    )
+    expect(status2 == 303, f"expected replay redirect got {status2}: {payload2}")
+    expect(dict(headers2).get("Location") == location, str(headers2))
+    expect(len(stripe.checkout_sessions) == 1, str(stripe.checkout_sessions))
+    print("PASS test_public_bot_checkout_button_redirects_to_stripe")
 
 
 def test_web_telegram_discord_onboarding_parity() -> None:
@@ -3724,6 +3802,7 @@ def main() -> int:
     test_public_onboarding_checkout_route()
     test_public_onboarding_checkout_resolves_live_stripe_from_config()
     test_public_onboarding_checkout_maps_package_price_ids()
+    test_public_bot_checkout_button_redirects_to_stripe()
     test_web_telegram_discord_onboarding_parity()
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()

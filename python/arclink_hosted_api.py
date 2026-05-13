@@ -18,6 +18,7 @@ import sqlite3
 import threading
 import time
 import hmac
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
@@ -86,7 +87,7 @@ from arclink_discord import (
     handle_discord_webhook_request,
 )
 from arclink_notification_delivery import run_public_agent_turns_once
-from arclink_product import base_domain as default_base_domain
+from arclink_product import base_domain as default_base_domain, chutes_default_model
 from arclink_secrets_regex import redact_then_truncate
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
@@ -501,6 +502,90 @@ def _handle_public_onboarding_checkout(
         base_domain=config.base_domain,
     )
     return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _public_bot_checkout_token_valid(session: Mapping[str, Any], *, plan: str, token: str) -> bool:
+    metadata = json_loads_safe(str(session.get("metadata_json") or "{}"))
+    raw_hashes = metadata.get("public_bot_checkout_verifiers")
+    if not isinstance(raw_hashes, Mapping):
+        return False
+    expected = str(raw_hashes.get(plan) or "").strip()
+    supplied = str(token or "").strip()
+    supplied_digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
+    return bool(expected and supplied_digest and hmac.compare_digest(expected, supplied_digest))
+
+
+def _handle_public_bot_onboarding_checkout_redirect(
+    conn: sqlite3.Connection,
+    query: Mapping[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+    stripe_client: Any,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    session_id = str(query.get("session") or query.get("session_id") or "").strip()
+    plan = str(query.get("plan") or "").strip().lower()
+    token = str(query.get("token") or "").strip()
+    if plan not in {"founders", "scale"}:
+        return _json_response(400, {"error": "unsupported_public_bot_checkout_plan", "request_id": request_id}, request_id=request_id)
+    if not session_id or not token:
+        return _json_response(400, {"error": "missing_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+
+    row = conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if row is None:
+        return _json_response(404, {"error": "onboarding_session_not_found", "request_id": request_id}, request_id=request_id)
+    session = dict(row)
+    if not _public_bot_checkout_token_valid(session, plan=plan, token=token):
+        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+
+    existing_url = str(session.get("checkout_url") or "").strip()
+    existing_plan = str(session.get("selected_plan_id") or "").strip().lower()
+    checkout_state = str(session.get("checkout_state") or "").strip().lower()
+    if existing_url and checkout_state in {"open", "paid"}:
+        if existing_plan == plan:
+            return _json_response(
+                303,
+                {"checkout_url": existing_url, "request_id": request_id},
+                request_id=request_id,
+                extra_headers=[("Location", existing_url), ("Cache-Control", "no-store")],
+            )
+        return _json_response(400, {"error": "checkout_already_open_for_different_plan", "request_id": request_id}, request_id=request_id)
+
+    price_id = config.founders_price_id if plan == "founders" else config.scale_price_id
+    if not price_id:
+        return _json_response(503, {"error": "stripe_price_not_configured", "request_id": request_id}, request_id=request_id)
+
+    answer = answer_public_onboarding_api(
+        conn,
+        session_id=session_id,
+        question_key="plan",
+        answer_summary=f"selected {plan} from public bot checkout button",
+        selected_plan_id=plan,
+        selected_model_id=chutes_default_model(config.env),
+    )
+    if answer.status != 200:
+        return _json_response(answer.status, answer.payload, request_id=request_id)
+
+    root = f"https://{str(config.base_domain or default_base_domain(config.env)).strip().strip('/')}"
+    result = open_public_onboarding_checkout_api(
+        conn,
+        session_id=session_id,
+        stripe_client=stripe_client,
+        price_id=price_id,
+        success_url=f"{root}/checkout/success?session={session_id}",
+        cancel_url=f"{root}/checkout/cancel?session={session_id}",
+        base_domain=config.base_domain,
+    )
+    if result.status != 200:
+        return _json_response(result.status, result.payload, request_id=request_id)
+    checkout_url = str(result.payload.get("session", {}).get("checkout_url") or "").strip()
+    if not checkout_url:
+        return _json_response(503, {"error": "stripe_checkout_url_missing", "request_id": request_id}, request_id=request_id)
+    return _json_response(
+        303,
+        {"checkout_url": checkout_url, "request_id": request_id},
+        request_id=request_id,
+        extra_headers=[("Location", checkout_url), ("Cache-Control", "no-store")],
+    )
 
 
 def _handle_stripe_webhook(
@@ -1682,6 +1767,22 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         }),
         "responses": {"200": {"description": "Checkout URL returned"}, "400": {"description": "Invalid input"}},
     },
+    "public_bot_onboarding_checkout": {
+        "summary": "Redirect a public bot checkout button to Stripe",
+        "tags": ["onboarding"],
+        "parameters": [
+            _qparam("session"),
+            _qparam("plan"),
+            _qparam("token"),
+        ],
+        "responses": {
+            "303": {"description": "Redirect to Stripe Checkout"},
+            "400": {"description": "Invalid or already-open checkout"},
+            "403": {"description": "Invalid checkout token"},
+            "404": {"description": "Onboarding session not found"},
+            "503": {"description": "Stripe checkout unavailable"},
+        },
+    },
     "stripe_webhook": {
         "summary": "Stripe webhook receiver",
         "tags": ["webhooks"],
@@ -1988,6 +2089,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/onboarding/start"): "public_onboarding_start",
     ("POST", "/onboarding/answer"): "public_onboarding_answer",
     ("POST", "/onboarding/checkout"): "public_onboarding_checkout",
+    ("GET", "/onboarding/public-bot-checkout"): "public_bot_onboarding_checkout",
     ("POST", "/webhooks/stripe"): "stripe_webhook",
     ("POST", "/webhooks/telegram"): "telegram_webhook",
     ("POST", "/webhooks/discord"): "discord_webhook",
@@ -2034,6 +2136,7 @@ _PUBLIC_ROUTES = frozenset({
     "public_onboarding_start",
     "public_onboarding_answer",
     "public_onboarding_checkout",
+    "public_bot_onboarding_checkout",
     "onboarding_status",
     "onboarding_claim_session",
     "onboarding_cancel",
@@ -2181,6 +2284,8 @@ def route_arclink_hosted_api(
             result = _handle_public_onboarding_answer(conn, parsed_body, request_id, cfg)
         elif route_key == "public_onboarding_checkout":
             result = _handle_public_onboarding_checkout(conn, parsed_body, request_id, cfg, stripe)
+        elif route_key == "public_bot_onboarding_checkout":
+            result = _handle_public_bot_onboarding_checkout_redirect(conn, clean_query, request_id, cfg, stripe)
         elif route_key == "stripe_webhook":
             result = _handle_stripe_webhook(conn, body, headers, request_id, cfg)
         elif route_key == "telegram_webhook":
@@ -2406,6 +2511,7 @@ def _status_text(status_code: int) -> str:
         200: "200 OK",
         201: "201 Created",
         202: "202 Accepted",
+        303: "303 See Other",
         204: "204 No Content",
         400: "400 Bad Request",
         401: "401 Unauthorized",

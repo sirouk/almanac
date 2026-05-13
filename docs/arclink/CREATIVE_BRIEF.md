@@ -159,8 +159,8 @@ I can take you from a few answers to agent onboard ArcLink with memory, files, c
 Package CTAs:
 
 ```text
-Founders - $149/month
-Sovereign / Scale
+Founders $149/mo
+Scale $275/mo
 Sovereign - $199/month
 Scale - $275/month
 ```
@@ -291,7 +291,7 @@ Raven here. ArcLink is in range.
 
 I bring private agents online with memory, files, code workspace, model access, and dashboard visibility. No bot-building. No server chores.
 
-Tap Take Me Aboard to pick Founders, Sovereign, or Scale. Tap Update Name and just tell me what to call you.
+Tap Take Me Aboard to pick Founders or Scale. Tap Update Name and just tell me what to call you.
 ```
 
 Buttons:
@@ -349,8 +349,10 @@ Welcome aboard, {Name}.
 
 Choose your ArcLink onboarding lane.
 
-Limited 100 Founders is $149/month: Sovereign-equivalent access for the first 100 aboard.
-Sovereign is $199/month. Scale is $275/month.
+Founders is $149/mo: Sovereign-equivalent access for the first 100 aboard.
+Scale is $275/mo: three agents onboard ArcLink with Federation.
+
+Tap a lane to open secure Stripe checkout. I will report back here once payment clears and provisioning starts.
 
 Agentic Expansion after launch starts at $79/month on Scale and $99/month on Sovereign.
 ```
@@ -358,13 +360,13 @@ Agentic Expansion after launch starts at $79/month on Scale and $99/month on Sov
 Buttons:
 
 ```text
-Founders - $149/month
-Sovereign / Scale
+Founders $149/mo
+Scale $275/mo
 ```
 
 ### Standard Package Prompt
 
-Triggered by `Sovereign / Scale` or `/packages standard`.
+Triggered by `/packages standard`.
 
 ```text
 Welcome aboard, {Name}.
@@ -687,8 +689,8 @@ Canonical button labels:
 ```text
 Take Me Aboard
 Update Name
-Founders - $149/month
-Sovereign / Scale
+Founders $149/mo
+Scale $275/mo
 Sovereign - $199/month
 Scale - $275/month
 Hire Founders - $149/month

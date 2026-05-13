@@ -110,9 +110,9 @@ Hidden/account-state actions:
 
 Raven should prefer buttons over typed pseudo-actions whenever the platform supports them. Labels should be vivid, but each one must still explain the action:
 
-- `Take Me Aboard` opens the Founders, Sovereign, and Scale choice.
-- `Founders - $149/month` chooses the Limited 100 Founders path quickly.
-- `Sovereign / Scale` opens the standard package lane.
+- `Take Me Aboard` opens direct Founders and Scale checkout choices.
+- `Founders $149/mo` opens Limited 100 Founders checkout through Stripe.
+- `Scale $275/mo` opens Scale checkout through Stripe.
 - `Sovereign - $199/month` chooses the Sovereign path quickly.
 - `Scale - $275/month` chooses the Scale path quickly.
 - `Hire Founders - $149/month`, `Hire Sovereign - $199/month`, or `Hire Scale - $275/month` opens package checkout. The checkout handoff should be a single-step message with only the checkout button; Raven reports back automatically after Stripe and provisioning events.

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import hashlib
 import re
 import secrets
 import sqlite3
 from typing import Any, Mapping
+from urllib.parse import urlencode
 
 from arclink_api_auth import (
     ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS,
@@ -42,6 +44,8 @@ ARCLINK_PUBLIC_BOT_PLAN_ALIASES = {
     "sovereign": "sovereign",
     "scale": "scale",
 }
+ARCLINK_PUBLIC_BOT_DIRECT_CHECKOUT_PLANS = ("founders", "scale")
+ARCLINK_PUBLIC_BOT_DIRECT_CHECKOUT_PATH = "/api/v1/onboarding/public-bot-checkout"
 ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS = frozenset({"/packages", "packages", "plans", "take me aboard", "aboard"})
 ARCLINK_PUBLIC_BOT_STANDARD_PACKAGE_COMMANDS = frozenset({"/packages standard", "packages standard", "/standard-packages", "standard packages"})
 ARCLINK_PUBLIC_BOT_TURN_LIMIT = 20
@@ -653,6 +657,7 @@ def _package_prompt_reply(
     greeting: str = "",
     bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     standard: bool = False,
+    checkout_buttons: tuple[ArcLinkPublicBotButton, ...] = (),
 ) -> ArcLinkPublicBotTurn:
     name = str(session.get("display_name_hint") or "").strip()
     raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
@@ -681,17 +686,86 @@ def _package_prompt_reply(
         reply=(
             f"{header}\n\n"
             f"Choose your ArcLink onboarding lane.\n\n"
-            f"Limited 100 Founders is ${FOUNDERS_MONTHLY_DOLLARS}/month: Sovereign-equivalent access for the first 100 aboard.\n"
-            f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month. Scale is ${SCALE_MONTHLY_DOLLARS}/month.\n\n"
+            f"Founders is ${FOUNDERS_MONTHLY_DOLLARS}/mo: Sovereign-equivalent access for the first 100 aboard.\n"
+            f"Scale is ${SCALE_MONTHLY_DOLLARS}/mo: three agents onboard ArcLink with Federation.\n\n"
+            "Tap a lane to open secure Stripe checkout. I will report back here once payment clears and provisioning starts.\n\n"
             f"Agentic Expansion after launch starts at ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month on Scale "
             f"and ${SOVEREIGN_AGENT_EXPANSION_MONTHLY_DOLLARS}/month on Sovereign."
         ),
-        buttons=(
-            _button(f"Founders - ${FOUNDERS_MONTHLY_DOLLARS}/month", command="/plan founders"),
-            _button("Sovereign / Scale", command="/packages standard", style="secondary"),
+        buttons=checkout_buttons or (
+            _button(f"Founders ${FOUNDERS_MONTHLY_DOLLARS}/mo", command="/plan founders"),
+            _button(f"Scale ${SCALE_MONTHLY_DOLLARS}/mo", command="/plan scale", style="secondary"),
         ),
         bot_display_name=raven,
     )
+
+
+def _public_bot_direct_checkout_label(plan: str) -> str:
+    clean = str(plan or "").strip().lower()
+    if clean == "scale":
+        return f"Scale ${SCALE_MONTHLY_DOLLARS}/mo"
+    return f"Founders ${FOUNDERS_MONTHLY_DOLLARS}/mo"
+
+
+def _direct_checkout_url(*, session_id: str, plan: str, token: str, base_domain: str) -> str:
+    root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
+    query = urlencode({"session": session_id, "plan": plan, "token": token})
+    return f"{root}{ARCLINK_PUBLIC_BOT_DIRECT_CHECKOUT_PATH}?{query}"
+
+
+def _direct_checkout_token_digest(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _ensure_direct_checkout_buttons(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    base_domain: str,
+) -> tuple[dict[str, Any], tuple[ArcLinkPublicBotButton, ...]]:
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        return dict(session), ()
+    payload = _metadata(session)
+    tokens: dict[str, str] = {}
+    verifiers: dict[str, str] = {}
+    for plan in ARCLINK_PUBLIC_BOT_DIRECT_CHECKOUT_PLANS:
+        token = secrets.token_urlsafe(24)
+        tokens[plan] = token
+        verifiers[plan] = _direct_checkout_token_digest(token)
+    payload.pop("public_bot_checkout_tokens", None)
+    payload.pop("public_bot_checkout_token_hashes", None)
+    payload["public_bot_checkout_verifiers"] = verifiers
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json_dumps_safe(payload, label="ArcLink public bot checkout verifier", error_cls=ArcLinkPublicBotError),
+            utc_now_iso(),
+            session_id,
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    if row is not None:
+        session = dict(row)
+    buttons = tuple(
+        _button(
+            _public_bot_direct_checkout_label(plan),
+            url=_direct_checkout_url(
+                session_id=session_id,
+                plan=plan,
+                token=str(tokens.get(plan) or ""),
+                base_domain=base_domain,
+            ),
+            style="secondary" if plan == "scale" else "",
+        )
+        for plan in ARCLINK_PUBLIC_BOT_DIRECT_CHECKOUT_PLANS
+    )
+    return dict(session), buttons
 
 
 def _turn(
@@ -2729,6 +2803,7 @@ def _handle_active_workflow(
     channel_identity: str,
     message: str,
     command: str,
+    base_domain: str = "",
 ) -> ArcLinkPublicBotTurn | None:
     session, deployment = _deployment_context(conn, channel=channel, channel_identity=channel_identity)
     if not session:
@@ -2791,7 +2866,8 @@ def _handle_active_workflow(
             updates={},
             clear=("public_bot_workflow",),
         )
-        return _package_prompt_reply(updated, greeting=f"Welcome aboard, {new_name}.")
+        updated, checkout_buttons = _ensure_direct_checkout_buttons(conn, updated, base_domain=base_domain)
+        return _package_prompt_reply(updated, greeting=f"Welcome aboard, {new_name}.", checkout_buttons=checkout_buttons)
     if workflow == "connect_notion":
         if command in {"ready", "done", "verified", "complete"}:
             updated = _update_session_metadata(
@@ -3335,6 +3411,7 @@ def handle_arclink_public_bot_turn(
         channel_identity=clean_identity,
         message=message,
         command=command,
+        base_domain=base_domain,
     )
     if active_workflow is not None:
         return active_workflow
@@ -3417,7 +3494,7 @@ def handle_arclink_public_bot_turn(
                 f"{greeting}\n\n"
                 "I bring private agents online with memory, files, code workspace, model access, and dashboard visibility. "
                 "No bot-building. No server chores.\n\n"
-                "Tap Take Me Aboard to pick Founders, Sovereign, or Scale. Tap Update Name and just tell me what to call you."
+                "Tap Take Me Aboard to pick Founders or Scale. Tap Update Name and just tell me what to call you."
             ),
             buttons=(
                 _button("Take Me Aboard", command="/packages"),
@@ -3444,7 +3521,8 @@ def handle_arclink_public_bot_turn(
     if command in ARCLINK_PUBLIC_BOT_STANDARD_PACKAGE_COMMANDS:
         return _package_prompt_reply(session, standard=True, bot_display_name=raven)
     if command in ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS:
-        return _package_prompt_reply(session, bot_display_name=raven)
+        session, checkout_buttons = _ensure_direct_checkout_buttons(conn, session, base_domain=base_domain)
+        return _package_prompt_reply(session, bot_display_name=raven, checkout_buttons=checkout_buttons)
     if command in {"name", "/name"}:
         # Bare /name (or the Update Name button) opens a short listening lane.
         # The next plain-text message becomes the display name.
@@ -3476,7 +3554,13 @@ def handle_arclink_public_bot_turn(
             answer_summary="display name captured",
             display_name_hint=name,
         )
-        return _package_prompt_reply(session, greeting=f"Welcome aboard, {name}.", bot_display_name=raven)
+        session, checkout_buttons = _ensure_direct_checkout_buttons(conn, session, base_domain=base_domain)
+        return _package_prompt_reply(
+            session,
+            greeting=f"Welcome aboard, {name}.",
+            bot_display_name=raven,
+            checkout_buttons=checkout_buttons,
+        )
     plan_answer = _command_value(message, command, ("plan", "/plan"))
     if plan_answer is not None:
         plan = _normalize_public_bot_plan(plan_answer)
@@ -3550,7 +3634,7 @@ def handle_arclink_public_bot_turn(
         action="prompt_command",
             reply=(
                 f"I read you. {raven} on the line.\n\n"
-                "No command map needed yet. The early lanes stay few on purpose. From here I can help you pick Founders, Sovereign, or Scale, set your name, or read the board. Once your agent is awake on ArcLink, the deeper controls surface as a clean checklist."
+                "No command map needed yet. The early lanes stay few on purpose. From here I can help you pick Founders or Scale, set your name, or read the board. Once your agent is awake on ArcLink, the deeper controls surface as a clean checklist."
             ),
         buttons=(
             _button("Take Me Aboard", command="/packages"),

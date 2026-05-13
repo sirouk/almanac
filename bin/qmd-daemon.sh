@@ -12,6 +12,10 @@ mkdir -p "$(dirname "$QMD_INDEX_DB_PATH")"
 loopback_port="${QMD_MCP_LOOPBACK_PORT:-${QMD_MCP_PORT:-8181}}"
 container_port="${QMD_MCP_CONTAINER_PORT:-$loopback_port}"
 
+if [[ "$loopback_port" == "$container_port" && -z "${QMD_MCP_INTERNAL_PORT:-}" ]]; then
+  loopback_port="$((container_port + 20000))"
+fi
+
 if [[ "$loopback_port" == "$container_port" ]]; then
   exec qmd --index "$QMD_INDEX_NAME" mcp --http --host 127.0.0.1 --port "$loopback_port"
 fi

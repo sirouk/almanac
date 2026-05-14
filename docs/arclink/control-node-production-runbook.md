@@ -93,6 +93,43 @@ Before enabling live mutation paths, verify:
 - Rollback plans preserve state roots and do not delete vault, Nextcloud,
   memory, qmd, or workspace data by default.
 
+## Operator Pod Migration
+
+Wave 3 Pod migration is an Operator-only rollout path. Captain-initiated
+migration remains disabled by default with
+`ARCLINK_CAPTAIN_MIGRATION_ENABLED=0`; do not expose a Captain dashboard button
+or user API route until policy and live proof are complete.
+
+Operators queue migration through the existing admin action rail:
+
+```json
+{
+  "action_type": "reprovision",
+  "target_kind": "deployment",
+  "target_id": "<deployment_id>",
+  "metadata": {
+    "target_machine_id": "current",
+    "reason": "redeploy in place"
+  }
+}
+```
+
+Use `target_machine_id=current` or omit it for redeploy-in-place. Use a fleet
+host id or linked inventory machine id to move the Pod to another worker. The
+action worker calls `python/arclink_pod_migration.py`, captures source state to
+`<state_root_base>/.migrations/<migration_id>/`, materializes it on the target
+state root, runs executor-backed Compose apply, verifies health, and records
+`pod_migration_started`, `pod_migration_completed`, or
+`pod_migration_rolled_back`. Failed host moves tear down the target Compose
+stack without deleting retained state and restart the source Compose stack.
+
+Migration operation idempotency keys are `arclink:migration:<migration_id>`.
+Replaying the same migration id with the same intent returns the prior terminal
+result; changing the target for the same migration id is rejected. Successful
+migrations retain captured source-state artifacts until
+`ARCLINK_MIGRATION_GC_DAYS` elapses, default `7`; the control action-worker
+loop removes expired successful captures during its normal periodic pass.
+
 ## Fleet Inventory And ASU Placement
 
 The Operator inventory path is local-first and proof-gated for cloud providers:

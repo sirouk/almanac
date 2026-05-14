@@ -102,6 +102,33 @@ def test_arc_pod_captain_console_wave0_columns_and_indexes_exist() -> None:
     print("PASS test_arc_pod_captain_console_wave0_columns_and_indexes_exist")
 
 
+def test_pod_migration_wave3_columns_and_indexes_exist() -> None:
+    mod = load_control()
+    conn = memory_db(mod)
+    columns = {
+        str(row["name"]): str(row["type"]).upper()
+        for row in conn.execute("PRAGMA table_info(arclink_pod_migrations)").fetchall()
+    }
+    for name in (
+        "source_placement_id",
+        "target_placement_id",
+        "source_host_id",
+        "target_host_id",
+        "target_machine_id",
+        "source_state_root",
+        "target_state_root",
+        "capture_dir",
+        "verification_json",
+        "target_host_metadata_json",
+        "source_retention_until",
+        "source_garbage_collected_at",
+    ):
+        expect(name in columns, str(columns))
+    indexes = {str(row["name"]) for row in conn.execute("PRAGMA index_list(arclink_pod_migrations)").fetchall()}
+    expect("idx_arclink_pod_migrations_gc" in indexes, str(indexes))
+    print("PASS test_pod_migration_wave3_columns_and_indexes_exist")
+
+
 def test_deployment_prefix_reservation_is_unique() -> None:
     mod = load_control()
     conn = memory_db(mod)
@@ -336,8 +363,19 @@ def test_arc_pod_captain_console_status_drift_checks() -> None:
     conn.execute(
         """
         INSERT INTO arclink_pod_migrations (
-          migration_id, deployment_id, status, created_at, updated_at
-        ) VALUES ('migration_bad', 'dep_missing', 'bogus', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+          migration_id, deployment_id, source_placement_id, target_placement_id,
+          source_host_id, target_host_id, status, created_at, updated_at
+        ) VALUES ('migration_bad', 'dep_missing', 'plc_missing_source', 'plc_missing_target',
+          'host_missing_source', 'host_missing_target', 'bogus', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_pod_migrations (
+          migration_id, deployment_id, source_placement_id, source_host_id,
+          target_host_id, status, created_at, updated_at
+        ) VALUES ('migration_target_required', 'dep_missing', 'plc_missing_source',
+          'host_missing_source', 'host_missing_target', 'running', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
         """
     )
     conn.execute(
@@ -364,6 +402,11 @@ def test_arc_pod_captain_console_status_drift_checks() -> None:
     expect("wrapped_report_status_invalid" in kinds, str(drift))
     expect("pod_message_sender_deployment_missing" in kinds, str(drift))
     expect("pod_migration_deployment_missing" in kinds, str(drift))
+    expect("pod_migration_source_placement_missing" in kinds, str(drift))
+    expect("pod_migration_target_placement_missing" in kinds, str(drift))
+    expect("pod_migration_source_host_missing" in kinds, str(drift))
+    expect("pod_migration_target_host_missing" in kinds, str(drift))
+    expect("pod_migration_target_placement_required" in kinds, str(drift))
     expect("crew_recipe_user_missing" in kinds, str(drift))
     expect("wrapped_report_user_missing" in kinds, str(drift))
     print("PASS test_arc_pod_captain_console_status_drift_checks")
@@ -372,6 +415,7 @@ def test_arc_pod_captain_console_status_drift_checks() -> None:
 def main() -> int:
     test_arclink_schema_creates_expected_tables_and_is_idempotent()
     test_arc_pod_captain_console_wave0_columns_and_indexes_exist()
+    test_pod_migration_wave3_columns_and_indexes_exist()
     test_deployment_prefix_reservation_is_unique()
     test_generated_deployment_prefixes_validate_denylist_and_retry_collisions()
     test_generated_deployment_prefix_pool_is_large_and_public_safe()
@@ -379,7 +423,7 @@ def main() -> int:
     test_subscription_health_and_provisioning_helpers()
     test_arclink_drift_detection_reports_missing_linked_rows()
     test_arc_pod_captain_console_status_drift_checks()
-    print("PASS all 9 ArcLink schema tests")
+    print("PASS all 10 ArcLink schema tests")
     return 0
 
 

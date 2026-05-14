@@ -120,7 +120,7 @@ def test_admin_action_rejects_unwired_action_types() -> None:
     control = load_module("arclink_control.py", "arclink_control_admin_action_unwired_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_unwired_test")
     conn = memory_db(control)
-    for action_type in ("reprovision", "rollout", "force_resynth", "rotate_bot_key", "suspend", "unsuspend"):
+    for action_type in ("rollout", "force_resynth", "rotate_bot_key", "suspend", "unsuspend"):
         try:
             dashboard.queue_arclink_admin_action(
                 conn,
@@ -138,6 +138,25 @@ def test_admin_action_rejects_unwired_action_types() -> None:
     queued = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
     expect(queued == 0, str(queued))
     print("PASS test_admin_action_rejects_unwired_action_types")
+
+
+def test_admin_action_accepts_reprovision_as_executable() -> None:
+    control = load_module("arclink_control.py", "arclink_control_admin_action_reprovision_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_reprovision_test")
+    conn = memory_db(control)
+    action = dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_1",
+        action_type="reprovision",
+        target_kind="deployment",
+        target_id="dep_1",
+        reason="operator requested redeploy in place",
+        idempotency_key="reprovision-1",
+        metadata={"target_machine_id": "current"},
+    )
+    expect(action["status"] == "queued", str(action))
+    expect(json.loads(action["metadata_json"])["target_machine_id"] == "current", str(action))
+    print("PASS test_admin_action_accepts_reprovision_as_executable")
 
 
 def test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects() -> None:
@@ -248,6 +267,7 @@ def test_admin_dashboard_exposes_action_execution_readiness() -> None:
 
     ready = dashboard.admin_action_execution_readiness(env={"ARCLINK_EXECUTOR_ADAPTER": "fake"})
     expect("restart" in ready["executable"], str(ready))
+    expect("reprovision" in ready["executable"], str(ready))
     expect("dns_repair" in ready["executable"], str(ready))
     expect("comp" in ready["executable"], str(ready))
     expect("rollout" in ready["pending_not_implemented"], str(ready))
@@ -264,10 +284,11 @@ def main() -> int:
     test_admin_action_requires_reason_and_queues_audited_intent()
     test_admin_action_idempotency_reuses_intent_without_duplicate_audit()
     test_admin_action_rejects_unwired_action_types()
+    test_admin_action_accepts_reprovision_as_executable()
     test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects()
     test_admin_refund_and_cancel_actions_record_audited_notes()
     test_admin_dashboard_exposes_action_execution_readiness()
-    print("PASS all 6 ArcLink admin action tests")
+    print("PASS all 7 ArcLink admin action tests")
     return 0
 
 

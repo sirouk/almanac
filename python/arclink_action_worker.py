@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -39,6 +40,7 @@ from arclink_executor import (
     SshDockerComposeRunner,
 )
 from arclink_provisioning import render_arclink_state_roots
+from arclink_pod_migration import garbage_collect_pod_migrations, migrate_pod
 
 
 class ArcLinkActionWorkerError(ValueError):
@@ -47,7 +49,7 @@ class ArcLinkActionWorkerError(ValueError):
 
 # Action types that map to implemented executor or local control-plane calls.
 _EXECUTOR_ACTIONS = frozenset({
-    "restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp",
+    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp",
 })
 
 _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
@@ -81,6 +83,10 @@ def _safe_error_code(exc: Exception) -> str:
 def _safe_mapping_json(raw: Any) -> dict[str, Any]:
     parsed = json_loads_safe(str(raw or "{}"))
     return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _dns_role_from_record_id(record_id: str, deployment_id: str, hostname: str) -> str:
@@ -699,6 +705,41 @@ def _dispatch_action(
         )
         return {"status": "applied", "action": "comp", "user_id": user_id, "operation_kind": "control_db_comp", "operation_idempotency_key": operation_key}
 
+    if action_type == "reprovision":
+        if target_kind != "deployment":
+            raise ArcLinkActionWorkerError("reprovision action requires a deployment target")
+        migration_id = str(metadata.get("migration_id") or "").strip()
+        if not migration_id:
+            migration_id = "mig_" + hashlib.sha256(action_id.encode("utf-8")).hexdigest()[:24]
+        operation_key = f"arclink:migration:{migration_id}"
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="pod_migration",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        dry_run = _truthy(metadata.get("dry_run"))
+        result = migrate_pod(
+            conn,
+            executor=executor,
+            deployment_id=target_id,
+            target_machine_id=str(metadata.get("target_machine_id") or "current"),
+            migration_id=migration_id,
+            reason=str(metadata.get("reason") or "operator queued reprovision action"),
+            dry_run=dry_run,
+            env={key: str(value) for key, value in dict(metadata.get("env") or {}).items()} if isinstance(metadata.get("env"), Mapping) else None,
+        )
+        if str(result.get("status") or "") != "succeeded" and not (dry_run and str(result.get("status") or "") == "planned"):
+            raise ArcLinkActionWorkerError(f"reprovision migration did not succeed: {result.get('status') or 'unknown'}")
+        return {
+            **result,
+            "action": "reprovision",
+            "operation_kind": "pod_migration",
+            "operation_idempotency_key": operation_key,
+        }
+
     raise ArcLinkActionWorkerError(f"unsupported action type: {action_type}")
 
 
@@ -810,6 +851,10 @@ def list_action_attempts(
     return [dict(r) for r in rows]
 
 
+def run_pod_migration_gc(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return garbage_collect_pod_migrations(conn)
+
+
 def _executor_from_env(env: Mapping[str, str] | None = None) -> ArcLinkExecutor:
     source = dict(env or os.environ)
     adapter = str(source.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower()
@@ -917,7 +962,10 @@ def main(argv: list[str] | None = None) -> int:
                 batch_size=max(1, args.batch_size),
                 worker_id=worker_id,
             )
+            migration_gc = run_pod_migration_gc(conn)
             payload = {"recovered": recovered, "processed": results}
+            if migration_gc:
+                payload["migration_gc"] = migration_gc
             if args.json:
                 print(json.dumps(payload, sort_keys=True))
             elif results or recovered:

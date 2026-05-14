@@ -1,54 +1,69 @@
 # Stack Snapshot
 
-## Scope
-
-This snapshot uses repository-level manifest and source signals only. It avoids
-private state, live service state, local machine paths, timing output, and raw
-command output.
-
-## Primary Stack
-
-- primary_stack: Python control plane with Bash operations and Next.js web UI
-- primary_score: 091/100
+- generated_at: 2026-05-14T05:05:00Z
+- project_root: .
+- primary_stack: Python
+- primary_score: 092/100
 - confidence: high
 
-## Deterministic Confidence Score
+## Deterministic Scoring Inputs
 
-Score formula:
+Repository-level public signals, excluding private state and generated caches:
 
-- Python control-plane source and tests: 35 points
-- Canonical Bash deploy/runtime entrypoints: 20 points
-- SQLite schema ownership in Python: 15 points
-- Next.js web product surface: 12 points
-- Compose/container runtime: 6 points
-- ArcLink-owned Hermes plugin/hook layer: 3 points
+| signal | count / evidence |
+| --- | --- |
+| Python source files | 177 |
+| Shell scripts | 77 |
+| TypeScript / TSX files | 7 |
+| Runtime manifests | `requirements-dev.txt`, `compose.yaml`, `Dockerfile`, `deploy.sh`, `test.sh`, `web/package.json` |
+| Wave 3 implementation target | `python/arclink_pod_migration.py`, `python/arclink_control.py`, `python/arclink_action_worker.py`, `python/arclink_executor.py` |
 
-Observed score: 91/100.
+Scoring rule:
+
+- Python receives base weight from source majority plus direct ownership of the
+  Wave 3 control-plane path.
+- Shell receives operational weight from canonical deploy and job wrappers.
+- Node.js receives UI weight from the Next.js web surface, but Wave 3 does not
+  require a Captain-facing UI unless a disabled route is added.
+- SQLite and Compose are runtime components, not standalone primary stacks for
+  this mission.
 
 ## Project Stack Ranking
 
 | rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python + SQLite control plane | 091 | `python/` contains control DB, hosted API, auth, onboarding, provisioning, fleet, inventory, bots, dashboard, MCP, memory, and notification modules; `tests/` contains focused Python regression coverage. |
-| 2 | Bash operational orchestration | 074 | `deploy.sh`, `bin/deploy.sh`, Docker/control menus, bootstrap, health, qmd, service, and live-proof wrappers are canonical operator entrypoints. |
-| 3 | Next.js / React / TypeScript web | 061 | `web/package.json` declares Next.js 15, React 19, TypeScript 5, ESLint, Node tests, and Playwright; `web/src/app` owns onboarding, dashboard, and admin surfaces. |
-| 4 | Docker Compose runtime | 047 | `compose.yaml` and `Dockerfile` define Control Node and Shared Host Docker service topology. |
-| 5 | Hermes plugin/hook layer | 040 | `plugins/hermes-agent/` and `hooks/hermes-agent/` hold ArcLink-owned managed-context, dashboard plugins, and Telegram start hook integration. |
-| 6 | External providers | 025 | Stripe, Chutes, Telegram, Discord, Hetzner, Linode, Notion, Cloudflare, and Tailscale are integration boundaries, not primary local implementation stacks. |
+| 1 | Python | 092 | 177 Python files; control DB, migration orchestrator, executor, action worker, provisioning, fleet, and tests are Python-led. |
+| 2 | Bash / POSIX shell | 056 | 77 shell scripts; canonical deploy/control wrappers and optional job-loop integration. |
+| 3 | Docker Compose | 048 | `compose.yaml`, `Dockerfile`, executor apply/lifecycle surfaces. |
+| 4 | SQLite | 046 | Control-plane schema in `python/arclink_control.py`; Wave 3 adds `arclink_pod_migrations`. |
+| 5 | Node.js / Next.js | 034 | `web/package.json`, TypeScript app/admin UI, web tests; secondary for Wave 3. |
+| 6 | External services | 012 | Stripe, Telegram, Discord, Cloudflare, Tailscale, Hetzner, Linode, Chutes, and Notion are present but proof-gated and out of local PLAN scope. |
 
-## Stack Hypotheses
+## Ranked Stack Hypotheses
 
-| hypothesis | confidence | notes |
+1. **Python control-plane application with SQLite state and executor-managed
+   Docker Compose runtime**: selected. This matches Wave 3 implementation,
+   schema, tests, and action-worker dispatch.
+2. **Shell-first operator automation around Python helpers**: plausible for
+   deploy/upgrade work, but not the right primary path for migration replay,
+   rollback, manifests, or schema drift checks.
+3. **Next.js product/admin application backed by Python APIs**: true for the
+   public surface, but Wave 3 initial rollout is Operator-only and does not
+   require Captain-facing migration UI.
+
+## Alternatives
+
+| alternative | fit for Wave 3 | decision |
 | --- | --- | --- |
-| ArcLink is primarily a Python/SQLite control platform operated by Bash scripts | 0.95 | Most mission behavior, schema, API, bots, provisioning, fleet, inventory, and tests live in Python; deploy and control inventory are routed through Bash. |
-| The web app is a supporting Next.js product/admin console rather than the system spine | 0.88 | The web surface handles onboarding/dashboard/admin UX but calls Python-hosted APIs and mirrors control-plane state. |
-| Compose is the runtime substrate for Control Node and Docker validation, not the source of product logic | 0.82 | Compose wires services and environment, while Python modules own behavior. |
-| Hermes should remain an external pinned runtime extended by ArcLink plugins/hooks | 0.91 | AGENTS guidance and repo layout route Agent behavior through ArcLink wrappers, plugins, hooks, and generated config. |
+| Add a new transfer service or infrastructure dependency | Low | Avoid. Existing Python + executor seams are enough for local proof. |
+| Implement migration mostly in shell/rsync scripts | Medium for host work, low for replay/audit | Reject for primary implementation; shell can wrap GC later if needed. |
+| Implement migration as a web/UI feature first | Low | Captain migration remains disabled by default behind `ARCLINK_CAPTAIN_MIGRATION_ENABLED=0`. |
 
-## Alternatives Ranking
+## Confidence
 
-| alternative | score | why not primary |
-| --- | --- | --- |
-| Node.js-first app | 061 | Strong web UI, but it does not own schema, provisioning, bots, fleet, migration, notification, or MCP control logic. |
-| Compose-first platform | 047 | Important for runtime packaging, but behavior is implemented in Python/Bash. |
-| Hermes-core fork | 010 | Explicitly out of scope; ArcLink must use plugins/hooks/wrappers instead of editing Hermes core. |
+Deterministic confidence score: **92/100**.
+
+Confidence is high because repository structure, manifests, and the Wave 3
+target files all point to Python as the primary implementation stack. The
+remaining uncertainty is live host transfer behavior, which is intentionally
+proof-gated and outside local PLAN validation.

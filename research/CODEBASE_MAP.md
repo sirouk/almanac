@@ -2,80 +2,68 @@
 
 ## Scope
 
-This map covers public repository areas relevant to the ArcPod Captain Console
-mission. It excludes private state, live credentials, user Hermes homes,
-dependency folders, caches, logs, and production service state.
+This map covers public repository areas relevant to Wave 3: 1:1 Pod Migration.
+It excludes private state, live credentials, user Hermes homes, dependency
+folders, caches, logs, production service state, and Hermes core.
 
-## Top-Level Entrypoints
+## Planning Entrypoints
 
 | Path | Role |
 | --- | --- |
-| `AGENTS.md` | Repository operating guide, canonical commands, safety rules, deployment posture, and vocabulary recap target. |
-| `deploy.sh` | Thin wrapper around the canonical deploy menu. Control inventory subcommands should surface through this entrypoint. |
-| `bin/deploy.sh` | Shared Host and Control Node install/upgrade/health/control-menu orchestration. Add control inventory menu and argv aliases here. |
-| `bin/arclink-docker.sh` | Shared Host Docker and Control Node Docker orchestration. Preserve live mutation gates. |
-| `compose.yaml` | Compose service topology and env contracts. Wrapped scheduler/service changes land here if Wave 6 chooses a service. |
-| `Dockerfile` | Shared app image for Python, Node, Hermes/qmd support, and Docker CLI. |
-| `bin/arclink-ctl` | Operator CLI for control DB, onboarding, org profile, and admin operations. |
-| `test.sh` | Heavy preflight/install smoke. Prefer focused tests first. |
-| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for the active ArcPod mission. |
+| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for Wave 3 only. |
+| `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` | Authoritative Wave 3 backlog under `## Wave 3: 1:1 Pod Migration`. |
+| `research/RESEARCH_SUMMARY.md` | Current PLAN summary and assumptions. |
+| `research/COVERAGE_MATRIX.md` | Goal-to-proof matrix for BUILD validation. |
+| `research/STACK_SNAPSHOT.md` | Deterministic stack hypothesis and alternatives. |
 
-## Major Directories
+## Runtime Directories
 
 | Directory | Responsibility |
 | --- | --- |
-| `python/` | Control DB, hosted API, auth/session/CSRF, onboarding, provisioning, action worker, executor, fleet, ingress, entitlements, evidence, public bots, MCP, Notion/SSOT, memory synthesis, dashboard, diagnostics, and notifications. |
-| `tests/` | Focused Python regression tests for control, onboarding, bots, hosted API, auth, provisioning, fleet, Docker, dashboard, MCP, notification, and runtime contracts. |
-| `bin/` | Deploy, Docker, bootstrap, health, qmd, PDF, backup, service, runtime, and live-proof wrappers. |
-| `web/` | Next.js App Router product, onboarding, dashboard, admin UI, API client, Node tests, and Playwright checks. |
-| `plugins/hermes-agent/` | ArcLink-owned Hermes plugins including managed context, Drive, Code, and Terminal. |
-| `hooks/hermes-agent/` | ArcLink Hermes hooks, including Telegram `/start`. |
-| `templates/` | Rendered operational templates. `templates/SOUL.md.tmpl` is the Wave 0 SOUL overlay target. |
-| `systemd/` | User service and timer templates. |
-| `config/` | Runtime pins, provider defaults, environment examples, schemas, and public example configuration. |
-| `docs/arclink/` | Product, operator, Raven, first-day, control-node, and runbook documentation. Vocabulary canon belongs here. |
-| `research/` | Ralphie steering, research, coverage, dependency, stack, and completion artifacts. |
-| `consensus/` | Phase gate records and blocked-operation notes. |
+| `python/` | Control DB, hosted API, auth/session/CSRF, provisioning, executor, fleet placement, action worker, migration orchestration, dashboard, bots, ingress, notifications, MCP, and memory modules. |
+| `tests/` | Focused regression tests for schema, migration, admin actions, action worker, executor, fleet, hosted API, and adjacent behavior. |
+| `bin/` | Canonical deploy/control scripts and job wrappers. Wave 3 should touch shell only for a real GC job-loop integration or operator command. |
+| `docs/arclink/` | Operator and production runbooks. Wave 3 migration docs belong here after behavior is true. |
+| `docs/openapi/` | API contract. Update only if BUILD adds a new route or request/response schema. |
+| `config/` | Public example env and model/provider config. Wave 3 uses migration defaults here. |
+| `compose.yaml` | Docker service topology. Add migration GC service integration only if BUILD chooses a service-level loop. |
+| `web/` | Next.js product/admin UI. Wave 3 should not expose Captain migration while the default flag is off. |
+| `research/` | Planning and completion artifacts. |
+| `consensus/` | Build gate and prior plan-gate records. |
 
-## Runtime Lanes
+## Wave 3 Source Surfaces
 
-| Lane | Shape | Primary files |
+| Surface | Current candidate state | BUILD handoff target |
 | --- | --- | --- |
-| Shared Host | Service user, nested private state, systemd units, Curator, qmd, Notion, Nextcloud, and per-user agents | `bin/deploy.sh`, `bin/bootstrap-*.sh`, `bin/install-*-services.sh`, `python/arclink_enrollment_provisioner.py` |
-| Shared Host Docker | Compose substrate plus Docker agent supervisor | `compose.yaml`, `Dockerfile`, `bin/arclink-docker.sh`, `python/arclink_docker_agent_supervisor.py` |
-| Sovereign Control Node | Hosted API/web, Stripe entitlement, provisioning, action queue, ingress, public bots, fleet, evidence, and admin dashboard | `python/arclink_hosted_api.py`, `python/arclink_api_auth.py`, `python/arclink_provisioning.py`, `python/arclink_action_worker.py`, `python/arclink_sovereign_worker.py` |
-| Public Bot Gateways | Telegram/Discord webhook and command handling for Raven and onboarding | `python/arclink_telegram.py`, `python/arclink_discord.py`, `python/arclink_public_bots.py`, `python/arclink_public_bot_commands.py` |
-| Agent Runtime | Hermes homes, plugins, hooks, skills, qmd tools, gateways, and dashboard plugins | `bin/install-agent-user-services.sh`, `bin/install-deployment-hermes-home.sh`, `plugins/hermes-agent/*`, `hooks/hermes-agent/*` |
+| Migration schema | `arclink_pod_migrations` exists with placement links, hosts, roots, manifests, rollback/verification metadata, retention/GC fields, indexes, statuses, and drift checks. | Validate schema migration from empty and existing DBs; ensure status/relationship drift tests cover invalid and missing references. |
+| Migration module | `python/arclink_pod_migration.py` implements planning, capture, materialization, verification, rollback, replay, dry-run, audit/events, and GC. | Run focused tests, inspect secret redaction, confirm portable manifests, and harden any uncovered edge cases. |
+| Admin `reprovision` | Dashboard readiness and action worker now model `reprovision` as executable when executor probes pass. | Verify readiness, queuing, action-operation linking, dry-run, success, and safe failure. |
+| Captain migration | No exposed Captain route was identified. | Keep disabled by default. Add a gated route only if required, with CSRF/session tests and no visible button until policy is decided. |
+| State capture | Candidate module captures the source root into a migration staging directory and records relative path, boundary, size, mode, and digest. | Verify vault, memory, sessions, configs, secret-reference boundaries, bot env metadata, DNS rows, placement, and Hermes home are represented without secret contents. |
+| Target materialization | Candidate module renders target provisioning intent and applies through the executor fake/local/SSH abstraction. | Confirm it does not fork provisioning logic and does not add live host mutation outside executor rails. |
+| Rollback | Candidate module restores source placement and removes target placement on failed verification. | Validate one-active-placement invariant, audit/event emission, and idempotent replay of rolled-back rows. |
+| GC | Candidate module marks expired successful migrations and removes staging artifacts when requested. | Validate recent, failed, rolled-back, cancelled, and succeeded-expired cases. |
 
-## Wave Hotspots
+## Relevant Existing Patterns
 
-| Wave | Main files to inspect/change | Architecture assumptions |
-| --- | --- | --- |
-| Wave 0 vocabulary/schema/SOUL | `docs/arclink/vocabulary.md`, docs status index if present, `AGENTS.md`, selected `docs/arclink/*.md`, `python/arclink_control.py`, `templates/SOUL.md.tmpl`, schema tests | Captain-facing terms change; backend table/module/env names stay technical. Apply migrations through `ensure_schema`. |
-| Wave 1 onboarding identity | `web/src/app/onboarding/page.tsx`, `web/src/lib/api*`, `python/arclink_onboarding.py`, `python/arclink_public_bots.py`, `python/arclink_discord.py`, `python/arclink_public_bot_commands.py`, `python/arclink_api_auth.py`, `python/arclink_hosted_api.py`, provisioning and public bot tests | Agent Name and Agent Title are required inputs; reject secret-shaped material; preserve Captain display-name capture. |
-| Wave 2 fleet inventory/ASU | `bin/deploy.sh`, `python/arclink_fleet.py`, `python/arclink_inventory.py`, `python/arclink_asu.py`, `python/arclink_inventory_hetzner.py`, `python/arclink_inventory_linode.py`, dashboard snapshot, deploy/fleet/provider tests | Manual mode works without cloud credentials; Hetzner/Linode fail closed without tokens; `headroom` remains default placement. |
-| Wave 3 Pod migration | new `python/arclink_pod_migration.py`, `python/arclink_action_worker.py`, `python/arclink_sovereign_worker.py`, executor/provisioning/fleet modules, migration tests | Migration is idempotent, rollback-safe, and uses existing operation/audit/placement contracts. |
-| Wave 4 pod comms | new `python/arclink_pod_comms.py`, `python/arclink_mcp_server.py`, `python/arclink_api_auth.py`, `python/arclink_hosted_api.py`, web dashboard/admin pages, notification tests | Same-Captain Crew comms allowed; cross-Captain comms require share grants; attachments use share projections. |
-| Wave 5 Crew Training | new recipe module, `templates/CREW_RECIPE.md.tmpl`, `templates/SOUL.md.tmpl`, managed-context identity overlay path, hosted API, public bots, web dashboard | Writes active Crew Recipe and additive SOUL overlay; memories and sessions are untouched. |
-| Wave 6 ArcLink Wrapped | new `python/arclink_wrapped.py`, notification delivery, Compose/job loop, hosted API, dashboard/admin UI, docs | Reports use existing ledgers/outbox, redact secrets, and default to daily with weekly/monthly options. |
-
-## Existing Focused Tests
-
-| Surface | Existing tests to extend |
+| Pattern | Files |
 | --- | --- |
-| Schema/control DB | `tests/test_arclink_schema.py`, `tests/test_arclink_control_db.py` |
-| Onboarding/provisioning | `tests/test_arclink_onboarding.py`, `tests/test_arclink_provisioning.py`, `tests/test_onboarding_completion_messages.py` |
-| Public bots | `tests/test_arclink_public_bots.py`, `tests/test_arclink_telegram.py`, `tests/test_arclink_discord.py` |
-| Hosted API/auth/dashboard | `tests/test_arclink_hosted_api.py`, `tests/test_arclink_api_auth.py`, `tests/test_arclink_dashboard.py` |
-| Fleet/deploy/Docker | `tests/test_arclink_fleet.py`, `tests/test_deploy_regressions.py`, `tests/test_arclink_docker.py` |
-| MCP/plugins | `tests/test_arclink_mcp_schemas.py`, `tests/test_arclink_plugins.py` |
-| Notifications | `tests/test_arclink_notification_delivery.py` |
-| Web | `web/tests/test_api_client.mjs`, `web/tests/test_page_smoke.mjs`, `web/tests/browser/product-checks.spec.ts` |
+| Schema migrations, constants, indexes, drift checks | `python/arclink_control.py`, `tests/test_arclink_schema.py` |
+| Operation idempotency | `python/arclink_control.py`, executor and migration tests |
+| Admin action queue and readiness | `python/arclink_dashboard.py`, `python/arclink_api_auth.py`, `python/arclink_hosted_api.py`, `tests/test_arclink_admin_actions.py` |
+| Action worker dispatch | `python/arclink_action_worker.py`, `tests/test_arclink_action_worker.py` |
+| Fake/local/SSH executor split | `python/arclink_executor.py`, `tests/test_arclink_executor.py` |
+| Provisioning intent rendering | `python/arclink_provisioning.py`, `tests/test_arclink_provisioning.py` |
+| Fleet placement and host load | `python/arclink_fleet.py`, `tests/test_arclink_fleet.py` |
+| Compose apply and health conventions | `python/arclink_sovereign_worker.py`, `tests/test_arclink_sovereign_worker.py` |
 
 ## Architecture Assumptions
 
-- Keep Shared Host, Shared Host Docker, and Sovereign Control Node paths distinct.
-- Do not patch Hermes core; use ArcLink wrappers, hooks, plugins, generated config, and service units.
-- Prefer existing migration helpers, audit helpers, notification outbox, operation idempotency, fleet placement, hosted API/auth, and dashboard patterns.
-- Keep cloud providers, public bot command sync, deploys/upgrades, live payment flows, and production proof gated until explicitly authorized.
-- Treat public docs as editable only after behavior is implemented or a project-specific deferral is recorded.
+- Do not modify Hermes core; migration works through ArcLink wrappers,
+  provisioning renders, plugins, hooks, generated config, service units, and
+  executor operations.
+- Keep Shared Host, Shared Host Docker, and Sovereign Control Node concepts
+  distinct. Wave 3 targets Sovereign Control Node Pod migration.
+- Use relative paths in manifests and docs so artifacts remain portable.
+- Store secret references and file digests, not secret values.
+- Prefer fake executor and temporary-directory tests over live deploy proof.

@@ -60,6 +60,21 @@ def _fake_executor(executor_mod):
     )
 
 
+class _PermissiveSecretResolver:
+    def __init__(self, executor_mod):
+        self.executor_mod = executor_mod
+
+    def materialize(self, secret_ref: str, target_path: str):
+        return self.executor_mod.ResolvedSecretFile(secret_ref=secret_ref, target_path=target_path)
+
+
+def _fake_executor_with_secrets(executor_mod):
+    return executor_mod.ArcLinkExecutor(
+        config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+        secret_resolver=_PermissiveSecretResolver(executor_mod),
+    )
+
+
 def test_restart_action_through_fake_executor() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_restart")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_restart")
@@ -396,6 +411,134 @@ def test_comp_replay_does_not_duplicate_audit() -> None:
     print("PASS test_comp_replay_does_not_duplicate_audit")
 
 
+def test_reprovision_dispatches_pod_migration() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_reprovision")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_reprovision")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_aw_reprovision")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_reprovision")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root_base = Path(tmpdir) / "state"
+        roots = provisioning.render_arclink_state_roots(
+            deployment_id="dep_reprovision",
+            prefix="reprovision-one",
+            state_root_base=str(root_base),
+        )
+        state_root = Path(roots["root"])
+        (state_root / "vault").mkdir(parents=True)
+        (state_root / "vault" / "note.md").write_text("redeploy me\n", encoding="utf-8")
+        now = control.utc_now_iso()
+        control.upsert_arclink_user(conn, user_id="user_reprovision", email="owner@example.test", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id="dep_reprovision",
+            user_id="user_reprovision",
+            prefix="reprovision-one",
+            base_domain="example.test",
+            status="active",
+            metadata={"state_roots": roots, "state_root_base": str(root_base), "base_domain": "example.test"},
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_hosts (
+              host_id, hostname, status, capacity_slots, observed_load, metadata_json, created_at, updated_at
+            ) VALUES ('host_reprovision', 'reprovision.example.test', 'active', 10, 1, ?, ?, ?)
+            """,
+            (json.dumps({"state_root_base": str(root_base), "edge_target": "edge.example.test"}), now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
+            VALUES ('plc_reprovision', 'dep_reprovision', 'host_reprovision', 'active', ?)
+            """,
+            (now,),
+        )
+        conn.commit()
+        action = _queue_action(
+            dashboard,
+            conn,
+            action_type="reprovision",
+            target_id="dep_reprovision",
+            key="reprovision-action-1",
+            metadata={"target_machine_id": "current"},
+        )
+        result = worker.process_next_arclink_action(conn, executor=_fake_executor_with_secrets(executor_mod))
+        expect(result["status"] == "succeeded", str(result))
+        migration_row = conn.execute("SELECT * FROM arclink_pod_migrations WHERE deployment_id = 'dep_reprovision'").fetchone()
+        expect(migration_row is not None and migration_row["status"] == "succeeded", str(dict(migration_row) if migration_row else None))
+        link = conn.execute(
+            """
+            SELECT *
+            FROM arclink_action_operation_links
+            WHERE action_id = ? AND operation_kind = 'pod_migration'
+            """,
+            (action["action_id"],),
+        ).fetchone()
+        expect(link is not None, "expected reprovision action to link to pod_migration")
+    print("PASS test_reprovision_dispatches_pod_migration")
+
+
+def test_reprovision_dry_run_does_not_require_migration_success() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_reprovision_dry")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision_dry")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_reprovision_dry")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_aw_reprovision_dry")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_reprovision_dry")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root_base = Path(tmpdir) / "state"
+        roots = provisioning.render_arclink_state_roots(
+            deployment_id="dep_reprovision_dry",
+            prefix="reprovision-dry",
+            state_root_base=str(root_base),
+        )
+        (Path(roots["root"]) / "vault").mkdir(parents=True)
+        now = control.utc_now_iso()
+        control.upsert_arclink_user(conn, user_id="user_reprovision_dry", email="owner-dry@example.test", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id="dep_reprovision_dry",
+            user_id="user_reprovision_dry",
+            prefix="reprovision-dry",
+            base_domain="example.test",
+            status="active",
+            metadata={"state_roots": roots, "state_root_base": str(root_base), "base_domain": "example.test"},
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_hosts (
+              host_id, hostname, status, capacity_slots, observed_load, metadata_json, created_at, updated_at
+            ) VALUES ('host_reprovision_dry', 'reprovision-dry.example.test', 'active', 10, 1, ?, ?, ?)
+            """,
+            (json.dumps({"state_root_base": str(root_base), "edge_target": "edge.example.test"}), now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
+            VALUES ('plc_reprovision_dry', 'dep_reprovision_dry', 'host_reprovision_dry', 'active', ?)
+            """,
+            (now,),
+        )
+        conn.commit()
+        _queue_action(
+            dashboard,
+            conn,
+            action_type="reprovision",
+            target_id="dep_reprovision_dry",
+            key="reprovision-action-dry-1",
+            metadata={"target_machine_id": "current", "dry_run": True},
+        )
+        result = worker.process_next_arclink_action(conn, executor=_fake_executor_with_secrets(executor_mod))
+        expect(result["status"] == "succeeded", str(result))
+        expect(result["result"]["status"] == "planned" and result["result"]["dry_run"] is True, str(result))
+        migration_row = conn.execute("SELECT * FROM arclink_pod_migrations WHERE deployment_id = 'dep_reprovision_dry'").fetchone()
+        expect(migration_row is not None and migration_row["status"] == "planned", str(dict(migration_row) if migration_row else None))
+        placement = conn.execute("SELECT status FROM arclink_deployment_placements WHERE placement_id = 'plc_reprovision_dry'").fetchone()
+        expect(placement["status"] == "active", str(dict(placement)))
+    print("PASS test_reprovision_dry_run_does_not_require_migration_success")
+
+
 def test_batch_processing() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_batch")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_batch")
@@ -650,7 +793,7 @@ def test_legacy_unwired_action_rows_fail_safely() -> None:
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_pending_all")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_pending_all")
     conn = memory_db(control)
-    unwired_types = ["suspend", "unsuspend", "reprovision", "rollout", "force_resynth", "rotate_bot_key"]
+    unwired_types = ["suspend", "unsuspend", "rollout", "force_resynth", "rotate_bot_key"]
     now = control.utc_now_iso()
     for action_type in unwired_types:
         conn.execute(
@@ -773,6 +916,7 @@ def test_action_worker_ssh_executor_requires_machine_mode_and_allowlist() -> Non
 def test_action_worker_main_reuses_single_db_connection_for_once_batch() -> None:
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_db_reuse")
     calls: list[str] = []
+    gc_calls: list[str] = []
 
     class ConnContext:
         def __enter__(self):
@@ -785,6 +929,7 @@ def test_action_worker_main_reuses_single_db_connection_for_once_batch() -> None
     original_executor_from_env = worker._executor_from_env
     original_recover = worker.recover_stale_actions
     original_process = worker.process_arclink_action_batch
+    original_gc = worker.run_pod_migration_gc
     old_env = os.environ.copy()
     try:
         os.environ["ARCLINK_EXECUTOR_ADAPTER"] = "fake"
@@ -792,14 +937,17 @@ def test_action_worker_main_reuses_single_db_connection_for_once_batch() -> None
         worker._executor_from_env = lambda env: object()
         worker.recover_stale_actions = lambda conn: []
         worker.process_arclink_action_batch = lambda conn, **kwargs: []
+        worker.run_pod_migration_gc = lambda conn: gc_calls.append("gc") or []
         rc = worker.main(["--once", "--json", "--db", "/tmp/arclink-test.sqlite3"])
         expect(rc == 0, f"expected clean once run, got {rc}")
         expect(calls == ["/tmp/arclink-test.sqlite3"], str(calls))
+        expect(gc_calls == ["gc"], str(gc_calls))
     finally:
         worker._db_connect = original_db_connect
         worker._executor_from_env = original_executor_from_env
         worker.recover_stale_actions = original_recover
         worker.process_arclink_action_batch = original_process
+        worker.run_pod_migration_gc = original_gc
         os.environ.clear()
         os.environ.update(old_env)
     print("PASS test_action_worker_main_reuses_single_db_connection_for_once_batch")
@@ -820,6 +968,8 @@ if __name__ == "__main__":
     test_cancel_missing_subscription_fails_closed()
     test_comp_applies_entitlement_gate()
     test_comp_replay_does_not_duplicate_audit()
+    test_reprovision_dispatches_pod_migration()
+    test_reprovision_dry_run_does_not_require_migration_success()
     test_batch_processing()
     test_empty_queue_returns_none()
     test_action_attempt_recorded()
@@ -834,4 +984,4 @@ if __name__ == "__main__":
     test_disabled_action_worker_cli_exits_cleanly()
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 29 action worker tests passed.")
+    print(f"\nAll 31 action worker tests passed.")

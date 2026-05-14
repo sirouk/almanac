@@ -101,6 +101,33 @@ reprovisioned or re-rendered before production use so
 `ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS=1` is present in the pod proxy
 environment.
 
+**Pod migration / reprovision:** The `reprovision` admin action is wired to the
+Pod migration orchestrator. Initial rollout is Operator-only:
+`ARCLINK_CAPTAIN_MIGRATION_ENABLED=0` stays the default and there is no
+Captain-facing migration route in this wave.
+
+Queue a redeploy-in-place by targeting the deployment and setting
+`metadata.target_machine_id=current`. Queue a host move by setting
+`metadata.target_machine_id` to a fleet host id or an inventory machine id with
+`machine_host_link` populated. The migration captures source state into
+`<state_root_base>/.migrations/<migration_id>/`, records file digests in
+`arclink_pod_migrations.capture_manifest_json`, materializes the target state
+root, applies Compose through the configured executor, verifies service health,
+and updates source/target placement rows.
+
+Rollback is automatic on failed verification: the source placement is restored
+to `active`, the pending target placement is left `removed`, target Compose is
+torn down for host moves, source Compose is restarted, the migration row is
+marked `rolled_back`, and `pod_migration_rolled_back` is emitted. Idempotent
+replay uses `arclink:migration:<migration_id>`; the same migration id with a
+different target is rejected.
+
+Successful migration captures are retained for
+`ARCLINK_MIGRATION_GC_DAYS` days, default `7`. The GC helper
+`garbage_collect_pod_migrations(conn, ...)` marks expired successful migrations
+with `source_garbage_collected_at` after removing their staging artifacts; the
+deployed control action-worker loop invokes that helper after each batch.
+
 **Linked resources:** Cross-user Drive/Code sharing is modeled as read-only
 share grants. A user session creates a pending grant for a recipient, Raven
 queues an owner approval notification when the owner has a linked Telegram or

@@ -1336,12 +1336,22 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         CREATE TABLE IF NOT EXISTS arclink_pod_migrations (
           migration_id TEXT PRIMARY KEY,
           deployment_id TEXT NOT NULL,
+          source_placement_id TEXT NOT NULL DEFAULT '',
+          target_placement_id TEXT NOT NULL DEFAULT '',
           source_host_id TEXT NOT NULL DEFAULT '',
           target_host_id TEXT NOT NULL DEFAULT '',
+          target_machine_id TEXT NOT NULL DEFAULT '',
+          source_state_root TEXT NOT NULL DEFAULT '',
+          target_state_root TEXT NOT NULL DEFAULT '',
+          capture_dir TEXT NOT NULL DEFAULT '',
           status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'running', 'succeeded', 'failed', 'rolled_back', 'cancelled')),
           operation_idempotency_key TEXT NOT NULL DEFAULT '',
           capture_manifest_json TEXT NOT NULL DEFAULT '{}',
           rollback_metadata_json TEXT NOT NULL DEFAULT '{}',
+          verification_json TEXT NOT NULL DEFAULT '{}',
+          target_host_metadata_json TEXT NOT NULL DEFAULT '{}',
+          source_retention_until TEXT NOT NULL DEFAULT '',
+          source_garbage_collected_at TEXT NOT NULL DEFAULT '',
           error TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -1706,6 +1716,18 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_admins", "totp_verified_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "worker_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "claimed_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "source_placement_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "target_placement_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "source_host_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "target_host_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "target_machine_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "source_state_root", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "target_state_root", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "capture_dir", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "verification_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "arclink_pod_migrations", "target_host_metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "arclink_pod_migrations", "source_retention_until", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_pod_migrations", "source_garbage_collected_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_onboarding_sessions", "agent_name", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_onboarding_sessions", "agent_title", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_onboarding_sessions", "completed_at", "TEXT NOT NULL DEFAULT ''")
@@ -1863,6 +1885,12 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_pod_migrations_deployment_status
         ON arclink_pod_migrations (deployment_id, status, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_pod_migrations_gc
+        ON arclink_pod_migrations (status, source_retention_until, source_garbage_collected_at)
         """
     )
     conn.execute(
@@ -3807,6 +3835,38 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
             "deployment_id",
         ),
         (
+            "pod_migration_source_placement_missing",
+            "arclink_pod_migrations",
+            "migration_id",
+            "source_placement_id",
+            "arclink_deployment_placements",
+            "placement_id",
+        ),
+        (
+            "pod_migration_target_placement_missing",
+            "arclink_pod_migrations",
+            "migration_id",
+            "target_placement_id",
+            "arclink_deployment_placements",
+            "placement_id",
+        ),
+        (
+            "pod_migration_source_host_missing",
+            "arclink_pod_migrations",
+            "migration_id",
+            "source_host_id",
+            "arclink_fleet_hosts",
+            "host_id",
+        ),
+        (
+            "pod_migration_target_host_missing",
+            "arclink_pod_migrations",
+            "migration_id",
+            "target_host_id",
+            "arclink_fleet_hosts",
+            "host_id",
+        ),
+        (
             "crew_recipe_user_missing",
             "arclink_crew_recipes",
             "recipe_id",
@@ -3890,6 +3950,22 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
                     "reference_id": str(row["invalid_status"] or ""),
                 }
             )
+    rows = conn.execute(
+        """
+        SELECT migration_id
+        FROM arclink_pod_migrations
+        WHERE status IN ('running', 'succeeded', 'failed', 'rolled_back')
+          AND target_placement_id = ''
+        """
+    ).fetchall()
+    for row in rows:
+        drift.append(
+            {
+                "kind": "pod_migration_target_placement_required",
+                "source_id": str(row["migration_id"] or ""),
+                "reference_id": "",
+            }
+        )
     return drift
 
 

@@ -33,7 +33,7 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"})
 ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
 ARCLINK_USER_DASHBOARD_SECTIONS = (
     "deployment_health",

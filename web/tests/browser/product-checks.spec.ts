@@ -207,9 +207,9 @@ const MOCK_ADMIN_DASHBOARD = {
   active_sessions: { user: 1, admin: 1 },
   recent_failures: [],
   action_execution_readiness: {
-    executable: ["restart", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"],
-    pending_not_implemented: ["force_resynth", "reprovision", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
-    disabled: ["force_resynth", "reprovision", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
+    executable: ["restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"],
+    pending_not_implemented: ["force_resynth", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
+    disabled: ["force_resynth", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
     executor_adapter: "fake",
     queue_policy: "admin UI queues only modeled worker actions; pending actions stay disabled until worker wiring lands",
   },

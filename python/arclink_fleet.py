@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import os
 import sqlite3
 from typing import Any, Mapping
 
@@ -164,7 +165,37 @@ def list_fleet_hosts(conn: sqlite3.Connection, *, status: str = "") -> list[dict
         ).fetchall()
     else:
         rows = conn.execute("SELECT * FROM arclink_fleet_hosts ORDER BY hostname").fetchall()
-    return [dict(r) for r in rows]
+    hosts: list[dict[str, Any]] = []
+    for row in rows:
+        host = dict(row)
+        inv = conn.execute(
+            """
+            SELECT asu_capacity, asu_consumed
+            FROM arclink_inventory_machines
+            WHERE machine_host_link = ? AND status != 'removed'
+            ORDER BY registered_at ASC
+            LIMIT 1
+            """,
+            (host["host_id"],),
+        ).fetchone()
+        if inv is not None:
+            host["asu_capacity"] = float(inv["asu_capacity"] or 0)
+            active = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM arclink_deployment_placements
+                WHERE host_id = ? AND status = 'active'
+                """,
+                (host["host_id"],),
+            ).fetchone()["count"]
+            host["asu_consumed"] = float(active or inv["asu_consumed"] or 0)
+            host["asu_available"] = float(host["asu_capacity"]) - float(host["asu_consumed"])
+        else:
+            host["asu_capacity"] = float(host["capacity_slots"])
+            host["asu_consumed"] = float(host["observed_load"])
+            host["asu_available"] = float(host["capacity_slots"]) - float(host["observed_load"])
+        hosts.append(host)
+    return hosts
 
 
 def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -188,6 +219,9 @@ def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
                 "capacity_slots": int(h["capacity_slots"]),
                 "observed_load": int(h["observed_load"]),
                 "headroom": int(h["capacity_slots"]) - int(h["observed_load"]),
+                "asu_capacity": float(h.get("asu_capacity") or 0),
+                "asu_consumed": float(h.get("asu_consumed") or 0),
+                "asu_available": float(h.get("asu_available") or 0),
             }
             for h in hosts
         ],
@@ -273,12 +307,16 @@ def place_deployment(
             return dict(existing)
 
         hosts = list_fleet_hosts(conn)
-        candidates = _filter_placement_candidates(hosts, region=region, required_tags=required_tags)
+        strategy = _placement_strategy()
+        candidates = _filter_placement_candidates(hosts, region=region, required_tags=required_tags, strategy=strategy)
         if not candidates:
-            raise ArcLinkFleetError(_placement_rejection_summary(hosts, region=region, required_tags=required_tags))
+            raise ArcLinkFleetError(_placement_rejection_summary(hosts, region=region, required_tags=required_tags, strategy=strategy))
 
-        # Deterministic: pick host with most headroom, break ties by hostname.
-        best = sorted(candidates, key=lambda h: (-int(h["headroom"]), str(h["hostname"])))[0]
+        if strategy == "standard_unit":
+            best = sorted(candidates, key=lambda h: (-float(h["asu_available"]), str(h["hostname"])))[0]
+        else:
+            # Deterministic: pick host with most headroom, break ties by hostname.
+            best = sorted(candidates, key=lambda h: (-int(h["headroom"]), str(h["hostname"])))[0]
 
         placement_id = _fleet_id("plc")
         now = utc_now_iso()
@@ -358,15 +396,21 @@ def _filter_placement_candidates(
     *,
     region: str = "",
     required_tags: Mapping[str, str] | None = None,
+    strategy: str = "",
 ) -> list[dict[str, Any]]:
+    placement_strategy = strategy or _placement_strategy()
     result = []
     for h in hosts:
         if h["status"] != "active":
             continue
         if int(h.get("drain", 0)):
             continue
+        asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
         headroom = int(h["capacity_slots"]) - int(h["observed_load"])
-        if headroom <= 0:
+        if placement_strategy == "standard_unit":
+            if asu_available < 1:
+                continue
+        elif headroom <= 0:
             continue
         if region and h.get("region", "") != region:
             continue
@@ -374,7 +418,7 @@ def _filter_placement_candidates(
             host_tags = json_loads_safe(h.get("tags_json", "{}"))
             if not all(host_tags.get(k) == v for k, v in required_tags.items()):
                 continue
-        result.append({**h, "headroom": headroom})
+        result.append({**h, "headroom": headroom, "asu_available": asu_available})
     return result
 
 
@@ -383,6 +427,7 @@ def _placement_rejection_summary(
     *,
     region: str = "",
     required_tags: Mapping[str, str] | None = None,
+    strategy: str = "",
 ) -> str:
     if not hosts:
         return "no eligible ArcLink fleet hosts for placement: no active hosts registered"
@@ -394,8 +439,13 @@ def _placement_rejection_summary(
         if int(h.get("drain", 0)):
             reasons.add("draining")
             continue
+        asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
         headroom = int(h["capacity_slots"]) - int(h["observed_load"])
-        if headroom <= 0:
+        if (strategy or _placement_strategy()) == "standard_unit":
+            if asu_available < 1:
+                reasons.add("asu_saturated")
+                continue
+        elif headroom <= 0:
             reasons.add("saturated")
             continue
         if region and h.get("region", "") != region:
@@ -408,3 +458,10 @@ def _placement_rejection_summary(
                 continue
     detail = ", ".join(sorted(reasons)) or "no matching host"
     return f"no eligible ArcLink fleet hosts for placement: {detail}"
+
+
+def _placement_strategy() -> str:
+    strategy = os.environ.get("ARCLINK_FLEET_PLACEMENT_STRATEGY", "headroom").strip().lower()
+    if strategy not in {"headroom", "standard_unit"}:
+        return "headroom"
+    return strategy

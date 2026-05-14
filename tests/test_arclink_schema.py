@@ -66,9 +66,40 @@ def test_arclink_schema_creates_expected_tables_and_is_idempotent() -> None:
         "arclink_onboarding_events",
         "arclink_action_intents",
         "arclink_action_operation_links",
+        "arclink_inventory_machines",
+        "arclink_pod_messages",
+        "arclink_pod_migrations",
+        "arclink_crew_recipes",
+        "arclink_wrapped_reports",
     }
     expect(expected <= names, f"missing ArcLink tables: {sorted(expected - names)}")
     print("PASS test_arclink_schema_creates_expected_tables_and_is_idempotent")
+
+
+def test_arc_pod_captain_console_wave0_columns_and_indexes_exist() -> None:
+    mod = load_control()
+    conn = memory_db(mod)
+    columns = {
+        table: {
+            str(row["name"]): str(row["type"]).upper()
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for table in ("arclink_users", "arclink_deployments", "arclink_onboarding_sessions")
+    }
+    expect("agent_title" in columns["arclink_users"], str(columns["arclink_users"]))
+    for name in ("captain_role", "captain_mission", "captain_treatment", "wrapped_frequency"):
+        expect(name in columns["arclink_users"], str(columns["arclink_users"]))
+    for name in ("agent_name", "agent_title", "asu_weight"):
+        expect(name in columns["arclink_deployments"], str(columns["arclink_deployments"]))
+    for name in ("agent_name", "agent_title"):
+        expect(name in columns["arclink_onboarding_sessions"], str(columns["arclink_onboarding_sessions"]))
+
+    indexes = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA index_list(arclink_crew_recipes)").fetchall()
+    }
+    expect("idx_arclink_crew_recipes_one_active" in indexes, str(indexes))
+    print("PASS test_arc_pod_captain_console_wave0_columns_and_indexes_exist")
 
 
 def test_deployment_prefix_reservation_is_unique() -> None:
@@ -282,15 +313,73 @@ def test_arclink_drift_detection_reports_missing_linked_rows() -> None:
     print("PASS test_arclink_drift_detection_reports_missing_linked_rows")
 
 
+def test_arc_pod_captain_console_status_drift_checks() -> None:
+    mod = load_control()
+    conn = memory_db(mod)
+    conn.execute("PRAGMA ignore_check_constraints = ON")
+    conn.execute(
+        """
+        INSERT INTO arclink_inventory_machines (
+          machine_id, provider, hostname, status, registered_at
+        ) VALUES ('machine_bad', 'manual', 'bad.example.test', 'bogus', '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_pod_messages (
+          message_id, sender_deployment_id, recipient_deployment_id,
+          sender_user_id, recipient_user_id, status, created_at
+        ) VALUES ('msg_bad', 'dep_missing_sender', 'dep_missing_recipient',
+          'user_missing_sender', 'user_missing_recipient', 'bogus', '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_pod_migrations (
+          migration_id, deployment_id, status, created_at, updated_at
+        ) VALUES ('migration_bad', 'dep_missing', 'bogus', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_crew_recipes (
+          recipe_id, user_id, status
+        ) VALUES ('recipe_bad', 'user_missing', 'bogus')
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_wrapped_reports (
+          report_id, user_id, period, period_start, period_end, status, created_at
+        ) VALUES ('wrapped_bad', 'user_missing', 'daily', '2026-01-01', '2026-01-02', 'bogus', '2026-01-02T00:00:00+00:00')
+        """
+    )
+    conn.execute("PRAGMA ignore_check_constraints = OFF")
+    drift = mod.arclink_drift_checks(conn)
+    kinds = {item["kind"] for item in drift}
+    expect("inventory_machine_status_invalid" in kinds, str(drift))
+    expect("pod_message_status_invalid" in kinds, str(drift))
+    expect("pod_migration_status_invalid" in kinds, str(drift))
+    expect("crew_recipe_status_invalid" in kinds, str(drift))
+    expect("wrapped_report_status_invalid" in kinds, str(drift))
+    expect("pod_message_sender_deployment_missing" in kinds, str(drift))
+    expect("pod_migration_deployment_missing" in kinds, str(drift))
+    expect("crew_recipe_user_missing" in kinds, str(drift))
+    expect("wrapped_report_user_missing" in kinds, str(drift))
+    print("PASS test_arc_pod_captain_console_status_drift_checks")
+
+
 def main() -> int:
     test_arclink_schema_creates_expected_tables_and_is_idempotent()
+    test_arc_pod_captain_console_wave0_columns_and_indexes_exist()
     test_deployment_prefix_reservation_is_unique()
     test_generated_deployment_prefixes_validate_denylist_and_retry_collisions()
     test_generated_deployment_prefix_pool_is_large_and_public_safe()
     test_events_and_audit_are_append_only_by_primary_key()
     test_subscription_health_and_provisioning_helpers()
     test_arclink_drift_detection_reports_missing_linked_rows()
-    print("PASS all 7 ArcLink schema tests")
+    test_arc_pod_captain_console_status_drift_checks()
+    print("PASS all 9 ArcLink schema tests")
     return 0
 
 

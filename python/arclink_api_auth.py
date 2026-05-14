@@ -38,6 +38,7 @@ from arclink_onboarding import (
 )
 from arclink_entitlements import ReconciliationDrift, detect_stripe_reconciliation_drift
 from arclink_product import chutes_default_model, primary_provider
+from arclink_provisioning import update_arclink_deployment_identity
 from arclink_chutes import (
     chutes_credential_lifecycle,
     chutes_threshold_continuation_policy,
@@ -977,6 +978,8 @@ def answer_public_onboarding_api(
     answer_summary: str = "",
     email_hint: str = "",
     display_name_hint: str = "",
+    agent_name: str = "",
+    agent_title: str = "",
     selected_plan_id: str = "",
     selected_model_id: str = "",
 ) -> ArcLinkApiResponse:
@@ -989,6 +992,8 @@ def answer_public_onboarding_api(
         answer_summary=answer_summary,
         email_hint=email_hint,
         display_name_hint=display_name_hint,
+        agent_name=agent_name,
+        agent_title=agent_title,
         selected_plan_id=selected_plan_id,
         selected_model_id=selected_model_id,
     )
@@ -1033,6 +1038,49 @@ def read_user_dashboard_api(
     if target_user != str(session["user_id"] or ""):
         raise ArcLinkApiAuthError("ArcLink user session cannot read another user")
     return ArcLinkApiResponse(status=200, payload=read_arclink_user_dashboard(conn, user_id=target_user))
+
+
+def user_update_agent_identity_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    deployment_id: str,
+    agent_name: str = "",
+    agent_title: str = "",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    target_user = str(session["user_id"] or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    row = conn.execute(
+        "SELECT * FROM arclink_deployments WHERE deployment_id = ?",
+        (clean_deployment,),
+    ).fetchone()
+    if row is None or str(row["user_id"] or "") != target_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot update another user's Agent")
+    result = update_arclink_deployment_identity(
+        conn,
+        deployment=row,
+        agent_name=agent_name if str(agent_name or "").strip() else str(row["agent_name"] or ""),
+        agent_title=agent_title if str(agent_title or "").strip() else str(row["agent_title"] or ""),
+        actor_id=target_user,
+        reason="user updated Agent identity",
+        projection_source="user_dashboard_agent_identity_update",
+    )
+    updated = result["deployment"]
+    return ArcLinkApiResponse(
+        status=200,
+        payload={
+            "deployment": {
+                "deployment_id": str(updated.get("deployment_id") or ""),
+                "agent_name": str(updated.get("agent_name") or ""),
+                "agent_title": str(updated.get("agent_title") or ""),
+            },
+            "identity_projection": result["identity_projection"],
+        },
+    )
 
 
 def read_admin_dashboard_api(

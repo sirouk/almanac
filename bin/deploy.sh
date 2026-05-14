@@ -143,6 +143,12 @@ ARCLINK_LOCAL_FLEET_REGION="${ARCLINK_LOCAL_FLEET_REGION:-}"
 ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
 ARCLINK_FLEET_SSH_KEY_PATH="${ARCLINK_FLEET_SSH_KEY_PATH:-}"
 ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
+ARCLINK_FLEET_PLACEMENT_STRATEGY="${ARCLINK_FLEET_PLACEMENT_STRATEGY:-headroom}"
+ARCLINK_ASU_VCPU_PER_POD="${ARCLINK_ASU_VCPU_PER_POD:-1}"
+ARCLINK_ASU_RAM_PER_POD="${ARCLINK_ASU_RAM_PER_POD:-4}"
+ARCLINK_ASU_DISK_PER_POD="${ARCLINK_ASU_DISK_PER_POD:-30}"
+HETZNER_API_TOKEN="${HETZNER_API_TOKEN:-}"
+LINODE_API_TOKEN="${LINODE_API_TOKEN:-}"
 STRIPE_SECRET_KEY="${STRIPE_SECRET_KEY:-}"
 STRIPE_WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-}"
 CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
@@ -513,6 +519,7 @@ Usage:
   deploy.sh control reset-production
   deploy.sh control fleet-key
   deploy.sh control register-worker
+  deploy.sh control inventory [list|probe|add|drain|remove|set-strategy]
   deploy.sh install
   deploy.sh upgrade
   deploy.sh notion-ssot
@@ -542,6 +549,7 @@ Sovereign Control Node:
   deploy.sh control reset-production # backup, then clear production users after double confirmation
   deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
   deploy.sh control register-worker # interactively add a remote SSH fleet worker
+  deploy.sh control inventory list  # list inventory machines and ASU load
 
 Shared Host Docker control center:
   deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
@@ -580,6 +588,7 @@ Control and Docker shortcut aliases:
   deploy.sh control-reset-production
   deploy.sh control-fleet-key
   deploy.sh control-register-worker
+  deploy.sh control-inventory
   deploy.sh docker-install
   deploy.sh docker-upgrade
   deploy.sh docker-reconfigure
@@ -631,7 +640,7 @@ while [[ $# -gt 0 ]]; do
       CONTROL_DEPLOY_ARGS=("$@")
       break
       ;;
-    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-teardown|control-write-config|control-remove)
+    control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-inventory|control-inventory-list|control-inventory-probe|control-inventory-add|control-inventory-drain|control-inventory-remove|control-inventory-set-strategy|control-teardown|control-write-config|control-remove)
       MODE="$1"
       shift
       CONTROL_DEPLOY_ARGS=("$@")
@@ -1205,6 +1214,14 @@ Usage:
   deploy.sh control reset-production # backup, then clear production user data after double confirmation
   deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
   deploy.sh control register-worker # interactively register a remote SSH fleet worker
+  deploy.sh control inventory list
+  deploy.sh control inventory probe <machine-id|hostname>
+  deploy.sh control inventory add manual
+  deploy.sh control inventory add hetzner
+  deploy.sh control inventory add linode
+  deploy.sh control inventory drain <machine-id|hostname>
+  deploy.sh control inventory remove <machine-id|hostname>
+  deploy.sh control inventory set-strategy <headroom|standard_unit>
   deploy.sh control provision-once # run one provisioner batch now
 
 Shortcut aliases:
@@ -1219,6 +1236,8 @@ Shortcut aliases:
   deploy.sh control-reset-production
   deploy.sh control-fleet-key
   deploy.sh control-register-worker
+  deploy.sh control-inventory
+  deploy.sh control-inventory-list
 EOF
 }
 
@@ -1335,9 +1354,10 @@ ArcLink Sovereign Control Node control center
  10) Reset production user data after double confirmation
  11) Show fleet SSH public key
  12) Register remote fleet worker
- 13) Stop control node stack
- 14) Teardown control node stack and named volumes
- 15) Exit
+ 13) Inventory and ASU placement
+ 14) Stop control node stack
+ 15) Teardown control node stack and named volumes
+ 16) Exit
 EOF
 
   while true; do
@@ -1355,10 +1375,11 @@ EOF
       10) CONTROL_DEPLOY_COMMAND="reset-production"; return 0 ;;
       11) CONTROL_DEPLOY_COMMAND="fleet-key"; return 0 ;;
       12) CONTROL_DEPLOY_COMMAND="register-worker"; return 0 ;;
-      13) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
-      14) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
-      15) exit 0 ;;
-      *) echo "Please choose 1 through 15." ;;
+      13) CONTROL_DEPLOY_COMMAND="inventory"; return 0 ;;
+      14) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
+      15) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
+      16) exit 0 ;;
+      *) echo "Please choose 1 through 16." ;;
     esac
   done
 }
@@ -2248,10 +2269,16 @@ emit_runtime_config() {
     write_kv ARCLINK_LOCAL_FLEET_SSH_HOST "${ARCLINK_LOCAL_FLEET_SSH_HOST:-}"
     write_kv ARCLINK_LOCAL_FLEET_SSH_USER "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
     write_kv ARCLINK_LOCAL_FLEET_REGION "${ARCLINK_LOCAL_FLEET_REGION:-}"
-    write_kv ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
-    write_kv ARCLINK_FLEET_SSH_KEY_PATH "${ARCLINK_FLEET_SSH_KEY_PATH:-}"
-    write_kv ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
-    write_kv STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
+  write_kv ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
+  write_kv ARCLINK_FLEET_SSH_KEY_PATH "${ARCLINK_FLEET_SSH_KEY_PATH:-}"
+  write_kv ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
+  write_kv ARCLINK_FLEET_PLACEMENT_STRATEGY "${ARCLINK_FLEET_PLACEMENT_STRATEGY:-headroom}"
+  write_kv ARCLINK_ASU_VCPU_PER_POD "${ARCLINK_ASU_VCPU_PER_POD:-1}"
+  write_kv ARCLINK_ASU_RAM_PER_POD "${ARCLINK_ASU_RAM_PER_POD:-4}"
+  write_kv ARCLINK_ASU_DISK_PER_POD "${ARCLINK_ASU_DISK_PER_POD:-30}"
+  write_kv HETZNER_API_TOKEN "${HETZNER_API_TOKEN:-}"
+  write_kv LINODE_API_TOKEN "${LINODE_API_TOKEN:-}"
+  write_kv STRIPE_SECRET_KEY "${STRIPE_SECRET_KEY:-}"
     write_kv STRIPE_WEBHOOK_SECRET "${STRIPE_WEBHOOK_SECRET:-}"
     write_kv ARCLINK_SESSION_HASH_PEPPER "${ARCLINK_SESSION_HASH_PEPPER:-}"
     write_kv ARCLINK_SESSION_HASH_PEPPER_REQUIRED "${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-1}"
@@ -9072,6 +9099,108 @@ PY
   fi
 }
 
+run_control_inventory() {
+  local docker_env="" subcommand="" forced_command="" provider="" target="" hostname="" ssh_host="" ssh_user="" region="" capacity_slots="" tags="" strategy=""
+
+  docker_env="$(docker_env_file_path)"
+  if [[ ! -r "$docker_env" ]]; then
+    echo "Bootstrapping Sovereign Control Node config so inventory has a durable DB path..."
+    run_arclink_docker bootstrap
+  fi
+  if [[ -r "$docker_env" ]]; then
+    # shellcheck disable=SC1090
+    source "$docker_env"
+  fi
+
+  forced_command="${1:-}"
+  if [[ -n "$forced_command" ]]; then
+    subcommand="$forced_command"
+  else
+    subcommand="${CONTROL_DEPLOY_ARGS[0]:-list}"
+  fi
+  if [[ -z "$subcommand" ]]; then
+    subcommand="list"
+  fi
+  case "$subcommand" in
+    list)
+      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" list
+      ;;
+    probe)
+      if [[ -n "$forced_command" ]]; then
+        target="${CONTROL_DEPLOY_ARGS[0]:-}"
+      else
+        target="${CONTROL_DEPLOY_ARGS[1]:-}"
+      fi
+      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" probe "$target"
+      ;;
+    add)
+      if [[ -n "$forced_command" ]]; then
+        provider="${CONTROL_DEPLOY_ARGS[0]:-manual}"
+      else
+        provider="${CONTROL_DEPLOY_ARGS[1]:-manual}"
+      fi
+      case "$provider" in
+        manual)
+          ensure_control_fleet_ssh_key
+          print_control_fleet_ssh_key_guidance
+          if [[ ! -t 0 ]]; then
+            echo "Manual inventory registration is interactive. Run ./deploy.sh control inventory add manual from a terminal." >&2
+            return 2
+          fi
+          hostname="$(normalize_optional_answer "$(ask "Inventory hostname" "")")"
+          ssh_host="$(normalize_optional_answer "$(ask "SSH host" "$hostname")")"
+          ssh_user="$(normalize_optional_answer "$(ask "SSH user" "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}")")"
+          region="$(normalize_optional_answer "$(ask "Region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
+          capacity_slots="$(ask "Legacy capacity slots" "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
+          tags="$(normalize_optional_answer "$(ask "Placement tags as JSON object" "{}")")"
+          ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+            python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" add manual \
+              --hostname "$hostname" --ssh-host "$ssh_host" --ssh-user "$ssh_user" \
+              --region "$region" --capacity-slots "$capacity_slots" --tags-json "$tags"
+          ;;
+        hetzner|linode)
+          ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+            python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" add "$provider"
+          ;;
+        *)
+          echo "Unknown inventory provider: $provider" >&2
+          return 2
+          ;;
+      esac
+      ;;
+    drain|remove)
+      if [[ -n "$forced_command" ]]; then
+        target="${CONTROL_DEPLOY_ARGS[0]:-}"
+      else
+        target="${CONTROL_DEPLOY_ARGS[1]:-}"
+      fi
+      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" "$subcommand" "$target"
+      ;;
+    set-strategy)
+      if [[ -n "$forced_command" ]]; then
+        strategy="${CONTROL_DEPLOY_ARGS[0]:-}"
+      else
+        strategy="${CONTROL_DEPLOY_ARGS[1]:-}"
+      fi
+      case "$strategy" in
+        headroom|standard_unit) ;;
+        *) echo "Inventory placement strategy must be headroom or standard_unit." >&2; return 2 ;;
+      esac
+      ARCLINK_FLEET_PLACEMENT_STRATEGY="$strategy"
+      write_docker_runtime_config "$docker_env"
+      CONFIG_TARGET="$docker_env"
+      echo "Set ARCLINK_FLEET_PLACEMENT_STRATEGY=$strategy"
+      ;;
+    *)
+      echo "Unknown inventory command: $subcommand" >&2
+      return 2
+      ;;
+  esac
+}
+
 publish_control_tailscale_ingress() {
   local port="${ARCLINK_TAILSCALE_HTTPS_PORT:-443}"
   local notion_path="${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}"
@@ -10086,6 +10215,13 @@ control_command_from_mode() {
     control-reset-production) printf '%s\n' "reset-production" ;;
     control-fleet-key|control-show-fleet-key) printf '%s\n' "fleet-key" ;;
     control-register-worker|control-register-fleet-worker|control-fleet-add) printf '%s\n' "register-worker" ;;
+    control-inventory) printf '%s\n' "inventory" ;;
+    control-inventory-list) printf '%s\n' "inventory-list" ;;
+    control-inventory-probe) printf '%s\n' "inventory-probe" ;;
+    control-inventory-add) printf '%s\n' "inventory-add" ;;
+    control-inventory-drain) printf '%s\n' "inventory-drain" ;;
+    control-inventory-remove) printf '%s\n' "inventory-remove" ;;
+    control-inventory-set-strategy) printf '%s\n' "inventory-set-strategy" ;;
     control-provision-once) printf '%s\n' "provision-once" ;;
     control-teardown) printf '%s\n' "teardown" ;;
     control-write-config) printf '%s\n' "write-config" ;;
@@ -10136,6 +10272,27 @@ run_control_deploy_flow() {
       ;;
     register-worker|register-fleet-worker|fleet-add)
       register_control_remote_fleet_worker
+      ;;
+    inventory)
+      run_control_inventory
+      ;;
+    inventory-list)
+      run_control_inventory list
+      ;;
+    inventory-probe)
+      run_control_inventory probe
+      ;;
+    inventory-add)
+      run_control_inventory add
+      ;;
+    inventory-drain)
+      run_control_inventory drain
+      ;;
+    inventory-remove)
+      run_control_inventory remove
+      ;;
+    inventory-set-strategy)
+      run_control_inventory set-strategy
       ;;
     bootstrap|write-config|config|build|up|down|ps|ports|logs|health|record-release|provision-once|teardown|remove)
       run_arclink_docker "$command" ${CONTROL_DEPLOY_ARGS[@]+"${CONTROL_DEPLOY_ARGS[@]}"}
@@ -10283,7 +10440,7 @@ if [[ -z "$MODE" || "$MODE" == "menu" ]]; then
 fi
 
 case "$MODE" in
-  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-teardown|control-write-config|control-remove)
+  control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-inventory|control-inventory-list|control-inventory-probe|control-inventory-add|control-inventory-drain|control-inventory-remove|control-inventory-set-strategy|control-teardown|control-write-config|control-remove)
     run_control_deploy_flow
     ;;
   docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)

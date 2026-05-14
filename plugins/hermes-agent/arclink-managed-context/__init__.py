@@ -1366,6 +1366,7 @@ def _recent_events_payload(payload: dict[str, object]) -> list[dict[str, str]]:
 def _identity_payload(payload: dict[str, object]) -> dict[str, str]:
     field_map = (
         ("agent_label", "public_bot_name"),
+        ("agent_title", "agent_title"),
         ("user_name", "user"),
         ("human_display_name", "profile_user"),
         ("preferred_name", "preferred_name"),

@@ -153,7 +153,7 @@ Choose ArcLink Onboarding
 Start body:
 
 ```text
-I can take you from a few answers to agent onboard ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
+I can take you from a few answers to an ArcPod with memory, files, code workspace, model access, and dashboard visibility already wired up.
 ```
 
 Package CTAs:
@@ -180,13 +180,17 @@ Name The Agent
 Field:
 
 ```text
-Display Name
+Captain Name
+Agent Name
+Agent Title
 ```
 
 Placeholder:
 
 ```text
 Your name or org
+Bob
+the know-it-all
 ```
 
 Helper:
@@ -256,7 +260,7 @@ Complete The Hire
 Fallback:
 
 ```text
-Onboarding complete. I am preparing your deployment.
+Onboarding complete. I am preparing your ArcPod.
 ```
 
 Fallback CTA:

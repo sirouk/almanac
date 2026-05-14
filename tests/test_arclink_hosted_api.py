@@ -128,6 +128,52 @@ def test_user_dashboard_requires_session_auth() -> None:
     print("PASS test_user_dashboard_requires_session_auth")
 
 
+def test_user_agent_identity_route_requires_csrf_and_updates_deployment() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_agent_identity_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_agent_identity_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_agent_identity_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_agent_identity_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_agent_identity",
+        email="agent-identity@example.test",
+        prefix="agent-identity-1a2b",
+    )
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_agent_identity_hosted")
+    body = json.dumps({
+        "deployment_id": prepared["deployment_id"],
+        "agent_name": "Atlas",
+        "agent_title": "the right hand",
+    })
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/agent-identity",
+        headers=browser_auth_headers(session),
+        body=body,
+        config=config,
+    )
+    expect(status == 401, f"agent identity without CSRF expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/agent-identity",
+        headers=browser_auth_headers(session, csrf=True),
+        body=body,
+        config=config,
+    )
+    expect(status == 200, f"agent identity update expected 200 got {status}: {payload}")
+    expect(payload["deployment"]["agent_name"] == "Atlas", str(payload))
+    expect(payload["deployment"]["agent_title"] == "the right hand", str(payload))
+    print("PASS test_user_agent_identity_route_requires_csrf_and_updates_deployment")
+
+
 def test_admin_dashboard_requires_admin_session() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_admin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_admin_test")
@@ -1710,6 +1756,13 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
         channel_identity="tg:direct-checkout",
         text="/start",
         display_name_hint="Direct Buyer",
+    )
+    bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:direct-checkout",
+        text="/agent-identity Atlas, the right hand",
+        base_domain="example.test",
     )
     package = bots.handle_arclink_public_bot_turn(
         conn,
@@ -3921,6 +3974,7 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
+    test_user_agent_identity_route_requires_csrf_and_updates_deployment()
     test_admin_dashboard_requires_admin_session()
     test_admin_action_requires_csrf_and_mutation_role()
     test_safe_error_shapes_never_leak_internal_details()
@@ -3993,7 +4047,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 72 ArcLink hosted API tests")
+    print("PASS all 73 ArcLink hosted API tests")
     return 0
 
 

@@ -6,6 +6,7 @@ import json
 import os
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -103,6 +104,67 @@ def test_sessions_store_hashes_and_user_api_is_scoped_to_principal() -> None:
     else:
         raise AssertionError("expected cross-user dashboard read to fail")
     print("PASS test_sessions_store_hashes_and_user_api_is_scoped_to_principal")
+
+
+def test_user_agent_identity_update_requires_session_and_csrf() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_agent_identity_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_agent_identity_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_agent_identity_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        hermes_home = Path(tmpdir) / "state" / "hermes-home"
+        (hermes_home / "state").mkdir(parents=True)
+        (hermes_home / "state" / "arclink-identity-context.json").write_text(
+            json.dumps({"agent_label": "Old", "org_name": "Kept Org"}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+            (
+                json.dumps({"state_roots": {"hermes_home": str(hermes_home)}}, sort_keys=True),
+                prepared["deployment_id"],
+            ),
+        )
+        conn.commit()
+        session = api.create_arclink_user_session(
+            conn,
+            user_id=prepared["user_id"],
+            metadata={"surface": "browser"},
+            session_id="usess_agent_identity",
+        )
+        try:
+            api.user_update_agent_identity_api(
+                conn,
+                session_id=session["session_id"],
+                session_token=session["session_token"],
+                csrf_token="wrong",
+                deployment_id=prepared["deployment_id"],
+                agent_name="Atlas",
+                agent_title="the right hand",
+            )
+        except api.ArcLinkApiAuthError as exc:
+            expect("CSRF" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected CSRF failure")
+        updated = api.user_update_agent_identity_api(
+            conn,
+            session_id=session["session_id"],
+            session_token=session["session_token"],
+            csrf_token=session["csrf_token"],
+            deployment_id=prepared["deployment_id"],
+            agent_name="Atlas",
+            agent_title="the right hand",
+        )
+        expect(updated.status == 200, str(updated))
+        expect(updated.payload["deployment"]["agent_name"] == "Atlas", str(updated.payload))
+        expect(updated.payload["identity_projection"]["status"] == "projected", str(updated.payload))
+        row = conn.execute("SELECT agent_name, agent_title FROM arclink_deployments WHERE deployment_id = ?", (prepared["deployment_id"],)).fetchone()
+        expect(row["agent_name"] == "Atlas" and row["agent_title"] == "the right hand", str(dict(row)))
+        identity = json.loads((hermes_home / "state" / "arclink-identity-context.json").read_text(encoding="utf-8"))
+        expect(identity["agent_label"] == "Atlas" and identity["agent_title"] == "the right hand", str(identity))
+        expect(identity["org_name"] == "Kept Org", str(identity))
+    print("PASS test_user_agent_identity_update_requires_session_and_csrf")
 
 
 def test_public_onboarding_api_rate_limits_and_reuses_shared_contract() -> None:
@@ -766,6 +828,7 @@ def test_proof_token_hashes_use_hmac_and_accept_legacy() -> None:
 
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
+    test_user_agent_identity_update_requires_session_and_csrf()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
     test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema()
@@ -782,7 +845,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 16 ArcLink API/auth tests")
+    print("PASS all 17 ArcLink API/auth tests")
     return 0
 
 

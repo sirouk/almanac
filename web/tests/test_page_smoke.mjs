@@ -69,6 +69,10 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("startOnboarding"), "missing start API call");
     assert.ok(content.includes("answerOnboarding"), "missing answer API call");
     assert.ok(content.includes("openCheckout"), "missing checkout API call");
+    assert.ok(content.includes("Agent Name"), "missing Agent Name input");
+    assert.ok(content.includes("Agent Title"), "missing Agent Title input");
+    assert.ok(content.includes("agent_name"), "missing agent_name payload");
+    assert.ok(content.includes("agent_title"), "missing agent_title payload");
     assert.ok(content.includes("Fake adapters"), "missing fake adapter notice");
     assert.ok(content.includes("/checkout/success"), "missing checkout success redirect");
     assert.ok(content.includes("/checkout/cancel"), "missing checkout cancel redirect");
@@ -89,6 +93,7 @@ describe("Page content smoke checks", () => {
       assert.ok(content.includes(`"${tab}"`), `missing tab: ${tab}`);
     }
     assert.ok(content.includes("api.userDashboard"), "missing dashboard API call");
+    assert.ok(content.includes("api.updateAgentIdentity"), "missing Agent identity API call");
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
     assert.ok(content.includes("Drive"), "dashboard should link to Drive");
     assert.ok(content.includes("Code"), "dashboard should link to Code");
@@ -149,6 +154,7 @@ describe("API client route parity with hosted API", () => {
       "/user/provisioning",
       "/user/credentials",
       "/user/credentials/acknowledge",
+      "/user/agent-identity",
       "/user/linked-resources",
       "/user/share-grants",
       "/user/share-grants/approve",

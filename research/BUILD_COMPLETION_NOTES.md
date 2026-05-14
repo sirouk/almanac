@@ -1,5 +1,68 @@
 # Build Completion Notes
 
+## 2026-05-14 ArcPod Captain Console Wave 0/1 Build Slice
+
+Scope: executed the highest-priority current ArcPod Captain Console plan slice:
+Wave 0 vocabulary/schema/SOUL foundations and Wave 1 onboarding Agent Name +
+Agent Title flow. Existing dirty-tree work was preserved. No `arclink-priv`,
+live secrets, production deploys, live providers, payment mutation, public bot
+mutation, or Hermes core edits were touched.
+
+Changed behavior:
+
+- Added the canonical vocabulary reference and marked it in the docs status
+  map; kept Operator/backend terminology on operator/admin surfaces.
+- Added Wave 0 schema columns/tables/status drift checks for Agent titles,
+  Crew Training, inventory, pod messages, pod migrations, and Wrapped reports.
+- Added web onboarding Agent Name and Agent Title inputs, resume persistence,
+  API payload fields, Stripe metadata propagation, Scale naming suffixes, and
+  deployment/user identity persistence.
+- Added Telegram/Discord public-bot Agent identity prompts and commands,
+  plus dashboard/API/public-bot rename and retitle surfaces with CSRF/audit/DB
+  updates.
+- Added post-launch local identity projection for rename/retitle: when a
+  provisioned Pod's local Hermes home is present in deployment state roots,
+  ArcLink updates `state/arclink-identity-context.json` without a gateway
+  restart so managed-context can inject the new Agent name/title on the next
+  turn.
+- Repaired the provisioning/SOUL path so captured `agent_name` and
+  `agent_title` reach `ARCLINK_AGENT_NAME`, `ARCLINK_AGENT_TITLE`,
+  `SOUL.md`, `arclink-identity-context.json`, and the managed-context
+  `[local:identity]` projection.
+
+Validation run:
+
+- `python3 -m py_compile python/arclink_control.py python/arclink_public_bots.py python/arclink_onboarding.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_telegram.py python/arclink_discord.py python/arclink_headless_hermes_setup.py python/arclink_dashboard.py` passed.
+- `python3 -m py_compile python/arclink_provisioning.py python/arclink_headless_hermes_setup.py` passed.
+- `python3 -m py_compile plugins/hermes-agent/arclink-managed-context/__init__.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_headless_hermes_setup.py` passed.
+- `python3 tests/test_arclink_plugins.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `npm --prefix web test` passed.
+- `npm --prefix web run lint` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks and deferrals:
+
+- Post-launch rename/retitle now refreshes a local provisioned Pod's
+  managed-context identity file when its Hermes home exists on the control
+  node. Remote fleet projection remains proof-gated until the Wave 2/3 worker
+  transport path lands; the helper skips missing local Hermes homes rather than
+  creating control-node lookalike paths.
+- Wave 2 and later surfaces remain unimplemented in this slice.
+- Live Stripe, Chutes, Cloudflare, Tailscale, Telegram, Discord, Notion, remote
+  Docker host, deploy/upgrade, Docker install/upgrade, public-bot mutation, and
+  real payment-flow proof remain explicit operator-authorized live gates.
+
 ## 2026-05-12 Three-Pass Sovereign Revisit
 
 Scope: performed three additional local passes over the Sovereign control-node
@@ -5291,3 +5354,55 @@ Known risks:
   maintenance window with disposable credentials/hosts.
 - The residual closure is local-code complete. Broad release validation and
   live provider/host proof remain later, explicitly authorized work.
+
+## 2026-05-14 ArcPod Captain Console Waves 0-2 Build Validation
+
+Scope: validated the candidate Wave 0 vocabulary/schema/SOUL foundation, Wave 1
+Agent Name and Agent Title onboarding/rename flow, and Wave 2 inventory/ASU
+placement work already present in the dirty tree. No private state, live
+provider account, payment flow, public bot mutation, deploy, upgrade, or Hermes
+core path was touched.
+
+Files changed in this pass:
+
+- `IMPLEMENTATION_PLAN.md`: marked Waves 0-2 locally validated and recorded
+  that `python/arclink_users.py` is a stale compile target because the module
+  does not exist in this repo.
+- `research/BUILD_COMPLETION_NOTES.md`: added this validation record.
+
+Verification run:
+
+- `python3 -m py_compile python/arclink_control.py python/arclink_public_bots.py python/arclink_onboarding.py python/arclink_provisioning.py python/arclink_fleet.py python/arclink_asu.py python/arclink_inventory.py python/arclink_inventory_hetzner.py python/arclink_inventory_linode.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_onboarding.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_asu.py` passed.
+- `python3 tests/test_arclink_inventory_hetzner.py` passed.
+- `python3 tests/test_arclink_inventory_linode.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `cd web && npm test` passed.
+- `cd web && npm run lint` passed.
+- `cd web && npm run test:browser` passed with 45 passing and 3 skipped
+  desktop-only-mobile-layout cases.
+
+Skipped live gates:
+
+- No `./deploy.sh install`, `./deploy.sh upgrade`, Docker install/upgrade,
+  production restart, live Stripe, Chutes, Hetzner, Linode, Cloudflare,
+  Tailscale, Telegram, Discord, or Notion proof was run.
+
+Known risks:
+
+- Waves 0-2 are locally source-validated but remain unproven against live
+  infrastructure and real provider credentials.
+- Wave 3 Pod migration remains the next implementation wave. The current tree
+  has schema foundations, but reprovision/migration execution is not closed by
+  this validation pass.

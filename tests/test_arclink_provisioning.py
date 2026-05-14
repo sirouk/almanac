@@ -37,7 +37,16 @@ def memory_db(control):
     return conn
 
 
-def seed_deployment(control, conn, *, entitlement_state: str = "paid", status: str = "provisioning_ready", metadata=None):
+def seed_deployment(
+    control,
+    conn,
+    *,
+    entitlement_state: str = "paid",
+    status: str = "provisioning_ready",
+    metadata=None,
+    agent_name: str = "Atlas",
+    agent_title: str = "the right hand",
+):
     control.upsert_arclink_user(
         conn,
         user_id="user_1",
@@ -50,6 +59,8 @@ def seed_deployment(control, conn, *, entitlement_state: str = "paid", status: s
         user_id="user_1",
         prefix="amber-vault-1a2b",
         base_domain="example.test",
+        agent_name=agent_name,
+        agent_title=agent_title,
         status=status,
         metadata=metadata or {},
     )
@@ -119,6 +130,8 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["dashboard_password"]["secret_ref"] == "secret://arclink/dashboard/users/user_1/password", str(compose_secrets))
     expect(compose_secrets["dashboard_password"]["target"] == "/run/secrets/dashboard_password", str(compose_secrets))
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
+    expect(intent["environment"]["ARCLINK_AGENT_NAME"] == "Atlas", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_AGENT_TITLE"] == "the right hand", str(intent["environment"]))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
@@ -189,6 +202,8 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["managed-context-install"]["environment"]["RUNTIME_DIR"] == "/opt/arclink/runtime", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["VAULT_DIR"] == "/srv/vault", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_AGENT_NAME"] == "Atlas", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_AGENT_TITLE"] == "the right hand", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_PASSWORD_FILE"] == "/run/secrets/dashboard_password", str(services["managed-context-install"]))
     expect(
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",

@@ -107,6 +107,12 @@ finally:
 path.chmod(0o600)
 PY
 
+agent_name="${ARCLINK_AGENT_NAME:-}"
+if [[ -z "$agent_name" ]]; then
+  agent_name="${ARCLINK_PREFIX:-ArcLink} Hermes"
+fi
+agent_title="${ARCLINK_AGENT_TITLE:-}"
+
 provider="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
 secret_file="${ARCLINK_CHUTES_API_KEY_FILE:-/run/secrets/chutes_api_key}"
 if [[ "$provider" == "chutes" && -r "$secret_file" && -s "$secret_file" ]]; then
@@ -133,7 +139,8 @@ PY
     "$REPO_DIR/python/arclink_headless_hermes_setup.py" \
     --provider-spec-json "$provider_spec" \
     --secret-path "$secret_file" \
-    --bot-name "${ARCLINK_PREFIX:-ArcLink} Hermes" \
+    --bot-name "$agent_name" \
+    --agent-title "$agent_title" \
     --unix-user "arclink" \
     --user-name "${ARCLINK_PREFIX:-ArcLink}" >/dev/null
 fi

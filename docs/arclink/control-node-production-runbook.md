@@ -93,6 +93,33 @@ Before enabling live mutation paths, verify:
 - Rollback plans preserve state roots and do not delete vault, Nextcloud,
   memory, qmd, or workspace data by default.
 
+## Fleet Inventory And ASU Placement
+
+The Operator inventory path is local-first and proof-gated for cloud providers:
+
+```bash
+./deploy.sh control inventory list
+./deploy.sh control inventory add manual
+./deploy.sh control inventory probe <machine-id|hostname>
+./deploy.sh control inventory drain <machine-id|hostname>
+./deploy.sh control inventory remove <machine-id|hostname>
+./deploy.sh control inventory set-strategy standard_unit
+```
+
+Manual registration works without cloud credentials and reuses the control
+fleet SSH key guidance. Hetzner and Linode commands fail closed until
+`HETZNER_API_TOKEN` or `LINODE_API_TOKEN` is configured in private control-node
+config; missing tokens print "configure provider to enable" and do not make API
+calls.
+
+ArcPod Standard Unit sizing defaults to 1 vCPU, 4 GiB RAM, and 30 GiB disk per
+Pod. Operators can tune `ARCLINK_ASU_VCPU_PER_POD`,
+`ARCLINK_ASU_RAM_PER_POD`, and `ARCLINK_ASU_DISK_PER_POD`. Placement keeps the
+legacy `headroom` strategy by default. Setting
+`ARCLINK_FLEET_PLACEMENT_STRATEGY=standard_unit` makes new placements prefer
+the machine with the most available ASU while existing placements remain
+unchanged.
+
 ## Stripe Webhook
 
 Create a selected-event Stripe destination at:

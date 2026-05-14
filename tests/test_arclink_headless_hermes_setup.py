@@ -168,7 +168,19 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         write_arclink_config(arclink_config)
 
         result = subprocess.run(
-            [sys.executable, str(SCRIPT), "--identity-only", "--bot-name", "Kor", "--unix-user", "kor", "--user-name", "Kora Reed"],
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--identity-only",
+                "--bot-name",
+                "Kor",
+                "--agent-title",
+                "the research lead",
+                "--unix-user",
+                "kor",
+                "--user-name",
+                "Kora Reed",
+            ],
             cwd=str(REPO),
             env={
                 **os.environ,
@@ -201,6 +213,7 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("You are Hermes Agent, an intelligent AI assistant created by Nous Research. Be direct and useful." in soul_text, soul_text)
         expect("ArcLink identity overlay:" in soul_text, soul_text)
         expect("You are Kor" in soul_text, soul_text)
+        expect("Agent title: the research lead" in soul_text, soul_text)
         expect("Kora Reed" in soul_text, soul_text)
         expect("Acme Labs" in soul_text, soul_text)
         expect("Hermes deployment lane" in soul_text, soul_text)
@@ -215,6 +228,7 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
 
         identity_state = json.loads(identity_state_path.read_text(encoding="utf-8"))
         expect(identity_state["agent_label"] == "Kor", identity_state)
+        expect(identity_state["agent_title"] == "the research lead", identity_state)
         expect(identity_state["user_name"] == "Kora Reed", identity_state)
         expect(identity_state["org_name"] == "Acme Labs", identity_state)
         expect(identity_state["org_mission"] == "Make serious research more legible and actionable.", identity_state)

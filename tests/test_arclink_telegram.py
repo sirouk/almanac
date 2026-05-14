@@ -107,6 +107,7 @@ def test_telegram_fake_transport_polling() -> None:
 
     transport.enqueue_update("42", "99", "/start")
     transport.enqueue_update("42", "99", "name Test Buyer")
+    transport.enqueue_update("42", "99", "/agent-identity Atlas, the right hand")
 
     cfg = tg.TelegramConfig(bot_token="", bot_username="test", webhook_url="", api_base="")
     tg.run_telegram_polling(
@@ -114,15 +115,16 @@ def test_telegram_fake_transport_polling() -> None:
         transport=transport,
         stripe_client=stripe,
         base_domain="example.test",
-        max_iterations=2,
+        max_iterations=3,
     )
-    expect(len(transport.sent_messages) == 2, f"expected 2 replies, got {len(transport.sent_messages)}")
+    expect(len(transport.sent_messages) == 3, f"expected 3 replies, got {len(transport.sent_messages)}")
     expect("Raven" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
-    expect("Welcome aboard, Test Buyer" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
-    expect("Founders $149/mo" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
-    expect("Scale $275/mo" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
-    expect("/api/v1/onboarding/public-bot-checkout" in str(transport.sent_messages[1].get("reply_markup", {})), str(transport.sent_messages[1]))
-    expect("reply_markup" in transport.sent_messages[1], str(transport.sent_messages[1]))
+    expect("Name your Agent" in transport.sent_messages[1]["text"], transport.sent_messages[1]["text"])
+    expect("Welcome aboard, Test Buyer" in transport.sent_messages[2]["text"], transport.sent_messages[2]["text"])
+    expect("Founders $149/mo" in str(transport.sent_messages[2].get("reply_markup", {})), str(transport.sent_messages[2]))
+    expect("Scale $275/mo" in str(transport.sent_messages[2].get("reply_markup", {})), str(transport.sent_messages[2]))
+    expect("/api/v1/onboarding/public-bot-checkout" in str(transport.sent_messages[2].get("reply_markup", {})), str(transport.sent_messages[2]))
+    expect("reply_markup" in transport.sent_messages[2], str(transport.sent_messages[2]))
     print("PASS test_telegram_fake_transport_polling")
 
 
@@ -174,7 +176,7 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     expect(calls[0]["scope"] == {"type": "chat", "chat_id": 42}, str(calls[0]))
     names = {item["command"] for item in calls[0]["commands"]}
     expect("raven" in names, str(names))
-    expect("agents" in names and "status" in names and "help" in names, str(names))
+    expect("agents" not in names and "status" not in names and "help" not in names, str(names))
     expect("model" in names, str(names))
     expect("provider" in names, str(names))
     expect("reload_mcp" in names, str(names))
@@ -190,8 +192,8 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
         {"update_id": 21, "message": {"message_id": 10, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agents"}},
         telegram_bot_token="123:abc",
     )
-    expect(agent_agents is not None and agent_agents["action"] == "agent_message_queued", str(agent_agents))
-    expect(str(agent_agents.get("text") or "") == "", str(agent_agents))
+    expect(agent_agents is not None and agent_agents["action"] == "show_agents", str(agent_agents))
+    expect("Your ArcLink crew" in str(agent_agents.get("text") or ""), str(agent_agents))
 
     arbitrary_agent_command = tg.handle_telegram_update(
         conn,

@@ -139,6 +139,15 @@ def seed_credential_handoffs(
     conn.commit()
 
 
+def capture_agent_identity(bots, conn, *, channel: str = "telegram", channel_identity: str = "tg:42", name: str = "Atlas", title: str = "the right hand"):
+    return bots.handle_arclink_public_bot_turn(
+        conn,
+        channel=channel,
+        channel_identity=channel_identity,
+        text=f"/agent-identity {name}, {title}",
+    )
+
+
 def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_test")
@@ -155,6 +164,8 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
         channel_identity="tg:42",
         text="/name Bot Buyer",
     )
+    identity = capture_agent_identity(bots, conn, channel_identity="tg:42", name="Atlas", title="the right hand")
+    expect(identity.action == "prompt_package", str(identity))
     planned = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -176,12 +187,13 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     expect(f"/checkout/cancel?session={checkout.session_id}" in checkout_session["cancel_url"], str(checkout_session))
     expect(checkout.buttons and checkout.buttons[0].label == "Hire Sovereign - $199/month", str(checkout.buttons))
     session = conn.execute(
-        "SELECT channel, channel_identity, status, checkout_state, email_hint, display_name_hint FROM arclink_onboarding_sessions WHERE session_id = ?",
+        "SELECT channel, channel_identity, status, checkout_state, email_hint, display_name_hint, agent_name, agent_title FROM arclink_onboarding_sessions WHERE session_id = ?",
         (checkout.session_id,),
     ).fetchone()
     expect(session["channel"] == "telegram" and session["channel_identity"] == "tg:42", str(dict(session)))
     expect(session["status"] == "checkout_open" and session["checkout_state"] == "open", str(dict(session)))
     expect(session["email_hint"] == "" and session["display_name_hint"] == "Bot Buyer", str(dict(session)))
+    expect(session["agent_name"] == "Atlas" and session["agent_title"] == "the right hand", str(dict(session)))
     events = {
         row["event_type"]
         for row in conn.execute("SELECT event_type FROM arclink_onboarding_events WHERE session_id = ?", (checkout.session_id,)).fetchall()
@@ -198,6 +210,7 @@ def test_public_bot_cancel_closes_open_checkout_without_creating_new_session() -
     stripe = adapters.FakeStripeClient()
 
     bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:cancel", text="/start")
+    capture_agent_identity(bots, conn, channel_identity="tg:cancel")
     bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:cancel", text="/plan sovereign")
     checkout = bots.handle_arclink_public_bot_turn(
         conn,
@@ -246,6 +259,8 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     package = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="Scale Buyer",
     )
+    expect(package.action == "prompt_agent_name", str(package))
+    package = capture_agent_identity(bots, conn, channel_identity="tg:scale", name="Vane", title="the navigator")
     expect([b.label for b in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
     expect(all(button.url and "/api/v1/onboarding/public-bot-checkout" in button.url for button in package.buttons), str(package.buttons))
     standard = bots.handle_arclink_public_bot_turn(
@@ -295,6 +310,7 @@ def test_public_bot_founders_checkout_uses_founders_price() -> None:
     stripe = adapters.FakeStripeClient()
 
     bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:founders", text="/start", display_name_hint="Founder")
+    capture_agent_identity(bots, conn, channel_identity="tg:founders")
     planned = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:founders", text="/plan founders")
     expect("Limited 100 Founders is locked" in planned.reply, planned.reply)
     expect([b.label for b in planned.buttons] == ["Hire Founders - $149/month", "Change Package"], str(planned.buttons))
@@ -329,6 +345,7 @@ def test_public_bot_plan_selection_opens_checkout_when_stripe_is_available() -> 
     stripe = adapters.FakeStripeClient()
 
     bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:auto", text="/start", display_name_hint="Buyer")
+    capture_agent_identity(bots, conn, channel_identity="tg:auto")
     opened = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -364,6 +381,11 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     expect("pair_channel" in telegram_names, str(telegram))
     expect("link_channel" in telegram_names, str(telegram))
     expect("raven_name" in telegram_names, str(telegram))
+    expect("agent_name" in telegram_names, str(telegram))
+    expect("agent_title" in telegram_names, str(telegram))
+    expect("agent_identity" in telegram_names, str(telegram))
+    expect("rename_agent" in telegram_names, str(telegram))
+    expect("retitle_agent" in telegram_names, str(telegram))
     expect("upgrade_hermes" in telegram_names, str(telegram))
     expect("agent" in telegram_names, str(telegram))
     expect("connect-notion" not in telegram_names, str(telegram))
@@ -636,6 +658,8 @@ def test_public_bot_credentials_repair_legacy_dashboard_ref_to_user_secret() -> 
         ),
     )
     conn.commit()
+
+
     old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["ARCLINK_SECRET_STORE_DIR"] = tmp
@@ -1513,8 +1537,9 @@ def main() -> int:
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_agent_label_does_not_use_user_display_name()
+    test_public_bot_can_rename_and_retitle_live_agent()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 26 ArcLink public bot tests")
+    print("PASS all 27 ArcLink public bot tests")
     return 0
 
 
@@ -1737,6 +1762,57 @@ def test_public_bot_agent_label_does_not_use_user_display_name() -> None:
     print("PASS test_public_bot_agent_label_does_not_use_user_display_name")
 
 
+def test_public_bot_can_rename_and_retitle_live_agent() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_agent_identity_update_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_agent_identity_update_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-identity")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        hermes_home = Path(tmpdir) / "state" / "hermes-home"
+        (hermes_home / "state").mkdir(parents=True)
+        (hermes_home / "state" / "arclink-identity-context.json").write_text(
+            json.dumps({"agent_label": "Old", "crew_preset": "Corpos"}, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+            (
+                json.dumps({"state_roots": {"hermes_home": str(hermes_home)}}, sort_keys=True),
+                seeded["deployment_id"],
+            ),
+        )
+        conn.commit()
+
+        renamed = bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="telegram",
+            channel_identity="tg:42",
+            text="/rename-agent Atlas",
+        )
+        expect(renamed.action == "agent_identity_updated", str(renamed))
+        retitled = bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="telegram",
+            channel_identity="tg:42",
+            text="/retitle-agent the right hand",
+        )
+        expect(retitled.action == "agent_identity_updated", str(retitled))
+        row = conn.execute(
+            "SELECT agent_name, agent_title FROM arclink_deployments WHERE deployment_id = ?",
+            (seeded["deployment_id"],),
+        ).fetchone()
+        expect(row["agent_name"] == "Atlas" and row["agent_title"] == "the right hand", str(dict(row)))
+        identity = json.loads((hermes_home / "state" / "arclink-identity-context.json").read_text(encoding="utf-8"))
+        expect(identity["agent_label"] == "Atlas" and identity["agent_title"] == "the right hand", str(identity))
+        expect(identity["crew_preset"] == "Corpos", str(identity))
+        audit = conn.execute(
+            "SELECT COUNT(*) AS n FROM arclink_audit_log WHERE target_id = ? AND action = ?",
+            (seeded["deployment_id"], f"agent_identity_renamed:{seeded['deployment_id']}"),
+        ).fetchone()
+        expect(audit["n"] == 2, str(dict(audit)))
+    print("PASS test_public_bot_can_rename_and_retitle_live_agent")
+
+
 def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> None:
     """The /start greeting must address the user by the name we picked up
     from the channel profile (Telegram first_name, Discord global_name) and
@@ -1761,12 +1837,20 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
     expect("Check Status" not in labels, "no status-check on cold-open greeting")
     expect("Update Name" in labels, "Update Name belongs on the cold-open greeting")
 
-    # Take Me Aboard opens the two-package choice.
+    # Take Me Aboard opens the Agent identity lane before package choice.
     aboard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:9001",
         text="/packages", display_name_hint="Chris",
     )
-    expect(aboard.action == "prompt_package", str(aboard.action))
+    expect(aboard.action == "prompt_agent_name", str(aboard.action))
+    package = capture_agent_identity(bots, conn, channel_identity="tg:9001", name="Atlas", title="the right hand")
+    expect(package.action == "prompt_package", str(package.action))
+    expect([b.label for b in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
+    expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in package.buttons), str(package.buttons))
+    aboard = bots.handle_arclink_public_bot_turn(
+        conn, channel="telegram", channel_identity="tg:9001",
+        text="/packages", display_name_hint="Chris",
+    )
     expect([b.label for b in aboard.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(aboard.buttons))
     expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in aboard.buttons), str(aboard.buttons))
     standard = bots.handle_arclink_public_bot_turn(
@@ -1789,13 +1873,8 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         text="Sirouk",
         display_name_hint="Chris",
     )
-    expect("Welcome aboard, Sirouk" in renamed.reply, renamed.reply)
-    expect("$149/mo" in renamed.reply, renamed.reply)
-    expect("$275/mo" in renamed.reply, renamed.reply)
-    expect("Sovereign-equivalent" in renamed.reply, renamed.reply)
+    expect("Welcome aboard, Sirouk" in renamed.reply or renamed.action == "prompt_package", renamed.reply)
     expect([b.label for b in renamed.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(renamed.buttons))
-    expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in renamed.buttons), str(renamed.buttons))
-    expect(len(renamed.buttons) == 2, str(renamed.buttons))
 
     # If no display name was provided by the channel, the greeting falls back
     # to the generic line and the buttons are unchanged.

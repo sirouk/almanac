@@ -172,7 +172,7 @@ function CheckoutSuccessContent() {
         {confirmed && (
           <div className="mt-4">
             <p className="text-sm text-soft-white/65">
-              {displayName ? `Captain ${displayName}, ` : ""}{deploymentReady ? "your ArcLink agent is online." : "Raven has confirmed payment and your ArcLink agent is entering the launch queue."}
+              {displayName ? `Captain ${displayName}, ` : ""}{deploymentReady ? "your ArcPod is online." : "Raven has confirmed payment and your ArcPod is entering the launch queue."}
             </p>
             {channelLabel && (
               <p className="mt-2 text-sm text-soft-white/65">

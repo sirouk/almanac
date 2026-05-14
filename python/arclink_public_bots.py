@@ -23,12 +23,15 @@ from arclink_control import append_arclink_audit, append_arclink_event, queue_no
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
+    clean_arclink_agent_name,
+    clean_arclink_agent_title,
     create_or_resume_arclink_onboarding_session,
     handoff_arclink_onboarding_channel,
     open_arclink_onboarding_checkout,
 )
 from arclink_product import base_domain as default_base_domain
 from arclink_product import chutes_default_model, launch_phrase
+from arclink_provisioning import update_arclink_deployment_identity
 
 
 ARCLINK_PUBLIC_BOT_CHANNELS = frozenset({"telegram", "discord"})
@@ -97,6 +100,17 @@ ARCLINK_PUBLIC_BOT_RAVEN_NAME_COMMANDS = (
     "raven_name",
     "raven name",
 )
+ARCLINK_PUBLIC_BOT_AGENT_NAME_COMMANDS = ("/agent-name", "/agent_name", "agent-name", "agent_name", "agent name")
+ARCLINK_PUBLIC_BOT_AGENT_TITLE_COMMANDS = ("/agent-title", "/agent_title", "agent-title", "agent_title", "agent title")
+ARCLINK_PUBLIC_BOT_AGENT_IDENTITY_COMMANDS = (
+    "/agent-identity",
+    "/agent_identity",
+    "agent-identity",
+    "agent_identity",
+    "agent identity",
+)
+ARCLINK_PUBLIC_BOT_RENAME_AGENT_COMMANDS = ("/rename-agent", "/rename_agent", "rename-agent", "rename_agent")
+ARCLINK_PUBLIC_BOT_RETITLE_AGENT_COMMANDS = ("/retitle-agent", "/retitle_agent", "retitle-agent", "retitle_agent")
 ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS = frozenset(
     {"/add-agent", "/add_agent", "add-agent", "add agent", "hire another agent", "add another agent"}
 )
@@ -197,12 +211,82 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="name",
         telegram_command="name",
         discord_command="name",
-        description="Name your ArcLink workspace",
+        description="Set the Captain name Raven should use",
         discord_options=(
             {
                 "type": 3,
                 "name": "display_name",
                 "description": "Your name or team name",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="agent_name",
+        telegram_command="agent_name",
+        discord_command="agent-name",
+        description="Name your Agent",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "name",
+                "description": "Agent name",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="agent_title",
+        telegram_command="agent_title",
+        discord_command="agent-title",
+        description="Set your Agent title",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "title",
+                "description": "Agent title",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="agent_identity",
+        telegram_command="agent_identity",
+        discord_command="agent-identity",
+        description="Set Agent name and title",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "identity",
+                "description": "Name, title",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="rename_agent",
+        telegram_command="rename_agent",
+        discord_command="rename-agent",
+        description="Rename your active Agent",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "name",
+                "description": "New Agent name",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="retitle_agent",
+        telegram_command="retitle_agent",
+        discord_command="retitle-agent",
+        description="Retitle your active Agent",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "title",
+                "description": "New Agent title",
                 "required": True,
             },
         ),
@@ -453,6 +537,81 @@ def _raven_name_command_value(message: str, command: str) -> str | None:
     return None
 
 
+def _value_for_named_command(message: str, command: str, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        if command == name:
+            return ""
+        prefix = f"{name} "
+        if command.startswith(prefix):
+            return message[len(prefix):].strip()
+    return None
+
+
+def _workflow_value_for_named_command(message: str, command: str, names: tuple[str, ...]) -> str | None:
+    explicit_value = _value_for_named_command(message, command, names)
+    if explicit_value is not None:
+        return explicit_value.strip()
+    if command.startswith("/"):
+        return None
+    return str(message or "").strip()
+
+
+def _agent_identity_pair(value: str) -> tuple[str, str]:
+    raw = str(value or "").strip()
+    for delimiter in (",", " - ", " as "):
+        if delimiter in raw:
+            left, right = raw.split(delimiter, 1)
+            return left.strip(), right.strip()
+    parts = raw.split(maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return raw, ""
+
+
+def _clean_agent_name(value: str, *, required: bool = True) -> str:
+    return clean_arclink_agent_name(value, required=required)
+
+
+def _clean_agent_title(value: str, *, required: bool = True) -> str:
+    return clean_arclink_agent_title(value, required=required)
+
+
+def _answer_agent_identity(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    question_key: str,
+    answer_summary: str,
+    agent_name: str | None = None,
+    agent_title: str | None = None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if agent_name is not None:
+        kwargs["agent_name"] = _clean_agent_name(agent_name)
+    if agent_title is not None:
+        kwargs["agent_title"] = _clean_agent_title(agent_title)
+    return answer_arclink_onboarding_question(
+        conn,
+        session_id=str(session["session_id"]),
+        question_key=question_key,
+        answer_summary=answer_summary,
+        **kwargs,
+    )
+
+
+def _clear_public_bot_workflow(conn: sqlite3.Connection, session: Mapping[str, Any]) -> dict[str, Any]:
+    return _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={},
+        clear=("public_bot_workflow",),
+    )
+
+
+def _session_has_agent_identity(session: Mapping[str, Any]) -> bool:
+    return bool(str(session.get("agent_name") or "").strip() and str(session.get("agent_title") or "").strip())
+
+
 def _raven_identity_user_id(
     session: Mapping[str, Any] | None,
     deployment: Mapping[str, Any] | None,
@@ -698,6 +857,79 @@ def _package_prompt_reply(
         ),
         bot_display_name=raven,
     )
+
+
+def _agent_name_prompt_reply(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
+) -> ArcLinkPublicBotTurn:
+    updated = _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={"public_bot_workflow": "agent_name", "agent_name_requested_at": utc_now_iso()},
+    )
+    return _reply(
+        updated,
+        action="prompt_agent_name",
+        reply=(
+            "Name your Agent.\n\n"
+            "Send the Agent name as plain text, or use `/agent-name Atlas`. Keep it to 40 characters."
+        ),
+        buttons=(_button("Cancel", command="/cancel", style="secondary"),),
+        bot_display_name=bot_display_name,
+    )
+
+
+def _agent_title_prompt_reply(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
+) -> ArcLinkPublicBotTurn:
+    updated = _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={"public_bot_workflow": "agent_title", "agent_title_requested_at": utc_now_iso()},
+    )
+    name = str(updated.get("agent_name") or "").strip()
+    name_line = f" for {name}" if name else ""
+    return _reply(
+        updated,
+        action="prompt_agent_title",
+        reply=(
+            f"Give your Agent{name_line} a title.\n\n"
+            "Send the title as plain text, or use `/agent-title the right hand`. Keep it to 80 characters."
+        ),
+        buttons=(_button("Cancel", command="/cancel", style="secondary"),),
+        bot_display_name=bot_display_name,
+    )
+
+
+def _identity_or_package_prompt(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    base_domain: str = "",
+    greeting: str = "",
+    bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
+    standard: bool = False,
+) -> ArcLinkPublicBotTurn:
+    if _session_has_agent_identity(session):
+        if str(_metadata(session).get("public_bot_workflow") or "") in {"agent_name", "agent_title", "name_update"}:
+            session = _clear_session_workflow(conn, session_id=str(session["session_id"]))
+        session, checkout_buttons = _ensure_direct_checkout_buttons(conn, session, base_domain=base_domain)
+        return _package_prompt_reply(
+            session,
+            greeting=greeting,
+            bot_display_name=bot_display_name,
+            standard=standard,
+            checkout_buttons=checkout_buttons,
+        )
+    if not str(session.get("agent_name") or "").strip():
+        return _agent_name_prompt_reply(conn, session, bot_display_name=bot_display_name)
+    return _agent_title_prompt_reply(conn, session, bot_display_name=bot_display_name)
 
 
 def _public_bot_direct_checkout_label(plan: str) -> str:
@@ -1186,6 +1418,54 @@ def _deployment_for_selector(
     return dict(row) if row is not None else None
 
 
+def _agent_identity_update_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    deployment: Mapping[str, Any] | None,
+    session: Mapping[str, Any] | None,
+    agent_name: str | None = None,
+    agent_title: str | None = None,
+) -> ArcLinkPublicBotTurn:
+    if deployment is None or str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="agent_identity_not_ready",
+            reply="Agent rename and retitle commands open after your ArcPod is live. During onboarding, use `/agent-name`, `/agent-title`, or `/agent-identity Name, title`.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Take Me Aboard", command="/packages", style="secondary"),),
+        )
+    result = update_arclink_deployment_identity(
+        conn,
+        deployment=deployment,
+        agent_name=agent_name,
+        agent_title=agent_title,
+        actor_id=str(deployment.get("user_id") or "").strip(),
+        reason="public_bot updated Agent identity",
+        channel=channel,
+        projection_source="public_bot_agent_identity_update",
+    )
+    updated = result["deployment"]
+    label = str(updated.get("agent_name") or _agent_label(updated)).strip()
+    title = str(updated.get("agent_title") or "").strip()
+    title_line = f", {title}" if title else ""
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="agent_identity_updated",
+        reply=(
+            f"Agent identity updated: {label}{title_line}.\n\n"
+            "Raven recorded the change; managed context will carry the new identity on the next refresh."
+        ),
+        session=session,
+        deployment=updated,
+        buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+    )
+
+
 def _deployments_for_user(conn: sqlite3.Connection, user_id: str) -> list[dict[str, Any]]:
     clean_user_id = str(user_id or "").strip()
     if not clean_user_id:
@@ -1233,7 +1513,7 @@ def _agent_label(
     after the user.
     """
     metadata = _metadata(deployment)
-    candidate = str(metadata.get("agent_name") or metadata.get("display_name") or "").strip()
+    candidate = str(deployment.get("agent_name") or metadata.get("agent_name") or metadata.get("display_name") or "").strip()
     if candidate:
         return candidate[:40]
 
@@ -2866,8 +3146,42 @@ def _handle_active_workflow(
             updates={},
             clear=("public_bot_workflow",),
         )
-        updated, checkout_buttons = _ensure_direct_checkout_buttons(conn, updated, base_domain=base_domain)
-        return _package_prompt_reply(updated, greeting=f"Welcome aboard, {new_name}.", checkout_buttons=checkout_buttons)
+        return _identity_or_package_prompt(
+            conn,
+            updated,
+            base_domain=base_domain,
+            greeting=f"Welcome aboard, {new_name}.",
+        )
+    if workflow == "agent_name":
+        new_name = _workflow_value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_AGENT_NAME_COMMANDS)
+        if new_name is None:
+            return None
+        if not new_name:
+            return _agent_name_prompt_reply(conn, session)
+        updated = _answer_agent_identity(
+            conn,
+            session,
+            question_key="agent_name",
+            answer_summary="agent name captured",
+            agent_name=new_name,
+        )
+        updated = _clear_public_bot_workflow(conn, updated)
+        return _agent_title_prompt_reply(conn, updated)
+    if workflow == "agent_title":
+        new_title = _workflow_value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_AGENT_TITLE_COMMANDS)
+        if new_title is None:
+            return None
+        if not new_title:
+            return _agent_title_prompt_reply(conn, session)
+        updated = _answer_agent_identity(
+            conn,
+            session,
+            question_key="agent_title",
+            answer_summary="agent title captured",
+            agent_title=new_title,
+        )
+        updated = _clear_public_bot_workflow(conn, updated)
+        return _identity_or_package_prompt(conn, updated, base_domain=base_domain)
     if workflow == "connect_notion":
         if command in {"ready", "done", "verified", "complete"}:
             updated = _update_session_metadata(
@@ -3189,6 +3503,48 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             session=session,
             deployment=deployment,
+        )
+
+    rename_value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_RENAME_AGENT_COMMANDS)
+    if rename_value is not None:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        if not rename_value.strip():
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="rename_agent_missing",
+                reply="Send the new Agent name after the command, for example `/rename-agent Atlas`.",
+                session=session,
+                deployment=deployment,
+            )
+        return _agent_identity_update_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+            agent_name=rename_value,
+        )
+
+    retitle_value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_RETITLE_AGENT_COMMANDS)
+    if retitle_value is not None:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        if not retitle_value.strip():
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="retitle_agent_missing",
+                reply="Send the new Agent title after the command, for example `/retitle-agent the right hand`.",
+                session=session,
+                deployment=deployment,
+            )
+        return _agent_identity_update_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+            agent_title=retitle_value,
         )
 
     agent_passthrough = _agent_passthrough_message(message, command)
@@ -3518,11 +3874,48 @@ def handle_arclink_public_bot_turn(
             action="prompt_name",
             reply="Keep your email out of comms. Stripe collects it at checkout, and only there. Tap Update Name, then just send the name you want Raven to use.",
         )
+    agent_identity_value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_AGENT_IDENTITY_COMMANDS)
+    if agent_identity_value is not None:
+        if not agent_identity_value.strip():
+            return _agent_name_prompt_reply(conn, session, bot_display_name=raven)
+        parsed_name, parsed_title = _agent_identity_pair(agent_identity_value)
+        session = _answer_agent_identity(
+            conn,
+            session,
+            question_key="agent_identity",
+            answer_summary="agent identity captured",
+            agent_name=parsed_name,
+            agent_title=parsed_title,
+        )
+        return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
+    agent_name_value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_AGENT_NAME_COMMANDS)
+    if agent_name_value is not None:
+        if not agent_name_value.strip():
+            return _agent_name_prompt_reply(conn, session, bot_display_name=raven)
+        session = _answer_agent_identity(
+            conn,
+            session,
+            question_key="agent_name",
+            answer_summary="agent name captured",
+            agent_name=agent_name_value,
+        )
+        return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
+    agent_title_value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_AGENT_TITLE_COMMANDS)
+    if agent_title_value is not None:
+        if not agent_title_value.strip():
+            return _agent_title_prompt_reply(conn, session, bot_display_name=raven)
+        session = _answer_agent_identity(
+            conn,
+            session,
+            question_key="agent_title",
+            answer_summary="agent title captured",
+            agent_title=agent_title_value,
+        )
+        return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
     if command in ARCLINK_PUBLIC_BOT_STANDARD_PACKAGE_COMMANDS:
-        return _package_prompt_reply(session, standard=True, bot_display_name=raven)
+        return _identity_or_package_prompt(conn, session, base_domain=base_domain, standard=True, bot_display_name=raven)
     if command in ARCLINK_PUBLIC_BOT_PACKAGE_COMMANDS:
-        session, checkout_buttons = _ensure_direct_checkout_buttons(conn, session, base_domain=base_domain)
-        return _package_prompt_reply(session, bot_display_name=raven, checkout_buttons=checkout_buttons)
+        return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
     if command in {"name", "/name"}:
         # Bare /name (or the Update Name button) opens a short listening lane.
         # The next plain-text message becomes the display name.
@@ -3554,15 +3947,17 @@ def handle_arclink_public_bot_turn(
             answer_summary="display name captured",
             display_name_hint=name,
         )
-        session, checkout_buttons = _ensure_direct_checkout_buttons(conn, session, base_domain=base_domain)
-        return _package_prompt_reply(
+        return _identity_or_package_prompt(
+            conn,
             session,
+            base_domain=base_domain,
             greeting=f"Welcome aboard, {name}.",
             bot_display_name=raven,
-            checkout_buttons=checkout_buttons,
         )
     plan_answer = _command_value(message, command, ("plan", "/plan"))
     if plan_answer is not None:
+        if not _session_has_agent_identity(session):
+            return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
         plan = _normalize_public_bot_plan(plan_answer)
         if plan not in ARCLINK_PUBLIC_BOT_PLANS:
             raise ArcLinkPublicBotError(f"unsupported ArcLink public bot plan: {plan or 'blank'}")
@@ -3617,6 +4012,8 @@ def handle_arclink_public_bot_turn(
     if command in {"checkout", "/checkout"}:
         if stripe_client is None:
             raise ArcLinkPublicBotError("checkout requires an injected Stripe client")
+        if not _session_has_agent_identity(session):
+            return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
         selected_plan = _normalize_public_bot_plan(str(session.get("selected_plan_id") or "founders"))
         return _open_first_agent_checkout_turn(
             conn,

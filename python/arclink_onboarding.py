@@ -59,6 +59,8 @@ ARCLINK_ONBOARDING_EVENT_TYPES = frozenset(
     }
 )
 ARCLINK_ONBOARDING_SESSION_TTL_SECONDS = 24 * 60 * 60
+ARCLINK_AGENT_NAME_MAX_CHARS = 40
+ARCLINK_AGENT_TITLE_MAX_CHARS = 80
 
 _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
@@ -106,6 +108,35 @@ def _reject_secret_material(value: Any, *, path: str) -> None:
         return
     if _SECRET_KEY_RE.search(path) or _PLAINTEXT_SECRET_RE.search(text):
         raise ArcLinkOnboardingError(f"public onboarding state cannot store secret material at {path}")
+
+
+def _clean_agent_identity_value(value: str, *, field: str, max_chars: int, required: bool = False) -> str:
+    clean = str(value or "").strip()
+    if required and not clean:
+        raise ArcLinkOnboardingError(f"{field} is required")
+    if clean:
+        _reject_secret_material(clean, path=f"$.{field}")
+    if len(clean) > max_chars:
+        raise ArcLinkOnboardingError(f"{field} must be {max_chars} characters or fewer")
+    return clean
+
+
+def clean_arclink_agent_name(value: str, *, required: bool = False) -> str:
+    return _clean_agent_identity_value(
+        value,
+        field="agent_name",
+        max_chars=ARCLINK_AGENT_NAME_MAX_CHARS,
+        required=required,
+    )
+
+
+def clean_arclink_agent_title(value: str, *, required: bool = False) -> str:
+    return _clean_agent_identity_value(
+        value,
+        field="agent_title",
+        max_chars=ARCLINK_AGENT_TITLE_MAX_CHARS,
+        required=required,
+    )
 
 
 def _clean_channel(channel: str) -> str:
@@ -260,6 +291,8 @@ def _update_session(
         "current_step",
         "email_hint",
         "display_name_hint",
+        "agent_name",
+        "agent_title",
         "selected_plan_id",
         "selected_model_id",
         "user_id",
@@ -331,6 +364,8 @@ def create_or_resume_arclink_onboarding_session(
     session_id: str = "",
     email_hint: str = "",
     display_name_hint: str = "",
+    agent_name: str = "",
+    agent_title: str = "",
     selected_plan_id: str = "",
     selected_model_id: str = "",
     current_step: str = "started",
@@ -343,10 +378,14 @@ def create_or_resume_arclink_onboarding_session(
     for key, value in {
         "email_hint": email_hint,
         "display_name_hint": display_name_hint,
+        "agent_name": agent_name,
+        "agent_title": agent_title,
         "selected_plan_id": selected_plan_id,
         "selected_model_id": selected_model_id,
     }.items():
         _reject_secret_material(value, path=f"$.{key}")
+    clean_agent_name = clean_arclink_agent_name(agent_name)
+    clean_agent_title = clean_arclink_agent_title(agent_title)
     existing = None if force_new else _active_session_row(conn, channel=clean_channel, channel_identity=clean_identity)
     if existing is None and not force_new and clean_channel == "web":
         existing = _active_email_session_row(conn, channel=clean_channel, email_hint=email_hint)
@@ -355,6 +394,8 @@ def create_or_resume_arclink_onboarding_session(
         for key, value in (
             ("email_hint", email_hint),
             ("display_name_hint", display_name_hint),
+            ("agent_name", clean_agent_name),
+            ("agent_title", clean_agent_title),
             ("selected_plan_id", selected_plan_id),
             ("selected_model_id", selected_model_id),
         ):
@@ -375,9 +416,9 @@ def create_or_resume_arclink_onboarding_session(
         """
         INSERT INTO arclink_onboarding_sessions (
           session_id, channel, channel_identity, status, current_step,
-          email_hint, display_name_hint, selected_plan_id, selected_model_id,
+          email_hint, display_name_hint, agent_name, agent_title, selected_plan_id, selected_model_id,
           checkout_state, metadata_json, created_at, updated_at, expires_at
-        ) VALUES (?, ?, ?, 'started', ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'started', ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
         """,
         (
             clean_session_id,
@@ -386,6 +427,8 @@ def create_or_resume_arclink_onboarding_session(
             current_step,
             str(email_hint or "").strip(),
             str(display_name_hint or "").strip(),
+            clean_agent_name,
+            clean_agent_title,
             str(selected_plan_id or "").strip(),
             str(selected_model_id or "").strip(),
             _json(metadata),
@@ -413,6 +456,8 @@ def answer_arclink_onboarding_question(
     answer_summary: str = "",
     email_hint: str = "",
     display_name_hint: str = "",
+    agent_name: str = "",
+    agent_title: str = "",
     selected_plan_id: str = "",
     selected_model_id: str = "",
 ) -> dict[str, Any]:
@@ -421,6 +466,14 @@ def answer_arclink_onboarding_question(
     for key, value in (
         ("email_hint", email_hint),
         ("display_name_hint", display_name_hint),
+        (
+            "agent_name",
+            clean_arclink_agent_name(agent_name),
+        ),
+        (
+            "agent_title",
+            clean_arclink_agent_title(agent_title),
+        ),
         ("selected_plan_id", selected_plan_id),
         ("selected_model_id", selected_model_id),
     ):
@@ -461,12 +514,15 @@ def prepare_arclink_onboarding_deployment(
     )
     selected_plan_id = str(session.get("selected_plan_id") or "").strip()
     agent_count = _plan_agent_count(selected_plan_id)
+    agent_name = str(session.get("agent_name") or "").strip()
+    agent_title = str(session.get("agent_title") or "").strip()
     deployment_id = str(session.get("deployment_id") or "") or _stable_id("arcdep", session_id, length=18)
     upsert_arclink_user(
         conn,
         user_id=user_id,
         email=email_hint,
         display_name=str(session.get("display_name_hint") or ""),
+        agent_title=agent_title,
     )
     deployment_ids = [deployment_id]
     deployment_ids.extend(_stable_id("arcdep", session_id, f"agent:{idx}", length=18) for idx in range(2, agent_count + 1))
@@ -483,6 +539,11 @@ def prepare_arclink_onboarding_deployment(
             "bundle_agent_index": idx,
             "bundle_primary_deployment_id": deployment_id,
         }
+        deployment_agent_name = agent_name
+        if idx == 2 and deployment_agent_name:
+            deployment_agent_name = f"{deployment_agent_name} (Chief)"
+        elif idx == 3 and deployment_agent_name:
+            deployment_agent_name = f"{deployment_agent_name} (Bosun)"
         explicit_prefix = str(prefix or "").strip() if idx == 1 else ""
         if explicit_prefix:
             reserve_arclink_deployment_prefix(
@@ -491,6 +552,8 @@ def prepare_arclink_onboarding_deployment(
                 user_id=user_id,
                 prefix=explicit_prefix,
                 base_domain=base_domain,
+                agent_name=deployment_agent_name,
+                agent_title=agent_title,
                 status="entitlement_required",
                 metadata=deployment_metadata,
             )
@@ -500,6 +563,8 @@ def prepare_arclink_onboarding_deployment(
                 deployment_id=current_deployment_id,
                 user_id=user_id,
                 base_domain=base_domain,
+                agent_name=deployment_agent_name,
+                agent_title=agent_title,
                 status="entitlement_required",
                 metadata=deployment_metadata,
             )
@@ -545,6 +610,8 @@ def open_arclink_onboarding_checkout(
             "arclink_deployment_id": deployment_id,
             "arclink_purchase_kind": purchase_kind,
             "arclink_plan_id": selected_plan_id,
+            "arclink_agent_name": str(session.get("agent_name") or ""),
+            "arclink_agent_title": str(session.get("agent_title") or ""),
         },
         line_items=line_items,
     )
@@ -720,6 +787,8 @@ def handoff_arclink_onboarding_channel(
         channel_identity=target_channel_identity,
         email_hint=str(source.get("email_hint") or ""),
         display_name_hint=str(source.get("display_name_hint") or ""),
+        agent_name=str(source.get("agent_name") or ""),
+        agent_title=str(source.get("agent_title") or ""),
         selected_plan_id=str(source.get("selected_plan_id") or ""),
         selected_model_id=str(source.get("selected_model_id") or ""),
         metadata={"handoff_from_session_id": source_session_id},

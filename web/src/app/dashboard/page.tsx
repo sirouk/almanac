@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -58,7 +58,9 @@ interface BillingLifecycle {
 
 interface Deployment {
   deployment_id: string;
+  agent_name?: string;
   agent_label?: string;
+  agent_title?: string;
   hostname?: string;
   prefix?: string;
   base_domain?: string;
@@ -349,6 +351,36 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleAgentIdentitySubmit(event: FormEvent<HTMLFormElement>, deploymentId: string) {
+    event.preventDefault();
+    setError("");
+    const form = new FormData(event.currentTarget);
+    const agentName = String(form.get("agent_name") || "").trim();
+    const agentTitle = String(form.get("agent_title") || "").trim();
+    const result = await api.updateAgentIdentity({
+      deployment_id: deploymentId,
+      agent_name: agentName,
+      agent_title: agentTitle,
+    });
+    if (result.status !== 200) {
+      setError("Could not update Agent identity.");
+      return;
+    }
+    const deployment = (result.data as { deployment?: Deployment }).deployment;
+    if (!deployment) return;
+    setData((current) => {
+      if (!current?.deployments) return current;
+      return {
+        ...current,
+        deployments: current.deployments.map((item) => (
+          item.deployment_id === deployment.deployment_id
+            ? { ...item, agent_label: deployment.agent_name || item.agent_label, agent_title: deployment.agent_title }
+            : item
+        )),
+      };
+    });
+  }
+
   useEffect(() => {
     let mounted = true;
     Promise.all([
@@ -506,6 +538,37 @@ export default function DashboardPage() {
                 <InfoPanel title="Primary Agent" value={activeDeployment ? deploymentTitle(activeDeployment) : "Not launched"} detail={activeDeployment?.deployment_id || "Start launch to create the first private workspace."} />
                 <InfoPanel title="Service Health" value={`${health.healthy}/${health.total || 0}`} detail={health.attention ? `${health.attention} service signals need attention.` : "All reported services are clear."} />
               </div>
+              {activeDeployment && (
+                <form onSubmit={(event) => handleAgentIdentitySubmit(event, activeDeployment.deployment_id)} className="grid gap-3 border border-border bg-surface/80 p-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+                  <div>
+                    <label htmlFor="agent-identity-name" className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Agent Name</label>
+                    <input
+                      id="agent-identity-name"
+                      name="agent_name"
+                      type="text"
+                      required
+                      maxLength={40}
+                      defaultValue={deploymentTitle(activeDeployment)}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="agent-identity-title" className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Agent Title</label>
+                    <input
+                      id="agent-identity-title"
+                      name="agent_title"
+                      type="text"
+                      required
+                      maxLength={80}
+                      defaultValue={activeDeployment.agent_title || ""}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                    />
+                  </div>
+                  <button type="submit" className="rounded border border-signal-orange/60 px-4 py-2 text-sm font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet">
+                    Update Identity
+                  </button>
+                </form>
+              )}
               <DashboardRecoveryRail
                 deployment={activeDeployment}
                 entitlementState={entitlementState}

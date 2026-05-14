@@ -1031,6 +1031,51 @@
         ]
       }
     },
+    "/api/v1/user/agent-identity": {
+      "post": {
+        "operationId": "user_agent_identity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "agent_name": {
+                    "type": "string"
+                  },
+                  "agent_title": {
+                    "type": "string"
+                  },
+                  "deployment_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deployment_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Agent identity updated"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Rename or retitle a user's Agent",
+        "tags": [
+          "user"
+        ]
+      }
+    },
     "/api/v1/user/billing": {
       "get": {
         "operationId": "user_billing",

@@ -17,6 +17,8 @@ type ResumeState = {
   claimToken: string;
   cancelToken: string;
   name: string;
+  agentName: string;
+  agentTitle: string;
   email: string;
   planId: PlanId;
   checkoutUrl: string;
@@ -46,6 +48,8 @@ const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
   const [name, setName] = useState("");
+  const [agentName, setAgentName] = useState("");
+  const [agentTitle, setAgentTitle] = useState("");
   const [email, setEmail] = useState("");
   const [planId, setPlanId] = useState<PlanId>("founders");
   const [showStandardPlans, setShowStandardPlans] = useState(false);
@@ -88,6 +92,8 @@ export default function OnboardingPage() {
       if (parsed.claimToken) setClaimToken(parsed.claimToken);
       if (parsed.cancelToken) setCancelToken(parsed.cancelToken);
       if (parsed.name) setName(parsed.name);
+      if (parsed.agentName) setAgentName(parsed.agentName);
+      if (parsed.agentTitle) setAgentTitle(parsed.agentTitle);
       if (parsed.email) setEmail(parsed.email);
       if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
       if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
@@ -107,13 +113,13 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (step === "start") return;
-    const snapshot: ResumeState = { step, sessionId, claimToken, cancelToken, name, email, planId, checkoutUrl };
+    const snapshot: ResumeState = { step, sessionId, claimToken, cancelToken, name, agentName, agentTitle, email, planId, checkoutUrl };
     try {
       window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
     } catch {
       // localStorage quota or disabled - drop silently.
     }
-  }, [step, sessionId, claimToken, cancelToken, name, email, planId, checkoutUrl]);
+  }, [step, sessionId, claimToken, cancelToken, name, agentName, agentTitle, email, planId, checkoutUrl]);
 
   function webContactId() {
     const key = "arclink_web_contact_id";
@@ -191,6 +197,8 @@ export default function OnboardingPage() {
         question_key: "name",
         answer_summary: name,
         display_name: name,
+        agent_name: agentName,
+        agent_title: agentTitle,
         email,
       });
       if (res.status === 200) {
@@ -272,7 +280,7 @@ export default function OnboardingPage() {
           />
           <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-[#E7E6E6]/35">
             {step === "start" && "Step 1 of 3 - First contact"}
-            {step === "questions" && "Step 2 of 3 - Name and contact"}
+            {step === "questions" && "Step 2 of 3 - Agent identity"}
             {step === "checkout" && "Step 3 of 3 - Stripe handoff"}
             {step === "done" && "Step 3 of 3 - Stripe handoff"}
           </p>
@@ -353,7 +361,7 @@ export default function OnboardingPage() {
           {step === "questions" && (
             <form onSubmit={handleAnswer} className="mt-6 space-y-4">
               <div>
-                <label htmlFor="name" className="font-body block text-sm text-[#E7E6E6]/55">Display Name</label>
+                <label htmlFor="name" className="font-body block text-sm text-[#E7E6E6]/55">Captain Name</label>
                 <input
                   id="name"
                   type="text"
@@ -362,6 +370,32 @@ export default function OnboardingPage() {
                   onChange={(e) => setName(e.target.value)}
                   className="mt-1 w-full rounded border border-white/10 bg-[#080808] px-3 py-2 text-[#E7E6E6] outline-none transition focus:border-[#FB5005]"
                   placeholder="Your name or org"
+                />
+              </div>
+              <div>
+                <label htmlFor="agent-name" className="font-body block text-sm text-[#E7E6E6]/55">Agent Name</label>
+                <input
+                  id="agent-name"
+                  type="text"
+                  required
+                  maxLength={40}
+                  value={agentName}
+                  onChange={(e) => setAgentName(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/10 bg-[#080808] px-3 py-2 text-[#E7E6E6] outline-none transition focus:border-[#FB5005]"
+                  placeholder="Bob"
+                />
+              </div>
+              <div>
+                <label htmlFor="agent-title" className="font-body block text-sm text-[#E7E6E6]/55">Agent Title</label>
+                <input
+                  id="agent-title"
+                  type="text"
+                  required
+                  maxLength={80}
+                  value={agentTitle}
+                  onChange={(e) => setAgentTitle(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/10 bg-[#080808] px-3 py-2 text-[#E7E6E6] outline-none transition focus:border-[#FB5005]"
+                  placeholder="the know-it-all"
                 />
               </div>
               <div>
@@ -422,7 +456,7 @@ export default function OnboardingPage() {
               ) : (
                 <>
                   <p className="font-body text-sm text-[#1AC153]">
-                    Onboarding complete. I am preparing your deployment.
+                    Onboarding complete. I am preparing your ArcPod.
                   </p>
                   <Link
                     href="/dashboard"

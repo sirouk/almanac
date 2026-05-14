@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import os
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -323,6 +324,44 @@ def test_placement_rejects_secret_required_tags() -> None:
     print("PASS test_placement_rejects_secret_required_tags")
 
 
+def test_standard_unit_strategy_uses_inventory_asu_available() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_asu")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_asu")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_asu")
+    conn = memory_db(control)
+    h1 = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=20)
+    h2 = fleet.register_fleet_host(conn, hostname="h2.test", capacity_slots=20)
+    inventory.register_inventory_machine(
+        conn,
+        provider="manual",
+        hostname="h1.test",
+        status="ready",
+        asu_capacity=2,
+        asu_consumed=0,
+        machine_host_link=h1["host_id"],
+    )
+    inventory.register_inventory_machine(
+        conn,
+        provider="manual",
+        hostname="h2.test",
+        status="ready",
+        asu_capacity=8,
+        asu_consumed=0,
+        machine_host_link=h2["host_id"],
+    )
+    old = os.environ.get("ARCLINK_FLEET_PLACEMENT_STRATEGY")
+    os.environ["ARCLINK_FLEET_PLACEMENT_STRATEGY"] = "standard_unit"
+    try:
+        placement = fleet.place_deployment(conn, deployment_id="dep_asu")
+    finally:
+        if old is None:
+            os.environ.pop("ARCLINK_FLEET_PLACEMENT_STRATEGY", None)
+        else:
+            os.environ["ARCLINK_FLEET_PLACEMENT_STRATEGY"] = old
+    expect(placement["host_id"] == h2["host_id"], str(placement))
+    print("PASS test_standard_unit_strategy_uses_inventory_asu_available")
+
+
 if __name__ == "__main__":
     test_register_fleet_host()
     test_register_existing_fleet_host_updates_config_without_touching_load()
@@ -340,4 +379,5 @@ if __name__ == "__main__":
     test_remove_placement()
     test_region_filter()
     test_placement_rejects_secret_required_tags()
-    print(f"\nAll 16 fleet tests passed.")
+    test_standard_unit_strategy_uses_inventory_asu_available()
+    print(f"\nAll 17 fleet tests passed.")

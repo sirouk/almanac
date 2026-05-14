@@ -110,6 +110,59 @@ def test_plan_agent_counts_are_applied_before_entitlement_gate() -> None:
     print("PASS test_plan_agent_counts_are_applied_before_entitlement_gate")
 
 
+def test_onboarding_agent_identity_flows_to_deployments_and_checkout_metadata() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_agent_identity_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_onboarding_agent_identity_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_agent_identity_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="identity@example.test",
+        session_id="onb_agent_identity",
+        email_hint="identity@example.test",
+        display_name_hint="Captain Vale",
+        selected_plan_id="scale",
+    )
+    answered = onboarding.answer_arclink_onboarding_question(
+        conn,
+        session_id=session["session_id"],
+        question_key="name",
+        answer_summary="Captain and Agent identity",
+        agent_name="Atlas",
+        agent_title="the right hand",
+    )
+    expect(answered["agent_name"] == "Atlas", str(answered))
+    expect(answered["agent_title"] == "the right hand", str(answered))
+    opened = onboarding.open_arclink_onboarding_checkout(
+        conn,
+        session_id=session["session_id"],
+        stripe_client=stripe,
+        price_id="price_scale",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        base_domain="example.test",
+    )
+    checkout = stripe.checkout_sessions[opened["checkout_session_id"]]
+    expect(checkout["metadata"]["arclink_agent_name"] == "Atlas", str(checkout))
+    expect(checkout["metadata"]["arclink_agent_title"] == "the right hand", str(checkout))
+    rows = conn.execute(
+        """
+        SELECT agent_name, agent_title, metadata_json
+        FROM arclink_deployments
+        WHERE user_id = ?
+        ORDER BY json_extract(metadata_json, '$.bundle_agent_index')
+        """,
+        (opened["user_id"],),
+    ).fetchall()
+    expect([row["agent_name"] for row in rows] == ["Atlas", "Atlas (Chief)", "Atlas (Bosun)"], str([dict(row) for row in rows]))
+    expect({row["agent_title"] for row in rows} == {"the right hand"}, str([dict(row) for row in rows]))
+    user = conn.execute("SELECT agent_title FROM arclink_users WHERE user_id = ?", (opened["user_id"],)).fetchone()
+    expect(user["agent_title"] == "the right hand", str(dict(user)))
+    print("PASS test_onboarding_agent_identity_flows_to_deployments_and_checkout_metadata")
+
+
 def test_onboarding_uses_readable_random_unique_prefixes() -> None:
     control = load_module("arclink_control.py", "arclink_control_onboarding_prefix_pool_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_prefix_pool_test")
@@ -528,6 +581,7 @@ def test_web_telegram_discord_onboarding_parity() -> None:
 def main() -> int:
     test_public_onboarding_sessions_resume_without_duplicate_active_rows()
     test_plan_agent_counts_are_applied_before_entitlement_gate()
+    test_onboarding_agent_identity_flows_to_deployments_and_checkout_metadata()
     test_onboarding_uses_readable_random_unique_prefixes()
     test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked()
     test_successful_checkout_uses_entitlement_gate_before_provisioning_ready()
@@ -537,7 +591,7 @@ def main() -> int:
     test_stale_onboarding_session_expires_and_allows_reentry()
     test_duplicate_active_web_onboarding_by_email_reuses_session()
     test_web_telegram_discord_onboarding_parity()
-    print("PASS all 11 ArcLink onboarding tests")
+    print("PASS all 12 ArcLink onboarding tests")
     return 0
 
 

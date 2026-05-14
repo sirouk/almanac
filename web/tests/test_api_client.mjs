@@ -63,6 +63,7 @@ const api = {
   userProvisioning: () => request("/user/provisioning", {}, "user"),
   userCredentials: () => request("/user/credentials", {}, "user"),
   acknowledgeCredential: (body) => request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }, "user"),
+  updateAgentIdentity: (body) => request("/user/agent-identity", { method: "POST", body: JSON.stringify(body) }, "user"),
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
   createShareGrant: (body) => request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
   approveShareGrant: (body) => request("/user/share-grants/approve", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -159,6 +160,15 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/user/credentials/acknowledge"));
     assert.equal(lastFetchOpts.method, "POST");
     assert.equal(JSON.parse(lastFetchOpts.body).handoff_id, "cred_1");
+  });
+
+  it("updateAgentIdentity POSTs to /user/agent-identity", async () => {
+    await api.updateAgentIdentity({ deployment_id: "dep_1", agent_name: "Atlas", agent_title: "the right hand" });
+    assert.ok(lastFetchUrl.endsWith("/user/agent-identity"));
+    assert.equal(lastFetchOpts.method, "POST");
+    const body = JSON.parse(lastFetchOpts.body);
+    assert.equal(body.agent_name, "Atlas");
+    assert.equal(body.agent_title, "the right hand");
   });
 
   it("userLinkedResources GETs /user/linked-resources", async () => {

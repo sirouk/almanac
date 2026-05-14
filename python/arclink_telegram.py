@@ -342,7 +342,11 @@ def _hermes_agent_source_candidates(env: Mapping[str, str] | None = None) -> lis
         if key in seen:
             continue
         seen.add(key)
-        if (path / "hermes_cli" / "commands.py").exists():
+        try:
+            has_commands = (path / "hermes_cli" / "commands.py").exists()
+        except OSError:
+            has_commands = False
+        if has_commands:
             candidates.append(path)
     return candidates
 
@@ -434,21 +438,29 @@ def arclink_public_bot_telegram_active_command_plan(
     raw_agent = list(agent_commands) if agent_commands is not None else arclink_public_bot_telegram_agent_commands(env=env)
     normalized_agent: list[dict[str, str]] = []
     seen_agent: set[str] = set()
+    raw_agent_names: set[str] = set()
     suppressed: list[str] = []
     for item in raw_agent:
         name = _telegram_command_name(str(item.get("command") or ""))
         description = str(item.get("description") or "").strip()
-        if not name or not description or name in seen_agent:
+        if not name or not description:
+            continue
+        raw_agent_names.add(name)
+        if name in seen_agent:
             continue
         if name in ARCLINK_TELEGRAM_POLICY_SUPPRESSED_AGENT_COMMANDS:
             suppressed.append(name)
+            continue
+        if name in ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES:
+            continue
+        if name in ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES:
             continue
         normalized_agent.append({"command": name, "description": description[:256]})
         seen_agent.add(name)
 
     raven_command = ""
     for candidate in ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES:
-        if candidate not in seen_agent:
+        if candidate not in raw_agent_names:
             raven_command = candidate
             break
     if not raven_command:
@@ -456,7 +468,7 @@ def arclink_public_bot_telegram_active_command_plan(
         # any upstream collision is obvious in the operator alert.
         for suffix in range(10):
             candidate = f"arclink_ops{suffix}"
-            if candidate not in seen_agent:
+            if candidate not in raw_agent_names:
                 raven_command = candidate
                 break
     if not raven_command:
@@ -474,8 +486,8 @@ def arclink_public_bot_telegram_active_command_plan(
         if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
             break
 
-    legacy_conflicts = sorted(seen_agent & ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES)
-    hard_conflicts = sorted(seen_agent & set(ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES))
+    legacy_conflicts = sorted(raw_agent_names & ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES)
+    hard_conflicts = sorted(raw_agent_names & set(ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES))
     hidden_count = max(0, len(normalized_agent) + 1 - len(commands))
     return {
         "commands": commands,
@@ -851,9 +863,8 @@ def handle_telegram_update(
     if parsed.get("telegram_native_callback"):
         turn_metadata["telegram_native_callback"] = True
     if str(parsed.get("text") or "").strip().startswith("/"):
-        turn_metadata["active_agent_command_names"] = [
-            item["command"] for item in arclink_public_bot_telegram_agent_commands()
-        ]
+        active_plan = arclink_public_bot_telegram_active_command_plan()
+        turn_metadata["active_agent_command_names"] = list(active_plan.get("agent_command_names") or [])
     turn = handle_arclink_public_bot_turn(
         conn,
         channel="telegram",

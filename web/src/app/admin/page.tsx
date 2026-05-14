@@ -967,7 +967,11 @@ function ScaleOperationsSection({ snapshot }: { snapshot: Record<string, unknown
   const attempts = (snapshot?.recent_action_attempts as Record<string, unknown>[]) || [];
   const rollouts = (snapshot?.active_rollouts as Record<string, unknown>[]) || [];
   const placements = (snapshot?.placements as Record<string, unknown>[]) || [];
+  const inventory = ((snapshot?.inventory as Record<string, unknown>)?.machines as Record<string, unknown>[]) || [];
+  const placementStrategy = ((snapshot?.inventory as Record<string, unknown>)?.strategy as string) || "headroom";
   const lastExecutor = (snapshot?.last_executor_result as Record<string, unknown>) || {};
+  const totalAsu = inventory.reduce((sum, row) => sum + Number(row.asu_capacity || 0), 0);
+  const consumedAsu = inventory.reduce((sum, row) => sum + Number(row.asu_consumed || 0), 0);
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
       <div className="flex items-center justify-between">
@@ -981,6 +985,43 @@ function ScaleOperationsSection({ snapshot }: { snapshot: Record<string, unknown
             <MiniMetric label="Active" value={capacity.active_hosts as number || 0} />
             <MiniMetric label="Slots" value={capacity.total_slots as number || 0} />
             <MiniMetric label="Free" value={capacity.available_slots as number || 0} />
+            <MiniMetric label="ASU" value={totalAsu} />
+          </div>
+          <div className="mt-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-xs font-semibold uppercase text-soft-white/40">Inventory</h4>
+              <span className="font-mono text-xs text-soft-white/40">{placementStrategy} · {consumedAsu}/{totalAsu} ASU</span>
+            </div>
+            {inventory.length ? (
+              <div className="overflow-x-auto border border-border/60">
+                <table className="w-full min-w-[640px] text-left text-xs">
+                  <thead className="bg-carbon text-soft-white/45">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Machine</th>
+                      <th className="px-3 py-2 font-medium">Provider</th>
+                      <th className="px-3 py-2 font-medium">Region</th>
+                      <th className="px-3 py-2 font-medium">ASU</th>
+                      <th className="px-3 py-2 font-medium">Last Probe</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inventory.slice(0, 8).map((row, i) => (
+                      <tr key={i} className="border-t border-border/60 bg-carbon/60">
+                        <td className="px-3 py-2 font-mono text-soft-white/80">{(row.hostname as string) || (row.machine_id as string) || "unknown"}</td>
+                        <td className="px-3 py-2 text-soft-white/60">{(row.provider as string) || "manual"}</td>
+                        <td className="px-3 py-2 text-soft-white/60">{(row.region as string) || "-"}</td>
+                        <td className="px-3 py-2 text-soft-white/60">{Number(row.asu_consumed || 0)}/{Number(row.asu_capacity || 0)}</td>
+                        <td className="px-3 py-2 text-soft-white/40">{(row.last_probed_at as string) || "-"}</td>
+                        <td className="px-3 py-2"><StatusBadge status={(row.status as string) || "unknown"} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-xs text-soft-white/40">No inventory machines registered.</p>
+            )}
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <OperatorList title="Placements" rows={placements} primary="deployment_id" secondary="host_id" statusKey="status" empty="No placements recorded." />

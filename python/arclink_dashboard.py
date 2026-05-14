@@ -109,7 +109,11 @@ def _action_worker_liveness_probe(env: Mapping[str, str]) -> dict[str, Any]:
             state_dir = str(Path(priv_dir) / "state")
         status_dir = str(Path(state_dir) / "docker" / "jobs")
     status_file = Path(status_dir) / "control-action-worker.json"
-    if not status_file.is_file():
+    try:
+        status_file_exists = status_file.is_file()
+    except OSError:
+        status_file_exists = False
+    if not status_file_exists:
         return {"name": "control_action_worker", "ok": False, "detail": "missing_status_file"}
     try:
         data = json.loads(status_file.read_text(encoding="utf-8"))
@@ -243,10 +247,27 @@ def build_scale_operations_snapshot(
     stale_action_threshold_seconds: int = 3600,
 ) -> dict[str, Any]:
     """Build operator-visible scale operations read model."""
-    from arclink_fleet import fleet_capacity_summary, list_fleet_hosts
+    from arclink_fleet import fleet_capacity_summary
+    from arclink_inventory import list_inventory_machines
     from arclink_rollout import list_rollouts
 
     capacity = fleet_capacity_summary(conn)
+    inventory = [
+        {
+            "machine_id": str(row["machine_id"]),
+            "provider": str(row["provider"]),
+            "hostname": str(row["hostname"]),
+            "ssh_host": str(row["ssh_host"] or ""),
+            "ssh_user": str(row["ssh_user"] or ""),
+            "region": str(row["region"] or ""),
+            "status": str(row["status"]),
+            "asu_capacity": float(row["asu_capacity"] or 0),
+            "asu_consumed": float(row["asu_consumed"] or 0),
+            "last_probed_at": str(row["last_probed_at"] or ""),
+            "machine_host_link": str(row["machine_host_link"] or ""),
+        }
+        for row in list_inventory_machines(conn)
+    ]
 
     # Stale queued actions (queued for over threshold)
     from arclink_control import parse_utc_iso, utc_now
@@ -324,6 +345,10 @@ def build_scale_operations_snapshot(
     return {
         "fleet_capacity": capacity,
         "fleet_surface": "internal_read_only",
+        "inventory": {
+            "machines": inventory,
+            "strategy": os.environ.get("ARCLINK_FLEET_PLACEMENT_STRATEGY", "headroom").strip() or "headroom",
+        },
         "placements": placements,
         "stale_actions": stale_actions,
         "recent_action_attempts": recent_attempts,
@@ -844,6 +869,7 @@ def read_arclink_user_dashboard(
             {
                 "deployment_id": str(dep["deployment_id"] or ""),
                 "agent_label": _deployment_agent_label(conn, dep, metadata=metadata),
+                "agent_title": str(dep.get("agent_title") or ""),
                 "status": str(dep["status"] or ""),
                 "prefix": str(dep["prefix"] or ""),
                 "base_domain": str(dep["base_domain"] or ""),

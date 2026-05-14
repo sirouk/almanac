@@ -470,6 +470,10 @@ test.describe("Accessibility", () => {
     await expect(nameInput).toBeVisible();
     const label = page.locator('label[for="name"]');
     await expect(label).toBeVisible();
+    await expect(page.locator('label[for="agent-name"]')).toHaveText("Agent Name");
+    await expect(page.locator('input[id="agent-name"]')).toHaveAttribute("required", "");
+    await expect(page.locator('label[for="agent-title"]')).toHaveText("Agent Title");
+    await expect(page.locator('input[id="agent-title"]')).toHaveAttribute("required", "");
   });
 
   test("login form focus state works", async ({ page }) => {
@@ -672,6 +676,8 @@ test.describe("Onboarding flow", () => {
 
     // Step 2: Answer; the site should prepare Stripe immediately after this.
     await page.fill('input[id="name"]', "New User");
+    await page.fill('input[id="agent-name"]', "Atlas");
+    await page.fill('input[id="agent-title"]', "the right hand");
     await page.fill('input[id="email"]', "new.user@example.test");
     await page.click('button[type="submit"]');
     await expect(page.getByRole("heading", { name: "Stripe Handoff Ready" })).toBeVisible();

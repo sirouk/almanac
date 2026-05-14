@@ -963,6 +963,11 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           user_id TEXT PRIMARY KEY,
           email TEXT NOT NULL DEFAULT '',
           display_name TEXT NOT NULL DEFAULT '',
+          agent_title TEXT NOT NULL DEFAULT '',
+          captain_role TEXT NOT NULL DEFAULT '',
+          captain_mission TEXT NOT NULL DEFAULT '',
+          captain_treatment TEXT NOT NULL DEFAULT '',
+          wrapped_frequency TEXT NOT NULL DEFAULT 'daily' CHECK (wrapped_frequency IN ('daily', 'weekly', 'monthly')),
           status TEXT NOT NULL CHECK (status IN ('active', 'suspended', 'merged')),
           password_hash TEXT NOT NULL DEFAULT '',
           stripe_customer_id TEXT NOT NULL DEFAULT '',
@@ -991,6 +996,9 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           agent_id TEXT NOT NULL DEFAULT '',
           session_id TEXT NOT NULL DEFAULT '',
           bootstrap_request_id TEXT NOT NULL DEFAULT '',
+          agent_name TEXT NOT NULL DEFAULT '',
+          agent_title TEXT NOT NULL DEFAULT '',
+          asu_weight REAL NOT NULL DEFAULT 1.0,
           status TEXT NOT NULL CHECK (status IN ('reserved', 'entitlement_required', 'provisioning_ready', 'provisioning', 'active', 'provisioning_failed', 'teardown_requested', 'teardown_running', 'teardown_complete', 'teardown_failed', 'torn_down', 'cancelled')),
           metadata_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL,
@@ -1197,6 +1205,8 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           current_step TEXT NOT NULL DEFAULT '',
           email_hint TEXT NOT NULL DEFAULT '',
           display_name_hint TEXT NOT NULL DEFAULT '',
+          agent_name TEXT NOT NULL DEFAULT '',
+          agent_title TEXT NOT NULL DEFAULT '',
           selected_plan_id TEXT NOT NULL DEFAULT '',
           selected_model_id TEXT NOT NULL DEFAULT '',
           user_id TEXT NOT NULL DEFAULT '',
@@ -1289,6 +1299,81 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           target_id TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
           PRIMARY KEY (action_id, operation_kind, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_inventory_machines (
+          machine_id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL CHECK (provider IN ('local', 'manual', 'hetzner', 'linode')),
+          provider_resource_id TEXT NOT NULL DEFAULT '',
+          hostname TEXT NOT NULL,
+          ssh_host TEXT NOT NULL DEFAULT '',
+          ssh_user TEXT NOT NULL DEFAULT '',
+          region TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'draining', 'degraded', 'removed')),
+          asu_capacity REAL NOT NULL DEFAULT 0,
+          asu_consumed REAL NOT NULL DEFAULT 0,
+          hardware_summary_json TEXT NOT NULL DEFAULT '{}',
+          connectivity_summary_json TEXT NOT NULL DEFAULT '{}',
+          machine_host_link TEXT NOT NULL DEFAULT '',
+          registered_at TEXT NOT NULL,
+          last_probed_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_pod_messages (
+          message_id TEXT PRIMARY KEY,
+          sender_deployment_id TEXT NOT NULL,
+          recipient_deployment_id TEXT NOT NULL,
+          sender_user_id TEXT NOT NULL,
+          recipient_user_id TEXT NOT NULL,
+          body TEXT NOT NULL DEFAULT '',
+          attachments_json TEXT NOT NULL DEFAULT '[]',
+          status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'delivered', 'failed', 'redacted')),
+          created_at TEXT NOT NULL,
+          delivered_at TEXT NOT NULL DEFAULT '',
+          audit_id TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_pod_migrations (
+          migration_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL,
+          source_host_id TEXT NOT NULL DEFAULT '',
+          target_host_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'running', 'succeeded', 'failed', 'rolled_back', 'cancelled')),
+          operation_idempotency_key TEXT NOT NULL DEFAULT '',
+          capture_manifest_json TEXT NOT NULL DEFAULT '{}',
+          rollback_metadata_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_crew_recipes (
+          recipe_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          preset TEXT NOT NULL DEFAULT '',
+          capacity TEXT NOT NULL DEFAULT '',
+          role TEXT NOT NULL DEFAULT '',
+          mission TEXT NOT NULL DEFAULT '',
+          treatment TEXT NOT NULL DEFAULT '',
+          soul_overlay_json TEXT NOT NULL DEFAULT '{}',
+          applied_at TEXT NOT NULL DEFAULT '',
+          archived_at TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'superseded'))
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_wrapped_reports (
+          report_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          period TEXT NOT NULL CHECK (period IN ('daily', 'weekly', 'monthly')),
+          period_start TEXT NOT NULL,
+          period_end TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'generated', 'delivered', 'failed')),
+          ledger_json TEXT NOT NULL DEFAULT '{}',
+          novelty_score REAL NOT NULL DEFAULT 0,
+          delivery_channel TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          delivered_at TEXT NOT NULL DEFAULT ''
         );
         """
     )
@@ -1606,6 +1691,14 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_users", "entitlement_state", "TEXT NOT NULL DEFAULT 'none'")
     _ensure_column(conn, "arclink_users", "entitlement_updated_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_users", "password_hash", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_users", "agent_title", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_users", "captain_role", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_users", "captain_mission", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_users", "captain_treatment", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_users", "wrapped_frequency", "TEXT NOT NULL DEFAULT 'daily'")
+    _ensure_column(conn, "arclink_deployments", "agent_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_deployments", "agent_title", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_deployments", "asu_weight", "REAL NOT NULL DEFAULT 1.0")
     _ensure_column(conn, "arclink_admins", "password_hash", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_admins", "role_scope_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "arclink_admins", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
@@ -1613,6 +1706,8 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_admins", "totp_verified_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "worker_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "claimed_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_onboarding_sessions", "agent_name", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_onboarding_sessions", "agent_title", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_onboarding_sessions", "completed_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_onboarding_sessions", "expires_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_credential_handoffs", "expires_at", "TEXT NOT NULL DEFAULT ''")
@@ -1743,6 +1838,37 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_operation_idempotency_status
         ON arclink_operation_idempotency (operation_kind, status, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_crew_recipes_one_active
+        ON arclink_crew_recipes (user_id)
+        WHERE status = 'active'
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_inventory_machines_provider_status
+        ON arclink_inventory_machines (provider, status, hostname)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_pod_messages_recipient_status
+        ON arclink_pod_messages (recipient_deployment_id, status, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_pod_migrations_deployment_status
+        ON arclink_pod_migrations (deployment_id, status, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_wrapped_reports_user_period
+        ON arclink_wrapped_reports (user_id, period, period_start)
         """
     )
     conn.execute(
@@ -2259,8 +2385,14 @@ ARCLINK_ACTION_INTENT_STATUSES = {"queued", "running", "succeeded", "failed", "c
 ARCLINK_ACTION_ATTEMPT_STATUSES = {"running", "succeeded", "failed"}
 ARCLINK_EVIDENCE_RUN_STATUSES = {"pending", "skipped", "passed", "failed", "blocked"}
 ARCLINK_FLEET_HOST_STATUSES = {"active", "degraded", "offline"}
+ARCLINK_INVENTORY_MACHINE_STATUSES = {"pending", "ready", "draining", "degraded", "removed"}
 ARCLINK_DEPLOYMENT_PLACEMENT_STATUSES = {"active", "removed"}
 ARCLINK_ROLLOUT_STATUSES = {"planned", "in_progress", "paused", "completed", "failed", "rolled_back"}
+ARCLINK_POD_MESSAGE_STATUSES = {"queued", "delivered", "failed", "redacted"}
+ARCLINK_POD_MIGRATION_STATUSES = {"planned", "running", "succeeded", "failed", "rolled_back", "cancelled"}
+ARCLINK_CREW_RECIPE_STATUSES = {"active", "archived", "superseded"}
+ARCLINK_WRAPPED_REPORT_STATUSES = {"pending", "generated", "delivered", "failed"}
+ARCLINK_WRAPPED_FREQUENCIES = {"daily", "weekly", "monthly"}
 ARCLINK_PROVISIONING_JOB_TRANSITIONS = {
     "queued": {"running", "cancelled"},
     "running": {"succeeded", "failed", "cancelled"},
@@ -2563,6 +2695,9 @@ def reserve_generated_arclink_deployment_prefix(
     agent_id: str = "",
     session_id: str = "",
     bootstrap_request_id: str = "",
+    agent_name: str = "",
+    agent_title: str = "",
+    asu_weight: float = 1.0,
     status: str = "reserved",
     metadata: Mapping[str, Any] | None = None,
     rng: Any | None = None,
@@ -2581,6 +2716,9 @@ def reserve_generated_arclink_deployment_prefix(
                 agent_id=agent_id,
                 session_id=session_id,
                 bootstrap_request_id=bootstrap_request_id,
+                agent_name=agent_name,
+                agent_title=agent_title,
+                asu_weight=asu_weight,
                 status=status,
                 metadata=metadata,
             )
@@ -2601,6 +2739,9 @@ def reserve_arclink_deployment_prefix(
     agent_id: str = "",
     session_id: str = "",
     bootstrap_request_id: str = "",
+    agent_name: str = "",
+    agent_title: str = "",
+    asu_weight: float = 1.0,
     status: str = "reserved",
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -2612,8 +2753,9 @@ def reserve_arclink_deployment_prefix(
             """
             INSERT INTO arclink_deployments (
               deployment_id, user_id, prefix, base_domain, agent_id, session_id,
-              bootstrap_request_id, status, metadata_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              bootstrap_request_id, agent_name, agent_title, asu_weight, status,
+              metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 deployment_id,
@@ -2623,6 +2765,9 @@ def reserve_arclink_deployment_prefix(
                 agent_id,
                 session_id,
                 bootstrap_request_id,
+                str(agent_name or "").strip(),
+                str(agent_title or "").strip(),
+                float(asu_weight or 1.0),
                 clean_status,
                 _arclink_json(metadata),
                 now,
@@ -2641,6 +2786,11 @@ def upsert_arclink_user(
     user_id: str,
     email: str = "",
     display_name: str = "",
+    agent_title: str = "",
+    captain_role: str = "",
+    captain_mission: str = "",
+    captain_treatment: str = "",
+    wrapped_frequency: str = "",
     status: str = "active",
     stripe_customer_id: str = "",
     entitlement_state: str | None = None,
@@ -2652,17 +2802,27 @@ def upsert_arclink_user(
     clean_state = str(entitlement_state if entitlement_supplied else "none").strip().lower()
     if clean_state not in ARCLINK_ENTITLEMENT_STATES:
         raise ValueError(f"unsupported ArcLink entitlement state: {clean_state}")
+    wrapped_frequency_supplied = bool(str(wrapped_frequency or "").strip())
+    clean_wrapped_frequency = str(wrapped_frequency or "").strip().lower()
+    if clean_wrapped_frequency and clean_wrapped_frequency not in ARCLINK_WRAPPED_FREQUENCIES:
+        raise ValueError(f"unsupported ArcLink Wrapped frequency: {clean_wrapped_frequency}")
     now = utc_now_iso()
     entitlement_updated_at = now if entitlement_supplied else ""
     conn.execute(
         """
         INSERT INTO arclink_users (
           user_id, email, display_name, status, stripe_customer_id,
-          entitlement_state, entitlement_updated_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          entitlement_state, entitlement_updated_at, agent_title, captain_role,
+          captain_mission, captain_treatment, wrapped_frequency, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id) DO UPDATE SET
           email = CASE WHEN excluded.email != '' THEN excluded.email ELSE arclink_users.email END,
           display_name = CASE WHEN excluded.display_name != '' THEN excluded.display_name ELSE arclink_users.display_name END,
+          agent_title = CASE WHEN excluded.agent_title != '' THEN excluded.agent_title ELSE arclink_users.agent_title END,
+          captain_role = CASE WHEN excluded.captain_role != '' THEN excluded.captain_role ELSE arclink_users.captain_role END,
+          captain_mission = CASE WHEN excluded.captain_mission != '' THEN excluded.captain_mission ELSE arclink_users.captain_mission END,
+          captain_treatment = CASE WHEN excluded.captain_treatment != '' THEN excluded.captain_treatment ELSE arclink_users.captain_treatment END,
+          wrapped_frequency = CASE WHEN ? THEN excluded.wrapped_frequency ELSE arclink_users.wrapped_frequency END,
           status = CASE
             WHEN ? THEN excluded.status
             WHEN arclink_users.status IN ('suspended', 'merged') THEN arclink_users.status
@@ -2690,8 +2850,14 @@ def upsert_arclink_user(
             stripe_customer_id,
             clean_state,
             entitlement_updated_at,
+            str(agent_title or "").strip(),
+            str(captain_role or "").strip(),
+            str(captain_mission or "").strip(),
+            str(captain_treatment or "").strip(),
+            clean_wrapped_frequency if wrapped_frequency_supplied else "daily",
             now,
             now,
+            1 if wrapped_frequency_supplied else 0,
             1 if force_status_transition else 0,
             1 if entitlement_supplied else 0,
             1 if entitlement_supplied else 0,
@@ -3593,6 +3759,70 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
             "host_id",
         ),
         (
+            "inventory_machine_host_missing",
+            "arclink_inventory_machines",
+            "machine_id",
+            "machine_host_link",
+            "arclink_fleet_hosts",
+            "host_id",
+        ),
+        (
+            "pod_message_sender_deployment_missing",
+            "arclink_pod_messages",
+            "message_id",
+            "sender_deployment_id",
+            "arclink_deployments",
+            "deployment_id",
+        ),
+        (
+            "pod_message_recipient_deployment_missing",
+            "arclink_pod_messages",
+            "message_id",
+            "recipient_deployment_id",
+            "arclink_deployments",
+            "deployment_id",
+        ),
+        (
+            "pod_message_sender_user_missing",
+            "arclink_pod_messages",
+            "message_id",
+            "sender_user_id",
+            "arclink_users",
+            "user_id",
+        ),
+        (
+            "pod_message_recipient_user_missing",
+            "arclink_pod_messages",
+            "message_id",
+            "recipient_user_id",
+            "arclink_users",
+            "user_id",
+        ),
+        (
+            "pod_migration_deployment_missing",
+            "arclink_pod_migrations",
+            "migration_id",
+            "deployment_id",
+            "arclink_deployments",
+            "deployment_id",
+        ),
+        (
+            "crew_recipe_user_missing",
+            "arclink_crew_recipes",
+            "recipe_id",
+            "user_id",
+            "arclink_users",
+            "user_id",
+        ),
+        (
+            "wrapped_report_user_missing",
+            "arclink_wrapped_reports",
+            "report_id",
+            "user_id",
+            "arclink_users",
+            "user_id",
+        ),
+        (
             "evidence_deployment_missing",
             "arclink_evidence_runs",
             "run_id",
@@ -3614,9 +3844,15 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
         ("action_intent_status_invalid", "arclink_action_intents", "action_id", "status", ARCLINK_ACTION_INTENT_STATUSES),
         ("action_attempt_status_invalid", "arclink_action_attempts", "attempt_id", "status", ARCLINK_ACTION_ATTEMPT_STATUSES),
         ("fleet_host_status_invalid", "arclink_fleet_hosts", "host_id", "status", ARCLINK_FLEET_HOST_STATUSES),
+        ("inventory_machine_status_invalid", "arclink_inventory_machines", "machine_id", "status", ARCLINK_INVENTORY_MACHINE_STATUSES),
         ("placement_status_invalid", "arclink_deployment_placements", "placement_id", "status", ARCLINK_DEPLOYMENT_PLACEMENT_STATUSES),
         ("rollout_status_invalid", "arclink_rollouts", "rollout_id", "status", ARCLINK_ROLLOUT_STATUSES),
         ("evidence_status_invalid", "arclink_evidence_runs", "run_id", "status", ARCLINK_EVIDENCE_RUN_STATUSES),
+        ("pod_message_status_invalid", "arclink_pod_messages", "message_id", "status", ARCLINK_POD_MESSAGE_STATUSES),
+        ("pod_migration_status_invalid", "arclink_pod_migrations", "migration_id", "status", ARCLINK_POD_MIGRATION_STATUSES),
+        ("crew_recipe_status_invalid", "arclink_crew_recipes", "recipe_id", "status", ARCLINK_CREW_RECIPE_STATUSES),
+        ("wrapped_report_status_invalid", "arclink_wrapped_reports", "report_id", "status", ARCLINK_WRAPPED_REPORT_STATUSES),
+        ("wrapped_frequency_invalid", "arclink_users", "user_id", "wrapped_frequency", ARCLINK_WRAPPED_FREQUENCIES),
     ]
     drift: list[dict[str, str]] = []
     for kind, source_table, source_id_col, ref_col, target_table, target_col in relationship_checks:

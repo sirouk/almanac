@@ -80,6 +80,7 @@ from arclink_api_auth import (
     revoke_arclink_session,
     revoke_user_share_grant_api,
     start_public_onboarding_api,
+    user_update_agent_identity_api,
 )
 from arclink_dashboard import _deployment_urls, build_operator_snapshot, build_scale_operations_snapshot
 from arclink_discord import (
@@ -470,6 +471,8 @@ def _handle_public_onboarding_answer(
         answer_summary=str(body.get("answer_summary") or ""),
         email_hint=str(body.get("email") or ""),
         display_name_hint=str(body.get("display_name") or ""),
+        agent_name=str(body.get("agent_name") or ""),
+        agent_title=str(body.get("agent_title") or ""),
         selected_plan_id=str(body.get("plan_id") or ""),
         selected_model_id=str(body.get("model_id") or ""),
     )
@@ -1021,6 +1024,27 @@ def _handle_user_credential_ack(
         session_token=creds["session_token"],
         csrf_token=csrf,
         handoff_id=str(body.get("handoff_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_agent_identity(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = user_update_agent_identity_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        deployment_id=str(body.get("deployment_id") or ""),
+        agent_name=str(body.get("agent_name") or ""),
+        agent_title=str(body.get("agent_title") or ""),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -1914,6 +1938,16 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "requestBody": _openapi_json_body({"handoff_id": {"type": "string"}}, required=["handoff_id"]),
         "responses": {"200": {"description": "Credential handoff removed"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_agent_identity": {
+        "summary": "Rename or retitle a user's Agent",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({
+            "deployment_id": {"type": "string"},
+            "agent_name": {"type": "string"},
+            "agent_title": {"type": "string"},
+        }, required=["deployment_id"]),
+        "responses": {"200": {"description": "Agent identity updated"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
     "user_share_grant_create": {
         "summary": "Request a read-only Drive/Code share grant",
         "tags": ["user"],
@@ -2151,6 +2185,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/provisioning"): "user_provisioning_status",
     ("GET", "/user/credentials"): "user_credentials",
     ("POST", "/user/credentials/acknowledge"): "user_credential_ack",
+    ("POST", "/user/agent-identity"): "user_agent_identity",
     ("POST", "/user/share-grants"): "user_share_grant_create",
     ("POST", "/user/share-grants/approve"): "user_share_grant_approve",
     ("POST", "/user/share-grants/deny"): "user_share_grant_deny",
@@ -2229,6 +2264,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "admin_logout",
     "user_portal_link",
     "user_credential_ack",
+    "user_agent_identity",
     "user_share_grant_create",
     "user_share_grant_approve",
     "user_share_grant_deny",
@@ -2371,6 +2407,8 @@ def route_arclink_hosted_api(
             result = _handle_user_credentials(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_credential_ack":
             result = _handle_user_credential_ack(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_agent_identity":
+            result = _handle_user_agent_identity(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_create":
             result = _handle_user_share_grant_create(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_approve":

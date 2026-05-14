@@ -1,46 +1,54 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-12T02:48:53Z
-- updated_at: 2026-05-11
-- project_root: .
-- primary_stack: Python
-- primary_score: 092/100
+## Scope
+
+This snapshot uses repository-level manifest and source signals only. It avoids
+private state, live service state, local machine paths, timing output, and raw
+command output.
+
+## Primary Stack
+
+- primary_stack: Python control plane with Bash operations and Next.js web UI
+- primary_score: 091/100
 - confidence: high
+
+## Deterministic Confidence Score
+
+Score formula:
+
+- Python control-plane source and tests: 35 points
+- Canonical Bash deploy/runtime entrypoints: 20 points
+- SQLite schema ownership in Python: 15 points
+- Next.js web product surface: 12 points
+- Compose/container runtime: 6 points
+- ArcLink-owned Hermes plugin/hook layer: 3 points
+
+Observed score: 91/100.
 
 ## Project Stack Ranking
 
 | rank | stack | score | evidence |
-| --- | --- | --- |--- |
-| 1 | Python | 092 | 54 arclink_*.py modules (~54k lines), 99 test files (871 functions), SQLite control DB, WSGI hosted API, workers, provisioning, bots, evidence, memory synthesis |
-| 2 | Bash | 065 | deploy.sh, bin/*.sh (20+ scripts), Docker/systemd/health/qmd wrappers, canonical host lifecycle |
-| 3 | Docker/Compose | 055 | Dockerfile, compose.yaml, 5+ services, Sovereign Control Node and Shared Host Docker lanes |
-| 4 | Node.js/TypeScript | 018 | Next.js 15 web app (12 source files, ~2.5k lines), 3 web test files, Playwright browser checks |
-| 5 | .NET | 000 | - |
-| 6 | Go | 000 | - |
-| 7 | Java | 000 | - |
-| 8 | Ruby | 000 | - |
-| 9 | Rust | 000 | - |
+| --- | --- | --- | --- |
+| 1 | Python + SQLite control plane | 091 | `python/` contains control DB, hosted API, auth, onboarding, provisioning, fleet, inventory, bots, dashboard, MCP, memory, and notification modules; `tests/` contains focused Python regression coverage. |
+| 2 | Bash operational orchestration | 074 | `deploy.sh`, `bin/deploy.sh`, Docker/control menus, bootstrap, health, qmd, service, and live-proof wrappers are canonical operator entrypoints. |
+| 3 | Next.js / React / TypeScript web | 061 | `web/package.json` declares Next.js 15, React 19, TypeScript 5, ESLint, Node tests, and Playwright; `web/src/app` owns onboarding, dashboard, and admin surfaces. |
+| 4 | Docker Compose runtime | 047 | `compose.yaml` and `Dockerfile` define Control Node and Shared Host Docker service topology. |
+| 5 | Hermes plugin/hook layer | 040 | `plugins/hermes-agent/` and `hooks/hermes-agent/` hold ArcLink-owned managed-context, dashboard plugins, and Telegram start hook integration. |
+| 6 | External providers | 025 | Stripe, Chutes, Telegram, Discord, Hetzner, Linode, Notion, Cloudflare, and Tailscale are integration boundaries, not primary local implementation stacks. |
 
-## Deterministic Alternatives Ranking
+## Stack Hypotheses
 
-- Candidate evaluation is based on repository-level manifest, source volume, and runtime authority signals.
-- Primary decision rule: highest score by source volume and runtime authority, then explicit manifest precedence.
+| hypothesis | confidence | notes |
+| --- | --- | --- |
+| ArcLink is primarily a Python/SQLite control platform operated by Bash scripts | 0.95 | Most mission behavior, schema, API, bots, provisioning, fleet, inventory, and tests live in Python; deploy and control inventory are routed through Bash. |
+| The web app is a supporting Next.js product/admin console rather than the system spine | 0.88 | The web surface handles onboarding/dashboard/admin UX but calls Python-hosted APIs and mirrors control-plane state. |
+| Compose is the runtime substrate for Control Node and Docker validation, not the source of product logic | 0.82 | Compose wires services and environment, while Python modules own behavior. |
+| Hermes should remain an external pinned runtime extended by ArcLink plugins/hooks | 0.91 | AGENTS guidance and repo layout route Agent behavior through ArcLink wrappers, plugins, hooks, and generated config. |
 
-### Top 3 stack alternatives (ranked)
+## Alternatives Ranking
 
-- 1) Python: score=092, evidence=[54 arclink modules, SQLite control DB, WSGI hosted API, workers, provisioning, bots, evidence, auth, memory synthesis, requirements-dev.txt]
-- 2) Bash: score=065, evidence=[deploy.sh, 20+ bin/*.sh scripts, Docker/health/qmd/systemd wrappers]
-- 3) Docker/Compose: score=055, evidence=[Dockerfile, compose.yaml, 5+ services, multi-lane container topology]
-
-## Assessment Notes
-
-The prior auto-generated snapshot incorrectly ranked Node.js and Python as tied
-at 018/100 because the scoring heuristic counted only TypeScript/JS manifest
-files without weighting Python source volume (~54k lines across 54 modules and
-99 test files) or runtime authority (Python owns the control DB, hosted API,
-auth, workers, provisioning, fleet, ingress, evidence, bots, and dashboard).
-
-Python is unambiguously the primary stack. Node.js/TypeScript is a secondary
-web surface layer (Next.js 15 App Router, ~2.5k lines, 12 source files). Bash
-is the operational orchestration layer. Docker/Compose defines the container
-runtime topology.
+| alternative | score | why not primary |
+| --- | --- | --- |
+| Node.js-first app | 061 | Strong web UI, but it does not own schema, provisioning, bots, fleet, migration, notification, or MCP control logic. |
+| Compose-first platform | 047 | Important for runtime packaging, but behavior is implemented in Python/Bash. |
+| Hermes-core fork | 010 | Explicitly out of scope; ArcLink must use plugins/hooks/wrappers instead of editing Hermes core. |

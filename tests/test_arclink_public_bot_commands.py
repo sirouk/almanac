@@ -61,7 +61,8 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         exact = [call["exact"] for call in calls if "exact" in call][0]
         names = {item["command"] for item in exact["commands"]}
         expect("arclink" in names, str(names))
-        expect("raven" in names and "agents" in names and "status" in names and "model" in names, str(names))
+        expect("model" in names, str(names))
+        expect("raven" not in names and "agents" not in names and "status" not in names, str(names))
         expect("update" not in names, str(names))
 
         conn = sqlite3.connect(db_path)
@@ -72,6 +73,7 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         expect("agents" in metadata["telegram_command_scope_legacy_conflicts"], str(metadata))
         expect("raven" in metadata["telegram_command_scope_hard_conflicts"], str(metadata))
         expect("update" in metadata["telegram_command_scope_policy_suppressed"], str(metadata))
+        expect(metadata["telegram_active_agent_command_names"] == ["model"], str(metadata))
         expect(metadata["telegram_command_scope_hidden_count"] == 3, str(metadata))
         outbox = conn.execute("SELECT target_kind, message FROM notification_outbox").fetchall()
         expect(len(outbox) == 1 and outbox[0]["target_kind"] == "operator", str([dict(r) for r in outbox]))

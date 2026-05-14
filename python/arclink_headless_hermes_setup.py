@@ -369,7 +369,7 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
+def _render_soul(bot_name: str, unix_user: str, user_name: str = "", agent_title: str = "") -> str:
     org_profile_soul, _ = _org_profile_soul_and_context(bot_name, unix_user, user_name)
     if org_profile_soul:
         return org_profile_soul
@@ -383,6 +383,7 @@ def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
                 {
                     "upstream_soul": _upstream_soul_text(),
                     "agent_label": _identity_value(bot_name, "your ArcLink agent"),
+                    "agent_title": str(agent_title or "").strip(),
                     "unix_user": _identity_value(unix_user, "unknown"),
                     "user_name": _identity_value(user_name, "your enrolled user"),
                     "org_name": _identity_value(_config_value("ARCLINK_ORG_NAME"), "the organization you support"),
@@ -399,6 +400,11 @@ def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
                         _config_value("ARCLINK_ORG_QUIET_HOURS"),
                         "No quiet hours are configured yet; confirm before sending time-sensitive nudges.",
                     ),
+                    "crew_preset": "",
+                    "crew_capacity": "",
+                    "captain_role": "",
+                    "captain_mission": "",
+                    "captain_treatment": "",
                 }
             ).strip()
             + "\n"
@@ -407,7 +413,7 @@ def _render_soul(bot_name: str, unix_user: str, user_name: str = "") -> str:
         raise SystemExit(f"SOUL template placeholder '{exc.args[0]}' is missing from the render context") from exc
 
 
-def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "") -> dict[str, str]:
+def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", agent_title: str = "") -> dict[str, str]:
     from hermes_cli.config import load_config, save_config
 
     arclink_skill_names = [
@@ -449,9 +455,11 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "") -
     )
     org_profile_soul, org_profile_context = _org_profile_soul_and_context(label, unix_user, user_name)
     # Hermes reads HERMES_HOME/SOUL.md directly at runtime as the durable identity prompt.
-    _atomic_write_text(soul_path, org_profile_soul or _render_soul(label, unix_user, user_name))
+    clean_agent_title = str(agent_title or "").strip()
+    _atomic_write_text(soul_path, org_profile_soul or _render_soul(label, unix_user, user_name, clean_agent_title))
     identity_payload: dict[str, Any] = {
         "agent_label": label,
+        "agent_title": clean_agent_title,
         "unix_user": unix_user,
         "user_name": user_name,
         "org_name": org_name,
@@ -459,6 +467,11 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "") -
         "org_primary_project": org_primary_project,
         "org_timezone": org_timezone,
         "org_quiet_hours": org_quiet_hours,
+        "crew_preset": "",
+        "crew_capacity": "",
+        "captain_role": "",
+        "captain_mission": "",
+        "captain_treatment": "",
     }
     if org_profile_context:
         try:
@@ -586,6 +599,7 @@ def main() -> None:
     parser.add_argument("--provider-spec-json", help="Provider setup spec as json.")
     parser.add_argument("--secret-path", help="Path to the staged provider secret.")
     parser.add_argument("--bot-name", default="", help="Public-facing bot name for ArcLink prefill priming.")
+    parser.add_argument("--agent-title", default="", help="Public-facing Agent title for ArcLink identity context.")
     parser.add_argument("--unix-user", default="", help="Unix username being provisioned.")
     parser.add_argument("--user-name", default="", help="Human display name for the user being provisioned.")
     parser.add_argument(
@@ -596,7 +610,7 @@ def main() -> None:
     parser.add_argument("--prefill-only", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    identity_paths = _seed_arclink_identity(args.bot_name, args.unix_user, args.user_name)
+    identity_paths = _seed_arclink_identity(args.bot_name, args.unix_user, args.user_name, args.agent_title)
     identity_only = bool(args.identity_only or args.prefill_only)
     if identity_only:
         print(

@@ -2179,6 +2179,19 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     print("PASS test_control_fleet_worker_registration_is_first_class")
 
 
+def test_control_inventory_submenu_and_aliases_are_first_class() -> None:
+    text = DEPLOY_SH.read_text()
+    inventory = extract(text, "run_control_inventory() {", "publish_control_tailscale_ingress() {")
+    expect("deploy.sh control inventory list" in text, "usage should expose inventory list")
+    expect("Inventory and ASU placement" in text, "control menu should expose inventory")
+    expect("control-inventory-list" in text, "shortcut alias should expose inventory list")
+    expect("python/arclink_inventory.py" in inventory, "inventory should route through the Python inventory CLI")
+    expect("add manual" in inventory and "add hetzner" in text and "add linode" in text, "inventory providers should be exposed")
+    expect("ARCLINK_FLEET_PLACEMENT_STRATEGY" in inventory, "set-strategy should persist placement strategy")
+    expect("HETZNER_API_TOKEN" in text and "LINODE_API_TOKEN" in text, "provider tokens should be config/env backed")
+    print("PASS test_control_inventory_submenu_and_aliases_are_first_class")
+
+
 def test_control_docker_bootstrap_seeds_session_hash_pepper() -> None:
     deploy = DEPLOY_SH.read_text(encoding="utf-8")
     docker_helper = (REPO / "bin" / "arclink-docker.sh").read_text(encoding="utf-8")
@@ -3364,6 +3377,7 @@ def main() -> int:
         test_control_runtime_reset_is_backup_first_and_guarded,
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,
+        test_control_inventory_submenu_and_aliases_are_first_class,
         test_control_docker_bootstrap_seeds_session_hash_pepper,
         test_control_upgrade_syncs_checkout_from_upstream_before_build,
         test_deploy_sh_guides_notion_workspace_migration,

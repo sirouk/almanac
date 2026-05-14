@@ -1806,6 +1806,7 @@ def _render_base_soul(context: dict[str, Any], *, unix_user: str = "") -> str:
         {
             "upstream_soul": _upstream_soul_text(),
             "agent_label": agent.get("name") or "your ArcLink agent",
+            "agent_title": agent.get("title") or "",
             "unix_user": unix_user or "unknown",
             "user_name": context.get("human_display_name") or "your enrolled user",
             "org_name": org.get("name") or "the operating context you support",
@@ -1813,6 +1814,11 @@ def _render_base_soul(context: dict[str, Any], *, unix_user: str = "") -> str:
             "org_primary_project": org.get("primary_project") or "the work your user puts in front of you",
             "org_timezone": org.get("timezone") or "Etc/UTC",
             "org_quiet_hours": org.get("quiet_hours") or "No quiet hours are configured yet; confirm before sending time-sensitive nudges.",
+            "crew_preset": "",
+            "crew_capacity": "",
+            "captain_role": "",
+            "captain_mission": "",
+            "captain_treatment": "",
         }
     ).strip()
     return merge_soul_overlay(rendered, render_soul_overlay(context))

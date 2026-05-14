@@ -8,6 +8,11 @@ shared-host system for Hermes agents, with a private nested state repo,
 systemd services, per-user Unix accounts, chat gateways, qmd retrieval, Notion
 SSOT rails, and deploy keys.
 
+Vocabulary split: Captain-facing surfaces use Raven for the guide, ArcPod or
+Pod for a provisioned deployment, Agent for the Hermes-powered occupant,
+Captain for the paying owner, and Crew for that Captain's Agents. Operator is
+reserved for platform/admin/deploy surfaces and backend runbooks.
+
 ## Prime Directives
 
 - Read this file before changing deploy, onboarding, service, or runtime code.

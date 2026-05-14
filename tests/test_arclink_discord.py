@@ -130,6 +130,9 @@ def test_discord_message_event_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
+    expect("Name your Agent" in result["data"]["content"], result["data"]["content"])
+    identity = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="/agent-identity Atlas, the right hand")
+    result = dc.handle_discord_interaction(conn, identity)
     expect("Welcome aboard, Test Buyer" in result["data"]["content"], result["data"]["content"])
     expect("Founders $149/mo" in str(result["data"].get("components", [])), str(result["data"]))
     expect("Scale $275/mo" in str(result["data"].get("components", [])), str(result["data"]))
@@ -230,7 +233,8 @@ def test_discord_full_onboarding_flow() -> None:
 
     steps = [
         ("/start", "prompt_name"),
-        ("name Discord Bot", "prompt_package"),
+        ("name Discord Bot", "prompt_agent_name"),
+        ("/agent-identity Atlas, the right hand", "prompt_package"),
         ("plan sovereign", "open_checkout"),
     ]
     session_ids = set()

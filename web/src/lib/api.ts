@@ -70,6 +70,9 @@ export const api = {
   acknowledgeCredential: (body: Record<string, string>) =>
     request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }, "user"),
 
+  updateAgentIdentity: (body: Record<string, string>) =>
+    request("/user/agent-identity", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
 
   createShareGrant: (body: Record<string, string>) =>

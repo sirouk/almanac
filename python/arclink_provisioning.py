@@ -5,19 +5,24 @@ import hashlib
 import json
 import re
 import sqlite3
+import tempfile
+from pathlib import Path
 from typing import Any, Mapping
 
 from arclink_control import (
+    append_arclink_audit,
     append_arclink_event,
     arclink_deployment_can_provision,
     arclink_deployment_entitlement_state,
     create_arclink_provisioning_job,
     transition_arclink_provisioning_job,
     upsert_arclink_service_health,
+    utc_now_iso,
 )
 from arclink_access import build_arclink_ssh_access_record
 from arclink_adapters import arclink_access_urls, arclink_hostnames, arclink_tailscale_hostnames
 from arclink_ingress import desired_arclink_ingress_records, render_traefik_dynamic_labels
+from arclink_onboarding import clean_arclink_agent_name, clean_arclink_agent_title
 from arclink_product import chutes_base_url, chutes_default_model, model_reasoning_default, primary_provider
 from arclink_secrets_regex import (
     contains_secret_material,
@@ -50,6 +55,8 @@ CONTAINER_VAULT_DIR = "/srv/vault"
 CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
 CONTAINER_CODE_WORKSPACE_DIR = "/workspace"
 CONTAINER_LINKED_RESOURCES_DIR = "/linked-resources"
+IDENTITY_STATE_FILENAME = "arclink-identity-context.json"
+
 
 class ArcLinkProvisioningError(RuntimeError):
     pass
@@ -161,6 +168,156 @@ def _load_deployment(conn: sqlite3.Connection, deployment_id: str) -> dict[str, 
 def _load_user(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM arclink_users WHERE user_id = ?", (user_id,)).fetchone()
     return {} if row is None else dict(row)
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-identity-", suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8", closefd=True) as handle:
+            handle.write(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n")
+            handle.flush()
+        Path(tmp_path).replace(path)
+        path.chmod(0o600)
+    except BaseException:
+        try:
+            Path(tmp_path).unlink()
+        except OSError:
+            pass
+        raise
+
+
+def project_arclink_deployment_identity_context(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    source: str = "agent_identity_update",
+) -> dict[str, Any]:
+    """Refresh an already-provisioned Pod's local managed-context identity file.
+
+    The control node only writes when the deployment metadata points at a local
+    Hermes home that already exists. Remote fleet projection is intentionally
+    left to a worker/migration transport instead of creating lookalike local
+    paths on the control node.
+    """
+    deployment = _load_deployment(conn, deployment_id)
+    user = _load_user(conn, str(deployment["user_id"]))
+    metadata = _json_loads(str(deployment.get("metadata_json") or "{}"))
+    roots = metadata.get("state_roots") if isinstance(metadata.get("state_roots"), Mapping) else {}
+    hermes_home = str((roots or {}).get("hermes_home") or "").strip()
+    if not hermes_home:
+        return {"status": "skipped", "reason": "state_roots_missing"}
+    hermes_home_path = Path(hermes_home)
+    if not hermes_home_path.is_dir():
+        return {"status": "skipped", "reason": "local_hermes_home_missing", "hermes_home": hermes_home}
+    identity_path = hermes_home_path / "state" / IDENTITY_STATE_FILENAME
+    existing: dict[str, Any] = {}
+    if identity_path.exists():
+        try:
+            parsed = json.loads(identity_path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                existing = dict(parsed)
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    payload = dict(existing)
+    agent_label = str(deployment.get("agent_name") or "").strip() or str(deployment.get("prefix") or "").strip()
+    agent_title = str(deployment.get("agent_title") or user.get("agent_title") or "").strip()
+    payload.update(
+        {
+            "agent_label": agent_label or "your ArcLink agent",
+            "agent_title": agent_title,
+            "deployment_id": str(deployment["deployment_id"]),
+            "user_id": str(deployment["user_id"]),
+            "user_name": str(user.get("display_name") or payload.get("user_name") or "").strip(),
+            "identity_source": str(source or "agent_identity_update"),
+        }
+    )
+    _atomic_write_json(identity_path, payload)
+    return {
+        "status": "projected",
+        "identity_state_file": str(identity_path),
+        "agent_label": payload["agent_label"],
+        "agent_title": payload["agent_title"],
+    }
+
+
+def update_arclink_deployment_identity(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    agent_name: str | None = None,
+    agent_title: str | None = None,
+    actor_id: str = "",
+    reason: str = "updated Agent identity",
+    channel: str = "",
+    projection_source: str = "agent_identity_update",
+) -> dict[str, Any]:
+    deployment_row = dict(deployment)
+    deployment_id = str(deployment_row.get("deployment_id") or "").strip()
+    user_id = str(deployment_row.get("user_id") or actor_id or "").strip()
+    if not deployment_id or not user_id:
+        raise ArcLinkProvisioningError("Agent identity update requires a deployment")
+
+    old_name = str(deployment_row.get("agent_name") or "").strip()
+    old_title = str(deployment_row.get("agent_title") or "").strip()
+    clean_name = old_name if agent_name is None else clean_arclink_agent_name(agent_name, required=True)
+    clean_title = old_title if agent_title is None else clean_arclink_agent_title(agent_title, required=True)
+    clean_reason = str(reason or "updated Agent identity").strip()
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET agent_name = ?, agent_title = ?, updated_at = ?
+        WHERE deployment_id = ? AND user_id = ?
+        """,
+        (clean_name, clean_title, now, deployment_id, user_id),
+    )
+    audit_metadata: dict[str, Any] = {
+        "old_name": old_name,
+        "new_name": clean_name,
+        "old_title": old_title,
+        "new_title": clean_title,
+    }
+    clean_channel = str(channel or "").strip()
+    if clean_channel:
+        audit_metadata["channel"] = clean_channel
+    append_arclink_audit(
+        conn,
+        action=f"agent_identity_renamed:{deployment_id}",
+        actor_id=str(actor_id or user_id).strip(),
+        target_kind="deployment",
+        target_id=deployment_id,
+        reason=clean_reason,
+        metadata=audit_metadata,
+        commit=False,
+    )
+    projection = project_arclink_deployment_identity_context(
+        conn,
+        deployment_id=deployment_id,
+        source=projection_source,
+    )
+    event_metadata: dict[str, Any] = {
+        "user_id": user_id,
+        "agent_name": clean_name,
+        "agent_title": clean_title,
+        "identity_projection": projection,
+    }
+    if clean_channel:
+        event_metadata["channel"] = clean_channel
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="agent_identity_updated",
+        metadata=event_metadata,
+        commit=False,
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
+    return {
+        "deployment": dict(row) if row is not None else deployment_row,
+        "identity_projection": projection,
+    }
 
 
 def render_arclink_state_roots(
@@ -610,6 +767,8 @@ def _render_services(
                 "ARCLINK_HERMES_DOCS_VAULT_DIR": f"{CONTAINER_VAULT_DIR}/Agents_KB/hermes-agent-docs",
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
                 "ARCLINK_PREFIX": prefix,
+                "ARCLINK_AGENT_NAME": env["ARCLINK_AGENT_NAME"],
+                "ARCLINK_AGENT_TITLE": env["ARCLINK_AGENT_TITLE"],
                 "ARCLINK_DASHBOARD_USERNAME": env["ARCLINK_DASHBOARD_USERNAME"],
                 "ARCLINK_PRIMARY_PROVIDER": env["ARCLINK_PRIMARY_PROVIDER"],
                 "ARCLINK_CHUTES_BASE_URL": env["ARCLINK_CHUTES_BASE_URL"],
@@ -701,6 +860,8 @@ def render_arclink_provisioning_intent(
         or "arclink_default"
     ).strip()
     prefix = str(deployment["prefix"])
+    agent_name = str(deployment.get("agent_name") or "").strip()
+    agent_title = str(deployment.get("agent_title") or user.get("agent_title") or "").strip()
     roots = render_arclink_state_roots(deployment_id=deployment_id, prefix=prefix, state_root_base=state_root_base)
     if clean_ingress_mode == "tailscale":
         hostnames = arclink_tailscale_hostnames(prefix, clean_tailscale_dns_name, strategy=clean_tailscale_strategy)
@@ -757,6 +918,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_DEPLOYMENT_ID": deployment_id,
         "ARCLINK_USER_ID": str(deployment["user_id"]),
         "ARCLINK_PREFIX": prefix,
+        "ARCLINK_AGENT_NAME": agent_name,
+        "ARCLINK_AGENT_TITLE": agent_title,
         "ARCLINK_BASE_DOMAIN": clean_base_domain,
         "ARCLINK_INGRESS_MODE": clean_ingress_mode,
         "ARCLINK_TAILSCALE_DNS_NAME": clean_tailscale_dns_name,

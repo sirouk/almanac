@@ -1,83 +1,86 @@
 # Research Summary
 
-<confidence>91</confidence>
+<confidence>92</confidence>
 
 ## Scope
 
 This PLAN pass inspected the public ArcLink repository structure, current
-planning artifacts, ArcPod Captain Console steering sections for Waves 4-6,
-schema foundations, API/dashboard/MCP patterns, tests, runbooks, Compose job
-loops, and vocabulary canon.
+planning artifacts, the Wave 5 Crew Training section of the ArcPod Captain
+Console steering document, schema foundations, provider/safety rails,
+managed-context identity projection, hosted API patterns, public bot command
+handling, dashboard code, focused tests, docs, and OpenAPI location.
 
 No private state, live secrets, user Hermes homes, deploy keys, production
-services, provider accounts, payment flows, public bot command registration, or
-Hermes core were inspected or mutated.
+services, payment/provider mutations, live bot command registration, live
+Chutes inference, live deploys, or Hermes core were inspected or mutated.
 
 ## Active Mission
 
-The active BUILD backlog is now Waves 4-6 from:
+The active BUILD backlog is Wave 5 only: Crew Training.
+
+The user-provided Project Goals Document supersedes the bootstrap objective
+that references the older Sovereign audit backlog. The older audit document is
+background only for this run. Waves 0-4 are treated as landed and should not be
+re-touched unless a direct regression blocks Crew Training.
+
+Authoritative Wave 5 detail lives in:
 
 `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md`
-
-The user-provided goals document supersedes the bootstrap line about restarting
-the older Sovereign audit backlog. `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md`
-is historical/background only for this mission. Waves 0-3 are treated as landed
-and should not be re-touched unless a direct regression blocks Waves 4-6.
 
 ## Current Findings
 
 | Area | Finding |
 | --- | --- |
-| Schema foundations | `arclink_pod_messages`, `arclink_crew_recipes`, `arclink_wrapped_reports`, `arclink_users.wrapped_frequency`, Captain role/mission/treatment columns, SOUL overlay placeholders, status constants, indexes, and drift checks are already present. |
-| Wave 4 behavior | `python/arclink_pod_comms.py`, MCP `pod_comms.*` tools, user/admin comms API routes, Comms dashboard tabs, and `tests/test_arclink_pod_comms.py` are absent. Share grants currently allow only `drive` and `code`; `pod_comms` is not allowed. |
-| Wave 5 behavior | `python/arclink_crew_recipes.py`, `templates/CREW_RECIPE.md.tmpl`, web `/train-crew`, dashboard Crew Training UI, public bot `/train-crew` and `/whats-changed`, and `tests/test_arclink_crew_recipes.py` are absent. The SOUL template has additive placeholders ready. |
-| Wave 6 behavior | `python/arclink_wrapped.py`, Wrapped scheduler/job wrapper, dashboard history tab, frequency update route/command, Wrapped docs, and `tests/test_arclink_wrapped.py` are absent. Compose already has reusable `docker-job-loop.sh` patterns. |
-| Existing rails | Rate limits, audit/events, notification outbox, share grants, MCP tool registration, hosted API auth, CIDR-gated admin routes, Chutes boundary models/fakes, memory-synth unsafe-output rejection, and evidence redaction already exist and should be reused. |
-| Web stack | Next.js/React dashboard and admin pages are monolithic page components with local tab state and API helper calls in `web/src/lib/api.ts`. New tabs should follow that pattern before any frontend refactor. |
+| Schema foundation | `arclink_crew_recipes` exists with active/archive statuses and a unique active recipe index per Captain. `arclink_users` already has `captain_role`, `captain_mission`, and `captain_treatment`. |
+| SOUL template | `templates/SOUL.md.tmpl` already has additive Crew Recipe placeholders for preset, capacity, Captain role, mission, treatment, and Agent title. |
+| Wave 4 state | Pod-to-Pod Comms is present in source and tests. It is not part of this BUILD scope except as an existing adjacent surface. |
+| Wave 5 missing behavior | `python/arclink_crew_recipes.py`, `templates/CREW_RECIPE.md.tmpl`, Crew Training API routes, dashboard questionnaire, public bot `/train-crew` and `/whats-changed`, and `tests/test_arclink_crew_recipes.py` are absent. |
+| Provider boundary | Chutes boundary and fake inference client patterns exist. Crew Training should use injectable generation and deterministic fallback; live Chutes is not required for BUILD. |
+| Safety boundary | `arclink_memory_synthesizer` defines unsafe-output patterns and `_card_has_unsafe_output`. Crew Training should reuse or extract that boundary for URLs, shell commands, and jailbreak patterns. |
+| Identity projection | `python/arclink_provisioning.py` writes `state/arclink-identity-context.json` for existing Hermes homes. Crew Training should extend this projection with additive recipe overlay fields and never touch memories or sessions. |
+| API/web pattern | `python/arclink_hosted_api.py` uses explicit `_handle_*` functions, `_ROUTES`, `_JSON_OBJECT_ROUTES`, CSRF checks for mutations, and generated OpenAPI. `web/src/lib/api.ts` centralizes API helpers. |
+| Public bot pattern | `python/arclink_public_bots.py` keeps command handling local and testable without live Telegram or Discord mutation. `/train-crew` should use the same pure handler style. |
 
 ## Implementation Path Comparison
 
-| Decision | Path A | Path B | Decision |
+| Decision | Path A | Path B | Selected path |
 | --- | --- | --- | --- |
-| Wave 4 comms broker | Dedicated `python/arclink_pod_comms.py` with DB, rate-limit, share-grant, audit, and notification helpers | Inline comms SQL in MCP/API handlers | Choose Path A. It keeps trust-boundary and tests centralized. |
-| Wave 4 attachments | Reuse share-grant projection metadata and store only references in `attachments_json` | Copy raw file contents or paths into message rows | Choose share-grant projection only. Raw file transfer violates the stated boundary. |
-| Wave 5 recipe generation | Dedicated `python/arclink_crew_recipes.py` with injectable/fake Chutes client and deterministic fallback | Web/bot handlers generate overlays directly | Choose dedicated module. It centralizes unsafe-output rejection and archive/activate semantics. |
-| Wave 5 overlay write | Store recipe row and identity-context overlay for next managed-context refresh | Rewrite memory, sessions, or Hermes core prompts | Choose additive overlay only. Memory/session mutation is explicitly out of scope. |
-| Wave 6 scheduler | Add `arclink-wrapped` service using existing `docker-job-loop.sh` | Piggyback silently inside health-watch | Prefer explicit service unless BUILD finds a strong reason to integrate into an existing loop. It is easier to test, document, and operate. |
-| Wave 6 data access | Read control DB plus bounded read-only per-deployment state roots through existing deployment metadata | Scan live user homes or private runtime paths ad hoc | Choose metadata-bounded reads only. No uid crossing or private-state rummaging. |
+| Crew Recipe core | Dedicated `python/arclink_crew_recipes.py` with preview, regenerate, confirm/apply, archive, diff, and injectable generation | Generate recipes directly in hosted API, web, and bot handlers | Path A. It centralizes lifecycle, unsafe-output rejection, fallback, audit, and tests. |
+| Provider use | Use Chutes through an injectable boundary and deterministic preset-only fallback | Require live Chutes credentials for all Crew Training runs | Path A. BUILD must pass without live credentials, and the UI must truthfully label fallback mode. |
+| Unsafe output handling | Reuse or extract the memory-synth unsafe-output patterns | Trust model output after parsing | Path A. The steering requires rejection of URLs, shell commands, and jailbreak text before SOUL overlay. |
+| SOUL application | Additive overlay through identity-context projection and managed-context refresh | Rewrite memory, sessions, Hermes core prompts, or gateway process state | Path A. Crew Training is persona overlay only and must not restart Hermes. |
+| Web shape | Add a focused Crew Training questionnaire route or dashboard panel using current API helper patterns | Refactor the dashboard architecture first | Path A. The dashboard is monolithic today; BUILD should keep the addition scoped. |
+| Bot state | Store questionnaire progress in existing public bot onboarding/session metadata until confirmed | Add a new live bot service or mutate command registration | Path A. Local handler tests can prove the flow without external bot mutation. |
 
 ## Build Assumptions
 
-- Current source and focused tests are ground truth where historical docs
-  disagree.
-- Schema foundations from prior waves are usable; new columns should be added
-  only when a concrete Wave 4-6 behavior requires them.
-- `arclink_share_grants` remains the attachment/security projection model.
-- Chutes-backed Crew Recipe generation must be injectable/fake-tested locally;
-  no live inference proof is required for BUILD.
-- Wrapped reports may compute from deterministic local fixtures; live Hermes
-  session proof remains operator-gated.
-- Captain-facing copy uses ArcPod / Pod / Agent / Captain / Crew / Raven /
-  Comms. Backend/operator code can keep deployment/user naming.
+- Current source is ground truth where historical planning docs disagree.
+- Wave 5 does not need new schema unless implementation discovers a concrete
+  deliverable that cannot fit the existing tables and columns.
+- The active recipe row is the durable source of truth; identity-context files
+  are projections for managed-context injection.
+- Deterministic fallback output must be useful and visibly labeled as fallback
+  or dry-run mode.
+- Operator-on-behalf application is allowed only through an audited admin path.
+- Captain-facing copy uses ArcPod, Pod, Agent, Captain, Crew, Raven, and Crew
+  Training. Backend/internal code can keep user/deployment naming.
 
 ## Risks
 
-- Cross-Captain comms must fail closed unless an active `pod_comms`
-  share-grant exists.
-- Comms rate limiting must happen before expensive writes or notification
-  fanout.
-- Crew Recipe generation must reject unsafe model output and fall back
-  deterministically after bounded retries.
-- Identity-context overlay writes must not wipe memory, sessions, or unrelated
-  org-profile overlays.
-- Wrapped must redact secrets before rendering and must not expose Captain
-  narrative in Operator views.
-- Quiet-hours behavior for Wrapped depends on existing user/profile data; if a
-  precise source is unavailable, BUILD should document and test the selected
-  fail-closed or default behavior.
+- Accidentally planning or implementing Wave 6 would violate this run's scope.
+- Recipe generation must not leak or require Chutes secret material; tests
+  should use fake clients and secret references only.
+- Unsafe model output must be rejected before it can become a SOUL overlay.
+- Identity-context writes must preserve unrelated existing keys and must not
+  write to memory/session locations.
+- Web and bot flows need truthful fallback copy so Captains do not mistake
+  deterministic fallback for live provider output.
+- Public bot tests should avoid live command registration and external
+  delivery.
 
 ## Verdict
 
-PLAN is ready for BUILD handoff for Waves 4-6 in order: Pod-to-Pod Comms,
-Crew Training, then ArcLink Wrapped. The existing build gate was stale Wave 3
-content and has been replaced with a no-secret Wave 4-6 gate.
+PLAN is ready for Wave 5 BUILD handoff after the required artifacts in this
+pass are updated. No blocker requires `consensus/build_gate.md` to stop BUILD,
+but the gate is narrowed to Wave 5 and explicitly keeps private/live actions
+blocked.

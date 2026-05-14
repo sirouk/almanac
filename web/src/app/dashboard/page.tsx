@@ -227,8 +227,63 @@ interface ProviderStateData {
   deployment_models?: ProviderDeploymentModel[];
 }
 
-type Tab = "overview" | "billing" | "provisioning" | "services" | "vault" | "comms" | "bots" | "model" | "memory" | "security" | "support";
-const ALL_TABS: Tab[] = ["overview", "billing", "provisioning", "services", "vault", "comms", "bots", "model", "memory", "security", "support"];
+interface CrewRecipe {
+  recipe_id?: string;
+  preset?: string;
+  capacity?: string;
+  role?: string;
+  mission?: string;
+  treatment?: string;
+  applied_at?: string;
+  status?: string;
+  soul_overlay?: { crew_recipe_text?: string };
+}
+
+interface CrewRecipeState {
+  current?: CrewRecipe | null;
+  prior?: CrewRecipe | null;
+  whats_changed?: { status?: string; summary?: string };
+}
+
+interface CrewRecipePreview {
+  mode?: string;
+  fallback?: boolean;
+  fallback_reason?: string;
+  recipe_text?: string;
+}
+
+interface CrewRecipeForm {
+  [key: string]: string;
+  role: string;
+  mission: string;
+  treatment: string;
+  preset: string;
+  capacity: string;
+}
+
+const DEFAULT_CREW_FORM: CrewRecipeForm = {
+  role: "",
+  mission: "",
+  treatment: "Like a peer - casual, give pushback",
+  preset: "Frontier",
+  capacity: "development",
+};
+const CREW_TREATMENT_OPTIONS = [
+  "Like a Captain - formal, ready to take orders",
+  "Like a peer - casual, give pushback",
+  "Like a coach - supportive, ask great questions",
+];
+const CREW_PRESET_OPTIONS = ["Frontier", "Concourse", "Salvage", "Vanguard"];
+const CREW_CAPACITY_OPTIONS = [
+  { label: "Sales", value: "sales" },
+  { label: "Marketing", value: "marketing" },
+  { label: "Development", value: "development" },
+  { label: "Life Coaching", value: "life coaching" },
+  { label: "Companionship", value: "companionship" },
+];
+
+type Tab = "overview" | "crew" | "billing" | "provisioning" | "services" | "vault" | "comms" | "bots" | "model" | "memory" | "security" | "support";
+const ALL_TABS: Tab[] = ["overview", "crew", "billing", "provisioning", "services", "vault", "comms", "bots", "model", "memory", "security", "support"];
 
 function isGoodStatus(status = "") {
   return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "running"].includes(status.toLowerCase());
@@ -323,9 +378,14 @@ export default function DashboardPage() {
   const [linkedResources, setLinkedResources] = useState<LinkedResourcesData | null>(null);
   const [comms, setComms] = useState<CommsData | null>(null);
   const [providerState, setProviderState] = useState<ProviderStateData | null>(null);
+  const [crewRecipe, setCrewRecipe] = useState<CrewRecipeState | null>(null);
+  const [crewPreview, setCrewPreview] = useState<CrewRecipePreview | null>(null);
+  const [crewForm, setCrewForm] = useState<CrewRecipeForm>(DEFAULT_CREW_FORM);
   const [credentialsError, setCredentialsError] = useState("");
   const [linkedResourcesError, setLinkedResourcesError] = useState("");
   const [providerStateError, setProviderStateError] = useState("");
+  const [crewError, setCrewError] = useState("");
+  const [crewLoading, setCrewLoading] = useState(false);
   const [credentialAckLoading, setCredentialAckLoading] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -396,6 +456,54 @@ export default function DashboardPage() {
     });
   }
 
+  async function refreshCrewRecipe() {
+    const result = await api.userCrewRecipe();
+    if (result.status === 200) {
+      setCrewRecipe(result.data as CrewRecipeState);
+    }
+  }
+
+  function updateCrewForm(field: keyof CrewRecipeForm, value: string) {
+    setCrewForm((current) => ({ ...current, [field]: value }));
+  }
+
+  async function handleCrewPreview(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    setCrewError("");
+    setCrewLoading(true);
+    try {
+      const result = await api.previewCrewRecipe(crewForm);
+      if (result.status !== 200) {
+        setCrewError("Could not preview Crew Recipe.");
+        return;
+      }
+      setCrewPreview((result.data as { preview?: CrewRecipePreview }).preview || null);
+    } catch {
+      setCrewError("Could not preview Crew Recipe.");
+    } finally {
+      setCrewLoading(false);
+    }
+  }
+
+  async function handleCrewApply() {
+    setCrewError("");
+    setCrewLoading(true);
+    try {
+      const result = await api.applyCrewRecipe(crewForm);
+      if (result.status !== 200) {
+        setCrewError("Could not apply Crew Training.");
+        return;
+      }
+      const preview = (result.data as { preview?: CrewRecipePreview }).preview;
+      if (preview) setCrewPreview(preview);
+      await refreshCrewRecipe();
+    } catch {
+      setCrewError("Could not apply Crew Training.");
+    } finally {
+      setCrewLoading(false);
+    }
+  }
+
   useEffect(() => {
     let mounted = true;
     Promise.all([
@@ -446,6 +554,9 @@ export default function DashboardPage() {
         }
       }).catch(() => {
         if (mounted) setProviderStateError("Provider state could not be loaded. Provider changes remain operator-managed until the API is available.");
+      }),
+      api.userCrewRecipe().then((r) => {
+        if (mounted && r.status === 200) setCrewRecipe(r.data as CrewRecipeState);
       }),
     ]).catch(() => {
       if (mounted) setError("Failed to load dashboard.");
@@ -611,6 +722,120 @@ export default function DashboardPage() {
                   <Link href="/onboarding" className="text-signal-orange hover:underline">
                     Start launch
                   </Link>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "crew" && (
+            <div className="space-y-6">
+              <SectionHeader title="Crew Training" eyebrow="Crew Recipe" detail="Capture the Captain posture, generate a Crew Recipe, and apply it as an additive SOUL overlay for every Pod in your Crew." />
+              {crewError && <ErrorAlert message={crewError} />}
+              <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+                <form onSubmit={handleCrewPreview} className="space-y-4 border border-border bg-surface/80 p-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block text-sm">
+                      <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Your Role</span>
+                      <input
+                        value={crewForm.role}
+                        onChange={(event) => updateCrewForm("role", event.target.value)}
+                        required
+                        maxLength={240}
+                        className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                        placeholder="founder building a startup"
+                      />
+                    </label>
+                    <label className="block text-sm">
+                      <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Treatment</span>
+                      <select
+                        value={crewForm.treatment}
+                        onChange={(event) => updateCrewForm("treatment", event.target.value)}
+                        className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      >
+                        {CREW_TREATMENT_OPTIONS.map((option) => (
+                          <option key={option}>{option}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <label className="block text-sm">
+                    <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Mission</span>
+                    <textarea
+                      value={crewForm.mission}
+                      onChange={(event) => updateCrewForm("mission", event.target.value)}
+                      required
+                      maxLength={500}
+                      rows={3}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      placeholder="what should your Crew help you ship in the next 12 weeks"
+                    />
+                  </label>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="block text-sm">
+                      <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Crew Preset</span>
+                      <select
+                        value={crewForm.preset}
+                        onChange={(event) => updateCrewForm("preset", event.target.value)}
+                        className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      >
+                        {CREW_PRESET_OPTIONS.map((option) => (
+                          <option key={option}>{option}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-sm">
+                      <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Crew Capacity</span>
+                      <select
+                        value={crewForm.capacity}
+                        onChange={(event) => updateCrewForm("capacity", event.target.value)}
+                        className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      >
+                        {CREW_CAPACITY_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="submit" disabled={crewLoading} className="rounded border border-signal-orange/60 px-4 py-2 text-sm font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
+                      {crewPreview ? "Regenerate" : "Preview Recipe"}
+                    </button>
+                    <button type="button" disabled={crewLoading || !crewPreview} onClick={handleCrewApply} className="rounded border border-neon-green/50 px-4 py-2 text-sm font-semibold text-neon-green transition hover:bg-neon-green hover:text-jet disabled:opacity-50">
+                      Confirm Training
+                    </button>
+                  </div>
+                </form>
+                <div className="space-y-4">
+                  <div className="border border-border bg-surface/80 p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Current Recipe</p>
+                    {crewRecipe?.current ? (
+                      <div className="mt-3 text-sm text-soft-white/65">
+                        <p className="font-semibold text-soft-white">{crewRecipe.current.preset} / {crewRecipe.current.capacity}</p>
+                        <p className="mt-2">{crewRecipe.current.soul_overlay?.crew_recipe_text || crewRecipe.current.mission}</p>
+                        <p className="mt-2 text-xs text-soft-white/35">{crewRecipe.current.applied_at ? `Applied ${formatDate(crewRecipe.current.applied_at)}` : "Applied time unavailable"}</p>
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-soft-white/45">No Crew Recipe is active yet.</p>
+                    )}
+                  </div>
+                  <div className="border border-border bg-surface/80 p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">What Changed</p>
+                    <p className="mt-3 text-sm text-soft-white/60">{crewRecipe?.whats_changed?.summary || "No prior Crew Recipe to compare."}</p>
+                  </div>
+                </div>
+              </div>
+              {crewPreview && (
+                <div className="border border-signal-orange/30 bg-signal-orange/10 p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Review</p>
+                    <StatusBadge status={crewPreview.mode || "preview"} />
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-soft-white/70">{crewPreview.recipe_text}</p>
+                  {crewPreview.fallback && (
+                    <p className="mt-3 text-xs leading-5 text-yellow-200">{crewPreview.fallback_reason || "Live recipe generation requires Chutes credentials. Using preset-only overlay."}</p>
+                  )}
                 </div>
               )}
             </div>

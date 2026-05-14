@@ -44,9 +44,11 @@ from arclink_api_auth import (
     _header as _api_header,
     accept_user_share_grant_api,
     acknowledge_user_credential_api,
+    admin_apply_user_crew_recipe_api,
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
     approve_user_share_grant_api,
+    apply_user_crew_recipe_api,
     check_arclink_rate_limit,
     create_arclink_admin_login_session_api,
     create_arclink_login_session_api,
@@ -71,6 +73,7 @@ from arclink_api_auth import (
     claim_session_from_onboarding_api,
     read_provider_state_api,
     read_user_credentials_api,
+    read_user_crew_recipe_api,
     authenticate_arclink_user_session,
     read_user_billing_api,
     read_user_dashboard_api,
@@ -79,6 +82,7 @@ from arclink_api_auth import (
     require_arclink_csrf,
     revoke_arclink_session,
     revoke_user_share_grant_api,
+    preview_user_crew_recipe_api,
     start_public_onboarding_api,
     user_update_agent_identity_api,
 )
@@ -1050,6 +1054,89 @@ def _handle_user_agent_identity(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_crew_recipe_read(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_crew_recipe_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _crew_recipe_body(body: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "role": str(body.get("role") or ""),
+        "mission": str(body.get("mission") or ""),
+        "treatment": str(body.get("treatment") or ""),
+        "preset": str(body.get("preset") or ""),
+        "capacity": str(body.get("capacity") or ""),
+    }
+
+
+def _handle_user_crew_recipe_preview(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = preview_user_crew_recipe_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        **_crew_recipe_body(body),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_crew_recipe_apply(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = apply_user_crew_recipe_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        **_crew_recipe_body(body),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_admin_crew_recipe_apply(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="admin")
+    csrf = extract_arclink_csrf_token(headers, session_kind="admin")
+    result = admin_apply_user_crew_recipe_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        user_id=str(body.get("user_id") or ""),
+        **_crew_recipe_body(body),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_user_comms(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1994,6 +2081,48 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         }, required=["deployment_id"]),
         "responses": {"200": {"description": "Agent identity updated"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_crew_recipe": {
+        "summary": "Read the active and prior Crew Recipe",
+        "tags": ["user", "crew-training"],
+        "responses": {"200": {"description": "Crew Recipe state"}, "401": {"description": "Unauthorized"}},
+    },
+    "user_crew_recipe_preview": {
+        "summary": "Preview or regenerate a Crew Recipe without applying it",
+        "tags": ["user", "crew-training"],
+        "requestBody": _openapi_json_body({
+            "role": {"type": "string"},
+            "mission": {"type": "string"},
+            "treatment": {"type": "string"},
+            "preset": {"type": "string", "enum": ["Frontier", "Concourse", "Salvage", "Vanguard"]},
+            "capacity": {"type": "string", "enum": ["sales", "marketing", "development", "life coaching", "companionship"]},
+        }, required=["role", "mission", "treatment", "preset", "capacity"]),
+        "responses": {"200": {"description": "Crew Recipe preview"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_crew_recipe_apply": {
+        "summary": "Confirm Crew Training and apply the additive SOUL overlay",
+        "tags": ["user", "crew-training"],
+        "requestBody": _openapi_json_body({
+            "role": {"type": "string"},
+            "mission": {"type": "string"},
+            "treatment": {"type": "string"},
+            "preset": {"type": "string", "enum": ["Frontier", "Concourse", "Salvage", "Vanguard"]},
+            "capacity": {"type": "string", "enum": ["sales", "marketing", "development", "life coaching", "companionship"]},
+        }, required=["role", "mission", "treatment", "preset", "capacity"]),
+        "responses": {"200": {"description": "Crew Recipe applied"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "admin_crew_recipe_apply": {
+        "summary": "Apply Crew Training on a Captain's behalf with admin audit",
+        "tags": ["admin", "crew-training"],
+        "requestBody": _openapi_json_body({
+            "user_id": {"type": "string"},
+            "role": {"type": "string"},
+            "mission": {"type": "string"},
+            "treatment": {"type": "string"},
+            "preset": {"type": "string", "enum": ["Frontier", "Concourse", "Salvage", "Vanguard"]},
+            "capacity": {"type": "string", "enum": ["sales", "marketing", "development", "life coaching", "companionship"]},
+        }, required=["user_id", "role", "mission", "treatment", "preset", "capacity"]),
+        "responses": {"200": {"description": "Crew Recipe applied on behalf"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
     "user_share_grant_create": {
         "summary": "Request a read-only Drive/Code share grant",
         "tags": ["user"],
@@ -2239,6 +2368,9 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/credentials"): "user_credentials",
     ("POST", "/user/credentials/acknowledge"): "user_credential_ack",
     ("POST", "/user/agent-identity"): "user_agent_identity",
+    ("GET", "/user/crew-recipe"): "user_crew_recipe",
+    ("POST", "/user/crew-recipe/preview"): "user_crew_recipe_preview",
+    ("POST", "/user/crew-recipe/apply"): "user_crew_recipe_apply",
     ("POST", "/user/share-grants"): "user_share_grant_create",
     ("POST", "/user/share-grants/approve"): "user_share_grant_approve",
     ("POST", "/user/share-grants/deny"): "user_share_grant_deny",
@@ -2254,6 +2386,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/admin/events"): "admin_events",
     ("GET", "/admin/actions"): "admin_queued_actions",
     ("POST", "/admin/actions"): "admin_action",
+    ("POST", "/admin/crew-recipe/apply"): "admin_crew_recipe_apply",
     ("GET", "/admin/reconciliation"): "admin_reconciliation",
     ("GET", "/admin/provider-state"): "admin_provider_state",
     ("POST", "/admin/sessions/revoke"): "session_revoke",
@@ -2300,6 +2433,7 @@ _CIDR_PROTECTED_ROUTES = frozenset({
     "admin_events",
     "admin_queued_actions",
     "admin_action",
+    "admin_crew_recipe_apply",
     "admin_reconciliation",
     "admin_provider_state",
     "session_revoke",
@@ -2320,12 +2454,15 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_portal_link",
     "user_credential_ack",
     "user_agent_identity",
+    "user_crew_recipe_preview",
+    "user_crew_recipe_apply",
     "user_share_grant_create",
     "user_share_grant_approve",
     "user_share_grant_deny",
     "user_share_grant_accept",
     "user_share_grant_revoke",
     "admin_action",
+    "admin_crew_recipe_apply",
     "session_revoke",
     "onboarding_claim_session",
     "onboarding_cancel",
@@ -2466,6 +2603,12 @@ def route_arclink_hosted_api(
             result = _handle_user_credential_ack(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_agent_identity":
             result = _handle_user_agent_identity(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_crew_recipe":
+            result = _handle_user_crew_recipe_read(conn, headers, request_id, cfg)
+        elif route_key == "user_crew_recipe_preview":
+            result = _handle_user_crew_recipe_preview(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_crew_recipe_apply":
+            result = _handle_user_crew_recipe_apply(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_create":
             result = _handle_user_share_grant_create(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_approve":
@@ -2486,6 +2629,8 @@ def route_arclink_hosted_api(
             result = _handle_admin_read(conn, headers, clean_query, request_id, cfg, route_key)
         elif route_key == "admin_action":
             result = _handle_admin_action(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "admin_crew_recipe_apply":
+            result = _handle_admin_crew_recipe_apply(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "session_revoke":
             result = _handle_session_revoke(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "admin_operator_snapshot":

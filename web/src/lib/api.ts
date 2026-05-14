@@ -75,6 +75,14 @@ export const api = {
   updateAgentIdentity: (body: Record<string, string>) =>
     request("/user/agent-identity", { method: "POST", body: JSON.stringify(body) }, "user"),
 
+  userCrewRecipe: () => request("/user/crew-recipe", {}, "user"),
+
+  previewCrewRecipe: (body: Record<string, string>) =>
+    request("/user/crew-recipe/preview", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  applyCrewRecipe: (body: Record<string, string>) =>
+    request("/user/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
 
   createShareGrant: (body: Record<string, string>) =>
@@ -113,6 +121,9 @@ export const api = {
 
   queueAdminAction: (body: Record<string, string>) =>
     request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
+
+  adminApplyCrewRecipe: (body: Record<string, string>) =>
+    request("/admin/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "admin"),
 
   login: (body: Record<string, string>) =>
     request<{ session?: Record<string, unknown>; session_kind?: "user" | "admin"; role?: string; error?: string }>(

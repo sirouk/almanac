@@ -139,6 +139,22 @@ const MOCK_USER_LINKED_RESOURCES = {
   ],
 };
 
+const MOCK_USER_CREW_RECIPE = {
+  current: {
+    recipe_id: "crew_001",
+    preset: "Frontier",
+    capacity: "development",
+    role: "founder",
+    mission: "ship the launch",
+    treatment: "peer",
+    applied_at: "2026-05-01T12:00:00Z",
+    status: "active",
+    soul_overlay: { crew_recipe_text: "Frontier Development Crew Recipe for shipping the launch." },
+  },
+  prior: null,
+  whats_changed: { status: "first_recipe", summary: "This is the first active Crew Recipe." },
+};
+
 const MOCK_USER_PROVIDER_STATE = {
   provider: "chutes",
   default_model: "deepseek-r1",
@@ -241,6 +257,18 @@ async function mockApi(
     if (url.includes("/user/provisioning")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_PROVISIONING) });
     }
+    if (url.includes("/user/comms")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ comms: [] }) });
+    }
+    if (url.includes("/user/crew-recipe/preview") && method === "POST") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preview: { mode: "fallback", fallback: true, fallback_reason: "Live recipe generation requires Chutes credentials. Using preset-only overlay.", recipe_text: "Frontier Development Crew Recipe for shipping the launch." } }) });
+    }
+    if (url.includes("/user/crew-recipe/apply") && method === "POST") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ recipe: MOCK_USER_CREW_RECIPE.current, preview: { mode: "fallback", fallback: true, recipe_text: "Frontier Development Crew Recipe for shipping the launch." }, identity_projection: {} }) });
+    }
+    if (url.includes("/user/crew-recipe")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_CREW_RECIPE) });
+    }
     if (url.includes("/user/credentials/acknowledge") && method === "POST") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ credential: { ...MOCK_USER_CREDENTIALS.credentials[0], status: "removed" } }) });
     }
@@ -289,6 +317,9 @@ async function mockApi(
     if (url.includes("/admin/actions") && method === "POST") {
       return route.fulfill({ status: 202, contentType: "application/json", body: JSON.stringify({ ok: true, action_id: "act_mock" }) });
     }
+    if (url.includes("/admin/crew-recipe/apply") && method === "POST") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ recipe: MOCK_USER_CREW_RECIPE.current, identity_projection: {} }) });
+    }
     if (url.includes("/admin/provider-state")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ stripe: "fake", cloudflare: "fake", chutes: "fake" }) });
     }
@@ -319,6 +350,12 @@ async function mockApi(
 }
 
 async function mockDashboardAuxApi(page: Page) {
+  await page.route("**/api/v1/user/comms", async (route: Route) => {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ comms: [] }) });
+  });
+  await page.route("**/api/v1/user/crew-recipe", async (route: Route) => {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_CREW_RECIPE) });
+  });
   await page.route("**/api/v1/user/credentials/acknowledge", async (route: Route) => {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ credential: { ...MOCK_USER_CREDENTIALS.credentials[0], status: "removed" } }) });
   });

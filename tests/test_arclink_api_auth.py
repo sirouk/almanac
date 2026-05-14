@@ -167,6 +167,92 @@ def test_user_agent_identity_update_requires_session_and_csrf() -> None:
     print("PASS test_user_agent_identity_update_requires_session_and_csrf")
 
 
+def test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_crew_recipe_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_crew_recipe_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_crew_recipe_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    session = api.create_arclink_user_session(
+        conn,
+        user_id=prepared["user_id"],
+        metadata={"surface": "browser"},
+        session_id="usess_crew_recipe",
+    )
+    try:
+        api.preview_user_crew_recipe_api(
+            conn,
+            session_id=session["session_id"],
+            session_token=session["session_token"],
+            csrf_token="wrong",
+            role="founder",
+            mission="ship the launch",
+            treatment="peer",
+            preset="Frontier",
+            capacity="development",
+        )
+    except api.ArcLinkApiAuthError as exc:
+        expect("CSRF" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected Crew Recipe preview CSRF failure")
+    preview = api.preview_user_crew_recipe_api(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+        csrf_token=session["csrf_token"],
+        role="founder",
+        mission="ship the launch",
+        treatment="peer",
+        preset="Frontier",
+        capacity="development",
+    )
+    expect(preview.status == 200 and preview.payload["preview"]["mode"] == "fallback", str(preview))
+    applied = api.apply_user_crew_recipe_api(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+        csrf_token=session["csrf_token"],
+        role="founder",
+        mission="ship the launch",
+        treatment="peer",
+        preset="Frontier",
+        capacity="development",
+    )
+    expect(applied.status == 200 and applied.payload["recipe"]["status"] == "active", str(applied))
+    current = api.read_user_crew_recipe_api(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+    )
+    expect(current.payload["current"]["preset"] == "Frontier", str(current.payload))
+    api.upsert_arclink_admin(conn, admin_id="admin_crew_recipe", email="crew-admin@example.test", role="ops")
+    admin_session = api.create_arclink_admin_session(
+        conn,
+        admin_id="admin_crew_recipe",
+        session_id="asess_crew_recipe",
+        mfa_verified=True,
+    )
+    admin_applied = api.admin_apply_user_crew_recipe_api(
+        conn,
+        session_id=admin_session["session_id"],
+        session_token=admin_session["session_token"],
+        csrf_token=admin_session["csrf_token"],
+        user_id=prepared["user_id"],
+        role="operator",
+        mission="stabilize launch",
+        treatment="coach",
+        preset="Vanguard",
+        capacity="sales",
+    )
+    expect(admin_applied.status == 200 and admin_applied.payload["recipe"]["preset"] == "Vanguard", str(admin_applied))
+    active_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_crew_recipes WHERE user_id = ? AND status = 'active'", (prepared["user_id"],)).fetchone()["n"]
+    archived_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_crew_recipes WHERE user_id = ? AND status = 'archived'", (prepared["user_id"],)).fetchone()["n"]
+    expect(active_count == 1 and archived_count == 1, f"active={active_count} archived={archived_count}")
+    audit = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log").fetchall()]
+    expect("crew_recipe_applied_by_operator" in audit, str(audit))
+    print("PASS test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited")
+
+
 def test_public_onboarding_api_rate_limits_and_reuses_shared_contract() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_onboarding_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_api_auth_onboarding_test")
@@ -829,6 +915,7 @@ def test_proof_token_hashes_use_hmac_and_accept_legacy() -> None:
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_user_agent_identity_update_requires_session_and_csrf()
+    test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
     test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema()
@@ -845,7 +932,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 17 ArcLink API/auth tests")
+    print("PASS all 18 ArcLink API/auth tests")
     return 0
 
 

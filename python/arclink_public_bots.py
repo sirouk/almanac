@@ -20,6 +20,7 @@ from arclink_api_auth import (
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe
 from arclink_control import append_arclink_audit, append_arclink_event, queue_notification, utc_after_seconds_iso, utc_now_iso
+from arclink_crew_recipes import ArcLinkCrewRecipeError, apply_crew_recipe, preview_crew_recipe, whats_changed
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
@@ -93,6 +94,18 @@ ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS = frozenset(
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
 ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop"})
 ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents", "agent roster"})
+ARCLINK_PUBLIC_BOT_TRAIN_CREW_COMMANDS = frozenset({"/train-crew", "/train_crew", "train-crew", "train crew"})
+ARCLINK_PUBLIC_BOT_WHATS_CHANGED_COMMANDS = frozenset({"/whats-changed", "/whats_changed", "whats-changed", "what changed", "what's changed"})
+ARCLINK_PUBLIC_BOT_CREW_CONFIRM_COMMANDS = frozenset({"/confirm", "confirm", "apply", "/apply"})
+ARCLINK_PUBLIC_BOT_CREW_REGENERATE_COMMANDS = frozenset({"/regenerate", "regenerate", "try again", "/retry"})
+CREW_TRAINING_WORKFLOW_KEYS = ("public_bot_workflow", "crew_training", "crew_training_updated_at")
+CREW_TREATMENT_CHOICES = {
+    "captain": "Like a Captain - formal, ready to take orders",
+    "peer": "Like a peer - casual, give pushback",
+    "coach": "Like a coach - supportive, ask great questions",
+}
+CREW_PRESET_CHOICES = ("Frontier", "Concourse", "Salvage", "Vanguard")
+CREW_CAPACITY_CHOICES = ("sales", "marketing", "development", "life coaching", "companionship")
 ARCLINK_PUBLIC_BOT_RAVEN_NAME_COMMANDS = (
     "/raven-name",
     "/raven_name",
@@ -323,6 +336,18 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         description="Open your ArcLink crew manifest",
     ),
     ArcLinkPublicBotAction(
+        key="train_crew",
+        telegram_command="train_crew",
+        discord_command="train-crew",
+        description="Run Crew Training for your ArcLink Crew",
+    ),
+    ArcLinkPublicBotAction(
+        key="whats_changed",
+        telegram_command="whats_changed",
+        discord_command="whats-changed",
+        description="Show what changed in the current Crew Recipe",
+    ),
+    ArcLinkPublicBotAction(
         key="agent",
         telegram_command="agent",
         discord_command="agent",
@@ -500,6 +525,10 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return f"/agent-{verb[len('agent_'):]}"
     if verb in {"agent", "agents", "crew", "roster", "manifest"}:
         return "/agents"
+    if verb in {"train", "train_crew", "train-crew", "crew_training"}:
+        return "/train-crew"
+    if verb in {"whats_changed", "whats-changed", "changed", "changes"}:
+        return "/whats-changed"
     if verb in {"status", "health"}:
         return "/status"
     if verb in {"credentials", "credential"}:
@@ -1080,6 +1109,10 @@ def _active_raven_callback_command(command: str) -> str:
         "/commands": "/raven help",
         "/status": "/raven status",
         "/agents": "/raven agents",
+        "/train-crew": "/raven train_crew",
+        "/train_crew": "/raven train_crew",
+        "/whats-changed": "/raven whats_changed",
+        "/whats_changed": "/raven whats_changed",
         "/credentials": "/raven credentials",
         "/credentials-stored": "/raven credentials_stored",
         "/credentials_stored": "/raven credentials_stored",
@@ -3076,6 +3109,256 @@ def _share_grant_action_reply(
     )
 
 
+def _crew_training_data(session: Mapping[str, Any] | None) -> dict[str, Any]:
+    payload = _metadata(session)
+    data = payload.get("crew_training")
+    return dict(data) if isinstance(data, Mapping) else {}
+
+
+def _crew_training_update(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    workflow: str,
+    data: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={
+            "public_bot_workflow": workflow,
+            "crew_training": dict(data),
+            "crew_training_updated_at": utc_now_iso(),
+        },
+    )
+
+
+def _clear_crew_training_workflow(conn: sqlite3.Connection, session: Mapping[str, Any]) -> dict[str, Any]:
+    return _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={},
+        clear=CREW_TRAINING_WORKFLOW_KEYS,
+    )
+
+
+def _crew_choice_buttons(
+    choices: tuple[tuple[str, str], ...],
+    *,
+    include_cancel: bool = False,
+) -> tuple[ArcLinkPublicBotButton, ...]:
+    buttons = tuple(
+        _button(label, command=command, style="primary" if index == 0 else "secondary")
+        for index, (label, command) in enumerate(choices)
+    )
+    if include_cancel:
+        buttons = (*buttons, _button("Cancel", command="/cancel", style="secondary"))
+    return buttons
+
+
+def _crew_training_start_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if deployment is None or str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="crew_training_not_ready",
+            reply=_need_finished_onboarding_reply(),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Take Me Aboard", command="/packages"),),
+        )
+    if session is None:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="crew_training_not_ready",
+            reply=_need_finished_onboarding_reply(),
+            deployment=deployment,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    updated = _crew_training_update(conn, session, workflow="crew_training_role", data={})
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="crew_training_prompt_role",
+        reply="Crew Training is open.\n\nWhat is your role? Send one line, for example `founder building a startup`.",
+        session=updated,
+        deployment=deployment,
+        buttons=(_button("Cancel", command="/cancel", style="secondary"),),
+    )
+
+
+def _crew_training_prompt(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    action: str,
+    reply: str,
+    buttons: tuple[ArcLinkPublicBotButton, ...] = (),
+) -> ArcLinkPublicBotTurn:
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action=action,
+        reply=reply,
+        session=session,
+        deployment=deployment,
+        buttons=buttons or (_button("Cancel", command="/cancel", style="secondary"),),
+    )
+
+
+def _crew_training_review_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    if not user_id:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="crew_training_not_ready",
+            reply=_need_finished_onboarding_reply(),
+            session=session,
+            deployment=deployment,
+        )
+    try:
+        preview = preview_crew_recipe(
+            conn,
+            user_id=user_id,
+            role=str(data.get("role") or ""),
+            mission=str(data.get("mission") or ""),
+            treatment=str(data.get("treatment") or ""),
+            preset=str(data.get("preset") or ""),
+            capacity=str(data.get("capacity") or ""),
+        )
+    except (ArcLinkCrewRecipeError, KeyError) as exc:
+        updated = _crew_training_update(conn, session, workflow="crew_training_role", data={})
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="crew_training_restart",
+            reply=f"Crew Training needs a clean restart: {exc}. Send your role again.",
+            session=updated,
+            deployment=deployment,
+            buttons=(_button("Cancel", command="/cancel", style="secondary"),),
+        )
+    review_data = dict(data)
+    review_data["last_preview_mode"] = str(preview.get("mode") or "")
+    review_data["last_fallback_reason"] = str(preview.get("fallback_reason") or "")
+    updated = _crew_training_update(conn, session, workflow="crew_training_review", data=review_data)
+    fallback_line = f"\n\n{preview['fallback_reason']}" if preview.get("fallback") else ""
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="crew_training_review",
+        reply=(
+            "Review this Crew Recipe.\n\n"
+            f"{preview['recipe_text']}"
+            f"{fallback_line}\n\n"
+            "Send `confirm` to apply it, `regenerate` to try again, or `cancel` to close without changes."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(
+            _button("Confirm", command="/confirm"),
+            _button("Regenerate", command="/regenerate", style="secondary"),
+            _button("Cancel", command="/cancel", style="secondary"),
+        ),
+    )
+
+
+def _crew_training_confirm_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    result = apply_crew_recipe(
+        conn,
+        user_id=user_id,
+        role=str(data.get("role") or ""),
+        mission=str(data.get("mission") or ""),
+        treatment=str(data.get("treatment") or ""),
+        preset=str(data.get("preset") or ""),
+        capacity=str(data.get("capacity") or ""),
+        actor_id=user_id,
+    )
+    updated = _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={},
+        clear=CREW_TRAINING_WORKFLOW_KEYS,
+    )
+    recipe = result.get("recipe") or {}
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="crew_training_applied",
+        reply=(
+            f"Crew Training applied: {recipe.get('preset', '')} / {recipe.get('capacity', '')}.\n\n"
+            "The additive SOUL overlay is projected for your Crew. Memories and sessions were not rewritten."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(_button("What Changed", command="/whats-changed", style="secondary"),),
+    )
+
+
+def _whats_changed_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or (session or {}).get("user_id") or "").strip()
+    if not user_id:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="crew_recipe_not_ready",
+            reply=_need_finished_onboarding_reply(),
+            session=session,
+            deployment=deployment,
+        )
+    diff = whats_changed(conn, user_id=user_id)
+    current = diff.get("current") or {}
+    if diff["status"] == "none":
+        reply = "No Crew Recipe is active yet. Send `/train-crew` to create one."
+    elif diff["status"] == "first_recipe":
+        reply = f"Current Crew Recipe: {current.get('preset', '')} / {current.get('capacity', '')}. No prior recipe is archived yet."
+    else:
+        reply = f"Crew Recipe changes: {diff['summary']}"
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="crew_recipe_whats_changed",
+        reply=reply,
+        session=session,
+        deployment=deployment,
+        buttons=(_button("Train Crew", command="/train-crew", style="secondary"),),
+    )
+
+
 def _handle_active_workflow(
     conn: sqlite3.Connection,
     *,
@@ -3092,12 +3375,7 @@ def _handle_active_workflow(
     if not workflow:
         return None
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
-        updated = _update_session_metadata(
-            conn,
-            session_id=str(session["session_id"]),
-            updates={},
-            clear=("public_bot_workflow",),
-        )
+        updated = _clear_crew_training_workflow(conn, session)
         return _turn(
             channel=channel,
             channel_identity=channel_identity,
@@ -3113,6 +3391,157 @@ def _handle_active_workflow(
                 _button("Check Status", command="/status", style="secondary"),
             ),
         )
+    if workflow.startswith("crew_training_"):
+        data = _crew_training_data(session)
+        if workflow == "crew_training_role":
+            if command.startswith("/") and command not in {"/train-crew", "/train_crew"}:
+                return None
+            role = message.strip()
+            if not role or role.startswith("/"):
+                return _crew_training_prompt(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    action="crew_training_prompt_role",
+                    reply="What is your role? Send one line, for example `founder building a startup`.",
+                )
+            data["role"] = role
+            updated = _crew_training_update(conn, session, workflow="crew_training_mission", data=data)
+            return _crew_training_prompt(
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                action="crew_training_prompt_mission",
+                reply="What should your Crew help you ship in the next 12 weeks?",
+            )
+        if workflow == "crew_training_mission":
+            if command.startswith("/"):
+                return None
+            mission = message.strip()
+            if not mission:
+                return _crew_training_prompt(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    action="crew_training_prompt_mission",
+                    reply="Send the mission in one line.",
+                )
+            data["mission"] = mission
+            updated = _crew_training_update(conn, session, workflow="crew_training_treatment", data=data)
+            return _crew_training_prompt(
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                action="crew_training_prompt_treatment",
+                reply="How should your Crew treat you? Reply `captain`, `peer`, `coach`, or a custom one-line preference.",
+                buttons=_crew_choice_buttons(tuple((label.title(), label) for label in CREW_TREATMENT_CHOICES), include_cancel=True),
+            )
+        if workflow == "crew_training_treatment":
+            if command.startswith("/"):
+                return None
+            treatment = CREW_TREATMENT_CHOICES.get(command, message.strip())
+            if not treatment:
+                return _crew_training_prompt(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    action="crew_training_prompt_treatment",
+                    reply="Reply `captain`, `peer`, `coach`, or a custom one-line preference.",
+                )
+            data["treatment"] = treatment
+            updated = _crew_training_update(conn, session, workflow="crew_training_preset", data=data)
+            return _crew_training_prompt(
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                action="crew_training_prompt_preset",
+                reply="Pick a Crew preset: Frontier, Concourse, Salvage, or Vanguard.",
+                buttons=_crew_choice_buttons(tuple((preset, preset) for preset in CREW_PRESET_CHOICES), include_cancel=True),
+            )
+        if workflow == "crew_training_preset":
+            if command.startswith("/"):
+                return None
+            preset = message.strip().title()
+            if preset not in CREW_PRESET_CHOICES:
+                return _crew_training_prompt(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    action="crew_training_prompt_preset",
+                    reply="Pick one preset: Frontier, Concourse, Salvage, or Vanguard.",
+                )
+            data["preset"] = preset
+            updated = _crew_training_update(conn, session, workflow="crew_training_capacity", data=data)
+            return _crew_training_prompt(
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                action="crew_training_prompt_capacity",
+                reply="Pick a Crew capacity: sales, marketing, development, life coaching, or companionship.",
+                buttons=_crew_choice_buttons(tuple((capacity.title(), capacity) for capacity in CREW_CAPACITY_CHOICES)),
+            )
+        if workflow == "crew_training_capacity":
+            if command.startswith("/"):
+                return None
+            capacity = command.replace("_", " ").replace("-", " ")
+            if capacity not in CREW_CAPACITY_CHOICES:
+                return _crew_training_prompt(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    action="crew_training_prompt_capacity",
+                    reply="Pick one capacity: sales, marketing, development, life coaching, or companionship.",
+                )
+            data["capacity"] = capacity
+            return _crew_training_review_reply(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
+            )
+        if workflow == "crew_training_review":
+            if command in ARCLINK_PUBLIC_BOT_CREW_CONFIRM_COMMANDS:
+                return _crew_training_confirm_reply(
+                    conn,
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    data=data,
+                )
+            if command in ARCLINK_PUBLIC_BOT_CREW_REGENERATE_COMMANDS:
+                return _crew_training_review_reply(
+                    conn,
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    session=session,
+                    deployment=deployment,
+                    data=data,
+                )
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="crew_training_review_waiting",
+                reply="Send `confirm` to apply this Crew Recipe, `regenerate` to try again, or `cancel` to close without changes.",
+                session=session,
+                deployment=deployment,
+                buttons=(
+                    _button("Confirm", command="/confirm"),
+                    _button("Regenerate", command="/regenerate", style="secondary"),
+                    _button("Cancel", command="/cancel", style="secondary"),
+                ),
+            )
     if workflow == "name_update":
         explicit_name = _command_value(message, command, ("name", "/name"))
         if explicit_name is not None:
@@ -3498,6 +3927,26 @@ def handle_arclink_public_bot_turn(
     if command in ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         return _agents_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_TRAIN_CREW_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _crew_training_start_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_WHATS_CHANGED_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _whats_changed_reply(
             conn,
             channel=clean_channel,
             channel_identity=clean_identity,

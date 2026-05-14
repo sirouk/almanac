@@ -1511,6 +1511,56 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
     print("PASS test_public_bot_raven_display_name_is_channel_and_account_scoped")
 
 
+def test_public_bot_train_crew_flow_and_whats_changed() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_crew_training_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_crew_training_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:crew",
+        prefix="arc-crewtrain",
+    )
+
+    none = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/whats-changed")
+    expect(none.action == "crew_recipe_whats_changed", str(none))
+    expect("No Crew Recipe is active" in none.reply, none.reply)
+
+    start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/train-crew")
+    expect(start.action == "crew_training_prompt_role", str(start))
+    mission = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="founder building a tool")
+    expect(mission.action == "crew_training_prompt_mission", str(mission))
+    treatment = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="ship the launch")
+    expect(treatment.action == "crew_training_prompt_treatment", str(treatment))
+    preset = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="peer")
+    expect(preset.action == "crew_training_prompt_preset", str(preset))
+    capacity = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="Frontier")
+    expect(capacity.action == "crew_training_prompt_capacity", str(capacity))
+    review = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="development")
+    expect(review.action == "crew_training_review", str(review))
+    expect("Live recipe generation requires configured provider credentials" in review.reply, review.reply)
+    regenerated = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="regenerate")
+    expect(regenerated.action == "crew_training_review", str(regenerated))
+    confirmed = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="confirm")
+    expect(confirmed.action == "crew_training_applied", str(confirmed))
+    active = conn.execute("SELECT preset, capacity, status FROM arclink_crew_recipes WHERE user_id = ? AND status = 'active'", (seeded["user_id"],)).fetchone()
+    expect(active["preset"] == "Frontier" and active["capacity"] == "development", str(dict(active)))
+    first = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/whats-changed")
+    expect("No prior recipe" in first.reply, first.reply)
+
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/train-crew")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="operator")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="stabilize launch")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="coach")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="Vanguard")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="sales")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="confirm")
+    changed = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/whats-changed")
+    expect("preset: Frontier -> Vanguard" in changed.reply, changed.reply)
+    print("PASS test_public_bot_train_crew_flow_and_whats_changed")
+
+
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
@@ -1539,7 +1589,8 @@ def main() -> int:
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_can_rename_and_retitle_live_agent()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
-    print("PASS all 27 ArcLink public bot tests")
+    test_public_bot_train_crew_flow_and_whats_changed()
+    print("PASS all 28 ArcLink public bot tests")
     return 0
 
 

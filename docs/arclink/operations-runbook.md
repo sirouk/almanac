@@ -739,6 +739,37 @@ Use the canonical Docker path rather than editing generated Compose by hand:
 ./deploy.sh docker health
 ```
 
+## Crew Training
+
+Crew Training is a Captain-facing flow in the dashboard and Raven public bot
+(`/train-crew`). It captures the Captain role, mission, treatment preference,
+Crew preset, and Crew capacity, then previews a Crew Recipe before confirmation.
+
+Confirmation writes one active `arclink_crew_recipes` row for the Captain,
+archives any prior active row, writes an audit entry, and projects an additive
+SOUL overlay into each local Pod identity context at
+`state/arclink-identity-context.json` when that Hermes home exists. It does not
+rewrite memories or sessions and does not restart the Hermes gateway. Remote or
+unavailable local projection targets return a skipped reason for operator
+review.
+
+Live recipe generation uses the existing scoped provider boundary only when a
+Captain/Pod has an allowed scoped secret reference and budget. Without that
+credential boundary, Crew Training truthfully runs in deterministic fallback
+mode: "Live recipe generation requires configured provider credentials. Using
+preset-only overlay." Provider output containing URLs, shell commands, or
+instruction override patterns is rejected and retried before falling back.
+
+Focused checks:
+
+```bash
+python3 tests/test_arclink_crew_recipes.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_public_bots.py
+cd web && npm test && npm run lint && npm run build
+```
+
 **Tailscale path-mode app publishing:**
 
 When `ARCLINK_INGRESS_MODE=tailscale` and

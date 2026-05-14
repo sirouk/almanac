@@ -1,69 +1,65 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-14
-- project_root: .
-- primary_stack: Python control plane with SQLite, Bash/Compose runtime, and Next.js web surface
-- primary_score: 093/100
+- snapshot_date: 2026-05-14
+- project_type: existing ArcLink public repository
+- primary_stack: Python control plane with Next.js dashboard
+- deterministic_confidence_score: 092/100
 - confidence: high
 
-## Deterministic Scoring Inputs
+## Deterministic Scoring Rule
 
-Repository-level public signals, excluding private state and generated caches:
-
-| signal | count / evidence |
-| --- | --- |
-| Python source files | 63 in `python/` |
-| Python regression tests | 107 focused `tests/test_*.py` files |
-| Shell/runtime scripts | 155 shell files/signals across canonical wrappers and generated/public helper lanes |
-| Web source | 17 TSX files and 6 TS files under `web/` |
-| Runtime manifests | `requirements-dev.txt`, `compose.yaml`, `Dockerfile`, `deploy.sh`, `test.sh`, `web/package.json` |
-| Wave 4-6 targets | Python modules, SQLite tables, MCP/API handlers, public bots, dashboards, notification outbox, Compose job loop |
-
-Scoring rule:
-
-- Python receives the largest weight from control-plane ownership, schema,
-  API/auth, MCP, bots, notifications, Chutes/redaction helpers, and tests.
-- SQLite is core state but embedded through Python.
-- Next.js is required for Captain/Operator surfaces but depends on Python APIs.
-- Bash/Compose is operational runtime, especially for the Wave 6 scheduler.
-- External services are integration targets, not local BUILD dependencies.
+Scores are based only on public repository signals: manifest presence, source
+file volume, runtime entrypoints, test coverage, and direct relevance to Wave 5
+Crew Training. Private state and live services are excluded.
 
 ## Project Stack Ranking
 
 | rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python control plane | 093 | Owns schema, comms/recipe/wrapped modules, API/auth, MCP, bots, notifications, and focused tests. |
-| 2 | SQLite state model | 074 | Existing tables for pod messages, crew recipes, wrapped reports, audit/events, rate limits, notifications. |
-| 3 | Next.js / React / TypeScript | 061 | Captain dashboard, admin dashboard, API client, browser tests for Comms/Crew Training/Wrapped surfaces. |
-| 4 | Bash / Docker Compose | 055 | Canonical wrappers and job-loop service pattern for Wrapped scheduler. |
-| 5 | ArcLink/Hermes plugin boundary | 038 | Identity-context and managed-context rails; do not modify Hermes core. |
-| 6 | External providers | 018 | Chutes, Telegram, Discord, Stripe, Notion, Cloudflare, Tailscale, Hetzner, Linode remain proof-gated. |
+| 1 | Python | 092 | 187 Python files, control DB, hosted API, auth, public bots, provisioning, Chutes boundary, memory safety, and focused tests. |
+| 2 | TypeScript/React/Next.js | 074 | Next.js dashboard in `web/`, API helper layer, dashboard/admin pages, web tests, and browser-test lane. |
+| 3 | Bash | 061 | Canonical deploy/test wrappers and service/job scripts; likely unchanged for Wave 5. |
+| 4 | SQLite | 058 | Embedded control-plane DB schema and drift checks in Python; existing Crew Recipe table. |
+| 5 | Docker Compose | 042 | Runtime topology for control/shared services; not expected to change for Wave 5. |
+| 6 | Vite/React marketing app | 024 | Separate `arclink-frontend` app exists but is not the Wave 5 dashboard surface. |
+| 7 | Unknown/other | 000 | No stronger public signals. |
 
-## Ranked Stack Hypotheses
+## Top Stack Hypotheses
 
-1. **Python-led ArcLink control platform with SQLite state and Next.js dashboards**:
-   selected. This matches all Wave 4-6 behavior surfaces.
-2. **Next.js product app with Python backend**: true for user-facing work, but
-   insufficient as the primary stack because authorization, notifications,
-   MCP tools, and report generation live in Python.
-3. **Shell/Compose operator system with Python helpers**: true for deploy and
-   scheduling, but not primary for brokered comms, recipes, or Wrapped logic.
-
-## Alternatives
-
-| alternative | fit for Waves 4-6 | decision |
+| hypothesis | confidence | rationale |
 | --- | --- | --- |
-| Add a separate message broker or queue service | Low | Reject. SQLite plus notification outbox is the existing rail and enough for scoped comms. |
-| Add a new LLM/provider SDK for Crew Training | Low | Reject. Reuse Chutes boundary and fake/injectable tests. |
-| Build Wrapped as a frontend-only report | Low | Reject. Report inputs and redaction belong server-side. |
-| Fold Wrapped into health-watch | Medium | Accept only if an explicit `arclink-wrapped` job service proves unnecessary; default to named job-loop integration. |
+| Wave 5 should be implemented primarily in Python with small Next.js additions | 92 | Recipe lifecycle, provider fallback, unsafe-output checks, DB writes, API auth, bot flow, and identity projection all live in Python. The Captain UI is Next.js. |
+| Wave 5 requires new infrastructure | 12 | Existing schema, Chutes boundary, hosted API, public bot handler, and identity projection are sufficient. |
+| Wave 5 belongs in Hermes core | 02 | The operating guide forbids Hermes core changes, and managed-context already consumes ArcLink identity overlays. |
 
-## Confidence
+## Ranked Alternatives
 
-Deterministic confidence score: **93/100**.
+1. Python module plus API/bot/web adapters.
+   - Score: 92
+   - Use when implementing `python/arclink_crew_recipes.py`, hosted API routes,
+     bot commands, and identity projection.
 
-Confidence is high because repository structure, schema foundations, test
-layout, and the Wave 4-6 target surfaces consistently point to Python/SQLite
-as the primary implementation stack, with Next.js and Compose as secondary
-surfaces. Remaining uncertainty is live delivery/inference proof, which is
-explicitly blocked until operator authorization.
+2. API/web-only implementation.
+   - Score: 39
+   - Rejected because lifecycle, unsafe-output rejection, fallback, and audit
+     would be duplicated or hidden in handlers.
+
+3. Frontend-only dry-run questionnaire.
+   - Score: 18
+   - Rejected because the deliverable requires durable recipe rows and SOUL
+     overlay application.
+
+4. Live-provider-first implementation.
+   - Score: 15
+   - Rejected because BUILD must pass without live Chutes and must never
+     require provider mutation.
+
+5. Hermes-core modification.
+   - Score: 02
+   - Rejected by repository operating guide and Wave 5 constraints.
+
+## Stack Conclusion
+
+Use existing Python, SQLite, Chutes boundary/fakes, memory-synthesis safety,
+provisioning projection, hosted API/auth, public bot handlers, and Next.js
+dashboard patterns. Do not add infrastructure for Wave 5.

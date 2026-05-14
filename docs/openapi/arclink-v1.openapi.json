@@ -196,6 +196,79 @@
         ]
       }
     },
+    "/api/v1/admin/crew-recipe/apply": {
+      "post": {
+        "operationId": "admin_crew_recipe_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "capacity": {
+                    "enum": [
+                      "sales",
+                      "marketing",
+                      "development",
+                      "life coaching",
+                      "companionship"
+                    ],
+                    "type": "string"
+                  },
+                  "mission": {
+                    "type": "string"
+                  },
+                  "preset": {
+                    "enum": [
+                      "Frontier",
+                      "Concourse",
+                      "Salvage",
+                      "Vanguard"
+                    ],
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "treatment": {
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "user_id",
+                  "role",
+                  "mission",
+                  "treatment",
+                  "preset",
+                  "capacity"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Crew Recipe applied on behalf"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Apply Crew Training on a Captain's behalf with admin audit",
+        "tags": [
+          "admin",
+          "crew-training"
+        ]
+      }
+    },
     "/api/v1/admin/dashboard": {
       "get": {
         "operationId": "admin_dashboard",
@@ -1234,6 +1307,167 @@
         "summary": "Acknowledge credential storage and remove future handoff visibility",
         "tags": [
           "user"
+        ]
+      }
+    },
+    "/api/v1/user/crew-recipe": {
+      "get": {
+        "operationId": "user_crew_recipe",
+        "responses": {
+          "200": {
+            "description": "Crew Recipe state"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read the active and prior Crew Recipe",
+        "tags": [
+          "user",
+          "crew-training"
+        ]
+      }
+    },
+    "/api/v1/user/crew-recipe/apply": {
+      "post": {
+        "operationId": "user_crew_recipe_apply",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "capacity": {
+                    "enum": [
+                      "sales",
+                      "marketing",
+                      "development",
+                      "life coaching",
+                      "companionship"
+                    ],
+                    "type": "string"
+                  },
+                  "mission": {
+                    "type": "string"
+                  },
+                  "preset": {
+                    "enum": [
+                      "Frontier",
+                      "Concourse",
+                      "Salvage",
+                      "Vanguard"
+                    ],
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "treatment": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role",
+                  "mission",
+                  "treatment",
+                  "preset",
+                  "capacity"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Crew Recipe applied"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Confirm Crew Training and apply the additive SOUL overlay",
+        "tags": [
+          "user",
+          "crew-training"
+        ]
+      }
+    },
+    "/api/v1/user/crew-recipe/preview": {
+      "post": {
+        "operationId": "user_crew_recipe_preview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "capacity": {
+                    "enum": [
+                      "sales",
+                      "marketing",
+                      "development",
+                      "life coaching",
+                      "companionship"
+                    ],
+                    "type": "string"
+                  },
+                  "mission": {
+                    "type": "string"
+                  },
+                  "preset": {
+                    "enum": [
+                      "Frontier",
+                      "Concourse",
+                      "Salvage",
+                      "Vanguard"
+                    ],
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "treatment": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "role",
+                  "mission",
+                  "treatment",
+                  "preset",
+                  "capacity"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Crew Recipe preview"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Preview or regenerate a Crew Recipe without applying it",
+        "tags": [
+          "user",
+          "crew-training"
         ]
       }
     },

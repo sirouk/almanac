@@ -94,6 +94,9 @@ describe("Page content smoke checks", () => {
     }
     assert.ok(content.includes("api.userDashboard"), "missing dashboard API call");
     assert.ok(content.includes("api.updateAgentIdentity"), "missing Agent identity API call");
+    assert.ok(content.includes("Crew Training"), "missing Crew Training UI");
+    assert.ok(content.includes("api.previewCrewRecipe"), "missing Crew Training preview API call");
+    assert.ok(content.includes("api.applyCrewRecipe"), "missing Crew Training apply API call");
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
     assert.ok(content.includes("Drive"), "dashboard should link to Drive");
     assert.ok(content.includes("Code"), "dashboard should link to Code");
@@ -155,6 +158,9 @@ describe("API client route parity with hosted API", () => {
       "/user/credentials",
       "/user/credentials/acknowledge",
       "/user/agent-identity",
+      "/user/crew-recipe",
+      "/user/crew-recipe/preview",
+      "/user/crew-recipe/apply",
       "/user/linked-resources",
       "/user/share-grants",
       "/user/share-grants/approve",
@@ -170,6 +176,7 @@ describe("API client route parity with hosted API", () => {
       "/admin/audit",
       "/admin/events",
       "/admin/actions",
+      "/admin/crew-recipe/apply",
       "/admin/provider-state",
       "/admin/reconciliation",
       "/admin/operator-snapshot",

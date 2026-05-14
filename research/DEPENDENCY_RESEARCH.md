@@ -2,93 +2,82 @@
 
 ## Scope
 
-This document records stack and dependency signals relevant to ArcPod Captain
-Console Waves 4-6: Pod-to-Pod Comms, Crew Training, and ArcLink Wrapped. It
-does not assert live capability for Stripe, Telegram, Discord, Chutes, Notion,
-Cloudflare, Tailscale, Hetzner, Linode, Docker host mutation, or production
-deploy flows.
+This document records stack and dependency signals relevant to Wave 5 Crew
+Training. It does not assert live capability for Stripe, Telegram, Discord,
+Chutes, Notion, cloud providers, Docker host mutation, or production deploy
+flows.
 
 ## Stack Components
 
-| Component | Evidence | Wave 4-6 use | Decision |
+| Component | Evidence | Wave 5 use | Decision |
 | --- | --- | --- | --- |
-| Python 3.11+ | `python/*.py`, `tests/test_*.py`, `requirements-dev.txt` | New comms, recipe, wrapped modules; API/auth; MCP; bot flows; tests | Primary implementation surface. |
-| SQLite | `python/arclink_control.py` | Existing tables for pod messages, crew recipes, wrapped reports, audit/events, rate limits, notifications | Reuse `ensure_schema`; add only behavior-required schema deltas. |
-| Next.js / React / TypeScript | `web/package.json`, `web/src/app` | Comms, Crew Training, and Wrapped dashboard surfaces | Reuse current monolithic page/tab pattern; avoid frontend architecture churn. |
-| Bash | `deploy.sh`, `bin/*.sh` | Wrapped scheduler wrapper or job-loop integration | Touch only when needed for Wave 6 runtime. |
-| Docker Compose | `compose.yaml` | Add or integrate `arclink-wrapped` scheduled job | Reuse existing `docker-job-loop.sh` job-service pattern. |
-| Notification delivery | `notification_outbox`, `python/arclink_notification_delivery.py` | Comms recipient delivery and Wrapped delivery | Reuse; avoid bespoke delivery queues. |
-| MCP server | `python/arclink_mcp_server.py` | Agent-facing `pod_comms.*` tools | Follow existing `shares.request` schema/dispatch pattern. |
-| Chutes boundary | `python/arclink_chutes.py`, fake client patterns | Crew Recipe generation when credentials allow it | Use injectable/fake-tested client; deterministic fallback if unavailable. |
-| Memory synthesis safety | `python/arclink_memory_synthesizer.py` | Reject unsafe recipe output | Reuse unsafe-output pattern or extract small shared helper if needed. |
-| Evidence redaction | `python/arclink_evidence.py`, `python/arclink_secrets_regex.py` | Wrapped report redaction | Redact before render and delivery. |
+| Python 3 | `python/*.py`, `tests/test_*.py`, `requirements-dev.txt` | Recipe lifecycle, provider boundary, API/auth, bot handlers, provisioning projection, tests | Primary implementation surface. |
+| SQLite | `python/arclink_control.py` | Existing `arclink_crew_recipes`, `arclink_users`, audit, events, sessions, deployments | Reuse existing schema and `ensure_schema`. |
+| Chutes boundary | `python/arclink_chutes.py`, `python/arclink_chutes_live.py` | Provider-backed recipe generation when credentials allow it | Use injectable or fake clients; no live inference required. |
+| Memory synthesis safety | `python/arclink_memory_synthesizer.py` | Unsafe-output rejection before accepting recipe output | Reuse or extract the existing URL, shell command, and jailbreak checks. |
+| Provisioning projection | `python/arclink_provisioning.py` | Write additive recipe overlay into identity context for each Pod | Extend existing projection pattern; preserve existing keys. |
+| Hosted API | `python/arclink_hosted_api.py`, `python/arclink_api_auth.py` | Crew Training routes and CSRF-gated mutations | Follow existing route table and handler style. |
+| Public bots | `python/arclink_public_bots.py` | `/train-crew` and `/whats-changed` questionnaire flow | Keep pure handler tests; no live command registration. |
+| Next.js / React / TypeScript | `web/package.json`, `web/src/app`, `web/src/lib/api.ts` | Captain dashboard Crew Training UI | Reuse current API helper and dashboard page patterns. |
+| Docs/OpenAPI | `docs/openapi/arclink-v1.openapi.json`, runbooks | Contract and operator docs | Update after runtime behavior is implemented. |
 
 ## Version Snapshot
 
 | Lane | Public signal | Planning note |
 | --- | --- | --- |
-| Python | Dev requirements include jsonschema, PyYAML, requests, Playwright, pyflakes, ruff | New code should stay standard-library first and testable without live services. |
-| Web | Next 15, React 19, TypeScript 5, ESLint 9, Playwright | UI changes require `npm test`, lint, and targeted browser checks when flows are interactive. |
-| Compose | Job services already use `docker-job-loop.sh` intervals | Wrapped can join this model without new infrastructure. |
-| Hermes/qmd | Runtime is pinned and managed outside these waves | Do not patch Hermes core; identity-context overlays are ArcLink-owned. |
+| Python validation | `requirements-dev.txt` includes jsonschema, PyYAML, requests, Playwright, pyflakes, ruff | New code should stay standard-library first and testable without live services. |
+| Web app | Next 15, React 19, TypeScript 5, ESLint 9, Playwright | Dashboard changes require `npm test`, lint, build, and browser proof when available. |
+| Marketing app | A separate Vite/React app exists under `arclink-frontend` | Not in Wave 5 scope unless a direct dashboard routing issue requires it. |
+| Shell/Compose | Canonical deploy and Docker scripts exist | Wave 5 should not need shell or Compose changes. |
 
 ## Alternatives Compared
 
 | Decision area | Preferred path | Alternatives | Reason |
 | --- | --- | --- | --- |
-| Comms implementation | Python broker module plus MCP/API adapters | SQL in handlers; external chat queue | Central module is testable and keeps trust boundaries in one place. |
-| Comms authorization | Same-Captain allowed, cross-Captain requires active `pod_comms` share grant | Global allow-list; admin override by default | Share grants already model approval and projection. |
-| Crew generation | Provider-backed with fake/injectable Chutes and deterministic fallback | Require live Chutes; no-LLM static only | Meets product goal while keeping BUILD no-secret. |
-| Unsafe output | Reuse memory-synthesis unsafe patterns and shared redaction | Trust model output after JSON parse | Rejecting URLs/shell/jailbreak text is required before SOUL overlay. |
-| Wrapped scheduler | Explicit Compose job-loop service or wrapper | Fold into health-watch; manual-only command | A named job is operable and testable; health-watch overloading is harder to reason about. |
-| Wrapped data reads | Control DB plus bounded per-deployment metadata/state-root readers | Raw user-home scans | Prevents uid crossing and keeps tests local. |
+| Recipe business logic | `python/arclink_crew_recipes.py` | Inline logic in API, bot, or React | Central module makes lifecycle, fallback, unsafe-output rejection, and audit testable. |
+| Generation source | Chutes-compatible injectable client plus deterministic fallback | Require live Chutes; static-only output | Meets product goal without making live credentials a build gate. |
+| Fallback content | Deterministic preset/capacity overlay and truthful dry-run label | Silent generic fallback | Captains need honest state and stable local tests. |
+| Unsafe-output handling | Reuse or extract memory-synth safety patterns | New ad hoc regexes; trust model output | Existing boundary already encodes required rejection classes. |
+| SOUL application | Project overlay to identity context for each Pod | Rewrite memories, sessions, or Hermes core | Matches ArcLink managed-context architecture and avoids gateway restart. |
+| Web integration | Add focused questionnaire UI to existing dashboard flow | Frontend architecture rewrite | Keeps Wave 5 scoped and minimizes regression risk. |
+| Bot integration | Extend existing public bot handler/session metadata | New live bot workflow service | Local tests can prove behavior without external mutation. |
 
 ## External Integration Posture
 
 | Integration | Local BUILD posture | Live posture |
 | --- | --- | --- |
 | SQLite control DB | Temporary DBs and schema fixtures | No private runtime DB reads. |
-| Chutes inference | Fake/injectable response and deterministic fallback tests | Live inference blocked unless operator authorizes it. |
-| Telegram/Discord | Pure handler/command tests with queued notifications | No webhook mutation or command registration. |
-| Notification delivery | Queue rows and fake delivery assertions | Live chat delivery blocked. |
-| Hermes sessions/state | Temporary fixtures only | No real user home reads. |
-| Docker/Compose | Static config and shell syntax checks | No deploy/install/upgrade. |
-| Stripe/payment/provider mutation | Not needed for Waves 4-6 BUILD | Blocked. |
+| Chutes inference | Fake/injectable response and deterministic fallback tests | Live inference blocked unless separately authorized. |
+| Telegram/Discord | Pure handler tests with returned reply payloads | No webhook mutation, command registration, or live delivery. |
+| Hermes identity context | Temporary Hermes-home fixtures only | No real user home reads. |
+| Payment/provider mutation | Not needed for Crew Training BUILD | Blocked. |
+| Deploy/install/upgrade | Not needed for Crew Training BUILD | Blocked. |
 
 ## Dependency Risks
 
-- No new infrastructure is needed for Wave 4 or Wave 5. Adding one would widen
-  scope unnecessarily.
-- Chutes live inference must not become a hard dependency for Crew Training;
-  fallback output must be deterministic and useful.
-- Wrapped may need a small reader abstraction for session/vault/memory inputs
-  so tests do not depend on private runtime paths.
-- Web changes touch large dashboard components; keep additions localized and
-  consider small presentational helpers only if duplication becomes real.
+- Live Chutes must not become a required test or runtime dependency for Wave 5
+  completion.
+- Unsafe-output checks should be shared carefully so changing them does not
+  weaken memory synthesis behavior.
+- Identity-context projection must be atomic and preserve existing dashboard,
+  resource, and Agent identity fields.
+- The web dashboard is large; additions should be localized and tested through
+  existing page smoke/client tests plus a browser questionnaire proof.
 
 ## Validation Dependencies
 
-Minimum validation after BUILD hardening:
+Minimum validation after Wave 5 BUILD:
 
 ```bash
 git diff --check
-python3 -m py_compile python/arclink_pod_comms.py python/arclink_crew_recipes.py python/arclink_wrapped.py python/arclink_mcp_server.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_public_bots.py python/arclink_dashboard.py python/arclink_notification_delivery.py
-python3 tests/test_arclink_pod_comms.py
+python3 -m py_compile python/arclink_crew_recipes.py python/arclink_provisioning.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_public_bots.py python/arclink_dashboard.py
 python3 tests/test_arclink_crew_recipes.py
-python3 tests/test_arclink_wrapped.py
-python3 tests/test_arclink_mcp_schemas.py
-python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_provisioning.py
 python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_api_auth.py
 python3 tests/test_arclink_public_bots.py
 python3 tests/test_arclink_dashboard.py
-python3 tests/test_arclink_notification_delivery.py
 python3 tests/test_arclink_schema.py
-```
-
-If shell or Compose files change:
-
-```bash
-bash -n deploy.sh bin/*.sh test.sh
 ```
 
 If web files change:
@@ -98,4 +87,10 @@ cd web
 npm test
 npm run lint
 npm run build
+```
+
+If shell or Compose files unexpectedly change:
+
+```bash
+bash -n deploy.sh bin/*.sh test.sh
 ```

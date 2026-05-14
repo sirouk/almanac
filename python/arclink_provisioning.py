@@ -232,6 +232,31 @@ def project_arclink_deployment_identity_context(
             "identity_source": str(source or "agent_identity_update"),
         }
     )
+    recipe_row = conn.execute(
+        """
+        SELECT soul_overlay_json
+        FROM arclink_crew_recipes
+        WHERE user_id = ? AND status = 'active'
+        ORDER BY applied_at DESC, recipe_id DESC
+        LIMIT 1
+        """,
+        (str(deployment["user_id"]),),
+    ).fetchone()
+    if recipe_row is not None:
+        recipe_overlay = _json_loads(str(recipe_row["soul_overlay_json"] or "{}"))
+        if isinstance(recipe_overlay, Mapping):
+            for key in (
+                "crew_preset",
+                "crew_capacity",
+                "captain_role",
+                "captain_mission",
+                "captain_treatment",
+                "applied_at",
+                "crew_recipe_text",
+            ):
+                value = recipe_overlay.get(key)
+                if value is not None:
+                    payload[key] = value
     _atomic_write_json(identity_path, payload)
     return {
         "status": "projected",

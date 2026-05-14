@@ -45,6 +45,13 @@ from arclink_chutes import (
     evaluate_chutes_deployment_boundary,
     renewal_lifecycle_for_billing_state,
 )
+from arclink_crew_recipes import (
+    apply_crew_recipe,
+    current_crew_recipe,
+    preview_crew_recipe,
+    prior_crew_recipe,
+    whats_changed,
+)
 
 
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
@@ -1081,6 +1088,131 @@ def user_update_agent_identity_api(
             "identity_projection": result["identity_projection"],
         },
     )
+
+
+def _authenticated_user_id(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+) -> str:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    return str(session["user_id"] or "").strip()
+
+
+def _csrf_user_id(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+) -> str:
+    user_id = _authenticated_user_id(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    return user_id
+
+
+def _crew_recipe_args(
+    *,
+    role: str,
+    mission: str,
+    treatment: str,
+    preset: str,
+    capacity: str,
+) -> dict[str, str]:
+    return {
+        "role": role,
+        "mission": mission,
+        "treatment": treatment,
+        "preset": preset,
+        "capacity": capacity,
+    }
+
+
+def read_user_crew_recipe_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+) -> ArcLinkApiResponse:
+    user_id = _authenticated_user_id(conn, session_id=session_id, session_token=session_token)
+    return ArcLinkApiResponse(
+        status=200,
+        payload={
+            "current": current_crew_recipe(conn, user_id=user_id),
+            "prior": prior_crew_recipe(conn, user_id=user_id),
+            "whats_changed": whats_changed(conn, user_id=user_id),
+        },
+    )
+
+
+def preview_user_crew_recipe_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    role: str,
+    mission: str,
+    treatment: str,
+    preset: str,
+    capacity: str,
+) -> ArcLinkApiResponse:
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    preview = preview_crew_recipe(
+        conn,
+        user_id=user_id,
+        **_crew_recipe_args(role=role, mission=mission, treatment=treatment, preset=preset, capacity=capacity),
+    )
+    return ArcLinkApiResponse(status=200, payload={"preview": preview})
+
+
+def apply_user_crew_recipe_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    role: str,
+    mission: str,
+    treatment: str,
+    preset: str,
+    capacity: str,
+) -> ArcLinkApiResponse:
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    result = apply_crew_recipe(
+        conn,
+        user_id=user_id,
+        **_crew_recipe_args(role=role, mission=mission, treatment=treatment, preset=preset, capacity=capacity),
+        actor_id=user_id,
+    )
+    return ArcLinkApiResponse(status=200, payload=result)
+
+
+def admin_apply_user_crew_recipe_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    user_id: str,
+    role: str,
+    mission: str,
+    treatment: str,
+    preset: str,
+    capacity: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    _admin_mutation_allowed(conn, session)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="admin")
+    result = apply_crew_recipe(
+        conn,
+        user_id=user_id,
+        **_crew_recipe_args(role=role, mission=mission, treatment=treatment, preset=preset, capacity=capacity),
+        actor_id=str(session.get("admin_id") or ""),
+        operator_on_behalf=True,
+    )
+    return ArcLinkApiResponse(status=200, payload=result)
 
 
 def read_admin_dashboard_api(

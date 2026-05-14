@@ -111,6 +111,9 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/provisioning` | Deployment provisioning status |
 | GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
 | POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |
+| GET | `/user/crew-recipe` | Read the active Crew Recipe, prior archived recipe, and "what changed" summary |
+| POST | `/user/crew-recipe/preview` | Preview or regenerate a Crew Recipe without applying it (CSRF) |
+| POST | `/user/crew-recipe/apply` | Confirm Crew Training and apply the additive SOUL overlay (CSRF) |
 | POST | `/user/share-grants` | Request a read-only Drive/Code share grant (CSRF). Same-account agent-to-agent shares require `owner_deployment_id` plus a different `recipient_deployment_id` and auto-accept into the target agent's Linked root. |
 | POST | `/user/share-grants/approve` | Owner-approve a pending share grant (CSRF) |
 | POST | `/user/share-grants/deny` | Owner-deny a pending share grant (CSRF) |
@@ -133,6 +136,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/admin/events` | Event log (filters: deployment_id, since) |
 | GET | `/admin/actions` | Queued actions (filters: deployment_id, status, since) |
 | POST | `/admin/actions` | Queue admin action (CSRF) |
+| POST | `/admin/crew-recipe/apply` | Apply Crew Training on a Captain's behalf with admin mutation auth, CIDR/CSRF protection, and audit logging |
 | GET | `/admin/reconciliation` | Reconciliation drift summary |
 | GET | `/admin/operator-snapshot` | Operator snapshot (host readiness, diagnostics, journey blockers, evidence status) |
 | GET | `/admin/provider-state` | Provider adapter state, including sanitized Chutes budget summaries |
@@ -168,6 +172,7 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
 | `ARCLINK_HOSTED_API_MAX_BODY_BYTES` | `1048576` | General request body cap |
 | `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES` | `2097152` | Webhook request body cap |
+| `ARCLINK_CREW_RECIPE_FALLBACK_MODEL` | (none) | Optional Chutes-compatible model id used for Crew Recipe generation when the existing scoped Chutes boundary allows inference |
 | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` | `60` | Webhook rate-limit window |
 | `ARCLINK_WEBHOOK_RATE_LIMIT_DEFAULT` | `60` | Default webhook requests per window |
 | `TELEGRAM_WEBHOOK_SECRET` | (none) | Telegram webhook secret-token verification; webhook handling fails closed when unset |
@@ -203,6 +208,7 @@ The Next.js admin dashboard (`web/src/app/admin/page.tsx`) is wired to the hoste
 | events | `/admin/events` | GET |
 | actions (read) | `/admin/actions` | GET |
 | actions (queue) | `/admin/actions` | POST |
+| crew training on behalf | `/admin/crew-recipe/apply` | POST |
 | provider | `/admin/provider-state` | GET |
 | reconciliation | `/admin/reconciliation` | GET |
 | operator | `/admin/operator-snapshot` | GET |
@@ -228,7 +234,9 @@ policy exists.
 The user dashboard (`web/src/app/dashboard/page.tsx`) consumes
 `/user/dashboard`, `/user/billing`, `/user/provisioning`, `/user/provider-state`,
 `/user/credentials`, `/user/credentials/acknowledge`, and
-`/user/linked-resources`. The web API client also exposes
+`/user/linked-resources`. Its Crew Training tab consumes
+`/user/crew-recipe`, `/user/crew-recipe/preview`, and
+`/user/crew-recipe/apply`. The web API client also exposes
 `/user/share-grants/deny` and `/user/share-grants/revoke` for owner-scoped
 share closure flows. The hosted API and OpenAPI catalog define share create,
 approve, deny, accept, revoke, and linked-resource reads; the current Next.js
@@ -246,6 +254,17 @@ messages require an accepted, unexpired `pod_comms` grant; file references are
 separate Drive/Code share grants and are stored as attachment references rather
 than raw file content. The Captain route returns narratives for that Captain's
 inbox/outbox, while the Operator route returns only routing/status metadata.
+
+Crew Training uses the existing user session and CSRF boundary for Captain
+preview/apply calls. Applying a recipe archives the previous active
+`arclink_crew_recipes` row, writes the Captain role, mission, and treatment on
+`arclink_users`, emits audit/event rows, and projects an additive SOUL overlay
+into local Pod identity context files when those homes are available. It does
+not rewrite memory or session files and does not restart Hermes gateways.
+Provider-backed recipe generation is allowed only through the existing scoped
+Chutes boundary; otherwise the API returns a deterministic preset-only recipe
+with an explicit fallback reason. Provider output containing unsafe URL,
+command, or instruction-override patterns is rejected before fallback.
 
 ## Assumptions and Ownership
 

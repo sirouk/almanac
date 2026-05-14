@@ -1,61 +1,59 @@
 # Coverage Matrix
 
-## Wave Goal Coverage
+## Wave 5 Goal Coverage
 
-| Goal / criterion | Current PLAN coverage | BUILD proof required |
+| Goal / criterion | PLAN coverage | BUILD proof required |
 | --- | --- | --- |
-| Scope to Waves 4-6 | `IMPLEMENTATION_PLAN.md`, this matrix, and research summary now target Wave 4, Wave 5, and Wave 6 only | Completion notes cite Wave 4-6 items, not Wave 3 or older audit backlog. |
-| Do not retouch Waves 0-3 | Plan treats Waves 0-3 as landed unless a direct regression blocks later waves | Diff review shows no unrelated vocabulary/onboarding/fleet/migration churn. |
-| Wave 4 broker | Plan calls for `python/arclink_pod_comms.py` | Tests prove send/list/deliver/redact, rate limit, notifications, and audit events. |
-| Wave 4 authorization | Plan requires same-Captain default allow and cross-Captain active `pod_comms` share grant | Tests prove non-Crew send refusal, accepted grant allow, expired/revoked/pending grant refusal. |
-| Wave 4 attachments | Plan requires share-grant projection references only | Tests prove no raw file body/content is stored in message rows. |
-| Wave 4 MCP tools | Plan lists `pod_comms.list`, `pod_comms.send`, `pod_comms.share-file` | MCP schema and dispatch tests prove caller scoping and authorization. |
-| Wave 4 dashboards/API | Plan adds user/admin comms routes and tabs | API/auth tests prove Captain scope and admin CIDR/session scope; web tests prove tabs render read-only rows. |
-| Wave 5 recipe lifecycle | Plan calls for active-row archive/replace semantics | Tests prove one active recipe per Captain and previous active row archived. |
-| Wave 5 generation fallback | Plan requires provider-backed generation plus deterministic fallback | Tests prove unsafe output rejection, two retries, and fallback when Chutes unavailable. |
-| Wave 5 SOUL overlay | Plan requires additive identity-context overlay only | Tests prove memory/session files are untouched and overlay includes preset/capacity/role/mission/treatment/title. |
-| Wave 5 bot/web flows | Plan covers `/train-crew`, `/whats-changed`, and web questionnaire | Handler/API/browser tests prove capture, review, confirm, and diff behavior without live command registration. |
-| Wave 6 report generation | Plan calls for `python/arclink_wrapped.py` | Tests prove report reads fixtures from events/audit/comms/memory/session/vault deltas and emits at least five non-standard stats. |
-| Wave 6 novelty score | Plan requires documented formula | Tests verify deterministic formula; docs explain inputs and bounds. |
-| Wave 6 frequency | Plan uses `wrapped_frequency` daily/weekly/monthly | API/bot tests reject more frequent than daily and persist selected frequency. |
-| Wave 6 scheduler | Plan requires job-loop or service integration | Static/shell tests prove wrapper/service command; unit tests prove due-captain selection and retry next cycle. |
-| Wave 6 delivery/privacy | Plan requires redaction, quiet hours, notification outbox, Captain narrative, Operator aggregate-only view | Tests prove secret redaction, quiet-hour deferral, `target_kind='captain-wrapped'`, and admin response omits narrative. |
-| Docs/OpenAPI | Plan requires update after behavior is true | OpenAPI and runbooks contain new routes/sections matching tests. |
-| Constraints | Build gate blocks private/live/Hermes core changes | Completion notes list skipped live gates and no private-state access. |
+| Scope to Wave 5 only | `IMPLEMENTATION_PLAN.md`, research artifacts, and build gate now target Crew Training only | Completion notes cite Wave 5 and list no Wave 6 work unless explicitly deferred as out of scope. |
+| Do not re-touch Waves 0-4 | Plan treats Waves 0-4 as landed unless a direct regression blocks Crew Training | Diff review shows no unrelated vocabulary, onboarding, fleet, migration, or Comms churn. |
+| Capture Captain inputs | Plan requires role, mission, treatment, preset, and capacity capture | API, bot, and web tests prove values persist to `arclink_users` and preview state. |
+| Preset/capacity validation | Plan defines allowed presets and capacities from steering | `tests/test_arclink_crew_recipes.py` rejects unsupported values and normalizes valid values. |
+| Provider-backed generation | Plan uses Chutes-compatible injectable generation | Tests prove fake provider path is called when boundary allows inference. |
+| Deterministic fallback | Plan requires fallback when no credential/client or generation fails | Tests prove truthful fallback mode and stable preset-only overlay with no live Chutes. |
+| Unsafe-output rejection | Plan requires URL, shell-command, and jailbreak rejection with two retries | Tests prove unsafe outputs are rejected, retry count is bounded, and fallback happens after failures. |
+| Active recipe lifecycle | Plan requires one active row per Captain and archive of prior active recipe | Tests prove previous active row is archived and only one active recipe remains. |
+| Operator-on-behalf audit | Plan includes audited admin application path | API/auth tests prove admin-only access, audit action, actor id, and Captain target scope. |
+| Additive SOUL overlay | Plan applies recipe through identity-context projection | Provisioning/recipe tests prove existing keys are preserved and memory/session paths are untouched. |
+| Whole Crew application | Plan applies overlay to every Pod owned by the Captain | Tests seed multiple deployments and assert each local identity context receives overlay or records a safe skipped projection reason. |
+| Public bot `/train-crew` | Plan adds pure handler questionnaire flow | `tests/test_arclink_public_bots.py` proves step capture, review, regenerate, confirm, and fallback labels without live command registration. |
+| Public bot `/whats-changed` | Plan adds current vs prior recipe summary | Tests prove empty, first-recipe, and prior-vs-current responses. |
+| Web questionnaire | Plan adds dashboard Crew Training flow | Web tests prove API helpers and page rendering; browser proof walks questionnaire, regenerate, and confirm. |
+| Hosted API and OpenAPI | Plan adds user/admin Crew Training routes and docs | Hosted API tests prove route wiring, JSON body handling, CSRF, auth scopes, and generated OpenAPI entries. |
+| Runbooks | Plan updates operations and control-node production runbooks after behavior is true | Docs contain Crew Training operation, fallback, no-live-provider, and no-Hermes-restart notes. |
+| Constraints | Build gate blocks private/live/Hermes core changes | Completion notes list skipped live gates and confirm no private-state access. |
 
 ## Required Artifact Coverage
 
 | Artifact | PLAN status |
 | --- | --- |
-| `research/RESEARCH_SUMMARY.md` | Wave 4-6 summary with `<confidence>`, current findings, path comparison, assumptions, risks, and verdict. |
-| `research/CODEBASE_MAP.md` | Wave 4-6 map of directories, entrypoints, architecture assumptions, and source surfaces. |
-| `research/DEPENDENCY_RESEARCH.md` | Stack components, alternatives, integration posture, risks, and validation dependencies for Waves 4-6. |
-| `research/COVERAGE_MATRIX.md` | Goal-to-proof matrix for every Wave 4-6 requirement. |
+| `research/RESEARCH_SUMMARY.md` | Wave 5 summary with `<confidence>`, findings, path comparison, assumptions, risks, and verdict. |
+| `research/CODEBASE_MAP.md` | Wave 5 map of directories, entrypoints, architecture rails, and source surfaces. |
+| `research/DEPENDENCY_RESEARCH.md` | Stack components, alternatives, integration posture, risks, and validation dependencies for Crew Training. |
+| `research/COVERAGE_MATRIX.md` | Goal-to-proof matrix for every Wave 5 requirement. |
 | `research/STACK_SNAPSHOT.md` | Ranked stack hypotheses with deterministic confidence score and alternatives. |
-| `IMPLEMENTATION_PLAN.md` | Project-specific Wave 4-6 implementation plan with validation criteria and actionable tasks. |
-| `consensus/build_gate.md` | Updated no-secret Wave 4-6 build gate and blockers. |
+| `IMPLEMENTATION_PLAN.md` | Project-specific Wave 5 implementation plan with validation criteria and actionable tasks. |
+| `consensus/build_gate.md` | No-secret Wave 5 build gate and blocked live/private flows. |
 
 ## Focused Test Coverage
 
 | Test file | Required proof |
 | --- | --- |
-| `tests/test_arclink_pod_comms.py` | Send/list, same-Captain allow, cross-Captain grant gate, rate limit, notification, audit, redaction, attachments by reference. |
-| `tests/test_arclink_mcp_schemas.py` or MCP server tests | `pod_comms.*` schemas and dispatch scoping. |
-| `tests/test_arclink_crew_recipes.py` | Recipe generation/fallback, unsafe-output rejection, active/archive lifecycle, overlay shape, operator-on-behalf audit. |
-| `tests/test_arclink_wrapped.py` | Report generation, novelty score, five stats, redaction, frequency due logic, retry behavior, aggregate admin view. |
-| `tests/test_arclink_api_auth.py` | User/admin comms, Crew Training, Wrapped/frequency auth, CSRF, and scope checks. |
-| `tests/test_arclink_hosted_api.py` | Route wiring, OpenAPI route behavior, CIDR/session boundaries. |
-| `tests/test_arclink_public_bots.py` | `/train-crew`, `/whats-changed`, `/wrapped-frequency` command handling without live bot mutation. |
-| `tests/test_arclink_dashboard.py` | Dashboard snapshots include comms, recipes, wrapped history/aggregate state. |
-| `tests/test_arclink_notification_delivery.py` | New target kinds do not break delivery polling and respect quiet-hour/defer semantics where implemented. |
-| `tests/test_arclink_schema.py` | Existing Wave 4-6 schema remains idempotent; any new columns/indexes/drift checks are covered. |
-| `web/tests/test_api_client.mjs` | API helper methods for new routes. |
-| `web/tests/test_page_smoke.mjs` and browser tests | New tabs/questionnaire/history render without overlap and preserve dashboard navigation. |
+| `tests/test_arclink_crew_recipes.py` | Validation, generation/fallback, unsafe-output rejection, active/archive lifecycle, overlay shape, whole-Crew projection, no memory/session writes, operator-on-behalf audit. |
+| `tests/test_arclink_provisioning.py` | Identity-context projection preserves existing fields and includes Crew Recipe overlay fields. |
+| `tests/test_arclink_hosted_api.py` | Route wiring, OpenAPI behavior, request/response shape, fallback labeling, and admin/user boundaries. |
+| `tests/test_arclink_api_auth.py` | Session auth, CSRF, user scope, admin-on-behalf scope, and forbidden cross-Captain writes. |
+| `tests/test_arclink_public_bots.py` | `/train-crew` and `/whats-changed` command handling without live Telegram or Discord mutation. |
+| `tests/test_arclink_dashboard.py` | Dashboard snapshots include current recipe, prior recipe summary, and Crew Training readiness. |
+| `tests/test_arclink_schema.py` | Existing Crew Recipe schema remains idempotent; any schema delta has drift checks. |
+| `web/tests/test_api_client.mjs` | API helper methods for Crew Training routes. |
+| `web/tests/test_page_smoke.mjs` | Dashboard route renders with Crew Training UI. |
+| Browser test | Questionnaire end-to-end with preview, regenerate, confirm, persistence, and identity-context update without Hermes restart. |
 
 ## Completion Rules
 
-BUILD can claim Waves 4-6 complete only when each wave is implemented locally
-with focused tests or explicitly deferred with:
+BUILD can claim Wave 5 complete only when Crew Training is implemented locally
+with focused tests, docs/OpenAPI alignment, and validation notes. Any deferral
+must include:
 
 - checklist item;
 - risk if left unresolved;
@@ -63,5 +61,5 @@ with focused tests or explicitly deferred with:
 - exact operator action or policy decision needed;
 - focused tests preserving the interim boundary.
 
-Do not route to terminal done while any Wave 4, 5, or 6 item remains unresolved
-or lacks a project-specific deferral.
+Do not route to terminal done while any Wave 5 item remains unresolved or
+lacks a project-specific deferral.

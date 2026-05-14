@@ -174,6 +174,72 @@ def test_user_agent_identity_route_requires_csrf_and_updates_deployment() -> Non
     print("PASS test_user_agent_identity_route_requires_csrf_and_updates_deployment")
 
 
+def test_user_crew_recipe_routes_require_csrf_and_apply_recipe() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_crew_recipe_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_crew_recipe_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_crew_recipe_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_crew_recipe_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_crew_recipe",
+        email="crew-route@example.test",
+        prefix="crew-route-1a2b",
+    )
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_crew_recipe_hosted")
+    body = json.dumps({
+        "role": "founder",
+        "mission": "ship the launch",
+        "treatment": "peer",
+        "preset": "Frontier",
+        "capacity": "development",
+    })
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/crew-recipe",
+        headers=auth_headers(session),
+        config=config,
+    )
+    expect(status == 200 and payload["current"] is None, f"crew recipe read expected empty 200 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/crew-recipe/preview",
+        headers=browser_auth_headers(session),
+        body=body,
+        config=config,
+    )
+    expect(status == 401, f"crew recipe preview without CSRF expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/crew-recipe/preview",
+        headers=browser_auth_headers(session, csrf=True),
+        body=body,
+        config=config,
+    )
+    expect(status == 200 and payload["preview"]["mode"] == "fallback", f"crew preview expected fallback 200 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/crew-recipe/apply",
+        headers=browser_auth_headers(session, csrf=True),
+        body=body,
+        config=config,
+    )
+    expect(status == 200 and payload["recipe"]["preset"] == "Frontier", f"crew apply expected 200 got {status}: {payload}")
+    expect(payload["identity_projection"][prepared["deployment_id"]]["status"] in {"skipped", "projected"}, str(payload))
+    print("PASS test_user_crew_recipe_routes_require_csrf_and_apply_recipe")
+
+
 def test_admin_dashboard_requires_admin_session() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_admin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_admin_test")
@@ -253,6 +319,54 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
     expect(payload["action"]["status"] == "queued", str(payload))
 
     print("PASS test_admin_action_requires_csrf_and_mutation_role")
+
+
+def test_admin_crew_recipe_route_is_admin_csrf_and_audited() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_admin_crew_recipe_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_admin_crew_recipe_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_admin_crew_recipe_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_admin_crew_recipe_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_admin_crew_recipe",
+        email="admin-crew-route@example.test",
+        prefix="crew-route-behalf-1a2b",
+    )
+    api.upsert_arclink_admin(conn, admin_id="admin_crew_route", email="admin-crew-route@example.test", role="ops")
+    session = api.create_arclink_admin_session(conn, admin_id="admin_crew_route", session_id="asess_crew_route", mfa_verified=True)
+    body = json.dumps({
+        "user_id": prepared["user_id"],
+        "role": "operator",
+        "mission": "stabilize launch",
+        "treatment": "coach",
+        "preset": "Vanguard",
+        "capacity": "sales",
+    })
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/admin/crew-recipe/apply",
+        headers=auth_headers(session),
+        body=body,
+        config=config,
+    )
+    expect(status == 401, f"admin crew apply without CSRF expected 401 got {status}: {payload}")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/admin/crew-recipe/apply",
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
+        body=body,
+        config=config,
+    )
+    expect(status == 200 and payload["recipe"]["preset"] == "Vanguard", f"admin crew apply expected 200 got {status}: {payload}")
+    audit = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log").fetchall()]
+    expect("crew_recipe_applied_by_operator" in audit, str(audit))
+    print("PASS test_admin_crew_recipe_route_is_admin_csrf_and_audited")
 
 
 def test_safe_error_shapes_never_leak_internal_details() -> None:
@@ -3975,8 +4089,10 @@ def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
     test_user_agent_identity_route_requires_csrf_and_updates_deployment()
+    test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
     test_admin_dashboard_requires_admin_session()
     test_admin_action_requires_csrf_and_mutation_role()
+    test_admin_crew_recipe_route_is_admin_csrf_and_audited()
     test_safe_error_shapes_never_leak_internal_details()
     test_request_id_propagation_and_cors()
     test_admin_login_sets_session_cookies()
@@ -4047,7 +4163,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 73 ArcLink hosted API tests")
+    print("PASS all 75 ArcLink hosted API tests")
     return 0
 
 

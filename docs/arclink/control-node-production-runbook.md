@@ -183,6 +183,27 @@ tolerance, and records interaction ids so replayed interactions do not run
 twice. Stripe, Telegram, and Discord webhook routes all pass through hosted API
 rate limits before expensive verification work.
 
+## Crew Training
+
+Production Crew Training is available through the Captain dashboard and Raven
+public bot `/train-crew`; `/whats-changed` reports the current recipe against
+the prior archived recipe. The hosted API exposes user routes for read, preview,
+and apply, plus an admin-on-behalf apply route guarded by admin session, CIDR,
+CSRF, mutation role, MFA where configured, and audit logging.
+
+The confirmed recipe lifecycle is one active `arclink_crew_recipes` row per
+Captain. Applying a new recipe archives the old active row and writes the
+Captain role, mission, and treatment fields on `arclink_users`. Persona change
+is overlay-only: ArcLink projects Crew fields into
+`state/arclink-identity-context.json` for local Pod Hermes homes and leaves
+memory, sessions, and Hermes gateway processes untouched.
+
+Live LLM recipe generation is proof-gated behind the existing scoped provider
+credential and budget boundary. If the Captain has no allowed provider
+credential, or if generated output fails the unsafe-output boundary for URLs,
+shell commands, or jailbreak patterns, ArcLink uses a deterministic preset-only
+fallback and labels that state in API, dashboard, and bot responses.
+
 ## Teardown
 
 Cancellation and teardown are explicit lifecycle states, not implicit deletion.

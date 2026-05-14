@@ -64,6 +64,9 @@ const api = {
   userCredentials: () => request("/user/credentials", {}, "user"),
   acknowledgeCredential: (body) => request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }, "user"),
   updateAgentIdentity: (body) => request("/user/agent-identity", { method: "POST", body: JSON.stringify(body) }, "user"),
+  userCrewRecipe: () => request("/user/crew-recipe", {}, "user"),
+  previewCrewRecipe: (body) => request("/user/crew-recipe/preview", { method: "POST", body: JSON.stringify(body) }, "user"),
+  applyCrewRecipe: (body) => request("/user/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "user"),
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
   createShareGrant: (body) => request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
   approveShareGrant: (body) => request("/user/share-grants/approve", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -81,6 +84,7 @@ const api = {
   adminEvents: () => request("/admin/events", {}, "admin"),
   adminActions: () => request("/admin/actions", {}, "admin"),
   queueAdminAction: (body) => request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
+  adminApplyCrewRecipe: (body) => request("/admin/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "admin"),
   login: (body) => request("/auth/login", { method: "POST", body: JSON.stringify(body) }),
   logout: (kind) => request(`/auth/${kind}/logout`, { method: "POST" }, kind),
   userPortal: (body) => request("/user/portal", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -171,6 +175,17 @@ describe("API client route construction", () => {
     assert.equal(body.agent_title, "the right hand");
   });
 
+  it("Crew Training routes use user session and CSRF", async () => {
+    await api.userCrewRecipe();
+    assert.ok(lastFetchUrl.endsWith("/user/crew-recipe"));
+    await api.previewCrewRecipe({ role: "founder", mission: "ship", treatment: "peer", preset: "Frontier", capacity: "development" });
+    assert.ok(lastFetchUrl.endsWith("/user/crew-recipe/preview"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
+    await api.applyCrewRecipe({ role: "founder", mission: "ship", treatment: "peer", preset: "Frontier", capacity: "development" });
+    assert.ok(lastFetchUrl.endsWith("/user/crew-recipe/apply"));
+  });
+
   it("userLinkedResources GETs /user/linked-resources", async () => {
     await api.userLinkedResources();
     assert.ok(lastFetchUrl.endsWith("/user/linked-resources"));
@@ -251,6 +266,13 @@ describe("API client route construction", () => {
     await api.queueAdminAction({ action_type: "restart", reason: "test" });
     assert.ok(lastFetchUrl.endsWith("/admin/actions"));
     assert.equal(lastFetchOpts.method, "POST");
+  });
+
+  it("adminApplyCrewRecipe POSTs to admin on-behalf route", async () => {
+    await api.adminApplyCrewRecipe({ user_id: "arcusr_1", role: "operator", mission: "ship", treatment: "coach", preset: "Vanguard", capacity: "sales" });
+    assert.ok(lastFetchUrl.endsWith("/admin/crew-recipe/apply"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_ADMIN_CSRF);
   });
 
   it("login POSTs to /auth/login", async () => {

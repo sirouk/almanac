@@ -138,10 +138,22 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
 
 8. **Handoff**
    - The user dashboard reads `/api/v1/user/dashboard`,
-     `/api/v1/user/billing`, and `/api/v1/user/provisioning`.
-   - The admin dashboard reads `/api/v1/admin/*`.
+     `/api/v1/user/billing`, `/api/v1/user/provisioning`, and
+     `/api/v1/user/comms`.
+   - The admin dashboard reads `/api/v1/admin/*`, including CIDR-gated
+     `/api/v1/admin/comms` metadata for Pod Comms without Captain narratives.
    - When the pod is healthy, ArcLink returns the user's dashboard/files/code/
      Hermes URLs and keeps the deployment visible in admin operations.
+
+## Pod Comms
+
+Control Node Comms uses the same broker as Shared Host:
+`python/arclink_pod_comms.py`. Same-Captain Pods may message by default;
+cross-Captain Pod Comms requires an accepted, unexpired `pod_comms` share grant.
+Messages are rate-limited per sender deployment, audited as
+`pod_message_sent`, `pod_message_delivered`, and `pod_message_redacted`, and
+delivered through `notification_outbox`. Attachments are Drive/Code share-grant
+references only, not raw files.
 
 ## Required Live Credentials
 

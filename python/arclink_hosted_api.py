@@ -89,6 +89,7 @@ from arclink_discord import (
     handle_discord_webhook_request,
 )
 from arclink_notification_delivery import run_public_agent_turns_once
+from arclink_pod_comms import list_all_pod_messages, list_pod_messages
 from arclink_product import base_domain as default_base_domain, chutes_default_model
 from arclink_secrets_regex import redact_then_truncate
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
@@ -1049,6 +1050,28 @@ def _handle_user_agent_identity(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_comms(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: Mapping[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    session = authenticate_arclink_user_session(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+    )
+    result = list_pod_messages(
+        conn,
+        user_id=str(session["user_id"] or ""),
+        direction=str(query.get("direction") or "all"),
+        limit=int(query.get("limit") or 50),
+    )
+    return _json_response(200, {"comms": result["messages"], "direction": result["direction"], "limit": result["limit"]}, request_id=request_id)
+
+
 def _handle_user_share_grant_create(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1195,6 +1218,23 @@ def _handle_admin_read(
         **{k: v for k, v in query.items() if k in allowed_keys},
     )
     return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_admin_comms(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: dict[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="admin")
+    authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+    result = list_all_pod_messages(conn, limit=int(query.get("limit") or 200))
+    rows = [
+        {key: value for key, value in message.items() if key not in {"body", "attachments"}}
+        for message in result["messages"]
+    ]
+    return _json_response(200, {"comms": rows, "limit": result["limit"]}, request_id=request_id)
 
 
 def _handle_session_revoke(
@@ -1909,6 +1949,12 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "parameters": [_qparam("user_id")],
         "responses": {"200": {"description": "Dashboard data"}, "401": {"description": "Unauthorized"}},
     },
+    "user_comms": {
+        "summary": "Read Captain-scoped Pod Comms inbox/outbox",
+        "tags": ["user"],
+        "parameters": [_qparam("direction"), _qparam("limit")],
+        "responses": {"200": {"description": "Pod Comms rows"}, "401": {"description": "Unauthorized"}},
+    },
     "user_billing": {
         "summary": "Read user billing and entitlement state",
         "tags": ["user"],
@@ -1998,6 +2044,12 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["admin"],
         "parameters": [_qparam("channel"), _qparam("status"), _qparam("deployment_id"), _qparam("user_id"), _qparam("since")],
         "responses": {"200": {"description": "Admin dashboard data"}, "401": {"description": "Unauthorized"}},
+    },
+    "admin_comms": {
+        "summary": "Read Operator Pod Comms aggregate rows without message narratives",
+        "tags": ["admin"],
+        "parameters": [_qparam("limit")],
+        "responses": {"200": {"description": "Pod Comms metadata rows"}, "401": {"description": "Unauthorized"}},
     },
     "admin_service_health": {
         "summary": "Read service health across deployments",
@@ -2180,6 +2232,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/auth/user/logout"): "user_logout",
     ("POST", "/auth/admin/logout"): "admin_logout",
     ("GET", "/user/dashboard"): "user_dashboard",
+    ("GET", "/user/comms"): "user_comms",
     ("GET", "/user/billing"): "user_billing",
     ("POST", "/user/portal"): "user_portal_link",
     ("GET", "/user/provisioning"): "user_provisioning_status",
@@ -2193,6 +2246,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/user/share-grants/revoke"): "user_share_grant_revoke",
     ("GET", "/user/linked-resources"): "user_linked_resources",
     ("GET", "/admin/dashboard"): "admin_dashboard",
+    ("GET", "/admin/comms"): "admin_comms",
     ("GET", "/admin/service-health"): "admin_service_health",
     ("GET", "/admin/provisioning-jobs"): "admin_provisioning_jobs",
     ("GET", "/admin/dns-drift"): "admin_dns_drift",
@@ -2238,6 +2292,7 @@ _CIDR_PROTECTED_ROUTES = frozenset({
     "admin_login",
     "admin_logout",
     "admin_dashboard",
+    "admin_comms",
     "admin_service_health",
     "admin_provisioning_jobs",
     "admin_dns_drift",
@@ -2397,6 +2452,8 @@ def route_arclink_hosted_api(
             result = _handle_logout(conn, headers, request_id, cfg, "admin")
         elif route_key == "user_dashboard":
             result = _handle_user_dashboard(conn, headers, clean_query, request_id, cfg)
+        elif route_key == "user_comms":
+            result = _handle_user_comms(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_billing":
             result = _handle_user_billing(conn, headers, request_id, cfg)
         elif route_key == "user_portal_link":
@@ -2423,6 +2480,8 @@ def route_arclink_hosted_api(
             result = _handle_user_linked_resources(conn, headers, clean_query, request_id, cfg)
         elif route_key == "admin_dashboard":
             result = _handle_admin_dashboard(conn, headers, clean_query, request_id, cfg)
+        elif route_key == "admin_comms":
+            result = _handle_admin_comms(conn, headers, clean_query, request_id, cfg)
         elif route_key in _ADMIN_READ_HANDLERS:
             result = _handle_admin_read(conn, headers, clean_query, request_id, cfg, route_key)
         elif route_key == "admin_action":

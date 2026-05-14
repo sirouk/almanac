@@ -165,6 +165,37 @@
         ]
       }
     },
+    "/api/v1/admin/comms": {
+      "get": {
+        "operationId": "admin_comms",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pod Comms metadata rows"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read Operator Pod Comms aggregate rows without message narratives",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/dashboard": {
       "get": {
         "operationId": "admin_dashboard",
@@ -1093,6 +1124,44 @@
           }
         ],
         "summary": "Read user billing and entitlement state",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/comms": {
+      "get": {
+        "operationId": "user_comms",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "direction",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pod Comms rows"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read Captain-scoped Pod Comms inbox/outbox",
         "tags": [
           "user"
         ]

@@ -1,9 +1,9 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-14T05:05:00Z
+- generated_at: 2026-05-14
 - project_root: .
-- primary_stack: Python
-- primary_score: 092/100
+- primary_stack: Python control plane with SQLite, Bash/Compose runtime, and Next.js web surface
+- primary_score: 093/100
 - confidence: high
 
 ## Deterministic Scoring Inputs
@@ -12,58 +12,58 @@ Repository-level public signals, excluding private state and generated caches:
 
 | signal | count / evidence |
 | --- | --- |
-| Python source files | 177 |
-| Shell scripts | 77 |
-| TypeScript / TSX files | 7 |
+| Python source files | 63 in `python/` |
+| Python regression tests | 107 focused `tests/test_*.py` files |
+| Shell/runtime scripts | 155 shell files/signals across canonical wrappers and generated/public helper lanes |
+| Web source | 17 TSX files and 6 TS files under `web/` |
 | Runtime manifests | `requirements-dev.txt`, `compose.yaml`, `Dockerfile`, `deploy.sh`, `test.sh`, `web/package.json` |
-| Wave 3 implementation target | `python/arclink_pod_migration.py`, `python/arclink_control.py`, `python/arclink_action_worker.py`, `python/arclink_executor.py` |
+| Wave 4-6 targets | Python modules, SQLite tables, MCP/API handlers, public bots, dashboards, notification outbox, Compose job loop |
 
 Scoring rule:
 
-- Python receives base weight from source majority plus direct ownership of the
-  Wave 3 control-plane path.
-- Shell receives operational weight from canonical deploy and job wrappers.
-- Node.js receives UI weight from the Next.js web surface, but Wave 3 does not
-  require a Captain-facing UI unless a disabled route is added.
-- SQLite and Compose are runtime components, not standalone primary stacks for
-  this mission.
+- Python receives the largest weight from control-plane ownership, schema,
+  API/auth, MCP, bots, notifications, Chutes/redaction helpers, and tests.
+- SQLite is core state but embedded through Python.
+- Next.js is required for Captain/Operator surfaces but depends on Python APIs.
+- Bash/Compose is operational runtime, especially for the Wave 6 scheduler.
+- External services are integration targets, not local BUILD dependencies.
 
 ## Project Stack Ranking
 
 | rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python | 092 | 177 Python files; control DB, migration orchestrator, executor, action worker, provisioning, fleet, and tests are Python-led. |
-| 2 | Bash / POSIX shell | 056 | 77 shell scripts; canonical deploy/control wrappers and optional job-loop integration. |
-| 3 | Docker Compose | 048 | `compose.yaml`, `Dockerfile`, executor apply/lifecycle surfaces. |
-| 4 | SQLite | 046 | Control-plane schema in `python/arclink_control.py`; Wave 3 adds `arclink_pod_migrations`. |
-| 5 | Node.js / Next.js | 034 | `web/package.json`, TypeScript app/admin UI, web tests; secondary for Wave 3. |
-| 6 | External services | 012 | Stripe, Telegram, Discord, Cloudflare, Tailscale, Hetzner, Linode, Chutes, and Notion are present but proof-gated and out of local PLAN scope. |
+| 1 | Python control plane | 093 | Owns schema, comms/recipe/wrapped modules, API/auth, MCP, bots, notifications, and focused tests. |
+| 2 | SQLite state model | 074 | Existing tables for pod messages, crew recipes, wrapped reports, audit/events, rate limits, notifications. |
+| 3 | Next.js / React / TypeScript | 061 | Captain dashboard, admin dashboard, API client, browser tests for Comms/Crew Training/Wrapped surfaces. |
+| 4 | Bash / Docker Compose | 055 | Canonical wrappers and job-loop service pattern for Wrapped scheduler. |
+| 5 | ArcLink/Hermes plugin boundary | 038 | Identity-context and managed-context rails; do not modify Hermes core. |
+| 6 | External providers | 018 | Chutes, Telegram, Discord, Stripe, Notion, Cloudflare, Tailscale, Hetzner, Linode remain proof-gated. |
 
 ## Ranked Stack Hypotheses
 
-1. **Python control-plane application with SQLite state and executor-managed
-   Docker Compose runtime**: selected. This matches Wave 3 implementation,
-   schema, tests, and action-worker dispatch.
-2. **Shell-first operator automation around Python helpers**: plausible for
-   deploy/upgrade work, but not the right primary path for migration replay,
-   rollback, manifests, or schema drift checks.
-3. **Next.js product/admin application backed by Python APIs**: true for the
-   public surface, but Wave 3 initial rollout is Operator-only and does not
-   require Captain-facing migration UI.
+1. **Python-led ArcLink control platform with SQLite state and Next.js dashboards**:
+   selected. This matches all Wave 4-6 behavior surfaces.
+2. **Next.js product app with Python backend**: true for user-facing work, but
+   insufficient as the primary stack because authorization, notifications,
+   MCP tools, and report generation live in Python.
+3. **Shell/Compose operator system with Python helpers**: true for deploy and
+   scheduling, but not primary for brokered comms, recipes, or Wrapped logic.
 
 ## Alternatives
 
-| alternative | fit for Wave 3 | decision |
+| alternative | fit for Waves 4-6 | decision |
 | --- | --- | --- |
-| Add a new transfer service or infrastructure dependency | Low | Avoid. Existing Python + executor seams are enough for local proof. |
-| Implement migration mostly in shell/rsync scripts | Medium for host work, low for replay/audit | Reject for primary implementation; shell can wrap GC later if needed. |
-| Implement migration as a web/UI feature first | Low | Captain migration remains disabled by default behind `ARCLINK_CAPTAIN_MIGRATION_ENABLED=0`. |
+| Add a separate message broker or queue service | Low | Reject. SQLite plus notification outbox is the existing rail and enough for scoped comms. |
+| Add a new LLM/provider SDK for Crew Training | Low | Reject. Reuse Chutes boundary and fake/injectable tests. |
+| Build Wrapped as a frontend-only report | Low | Reject. Report inputs and redaction belong server-side. |
+| Fold Wrapped into health-watch | Medium | Accept only if an explicit `arclink-wrapped` job service proves unnecessary; default to named job-loop integration. |
 
 ## Confidence
 
-Deterministic confidence score: **92/100**.
+Deterministic confidence score: **93/100**.
 
-Confidence is high because repository structure, manifests, and the Wave 3
-target files all point to Python as the primary implementation stack. The
-remaining uncertainty is live host transfer behavior, which is intentionally
-proof-gated and outside local PLAN validation.
+Confidence is high because repository structure, schema foundations, test
+layout, and the Wave 4-6 target surfaces consistently point to Python/SQLite
+as the primary implementation stack, with Next.js and Compose as secondary
+surfaces. Remaining uncertainty is live delivery/inference proof, which is
+explicitly blocked until operator authorization.

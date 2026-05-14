@@ -1,85 +1,83 @@
 # Research Summary
 
-<confidence>94</confidence>
+<confidence>91</confidence>
 
 ## Scope
 
-This PLAN pass inspected the public ArcLink repository structure, the ArcPod
-Captain Console steering document, current Wave 3 migration surfaces, existing
-tests, runbook updates, and the required planning artifacts.
+This PLAN pass inspected the public ArcLink repository structure, current
+planning artifacts, ArcPod Captain Console steering sections for Waves 4-6,
+schema foundations, API/dashboard/MCP patterns, tests, runbooks, Compose job
+loops, and vocabulary canon.
 
 No private state, live secrets, user Hermes homes, deploy keys, production
 services, provider accounts, payment flows, public bot command registration, or
-Hermes core were inspected.
+Hermes core were inspected or mutated.
 
 ## Active Mission
 
-The active BUILD backlog is Wave 3 from:
+The active BUILD backlog is now Waves 4-6 from:
 
 `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md`
 
-The user-provided goals document supersedes the older bootstrap line about
-starting with the Sovereign audit Wave 1 repairs. Historical audit files remain
-background only. Waves 0 through 2 are treated as landed at commit `b32e1da`
-unless BUILD discovers a direct regression that blocks Wave 3.
+The user-provided goals document supersedes the bootstrap line about restarting
+the older Sovereign audit backlog. `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md`
+is historical/background only for this mission. Waves 0-3 are treated as landed
+and should not be re-touched unless a direct regression blocks Waves 4-6.
 
-## Current Worktree Findings
+## Current Findings
 
 | Area | Finding |
 | --- | --- |
-| Control schema | `python/arclink_control.py` now contains an `arclink_pod_migrations` table with source/target placement ids, source/target host ids, target machine id, source/target state roots, capture directory, manifest JSON, rollback metadata, verification JSON, target metadata, retention/GC timestamps, status checks, indexes, and drift checks. |
-| Migration module | `python/arclink_pod_migration.py` is present in the dirty tree. It plans migrations, captures source state with relative file digests, materializes target state, applies through the executor, verifies health through an injectable verifier, rolls back on failure, records audit/events, supports idempotent replay, handles dry-run planning, and exposes GC. |
-| Admin action wiring | `python/arclink_dashboard.py` includes `reprovision` in `ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES` when executor readiness passes. `python/arclink_action_worker.py` imports `migrate_pod` and dispatches `reprovision` to operation kind `pod_migration`. |
-| Tests | `tests/test_arclink_pod_migration.py` exists with coverage for capture/materialization/success replay, rollback replay, GC, and dry-run. `tests/test_arclink_action_worker.py`, `tests/test_arclink_admin_actions.py`, and `tests/test_arclink_schema.py` contain Wave 3 additions. |
-| Docs/config | `config/arclink.env.example`, `config/env.example`, `docs/arclink/control-node-production-runbook.md`, and `docs/arclink/operations-runbook.md` contain Operator-only migration and GC notes. |
-| Captain migration | No Captain-facing migration route was identified. This matches the required default posture: `ARCLINK_CAPTAIN_MIGRATION_ENABLED=0` and Operator-only initial rollout. |
-| Remaining proof | Candidate implementation is present but must be validated as a coherent BUILD patch. This PLAN pass did not run the validation floor. |
-
-## Runtime Stack Summary
-
-ArcLink is a Python-led control platform with SQLite control state, Bash
-operator entrypoints, Docker Compose runtime lanes, ArcLink-owned Hermes
-plugins/hooks, and a Next.js product/admin surface. Wave 3 should stay on the
-existing Python control-plane, executor, provisioning, fleet, action-worker,
-and schema rails.
+| Schema foundations | `arclink_pod_messages`, `arclink_crew_recipes`, `arclink_wrapped_reports`, `arclink_users.wrapped_frequency`, Captain role/mission/treatment columns, SOUL overlay placeholders, status constants, indexes, and drift checks are already present. |
+| Wave 4 behavior | `python/arclink_pod_comms.py`, MCP `pod_comms.*` tools, user/admin comms API routes, Comms dashboard tabs, and `tests/test_arclink_pod_comms.py` are absent. Share grants currently allow only `drive` and `code`; `pod_comms` is not allowed. |
+| Wave 5 behavior | `python/arclink_crew_recipes.py`, `templates/CREW_RECIPE.md.tmpl`, web `/train-crew`, dashboard Crew Training UI, public bot `/train-crew` and `/whats-changed`, and `tests/test_arclink_crew_recipes.py` are absent. The SOUL template has additive placeholders ready. |
+| Wave 6 behavior | `python/arclink_wrapped.py`, Wrapped scheduler/job wrapper, dashboard history tab, frequency update route/command, Wrapped docs, and `tests/test_arclink_wrapped.py` are absent. Compose already has reusable `docker-job-loop.sh` patterns. |
+| Existing rails | Rate limits, audit/events, notification outbox, share grants, MCP tool registration, hosted API auth, CIDR-gated admin routes, Chutes boundary models/fakes, memory-synth unsafe-output rejection, and evidence redaction already exist and should be reused. |
+| Web stack | Next.js/React dashboard and admin pages are monolithic page components with local tab state and API helper calls in `web/src/lib/api.ts`. New tabs should follow that pattern before any frontend refactor. |
 
 ## Implementation Path Comparison
 
-| Path | Strengths | Weaknesses | Decision |
+| Decision | Path A | Path B | Decision |
 | --- | --- | --- | --- |
-| Dedicated `arclink_pod_migration.py` orchestrator reusing provisioning, fleet, executor, operation idempotency, audit, and action-worker rails | Keeps capture, rollback, replay, and GC testable; matches current candidate worktree; avoids deploy-script or Hermes-core surgery | Requires careful validation of transaction boundaries and portable manifests | Selected. |
-| Fold migration into `arclink_sovereign_worker.py` | Reuses nearby apply and health conventions | Expands the provisioning worker into a migration engine and makes replay/rollback tests harder | Rejected. |
-| Add one opaque executor-level migration operation | Centralizes host operations | Hides DB state transitions, capture manifests, placement changes, and audit from the control plane | Rejected. |
-| Manual runbook only | Lowest immediate code change | Does not satisfy Wave 3 or remove `pending_not_implemented` for `reprovision` | Rejected. |
+| Wave 4 comms broker | Dedicated `python/arclink_pod_comms.py` with DB, rate-limit, share-grant, audit, and notification helpers | Inline comms SQL in MCP/API handlers | Choose Path A. It keeps trust-boundary and tests centralized. |
+| Wave 4 attachments | Reuse share-grant projection metadata and store only references in `attachments_json` | Copy raw file contents or paths into message rows | Choose share-grant projection only. Raw file transfer violates the stated boundary. |
+| Wave 5 recipe generation | Dedicated `python/arclink_crew_recipes.py` with injectable/fake Chutes client and deterministic fallback | Web/bot handlers generate overlays directly | Choose dedicated module. It centralizes unsafe-output rejection and archive/activate semantics. |
+| Wave 5 overlay write | Store recipe row and identity-context overlay for next managed-context refresh | Rewrite memory, sessions, or Hermes core prompts | Choose additive overlay only. Memory/session mutation is explicitly out of scope. |
+| Wave 6 scheduler | Add `arclink-wrapped` service using existing `docker-job-loop.sh` | Piggyback silently inside health-watch | Prefer explicit service unless BUILD finds a strong reason to integrate into an existing loop. It is easier to test, document, and operate. |
+| Wave 6 data access | Read control DB plus bounded read-only per-deployment state roots through existing deployment metadata | Scan live user homes or private runtime paths ad hoc | Choose metadata-bounded reads only. No uid crossing or private-state rummaging. |
 
 ## Build Assumptions
 
 - Current source and focused tests are ground truth where historical docs
   disagree.
-- The dirty worktree contains user or prior generated changes and must not be
-  reverted during BUILD.
-- Wave 3 remains Operator-only at launch. Captain-initiated migration stays
-  disabled by default behind `ARCLINK_CAPTAIN_MIGRATION_ENABLED=0`.
-- Local tests should use temporary control DBs, fake executors, and temporary
-  state trees; they must not read private state or real user homes.
-- Migration manifests may store relative paths, sizes, modes, boundaries, and
-  digests, but not file contents or secret values.
+- Schema foundations from prior waves are usable; new columns should be added
+  only when a concrete Wave 4-6 behavior requires them.
+- `arclink_share_grants` remains the attachment/security projection model.
+- Chutes-backed Crew Recipe generation must be injectable/fake-tested locally;
+  no live inference proof is required for BUILD.
+- Wrapped reports may compute from deterministic local fixtures; live Hermes
+  session proof remains operator-gated.
+- Captain-facing copy uses ArcPod / Pod / Agent / Captain / Crew / Raven /
+  Comms. Backend/operator code can keep deployment/user naming.
 
 ## Risks
 
-- Current capture uses local filesystem copy semantics. Live SSH/rsync transfer
-  remains proof-gated and should not be inferred from fake/local tests.
-- State capture must not leak secret values through manifests, audit, errors,
-  or action-worker results.
-- Rollback must leave exactly one active placement and must not delete source
-  artifacts before the retention window.
-- Idempotency must reject changed intent for the same migration id while
-  returning prior terminal results for true replay.
-- GC must only act on succeeded migrations past retention and must not touch
-  failed, rolled-back, cancelled, or recent migrations.
+- Cross-Captain comms must fail closed unless an active `pod_comms`
+  share-grant exists.
+- Comms rate limiting must happen before expensive writes or notification
+  fanout.
+- Crew Recipe generation must reject unsafe model output and fall back
+  deterministically after bounded retries.
+- Identity-context overlay writes must not wipe memory, sessions, or unrelated
+  org-profile overlays.
+- Wrapped must redact secrets before rendering and must not expose Captain
+  narrative in Operator views.
+- Quiet-hours behavior for Wrapped depends on existing user/profile data; if a
+  precise source is unavailable, BUILD should document and test the selected
+  fail-closed or default behavior.
 
 ## Verdict
 
-PLAN is ready for Wave 3 BUILD handoff. The BUILD phase should validate the
-candidate Wave 3 patch, tighten any gaps found by the focused tests, and avoid
-live/private proof unless the operator explicitly authorizes a named flow.
+PLAN is ready for BUILD handoff for Waves 4-6 in order: Pod-to-Pod Comms,
+Crew Training, then ArcLink Wrapped. The existing build gate was stale Wave 3
+content and has been replaced with a no-secret Wave 4-6 gate.

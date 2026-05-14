@@ -157,6 +157,18 @@ not a delivery failure: link or repair the owner's public channel and request
 the share again, or have the owner approve or deny the pending grant through
 their authenticated hosted API session.
 
+**Pod Comms:** Pod-to-Pod messages are brokered by
+`python/arclink_pod_comms.py` and stored in `arclink_pod_messages`. Same-Captain
+Crew messages are allowed by default. Cross-Captain messages require an
+accepted, unexpired `arclink_share_grants` row with `resource_kind='pod_comms'`;
+pending, approved-but-unaccepted, revoked, and expired grants fail closed.
+Messages rate-limit at 60 per minute per sender deployment and queue
+`notification_outbox` rows to the recipient `user-agent` with
+`channel_kind='pod-message'`. Attachments must be accepted share-grant
+references; raw files and file bodies do not belong in the message row.
+Captains read narratives at `GET /api/v1/user/comms`. Operators read metadata
+only at CIDR-gated `GET /api/v1/admin/comms`.
+
 **OpenAPI contract:** `GET /api/v1/openapi.json` (no auth). Static copy at
 `docs/openapi/arclink-v1.openapi.json`.
 

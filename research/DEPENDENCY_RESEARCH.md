@@ -2,82 +2,86 @@
 
 ## Scope
 
-This document records stack and dependency signals relevant to Wave 3: 1:1 Pod
-Migration. It does not assert live capability for Stripe, Telegram, Discord,
-Chutes, Notion, Cloudflare, Tailscale, Hetzner, Linode, Docker host mutation,
-or production deploy flows.
+This document records stack and dependency signals relevant to ArcPod Captain
+Console Waves 4-6: Pod-to-Pod Comms, Crew Training, and ArcLink Wrapped. It
+does not assert live capability for Stripe, Telegram, Discord, Chutes, Notion,
+Cloudflare, Tailscale, Hetzner, Linode, Docker host mutation, or production
+deploy flows.
 
 ## Stack Components
 
-| Component | Evidence | Wave 3 use | Decision |
+| Component | Evidence | Wave 4-6 use | Decision |
 | --- | --- | --- | --- |
-| Python 3.11+ | `python/*.py`, `tests/test_*.py`, `requirements-dev.txt`, runtime compatibility expectations | Migration orchestrator, schema updates, action dispatch, fake verifiers, GC helpers, tests | Primary implementation surface. |
-| SQLite | `python/arclink_control.py` | Migration rows, placements, idempotency, audit/events, DNS rows, service health | Use `ensure_schema`, constants, indexes, and drift checks. |
-| Bash | `deploy.sh`, `bin/*.sh` | Optional migration GC wrapper or operator command only if BUILD requires it | Avoid shell changes unless runtime integration requires them. |
-| Docker Compose | `compose.yaml`, `Dockerfile`, executor apply/lifecycle | Target materialization and service health through existing executor rail | Use fake runner in tests; live Docker mutation remains blocked. |
-| Executor adapters | `python/arclink_executor.py` | Compose lifecycle/apply, DNS apply, rollback apply, fake idempotency digest checks | Reuse; do not add host mutation paths outside executor abstractions. |
-| Provisioning renderer | `python/arclink_provisioning.py` | Re-render target intent and state roots | Reuse to avoid divergent deployment config. |
-| Fleet placement | `python/arclink_fleet.py`, placement tables | Source/target placement selection and load updates | Reuse existing placement model and preserve one-active-placement invariant. |
-| Hosted API/auth | `python/arclink_api_auth.py`, `python/arclink_hosted_api.py` | Existing admin action route and optional Captain-gated route | Admin path is required; Captain path stays disabled by default. |
-| Next.js web | `web/package.json`, `web/src/app` | Admin/Captain surfaces if a route is exposed | No Captain button for initial Operator-only rollout. |
-| Docs/OpenAPI | `docs/arclink/*.md`, `docs/openapi/arclink-v1.openapi.json` | Migration runbooks and route contract | Update only after behavior exists or when a route contract changes. |
+| Python 3.11+ | `python/*.py`, `tests/test_*.py`, `requirements-dev.txt` | New comms, recipe, wrapped modules; API/auth; MCP; bot flows; tests | Primary implementation surface. |
+| SQLite | `python/arclink_control.py` | Existing tables for pod messages, crew recipes, wrapped reports, audit/events, rate limits, notifications | Reuse `ensure_schema`; add only behavior-required schema deltas. |
+| Next.js / React / TypeScript | `web/package.json`, `web/src/app` | Comms, Crew Training, and Wrapped dashboard surfaces | Reuse current monolithic page/tab pattern; avoid frontend architecture churn. |
+| Bash | `deploy.sh`, `bin/*.sh` | Wrapped scheduler wrapper or job-loop integration | Touch only when needed for Wave 6 runtime. |
+| Docker Compose | `compose.yaml` | Add or integrate `arclink-wrapped` scheduled job | Reuse existing `docker-job-loop.sh` job-service pattern. |
+| Notification delivery | `notification_outbox`, `python/arclink_notification_delivery.py` | Comms recipient delivery and Wrapped delivery | Reuse; avoid bespoke delivery queues. |
+| MCP server | `python/arclink_mcp_server.py` | Agent-facing `pod_comms.*` tools | Follow existing `shares.request` schema/dispatch pattern. |
+| Chutes boundary | `python/arclink_chutes.py`, fake client patterns | Crew Recipe generation when credentials allow it | Use injectable/fake-tested client; deterministic fallback if unavailable. |
+| Memory synthesis safety | `python/arclink_memory_synthesizer.py` | Reject unsafe recipe output | Reuse unsafe-output pattern or extract small shared helper if needed. |
+| Evidence redaction | `python/arclink_evidence.py`, `python/arclink_secrets_regex.py` | Wrapped report redaction | Redact before render and delivery. |
 
 ## Version Snapshot
 
 | Lane | Public signal | Planning note |
 | --- | --- | --- |
-| Python | Dev requirements and runtime code target modern Python; compatibility should remain Python 3.11+ | New Wave 3 code should stay Python 3.11 compatible. |
-| Node/web | Web uses Next.js 15, React 19, TypeScript 5, ESLint, Node tests, and Playwright | Wave 3 does not require web changes unless adding a disabled Captain route/button. |
-| qmd/Hermes | qmd and Hermes are pinned runtime components | Migration must preserve qmd/memory/Hermes home state, not modify core runtime. |
-| Compose images | Compose defines app, API, web, qmd, Nextcloud, Postgres, Redis, and related services | Migration applies existing rendered services, not new infrastructure. |
+| Python | Dev requirements include jsonschema, PyYAML, requests, Playwright, pyflakes, ruff | New code should stay standard-library first and testable without live services. |
+| Web | Next 15, React 19, TypeScript 5, ESLint 9, Playwright | UI changes require `npm test`, lint, and targeted browser checks when flows are interactive. |
+| Compose | Job services already use `docker-job-loop.sh` intervals | Wrapped can join this model without new infrastructure. |
+| Hermes/qmd | Runtime is pinned and managed outside these waves | Do not patch Hermes core; identity-context overlays are ArcLink-owned. |
 
 ## Alternatives Compared
 
 | Decision area | Preferred path | Alternatives | Reason |
 | --- | --- | --- | --- |
-| Orchestration | Dedicated Python migration module | Shell runbook or sovereign worker-only implementation | Keeps DB state, file manifests, rollback, and idempotency testable. |
-| State transfer | Standard-library traversal/copy in local tests plus executor-compatible live boundary | Direct unstructured `rsync` calls embedded through business logic | Injection keeps no-secret BUILD deterministic and avoids leaking credentials through command surfaces. |
-| Idempotency | Existing operation idempotency helpers plus migration row replay | Action-intent-only replay | Migration has multiple sub-operations and needs durable replay independent of queue retries. |
-| Placement update | Control-plane placement rows with atomic source/target status transitions | Trust Compose target alone | Placement is the fleet source of truth and must rollback safely. |
-| Verification | Injectable verifier mirroring sovereign worker health expectations | Always run live health checks | Local tests can prove rollback paths without live infrastructure. |
-| GC | Migration helper with optional job-loop/service wrapper later | Manual cleanup docs only | Steering requires tested garbage collection after retention. |
+| Comms implementation | Python broker module plus MCP/API adapters | SQL in handlers; external chat queue | Central module is testable and keeps trust boundaries in one place. |
+| Comms authorization | Same-Captain allowed, cross-Captain requires active `pod_comms` share grant | Global allow-list; admin override by default | Share grants already model approval and projection. |
+| Crew generation | Provider-backed with fake/injectable Chutes and deterministic fallback | Require live Chutes; no-LLM static only | Meets product goal while keeping BUILD no-secret. |
+| Unsafe output | Reuse memory-synthesis unsafe patterns and shared redaction | Trust model output after JSON parse | Rejecting URLs/shell/jailbreak text is required before SOUL overlay. |
+| Wrapped scheduler | Explicit Compose job-loop service or wrapper | Fold into health-watch; manual-only command | A named job is operable and testable; health-watch overloading is harder to reason about. |
+| Wrapped data reads | Control DB plus bounded per-deployment metadata/state-root readers | Raw user-home scans | Prevents uid crossing and keeps tests local. |
 
 ## External Integration Posture
 
 | Integration | Local BUILD posture | Live posture |
 | --- | --- | --- |
-| SQLite control DB | Temporary DBs and schema tests | No private runtime DB reads. |
-| Filesystem state | Temporary test trees for representative vault, memory, sessions, configs, Hermes home, and secret-reference boundaries | No private state or user home reads. |
-| Docker/Compose | Fake executor and command shims | Host/container mutation blocked. |
-| SSH/rsync | Fake transport or executor-compatible seam | Live host transfer blocked unless explicitly authorized. |
-| Cloudflare/Tailscale DNS | Existing fake DNS/executor paths and DB row assertions | Live DNS/network mutation blocked. |
-| Telegram/Discord bot env | Secret refs and redacted metadata only | No public bot mutation or token reads. |
-| Hetzner/Linode | Inventory provider tests remain fake/no-token | Live list/provision/delete/probe blocked. |
+| SQLite control DB | Temporary DBs and schema fixtures | No private runtime DB reads. |
+| Chutes inference | Fake/injectable response and deterministic fallback tests | Live inference blocked unless operator authorizes it. |
+| Telegram/Discord | Pure handler/command tests with queued notifications | No webhook mutation or command registration. |
+| Notification delivery | Queue rows and fake delivery assertions | Live chat delivery blocked. |
+| Hermes sessions/state | Temporary fixtures only | No real user home reads. |
+| Docker/Compose | Static config and shell syntax checks | No deploy/install/upgrade. |
+| Stripe/payment/provider mutation | Not needed for Waves 4-6 BUILD | Blocked. |
 
 ## Dependency Risks
 
-- No new heavy transfer dependency is needed for the local proof; standard
-  library file traversal plus existing executor seams is enough.
-- File digest manifests must remain bounded and secret-free while proving
-  integrity.
-- Target materialization must reuse provisioning rendering rather than forking
-  deployment config generation.
-- GC must be conservative and only act on succeeded migrations past retention.
-- Docs and OpenAPI must not promise Captain self-service while the default flag
-  keeps migration disabled.
+- No new infrastructure is needed for Wave 4 or Wave 5. Adding one would widen
+  scope unnecessarily.
+- Chutes live inference must not become a hard dependency for Crew Training;
+  fallback output must be deterministic and useful.
+- Wrapped may need a small reader abstraction for session/vault/memory inputs
+  so tests do not depend on private runtime paths.
+- Web changes touch large dashboard components; keep additions localized and
+  consider small presentational helpers only if duplication becomes real.
 
 ## Validation Dependencies
 
-Minimum Wave 3 validation after BUILD hardening:
+Minimum validation after BUILD hardening:
 
 ```bash
 git diff --check
-python3 -m py_compile python/arclink_pod_migration.py python/arclink_action_worker.py python/arclink_dashboard.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_sovereign_worker.py python/arclink_executor.py
-python3 tests/test_arclink_pod_migration.py
-python3 tests/test_arclink_action_worker.py
-python3 tests/test_arclink_admin_actions.py
-python3 tests/test_arclink_sovereign_worker.py
-python3 tests/test_arclink_executor.py
+python3 -m py_compile python/arclink_pod_comms.py python/arclink_crew_recipes.py python/arclink_wrapped.py python/arclink_mcp_server.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_public_bots.py python/arclink_dashboard.py python/arclink_notification_delivery.py
+python3 tests/test_arclink_pod_comms.py
+python3 tests/test_arclink_crew_recipes.py
+python3 tests/test_arclink_wrapped.py
+python3 tests/test_arclink_mcp_schemas.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_public_bots.py
+python3 tests/test_arclink_dashboard.py
+python3 tests/test_arclink_notification_delivery.py
 python3 tests/test_arclink_schema.py
 ```
 
@@ -85,4 +89,13 @@ If shell or Compose files change:
 
 ```bash
 bash -n deploy.sh bin/*.sh test.sh
+```
+
+If web files change:
+
+```bash
+cd web
+npm test
+npm run lint
+npm run build
 ```

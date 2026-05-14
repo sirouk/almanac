@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, ErrorAlert, LoadingSpinner } from "@/components/ui";
 
-type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation" | "operator";
+type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "comms" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation" | "operator";
 
 interface AdminData {
   deployments?: Record<string, string>[];
@@ -24,6 +24,17 @@ interface HealthEntry {
   service_name: string;
   status: string;
   checked_at?: string;
+}
+
+interface AdminCommsMessage {
+  message_id: string;
+  sender_deployment_id: string;
+  recipient_deployment_id: string;
+  sender_user_id: string;
+  recipient_user_id: string;
+  status: string;
+  created_at?: string;
+  delivered_at?: string;
 }
 
 interface AdminActionReadiness {
@@ -76,6 +87,7 @@ export default function AdminPage() {
   const [audit, setAudit] = useState<{ audit?: Record<string, string>[] } | null>(null);
   const [actions, setActions] = useState<{ actions?: Record<string, string>[] } | null>(null);
   const [events, setEvents] = useState<{ events?: Record<string, string>[] } | null>(null);
+  const [comms, setComms] = useState<{ comms?: AdminCommsMessage[] } | null>(null);
   const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
   const [reconciliation, setReconciliation] = useState<{ reconciliation?: Record<string, string>[]; drift_count?: number } | null>(null);
   const [operatorSnapshot, setOperatorSnapshot] = useState<Record<string, unknown> | null>(null);
@@ -104,6 +116,7 @@ export default function AdminPage() {
     if (tab === "audit") api.adminAudit().then((r) => { if (r.status === 200) setAudit(r.data as typeof audit); });
     if (tab === "actions") api.adminActions().then((r) => { if (r.status === 200) setActions(r.data as typeof actions); });
     if (tab === "events") api.adminEvents().then((r) => { if (r.status === 200) setEvents(r.data as typeof events); });
+    if (tab === "comms") api.adminComms().then((r) => { if (r.status === 200) setComms(r.data as typeof comms); });
     if (tab === "provider") api.adminProviderState().then((r) => { if (r.status === 200) setProviderState(r.data as typeof providerState); });
     if (tab === "reconciliation") api.adminReconciliation().then((r) => { if (r.status === 200) setReconciliation(r.data as typeof reconciliation); });
     if (tab === "operator") {
@@ -112,7 +125,7 @@ export default function AdminPage() {
     }
   }, [tab, data]);
 
-  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
+  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "comms", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
   const deploymentCounts = statusCounts(data?.deployments || []);
   const failureCount = data?.recent_failures?.length || 0;
   const queuedActions = data?.sections?.find((section) => section.section === "queued_actions")?.counts?.queued || 0;
@@ -551,6 +564,14 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* Comms */}
+          {tab === "comms" && (
+            <div className="space-y-6">
+              <SectionHeader title="Comms" eyebrow="Operator metadata" detail="Pod Comms routing and status without Captain narratives or attachment bodies." />
+              <AdminCommsPanel messages={comms?.comms || []} />
+            </div>
+          )}
+
           {/* Security */}
           {tab === "security" && data && (
             <div className="space-y-6">
@@ -955,6 +976,42 @@ function DataRail({
           </div>
         )) : (
           <p className="text-sm text-soft-white/40">{empty}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AdminCommsPanel({ messages }: { messages: AdminCommsMessage[] }) {
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <h3 className="font-display font-semibold">Recent Pod Comms</h3>
+      <div className="mt-3 overflow-x-auto">
+        {messages.length ? (
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-soft-white/35">
+              <tr>
+                <th className="px-3 py-2">Message</th>
+                <th className="px-3 py-2">Sender</th>
+                <th className="px-3 py-2">Recipient</th>
+                <th className="px-3 py-2">Status</th>
+                <th className="px-3 py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {messages.map((message) => (
+                <tr key={message.message_id} className="border-t border-border/70">
+                  <td className="px-3 py-2 font-mono text-xs text-soft-white/60">{message.message_id}</td>
+                  <td className="px-3 py-2 text-soft-white/60">{message.sender_deployment_id}</td>
+                  <td className="px-3 py-2 text-soft-white/60">{message.recipient_deployment_id}</td>
+                  <td className="px-3 py-2"><StatusBadge status={message.status || "queued"} /></td>
+                  <td className="px-3 py-2 text-xs text-soft-white/35">{message.created_at || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="text-sm text-soft-white/40">No Pod Comms rows recorded.</p>
         )}
       </div>
     </div>

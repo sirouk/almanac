@@ -61,6 +61,8 @@ export const api = {
 
   userDashboard: () => request("/user/dashboard", {}, "user"),
 
+  userComms: () => request("/user/comms", {}, "user"),
+
   userBilling: () => request("/user/billing", {}, "user"),
 
   userProvisioning: () => request("/user/provisioning", {}, "user"),
@@ -94,6 +96,8 @@ export const api = {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return request(`/admin/dashboard${qs}`, {}, "admin");
   },
+
+  adminComms: () => request("/admin/comms", {}, "admin"),
 
   adminServiceHealth: () => request("/admin/service-health", {}, "admin"),
 

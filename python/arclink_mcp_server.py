@@ -19,6 +19,7 @@ from typing import Any
 
 from arclink_http import http_request, parse_json_response
 from arclink_api_auth import create_user_share_grant_for_owner
+from arclink_pod_comms import list_pod_messages, send_pod_message
 from arclink_control import (
     Config,
     RateLimitError,
@@ -82,6 +83,9 @@ TOOLS = {
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload used by the managed-context plugin, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
     "shares.request": "Request a read-only Drive/Code share for one of the caller's Vault or Workspace paths. The request stays pending for owner approval, then recipient acceptance, and never shares Linked resources onward.",
+    "pod_comms.list": "List the caller's Pod Comms inbox/outbox for one authenticated deployment. Results are scoped to the caller's own deployment.",
+    "pod_comms.send": "Send a Pod Comms message from the caller's deployment. Same-Captain Crew messages are allowed; cross-Captain messages require an active pod_comms share grant.",
+    "pod_comms.share-file": "Create a Drive/Code share-grant reference that can be attached to Pod Comms after the recipient accepts it. Raw files are never embedded in message bodies.",
     "curator.fanout": "Run the curator brief-fanout consumer. Requires operator-class token.",
     "notifications.list": "List queued notifications. Requires operator-class token.",
     "ssot.read": "Read the shared Notion SSOT through the central broker with caller-scoped filtering - returns rows where the caller appears in any of the database's people-typed columns (regardless of column name). Use this when the verified caller needs live structured involvement in the configured SSOT database. For broad plate/focus orientation, start from [managed:today-plate] and qmd-backed knowledge.search-and-fetch. For broad knowledge lookup by phrase or for content under page-scoped SSOTs and child databases, call notion.search-and-fetch instead.",
@@ -340,6 +344,42 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "actor": ACTOR_PROP,
         },
         required=("resource_kind", "resource_root", "resource_path"),
+    ),
+    "pod_comms.list": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "deployment_id": {"type": "string", "description": "Caller-owned deployment id. Defaults to the caller's active deployment."},
+            "direction": {"type": "string", "enum": ["all", "inbox", "outbox"], "default": "all"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+        },
+    ),
+    "pod_comms.send": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "deployment_id": {"type": "string", "description": "Caller-owned sender deployment id. Defaults to the caller's active deployment."},
+            "recipient_deployment_id": {"type": "string", "minLength": 1, "description": "Recipient Pod deployment id."},
+            "body": {"type": "string", "minLength": 1, "description": "Message body. Do not embed raw file contents."},
+            "attachments": {
+                "type": "array",
+                "items": {"type": "object", "additionalProperties": True},
+                "description": "Optional share-grant references such as {'grant_id': 'share_...'}; raw file payloads are rejected.",
+            },
+            "actor": ACTOR_PROP,
+        },
+        required=("recipient_deployment_id", "body"),
+    ),
+    "pod_comms.share-file": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "recipient_deployment_id": {"type": "string", "minLength": 1, "description": "Recipient Pod deployment id."},
+            "resource_kind": {"type": "string", "enum": ["drive", "code"], "description": "Surface that owns the file or directory."},
+            "resource_root": {"type": "string", "enum": ["vault", "workspace"], "description": "Origin root. Linked resources cannot be reshared."},
+            "resource_path": {"type": "string", "minLength": 1, "description": "Named file or directory under the selected root."},
+            "display_name": {"type": "string", "description": "Optional human label for the attachment reference."},
+            "deployment_id": {"type": "string", "description": "Caller-owned owner deployment id. Defaults to the caller's active deployment."},
+            "actor": ACTOR_PROP,
+        },
+        required=("recipient_deployment_id", "resource_kind", "resource_root", "resource_path"),
     ),
     "curator.fanout": _operator_schema({}),
     "notifications.list": _operator_schema(
@@ -985,6 +1025,82 @@ def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, A
         "linked_root": "Linked",
         "reshare_allowed": False,
         "copy_duplicate_policy": "policy_question",
+        **result.payload,
+    }
+
+
+def _agent_pod_comms_owner(conn: sqlite3.Connection, arguments: dict[str, Any]) -> tuple[dict[str, str], str]:
+    token_row = validate_token(conn, str(arguments.get("token") or ""))
+    agent_id = str(token_row["agent_id"] or "")
+    deployment_id = str(arguments.get("deployment_id") or arguments.get("sender_deployment_id") or "")
+    return _agent_share_owner(conn, agent_id, deployment_id), agent_id
+
+
+def _list_agent_pod_comms(conn: sqlite3.Connection, arguments: dict[str, Any]) -> dict[str, Any]:
+    owner, agent_id = _agent_pod_comms_owner(conn, arguments)
+    result = list_pod_messages(
+        conn,
+        deployment_id=owner["deployment_id"],
+        direction=str(arguments.get("direction") or "all"),
+        limit=_clamp_int(arguments.get("limit"), default=50, minimum=1, maximum=200),
+    )
+    return {"ok": True, "agent_id": agent_id, **result}
+
+
+def _send_agent_pod_comms(conn: sqlite3.Connection, arguments: dict[str, Any]) -> dict[str, Any]:
+    owner, agent_id = _agent_pod_comms_owner(conn, arguments)
+    attachments = arguments.get("attachments") or []
+    if not isinstance(attachments, list):
+        raise ValueError("pod_comms.send attachments must be an array")
+    result = send_pod_message(
+        conn,
+        sender_deployment_id=owner["deployment_id"],
+        recipient_deployment_id=str(arguments.get("recipient_deployment_id") or ""),
+        body=str(arguments.get("body") or ""),
+        attachments=attachments,
+        actor_id=str(arguments.get("actor") or agent_id),
+    )
+    return {"agent_id": agent_id, "deployment_id": owner["deployment_id"], **result}
+
+
+def _create_agent_pod_comms_share_file(conn: sqlite3.Connection, arguments: dict[str, Any]) -> dict[str, Any]:
+    owner, agent_id = _agent_pod_comms_owner(conn, arguments)
+    recipient_deployment = str(arguments.get("recipient_deployment_id") or "").strip()
+    if not recipient_deployment:
+        raise ValueError("pod_comms.share-file requires recipient_deployment_id")
+    row = conn.execute(
+        "SELECT user_id FROM arclink_deployments WHERE deployment_id = ? AND user_id != ''",
+        (recipient_deployment,),
+    ).fetchone()
+    if row is None:
+        raise PermissionError("recipient ArcLink deployment was not found")
+    result = create_user_share_grant_for_owner(
+        conn,
+        owner_user_id=owner["user_id"],
+        recipient_user_id=str(row["user_id"] or ""),
+        resource_kind=str(arguments.get("resource_kind") or ""),
+        resource_root=str(arguments.get("resource_root") or ""),
+        resource_path=str(arguments.get("resource_path") or ""),
+        owner_deployment_id=owner["deployment_id"],
+        recipient_deployment_id=recipient_deployment,
+        display_name=str(arguments.get("display_name") or ""),
+        access_mode="read",
+        metadata={
+            "requested_via": "arclink-mcp",
+            "attachment_for": "pod_comms",
+            "owner_deployment_id": owner["deployment_id"],
+            "recipient_deployment_id": recipient_deployment,
+            "requested_by_agent_id": agent_id,
+            "actor": str(arguments.get("actor") or agent_id),
+        },
+        requested_by_agent_id=agent_id,
+    )
+    return {
+        "ok": True,
+        "agent_id": agent_id,
+        "deployment_id": owner["deployment_id"],
+        "recipient_deployment_id": recipient_deployment,
+        "attachment_ready": result.payload.get("grant", {}).get("status") == "accepted",
         **result.payload,
     }
 
@@ -1932,6 +2048,15 @@ class Handler(BaseHTTPRequestHandler):
 
             if tool_name == "shares.request":
                 return _create_agent_share_request(conn, arguments)
+
+            if tool_name == "pod_comms.list":
+                return _list_agent_pod_comms(conn, arguments)
+
+            if tool_name == "pod_comms.send":
+                return _send_agent_pod_comms(conn, arguments)
+
+            if tool_name == "pod_comms.share-file":
+                return _create_agent_pod_comms_share_file(conn, arguments)
 
             if tool_name == "curator.fanout":
                 self._require_operator(conn, arguments)

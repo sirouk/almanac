@@ -155,6 +155,20 @@ interface LinkedResourcesData {
   linked_resources?: LinkedResource[];
 }
 
+interface CommsMessage {
+  message_id: string;
+  sender_deployment_id: string;
+  recipient_deployment_id: string;
+  body?: string;
+  status: string;
+  created_at?: string;
+  delivered_at?: string;
+}
+
+interface CommsData {
+  comms?: CommsMessage[];
+}
+
 interface ThresholdContinuation {
   status?: string;
   dashboard_guidance?: string;
@@ -213,8 +227,8 @@ interface ProviderStateData {
   deployment_models?: ProviderDeploymentModel[];
 }
 
-type Tab = "overview" | "billing" | "provisioning" | "services" | "vault" | "bots" | "model" | "memory" | "security" | "support";
-const ALL_TABS: Tab[] = ["overview", "billing", "provisioning", "services", "vault", "bots", "model", "memory", "security", "support"];
+type Tab = "overview" | "billing" | "provisioning" | "services" | "vault" | "comms" | "bots" | "model" | "memory" | "security" | "support";
+const ALL_TABS: Tab[] = ["overview", "billing", "provisioning", "services", "vault", "comms", "bots", "model", "memory", "security", "support"];
 
 function isGoodStatus(status = "") {
   return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "running"].includes(status.toLowerCase());
@@ -307,6 +321,7 @@ export default function DashboardPage() {
   const [provisioning, setProvisioning] = useState<{ deployments?: ProvisioningDeployment[] } | null>(null);
   const [credentials, setCredentials] = useState<CredentialsData | null>(null);
   const [linkedResources, setLinkedResources] = useState<LinkedResourcesData | null>(null);
+  const [comms, setComms] = useState<CommsData | null>(null);
   const [providerState, setProviderState] = useState<ProviderStateData | null>(null);
   const [credentialsError, setCredentialsError] = useState("");
   const [linkedResourcesError, setLinkedResourcesError] = useState("");
@@ -417,6 +432,9 @@ export default function DashboardPage() {
         }
       }).catch(() => {
         if (mounted) setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shares read-only when the API is available.");
+      }),
+      api.userComms().then((r) => {
+        if (mounted && r.status === 200) setComms(r.data as CommsData);
       }),
       api.userProviderState().then((r) => {
         if (!mounted) return;
@@ -755,6 +773,13 @@ export default function DashboardPage() {
                 <NoDeployments message="No deployments. Vault access available after provisioning." />
               )}
               <LinkedResourcesPanel resources={linkedResources} loadError={linkedResourcesError} />
+            </div>
+          )}
+
+          {activeTab === "comms" && (
+            <div className="space-y-6">
+              <SectionHeader title="Comms" eyebrow="Crew messages" detail="Pod-to-Pod messages for your Captain account. Attachments appear only as accepted share references." />
+              <CommsPanel messages={comms?.comms || []} />
             </div>
           )}
 
@@ -1509,6 +1534,28 @@ function CredentialHandoffPanel({
       <p className="mt-3 text-xs text-soft-white/30">
         {credentials?.instructions?.acknowledge || "After acknowledgement, ArcLink removes the handoff from future dashboard responses."}
       </p>
+    </div>
+  );
+}
+
+function CommsPanel({ messages }: { messages: CommsMessage[] }) {
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <h3 className="font-display font-semibold">Recent Comms</h3>
+      <div className="mt-3 space-y-2">
+        {messages.length ? messages.map((message) => (
+          <div key={message.message_id} className="border border-border/70 bg-carbon/70 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-mono text-xs text-soft-white/50">{message.sender_deployment_id} to {message.recipient_deployment_id}</p>
+              <StatusBadge status={message.status || "queued"} />
+            </div>
+            <p className="mt-2 text-sm leading-6 text-soft-white/80">{message.body || "Redacted message"}</p>
+            <p className="mt-2 text-xs text-soft-white/35">{formatDate(message.created_at || "")}</p>
+          </div>
+        )) : (
+          <p className="text-sm text-soft-white/40">No Pod Comms yet.</p>
+        )}
+      </div>
     </div>
   );
 }

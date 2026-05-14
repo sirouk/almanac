@@ -50,7 +50,7 @@ from arclink_chutes import (
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
 ARCLINK_ADMIN_MUTATION_ROLES = frozenset({"owner", "admin", "ops"})
 ARCLINK_CREDENTIAL_HANDOFF_KINDS = frozenset({"dashboard_password", "chutes_api_key", "notion_token"})
-ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code"})
+ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code", "pod_comms"})
 ARCLINK_SHARE_RESOURCE_ROOTS = frozenset({"vault", "workspace"})
 ARCLINK_SHARE_ACCESS_MODES = frozenset({"read"})
 ARCLINK_SHARE_STATUSES = ARCLINK_SHARE_GRANT_STATUSES
@@ -1959,8 +1959,19 @@ def _materialize_share_projection(
     owner_user = str(grant.get("owner_user_id") or "").strip()
     recipient_user = str(grant.get("recipient_user_id") or "").strip()
     resource_root = str(grant.get("resource_root") or "").strip().lower()
+    resource_kind = str(grant.get("resource_kind") or "").strip().lower()
     source_key = "vault" if resource_root == "vault" else "code_workspace"
     metadata = json_loads_safe(str(grant.get("metadata_json") or "{}"))
+    if resource_kind == "pod_comms":
+        metadata["projection"] = {
+            "status": "not_applicable",
+            "linked_root": "",
+            "linked_path": "",
+            "entry_path": "",
+            "resource_kind": "pod_comms",
+            "read_only": True,
+        }
+        return metadata
     owner_deployment = str(metadata.get("owner_deployment_id") or metadata.get("deployment_id") or "").strip()
     recipient_deployment = str(metadata.get("recipient_deployment_id") or "").strip()
     projection: dict[str, Any] = {
@@ -2092,6 +2103,17 @@ def _remove_share_projection(
     now: str,
 ) -> dict[str, Any]:
     metadata = json_loads_safe(str(grant.get("metadata_json") or "{}"))
+    if str(grant.get("resource_kind") or "").strip().lower() == "pod_comms":
+        metadata["projection"] = {
+            "status": "not_applicable",
+            "linked_root": "",
+            "linked_path": "",
+            "entry_path": "",
+            "resource_kind": "pod_comms",
+            "removed_at": now,
+            "read_only": True,
+        }
+        return metadata
     projection = metadata.get("projection")
     if not isinstance(projection, Mapping):
         metadata["projection"] = {
@@ -2187,11 +2209,19 @@ def create_user_share_grant_for_owner(
     mode = str(access_mode or "read").strip().lower()
     if kind not in ARCLINK_SHARE_RESOURCE_KINDS:
         raise ArcLinkApiAuthError("ArcLink share requires a supported resource kind")
-    if root not in ARCLINK_SHARE_RESOURCE_ROOTS:
+    if kind == "pod_comms":
+        root = root or "pod_comms"
+        if root != "pod_comms":
+            raise ArcLinkApiAuthError("ArcLink Pod Comms grants require the pod_comms root")
+        clean_path = str(resource_path or "*").strip() or "*"
+        if clean_path not in {"*", "pod_comms"}:
+            clean_path = _clean_share_path(clean_path)
+    elif root not in ARCLINK_SHARE_RESOURCE_ROOTS:
         raise ArcLinkApiAuthError("ArcLink share cannot originate from linked or unknown roots")
+    else:
+        clean_path = _clean_share_path(resource_path)
     if mode not in ARCLINK_SHARE_ACCESS_MODES:
         raise ArcLinkApiAuthError("ArcLink share grants are read-only")
-    clean_path = _clean_share_path(resource_path)
     safe_metadata = dict(metadata or {})
     if owner_deployment:
         safe_metadata["owner_deployment_id"] = owner_deployment

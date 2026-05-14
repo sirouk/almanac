@@ -105,6 +105,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 |--------|------|-------------|
 | POST | `/auth/user/logout` | Revoke user session (CSRF) |
 | GET | `/user/dashboard` | User deployment overview |
+| GET | `/user/comms` | Captain-scoped Pod Comms inbox/outbox with message narratives |
 | GET | `/user/billing` | Billing/entitlement status plus the local renewal lifecycle gate |
 | POST | `/user/portal` | Create Stripe portal link (CSRF) |
 | GET | `/user/provisioning` | Deployment provisioning status |
@@ -124,6 +125,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 |--------|------|-------------|
 | POST | `/auth/admin/logout` | Revoke admin session (CSRF) |
 | GET | `/admin/dashboard` | Platform overview (filters: channel, status, deployment_id, user_id, since) |
+| GET | `/admin/comms` | Operator Pod Comms metadata only; message narratives and attachments are withheld |
 | GET | `/admin/service-health` | Service health (filters: deployment_id, status, since) |
 | GET | `/admin/provisioning-jobs` | Provisioning jobs (filters: deployment_id, status, since) |
 | GET | `/admin/dns-drift` | DNS drift observations (filters: deployment_id, since) |
@@ -237,6 +239,13 @@ Same-account multi-agent shares use the same API surface but are deployment
 scoped: the source deployment provides Vault/Workspace, the target deployment
 receives a read-only Linked projection, and no owner-notification approval loop
 is needed because the authenticated user owns both agents.
+
+Pod Comms uses the same share-grant table for trust boundaries. Messages
+between Pods owned by the same Captain are allowed by default. Cross-Captain
+messages require an accepted, unexpired `pod_comms` grant; file references are
+separate Drive/Code share grants and are stored as attachment references rather
+than raw file content. The Captain route returns narratives for that Captain's
+inbox/outbox, while the Operator route returns only routing/status metadata.
 
 ## Assumptions and Ownership
 

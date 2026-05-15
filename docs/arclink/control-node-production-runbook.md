@@ -29,7 +29,7 @@ build window.
 Shared Host commands such as `./deploy.sh install` are the operator-led
 systemd/shared-user path. Shared Host Docker commands such as
 `./deploy.sh docker install` validate the shared-host substrate, not paid
-Sovereign pods.
+ArcPods.
 
 ## Credential Checklist
 

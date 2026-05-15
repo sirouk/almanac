@@ -280,13 +280,13 @@ shapes.
 | --- | --- | --- | --- |
 | **Sovereign Control Node Mode** | Dockerized paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, domain-or-Tailscale ingress intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
 | **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
-| **Shared Host Docker Mode** | Containerized validation and operation of the operator-led Shared Host substrate, including Curator/enrollment flows and shared services. This is not the paid Sovereign pod control path. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
+| **Shared Host Docker Mode** | Containerized validation and operation of the operator-led Shared Host substrate, including Curator/enrollment flows and shared services. This is not the paid ArcPod control path. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
 
 The interactive `./deploy.sh` menu first asks which mode you want, then opens
 that mode's control center. Sovereign Control Node actions live under the
-control menu and are the Dockerized paid-customer pod path. Shared Host actions
+control menu and are the Dockerized paid-ArcPod path. Shared Host actions
 live under the Shared Host menu. Shared Host Docker actions live under the
-Docker menu and are for operator-led shared services, not Sovereign pods. The
+Docker menu and are for operator-led shared services, not ArcPods. The
 top-level default is Sovereign Control Node Mode. Direct commands that do not
 include `control` or `docker`, such as `./deploy.sh install`, use Shared Host
 Mode.
@@ -450,8 +450,8 @@ from the same control-plane state.
 Sovereign Control Node Mode is the product control-plane path backed by Docker
 Compose. The host becomes the coordinator for self-serve users: web/API,
 Telegram, and Discord onboarding; Stripe checkout/webhooks; fleet placement;
-per-user pod intent; Tailscale or Cloudflare/domain ingress intent; health; and
-user/admin dashboards. Individual deployments are treated as Sovereign pods
+per-ArcPod intent; Tailscale or Cloudflare/domain ingress intent; health; and
+user/admin dashboards. Individual deployments are treated as ArcPods
 with their own runtime state, secrets, health, and product configuration. This
 is also the future collaboration model described in `FUTURE_SHARED_ARCLINK.md`.
 
@@ -496,17 +496,17 @@ Copy the endpoint signing secret into `STRIPE_WEBHOOK_SECRET` through
 Tailscale mode keeps the control node application Dockerized. `deploy.sh`
 brings up the Docker stack, then uses the host Tailscale CLI only as the
 network edge to publish the Dockerized web, API, and Notion webhook services.
-Per-user pod URLs default to path-based routes under the worker's Tailscale
+Per-ArcPod URLs default to path-based routes under the worker's Tailscale
 FQDN, for example `https://worker.tailnet.ts.net/u/<prefix>/files`. A
 `subdomain` strategy exists for environments that can really resolve and
 certificate sub-subdomains under a Tailscale name, but `path` is the safe
 default.
 
-Each Sovereign pod also reserves its own Notion callback surface in provisioning
+Each ArcPod also reserves its own Notion callback surface in provisioning
 intent. In domain mode that is `https://u-<prefix>.<base-domain>/notion/webhook`;
 in Tailscale path mode that is
 `https://<worker-tailnet-name>/u/<prefix>/notion/webhook`. The shared host's
-operator Notion Funnel is separate and should not be confused with customer pod
+operator Notion Funnel is separate and should not be confused with ArcPod
 Notion connections.
 
 When enabled, `control-provisioner` runs
@@ -532,8 +532,8 @@ Control-node details live in
 Shared Host Docker Mode is the containerized operator-led shared substrate. It
 runs the shared-host services and Curator/enrollment machinery inside Docker
 Compose for validation, repair, and container-native operation. It does not ask
-for Cloudflare-vs-Tailscale Sovereign pod ingress because it is not the paid
-customer pod control node.
+for Cloudflare-vs-Tailscale ArcPod ingress because it is not the paid ArcPod
+control node.
 
 ### Shared Host Docker Quick Start
 
@@ -582,7 +582,7 @@ Shared Host Docker control center. Shared Host commands remain in Shared Host
 Mode unless the direct command includes `docker`.
 
 Hermes runtime upgrades use the same pin lane in both shared-host Docker and
-sovereign pod deployments:
+ArcPod deployments:
 
 ```bash
 ./deploy.sh docker hermes-upgrade-check
@@ -592,8 +592,8 @@ sovereign pod deployments:
 The apply command updates `config/pins.json`, keeps `hermes-docs` inherited
 from the same `hermes-agent` ref, commits and pushes the pin bump when the
 upstream lane is configured, then re-enters `./deploy.sh docker upgrade`.
-During reconcile, active Docker agent homes and sovereign pod Hermes homes are
-refreshed from the rebuilt pinned runtime. The sovereign pod installer also
+During reconcile, active Docker agent homes and ArcPod Hermes homes are
+refreshed from the rebuilt pinned runtime. The ArcPod installer also
 syncs bundled Hermes skills, ArcLink skills, dashboard plugins, the primitive
 vault layout, and the matching pinned Hermes docs into the pod vault so Drive,
 Code, Terminal, qmd, and memory synthesis all see one release-aligned surface.

@@ -85,7 +85,7 @@ TELEGRAM_USER_COMMAND_NAMES = {
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Telegram onboarding worker for ArcLink Curator.")
+    parser = argparse.ArgumentParser(description="Telegram onboarding worker for Raven, Curator of the Console.")
     parser.add_argument("--once", action="store_true", help="Poll once, then exit.")
     parser.add_argument("--register-commands", action="store_true", help="Refresh Telegram bot command menus, then exit.")
     parser.add_argument("--poll-timeout", type=int, default=int(os.environ.get("ARCLINK_ONBOARDING_POLL_TIMEOUT_SECONDS", "20")))

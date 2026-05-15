@@ -1162,7 +1162,7 @@ ArcLink deploy menu
 
   1) Sovereign Control Node control center (Dockerized billing, bots, fleet, provisioning)
   2) Shared Host mode control center (operator-led)
-  3) Shared Host Docker control center (operator-led shared services, not Sovereign pods)
+  3) Shared Host Docker control center (operator-led shared services, not ArcPods)
   4) Exit
 EOF
 
@@ -1291,7 +1291,7 @@ choose_docker_mode() {
 
   cat <<'EOF'
 ArcLink Shared Host Docker control center
-  Operator-led shared services only; for Dockerized paid customer pods use
+  Operator-led shared services only; for Dockerized paid ArcPods use
   Sovereign Control Node mode.
 
   1) Install / repair Docker stack from current checkout
@@ -7129,8 +7129,8 @@ run_notion_ssot_setup() {
   echo "  3) If Notion lands you back in the workspace UI, open your workspace"
   echo "     switcher in the top-left, then go to Settings -> Integrations."
   echo "  4) Click Create new integration."
-  echo "  5) Name it something like ArcLink Curator, optionally upload an icon"
-  echo "     (the Curator Discord avatar in this repo works well), choose the"
+  echo "  5) Name it something like Raven, optionally upload an icon"
+  echo "     (the Raven/Curator Discord avatar in this repo works well), choose the"
   echo "     associated workspace, and click Create."
   echo "  6) On the capabilities screen:"
   echo "     - turn on every checkbox capability Notion offers on that screen"
@@ -8420,7 +8420,7 @@ collect_docker_install_answers() {
   echo "ArcLink deploy: Shared Host Docker install / repair from current checkout"
   echo
   echo "This is the operator-led Shared Host substrate in Docker. It does not"
-  echo "configure Sovereign customer pod ingress or ask Cloudflare vs Tailscale."
+  echo "configure ArcPod ingress or ask Cloudflare vs Tailscale."
   echo "For the Dockerized paid control node, run: ./deploy.sh control install"
   echo
   echo "Shared Host Docker mode uses fixed container paths and the current checkout as the host bind mount:"
@@ -9283,11 +9283,11 @@ collect_control_install_answers() {
     echo "Detected Tailscale DNS name: $detected_tailscale_dns"
     echo
   fi
-  echo "Sovereign deployment style:"
+  echo "Control-node deployment style:"
   echo "  single-machine - one starter machine runs the control node and first worker"
   echo "  hetzner        - control node places pods onto registered Hetzner workers"
   echo "  akamai-linode  - control node places pods onto registered Akamai Linode workers"
-  ARCLINK_CONTROL_DEPLOYMENT_STYLE="$(normalize_control_deployment_style "$(ask "Sovereign deployment style" "$ARCLINK_CONTROL_DEPLOYMENT_STYLE")")"
+  ARCLINK_CONTROL_DEPLOYMENT_STYLE="$(normalize_control_deployment_style "$(ask "Control-node deployment style" "$ARCLINK_CONTROL_DEPLOYMENT_STYLE")")"
   case "$ARCLINK_CONTROL_DEPLOYMENT_STYLE" in
     single-machine)
       default_executor_adapter="local"
@@ -9317,7 +9317,7 @@ collect_control_install_answers() {
         ARCLINK_TAILSCALE_HTTPS_PORT="443"
         ;;
     esac
-    ARCLINK_TAILSCALE_NOTION_PATH="$(normalize_http_path "$(ask "Tailscale public control-node Notion webhook path (customer pod callbacks are per deployment)" "${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}")")"
+    ARCLINK_TAILSCALE_NOTION_PATH="$(normalize_http_path "$(ask "Tailscale public control-node Notion webhook path (ArcPod callbacks are per deployment)" "${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}")")"
     ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="$(normalize_tailscale_host_strategy "$(ask "Tailscale deployment URL strategy (path/subdomain)" "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}")")"
     ARCLINK_BASE_DOMAIN="$ARCLINK_TAILSCALE_DNS_NAME"
     ARCLINK_EDGE_TARGET="$ARCLINK_TAILSCALE_DNS_NAME"
@@ -9386,7 +9386,7 @@ collect_control_install_answers() {
   ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS="${ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_CENTS:-9900}"
   ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS="${ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS:-7900}"
   ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS="${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-9900}"
-  ARCLINK_CONTROL_PROVISIONER_ENABLED="$(ask_yes_no "Enable Sovereign pod provisioner now" "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}")"
+  ARCLINK_CONTROL_PROVISIONER_ENABLED="$(ask_yes_no "Enable ArcPod provisioner now" "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}")"
   ARCLINK_EXECUTOR_ADAPTER="${ARCLINK_EXECUTOR_ADAPTER:-disabled}"
   if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" ]]; then
     echo
@@ -9456,7 +9456,7 @@ collect_control_install_answers() {
     CLOUDFLARE_API_TOKEN="$(ask_secret_with_default "Cloudflare DNS API token (ENTER keeps current, type none to clear)" "${CLOUDFLARE_API_TOKEN:-}")"
     CLOUDFLARE_ZONE_ID="$(normalize_optional_answer "$(ask "Cloudflare zone ID (type none to clear)" "${CLOUDFLARE_ZONE_ID:-}")")"
   else
-    echo "Tailscale ingress selected: Cloudflare DNS credentials are not required for Sovereign pod routing."
+    echo "Tailscale ingress selected: Cloudflare DNS credentials are not required for ArcPod routing."
   fi
   CHUTES_API_KEY="$(ask_secret_with_default "Chutes owner API key (ENTER keeps current, type none to clear)" "${CHUTES_API_KEY:-}")"
   TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Public Telegram bot token (ENTER keeps current, type none to clear)" "${TELEGRAM_BOT_TOKEN:-}")"
@@ -9715,7 +9715,7 @@ Contents:
   arclink-control.sqlite3      Consistent SQLite backup of the control DB when present
   table-counts.tsv            Table row counts at backup time
   arclink-priv.tgz            Private config/state/vault snapshot, excluding reset-backups
-  arcdata-deployments.tgz     Generated Sovereign pod data from ARCLINK_STATE_ROOT_BASE when present
+  arcdata-deployments.tgz     Generated ArcPod data from ARCLINK_STATE_ROOT_BASE when present
   docker-containers.jsonl      Docker container inventory when Docker is available
 EOF
 
@@ -9829,7 +9829,7 @@ ArcLink Sovereign PRODUCTION user-data reset
 This will back up first, then clear production user/customer runtime data on this control node:
   - public Raven onboarding sessions and channel pairing codes
   - users, subscriptions, deployments, provisioning jobs, service health
-  - generated Sovereign pod containers, named volumes, and /arcdata/deployments entries
+  - generated ArcPod containers, named volumes, and /arcdata/deployments entries
   - generated per-deployment secret-store directories
   - notification, webhook, audit, action, rate-limit, and event rows
 
@@ -9864,7 +9864,7 @@ ArcLink Sovereign sandbox user-data reset
 This will back up first, then clear sandbox/test user runtime data on this control node:
   - public Raven onboarding sessions and channel pairing codes
   - users, subscriptions, deployments, provisioning jobs, service health
-  - generated Sovereign pod containers, named volumes, and /arcdata/deployments entries
+  - generated ArcPod containers, named volumes, and /arcdata/deployments entries
   - generated per-deployment secret-store directories
   - notification, webhook, audit, action, rate-limit, and event rows
 
@@ -10175,7 +10175,7 @@ run_control_runtime_reset() {
   db_path="$(control_host_db_path)"
   echo "Stopping control-plane writers before reset..."
   stop_control_runtime_writers
-  echo "Stopping and removing generated Sovereign pod stacks..."
+  echo "Stopping and removing generated ArcPod stacks..."
   remove_control_generated_pods
   echo "Removing generated per-deployment secret-store directories..."
   remove_control_generated_secret_refs

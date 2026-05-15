@@ -900,7 +900,7 @@ def _package_prompt_reply(
         reply=(
             f"{header}\n\n"
             f"Choose your ArcLink onboarding lane.\n\n"
-            f"Founders is ${FOUNDERS_MONTHLY_DOLLARS}/mo: Sovereign-equivalent access for the first 100 aboard.\n"
+            f"Founders is ${FOUNDERS_MONTHLY_DOLLARS}/mo: single-ArcPod access for the first 100 Captains.\n"
             f"Scale is ${SCALE_MONTHLY_DOLLARS}/mo: three agents onboard ArcLink with Federation.\n\n"
             "Tap a lane to open secure Stripe checkout. I will report back here once payment clears and provisioning starts.\n\n"
             f"Agentic Expansion after launch starts at ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month on Scale "
@@ -2844,7 +2844,7 @@ def _agents_reply(
             channel_identity=channel_identity,
             action="agents_unavailable",
             reply=(
-                f"No crew on your manifest yet. Limited 100 Founders brings Sovereign-equivalent access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
+                f"No crew on your manifest yet. Limited 100 Founders brings single-ArcPod access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
                 f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month. Scale launches three agents with Federation for ${SCALE_MONTHLY_DOLLARS}/month."
             ),
             session=session,
@@ -4503,8 +4503,8 @@ def handle_arclink_public_bot_turn(
         elif plan == "founders":
             plan_reply = (
                 "Limited 100 Founders is locked.\n\n"
-                f"Sovereign-equivalent access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
-                "Agent onboard ArcLink while the Founders cohort is open."
+                f"Single-ArcPod access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
+                "One Agent onboard ArcLink while the Founders cohort is open."
             )
         else:
             plan_reply = (

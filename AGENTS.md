@@ -157,7 +157,7 @@ placement, provisioning jobs, and user/admin dashboards:
 ./deploy.sh control reset-runtime
 ```
 
-Do not use `./deploy.sh docker ...` for paid Sovereign pod control work. That
+Do not use `./deploy.sh docker ...` for paid ArcPod control work. That
 menu is for the containerized Shared Host substrate. Do not use bare
 `./deploy.sh install` for Control Node work; bare install is Shared Host mode.
 
@@ -561,7 +561,7 @@ New and refreshed agents should get these defaults from the outset:
 - Gateway run with Hermes `gateway run --replace`.
 - Home-channel env repaired from enrollment state when available.
 
-Sovereign pod Hermes homes use the same release-aligned installer path:
+ArcPod Hermes homes use the same release-aligned installer path:
 `bin/install-deployment-hermes-home.sh` syncs bundled Hermes skills,
 ArcLink skills, dashboard plugins, Hermes config migrations, primitive vault
 directories, and the Hermes docs that match the pinned runtime into the pod

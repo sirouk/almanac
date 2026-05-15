@@ -26,7 +26,7 @@ Some broader infrastructure items in the scope below are live foundations or pla
 | The agent runtime | Hermes | The agentic harness inside each pod: memory, skills, tools, reasoning loop. Each pod ships with a private Hermes. |
 | The retrieval rail | qmd vault | Vault index/retrieval over the user's files. |
 | The model rail | Chutes-first | SOTA inference default; BYOK lanes for Codex, Claude, and other providers preserved. |
-| The unit | Agent / Crew member | One Hermes instance plus its surrounding services. Limited 100 Founders is $149/month for Sovereign-equivalent access. Sovereign is $199/month: Agent onboard ArcLink. Scale is $275/month: Agents onboard ArcLink with Federation. Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale. |
+| The unit | ArcPod / Agent / Crew member | One Hermes-powered Agent occupying one ArcPod plus its surrounding services. Limited 100 Founders is $149/month for single-ArcPod access. Sovereign is $199/month: one Agent onboard ArcLink. Scale is $275/month: three Agents onboard ArcLink with Federation. Agentic Expansion adds Agents for $99/month on Sovereign or $79/month on Scale. |
 
 Voice rule:
 
@@ -36,7 +36,7 @@ Not:
 
 > Use `/start`, `/agents`, `/connect_notion`...
 
-Raven is the competent operator on comms when the lights come on. She is not a mascot and not a help menu.
+Raven is the guide to ArcLink and Curator of the Console when the lights come on. She is not a mascot and not a help menu.
 
 ## What ArcLink Delivers
 
@@ -107,13 +107,13 @@ Hero headline:
 
 ```text
 I'm Raven.
-I'll bring your agent aboard ArcLink.
+I'll bring your ArcPod online.
 ```
 
 Hero body:
 
 ```text
-Give me a name, a mission, and a cleared Stripe handoff. I will bring your agent aboard ArcLink. Sovereign is Agent onboard ArcLink for $199/month. Scale is Agents onboard ArcLink with Federation for $275/month.
+Give me an Agent name, a mission, and a cleared Stripe handoff. I will bring your ArcPod online. Sovereign is one Agent onboard ArcLink for $199/month. Scale is three Agents onboard ArcLink with Federation for $275/month.
 ```
 
 Hero CTAs:
@@ -353,7 +353,7 @@ Welcome aboard, {Name}.
 
 Choose your ArcLink onboarding lane.
 
-Founders is $149/mo: Sovereign-equivalent access for the first 100 aboard.
+Founders is $149/mo: single-ArcPod access for the first 100 Captains.
 Scale is $275/mo: three agents onboard ArcLink with Federation.
 
 Tap a lane to open secure Stripe checkout. I will report back here once payment clears and provisioning starts.

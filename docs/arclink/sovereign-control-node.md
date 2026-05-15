@@ -82,7 +82,7 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      instead of double-applying side effects.
 
 5. **Provisioning intent**
-   - `python/arclink_provisioning.py` renders the per-user pod intent:
+   - `python/arclink_provisioning.py` renders the per-ArcPod intent:
      dashboard, Hermes gateway/dashboard, QMD, vault watch, memory synth,
      Nextcloud, dashboard-native Drive/Code/Terminal plugins, notification delivery, health watch, managed
      context install, DNS records, Traefik labels, and secret references.

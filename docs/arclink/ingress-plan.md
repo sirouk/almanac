@@ -2,7 +2,7 @@
 
 ## Overview
 
-ArcLink Sovereign pods support two first-class ingress modes:
+ArcLink ArcPods support two first-class ingress modes:
 
 - `ARCLINK_INGRESS_MODE=domain`: public DNS is managed through Cloudflare and
   routed by Traefik to per-pod Docker services.
@@ -84,7 +84,7 @@ tailnet.
 - The host Tailscale CLI must be installed and logged in for live publication.
 - Tailscale Funnel/Serve approval must be handled by the tailnet operator when
   Tailscale prompts for it.
-- No Cloudflare token or zone is required for Sovereign pod routing.
+- No Cloudflare token or zone is required for ArcPod routing.
 
 Fake mode remains the default for tests and dry runs. Records are persisted to
 SQLite only and no provider API call is made.
@@ -123,7 +123,7 @@ URLs for SSH hostnames.
 
 ## Per-Deployment Notion Callback
 
-Sovereign pods reserve a customer-specific Notion callback endpoint in the
+ArcPods reserve a Captain-specific Notion callback endpoint in the
 rendered provisioning intent. This is separate from the operator-led shared-host
 Notion webhook used by Shared Host and Shared Host Docker modes.
 

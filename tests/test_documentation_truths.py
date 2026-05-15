@@ -110,13 +110,70 @@ def test_shipped_docs_do_not_claim_live_external_proof_passed() -> None:
     print("PASS test_shipped_docs_do_not_claim_live_external_proof_passed")
 
 
+def test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy() -> None:
+    forbidden = (
+        "Sovereign Pod",
+        "Sovereign pod",
+        "sovereign pod",
+        "Sovereign pods",
+        "sovereign pods",
+        "Sovereign deployment",
+        "sovereign deployment",
+        "Sovereign-equivalent",
+        "paid-customer pod",
+        "customer pod",
+        "per-user pod",
+        "per-user Sovereign",
+        "ArcLink Curator",
+        "Curator manages",
+        "Curator/plugin",
+        "Curator's plugin",
+        "Curator updates",
+        "competent operator on comms",
+        "working unit aboard",
+    )
+    scanned_roots = (
+        REPO / "README.md",
+        REPO / "AGENTS.md",
+        REPO / "templates",
+        REPO / "docs",
+        REPO / "web" / "src",
+        REPO / "python",
+        REPO / "bin",
+    )
+    allowed = {
+        Path("docs/arclink/vocabulary.md"),
+    }
+    offenders: list[str] = []
+    for root in scanned_roots:
+        paths = [root] if root.is_file() else list(root.rglob("*"))
+        for path in paths:
+            if not path.is_file() or path.suffix not in {"", ".md", ".py", ".tsx", ".ts", ".sh", ".yaml", ".yml"}:
+                continue
+            rel = path.relative_to(REPO)
+            if (
+                rel in allowed
+                or rel == Path("tests/test_documentation_truths.py")
+                or "arclink-priv" in rel.parts
+                or "openapi" in rel.parts
+            ):
+                continue
+            body = path.read_text(encoding="utf-8", errors="ignore")
+            for phrase in forbidden:
+                if phrase in body:
+                    offenders.append(f"{rel} contains stale vocabulary {phrase!r}")
+    expect(not offenders, "\n".join(offenders))
+    print("PASS test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy")
+
+
 def main() -> int:
     test_agents_service_user_unit_list_matches_templates()
     test_org_profile_docs_mark_cli_as_shipped_contract()
     test_docs_do_not_claim_stripe_webhook_skip()
     test_creative_brief_labels_live_external_proof_gates()
     test_shipped_docs_do_not_claim_live_external_proof_passed()
-    print("PASS all 5 documentation truth tests")
+    test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy()
+    print("PASS all 6 documentation truth tests")
     return 0
 
 

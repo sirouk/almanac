@@ -2,7 +2,7 @@
 """ArcLink Sovereign control-node provisioner.
 
 This worker is the connective tissue between hosted onboarding/billing and the
-per-user Sovereign pod runtime. It intentionally operates on existing ArcLink
+per-Captain ArcPod runtime. It intentionally operates on existing ArcLink
 contracts: deployments, fleet hosts, provisioning jobs, DNS records, service
 health, audit, and events.
 """

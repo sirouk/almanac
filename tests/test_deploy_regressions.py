@@ -1464,7 +1464,7 @@ def test_deploy_menu_defaults_to_sovereign_control_node() -> None:
         "expected top-level menu to expose Sovereign Control Node mode",
     )
     expect(
-        "Shared Host Docker control center (operator-led shared services, not Sovereign pods)" in mode_snippet,
+        "Shared Host Docker control center (operator-led shared services, not ArcPods)" in mode_snippet,
         "expected top-level menu to expose Shared Host Docker mode",
     )
     sovereign_index = mode_snippet.index("1) Sovereign Control Node control center")
@@ -2047,7 +2047,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("reset_control_telegram_active_command_scopes" in text, "runtime reset must clear stale active Telegram command scopes")
     expect("include_agent_commands=False" in text, "runtime reset should restore old active chats to the Raven-only command menu")
     expect("collect_control_install_answers()" in text, "expected control-node provider configuration flow")
-    expect("Sovereign deployment style" in text, "expected control install to ask for single-machine/hosted-fleet style")
+    expect("Control-node deployment style" in text, "expected control install to ask for single-machine/hosted-fleet style")
     expect("single-machine - one starter machine runs the control node and first worker" in text, "expected single-machine setup guidance")
     expect("hetzner        - control node places pods onto registered Hetzner workers" in text, "expected Hetzner setup guidance")
     expect("akamai-linode  - control node places pods onto registered Akamai Linode workers" in text, "expected Akamai Linode setup guidance")

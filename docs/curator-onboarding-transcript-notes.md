@@ -1,4 +1,4 @@
-# ArcLink Curator Onboarding Design Notes
+# Raven Onboarding Design Notes
 
 This public note captures generic product lessons from onboarding tests. Do not
 store live operator names, org rosters, budgets, transcript excerpts, repo

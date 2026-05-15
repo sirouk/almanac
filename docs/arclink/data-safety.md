@@ -8,14 +8,14 @@ ArcLink has three operating modes with different state boundaries.
 | --- | --- | --- |
 | Shared Host | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; enrolled users have private Hermes homes under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Operator-led, systemd-backed, per-user Unix accounts. |
 | Shared Host Docker | Same private state contract, bind-mounted into Compose from `arclink-priv/`; Docker agent homes live under `arclink-priv/state/docker/users/`. | Trusted-host containerization of the shared-host substrate. |
-| Sovereign Control Node | Dockerized product control plane with per-deployment state roots, Compose projects, and secret references rendered from control-plane rows. Current product pod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; provisioning and admin action workers are enabled by default, but live provider/account mutation still fails closed unless the operator configures the executor and external credentials. |
+| Sovereign Control Node | Dockerized product control plane with per-ArcPod state roots, Compose projects, and secret references rendered from control-plane rows. Current ArcPod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; provisioning and admin action workers are enabled by default, but live provider/account mutation still fails closed unless the operator configures the executor and external credentials. |
 
 Do not apply a path from one mode to another without checking the generated
 config and control-plane metadata.
 
 ## Per-Deployment Isolation
 
-Sovereign deployments are rendered as isolated Docker Compose stacks with:
+ArcPods are rendered as isolated Docker Compose stacks with:
 
 - **Dedicated Postgres database** per deployment where the rendered pod uses one.
 - **Dedicated Nextcloud instance** per deployment.
@@ -27,19 +27,19 @@ The access model is enforced by `arclink_access.py`, which pins the
 `cloudflare_access_tcp` domain SSH strategy, `tailscale_direct_ssh` Tailscale
 SSH strategy, and `nextcloud_dedicated` isolation model.
 
-## User And Agent Access
+## Captain And Agent Access
 
-ArcLink intentionally gives each enrolled user and agent broad access to their
-own deployment home, vault, workspace, and dashboard tools. This should feel
-like SSH into that user's isolated agent environment, not like a narrow file
-picker. The boundary is not "hide the user's own files"; the boundary is "do
-not expose the operator control plane, another user, or shared host secrets."
+ArcLink intentionally gives each Captain and Agent broad access to their own
+ArcPod home, vault, workspace, and dashboard tools. This should feel like SSH
+into that Captain's isolated Agent environment, not like a narrow file picker.
+The boundary is not "hide the Captain's own files"; the boundary is "do not
+expose the operator control plane, another Captain, or shared host secrets."
 
-Dashboard Drive, Code, and Terminal plugins therefore allow normal user-owned
-files, including ordinary `.env` files inside the user's own Vault/Workspace,
+Dashboard Drive, Code, and Terminal plugins therefore allow normal Captain-owned
+files, including ordinary `.env` files inside the Captain's own Vault/Workspace,
 while blocking control-plane/private-state env files, Hermes bootstrap tokens,
 ArcLink secrets directories, private SSH material, and other users'
-deployment roots. Terminal sessions run with a scrubbed allowlist environment
+ArcPod roots. Terminal sessions run with a scrubbed allowlist environment
 instead of inheriting operator/service secrets from the dashboard process.
 
 Accepted ArcLink shares are mounted as a separate Linked root in Drive and
@@ -59,7 +59,7 @@ receiver's normal user boundary.
   config/             # Per-deployment configuration
 ```
 
-Sovereign pod Docker volumes follow the naming convention:
+ArcPod Docker volumes follow the naming convention:
 - `arclink-{deployment_id}_postgres_data`
 - `arclink-{deployment_id}_nextcloud_data`
 - `arclink-{deployment_id}_redis_data`

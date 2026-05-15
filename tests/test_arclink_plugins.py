@@ -1094,7 +1094,11 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("selectionAnchor: ranged ? state.selectionAnchor" in selection_block, "Drive shift-range selection should keep the original anchor while growing")
     click_handler = body.split("function handleListItemClick", 1)[1].split("function trashSelected", 1)[0]
     expect("openItem" not in click_handler and "selectListItem(item, event, index, list)" in click_handler, "Drive single-click should select folders instead of opening them")
-    expect("onDoubleClick: function ()" in body and "openItem(item);" in body, "Drive double-click should open folder rows")
+    tree_block = body.split("function renderTreeNode(item, depth)", 1)[1].split("function renderRootTree", 1)[0]
+    expect('if (item.kind === "folder")' in tree_block and "toggleTree(rootId, item.path);" in tree_block, "Drive tree double-click should toggle folder expansion")
+    expect("openItem(Object.assign({}, item, { root: rootId }));" in tree_block, "Drive tree double-click should still open files")
+    root_tree_block = body.split("function renderRootTree", 1)[1].split("function renderDetailsPanel", 1)[0]
+    expect("onDoubleClick: function ()" in root_tree_block and 'toggleTree(rootId, "/");' in root_tree_block, "Drive root tree double-click should toggle expansion")
     expect('has-selection' in body, "Drive content pane should make room for metadata and preview after selection")
     content_block = body.split('className: "hermes-drive-content"', 1)[1].split("renderFullscreenPreview()", 1)[0]
     expect(content_block.find('className: "hermes-drive-items ') < content_block.find("renderDetailsPanel()"), "Drive preview/details should render below the scrollable file list")
@@ -1523,6 +1527,10 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect("hermes-code-statusbar" in body and "lastGitResult" in body, "Code UI should expose status bar and last git result")
     expect("function extensionColor(item)" in body and "long-ext" in body, "Code file icons should derive compact, readable extension colors")
     expect("function renderCodePreview(file)" in body and 'api("/preview?path="' in body, "Code UI should open previewable files in editor tabs")
+    explorer_block = body.split("function renderExplorer()", 1)[1].split("function renderSourcePicker()", 1)[0]
+    expect('if (item.kind === "folder")' in explorer_block and "loadItems(item.path, root);" in explorer_block, "Code Explorer single-click should select/load folders without expanding them")
+    expect("toggleExplorerNode(item.path, root);" in explorer_block, "Code Explorer double-click should toggle folder expansion")
+    expect("openItem(item, true);" in explorer_block, "Code Explorer double-click should still pin/open files")
     expect("hermes-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")
     expect("setPreviewFullscreenChrome(state.previewFullscreen)" in body, "Code fullscreen preview should suppress host Hermes chrome")
     expect("[role='navigation']" in body and " nav," in body, "Code fullscreen preview should hide host navigation chrome")

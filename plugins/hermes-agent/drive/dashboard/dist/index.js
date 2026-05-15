@@ -1388,7 +1388,11 @@
               }
             },
             onDoubleClick: function () {
-              openItem(Object.assign({}, item, { root: rootId }));
+              if (item.kind === "folder") {
+                toggleTree(rootId, item.path);
+              } else {
+                openItem(Object.assign({}, item, { root: rootId }));
+              }
             },
             onContextMenu: function (event) {
               openContextMenu(item, event);
@@ -1429,7 +1433,7 @@
               selectFolder(rootId, "/");
             },
             onDoubleClick: function () {
-              selectFolder(rootId, "/");
+              toggleTree(rootId, "/");
             },
           },
           renderCaret(rootId, null, 0),

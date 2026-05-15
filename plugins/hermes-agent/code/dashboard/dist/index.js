@@ -1106,10 +1106,18 @@
                 className: "hermes-code-item-open",
                 style: { paddingLeft: 0.42 + depth * 0.8 + "rem" },
                 onClick: function () {
-                  openItem(item);
+                  if (item.kind === "folder") {
+                    loadItems(item.path, root);
+                  } else {
+                    openItem(item);
+                  }
                 },
                 onDoubleClick: function () {
-                  if (item.kind !== "folder") openItem(item, true);
+                  if (item.kind === "folder") {
+                    toggleExplorerNode(item.path, root);
+                  } else {
+                    openItem(item, true);
+                  }
                 },
               },
               isFolder

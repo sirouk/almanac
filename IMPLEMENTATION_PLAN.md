@@ -1,184 +1,257 @@
-# Wave 5 Implementation Plan: Crew Training
+# Implementation Plan: Audit Gate, Wave 6 ArcLink Wrapped, Mission Closeout
 
 ## Goal
 
-Land Wave 5 Crew Training only.
+Complete the final ArcPod Captain Console run without touching private state or
+live infrastructure:
+
+1. Verify the previously remediated Sovereign audit Wave 1 trust-boundary items
+   still pass in current source.
+2. Land Wave 6 ArcLink Wrapped.
+3. Complete the Mission Closeout sweep for Waves 0-6.
 
 ## Build Status
 
-Wave 5 Crew Training BUILD is implemented locally. Live Chutes inference, live
-bot command registration, payment flows, deploys/upgrades, and service restarts
-remain intentionally skipped operator-gated live gates.
+Waves 0-5 are treated as landed in current source. They should not be retouched
+unless a direct regression blocks the audit gate, Wrapped, or closeout proof.
 
-A Captain can run Crew Training from the dashboard or public bot, provide role,
-mission, treatment preference, Crew preset, and Crew capacity, review or
-regenerate a Crew Recipe, and confirm it. Confirmation writes one active
-`arclink_crew_recipes` row for the Captain, archives the prior active recipe,
-and applies an additive SOUL overlay to every Pod in the Captain's Crew through
-the managed-context identity projection.
+Final status for this run: Wave 6 and the closeout sweep are source-complete in
+the current worktree. `research/BUILD_COMPLETION_NOTES.md` carries the
+six-wave mission closeout ledger, and
+`research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` carries the landing-status
+map. Remaining work after commit is operator-authorized live proof only.
 
-Waves 0-4 are treated as landed. Wave 6 is out of scope for this run.
+The historical audit verification file remains a regression checklist. Its two
+fiction/outdated items, `ME-11` and `ME-25`, must not become new backlog unless
+current source contradicts their fiction verdict.
 
 ## Constraints
 
 - Do not touch `arclink-priv`, live secrets, user Hermes homes, deploy keys,
   production services, payment/provider mutations, public bot command
-  registration, live deploys/upgrades, or Hermes core.
-- Do not rewrite memories or sessions. Crew Training changes only the active
-  recipe row and additive identity-context overlay.
-- Do not require live Chutes. Use fake/injectable generation and deterministic
-  fallback.
-- Keep schema changes out unless a concrete Wave 5 deliverable cannot fit the
-  existing `arclink_crew_recipes` and Captain fields.
-- Use Captain-facing vocabulary on user surfaces and Operator/backend
-  vocabulary on admin/internal surfaces.
-- Keep code changes scoped to Wave 5.
+  registration, live deploys/upgrades, Docker install/upgrade, or Hermes core.
+- Keep Wrapped read-only over Captain state. It may write Wrapped report rows,
+  notification rows, audit/events, and scheduler status, but must not mutate
+  sessions, memory, vault content, providers, payments, or deployments.
+- Use existing ArcLink architecture: Python, SQLite, hosted API, public bot
+  handler patterns, `notification_outbox`, `docker-job-loop.sh`, Next.js
+  dashboard, and canonical docs/OpenAPI.
+- Preserve the Sovereign Control Node domain-or-Tailscale ingress contract; do
+  not collapse paid pod ingress into Shared Host Docker validation paths.
+- Captain-facing surfaces use ArcPod, Pod, Agent, Captain, Crew, Raven, Comms,
+  Crew Training, and ArcLink Wrapped. Operator/backend surfaces keep technical
+  vocabulary.
+- Operator Wrapped views expose aggregate status/score only, never Captain
+  narrative, markdown, report text, or raw ledger snippets.
 
 ## Selected Implementation Path
 
 | Decision | Selected path | Rejected alternatives |
 | --- | --- | --- |
-| Recipe lifecycle | Add `python/arclink_crew_recipes.py` as the single lifecycle module. | Duplicating recipe SQL and fallback logic in API, bot, and web handlers. |
-| Generation | Use a Chutes-compatible injectable client and deterministic fallback. | Requiring live Chutes or silently pretending fallback is provider output. |
-| Safety | Reuse or extract the memory-synth unsafe-output boundary and retry twice before fallback. | Trusting generated output after JSON parse. |
-| SOUL overlay | Project additive overlay through existing identity-context files. | Rewriting memory, sessions, Hermes core, or restarting gateways. |
-| Web flow | Add focused dashboard questionnaire/review UI using existing API helper patterns. | Dashboard architecture rewrite. |
-| Bot flow | Extend pure public bot command handling for `/train-crew` and `/whats-changed`. | Live command registration or new bot service. |
+| Audit backlog | Verification gate first; repair only actual current regressions | Blindly re-implement historical audit items already fixed in source. |
+| Wrapped core | Add `python/arclink_wrapped.py` as the single source for scoring, rendering, persistence, cadence, and delivery enqueue | Duplicating Wrapped SQL/scoring in API, dashboard, bot, and scheduler handlers. |
+| Scheduler | Add a named `arclink-wrapped` job-loop service and thin runner | Host cron, new queue infrastructure, or piggybacking on health-watch. |
+| Data access | Scoped DB reads plus injectable read-only state/session scanners | Reading live user homes or private state during BUILD. |
+| Storage | Store rendered text/markdown and stats in `ledger_json` first; add columns only if tests show the existing schema is insufficient | Premature schema churn. |
+| Delivery | Queue `notification_outbox` with `target_kind='captain-wrapped'` and quiet-hours-aware `next_attempt_at` | Direct-send from scheduler or bypassing outbox retries. |
+| Dashboard | Add Captain Wrapped tab and admin aggregate panel using current tab/API patterns | Dashboard rewrite. |
+| Bot | Add pure `/wrapped-frequency` handler tests without live command registration | Mutating Telegram/Discord command menus during BUILD. |
 
 ## Validation Criteria
 
-Wave 5 BUILD is complete only when:
+BUILD is complete only when:
 
-- Preset and capacity validation reject unsupported values.
-- Preview/regenerate works with fake provider output and deterministic fallback.
-- Unsafe generated output containing URLs, shell commands, or jailbreak text is
-  rejected; generation retries at most twice before fallback.
-- Confirming writes one active `arclink_crew_recipes` row per Captain and
-  archives the prior active row.
-- Operator-on-behalf application is admin-only and audited.
-- Every Pod in the Captain's Crew receives the additive overlay through
-  identity-context projection, or returns a safe skipped projection reason for
-  unavailable local homes.
-- Existing identity-context keys are preserved.
-- Memory and session files are not touched.
-- Dashboard Crew Training questionnaire, review, regenerate, and confirm work.
-- Public bot `/train-crew` and `/whats-changed` work without live bot mutation.
-- OpenAPI and runbooks match implemented routes and behavior.
-- Focused Python and web validation passes, with live provider/deploy gates
-  explicitly skipped.
+- audit Wave 1 trust-boundary verification passes or any current regression is
+  fixed with focused tests;
+- `generate_wrapped_report(conn, user_id, period, period_start, period_end)`
+  produces deterministic reports from scoped events, audit rows, Comms rows,
+  read-only session counts, vault-reconciler deltas, and memory cards;
+- the novelty-score formula is documented and tested;
+- each rich report emits at least five non-standard statistics;
+- both plain text and Markdown render forms are redacted before persistence,
+  dashboard display, and delivery;
+- per-Captain cadence supports only `daily`, `weekly`, and `monthly`, defaults
+  to daily, and rejects anything more frequent;
+- a named scheduler retries failed reports next cycle and emits operator
+  notification for persistent failure;
+- Captain delivery goes through `notification_outbox` with
+  `target_kind='captain-wrapped'` and respects quiet hours;
+- Captain dashboard "Wrapped" tab shows history and frequency controls;
+- Operator dashboard/API shows aggregate Wrapped status/score only;
+- public bot `/wrapped-frequency` works in pure handler tests;
+- all seven Mission Closeout items are satisfied or explicitly deferred with
+  operator-facing rationale;
+- focused and broad local validation is recorded in completion notes.
 
 ## Actionable Tasks
 
-1. Add focused Crew Recipe tests first.
-   - Create `tests/test_arclink_crew_recipes.py`.
-   - Cover allowed presets: Frontier, Concourse, Salvage, Vanguard.
-   - Cover allowed capacities: sales, marketing, development, life coaching,
-     companionship.
-   - Cover invalid preset/capacity rejection.
-   - Cover provider success, provider unavailable fallback, unsafe output
-     rejection, two retry attempts, and deterministic fallback.
-   - Cover active/archive lifecycle and one active recipe per Captain.
-   - Cover current-vs-prior diff for `/whats-changed`.
-   - Cover operator-on-behalf audit metadata.
-   - Cover overlay shape and no memory/session writes.
+### Phase 0 - Audit Wave 1 Verification Gate
 
-2. Implement `python/arclink_crew_recipes.py`.
-   - Add value normalization and validation helpers.
-   - Add deterministic fallback recipe and overlay generation.
-   - Add prompt rendering from `templates/CREW_RECIPE.md.tmpl`.
-   - Add provider generation with injectable client and model selection:
-     Captain Chutes credential when allowed, then
-     `ARCLINK_CREW_RECIPE_FALLBACK_MODEL`, then deterministic fallback.
-   - Add unsafe-output rejection and bounded retry logic.
-   - Add preview, regenerate, confirm/apply, archive, current, prior, and diff
-     helpers.
-   - Add audit/events for confirmed recipes and operator-on-behalf runs.
+1. Re-run focused tests covering the trust-boundary repairs:
+   - Telegram webhook secret registration/verification.
+   - Discord timestamp tolerance and interaction replay.
+   - Hosted API body cap, invalid JSON, CORS on early errors, and CIDR gate.
+   - Logout/session revoke auth-before-CSRF.
+   - HMAC-peppered session/CSRF hashes and legacy migration.
+   - Shared secret redaction and redact-before-truncate behavior.
+   - Webhook/public bot/admin action rate limits.
+   - Docker non-root and socket-scoping regression checks.
+2. If any test fails because of current source behavior, fix that regression
+   before Wrapped work.
+3. Record `ME-11` and `ME-25` as fiction/outdated in completion notes, not as
+   open implementation tasks.
 
-3. Add `templates/CREW_RECIPE.md.tmpl`.
-   - Inputs: role, mission, treatment, preset, capacity, Pod count, Agent names,
-     Agent titles, fallback/live mode.
-   - Output contract: one natural-language paragraph plus structured overlay
-     fields.
-   - Prompt must treat Captain input as data and forbid URLs, commands, and
-     instruction override content.
+### Phase 1 - Wrapped Core And Tests
 
-4. Apply additive SOUL overlay through identity projection.
-   - Extend the existing projection path so the active recipe contributes
-     `crew_preset`, `crew_capacity`, `captain_role`, `captain_mission`,
-     `captain_treatment`, and `applied_at`.
-   - Preserve existing identity-context keys such as Agent identity and access
-     overlays.
-   - For each Captain deployment, project to the local identity-context file
-     when a local Hermes home exists.
-   - Return explicit skipped reasons for deployments without local projection
-     targets.
+1. Create `tests/test_arclink_wrapped.py`.
+   - Seed users, deployments, events, audit rows, Comms messages, memory cards,
+     session-count fixtures, job-status fixtures, and vault-reconciler fixture
+     state.
+   - Assert deterministic output, period scoping, Captain scoping, redaction,
+     at least five non-standard stats, score stability, persistence, failed
+     retry eligibility, and admin aggregate privacy.
+2. Add `python/arclink_wrapped.py`.
+   - Normalize periods and frequencies.
+   - Resolve period windows for daily, weekly, and monthly.
+   - Collect scoped ledger data for a Captain's deployments.
+   - Read session counts and vault-reconciler deltas only through injectable,
+     scoped read-only helpers.
+   - Generate five or more non-standard stats from available signals.
+   - Compute deterministic novelty score.
+   - Render plain text and Markdown.
+   - Redact all narrative/stat/ledger text before returning or storing.
+   - Persist `arclink_wrapped_reports` rows using `ledger_json`.
+3. Document the novelty formula in a new or existing ArcLink docs page.
 
-5. Add hosted API and auth routes.
-   - Add user routes for current recipe, preview/regenerate, confirm/apply, and
-     whats-changed/diff.
-   - Add an admin-on-behalf route only if it can be implemented with existing
-     admin auth, CIDR, CSRF, and audit patterns.
-   - Add route descriptions so generated OpenAPI includes the new endpoints.
-   - Extend `tests/test_arclink_api_auth.py` and
-     `tests/test_arclink_hosted_api.py`.
+### Phase 2 - Cadence, Scheduler, And Delivery
 
-6. Add dashboard Crew Training UI.
-   - Extend `web/src/lib/api.ts` with Crew Training helpers.
-   - Add a focused questionnaire/review/regenerate/confirm surface to the
-     Captain dashboard.
-   - Show truthful fallback/dry-run copy when provider generation is not live.
-   - Add admin-on-behalf UI only if the API path is included and audited.
-   - Update web API client and page smoke tests.
+1. Add frequency helpers and API-auth mutations.
+   - Default missing frequency to daily.
+   - Accept only `daily`, `weekly`, `monthly`.
+   - Reject hourly, cron, or arbitrary interval values.
+   - Audit successful changes.
+2. Add scheduler helpers.
+   - Select due Captains by frequency and latest generated/delivered/failed
+     report.
+   - Regenerate failed reports on the next eligible cycle.
+   - Track persistent failures and queue an operator notification without
+     Captain narrative.
+3. Add `bin/arclink-wrapped.sh` if needed.
+   - Keep it a thin wrapper around the Python module.
+   - Do not read private config beyond normal ArcLink public runtime config.
+4. Add a named `arclink-wrapped` Compose job-loop service.
+   - Use `bin/docker-job-loop.sh`.
+   - Do not mount the Docker socket.
+   - Add deploy/Docker regression coverage.
+5. Queue `notification_outbox` rows for successful Captain reports.
+   - Use `target_kind='captain-wrapped'`.
+   - Include safe extra metadata for report id, period, score, and render kind.
+   - Set `next_attempt_at` to respect supported quiet-hours windows.
 
-7. Add public bot flows.
-   - Add `/train-crew` questionnaire state using existing session metadata.
-   - Support role, mission, treatment, preset, capacity, review, regenerate,
-     confirm, and cancel.
-   - Add `/whats-changed` response for none/current/prior-vs-current cases.
-   - Keep tests pure; do not register live commands or mutate webhooks.
+### Phase 3 - Hosted API, Dashboard, And Bot
 
-8. Update docs and OpenAPI after behavior is true.
-   - Add Crew Training sections to operations and control-node production
-     runbooks.
-   - Document fallback mode, unsafe-output rejection, overlay-only persona
-     changes, no Hermes restart, and skipped live-provider proof.
-   - Regenerate or update OpenAPI entries for new routes.
+1. Add hosted API routes.
+   - `GET /user/wrapped`
+   - `POST /user/wrapped-frequency`
+   - `GET /admin/wrapped`
+   - Include OpenAPI metadata after behavior is implemented.
+2. Add auth helpers in `python/arclink_api_auth.py`.
+   - User routes are user-scoped and CSRF-gated for mutation.
+   - Admin route is aggregate-only and CIDR/admin-session protected.
+3. Extend `python/arclink_dashboard.py`.
+   - User dashboard snapshot includes Wrapped history and current frequency.
+   - Admin/operator snapshot includes aggregate counts, latest score/status,
+     failure count, and due count only.
+4. Extend `web/src/lib/api.ts`.
+   - Add Wrapped history/frequency/admin helpers.
+5. Extend `web/src/app/dashboard/page.tsx`.
+   - Add "Wrapped" tab with history, text/Markdown display, and frequency
+     selector.
+   - Ensure mobile/desktop layout has stable dimensions and no text overflow.
+6. Extend `web/src/app/admin/page.tsx`.
+   - Add aggregate Wrapped view with no Captain narrative.
+7. Extend `python/arclink_public_bots.py`.
+   - Add `/wrapped-frequency daily|weekly|monthly`.
+   - Reject invalid values and keep tests pure.
 
-9. Run Wave 5 validation.
-   - Run focused Python compile and tests.
-   - Run web tests/lint/build when web files change.
-   - Run browser proof for the questionnaire when dependencies are available.
-   - Record skipped live gates in completion notes.
+### Phase 4 - Mission Closeout Sweep
+
+1. Vocabulary migration completeness.
+   - Sweep `web/src/**`, `python/arclink_public_bots.py`,
+     `python/arclink_onboarding*.py`,
+     `python/arclink_onboarding_completion.py`,
+     `docs/arclink/CREATIVE_BRIEF.md`,
+     `docs/arclink/raven-public-bot.md`,
+     `docs/arclink/first-day-user-guide.md`, `README.md`, and completion-bundle
+     copy.
+   - Keep backend/operator surfaces technical.
+   - Add focused grep or string tests for stale Captain-facing language.
+2. Original onboarding bug verification.
+   - Confirm web, Telegram, and Discord Agent Name + Agent Title input capture
+     and flow into deployment row and SOUL/identity projection.
+   - Add or strengthen assertions where thin.
+3. Cross-wave coherence.
+   - Verify `arclink_inventory_machines`, `arclink_pod_messages`,
+     `arclink_pod_migrations`, `arclink_crew_recipes`, and
+     `arclink_wrapped_reports` are each written and read by their owning wave.
+   - Check MCP tools, hosted API routes, `deploy.sh control inventory`, and
+     dashboard tabs for collisions.
+4. Doc reconciliation.
+   - Update `docs/DOC_STATUS.md`, `docs/arclink/architecture.md`,
+     `docs/API_REFERENCE.md`, and `docs/openapi/arclink-v1.openapi.json`.
+   - Ensure every route added across Waves 0-6 appears in OpenAPI and API
+     reference.
+5. Steering-doc reconciliation.
+   - Update `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` with a
+     closing status section or accurate checkbox status for Waves 0-6.
+6. Final completion notes.
+   - Add a comprehensive `research/BUILD_COMPLETION_NOTES.md` entry summarizing
+     all six waves, files changed per wave, schema deltas, env vars,
+     validation run, skipped live gates, and residual risks.
+7. Broad validation.
+   - Run the per-wave validation floors plus web, shell, compile, and browser
+     checks listed below.
 
 ## Validation Floor
 
+Audit gate:
+
+```bash
+python3 tests/test_arclink_telegram.py
+python3 tests/test_arclink_discord.py
+python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_api_auth.py
+python3 tests/test_arclink_secrets_regex.py
+python3 tests/test_arclink_docker.py
+python3 tests/test_deploy_regressions.py
+```
+
+Wrapped focused:
+
 ```bash
 git diff --check
-python3 -m py_compile python/arclink_crew_recipes.py python/arclink_provisioning.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_public_bots.py python/arclink_dashboard.py
-python3 tests/test_arclink_crew_recipes.py
-python3 tests/test_arclink_provisioning.py
+python3 -m py_compile python/arclink_wrapped.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_dashboard.py python/arclink_public_bots.py python/arclink_notification_delivery.py
+python3 tests/test_arclink_wrapped.py
+python3 tests/test_arclink_notification_delivery.py
+python3 tests/test_arclink_dashboard.py
 python3 tests/test_arclink_hosted_api.py
 python3 tests/test_arclink_api_auth.py
 python3 tests/test_arclink_public_bots.py
-python3 tests/test_arclink_dashboard.py
 python3 tests/test_arclink_schema.py
 ```
 
-If web files change:
+Closeout and broad validation:
 
 ```bash
+bash -n deploy.sh bin/*.sh test.sh
 cd web
 npm test
 npm run lint
 npm run build
+npm run test:browser
 ```
 
-If shell or Compose files unexpectedly change:
-
-```bash
-bash -n deploy.sh bin/*.sh test.sh
-```
-
-Live Chutes inference, live bot command registration, payment flows, Docker
-install/upgrade, Shared Host or Control Node deploys, and production service
-restarts are not part of this validation floor.
+Compile every touched Python module before completion. Live Stripe, Chutes,
+Cloudflare, Tailscale, Telegram, Discord, Notion, remote Docker host,
+deploy/upgrade, Docker install/upgrade, payment-flow, public-bot mutation, and
+production service restart proof remain explicitly operator-gated.

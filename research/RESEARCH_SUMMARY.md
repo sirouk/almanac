@@ -1,86 +1,93 @@
 # Research Summary
 
-<confidence>92</confidence>
+<confidence>90</confidence>
 
 ## Scope
 
-This PLAN pass inspected the public ArcLink repository structure, current
-planning artifacts, the Wave 5 Crew Training section of the ArcPod Captain
-Console steering document, schema foundations, provider/safety rails,
-managed-context identity projection, hosted API patterns, public bot command
-handling, dashboard code, focused tests, docs, and OpenAPI location.
+This PLAN pass inspected the public ArcLink repository, current research
+artifacts, the ArcPod Captain Console steering document, the Sovereign audit
+verification file, schema and drift checks, hosted API and dashboard patterns,
+public bot handlers, notification delivery rails, Docker job-loop scheduling,
+OpenAPI/docs surfaces, and focused tests.
 
 No private state, live secrets, user Hermes homes, deploy keys, production
-services, payment/provider mutations, live bot command registration, live
-Chutes inference, live deploys, or Hermes core were inspected or mutated.
+deploys, payment/provider mutations, live bot command registration, or Hermes
+core were inspected or changed.
 
-## Active Mission
+## Mission Reconciliation
 
-The active BUILD backlog is Wave 5 only: Crew Training.
+The prompt contains two active-looking directives:
 
-The user-provided Project Goals Document supersedes the bootstrap objective
-that references the older Sovereign audit backlog. The older audit document is
-background only for this run. Waves 0-4 are treated as landed and should not be
-re-touched unless a direct regression blocks Crew Training.
+- Bootstrap objective: resolve the verified Sovereign audit backlog, starting
+  with Wave 1 security and trust-boundary repairs.
+- Project goals document: final ArcPod Captain Console run, landing Wave 6
+  ArcLink Wrapped plus the Mission Closeout sweep.
 
-Authoritative Wave 5 detail lives in:
+Current source and completion notes show the audit Wave 1 trust-boundary items
+already have local source-level remediations and focused tests. Therefore the
+BUILD handoff treats audit Wave 1 as a verification gate: re-run and inspect
+those trust-boundary checks first, repair any regression found, ignore the two
+fiction/outdated audit items, then implement Wave 6 and closeout. This satisfies
+the audit directive without reworking fixed code blindly.
 
-`research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md`
-
-## Current Findings
+## Current Source Findings
 
 | Area | Finding |
 | --- | --- |
-| Schema foundation | `arclink_crew_recipes` exists with active/archive statuses and a unique active recipe index per Captain. `arclink_users` already has `captain_role`, `captain_mission`, and `captain_treatment`. |
-| SOUL template | `templates/SOUL.md.tmpl` already has additive Crew Recipe placeholders for preset, capacity, Captain role, mission, treatment, and Agent title. |
-| Wave 4 state | Pod-to-Pod Comms is present in source and tests. It is not part of this BUILD scope except as an existing adjacent surface. |
-| Wave 5 missing behavior | `python/arclink_crew_recipes.py`, `templates/CREW_RECIPE.md.tmpl`, Crew Training API routes, dashboard questionnaire, public bot `/train-crew` and `/whats-changed`, and `tests/test_arclink_crew_recipes.py` are absent. |
-| Provider boundary | Chutes boundary and fake inference client patterns exist. Crew Training should use injectable generation and deterministic fallback; live Chutes is not required for BUILD. |
-| Safety boundary | `arclink_memory_synthesizer` defines unsafe-output patterns and `_card_has_unsafe_output`. Crew Training should reuse or extract that boundary for URLs, shell commands, and jailbreak patterns. |
-| Identity projection | `python/arclink_provisioning.py` writes `state/arclink-identity-context.json` for existing Hermes homes. Crew Training should extend this projection with additive recipe overlay fields and never touch memories or sessions. |
-| API/web pattern | `python/arclink_hosted_api.py` uses explicit `_handle_*` functions, `_ROUTES`, `_JSON_OBJECT_ROUTES`, CSRF checks for mutations, and generated OpenAPI. `web/src/lib/api.ts` centralizes API helpers. |
-| Public bot pattern | `python/arclink_public_bots.py` keeps command handling local and testable without live Telegram or Discord mutation. `/train-crew` should use the same pure handler style. |
+| Waves 0-5 | Source now contains Wave 0-5 surfaces: vocabulary, Agent Name/Title onboarding, inventory/ASU, Pod migration, Pod Comms, Crew Training, hosted API routes, web dashboard pieces, and tests. The prior plan files were stale and still described Wave 5 as future work. |
+| Audit Wave 1 | Telegram webhook secret, Discord timestamp/replay checks, hosted API body caps, CIDR gate, session hash peppering, shared secret redaction, safer auth/body errors, and webhook rate-limit tests are present in source/tests. Docker socket scoping still deserves close verification because Compose has several intentional socket mounts. |
+| Wrapped schema/core | `arclink_wrapped_reports` and `arclink_users.wrapped_frequency` exist with drift checks. `python/arclink_wrapped.py`, core tests, scheduler service, and `captain-wrapped` delivery are now present; Wrapped API/routes, dashboard tab, and bot cadence command remain open. |
+| Data inputs | Wrapped can read `arclink_events`, `arclink_audit_log`, `arclink_pod_messages`, `memory_synthesis_cards`, deployment metadata/state roots, job status JSON, and `arclink-vault-reconciler.json` deltas. These reads must stay scoped to the Captain's deployments and temporary test fixtures. |
+| Delivery rail | `notification_outbox` supports durable delivery attempts. Wrapped now has a `target_kind='captain-wrapped'` path, quiet-hours scheduling semantics, and report delivered-state updates. |
+| Redaction | `arclink_evidence.redact_value` and `arclink_secrets_regex` exist. Wrapped report rendering must redact before storing or delivering narrative text. |
+| Web stack | Next.js dashboard has user/admin tabs and API helpers. No Wrapped tab or API client methods exist. |
+| Docs/OpenAPI | `docs/API_REFERENCE.md`, `docs/arclink/architecture.md`, `docs/DOC_STATUS.md`, and `docs/openapi/arclink-v1.openapi.json` document Waves through Crew Training/Comms but not Wrapped. |
 
 ## Implementation Path Comparison
 
 | Decision | Path A | Path B | Selected path |
 | --- | --- | --- | --- |
-| Crew Recipe core | Dedicated `python/arclink_crew_recipes.py` with preview, regenerate, confirm/apply, archive, diff, and injectable generation | Generate recipes directly in hosted API, web, and bot handlers | Path A. It centralizes lifecycle, unsafe-output rejection, fallback, audit, and tests. |
-| Provider use | Use Chutes through an injectable boundary and deterministic preset-only fallback | Require live Chutes credentials for all Crew Training runs | Path A. BUILD must pass without live credentials, and the UI must truthfully label fallback mode. |
-| Unsafe output handling | Reuse or extract the memory-synth unsafe-output patterns | Trust model output after parsing | Path A. The steering requires rejection of URLs, shell commands, and jailbreak text before SOUL overlay. |
-| SOUL application | Additive overlay through identity-context projection and managed-context refresh | Rewrite memory, sessions, Hermes core prompts, or gateway process state | Path A. Crew Training is persona overlay only and must not restart Hermes. |
-| Web shape | Add a focused Crew Training questionnaire route or dashboard panel using current API helper patterns | Refactor the dashboard architecture first | Path A. The dashboard is monolithic today; BUILD should keep the addition scoped. |
-| Bot state | Store questionnaire progress in existing public bot onboarding/session metadata until confirmed | Add a new live bot service or mutate command registration | Path A. Local handler tests can prove the flow without external bot mutation. |
+| Audit Wave 1 handling | Verify current trust-boundary repairs first, patch only regressions | Re-implement all listed audit items from the historical report | Path A. Source and tests already show remediation; blind rewrites would widen risk. |
+| Wrapped core | Add `python/arclink_wrapped.py` with deterministic report generation, persistence, delivery enqueue, and due-cadence helpers | Scatter Wrapped SQL/rendering inside hosted API, dashboard, scheduler, and bot handlers | Path A. One module keeps scoring, redaction, and privacy boundaries testable. |
+| Scheduler | Add a named `arclink-wrapped` Compose job-loop service invoking a small `bin/arclink-wrapped.sh` runner that decides due reports | Fold Wrapped into `health-watch` or add a host cron | Path A. It matches existing Docker job-loop patterns, has visible status, and avoids unrelated health-watch coupling. |
+| Report inputs | Read existing ledgers and local fixture-safe state roots, with injected state-root/session scanners in tests | Require live Hermes homes or private state to prove session/memory inputs | Path A. BUILD must remain no-secret and no-private-state. |
+| Cadence changes | Expose `/user/wrapped-frequency` and public bot `/wrapped-frequency` with `daily|weekly|monthly` only | Let dashboard mutate `arclink_users` generically or accept arbitrary cron strings | Path A. It enforces the daily minimum and keeps the user API narrow. |
+| Delivery | Queue `notification_outbox` rows with `target_kind='captain-wrapped'`, `next_attempt_at` honoring quiet hours, and aggregate operator status only | Deliver directly from the scheduler or expose full narratives to Operator dashboards | Path A. It reuses durable notification retries and preserves Captain narrative privacy. |
+| Dashboard | Add a Captain "Wrapped" tab plus Operator aggregate status panel | Replace dashboard structure or put Wrapped in Crew Training | Path A. The current dashboard is tab-based and should stay scoped. |
 
 ## Build Assumptions
 
-- Current source is ground truth where historical planning docs disagree.
-- Wave 5 does not need new schema unless implementation discovers a concrete
-  deliverable that cannot fit the existing tables and columns.
-- The active recipe row is the durable source of truth; identity-context files
-  are projections for managed-context injection.
-- Deterministic fallback output must be useful and visibly labeled as fallback
-  or dry-run mode.
-- Operator-on-behalf application is allowed only through an audited admin path.
-- Captain-facing copy uses ArcPod, Pod, Agent, Captain, Crew, Raven, and Crew
-  Training. Backend/internal code can keep user/deployment naming.
+- Current source is the source of truth when historical research files disagree.
+- Audit fiction items `ME-11` and `ME-25` remain ignored except as regression
+  awareness.
+- Wrapped generation is read-only over Captain state. It may insert/update
+  `arclink_wrapped_reports` and queue notifications, but must not mutate
+  sessions, memories, vault content, Hermes core, or provider/payment state.
+- Captain-facing Wrapped narrative uses ArcPod, Pod, Agent, Captain, Crew,
+  Raven, Comms, and ArcLink Wrapped vocabulary.
+- Operator/admin views may show only aggregate Wrapped status, frequency,
+  novelty score, timestamps, and failure status. They must not show the
+  Captain's narrative or raw ledger snippets.
+- Any state-root or Hermes-session reading must be explicitly scoped to
+  deployments owned by the requested Captain and injectable for tests.
 
 ## Risks
 
-- Accidentally planning or implementing Wave 6 would violate this run's scope.
-- Recipe generation must not leak or require Chutes secret material; tests
-  should use fake clients and secret references only.
-- Unsafe model output must be rejected before it can become a SOUL overlay.
-- Identity-context writes must preserve unrelated existing keys and must not
-  write to memory/session locations.
-- Web and bot flows need truthful fallback copy so Captains do not mistake
-  deterministic fallback for live provider output.
-- Public bot tests should avoid live command registration and external
-  delivery.
+- Quiet-hours rules are not a fully normalized per-Captain scheduling API today;
+  Wrapped may need a conservative helper that delays delivery rather than
+  inventing new org-profile semantics.
+- `memory_synthesis_cards` is global. Wrapped must use only safe, bounded
+  summaries and avoid implying per-Captain ownership when source attribution is
+  ambiguous.
+- Compose still mounts the Docker socket for several trusted operator-action
+  services. The audit gate should verify current tests and document intentional
+  mounts rather than broadening Wrapped.
+- The Mission Closeout sweep is broad; docs/OpenAPI reconciliation should be
+  done after behavior is true, not before.
 
 ## Verdict
 
-PLAN is ready for Wave 5 BUILD handoff after the required artifacts in this
-pass are updated. No blocker requires `consensus/build_gate.md` to stop BUILD,
-but the gate is narrowed to Wave 5 and explicitly keeps private/live actions
-blocked.
+PLAN is ready for no-secret BUILD handoff after the required artifacts in this
+pass are updated. No blocker requires stopping BUILD, but the first BUILD task
+is a trust-boundary verification gate. Any regression there blocks Wrapped work
+until the focused repair and regression test land.

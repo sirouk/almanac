@@ -4,6 +4,56 @@ Generated: 2026-05-08 (Ralphie document phase: final product-reality alignment)
 
 Updated: 2026-05-10 (Raven selected-agent bridge contract alignment)
 
+Updated: 2026-05-14 (ArcLink Wrapped runbook alignment)
+
+## 2026-05-14 ArcLink Wrapped Documentation Update
+
+The current implementation plan and recent build notes show Wave 6 ArcLink
+Wrapped implemented locally across core generation, scheduler/delivery, hosted
+API routes, dashboard tabs, pure Raven cadence handling, OpenAPI, and focused
+tests. This document pass updated project-facing documentation for the
+operational runbook gap without adding live-proof claims.
+
+### Files Updated
+
+| File | Change | Rationale |
+| --- | --- | --- |
+| `docs/arclink/operations-runbook.md` | Added ArcLink Wrapped ownership, read/write assumptions, cadence limits, scheduler/delivery runbook, aggregate Operator boundary, and troubleshooting notes | The canonical operations runbook did not yet describe the new `arclink-wrapped` service, `captain-wrapped` delivery rail, or admin privacy boundary |
+| `docs/arclink/control-node-production-runbook.md` | Tightened the Wrapped cadence-handler wording so the inline command and allowed cadences render unambiguously | The production runbook already covered Wrapped behavior; this keeps the existing note mechanically clear |
+| `README.md` | Added `docs/arclink/wrapped.md` to the detailed ArcLink documentation index | The new canonical Wrapped doc was classified in `docs/DOC_STATUS.md` but was not visible from the top-level doc list |
+| `docs/arclink/document-phase-status.md` | Added this dated status note | Keeps the document-phase handoff current after the Wrapped documentation pass |
+
+### Docs Inspected
+
+| File | Verdict |
+| --- | --- |
+| `AGENTS.md` | Still aligned on no-secret handling, deploy-mode boundaries, and Raven/Captain/Operator vocabulary |
+| `IMPLEMENTATION_PLAN.md` | Current plan names Wrapped read-only assumptions, scheduler/delivery constraints, aggregate-only Operator views, and closeout gates |
+| `research/BUILD_COMPLETION_NOTES.md` | Records the Wrapped core, scheduler/delivery, API/dashboard/bot slices, validation, and skipped live gates |
+| `docs/arclink/wrapped.md` | Already documents the single owner module, scheduler service, delivery rail, API/dashboard/bot surfaces, proof commands, and novelty-score formula |
+| `docs/API_REFERENCE.md` | Lists the new user/admin Wrapped routes |
+| `docs/openapi/arclink-v1.openapi.json` | Includes the Wrapped route catalog generated from hosted API descriptions |
+| `docs/arclink/architecture.md` | Names `arclink_wrapped.py` and the user/admin Wrapped route boundaries |
+| `docs/arclink/control-node-production-runbook.md` | Already includes the production Wrapped service, delivery, privacy, and proof-gate notes |
+| `docs/DOC_STATUS.md` | Already classifies `docs/arclink/wrapped.md` as canonical |
+
+### Open Questions And Risks
+
+- Live Telegram/Discord delivery, public bot command registration,
+  production deploy/upgrade, Docker install/upgrade, and external
+  credential-dependent proof remain operator-gated.
+- The document pass did not claim terminal Wave 6 or Mission Closeout
+  completion; it only reconciled current project-facing docs for the Wrapped
+  behavior already implemented locally.
+- Operator Wrapped surfaces must remain aggregate-only. Any future admin route
+  that exposes report text, Markdown, or raw ledger snippets would require a
+  privacy review and doc update.
+
+Docs are clear enough to proceed with the current Wrapped handoff. Canonical
+docs now describe ownership, assumptions, runbook behavior, and privacy
+boundaries without local operator identity, private paths, secrets, command
+transcripts, or machine-only evidence.
+
 ## 2026-05-10 Raven Bridge Contract Update
 
 The current product matrix now counts 101 `real`, 0 `partial`, 0 `gap`, 15

@@ -632,6 +632,29 @@
         ]
       }
     },
+    "/api/v1/admin/wrapped": {
+      "get": {
+        "operationId": "admin_wrapped",
+        "responses": {
+          "200": {
+            "description": "Aggregate Wrapped status"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read aggregate ArcLink Wrapped status without Captain narrative",
+        "tags": [
+          "admin",
+          "wrapped"
+        ]
+      }
+    },
     "/api/v1/auth/admin/login": {
       "post": {
         "operationId": "admin_login",
@@ -1849,6 +1872,86 @@
         "summary": "Owner-revoke a share grant",
         "tags": [
           "user"
+        ]
+      }
+    },
+    "/api/v1/user/wrapped": {
+      "get": {
+        "operationId": "user_wrapped",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wrapped report history"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read Captain ArcLink Wrapped history",
+        "tags": [
+          "user",
+          "wrapped"
+        ]
+      }
+    },
+    "/api/v1/user/wrapped-frequency": {
+      "post": {
+        "operationId": "user_wrapped_frequency",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "frequency": {
+                    "enum": [
+                      "daily",
+                      "weekly",
+                      "monthly"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "frequency"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wrapped cadence updated"
+          },
+          "400": {
+            "description": "Invalid frequency"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Update Captain ArcLink Wrapped cadence",
+        "tags": [
+          "user",
+          "wrapped"
         ]
       }
     },

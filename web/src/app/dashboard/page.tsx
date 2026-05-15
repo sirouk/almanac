@@ -91,6 +91,26 @@ interface UserData {
   user?: { user_id: string; email: string; display_name: string };
   deployments?: Deployment[];
   entitlement?: { state: string; updated_at?: string };
+  wrapped?: WrappedData;
+}
+
+interface WrappedReport {
+  report_id: string;
+  period: string;
+  period_start: string;
+  period_end: string;
+  status: string;
+  novelty_score: number;
+  created_at: string;
+  delivered_at?: string;
+  stats?: { key?: string; label?: string; value?: string | number; detail?: string }[];
+  plain_text?: string;
+  markdown?: string;
+}
+
+interface WrappedData {
+  wrapped_frequency?: "daily" | "weekly" | "monthly";
+  reports?: WrappedReport[];
 }
 
 interface ProvisioningDeployment {
@@ -282,8 +302,8 @@ const CREW_CAPACITY_OPTIONS = [
   { label: "Companionship", value: "companionship" },
 ];
 
-type Tab = "overview" | "crew" | "billing" | "provisioning" | "services" | "vault" | "comms" | "bots" | "model" | "memory" | "security" | "support";
-const ALL_TABS: Tab[] = ["overview", "crew", "billing", "provisioning", "services", "vault", "comms", "bots", "model", "memory", "security", "support"];
+type Tab = "overview" | "crew" | "billing" | "provisioning" | "services" | "vault" | "wrapped" | "comms" | "bots" | "model" | "memory" | "security" | "support";
+const ALL_TABS: Tab[] = ["overview", "crew", "billing", "provisioning", "services", "vault", "wrapped", "comms", "bots", "model", "memory", "security", "support"];
 
 function isGoodStatus(status = "") {
   return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "running"].includes(status.toLowerCase());
@@ -384,6 +404,8 @@ export default function DashboardPage() {
   const [credentialsError, setCredentialsError] = useState("");
   const [linkedResourcesError, setLinkedResourcesError] = useState("");
   const [providerStateError, setProviderStateError] = useState("");
+  const [wrappedError, setWrappedError] = useState("");
+  const [wrappedUpdating, setWrappedUpdating] = useState(false);
   const [crewError, setCrewError] = useState("");
   const [crewLoading, setCrewLoading] = useState(false);
   const [credentialAckLoading, setCredentialAckLoading] = useState("");
@@ -501,6 +523,29 @@ export default function DashboardPage() {
       setCrewError("Could not apply Crew Training.");
     } finally {
       setCrewLoading(false);
+    }
+  }
+
+  async function handleWrappedFrequency(frequency: string) {
+    setWrappedError("");
+    setWrappedUpdating(true);
+    try {
+      const result = await api.updateWrappedFrequency({ frequency });
+      if (result.status !== 200) {
+        setWrappedError("Could not update ArcLink Wrapped cadence.");
+        return;
+      }
+      setData((current) => current ? {
+        ...current,
+        wrapped: {
+          ...(current.wrapped || {}),
+          wrapped_frequency: (result.data as { wrapped_frequency?: "daily" | "weekly" | "monthly" }).wrapped_frequency || "daily",
+        },
+      } : current);
+    } catch {
+      setWrappedError("Could not update ArcLink Wrapped cadence.");
+    } finally {
+      setWrappedUpdating(false);
     }
   }
 
@@ -1005,6 +1050,18 @@ export default function DashboardPage() {
             <div className="space-y-6">
               <SectionHeader title="Comms" eyebrow="Crew messages" detail="Pod-to-Pod messages for your Captain account. Attachments appear only as accepted share references." />
               <CommsPanel messages={comms?.comms || []} />
+            </div>
+          )}
+
+          {activeTab === "wrapped" && data && (
+            <div className="space-y-6">
+              <SectionHeader title="ArcLink Wrapped" eyebrow="Period reports" detail="Captain-facing daily, weekly, or monthly highlights generated from scoped ArcLink activity." />
+              {wrappedError && <ErrorAlert message={wrappedError} />}
+              <WrappedPanel
+                wrapped={data.wrapped}
+                updating={wrappedUpdating}
+                onFrequencyChange={handleWrappedFrequency}
+              />
             </div>
           )}
 
@@ -1779,6 +1836,69 @@ function CommsPanel({ messages }: { messages: CommsMessage[] }) {
           </div>
         )) : (
           <p className="text-sm text-soft-white/40">No Pod Comms yet.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WrappedPanel({
+  wrapped,
+  updating,
+  onFrequencyChange,
+}: {
+  wrapped?: WrappedData;
+  updating: boolean;
+  onFrequencyChange: (frequency: string) => void;
+}) {
+  const reports = wrapped?.reports || [];
+  const frequency = wrapped?.wrapped_frequency || "daily";
+  return (
+    <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
+      <div className="border border-border bg-surface/85 p-4">
+        <h3 className="font-display font-semibold">Cadence</h3>
+        <p className="mt-2 text-sm text-soft-white/55">Daily is the fastest supported ArcLink Wrapped cadence.</p>
+        <label className="mt-4 block text-sm">
+          <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Frequency</span>
+          <select
+            value={frequency}
+            disabled={updating}
+            onChange={(event) => onFrequencyChange(event.target.value)}
+            className="mt-2 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+          >
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
+      </div>
+      <div className="space-y-3">
+        {reports.length ? reports.map((report) => (
+          <article key={report.report_id} className="border border-border bg-surface/85 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">{report.period}</p>
+                <h3 className="mt-1 font-display text-xl font-semibold">Novelty score {report.novelty_score}</h3>
+                <p className="mt-1 text-xs text-soft-white/40">{formatDate(report.period_start)} to {formatDate(report.period_end)}</p>
+              </div>
+              <StatusBadge status={report.status} />
+            </div>
+            <pre className="mt-4 max-h-72 overflow-auto whitespace-pre-wrap rounded border border-border/70 bg-carbon p-3 text-sm leading-6 text-soft-white/75">
+              {report.markdown || report.plain_text || "ArcLink Wrapped report is still rendering."}
+            </pre>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {(report.stats || []).slice(0, 6).map((stat) => (
+                <div key={stat.key || stat.label} className="rounded bg-carbon px-3 py-2 text-sm">
+                  <p className="text-soft-white/55">{stat.label}</p>
+                  <p className="font-semibold text-soft-white">{stat.value}</p>
+                </div>
+              ))}
+            </div>
+          </article>
+        )) : (
+          <div className="border border-border bg-surface/85 p-6 text-sm text-soft-white/45">
+            No ArcLink Wrapped reports yet.
+          </div>
         )}
       </div>
     </div>

@@ -1,65 +1,71 @@
 # Stack Snapshot
 
-- snapshot_date: 2026-05-14
-- project_type: existing ArcLink public repository
-- primary_stack: Python control plane with Next.js dashboard
-- deterministic_confidence_score: 092/100
+- generated_at: 2026-05-14
+- project_root: repository root
+- primary_stack: Python control plane with Next.js dashboard and Shell/Compose runtime
+- primary_score: 087/100
 - confidence: high
-
-## Deterministic Scoring Rule
-
-Scores are based only on public repository signals: manifest presence, source
-file volume, runtime entrypoints, test coverage, and direct relevance to Wave 5
-Crew Training. Private state and live services are excluded.
 
 ## Project Stack Ranking
 
 | rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python | 092 | 187 Python files, control DB, hosted API, auth, public bots, provisioning, Chutes boundary, memory safety, and focused tests. |
-| 2 | TypeScript/React/Next.js | 074 | Next.js dashboard in `web/`, API helper layer, dashboard/admin pages, web tests, and browser-test lane. |
-| 3 | Bash | 061 | Canonical deploy/test wrappers and service/job scripts; likely unchanged for Wave 5. |
-| 4 | SQLite | 058 | Embedded control-plane DB schema and drift checks in Python; existing Crew Recipe table. |
-| 5 | Docker Compose | 042 | Runtime topology for control/shared services; not expected to change for Wave 5. |
-| 6 | Vite/React marketing app | 024 | Separate `arclink-frontend` app exists but is not the Wave 5 dashboard surface. |
-| 7 | Unknown/other | 000 | No stronger public signals. |
+| 1 | Python | 087 | 189 Python files, SQLite control-plane schema, hosted API, bots, provisioning, notification delivery, tests |
+| 2 | Shell + Docker Compose | 071 | 82 shell scripts, canonical `deploy.sh`, `bin/docker-job-loop.sh`, `compose.yaml`, systemd templates |
+| 3 | Next.js / React / TypeScript | 064 | Web package manifest, 17 TSX files, 6 TS files, dashboard/admin/onboarding surfaces, Playwright tests |
+| 4 | SQLite | 058 | Embedded control-plane DB schema and migrations in Python; no standalone DB service required for local tests |
+| 5 | Node.js tooling | 044 | Web build/test/lint toolchain and marketing/dashboard assets |
+| 6 | Hermes plugin runtime | 037 | ArcLink-managed Hermes plugins and hooks, installed by wrapper scripts rather than edited in core |
+| 7 | External provider adapters | 025 | Stripe, Chutes, Telegram, Discord, Hetzner, Linode, Notion, Cloudflare, Tailscale boundaries are fake/default-gated |
+| 8 | Unknown / other | 000 | No Go, Rust, Java, Ruby, or .NET manifests detected in the active public implementation path |
 
-## Top Stack Hypotheses
+## Deterministic Confidence Score
 
-| hypothesis | confidence | rationale |
+Score formula:
+
+```text
+primary_score =
+  30 points for dominant implementation language evidence
+  20 points for matching test suite evidence
+  15 points for runtime entrypoint evidence
+  15 points for web/dashboard manifest evidence
+  10 points for deployment/runtime orchestration evidence
+  10 points for docs/spec alignment evidence
+```
+
+Applied score:
+
+| Signal | Points | Evidence |
 | --- | --- | --- |
-| Wave 5 should be implemented primarily in Python with small Next.js additions | 92 | Recipe lifecycle, provider fallback, unsafe-output checks, DB writes, API auth, bot flow, and identity projection all live in Python. The Captain UI is Next.js. |
-| Wave 5 requires new infrastructure | 12 | Existing schema, Chutes boundary, hosted API, public bot handler, and identity projection are sufficient. |
-| Wave 5 belongs in Hermes core | 02 | The operating guide forbids Hermes core changes, and managed-context already consumes ArcLink identity overlays. |
+| Dominant implementation language | 28/30 | Python owns API, schema, bots, provisioning, notifications, and tests. |
+| Test suite | 19/20 | Focused Python tests exist for most ArcLink surfaces; web tests exist. |
+| Runtime entrypoints | 14/15 | `deploy.sh`, `bin/arclink-ctl`, hosted API, public bots, job-loop scripts. |
+| Web/dashboard manifest | 12/15 | Next.js app with dashboard/admin/onboarding and Playwright tests. |
+| Orchestration | 8/10 | Compose and systemd paths exist; live deploy remains operator-gated. |
+| Docs/spec alignment | 6/10 | API reference/OpenAPI exist but need Wave 6 reconciliation. |
+| Total | 087/100 | High confidence. |
 
-## Ranked Alternatives
+## Top 3 Stack Alternatives
 
-1. Python module plus API/bot/web adapters.
-   - Score: 92
-   - Use when implementing `python/arclink_crew_recipes.py`, hosted API routes,
-     bot commands, and identity projection.
+1. Python-first full-stack control plane: score 087.
+   Evidence: Python owns business logic, SQLite schema, hosted API, public bots,
+   notification delivery, and most tests. This is the correct implementation
+   lane for ArcLink Wrapped.
 
-2. API/web-only implementation.
-   - Score: 39
-   - Rejected because lifecycle, unsafe-output rejection, fallback, and audit
-     would be duplicated or hidden in handlers.
+2. Next.js-first product app: score 064.
+   Evidence: dashboard and onboarding are Next.js/React, but they consume
+   Python hosted API routes rather than owning core behavior.
 
-3. Frontend-only dry-run questionnaire.
-   - Score: 18
-   - Rejected because the deliverable requires durable recipe rows and SOUL
-     overlay application.
+3. Shell/Compose operations substrate: score 071 as a runtime lane, not the
+   primary product logic.
+   Evidence: deploy/install/health/job-loop scripts and Compose services own
+   runtime orchestration. Wrapped scheduling should use this lane narrowly.
 
-4. Live-provider-first implementation.
-   - Score: 15
-   - Rejected because BUILD must pass without live Chutes and must never
-     require provider mutation.
+## Alternatives And Rejections
 
-5. Hermes-core modification.
-   - Score: 02
-   - Rejected by repository operating guide and Wave 5 constraints.
-
-## Stack Conclusion
-
-Use existing Python, SQLite, Chutes boundary/fakes, memory-synthesis safety,
-provisioning projection, hosted API/auth, public bot handlers, and Next.js
-dashboard patterns. Do not add infrastructure for Wave 5.
+| Alternative | Why it is not primary |
+| --- | --- |
+| Pure Node.js service | The web app is significant, but control-plane state, API, and tests are Python/SQLite. |
+| New queue/scheduler infrastructure | Existing job-loop services are sufficient for Wrapped cadence and retry behavior. |
+| Direct Hermes-core implementation | ArcLink operating guide forbids modifying Hermes core for ArcLink behavior. |
+| Live-provider implementation path | BUILD is no-secret and local; live providers remain proof-gated. |

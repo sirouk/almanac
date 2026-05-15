@@ -111,6 +111,9 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/provisioning` | Deployment provisioning status |
 | GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
 | POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |
+| POST | `/user/agent-identity` | Rename or retitle a user's Agent (CSRF) |
+| GET | `/user/wrapped` | Captain ArcLink Wrapped history with redacted plain-text and Markdown renders |
+| POST | `/user/wrapped-frequency` | Set ArcLink Wrapped cadence to daily, weekly, or monthly (CSRF) |
 | GET | `/user/crew-recipe` | Read the active Crew Recipe, prior archived recipe, and "what changed" summary |
 | POST | `/user/crew-recipe/preview` | Preview or regenerate a Crew Recipe without applying it (CSRF) |
 | POST | `/user/crew-recipe/apply` | Confirm Crew Training and apply the additive SOUL overlay (CSRF) |
@@ -129,6 +132,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/auth/admin/logout` | Revoke admin session (CSRF) |
 | GET | `/admin/dashboard` | Platform overview (filters: channel, status, deployment_id, user_id, since) |
 | GET | `/admin/comms` | Operator Pod Comms metadata only; message narratives and attachments are withheld |
+| GET | `/admin/wrapped` | Aggregate ArcLink Wrapped status and scores only; Captain narratives are withheld |
 | GET | `/admin/service-health` | Service health (filters: deployment_id, status, since) |
 | GET | `/admin/provisioning-jobs` | Provisioning jobs (filters: deployment_id, status, since) |
 | GET | `/admin/dns-drift` | DNS drift observations (filters: deployment_id, since) |

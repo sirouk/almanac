@@ -52,6 +52,7 @@ from arclink_crew_recipes import (
     prior_crew_recipe,
     whats_changed,
 )
+from arclink_wrapped import list_user_wrapped_reports, set_wrapped_frequency, wrapped_admin_aggregate
 
 
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
@@ -1047,6 +1048,41 @@ def read_user_dashboard_api(
     return ArcLinkApiResponse(status=200, payload=read_arclink_user_dashboard(conn, user_id=target_user))
 
 
+def read_user_wrapped_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    limit: int = 20,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(session["user_id"] or "").strip()
+    return ArcLinkApiResponse(status=200, payload=list_user_wrapped_reports(conn, target_user, limit=limit))
+
+
+def update_user_wrapped_frequency_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    frequency: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    updated = set_wrapped_frequency(
+        conn,
+        str(session["user_id"] or ""),
+        frequency,
+        actor_id=str(session["user_id"] or ""),
+        reason="Captain updated ArcLink Wrapped cadence",
+    )
+    return ArcLinkApiResponse(
+        status=200,
+        payload={"wrapped_frequency": str(updated.get("wrapped_frequency") or "daily")},
+    )
+
+
 def user_update_agent_identity_api(
     conn: sqlite3.Connection,
     *,
@@ -1224,6 +1260,16 @@ def read_admin_dashboard_api(
 ) -> ArcLinkApiResponse:
     authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
     return ArcLinkApiResponse(status=200, payload=read_arclink_admin_dashboard(conn, **filters))
+
+
+def read_admin_wrapped_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+) -> ArcLinkApiResponse:
+    authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
+    return ArcLinkApiResponse(status=200, payload=wrapped_admin_aggregate(conn))
 
 
 def read_user_billing_api(

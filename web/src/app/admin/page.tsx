@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { StatusBadge, ErrorAlert, LoadingSpinner } from "@/components/ui";
 
-type Tab = "overview" | "users" | "deployments" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "comms" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation" | "operator";
+type Tab = "overview" | "users" | "deployments" | "wrapped" | "onboarding" | "health" | "provisioning" | "dns" | "payments" | "infrastructure" | "bots" | "comms" | "security" | "releases" | "audit" | "events" | "actions" | "sessions" | "provider" | "reconciliation" | "operator";
 
 interface AdminData {
   deployments?: Record<string, string>[];
@@ -17,6 +17,24 @@ interface AdminData {
   active_sessions?: { user: number; admin: number };
   recent_failures?: Record<string, string>[];
   action_execution_readiness?: AdminActionReadiness;
+  wrapped?: AdminWrappedData;
+}
+
+interface AdminWrappedData {
+  reports_by_status?: Record<string, number>;
+  latest?: {
+    user_id: string;
+    period: string;
+    period_start: string;
+    period_end: string;
+    status: string;
+    novelty_score: number;
+    created_at: string;
+    delivered_at?: string;
+  }[];
+  average_novelty_score?: number;
+  due_count?: number;
+  failed_count?: number;
 }
 
 interface HealthEntry {
@@ -88,6 +106,7 @@ export default function AdminPage() {
   const [actions, setActions] = useState<{ actions?: Record<string, string>[] } | null>(null);
   const [events, setEvents] = useState<{ events?: Record<string, string>[] } | null>(null);
   const [comms, setComms] = useState<{ comms?: AdminCommsMessage[] } | null>(null);
+  const [wrapped, setWrapped] = useState<AdminWrappedData | null>(null);
   const [providerState, setProviderState] = useState<Record<string, unknown> | null>(null);
   const [reconciliation, setReconciliation] = useState<{ reconciliation?: Record<string, string>[]; drift_count?: number } | null>(null);
   const [operatorSnapshot, setOperatorSnapshot] = useState<Record<string, unknown> | null>(null);
@@ -117,6 +136,7 @@ export default function AdminPage() {
     if (tab === "actions") api.adminActions().then((r) => { if (r.status === 200) setActions(r.data as typeof actions); });
     if (tab === "events") api.adminEvents().then((r) => { if (r.status === 200) setEvents(r.data as typeof events); });
     if (tab === "comms") api.adminComms().then((r) => { if (r.status === 200) setComms(r.data as typeof comms); });
+    if (tab === "wrapped") api.adminWrapped().then((r) => { if (r.status === 200) setWrapped(r.data as AdminWrappedData); });
     if (tab === "provider") api.adminProviderState().then((r) => { if (r.status === 200) setProviderState(r.data as typeof providerState); });
     if (tab === "reconciliation") api.adminReconciliation().then((r) => { if (r.status === 200) setReconciliation(r.data as typeof reconciliation); });
     if (tab === "operator") {
@@ -125,7 +145,7 @@ export default function AdminPage() {
     }
   }, [tab, data]);
 
-  const tabs: Tab[] = ["overview", "users", "deployments", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "comms", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
+  const tabs: Tab[] = ["overview", "users", "deployments", "wrapped", "onboarding", "health", "provisioning", "dns", "payments", "infrastructure", "bots", "comms", "security", "releases", "audit", "events", "actions", "sessions", "provider", "reconciliation", "operator"];
   const deploymentCounts = statusCounts(data?.deployments || []);
   const failureCount = data?.recent_failures?.length || 0;
   const queuedActions = data?.sections?.find((section) => section.section === "queued_actions")?.counts?.queued || 0;
@@ -572,6 +592,14 @@ export default function AdminPage() {
             </div>
           )}
 
+          {/* Wrapped */}
+          {tab === "wrapped" && (
+            <div className="space-y-6">
+              <SectionHeader title="ArcLink Wrapped" eyebrow="Aggregate status" detail="Operator view shows report status and scores only, without Captain narrative or Markdown." />
+              <AdminWrappedPanel wrapped={wrapped || data?.wrapped || null} />
+            </div>
+          )}
+
           {/* Security */}
           {tab === "security" && data && (
             <div className="space-y-6">
@@ -977,6 +1005,52 @@ function DataRail({
         )) : (
           <p className="text-sm text-soft-white/40">{empty}</p>
         )}
+      </div>
+    </div>
+  );
+}
+
+function AdminWrappedPanel({ wrapped }: { wrapped: AdminWrappedData | null }) {
+  const statusRows = Object.entries(wrapped?.reports_by_status || {});
+  const latest = wrapped?.latest || [];
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-4">
+        <StatCard label="Due" value={wrapped?.due_count ?? 0} />
+        <StatCard label="Failed" value={wrapped?.failed_count ?? 0} />
+        <StatCard label="Average Score" value={wrapped?.average_novelty_score ?? 0} />
+        <StatCard label="Reports" value={statusRows.reduce((sum, [, count]) => sum + count, 0)} />
+      </div>
+      <div className="border border-border bg-surface/85 p-4">
+        <h3 className="font-display font-semibold">Latest Wrapped Runs</h3>
+        <div className="mt-3 overflow-x-auto">
+          {latest.length ? (
+            <table className="w-full text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-soft-white/35">
+                <tr>
+                  <th className="px-3 py-2">Captain</th>
+                  <th className="px-3 py-2">Period</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Score</th>
+                  <th className="px-3 py-2">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {latest.map((row) => (
+                  <tr key={`${row.user_id}-${row.period_start}`} className="border-t border-border/70">
+                    <td className="px-3 py-2 font-mono text-xs text-soft-white/60">{row.user_id}</td>
+                    <td className="px-3 py-2 text-soft-white/60">{row.period}</td>
+                    <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+                    <td className="px-3 py-2 text-soft-white/60">{row.novelty_score}</td>
+                    <td className="px-3 py-2 text-xs text-soft-white/35">{row.created_at || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="text-sm text-soft-white/40">No ArcLink Wrapped aggregate rows recorded.</p>
+          )}
+        </div>
       </div>
     </div>
   );

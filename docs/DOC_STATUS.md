@@ -29,6 +29,7 @@ tests as truth, then update the closest canonical doc.
 | `docs/arclink/operations-runbook.md` | Canonical | Operator runbook for hosted/control operations and workspace plugins. |
 | `docs/arclink/data-safety.md` | Canonical | State, secret, and teardown safety across Shared Host, Docker, and Control Node modes. |
 | `docs/arclink/vocabulary.md` | Canonical | User-facing ArcPod/Captain/Crew/Raven vocabulary and Operator/backend boundary rules. |
+| `docs/arclink/wrapped.md` | Canonical | ArcLink Wrapped ownership, privacy boundary, scheduler/delivery behavior, and novelty-score rationale. |
 | `docs/arclink/first-day-user-guide.md` | Canonical | First-day customer/operator-user guide. |
 | `docs/arclink/control-node-production-runbook.md` | Proof-gated | Production Control Node checklist; live claims require credentials and evidence. |
 | `docs/arclink/notion-human-guide.md` | Canonical | Human-facing Notion, SSOT, indexing, and destructive-boundary guide. |

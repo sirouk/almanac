@@ -760,10 +760,48 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
             extra=extra,
         )
 
+    if target_kind == "captain-wrapped":
+        # ArcLink Wrapped uses the same public-channel delivery rail as Raven
+        # outreach, but carries a distinct target kind so reports can be
+        # audited and retried independently from normal public bot messages.
+        channel_kind = (row.get("channel_kind") or "").lower()
+        return _deliver_public_bot_user(
+            cfg,
+            channel_kind=channel_kind,
+            target_id=str(row.get("target_id") or ""),
+            message=str(row.get("message") or ""),
+            extra=extra,
+        )
+
     if target_kind == "public-agent-turn":
         return _deliver_public_agent_turn(cfg, row, extra)
 
     return f"unknown target_kind: {target_kind}"
+
+
+def _mark_wrapped_report_delivered(conn: Any, row: dict[str, Any]) -> None:
+    if str(row.get("target_kind") or "").lower() != "captain-wrapped":
+        return
+    try:
+        extra = json.loads(str(row.get("extra_json") or "{}"))
+    except json.JSONDecodeError:
+        extra = {}
+    if not isinstance(extra, dict):
+        return
+    report_id = str(extra.get("report_id") or "").strip()
+    if not report_id:
+        return
+    conn.execute(
+        """
+        UPDATE arclink_wrapped_reports
+        SET status = 'delivered',
+            delivered_at = ?
+        WHERE report_id = ?
+          AND status IN ('generated', 'delivered')
+        """,
+        (utc_now_iso(), report_id),
+    )
+    conn.commit()
 
 
 def _is_operator_upgrade_notification(row: dict[str, Any]) -> bool:
@@ -834,6 +872,7 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                     sys.stderr.write(f"[deliver] id={row['id']} error={error}\n")
                 continue
             mark_notification_delivered(conn, int(row["id"]))
+            _mark_wrapped_report_delivered(conn, row)
             summary["delivered"] += 1
             if (row.get("channel_kind") or "").lower() == "tui-only":
                 summary["skipped_tui"] += 1

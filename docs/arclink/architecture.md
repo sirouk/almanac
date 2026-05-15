@@ -20,6 +20,7 @@ arclink_fleet.py            Fleet host registry, deterministic placement, capaci
 arclink_action_worker.py    Queued admin action execution, attempts, stale recovery
 arclink_rollout.py          Durable rollout waves, pause/fail/rollback records, version drift
 arclink_dashboard.py        User/admin dashboard read models, queued admin action intent
+arclink_wrapped.py          ArcLink Wrapped scoring, redaction, cadence, persistence, scheduler
 arclink_api_auth.py         Hashed session/CSRF tokens, rate limits, MFA-ready admin gates
 arclink_hosted_api.py       Production WSGI app, /api/v1 route dispatch, CORS, cookie transport
 arclink_product_surface.py  Local no-secret WSGI prototype for development/contract testing
@@ -118,6 +119,8 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `GET /user/provisioning` | User session | Deployment provisioning status |
 | `GET /user/credentials` | User session | Pending credential handoff metadata with masked secret references |
 | `POST /user/credentials/acknowledge` | User + CSRF | Confirm credential storage and hide future handoff visibility |
+| `GET /user/wrapped` | User session | Captain ArcLink Wrapped report history with redacted renders |
+| `POST /user/wrapped-frequency` | User + CSRF | Set Wrapped cadence to daily, weekly, or monthly |
 | `POST /user/share-grants` | User + CSRF | Request a read-only Drive/Code share grant |
 | `POST /user/share-grants/approve` | User + CSRF | Owner-approve a pending share grant |
 | `POST /user/share-grants/deny` | User + CSRF | Owner-deny a pending share grant |
@@ -125,6 +128,7 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `GET /user/linked-resources` | User session | Accepted linked resources for the authenticated user |
 | `GET /user/provider-state` | User session | Provider adapter state |
 | `GET /admin/dashboard` | Admin session | Admin dashboard read |
+| `GET /admin/wrapped` | Admin session | Aggregate Wrapped status and score only; no Captain narrative |
 | `GET /admin/service-health` | Admin session | Service health |
 | `GET /admin/provisioning-jobs` | Admin session | Provisioning jobs |
 | `GET /admin/dns-drift` | Admin session | DNS drift observations |

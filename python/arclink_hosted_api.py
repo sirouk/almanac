@@ -69,11 +69,13 @@ from arclink_api_auth import (
     read_admin_queued_actions_api,
     read_admin_reconciliation_api,
     read_admin_service_health_api,
+    read_admin_wrapped_api,
     cancel_onboarding_session_api,
     claim_session_from_onboarding_api,
     read_provider_state_api,
     read_user_credentials_api,
     read_user_crew_recipe_api,
+    read_user_wrapped_api,
     authenticate_arclink_user_session,
     read_user_billing_api,
     read_user_dashboard_api,
@@ -84,6 +86,7 @@ from arclink_api_auth import (
     revoke_user_share_grant_api,
     preview_user_crew_recipe_api,
     start_public_onboarding_api,
+    update_user_wrapped_frequency_api,
     user_update_agent_identity_api,
 )
 from arclink_dashboard import _deployment_urls, build_operator_snapshot, build_scale_operations_snapshot
@@ -1054,6 +1057,42 @@ def _handle_user_agent_identity(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_wrapped(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: Mapping[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_wrapped_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        limit=int(query.get("limit") or 20),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_wrapped_frequency(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = update_user_wrapped_frequency_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        frequency=str(body.get("frequency") or body.get("wrapped_frequency") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_user_crew_recipe_read(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1387,6 +1426,20 @@ def _handle_admin_scale_operations(
     authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     snapshot = build_scale_operations_snapshot(conn)
     return _json_response(200, snapshot, request_id=request_id)
+
+
+def _handle_admin_wrapped(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="admin")
+    result = read_admin_wrapped_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
 
 
 def _handle_onboarding_status(
@@ -2081,6 +2134,20 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         }, required=["deployment_id"]),
         "responses": {"200": {"description": "Agent identity updated"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_wrapped": {
+        "summary": "Read Captain ArcLink Wrapped history",
+        "tags": ["user", "wrapped"],
+        "parameters": [_qparam("limit")],
+        "responses": {"200": {"description": "Wrapped report history"}, "401": {"description": "Unauthorized"}},
+    },
+    "user_wrapped_frequency": {
+        "summary": "Update Captain ArcLink Wrapped cadence",
+        "tags": ["user", "wrapped"],
+        "requestBody": _openapi_json_body({
+            "frequency": {"type": "string", "enum": ["daily", "weekly", "monthly"]},
+        }, required=["frequency"]),
+        "responses": {"200": {"description": "Wrapped cadence updated"}, "400": {"description": "Invalid frequency"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
     "user_crew_recipe": {
         "summary": "Read the active and prior Crew Recipe",
         "tags": ["user", "crew-training"],
@@ -2244,6 +2311,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["admin"],
         "responses": {"200": {"description": "Scale operations snapshot"}, "401": {"description": "Unauthorized"}},
     },
+    "admin_wrapped": {
+        "summary": "Read aggregate ArcLink Wrapped status without Captain narrative",
+        "tags": ["admin", "wrapped"],
+        "responses": {"200": {"description": "Aggregate Wrapped status"}, "401": {"description": "Unauthorized"}},
+    },
     "admin_provider_state": {
         "summary": "Read provider/model state plus sanitized Chutes budget, credential-lifecycle, and threshold policy boundary (admin)",
         "tags": ["admin"],
@@ -2368,6 +2440,8 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/credentials"): "user_credentials",
     ("POST", "/user/credentials/acknowledge"): "user_credential_ack",
     ("POST", "/user/agent-identity"): "user_agent_identity",
+    ("GET", "/user/wrapped"): "user_wrapped",
+    ("POST", "/user/wrapped-frequency"): "user_wrapped_frequency",
     ("GET", "/user/crew-recipe"): "user_crew_recipe",
     ("POST", "/user/crew-recipe/preview"): "user_crew_recipe_preview",
     ("POST", "/user/crew-recipe/apply"): "user_crew_recipe_apply",
@@ -2392,6 +2466,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/admin/sessions/revoke"): "session_revoke",
     ("GET", "/admin/operator-snapshot"): "admin_operator_snapshot",
     ("GET", "/admin/scale-operations"): "admin_scale_operations",
+    ("GET", "/admin/wrapped"): "admin_wrapped",
     ("GET", "/user/provider-state"): "user_provider_state",
     ("GET", "/onboarding/status"): "onboarding_status",
     ("POST", "/onboarding/claim-session"): "onboarding_claim_session",
@@ -2439,6 +2514,7 @@ _CIDR_PROTECTED_ROUTES = frozenset({
     "session_revoke",
     "admin_operator_snapshot",
     "admin_scale_operations",
+    "admin_wrapped",
 })
 
 _JSON_OBJECT_ROUTES = frozenset({
@@ -2454,6 +2530,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_portal_link",
     "user_credential_ack",
     "user_agent_identity",
+    "user_wrapped_frequency",
     "user_crew_recipe_preview",
     "user_crew_recipe_apply",
     "user_share_grant_create",
@@ -2603,6 +2680,10 @@ def route_arclink_hosted_api(
             result = _handle_user_credential_ack(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_agent_identity":
             result = _handle_user_agent_identity(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_wrapped":
+            result = _handle_user_wrapped(conn, headers, clean_query, request_id, cfg)
+        elif route_key == "user_wrapped_frequency":
+            result = _handle_user_wrapped_frequency(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_crew_recipe":
             result = _handle_user_crew_recipe_read(conn, headers, request_id, cfg)
         elif route_key == "user_crew_recipe_preview":
@@ -2637,6 +2718,8 @@ def route_arclink_hosted_api(
             result = _handle_admin_operator_snapshot(conn, headers, request_id, cfg)
         elif route_key == "admin_scale_operations":
             result = _handle_admin_scale_operations(conn, headers, request_id)
+        elif route_key == "admin_wrapped":
+            result = _handle_admin_wrapped(conn, headers, request_id)
         elif route_key == "admin_provider_state":
             result = _handle_provider_state(conn, headers, request_id, cfg, "admin")
         elif route_key == "user_provider_state":

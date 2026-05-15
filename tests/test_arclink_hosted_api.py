@@ -174,6 +174,92 @@ def test_user_agent_identity_route_requires_csrf_and_updates_deployment() -> Non
     print("PASS test_user_agent_identity_route_requires_csrf_and_updates_deployment")
 
 
+def test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_wrapped_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_wrapped_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_wrapped_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_wrapped_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(control, onboarding, conn, session_id="onb_wrapped", email="wrapped@example.test")
+    conn.execute(
+        """
+        INSERT INTO arclink_wrapped_reports (
+          report_id, user_id, period, period_start, period_end, status,
+          ledger_json, novelty_score, delivery_channel, created_at, delivered_at
+        ) VALUES ('wrap_hosted', ?, 'daily', '2026-05-13T00:00:00+00:00',
+          '2026-05-14T00:00:00+00:00', 'generated', ?, 81.0, 'telegram', ?, '')
+        """,
+        (
+            prepared["user_id"],
+            json.dumps(
+                {
+                    "formula_version": "wrapped_novelty_v1",
+                    "plain_text": "Captain report with sk_test_hosted_wrapped_secret",
+                    "markdown": "# ArcLink Wrapped",
+                    "stats": [{"key": "quiet_build_index", "label": "Quiet build index", "value": 1.5}],
+                    "source_counts": {"events": 2},
+                },
+                sort_keys=True,
+            ),
+            control.utc_now_iso(),
+        ),
+    )
+    conn.commit()
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/wrapped", headers={}, config=config,
+    )
+    expect(status == 401, f"expected 401 got {status}: {payload}")
+
+    user_session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_wrapped")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/wrapped",
+        headers=browser_auth_headers(user_session),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["reports"][0]["report_id"] == "wrap_hosted", str(payload))
+    expect("sk_test_hosted_wrapped_secret" not in payload["reports"][0]["plain_text"], str(payload["reports"][0]))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/wrapped-frequency",
+        headers=browser_auth_headers(user_session),
+        body=json.dumps({"frequency": "weekly"}),
+        config=config,
+    )
+    expect(status == 401, f"wrapped frequency without CSRF expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/wrapped-frequency",
+        headers=browser_auth_headers(user_session, csrf=True),
+        body=json.dumps({"frequency": "weekly"}),
+        config=config,
+    )
+    expect(status == 200 and payload["wrapped_frequency"] == "weekly", f"expected weekly update got {status}: {payload}")
+
+    api.upsert_arclink_admin(conn, admin_id="admin_wrapped", email="admin-wrapped@example.test", role="ops")
+    admin_session = api.create_arclink_admin_session(conn, admin_id="admin_wrapped", session_id="asess_wrapped")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/wrapped",
+        headers=browser_auth_headers(admin_session, kind="admin"),
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    serialized = json.dumps(payload, sort_keys=True)
+    expect("plain_text" not in serialized and "markdown" not in serialized, serialized)
+    expect(payload["reports_by_status"]["generated"] == 1, str(payload))
+    print("PASS test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only")
+
+
 def test_user_crew_recipe_routes_require_csrf_and_apply_recipe() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_crew_recipe_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_crew_recipe_test")
@@ -4089,6 +4175,7 @@ def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
     test_user_agent_identity_route_requires_csrf_and_updates_deployment()
+    test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only()
     test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
     test_admin_dashboard_requires_admin_session()
     test_admin_action_requires_csrf_and_mutation_role()

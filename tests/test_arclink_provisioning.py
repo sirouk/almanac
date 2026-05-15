@@ -105,6 +105,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         "nextcloud",
         "notion-webhook",
         "notification-delivery",
+        "arclink-wrapped",
         "health-watch",
         "managed-context-install",
     }
@@ -117,6 +118,16 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
             "./bin/arclink-notification-delivery.sh",
         ],
         str(services["notification-delivery"]),
+    )
+    expect(
+        services["arclink-wrapped"]["command"] == [
+            "./bin/docker-job-loop.sh",
+            "arclink-wrapped",
+            "300",
+            "./bin/arclink-wrapped.sh",
+            "--json",
+        ],
+        str(services["arclink-wrapped"]),
     )
     expect(intent["execution"]["ready"], str(intent["execution"]))
     expect(intent["state_roots"]["root"] == "/arcdata/deployments/dep_1-amber-vault-1a2b", str(intent["state_roots"]))

@@ -231,6 +231,91 @@ def test_public_bot_user_delivery_supports_telegram_and_discord_dm() -> None:
             os.environ.update(old_env)
 
 
+def test_captain_wrapped_delivery_uses_public_channel_and_marks_report_delivered() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_wrapped_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_wrapped_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO arclink_wrapped_reports (
+                      report_id, user_id, period, period_start, period_end, status,
+                      ledger_json, novelty_score, delivery_channel, created_at, delivered_at
+                    ) VALUES (
+                      'wrap_delivery', 'user_1', 'daily',
+                      '2026-05-12T00:00:00+00:00', '2026-05-13T00:00:00+00:00',
+                      'generated', '{}', 42.0, 'telegram', '2026-05-13T00:05:00+00:00', ''
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO notification_outbox (
+                      target_kind, target_id, channel_kind, message, extra_json, created_at, next_attempt_at
+                    ) VALUES ('captain-wrapped', 'tg:123', 'telegram', 'ArcLink Wrapped report', ?, ?, ?)
+                    """,
+                    (
+                        json.dumps({"report_id": "wrap_delivery", "period": "daily", "novelty_score": 42.0}),
+                        "2026-05-13T00:06:00+00:00",
+                        "2026-05-13T00:06:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+            telegram_calls: list[dict[str, object]] = []
+
+            def fake_telegram(*, bot_token, chat_id, text, reply_to_message_id=None, reply_markup=None, parse_mode=""):
+                telegram_calls.append(
+                    {
+                        "bot_token": bot_token,
+                        "chat_id": chat_id,
+                        "text": text,
+                    }
+                )
+                return {"ok": True}
+
+            delivery.telegram_send_message = fake_telegram
+            summary = delivery.run_once(cfg)
+            with control.connect_db(cfg) as conn:
+                row = conn.execute("SELECT status, delivered_at FROM arclink_wrapped_reports WHERE report_id = 'wrap_delivery'").fetchone()
+            expect(summary["delivered"] == 1, str(summary))
+            expect(telegram_calls and telegram_calls[0]["chat_id"] == "123", str(telegram_calls))
+            expect(row["status"] == "delivered" and row["delivered_at"], str(dict(row)))
+            print("PASS test_captain_wrapped_delivery_uses_public_channel_and_marks_report_delivered")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_turn_delivery_allows_explicit_quiet_fallback() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -783,6 +868,7 @@ def test_notification_due_now_normalizes_z_and_offset_timestamps() -> None:
 def main() -> int:
     test_discord_operator_delivery_supports_channel_ids()
     test_public_bot_user_delivery_supports_telegram_and_discord_dm()
+    test_captain_wrapped_delivery_uses_public_channel_and_marks_report_delivered()
     test_public_agent_turn_delivery_allows_explicit_quiet_fallback()
     test_public_agent_turn_delivery_fails_closed_without_quiet_fallback()
     test_public_agent_turn_delivery_prefers_gateway_bridge_when_available()
@@ -792,7 +878,7 @@ def main() -> int:
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_enables_gateway_streaming_without_reasoning()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
-    print("PASS all 11 notification delivery regression tests")
+    print("PASS all 12 notification delivery regression tests")
     return 0
 
 

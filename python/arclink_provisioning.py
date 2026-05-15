@@ -45,6 +45,7 @@ ARCLINK_PROVISIONING_SERVICE_NAMES = (
     "nextcloud",
     "notion-webhook",
     "notification-delivery",
+    "arclink-wrapped",
     "health-watch",
     "managed-context-install",
 )
@@ -606,6 +607,7 @@ ARCLINK_DEFAULT_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "nextcloud":               _resource_limit("512M", "1.0"),
     "notion-webhook":          _resource_limit("128M", "0.25"),
     "notification-delivery":   _resource_limit("128M", "0.25"),
+    "arclink-wrapped":         _resource_limit("128M", "0.25"),
     "health-watch":            _resource_limit("128M", "0.25"),
     "managed-context-install": _resource_limit("128M", "0.25"),
 }
@@ -773,6 +775,13 @@ def _render_services(
             environment=env,
             volumes=[memory_volume],
             deploy=_limits("notification-delivery"),
+        ),
+        "arclink-wrapped": _service(
+            image=app_image,
+            command=["./bin/docker-job-loop.sh", "arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"],
+            environment=env,
+            volumes=[memory_volume],
+            deploy=_limits("arclink-wrapped"),
         ),
         "health-watch": _service(
             image=app_image,

@@ -2,77 +2,90 @@
 
 ## Scope
 
-This map covers public repository areas relevant to Wave 5 Crew Training. It
-excludes private state, live credentials, user Hermes homes, dependency
-folders, caches, logs, production service state, and Hermes core.
+This map covers the public repository areas relevant to the audit verification
+gate, Wave 6 ArcLink Wrapped, and the Mission Closeout sweep. It excludes
+private state, live credentials, dependency folders, logs, generated browser
+artifacts, production service state, and Hermes core.
 
 ## Planning Entrypoints
 
 | Path | Role |
 | --- | --- |
-| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for Wave 5 only. |
-| `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` | Authoritative Wave 5 behavior spec. |
-| `docs/arclink/vocabulary.md` | Captain/operator vocabulary boundary. |
-| `research/RESEARCH_SUMMARY.md` | Current PLAN findings and assumptions. |
-| `research/COVERAGE_MATRIX.md` | Goal-to-proof matrix for Wave 5. |
-| `research/STACK_SNAPSHOT.md` | Deterministic stack hypothesis and alternatives. |
-| `consensus/build_gate.md` | No-secret Wave 5 build consent and blocked live/private flows. |
+| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for audit-gate verification, Wave 6, and closeout. |
+| `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` | Product steering for Waves 0-6; Wave 6 section is the Wrapped feature reference. |
+| `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md` | Historical audit verification and Wave 1 trust-boundary checklist; use as a regression gate, not as proof of current gaps. |
+| `research/BUILD_COMPLETION_NOTES.md` | Prior wave and audit-closure validation record; must receive final six-wave completion notes after BUILD. |
+| `docs/arclink/vocabulary.md` | Captain/operator vocabulary boundary for all user-facing closeout sweeps. |
+| `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` | Hosted API contract to update after Wrapped behavior lands. |
 
 ## Directory Map
 
 | Directory | Responsibility |
 | --- | --- |
-| `python/` | Control DB, hosted API, auth/session/CSRF, dashboard snapshots, public bots, Chutes boundary, memory synthesis safety, provisioning projection, and the new Crew Recipe module. |
-| `tests/` | Focused Python regressions for recipe lifecycle, API/auth, provisioning projection, public bot flow, dashboard data, and schema drift. |
-| `web/` | Next.js Captain dashboard and Operator/admin dashboard. Crew Training should be added using existing API helper and page patterns. |
-| `templates/` | `SOUL.md.tmpl` contains existing additive placeholders; `CREW_RECIPE.md.tmpl` must be added. |
-| `docs/arclink/` | Operations and control-node production runbooks. Add Crew Training sections after behavior is true. |
-| `docs/openapi/` | API contract. Add Crew Training routes after hosted API behavior exists. |
-| `research/` | Planning, steering, and completion artifacts. |
-| `consensus/` | Build gate records and blocked-flow notes. |
+| `python/` | Control DB, hosted API, auth/session/CSRF, dashboard read models, public bots, notification delivery, provisioning, inventory, migration, Comms, Crew Training, and the new Wrapped module. |
+| `bin/` | Canonical deploy/control scripts and Docker job-loop runners. Wrapped scheduler should add a small runner here if needed. |
+| `compose.yaml` | Shared Host Docker and Sovereign validation services. Wrapped should use a named job-loop service with no Docker socket. |
+| `tests/` | Focused Python regressions for security gates, Wrapped generation, cadence, delivery, API/auth, bots, dashboard snapshots, docs/OpenAPI parity, and closeout surfaces. |
+| `web/` | Next.js Captain dashboard and Operator dashboard. Wrapped needs API helpers, Captain tab/history, frequency control, and Operator aggregate-only panel. |
+| `docs/` | Canonical docs, API reference, OpenAPI spec, architecture and status maps. Closeout reconciles these after behavior is true. |
+| `research/` | Planning, steering, audit, and completion artifacts. |
+| `consensus/` | Build gate records for no-secret BUILD boundaries and blocked live/private flows. |
 
 ## Existing Architecture Rails
 
 | Rail | Files / patterns |
 | --- | --- |
-| Schema, constants, drift checks | `python/arclink_control.py`, `tests/test_arclink_schema.py` |
-| User and deployment projection | `python/arclink_provisioning.py` |
-| Audit and events | `append_arclink_audit`, `append_arclink_event` in `python/arclink_control.py` |
-| Hosted API routing | `_handle_*`, `_ROUTES`, `_JSON_OBJECT_ROUTES`, and OpenAPI generation in `python/arclink_hosted_api.py` |
-| Auth, sessions, CSRF | `python/arclink_api_auth.py` |
-| Captain dashboard API snapshots | `python/arclink_dashboard.py`, `read_user_dashboard_api` |
-| Public bot command handling | `python/arclink_public_bots.py`, `python/arclink_public_bot_commands.py` |
-| Chutes boundary and fakes | `python/arclink_chutes.py`, `python/arclink_chutes_live.py` |
-| Unsafe generated-output rejection | `UNSAFE_OUTPUT_PATTERNS` and `_card_has_unsafe_output` in `python/arclink_memory_synthesizer.py` |
-| Secret redaction | `python/arclink_secrets_regex.py`, `python/arclink_evidence.py` |
-| Managed-context injection | `plugins/hermes-agent/arclink-managed-context/`, identity state file loading |
-| Web API helpers | `web/src/lib/api.ts` |
-| Dashboard UI | `web/src/app/dashboard/page.tsx`, `web/src/app/admin/page.tsx` |
+| Schema and drift checks | `python/arclink_control.py`, `tests/test_arclink_schema.py` |
+| Audit/events | `append_arclink_audit`, `append_arclink_event` in `python/arclink_control.py` |
+| Hosted API routing | `_handle_*`, route tables, body caps, CORS, CIDR gate, and OpenAPI metadata in `python/arclink_hosted_api.py` |
+| Auth and sessions | `python/arclink_api_auth.py`; HMAC session/CSRF hashes and CSRF-gated mutations |
+| Dashboard read models | `python/arclink_dashboard.py` |
+| Public bots | `python/arclink_public_bots.py`, `python/arclink_public_bot_commands.py`, `python/arclink_telegram.py`, `python/arclink_discord.py` |
+| Notification delivery | `notification_outbox` helpers in `python/arclink_control.py` and worker in `python/arclink_notification_delivery.py` |
+| Secret redaction | `python/arclink_evidence.py`, `python/arclink_secrets_regex.py` |
+| Docker scheduling | `bin/docker-job-loop.sh`, existing job services in `compose.yaml` |
+| Memory synthesis | `python/arclink_memory_synthesizer.py`, `memory_synthesis_cards` table |
+| Pod Comms | `python/arclink_pod_comms.py`, `/user/comms`, `/admin/comms`, MCP Comms tools |
+| Crew Training | `python/arclink_crew_recipes.py`, `/user/crew-recipe`, dashboard Crew tab, public bot `/train-crew` |
 
-## Wave 5 Source Surfaces
+## Wave 0-5 Current Source State
+
+| Surface | Current source signal |
+| --- | --- |
+| Vocabulary | `docs/arclink/vocabulary.md` exists and names ArcPod, Pod, Captain, Crew, Raven, Comms, Crew Training, and ArcLink Wrapped. |
+| Onboarding identity | Web, public bots, schema, Stripe metadata, dashboard rename/retitle, and identity projection include Agent Name and Agent Title. |
+| Inventory/ASU | Inventory modules for manual/Hetzner/Linode and ASU tests exist; `deploy.sh control inventory` is referenced by regressions. |
+| Pod migration | `python/arclink_pod_migration.py` and tests exist. |
+| Pod Comms | `python/arclink_pod_comms.py`, dashboard/admin Comms panels, OpenAPI, and tests exist. |
+| Crew Training | `python/arclink_crew_recipes.py`, template, API/auth routes, dashboard Crew tab, public bot commands, OpenAPI, and tests exist. |
+
+## Wave 6 Source Surfaces
 
 | Surface | Current state | BUILD target |
 | --- | --- | --- |
-| Recipe module | Missing | Add `python/arclink_crew_recipes.py` for validate, preview, regenerate, confirm/apply, archive, list current/prior, diff, and audit. |
-| Prompt template | Missing | Add `templates/CREW_RECIPE.md.tmpl` with role, mission, treatment, preset, capacity, Pod count, and Agent identity inputs. |
-| Schema | Present | Reuse `arclink_crew_recipes` and Captain fields. Add no columns unless a deliverable genuinely requires one with tests. |
-| Active/archive lifecycle | Schema-ready only | One active recipe per Captain; confirming archives the previous active row and writes the new active row. |
-| Unsafe-output boundary | Present in memory synthesis | Reuse or extract a shared helper to reject URLs, shell commands, and jailbreak patterns; retry twice before fallback. |
-| Provider boundary | Chutes boundary and fake inference exist | Generate through an injectable Chutes-style client when allowed; otherwise deterministic preset-only fallback. |
-| SOUL overlay | Template placeholders present | Apply recipe fields to every Pod in the Captain's Crew through identity-context projection while preserving existing state keys. |
-| Hosted API | Crew Training routes missing | Add user preview/regenerate/confirm/current/diff routes and optional audited admin-on-behalf route. |
-| Web dashboard | No Crew Training questionnaire | Add Captain Crew Training questionnaire/review/regenerate/confirm UI and admin-on-behalf entry only if scoped and audited. |
-| Public bot | `/train-crew` and `/whats-changed` missing | Add pure handler flow that stores questionnaire state, shows review, confirms recipe, and reports current vs prior recipe. |
-| Docs/OpenAPI | Crew Training routes not documented | Update after behavior and tests are true. |
+| Wrapped module | Present core | `python/arclink_wrapped.py` now owns report generation, scoring, rendering, persistence, cadence helpers, delivery enqueue, scheduler, and operator aggregate helpers. |
+| Wrapped schema | Present | Reuse `arclink_wrapped_reports` and `arclink_users.wrapped_frequency`; add columns only if a required deliverable cannot fit existing schema. |
+| Data collectors | Present core | Scoped collectors cover events, audit, same-Captain Comms, memory cards, injected read-only session counts, and injected vault-reconciler deltas. |
+| Novelty score | Present | `wrapped_novelty_v1` is documented and reports expose at least five non-standard stats. |
+| Redaction | Existing helpers | Redact all rendered text and ledger snippets before storage, dashboard display, or notification enqueue. |
+| Cadence | Present core | Helper validates and audits `daily`, `weekly`, `monthly`; hourly/cron/arbitrary intervals are rejected. |
+| Scheduler | Present Docker/core | Named `arclink-wrapped` job-loop service and `bin/arclink-wrapped.sh` runner are wired without Docker socket access. |
+| Delivery | Present core | Queues `notification_outbox` with `target_kind='captain-wrapped'`, resolves Captain channel, delays through supported quiet-hours windows, retries failed reports, and emits aggregate operator failure notifications. |
+| Hosted API | Missing | Add user history/frequency routes and admin aggregate routes with existing auth/CSRF/CIDR patterns. |
+| Public bot | Missing | Add `/wrapped-frequency daily|weekly|monthly` and optional `/wrapped` status/history summary without live command mutation. |
+| Web dashboard | Missing | Add Captain "Wrapped" tab with history and frequency selector; add Operator aggregate-only status panel. |
+| Docs/OpenAPI | Missing | Reconcile docs and generated/spec OpenAPI after behavior lands. |
 
 ## Architecture Assumptions
 
-- Do not modify Hermes core; use ArcLink wrappers, plugins, generated config,
-  service units, and identity-context overlays.
-- Keep Crew Training as an additive SOUL overlay. Memories and sessions are
-  never rewritten.
-- Keep provider access behind existing Chutes and secret-reference boundaries.
-- Keep BUILD local and no-secret: fake clients, temporary DBs, temporary
-  identity-context fixtures, and no live bot/provider/payment/deploy actions.
-- Prefer one tested Python service module over duplicating business logic in
-  web, bot, and hosted API handlers.
+- ArcLink Wrapped is read-only over Captain state except for inserting/updating
+  Wrapped report rows and notification/audit/status rows.
+- It must never read arbitrary user homes or private state. Tests should use
+  temporary state roots and injected scanner functions.
+- It must not modify Hermes core, sessions, memories, vault content, provider
+  accounts, payments, or deployment state.
+- Operator/admin surfaces may expose only aggregate Wrapped status, score,
+  cadence, timestamps, and error state.
+- Captain-facing narrative and dashboard copy follow the vocabulary canon.
+- Scheduler work should reuse `docker-job-loop.sh` rather than adding a new
+  scheduler dependency.

@@ -84,6 +84,30 @@ def seed_dashboard(control, onboarding, conn):
         event_type="provisioning_rendered",
         metadata={"source": "test"},
     )
+    conn.execute(
+        """
+        INSERT INTO arclink_wrapped_reports (
+          report_id, user_id, period, period_start, period_end, status,
+          ledger_json, novelty_score, delivery_channel, created_at, delivered_at
+        ) VALUES (?, ?, 'daily', '2026-05-13T00:00:00+00:00', '2026-05-14T00:00:00+00:00',
+          'generated', ?, 72.5, 'telegram', ?, '')
+        """,
+        (
+            "wrap_dashboard",
+            prepared["user_id"],
+            json.dumps(
+                {
+                    "formula_version": "wrapped_novelty_v1",
+                    "plain_text": "ArcLink Wrapped report with sk_test_dashboard_secret",
+                    "markdown": "# ArcLink Wrapped",
+                    "stats": [{"key": "signal_variety", "label": "Signal variety", "value": 4}],
+                    "source_counts": {"events": 1},
+                },
+                sort_keys=True,
+            ),
+            control.utc_now_iso(),
+        ),
+    )
     onboarding.record_arclink_onboarding_first_agent_contact(
         conn,
         session_id=prepared["session_id"],
@@ -107,6 +131,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
         == {
             "deployment_health",
             "access_links",
+            "wrapped",
             "bot_setup",
             "files",
             "code",
@@ -135,6 +160,10 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     expect(section_index["terminal"]["url"] == "https://hermes-amber-vault-1a2b.example.test/terminal", str(section_index["terminal"]))
     expect(section_index["hermes"]["label"] == "Hermes Dashboard", str(section_index["hermes"]))
     expect(section_index["hermes"]["url"] == "https://hermes-amber-vault-1a2b.example.test", str(section_index["hermes"]))
+    expect(section_index["wrapped"]["status"] == "ready", str(section_index["wrapped"]))
+    expect(view["wrapped"]["wrapped_frequency"] == "daily", str(view["wrapped"]))
+    expect(view["wrapped"]["reports"][0]["report_id"] == "wrap_dashboard", str(view["wrapped"]))
+    expect("sk_test_dashboard_secret" not in view["wrapped"]["reports"][0]["plain_text"], str(view["wrapped"]["reports"][0]))
     expect(section_index["security"]["status"] == "masked", str(section_index["security"]))
     expect(section_index["support"]["status"] == "available", str(section_index["support"]))
     expect(deployment["billing"]["subscriptions"][0]["status"] == "active", str(deployment["billing"]))
@@ -377,6 +406,9 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
 
     all_view = dashboard.read_arclink_admin_dashboard(conn, channel="web")
     expect(all(item["deployment_id"] != "dep_cancelled_drift" for item in all_view["dns_drift"]), str(all_view["dns_drift"]))
+    expect(all_view["wrapped"]["reports_by_status"]["generated"] == 1, str(all_view["wrapped"]))
+    expect("plain_text" not in json.dumps(all_view["wrapped"]), str(all_view["wrapped"]))
+    expect(any(section["section"] == "wrapped" for section in all_view["sections"]), str(all_view["sections"]))
     view = dashboard.read_arclink_admin_dashboard(conn, channel="web", deployment_id=prepared["deployment_id"])
     section_index = {section["section"]: section for section in view["sections"]}
     expect(
@@ -385,6 +417,7 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
             "onboarding_funnel",
             "users",
             "deployments",
+            "wrapped",
             "payments",
             "infrastructure",
             "bots",

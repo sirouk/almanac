@@ -428,6 +428,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     command: ["./bin/docker-job-loop.sh", "notification-delivery", "1", "./bin/arclink-notification-delivery.sh"]
 
+  arclink-wrapped:
+    <<: *arclink-job
+    command: ["./bin/docker-job-loop.sh", "arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"]
+
   health-watch:
     <<: *arclink-job
     environment:

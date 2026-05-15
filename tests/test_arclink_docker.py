@@ -91,6 +91,7 @@ def test_compose_defines_full_stack_services() -> None:
         "agent-supervisor:",
         "ssot-batcher:",
         "notification-delivery:",
+        "arclink-wrapped:",
         "health-watch:",
         "curator-refresh:",
         "qmd-refresh:",
@@ -113,6 +114,11 @@ def test_compose_defines_full_stack_services() -> None:
         '["./bin/docker-job-loop.sh", "notification-delivery", "1", "./bin/arclink-notification-delivery.sh"]'
         in body,
         "public-channel agent turns should stay on the Docker-capable delivery worker with a low-latency poll",
+    )
+    expect(
+        '["./bin/docker-job-loop.sh", "arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"]'
+        in body,
+        "ArcLink Wrapped should run as its own named job-loop service",
     )
     expect("./arclink-priv/secrets/ssh:/root/.ssh" not in body, body)
     expect("./arclink-priv/secrets/ssh:/home/arclink/.ssh" in body, body)
@@ -142,6 +148,8 @@ def test_compose_defines_full_stack_services() -> None:
     for socket_service in ("control-provisioner", "control-action-worker", "agent-supervisor", "notification-delivery", "curator-refresh"):
         block = extract(body, f"  {socket_service}:", "\n\n")
         expect("group_add:" in block, f"{socket_service} missing socket gid group_add\n{block}")
+    wrapped_block = extract(body, "  arclink-wrapped:", "\n\n")
+    expect("/var/run/docker.sock" not in wrapped_block, wrapped_block)
     expect(
         "/var/run/docker.sock:/var/run/docker.sock" in body,
         "agent-supervisor must intentionally mount the Docker socket to reconcile per-agent containers",

@@ -14,6 +14,7 @@ from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_chutes import evaluate_chutes_deployment_boundary, renewal_lifecycle_for_billing_state
 from arclink_product import primary_provider
+from arclink_wrapped import list_user_wrapped_reports, wrapped_admin_aggregate
 
 
 ARCLINK_ADMIN_ACTION_TYPES = frozenset(
@@ -38,6 +39,7 @@ ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUT
 ARCLINK_USER_DASHBOARD_SECTIONS = (
     "deployment_health",
     "access_links",
+    "wrapped",
     "bot_setup",
     "files",
     "code",
@@ -162,6 +164,7 @@ ARCLINK_ADMIN_DASHBOARD_SECTIONS = (
     "onboarding_funnel",
     "users",
     "deployments",
+    "wrapped",
     "payments",
     "infrastructure",
     "bots",
@@ -601,6 +604,12 @@ def _user_dashboard_sections(
             "links": [link for link in plugin_links if link["url"]],
         },
         {
+            "section": "wrapped",
+            "label": "ArcLink Wrapped",
+            "status": "ready",
+            "summary": "Captain-facing period reports and cadence controls",
+        },
+        {
             "section": "bot_setup",
             "label": "Bot Setup",
             "status": "contacted" if onboarding.get("first_contacted") else "pending",
@@ -824,6 +833,7 @@ def read_arclink_user_dashboard(
         ).fetchall()
     ]
     deployment_cards: list[dict[str, Any]] = []
+    wrapped = list_user_wrapped_reports(conn, user_id)
     for row in deployments:
         dep = dict(row)
         health = _service_health(conn, str(dep["deployment_id"]))
@@ -907,6 +917,7 @@ def read_arclink_user_dashboard(
             "updated_at": str(user["entitlement_updated_at"] or ""),
             "renewal_lifecycle": renewal_lifecycle_for_billing_state(str(user["entitlement_state"] or "")),
         },
+        "wrapped": wrapped,
         "deployments": deployment_cards,
     }
 
@@ -1318,6 +1329,7 @@ def read_arclink_admin_dashboard(
     audit_count = _count(conn, "SELECT COUNT(*) FROM arclink_audit_log")
     queued_action_count = _count(conn, "SELECT COUNT(*) FROM arclink_action_intents WHERE status = 'queued'")
     failed_job_count = _count(conn, "SELECT COUNT(*) FROM arclink_provisioning_jobs WHERE status = 'failed'")
+    wrapped = wrapped_admin_aggregate(conn)
     admin_sections = [
         {
             "section": "onboarding_funnel",
@@ -1331,6 +1343,16 @@ def read_arclink_admin_dashboard(
             "label": "Deployments",
             "status": "ready",
             "counts": {"visible": len(deployments)},
+        },
+        {
+            "section": "wrapped",
+            "label": "ArcLink Wrapped",
+            "status": "attention" if wrapped["failed_count"] else "ready",
+            "counts": {
+                "due": wrapped["due_count"],
+                "failed": wrapped["failed_count"],
+                "reports": sum(int(count) for count in wrapped["reports_by_status"].values()),
+            },
         },
         {
             "section": "payments",
@@ -1394,6 +1416,7 @@ def read_arclink_admin_dashboard(
         "provisioning_jobs": provisioning_jobs,
         "action_intents": action_intents,
         "action_execution_readiness": admin_action_execution_readiness(),
+        "wrapped": wrapped,
         "events": events,
         "audit_rows": audit_rows,
         "audit": audit_rows,

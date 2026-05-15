@@ -33,6 +33,7 @@ from arclink_onboarding import (
 from arclink_product import base_domain as default_base_domain
 from arclink_product import chutes_default_model, launch_phrase
 from arclink_provisioning import update_arclink_deployment_identity
+from arclink_wrapped import ArcLinkWrappedError, set_wrapped_frequency
 
 
 ARCLINK_PUBLIC_BOT_CHANNELS = frozenset({"telegram", "discord"})
@@ -124,6 +125,12 @@ ARCLINK_PUBLIC_BOT_AGENT_IDENTITY_COMMANDS = (
 )
 ARCLINK_PUBLIC_BOT_RENAME_AGENT_COMMANDS = ("/rename-agent", "/rename_agent", "rename-agent", "rename_agent")
 ARCLINK_PUBLIC_BOT_RETITLE_AGENT_COMMANDS = ("/retitle-agent", "/retitle_agent", "retitle-agent", "retitle_agent")
+ARCLINK_PUBLIC_BOT_WRAPPED_FREQUENCY_COMMANDS = (
+    "/wrapped-frequency",
+    "/wrapped_frequency",
+    "wrapped-frequency",
+    "wrapped_frequency",
+)
 ARCLINK_PUBLIC_BOT_ADD_AGENT_COMMANDS = frozenset(
     {"/add-agent", "/add_agent", "add-agent", "add agent", "hire another agent", "add another agent"}
 )
@@ -301,6 +308,25 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
                 "name": "title",
                 "description": "New Agent title",
                 "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="wrapped_frequency",
+        telegram_command="wrapped_frequency",
+        discord_command="wrapped-frequency",
+        description="Set ArcLink Wrapped cadence",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "frequency",
+                "description": "daily, weekly, or monthly",
+                "required": True,
+                "choices": [
+                    {"name": "Daily", "value": "daily"},
+                    {"name": "Weekly", "value": "weekly"},
+                    {"name": "Monthly", "value": "monthly"},
+                ],
             },
         ),
     ),
@@ -3994,6 +4020,56 @@ def handle_arclink_public_bot_turn(
             session=session,
             deployment=deployment,
             agent_title=retitle_value,
+        )
+
+    wrapped_frequency_value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_WRAPPED_FREQUENCY_COMMANDS)
+    if wrapped_frequency_value is not None:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        user_id = str((deployment or {}).get("user_id") or (session or {}).get("user_id") or "").strip()
+        if not user_id:
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="wrapped_frequency_unavailable",
+                reply=_need_finished_onboarding_reply(),
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Take Me Aboard", command="/packages"),),
+            )
+        requested_frequency = wrapped_frequency_value.strip().lower()
+        if not requested_frequency:
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="wrapped_frequency_missing",
+                reply="Send the Wrapped cadence after the command: `/wrapped-frequency daily`, `/wrapped-frequency weekly`, or `/wrapped-frequency monthly`.",
+                session=session,
+                deployment=deployment,
+            )
+        try:
+            updated = set_wrapped_frequency(
+                conn,
+                user_id,
+                requested_frequency,
+                actor_id=user_id,
+                reason="Captain updated ArcLink Wrapped cadence from Raven",
+            )
+        except ArcLinkWrappedError:
+            return _turn(
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                action="wrapped_frequency_invalid",
+                reply="ArcLink Wrapped cadence can be daily, weekly, or monthly. Nothing more frequent than daily is supported.",
+                session=session,
+                deployment=deployment,
+            )
+        return _turn(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            action="wrapped_frequency_updated",
+            reply=f"ArcLink Wrapped is now set to {updated['wrapped_frequency']}.",
+            session=session,
+            deployment=deployment,
         )
 
     agent_passthrough = _agent_passthrough_message(message, command)

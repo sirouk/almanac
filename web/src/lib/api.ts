@@ -63,6 +63,11 @@ export const api = {
 
   userComms: () => request("/user/comms", {}, "user"),
 
+  userWrapped: () => request("/user/wrapped", {}, "user"),
+
+  updateWrappedFrequency: (body: Record<string, string>) =>
+    request("/user/wrapped-frequency", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   userBilling: () => request("/user/billing", {}, "user"),
 
   userProvisioning: () => request("/user/provisioning", {}, "user"),
@@ -106,6 +111,8 @@ export const api = {
   },
 
   adminComms: () => request("/admin/comms", {}, "admin"),
+
+  adminWrapped: () => request("/admin/wrapped", {}, "admin"),
 
   adminServiceHealth: () => request("/admin/service-health", {}, "admin"),
 

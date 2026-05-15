@@ -169,6 +169,55 @@ references; raw files and file bodies do not belong in the message row.
 Captains read narratives at `GET /api/v1/user/comms`. Operators read metadata
 only at CIDR-gated `GET /api/v1/admin/comms`.
 
+**ArcLink Wrapped:** Captain period reports are owned by
+`python/arclink_wrapped.py`. That module owns cadence validation, scoped reads,
+novelty scoring, redaction, report persistence, scheduler execution, delivery
+enqueue, and aggregate Operator reads. API routes, dashboard code, public bot
+handlers, and notification delivery must call into that module instead of
+duplicating Wrapped SQL or privacy decisions.
+
+Wrapped generation is read-only over Captain state. It may read the Captain's
+own Pods, same-Captain Comms, audit/event rows, scoped memory cards, and
+caller-supplied read-only Hermes session and vault-reconciler summaries. It may
+write `arclink_wrapped_reports`, `notification_outbox`, and audit/event rows
+for cadence changes or failures. It must not mutate sessions, memory files,
+vault content, providers, payments, deployments, bot registrations, or Hermes
+core.
+
+Cadence is limited to `daily`, `weekly`, and `monthly`; missing cadence defaults
+to `daily`, and anything more frequent than daily is rejected. Captain-facing
+routes are `GET /api/v1/user/wrapped` and CSRF-gated
+`POST /api/v1/user/wrapped-frequency`. Raven's `/wrapped-frequency` handler
+accepts `daily`, `weekly`, or `monthly` and uses the same mutation path without
+requiring live command registration during local validation.
+
+The Docker scheduler is the named `arclink-wrapped` job-loop service running
+`bin/arclink-wrapped.sh`. It retries failed reports on the next eligible cycle
+and queues persistent failures as Operator notifications without report
+narrative. The service does not require the Docker socket. Captain delivery is
+queued through `notification_outbox` with `target_kind='captain-wrapped'`;
+`python/arclink_notification_delivery.py` owns final delivery and marks the
+matching report delivered after the outbox row succeeds. Supported quiet-hours
+windows use `HH:MM-HH:MM`; unsupported free-form quiet-hours text is treated as
+no delay.
+
+Operators can inspect aggregate status at `GET /api/v1/admin/wrapped` and in
+the admin dashboard Wrapped tab. These surfaces expose report counts, due
+counts, failure counts, latest scores, and Captain ids only. They must not
+include Captain report text, Markdown, or raw ledger snippets.
+
+**Wrapped troubleshooting:**
+- Missing reports: check `arclink-wrapped` is present in the Docker control
+  stack and that active users have no existing successful report for the due
+  period.
+- Persistent failures: inspect failed `arclink_wrapped_reports` rows and
+  Operator notification rows; failure metadata must stay redacted.
+- Delivery not marked delivered: check the matching `captain-wrapped`
+  `notification_outbox` row, public channel metadata, and notification delivery
+  logs before re-running the scheduler.
+- Operator view includes narrative: treat that as a privacy regression and
+  repair the aggregate read model before exposing the admin route.
+
 **OpenAPI contract:** `GET /api/v1/openapi.json` (no auth). Static copy at
 `docs/openapi/arclink-v1.openapi.json`.
 

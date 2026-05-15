@@ -14,6 +14,35 @@ Land seven interlocking ArcLink product surfaces:
 
 Ralphie should treat code and focused regression tests as truth when docs disagree. Update docs after behavior is in place.
 
+## Landing Status (2026-05-14)
+
+This steering file remains the original mission spec. The implementation record
+is now source, tests, and `research/BUILD_COMPLETION_NOTES.md`. The task
+checkboxes below are preserved as the original build map; this landing section
+is the authoritative closeout status for the six ArcPod Captain Console waves.
+
+| Wave | Scope | Status |
+| --- | --- | --- |
+| 0 | Vocabulary canon, schema foundations, SOUL overlay variables, drift checks | Landed in `b32e1da` |
+| 1 | Agent Name and Agent Title onboarding on web / Telegram / Discord, post-onboarding rename/retitle, identity projection | Landed in `b32e1da` |
+| 2 | Fleet inventory, manual / Hetzner / Linode inventory providers, ArcPod Standard Unit, ASU-aware placement | Landed in `b32e1da` |
+| 3 | 1:1 Pod migration and executable `reprovision` admin action | Landed in `aec064e` |
+| 4 | Pod-to-Pod Comms, share-grant-gated cross-Captain comms, MCP tools, Captain/Operator Comms Console | Landed in `faf33dc` |
+| 5 | Crew Training, Crew Recipes, deterministic fallback generation, `/train-crew`, `/whats-changed`, additive SOUL overlay | Landed in `5fd4aff` |
+| 6 | ArcLink Wrapped report generation, scheduler, delivery, dashboard history, admin aggregate view, `/wrapped-frequency` | Complete in the final Wave 6 worktree; ready for final commit |
+
+Closeout notes:
+
+- The original onboarding defect is closed: the web `Name The Agent` step now
+  accepts Agent Name and Agent Title, public bots prompt and command both
+  fields, and identity flows through onboarding, Stripe metadata, deployments,
+  provisioning, and managed-context projection.
+- The Wave-0 schema is no longer orphan scaffolding: inventory, Comms,
+  migration, Crew Training, and Wrapped each read/write their owning tables.
+- Live provider and host proof remains operator-gated. No production deploy,
+  upgrade, remote SSH migration, live Stripe/Chutes/Cloudflare/Tailscale,
+  Telegram/Discord mutation, Notion proof, or live Wrapped delivery was run.
+
 ## Operating Guardrails
 
 - Read `AGENTS.md` before changing deploy, onboarding, service, runtime, or knowledge code.

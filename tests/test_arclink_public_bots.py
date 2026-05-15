@@ -386,6 +386,7 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     expect("agent_identity" in telegram_names, str(telegram))
     expect("rename_agent" in telegram_names, str(telegram))
     expect("retitle_agent" in telegram_names, str(telegram))
+    expect("wrapped_frequency" in telegram_names, str(telegram))
     expect("upgrade_hermes" in telegram_names, str(telegram))
     expect("agent" in telegram_names, str(telegram))
     expect("connect-notion" not in telegram_names, str(telegram))
@@ -394,12 +395,14 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
 
     discord = bots.arclink_public_bot_discord_application_commands()
     discord_names = {item["name"] for item in discord}
-    expect({"arclink", "agent", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
+    expect({"arclink", "agent", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "wrapped-frequency", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
     expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"founders", "sovereign", "scale"}, str(plan))
     agent = next(item for item in discord if item["name"] == "agent")
     expect(agent["options"][0]["name"] == "message" and agent["options"][0]["required"] is True, str(agent))
+    wrapped = next(item for item in discord if item["name"] == "wrapped-frequency")
+    expect({choice["value"] for choice in wrapped["options"][0]["choices"]} == {"daily", "weekly", "monthly"}, str(wrapped))
     print("PASS test_public_bot_action_catalog_has_real_platform_commands")
 
 
@@ -1588,9 +1591,10 @@ def main() -> int:
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_can_rename_and_retitle_live_agent()
+    test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
-    print("PASS all 28 ArcLink public bot tests")
+    print("PASS all 29 ArcLink public bot tests")
     return 0
 
 
@@ -1862,6 +1866,45 @@ def test_public_bot_can_rename_and_retitle_live_agent() -> None:
         ).fetchone()
         expect(audit["n"] == 2, str(dict(audit)))
     print("PASS test_public_bot_can_rename_and_retitle_live_agent")
+
+
+def test_public_bot_can_update_wrapped_frequency() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_wrapped_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_wrapped_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-wrapped")
+
+    missing = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/wrapped-frequency",
+    )
+    expect(missing.action == "wrapped_frequency_missing", str(missing))
+
+    invalid = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/wrapped-frequency hourly",
+    )
+    expect(invalid.action == "wrapped_frequency_invalid", str(invalid))
+
+    updated = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/wrapped-frequency weekly",
+    )
+    expect(updated.action == "wrapped_frequency_updated", str(updated))
+    row = conn.execute("SELECT wrapped_frequency FROM arclink_users WHERE user_id = ?", (seeded["user_id"],)).fetchone()
+    expect(row["wrapped_frequency"] == "weekly", str(dict(row)))
+    audit = conn.execute(
+        "SELECT metadata_json FROM arclink_audit_log WHERE target_id = ? AND action = 'wrapped_frequency_updated'",
+        (seeded["user_id"],),
+    ).fetchone()
+    expect(audit is not None and "weekly" in audit["metadata_json"], str(audit))
+    print("PASS test_public_bot_can_update_wrapped_frequency")
 
 
 def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> None:

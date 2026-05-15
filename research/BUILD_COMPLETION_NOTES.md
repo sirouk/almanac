@@ -1,5 +1,328 @@
 # Build Completion Notes
 
+## 2026-05-14 ArcPod Captain Console Mission Closeout
+
+Scope: final closeout for the ArcPod Captain Console mission. This entry
+reconciles the six waves landed between commits `b32e1da` and the current Wave
+6 worktree, verifies the original onboarding Agent Name / Agent Title bug is
+closed across web and public bots, records the vocabulary and route/document
+sweep, and states the live gates that remain operator-authorized work. No
+private state, live secrets, user Hermes homes, deploy keys, production
+services, payment/provider mutation, public bot command registration, deploy,
+upgrade, Docker install/upgrade, or Hermes core path was touched.
+
+Landing map:
+
+- Wave 0: vocabulary canon, schema foundations, SOUL overlay variables, and
+  drift checks landed in `b32e1da`.
+- Wave 1: web / Telegram / Discord Agent Name and Agent Title onboarding,
+  post-onboarding rename/retitle, dashboard identity controls, Stripe metadata,
+  deployment rows, and SOUL identity projection landed in `b32e1da`.
+- Wave 2: `./deploy.sh control inventory`, manual / Hetzner / Linode inventory
+  providers, ArcPod Standard Unit calculation, and ASU-aware placement landed
+  in `b32e1da`.
+- Wave 3: 1:1 Pod migration and executable `reprovision` admin action landed
+  in `aec064e`.
+- Wave 4: Pod-to-Pod Comms, share-grant-gated cross-Captain comms, MCP tools,
+  and Captain/Operator Comms Console landed in `faf33dc`.
+- Wave 5: Crew Training, Crew Recipes, deterministic fallback generation,
+  `/train-crew`, `/whats-changed`, and additive SOUL overlay application landed
+  in `5fd4aff`.
+- Wave 6: ArcLink Wrapped report generation, scheduler, delivery, dashboard
+  history, admin aggregate view, and `/wrapped-frequency` are complete in the
+  current Wave 6 worktree and ready for the final Wave 6 commit.
+
+Original onboarding bug verification:
+
+- Web onboarding now renders real `Agent Name` and `Agent Title` inputs under
+  the `Name The Agent` step (`web/src/app/onboarding/page.tsx`) and persists
+  both fields through resume state. Browser coverage asserts both labels and
+  the `Name The Agent` step in `web/tests/browser/product-checks.spec.ts`.
+- Hosted onboarding stores `agent_name` and `agent_title`, writes Stripe
+  metadata keys `arclink_agent_name` and `arclink_agent_title`, creates
+  deployment rows with per-Pod Agent names (`Atlas`, `Atlas (Chief)`, `Atlas
+  (Bosun)` for Scale), and writes `arclink_users.agent_title`; regression
+  coverage lives in `tests/test_arclink_onboarding.py`.
+- Telegram and Discord public bot command metadata includes `agent_name` and
+  `agent_title`; the public bot flow prompts `prompt_agent_name` and
+  `prompt_agent_title` before package selection and supports `/agent-name`,
+  `/agent-title`, `/agent-identity`, `/rename-agent`, and `/retitle-agent`.
+  `tests/test_arclink_public_bots.py` verifies capture into
+  `arclink_onboarding_sessions`, post-onboarding rename/retitle updates
+  `arclink_deployments`, and the identity projection contains the new Agent
+  label/title.
+- Provisioning consumes the stored identity via `python/arclink_provisioning.py`
+  and writes `ARCLINK_AGENT_NAME`, `ARCLINK_AGENT_TITLE`, and
+  `state/arclink-identity-context.json` so managed-context can inject the new
+  name/title without rewriting memories or sessions.
+
+Closeout sweep:
+
+- Vocabulary sweep: Captain-facing surfaces were checked for stale
+  `Sovereign Pod` / `Sovereign deployment` copy and migrated to the canon in
+  `docs/arclink/vocabulary.md` where applicable. Operator/backend surfaces keep
+  technical terms such as `deployment`, `user`, and `operator`.
+- Cross-wave schema coherence: all five Wave-0 tables are now owned by runtime
+  code: `arclink_inventory_machines` (inventory/ASU), `arclink_pod_messages`
+  (Comms), `arclink_pod_migrations` (migration), `arclink_crew_recipes` (Crew
+  Training), and `arclink_wrapped_reports` (Wrapped). No Wave-0 table remains
+  purely decorative schema.
+- Route/document reconciliation: `docs/API_REFERENCE.md`,
+  `docs/openapi/arclink-v1.openapi.json`, `docs/arclink/architecture.md`,
+  `docs/DOC_STATUS.md`, `docs/arclink/operations-runbook.md`,
+  `docs/arclink/control-node-production-runbook.md`, and
+  `docs/arclink/wrapped.md` were updated for the final Waves 0-6 surface.
+- Steering reconciliation: `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md`
+  now carries a closeout status map tying each wave to the landing commit or
+  final Wave 6 worktree.
+
+Validation recorded across the wave entries above:
+
+- Focused Python suites for schema, onboarding, public bots, Telegram, Discord,
+  hosted API, API auth, provisioning, plugins, fleet, ASU, inventory providers,
+  pod migration, action worker, admin actions, pod comms, MCP surfaces, crew
+  recipes, Wrapped, dashboard, Docker, deploy regressions, evidence,
+  notification delivery, sovereign worker, and audit trust-boundary regression
+  checks passed in their respective wave validation entries.
+- Web validation was recorded with `npm test`, `npm run lint`, `npm run build`,
+  and `npm run test:browser`; browser proof reported 45 passed and 3 skipped
+  desktop-only mobile-layout cases in the local environment.
+- Shell validation recorded `bash -n deploy.sh bin/*.sh test.sh`; diff hygiene
+  recorded `git diff --check`.
+
+Skipped live gates and residual risks:
+
+- No live Stripe, Chutes, Cloudflare, Tailscale, Hetzner, Linode, Telegram,
+  Discord, Notion, Docker install/upgrade, deploy/upgrade, production service
+  restart, remote SSH migration, real bot delivery, or live ArcPod Wrapped
+  delivery proof was run. Those remain operator-authorized live proof work.
+- The persistent trust-boundary residuals outside this mission remain as
+  previously recorded: Docker socket blast radius, control upgrade upstream
+  pull policy, generated secret cleanup, Cloudflare token env handling,
+  idempotency surface joins, Curator approval hardening, and the
+  plan-aware additional-agent price alias.
+- `ralphie.sh` was intentionally kept out of ArcLink product commits. Its local
+  YOLO default/config change is an operator tooling choice, not part of the
+  ArcLink product surface.
+
+## 2026-05-14 Wrapped API, Dashboard, And Bot Slice
+
+Scope: completed the next highest-priority Phase 3 Wrapped surfaces from
+`IMPLEMENTATION_PLAN.md` while preserving the existing audit gate,
+core/scheduler, and delivery work. This pass stayed local: no private state,
+live secrets, user Hermes homes, provider/payment mutation, public bot command
+registration, deploy, upgrade, Docker install/upgrade, or Hermes core path was
+touched.
+
+Files changed:
+
+- `python/arclink_wrapped.py`: added the Captain-visible Wrapped history read
+  model that returns redacted rendered text/Markdown and excludes raw scoped
+  ledger snippets.
+- `python/arclink_api_auth.py` and `python/arclink_hosted_api.py`: added
+  authenticated `GET /user/wrapped`, CSRF-gated `POST
+  /user/wrapped-frequency`, and aggregate-only `GET /admin/wrapped`.
+- `python/arclink_dashboard.py`: added Wrapped history/frequency to the
+  Captain dashboard snapshot and aggregate-only Wrapped state to the admin
+  dashboard snapshot.
+- `python/arclink_public_bots.py`: added pure `/wrapped-frequency
+  daily|weekly|monthly` handling plus Telegram underscore and Discord hyphen
+  command metadata without live command registration.
+- `web/src/lib/api.ts`, `web/src/app/dashboard/page.tsx`, and
+  `web/src/app/admin/page.tsx`: added API client helpers, Captain Wrapped tab
+  with cadence selector and report history, and Operator Wrapped tab with
+  aggregate status/score only.
+- `docs/API_REFERENCE.md`, `docs/openapi/arclink-v1.openapi.json`, and
+  `docs/arclink/wrapped.md`: documented the new routes and privacy boundary.
+- `tests/test_arclink_dashboard.py`, `tests/test_arclink_hosted_api.py`, and
+  `tests/test_arclink_public_bots.py`: added regression coverage for user
+  scoping, CSRF, redaction, aggregate-only admin output, dashboard snapshots,
+  web API route parity, and the Raven command handler.
+
+Validation run:
+
+- `python3 -m py_compile python/arclink_wrapped.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_dashboard.py python/arclink_public_bots.py` passed.
+- `python3 tests/test_arclink_wrapped.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `npm --prefix web run lint` passed.
+- `npm --prefix web test` passed.
+- `npm --prefix web run build` passed.
+- `npm --prefix web run test:browser` passed with 45 passed and 3 skipped.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks and deferrals:
+
+- This slice does not claim full Mission Closeout completion. Vocabulary sweep,
+  original onboarding end-to-end verification, cross-wave orphan-schema
+  reconciliation, full doc reconciliation, steering-doc reconciliation, and
+  comprehensive six-wave closeout notes remain open in `IMPLEMENTATION_PLAN.md`.
+- The bot command path is covered as a pure handler; live Telegram/Discord
+  command registration remains operator-gated.
+- Live delivery, production deploy/upgrade, Docker install/upgrade,
+  payment/provider flows, and external credential-dependent proof were not run.
+
+## 2026-05-14 Build Phase Verification Addendum
+
+Scope: preserved the existing Wrapped scheduler/delivery implementation work,
+re-ran the highest-priority audit gate and focused Wrapped validation, and
+confirmed no additional source repair was needed in this pass. No private
+state, live secrets, user Hermes homes, live provider/payment flows, public bot
+mutation, deploy, upgrade, Docker install/upgrade, or Hermes core path was
+touched.
+
+Files changed in this pass:
+
+- `research/BUILD_COMPLETION_NOTES.md`: recorded the expanded local validation
+  outcome and residual risks for the current BUILD phase.
+
+Validation run:
+
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_wrapped.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_dashboard.py` passed.
+- `python3 tests/test_arclink_public_bots.py` passed.
+- `python3 -m py_compile python/arclink_wrapped.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_dashboard.py python/arclink_public_bots.py python/arclink_notification_delivery.py python/arclink_provisioning.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks and deferrals:
+
+- This addendum still does not claim terminal Wave 6 or Mission Closeout
+  completion. Hosted API Wrapped routes, dashboard Wrapped surfaces,
+  `/wrapped-frequency` bot command wiring, OpenAPI/API-reference
+  reconciliation, and the full closeout sweep remain open in
+  `IMPLEMENTATION_PLAN.md`.
+- The local audit gate continues to treat `ME-11` and `ME-25` as
+  fiction/outdated regression-awareness items only.
+- Web validation was not rerun in this addendum because this pass did not touch
+  `web/src/**`; the broader closeout web floor remains required before final
+  mission `done`.
+
+## 2026-05-14 Wrapped Scheduler And Delivery Slice
+
+Scope: continued the highest-priority `IMPLEMENTATION_PLAN.md` Wave 6 tasks
+after the audit gate and Wrapped core were green. This slice stayed local:
+no `arclink-priv`, live secrets, user Hermes homes, production deploys,
+provider/payment mutations, public bot command registration, Docker
+install/upgrade, or Hermes core edits were touched.
+
+Files changed:
+
+- `python/arclink_wrapped.py`: added audited cadence mutation,
+  quiet-hours-aware `next_attempt_at` calculation, Captain channel resolution,
+  `captain-wrapped` notification enqueue, a one-cycle scheduler, failed-report
+  retry recording, and persistent-failure Operator notifications without
+  Captain narrative.
+- `python/arclink_notification_delivery.py`: added `captain-wrapped` delivery
+  through the existing public-channel delivery rail and marks matching Wrapped
+  reports delivered after successful outbox delivery.
+- `bin/arclink-wrapped.sh`: added the thin canonical runner for the Wrapped
+  scheduler.
+- `compose.yaml` and `python/arclink_provisioning.py`: added the named
+  `arclink-wrapped` Docker job-loop service with no Docker socket mount.
+- `tests/test_arclink_wrapped.py`: extended coverage for cadence auditing,
+  quiet-hours delay, outbox shape/privacy, failed retry, and persistent
+  Operator notification behavior.
+- `tests/test_arclink_notification_delivery.py`: added `captain-wrapped`
+  delivery coverage and report delivered-state update coverage.
+- `tests/test_arclink_docker.py` and `tests/test_arclink_provisioning.py`:
+  asserted the named scheduler service/runner exists and remains outside the
+  Docker socket boundary.
+- `docs/arclink/wrapped.md` and `research/CODEBASE_MAP.md`: reconciled the
+  implemented scheduler/delivery state.
+
+Validation run:
+
+- `python3 -m py_compile python/arclink_wrapped.py python/arclink_notification_delivery.py python/arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_wrapped.py` passed.
+- `python3 tests/test_arclink_notification_delivery.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `git diff --check` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks and deferrals:
+
+- This still does not claim full Wave 6 completion. Hosted API routes,
+  dashboard Wrapped tab, `/wrapped-frequency` public bot command,
+  OpenAPI/API-reference reconciliation, and the full Mission Closeout sweep
+  remain open.
+- Quiet-hours support intentionally parses the existing supported
+  `HH:MM-HH:MM` window format and treats unsupported free-form text as no
+  delay rather than inventing a new per-Captain scheduling schema.
+- Live Telegram/Discord delivery, production deploy/upgrade, Docker
+  install/upgrade, payment/provider flows, and public bot command registration
+  remain operator-gated and were not run.
+
+## 2026-05-14 Audit Gate And Wrapped Core Slice
+
+Scope: executed the highest-priority current `IMPLEMENTATION_PLAN.md` tasks:
+Wave 1 trust-boundary regression gate, then the first ArcLink Wrapped core
+slice. No `arclink-priv`, live secrets, user Hermes homes, production deploys,
+provider/payment mutations, public bot command registration, or Hermes core
+edits were touched.
+
+Files changed:
+
+- `IMPLEMENTATION_PLAN.md`: restored the explicit domain-or-Tailscale ingress
+  constraint required by the Docker documentation regression gate.
+- `python/arclink_wrapped.py`: added scoped Wrapped report generation,
+  frequency/period helpers, due-Captain selection, deterministic novelty
+  scoring, redacted plain-text/Markdown rendering, report persistence in
+  `arclink_wrapped_reports.ledger_json`, and aggregate-only admin status.
+- `tests/test_arclink_wrapped.py`: added regression coverage for Captain
+  scoping, redaction, deterministic score output, report persistence,
+  invalid more-than-daily cadence rejection, failed-report retry eligibility,
+  and admin privacy.
+- `docs/arclink/wrapped.md`: documented the `wrapped_novelty_v1` formula and
+  aggregate-only Operator boundary.
+
+Validation run:
+
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` initially failed because the plan no
+  longer mentioned domain-or-Tailscale ingress; after the plan repair it
+  passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_wrapped.py` passed.
+- `python3 tests/test_arclink_wrapped.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+
+Known risks and deferrals:
+
+- This slice does not claim full Wave 6 completion. Scheduler service,
+  notification delivery enqueue/quiet-hours handling, hosted API routes,
+  dashboard Wrapped tab, `/wrapped-frequency` public bot command, OpenAPI/API
+  reference reconciliation, and the full Mission Closeout sweep remain open.
+- `ME-11` and `ME-25` from the May 11 audit remain fiction/outdated regression
+  awareness items only, not open implementation backlog.
+- Live Stripe, Chutes, Cloudflare, Tailscale, Telegram, Discord, Notion,
+  remote Docker host, deploy/upgrade, Docker install/upgrade, public-bot
+  mutation, and payment-flow proof remain operator-gated and were not run.
+
 ## 2026-05-14 ArcPod Captain Console Wave 0/1 Build Slice
 
 Scope: executed the highest-priority current ArcPod Captain Console plan slice:

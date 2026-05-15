@@ -204,6 +204,39 @@ credential, or if generated output fails the unsafe-output boundary for URLs,
 shell commands, or jailbreak patterns, ArcLink uses a deterministic preset-only
 fallback and labels that state in API, dashboard, and bot responses.
 
+## ArcLink Wrapped
+
+ArcLink Wrapped is the Captain-facing period report for scoped activity across
+the Captain's own Pods, same-Captain Comms, audit/event rows, read-only Hermes
+session counts, vault reconciler deltas, and memory synthesis cards. The
+implementation owner is `python/arclink_wrapped.py`; API, dashboard, bot, and
+scheduler surfaces should not duplicate Wrapped SQL, scoring, redaction, or
+privacy rules.
+
+The scheduler is the named Docker job-loop service `arclink-wrapped`, running
+`bin/arclink-wrapped.sh`. It generates due reports on each local loop, respects
+per-Captain cadence (`daily`, `weekly`, or `monthly`; default `daily`), retries
+failed reports on the next eligible cycle, and queues persistent failures to
+Operator notification rows without Captain narrative.
+
+Captain delivery goes through `notification_outbox` with
+`target_kind='captain-wrapped'`; delivery resolution and final delivered-state
+marking remain owned by `python/arclink_notification_delivery.py`. Supported
+quiet-hours windows such as `22:00-08:00` delay `next_attempt_at`. Unsupported
+free-form quiet-hours text is treated as no delay rather than inventing a new
+scheduling contract.
+
+Captain surfaces are `GET /user/wrapped`, `POST /user/wrapped-frequency`, the
+dashboard Wrapped tab, and Raven's pure `/wrapped-frequency` handler for
+`daily`, `weekly`, or `monthly`. Operator surfaces are `GET /admin/wrapped`
+and the admin Wrapped panel; they expose aggregate status and novelty scores
+only, never report text, Markdown, or raw ledger snippets.
+
+Production proof should include `./deploy.sh control health`, the focused
+Wrapped and notification tests, and inspection of `arclink-wrapped` service
+logs after the control stack is up. Live bot command registration and webhook
+mutation remain separate operator-gated actions.
+
 ## Teardown
 
 Cancellation and teardown are explicit lifecycle states, not implicit deletion.

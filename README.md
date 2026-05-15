@@ -1232,6 +1232,7 @@ docs/arclink/foundation.md           # behavior notes and config
 docs/arclink/foundation-runbook.md   # assumptions, ownership, runbook, repair
 docs/arclink/architecture.md         # module map and data flow
 docs/arclink/operations-runbook.md   # host operations, health, scale ops
+docs/arclink/wrapped.md              # ArcLink Wrapped ownership and scheduler behavior
 docs/arclink/brand-system.md         # visual identity and voice
 docs/arclink/sovereign-control-node.md # control-node deploy and logic trace
 docs/arclink/control-node-production-runbook.md # proof-gated production checklist

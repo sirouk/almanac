@@ -16,6 +16,51 @@
     return "/api/plugins/" + PLUGIN + path;
   }
 
+  const PREVIEW_FULLSCREEN_CLASS = "hermes-plugin-preview-fullscreen-active";
+  const PREVIEW_FULLSCREEN_STYLE_ID = "hermes-plugin-preview-fullscreen-style";
+  const PREVIEW_FULLSCREEN_CSS =
+    "html." + PREVIEW_FULLSCREEN_CLASS + ",body." + PREVIEW_FULLSCREEN_CLASS + "{overflow:hidden!important;}" +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " aside," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " nav," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [role='navigation']," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [data-sidebar]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [data-testid*='sidebar' i]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='sidebar' i]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='Sidebar']{" +
+    "visibility:hidden!important;pointer-events:none!important;}" +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " .hermes-drive-preview-fullscreen," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " .hermes-code-preview-fullscreen{" +
+    "z-index:2147483000!important;}";
+
+  function previewFullscreenDocuments() {
+    const docs = [document];
+    try {
+      if (window.parent && window.parent !== window && window.parent.document) docs.push(window.parent.document);
+    } catch (error) {
+      // Cross-origin plugin hosts cannot be patched; the local overlay z-index still applies.
+    }
+    return docs;
+  }
+
+  function setPreviewFullscreenChrome(active) {
+    previewFullscreenDocuments().forEach(function (doc) {
+      try {
+        if (!doc) return;
+        let style = doc.getElementById(PREVIEW_FULLSCREEN_STYLE_ID);
+        if (!style && doc.head) {
+          style = doc.createElement("style");
+          style.id = PREVIEW_FULLSCREEN_STYLE_ID;
+          style.textContent = PREVIEW_FULLSCREEN_CSS;
+          doc.head.appendChild(style);
+        }
+        if (doc.documentElement) doc.documentElement.classList.toggle(PREVIEW_FULLSCREEN_CLASS, !!active);
+        if (doc.body) doc.body.classList.toggle(PREVIEW_FULLSCREEN_CLASS, !!active);
+      } catch (error) {
+        // Best-effort chrome suppression must never break preview rendering.
+      }
+    });
+  }
+
   function parentPath(path) {
     if (!path || path === "/") return "/";
     const parts = path.replace(/^\/+|\/+$/g, "").split("/");
@@ -961,7 +1006,20 @@
       if (!state.previewFullscreen || !state.openFile) return null;
       return h(
         "div",
-        { className: "hermes-code-preview-fullscreen", role: "dialog", "aria-modal": "true", "aria-label": "File preview" },
+        {
+          className: "hermes-code-preview-fullscreen",
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-label": "File preview",
+          tabIndex: -1,
+          onKeyDown: function (event) {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              patch({ previewFullscreen: false });
+            }
+          },
+        },
         h(
           "div",
           { className: "hermes-code-preview-fullbar" },
@@ -1433,6 +1491,37 @@
     useEffect(function () {
       loadStatus();
     }, []);
+
+    useEffect(function () {
+      setPreviewFullscreenChrome(state.previewFullscreen);
+      if (state.previewFullscreen) {
+        window.setTimeout(function () {
+          const node = document.querySelector(".hermes-code-preview-fullscreen");
+          if (node && node.focus) node.focus({ preventScroll: true });
+        }, 0);
+      }
+      return function () {
+        setPreviewFullscreenChrome(false);
+      };
+    }, [state.previewFullscreen]);
+
+    useEffect(function () {
+      function closeFullscreen(event) {
+        if (event.key !== "Escape" || !state.previewFullscreen) return;
+        event.preventDefault();
+        event.stopPropagation();
+        patch({ previewFullscreen: false });
+      }
+      const docs = previewFullscreenDocuments();
+      docs.forEach(function (doc) {
+        doc.addEventListener("keydown", closeFullscreen, true);
+      });
+      return function () {
+        docs.forEach(function (doc) {
+          doc.removeEventListener("keydown", closeFullscreen, true);
+        });
+      };
+    }, [state.previewFullscreen]);
 
     useEffect(function () {
       function beforeUnload(event) {

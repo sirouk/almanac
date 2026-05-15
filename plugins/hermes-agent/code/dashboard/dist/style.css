@@ -894,7 +894,7 @@
   position: fixed;
   right: 0;
   top: 0;
-  z-index: 60;
+  z-index: 2147483000;
 }
 
 .hermes-code-preview-fullscreen .hermes-code-text-preview,

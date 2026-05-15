@@ -50,6 +50,12 @@ systemd_env_line() {
   printf 'Environment=%s\n' "$(systemd_quote_value "$key=$value")"
 }
 
+systemd_utf8_env_lines() {
+  systemd_env_line LANG "${ARCLINK_UTF8_LOCALE:-C.UTF-8}"
+  systemd_env_line LC_ALL "${ARCLINK_UTF8_LOCALE:-C.UTF-8}"
+  systemd_env_line PYTHONIOENCODING "${PYTHONIOENCODING:-utf-8}"
+}
+
 if [[ -z "$HERMES_BIN" || ! -x "$HERMES_BIN" ]]; then
   if command -v hermes >/dev/null 2>&1; then
     HERMES_BIN="$(command -v hermes)"
@@ -295,6 +301,7 @@ Description=ArcLink user-agent refresh for $AGENT_ID
 Type=oneshot
 $(systemd_env_line ARCLINK_AGENT_ID "$AGENT_ID")
 $(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(systemd_utf8_env_lines)
 $(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 $(systemd_env_line ARCLINK_SHARED_REPO_DIR "$SHARED_REPO_DIR")
 $(systemd_env_line ARCLINK_AGENTS_STATE_DIR "$ARCLINK_AGENTS_STATE_DIR")
@@ -321,6 +328,7 @@ Description=Run an immediate Hermes-home backup for $AGENT_ID
 [Service]
 Type=oneshot
 $(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(systemd_utf8_env_lines)
 $(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 ExecStart="$SHARED_REPO_DIR/bin/backup-agent-home.sh" "$HERMES_HOME"
 EOF
@@ -364,6 +372,7 @@ Description=ArcLink user-agent messaging gateway for $AGENT_ID
 
 [Service]
 $(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(systemd_utf8_env_lines)
 $(if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then systemd_env_line HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"; fi)
 $(systemd_env_line HERMES_CRON_SCRIPT_TIMEOUT "1800")
 $(systemd_env_line TELEGRAM_REACTIONS "true")
@@ -389,6 +398,7 @@ Description=ArcLink Hermes dashboard for $AGENT_ID
 
 [Service]
 $(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(systemd_utf8_env_lines)
 $(systemd_env_line DRIVE_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
 $(systemd_env_line CODE_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
 $(systemd_env_line TERMINAL_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
@@ -413,6 +423,7 @@ Requires=arclink-user-agent-dashboard.service
 
 [Service]
 $(systemd_env_line HERMES_HOME "$HERMES_HOME")
+$(systemd_utf8_env_lines)
 WorkingDirectory=$HERMES_HOME
 ExecStart="$PYTHON3_BIN" "$SHARED_REPO_DIR/python/arclink_dashboard_auth_proxy.py" --listen-host 127.0.0.1 --listen-port $dashboard_proxy_port --target http://127.0.0.1:$dashboard_backend_port --access-file "$ACCESS_STATE_FILE" --realm "Hermes"
 Restart=always

@@ -591,6 +591,23 @@ def test_auto_provision_failure_updates_onboarding_session_and_notifies_user() -
             os.environ.update(old_env)
 
 
+def test_auto_provision_bootstrap_token_dirs_are_user_owned_before_init() -> None:
+    text = PROVISIONER_PY.read_text(encoding="utf-8")
+    run_one = text[text.index("def _run_one(") : text.index("def main(")]
+    expect("gid = pwd.getpwuid(uid).pw_gid" in run_one, "auto-provision should use the target user's primary gid")
+    expect("for path in (hermes_home, token_file.parent):" in run_one, "auto-provision should repair Hermes home ownership before init")
+    expect("os.chown(path, uid, gid)" in run_one, "auto-provision should chown token parent directories to the target user")
+    expect("path.chmod(0o700)" in run_one, "auto-provision should keep token parent directories private")
+    expect("os.chown(token_file, uid, gid)" in run_one, "auto-provision should not assume uid == gid for token files")
+    expect(
+        run_one.index("for path in (hermes_home, token_file.parent):")
+        < run_one.index("token_file.write_text")
+        < run_one.index('str(cfg.repo_dir / "bin" / "init.sh")'),
+        "auto-provision should fix ownership before writing the token and running init.sh as the user",
+    )
+    print("PASS test_auto_provision_bootstrap_token_dirs_are_user_owned_before_init")
+
+
 def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1336,6 +1353,20 @@ def test_install_system_services_does_not_self_deadlock_on_active_oneshots() -> 
     print("PASS test_install_system_services_does_not_self_deadlock_on_active_oneshots")
 
 
+def test_auto_provision_dashboard_probe_allows_cold_start_window() -> None:
+    text = PROVISIONER_PY.read_text(encoding="utf-8")
+    auto = extract(text, "def _provision_user_access_surfaces", "def _operator_completion_message")
+    expect(
+        'str(access["dashboard_local_url"]),\n        timeout_seconds=300,' in auto,
+        "auto-provision should allow a cold Hermes dashboard enough time to start before failing",
+    )
+    expect(
+        'str(access["code_local_url"]),\n        timeout_seconds=300,' in auto,
+        "auto-provision should use the same cold-start window for dashboard-native Code",
+    )
+    print("PASS test_auto_provision_dashboard_probe_allows_cold_start_window")
+
+
 def main() -> int:
     test_onboarding_paths_refresh_managed_memory_after_access_surfaces_exist()
     test_onboarding_paths_enter_notion_phase_before_final_completion()
@@ -1347,6 +1378,7 @@ def main() -> int:
     test_completion_bundle_send_is_idempotent()
     test_operator_completion_notifications_withhold_dashboard_password_by_default()
     test_auto_provision_failure_updates_onboarding_session_and_notifies_user()
+    test_auto_provision_bootstrap_token_dirs_are_user_owned_before_init()
     test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle()
     test_gateway_failures_notify_user_with_provision_error_status()
     test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboarding()
@@ -1359,7 +1391,8 @@ def main() -> int:
     test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
-    print("PASS all 22 enrollment provisioner regression tests")
+    test_auto_provision_dashboard_probe_allows_cold_start_window()
+    print("PASS all 24 enrollment provisioner regression tests")
     return 0
 
 

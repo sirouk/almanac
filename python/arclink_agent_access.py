@@ -403,6 +403,7 @@ def wait_for_http(
     expected = expected_statuses or {200}
     deadline = time.time() + timeout_seconds
     cookie = ""
+    last_observation = ""
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
             return None
@@ -411,8 +412,12 @@ def wait_for_http(
     while time.time() < deadline:
         try:
             if username or password:
-                login_url = urllib.parse.urljoin(url.rstrip("/") + "/", "__arclink/login")
-                form = urllib.parse.urlencode({"username": username, "password": password, "next": url}).encode("utf-8")
+                parsed_url = urllib.parse.urlsplit(url)
+                login_url = urllib.parse.urlunsplit((parsed_url.scheme, parsed_url.netloc, "/__arclink/login", "", ""))
+                next_path = parsed_url.path or "/"
+                if parsed_url.query:
+                    next_path = f"{next_path}?{parsed_url.query}"
+                form = urllib.parse.urlencode({"username": username, "password": password, "next": next_path}).encode("utf-8")
                 login_request = urllib.request.Request(
                     login_url,
                     data=form,
@@ -430,16 +435,19 @@ def wait_for_http(
             headers = {"Cookie": cookie} if cookie else {}
             request = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(request, timeout=10) as response:
+                last_observation = f"last status={response.status}"
                 if response.status in expected:
                     return
         except urllib.error.HTTPError as exc:
+            last_observation = f"last status={exc.code}"
             if exc.code in expected:
                 return
-        except Exception:
-            pass
+        except Exception as exc:
+            last_observation = f"last error={type(exc).__name__}: {exc}"
         time.sleep(2)
     expected_text = ", ".join(str(item) for item in sorted(expected))
-    raise RuntimeError(f"timed out waiting for {url} to return one of: {expected_text}")
+    suffix = f" ({last_observation})" if last_observation else ""
+    raise RuntimeError(f"timed out waiting for {url} to return one of: {expected_text}{suffix}")
 
 
 def ensure_access_state(

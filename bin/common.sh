@@ -1002,7 +1002,11 @@ pdf_ingest_markdown_file_count() {
 qmd_pending_embeddings_count() {
   ensure_nvm
   local status_output=""
-  status_output="$(qmd --index "$QMD_INDEX_NAME" status 2>/dev/null || true)"
+  if command -v timeout >/dev/null 2>&1; then
+    status_output="$(timeout 3s qmd --index "$QMD_INDEX_NAME" status 2>/dev/null || true)"
+  else
+    status_output="$(qmd --index "$QMD_INDEX_NAME" status 2>/dev/null || true)"
+  fi
   python3 -c 'import re, sys
 text = sys.stdin.read()
 match = re.search(r"Pending:\s+(\d+)\s+need embedding", text)

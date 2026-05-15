@@ -2836,6 +2836,24 @@ run_as_user_systemd() {
   su - "$user" -c "env XDG_RUNTIME_DIR='/run/user/$uid' DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/$uid/bus' $*"
 }
 
+start_system_provisioning_services_root() {
+  systemctl restart arclink-enrollment-provision.timer
+  start_system_service_if_idle_root arclink-enrollment-provision.service
+  systemctl restart arclink-notion-claim-poll.timer
+  start_system_service_if_idle_root arclink-notion-claim-poll.service
+}
+
+start_system_service_if_idle_root() {
+  local unit="$1" state=""
+  state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null || true)"
+  case "$state" in
+    active|activating|reloading|deactivating)
+      return 0
+      ;;
+  esac
+  systemctl start "$unit" >/dev/null 2>&1 || true
+}
+
 refresh_upgrade_check_state_root() {
   local deployed_commit="${1:-}"
   local tracked_repo="${2:-${ARCLINK_UPSTREAM_REPO_URL:-}}"
@@ -3369,14 +3387,7 @@ render_agent_install_payload_body() {
     echo "  repo: \"$GITHUB_REPO_URL\""
   fi
   if [[ -n "$GITHUB_REPO_OWNER_REPO" ]]; then
-    echo "  skill_docs:"
-    for skill_name in "${payload_skills[@]}"; do
-      echo "    - \"https://raw.githubusercontent.com/$GITHUB_REPO_OWNER_REPO/$GITHUB_REPO_BRANCH/skills/$skill_name/SKILL.md\""
-    done
-    echo "  skill_sources_github:"
-    for skill_name in "${payload_skills[@]}"; do
-      echo "    - \"$GITHUB_REPO_OWNER_REPO/skills/$skill_name\""
-    done
+    echo "  source_ref: \"$GITHUB_REPO_OWNER_REPO#$GITHUB_REPO_BRANCH\""
   fi
   echo "  skill_sources_local:"
   for skill_name in "${payload_skills[@]}"; do
@@ -3388,7 +3399,7 @@ render_agent_install_payload_body() {
   echo "    chutes: \"$ARCLINK_MODEL_PRESET_CHUTES\""
   echo "  actions:"
   echo "    - run hermes setup explicitly for model preset selection and optional Discord or Telegram gateway setup; keep local TUI available under the user's Unix account"
-  echo "    - install default ArcLink skills: qmd MCP, vault reconciler, first-contact, vaults, ssot, notion-knowledge, ssot-connect, and notion-mcp"
+  echo "    - install default ArcLink skills from skill_sources_local"
   echo "    - \"hermes mcp add arclink-mcp --url http://${ARCLINK_MCP_HOST:-127.0.0.1}:${ARCLINK_MCP_PORT:-8282}/mcp\""
   echo "    - \"hermes mcp add arclink-qmd --url $AGENT_QMD_URL\""
   local extra_mcp_name="${ARCLINK_EXTRA_MCP_NAME:-external-kb}"
@@ -3397,40 +3408,28 @@ render_agent_install_payload_body() {
   else
     echo "    - register ${extra_mcp_name} during first contact when ARCLINK_EXTRA_MCP_URL is provided"
   fi
-  echo "    - install the shipped arclink-managed-context plugin; bin/install-arclink-plugins.sh auto-enables it for Hermes homes"
-  echo "    - rely on arclink-managed-context to inject ArcLink MCP auth, per-intent recipe cards, and telemetry before tool dispatch"
-  echo "    - do not read HERMES_HOME secrets files and do not pass token in ArcLink MCP tool calls; the plugin injects the bootstrap token automatically"
-  echo "    - run arclink-first-contact immediately after MCP registration"
-  echo "    - first contact must resolve YAML .vault defaults, auto-subscribe every default_subscribed vault, fetch agents.managed-memory, and materialize the initial plugin-managed context state"
-  echo "    - prefer the arclink-mcp recipe-card rails directly for vault catalog/subscription, shared Notion lookup, and SSOT reads/writes; shell wrappers are human fallback only"
-  echo "    - install exactly one 4h refresh timer/service for the user agent, and rely on Curator fanout -> activation trigger -> user-agent-refresh for immediate plugin-context sync after vault/catalog changes"
+  echo "    - install arclink-managed-context; it must inject ArcLink MCP auth, recipe cards, and telemetry before tool dispatch"
+  echo "    - do not read HERMES_HOME secrets files and do not pass token in ArcLink MCP tool calls; the plugin injects it"
+  echo "    - run arclink-first-contact: first contact must resolve YAML .vault defaults, subscribe defaults, fetch agents.managed-memory, and write plugin-managed context state"
+  echo "    - prefer arclink-mcp recipe-card rails for vault catalog/subscription, shared Notion lookup, and SSOT reads/writes"
+  echo "    - install exactly one 4h refresh timer/service; Curator fanout triggers immediate context refreshes"
   echo "  memory_contract:"
   echo "    - maintain [managed:arclink-skill-ref], [managed:vault-ref], [managed:resource-ref], [managed:qmd-ref], [managed:notion-ref], [managed:vault-topology], [managed:vault-landmarks], [managed:recall-stubs], [managed:notion-landmarks], [managed:notion-stub], and [managed:today-plate] in plugin-managed context state"
   echo "    - do not write dynamic [managed:*] stubs into HERMES_HOME/memories/MEMORY.md; MEMORY.md is user-owned long-lived memory, not the ArcLink hot-swap rail"
-  echo "    - make [managed:arclink-skill-ref] explicit: ArcLink skills are active defaults, not passive extras"
-  echo "    - make [managed:resource-ref] explicit: keep the user's dashboard/code URLs plus shared ArcLink rails in memory, but never store the user's credentials there"
-  echo "    - make [managed:qmd-ref] explicit: qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval"
-  echo "    - make [managed:notion-ref] explicit: use shared Notion knowledge rails for indexed search/fetch context without confusing them with the governed SSOT write lane"
-  echo "    - make [managed:vault-landmarks] explicit: keep a compact top-level vault map, including plain qmd-indexed folders, while leaving content depth to retrieval tools"
-  echo "    - make [managed:recall-stubs] explicit: keep only high-level awareness cards and source-lane pointers; use MCP search-and-fetch for evidence and depth"
-  echo "    - make [managed:notion-landmarks] explicit: keep a compact local-index map of shared Notion areas without treating it as evidence or live structured state"
-  echo "    - make [managed:notion-stub] explicit: keep verification, scope, and pending-write posture visible so the agent can predict whether writes apply or queue"
-  echo "    - make [managed:today-plate] explicit: surface what is on deck for the user, due pressure, and pending approvals before exploring tools"
+  echo "    - ArcLink skills are active defaults, not passive extras; keep the user's dashboard/code URLs plus shared ArcLink rails in memory, but never store the user's credentials there"
+  echo "    - qmd first for private/shared-vault questions or follow-ups from the current discussion; use mixed lex+vec retrieval"
+  echo "    - keep compact vault, recall, Notion, and today-plate stubs; use MCP search-and-fetch for evidence and depth"
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     echo "    - include \"$PDF_INGEST_COLLECTION_NAME\" when present, especially for newly uploaded PDFs"
   fi
-  echo "    - do not store note bodies, PDF bodies, or large dumps in built-in memory"
-  echo "    - do not rely on background memory review or session-end flush"
+  echo "    - do not store note/PDF bodies or large dumps in built-in memory; do not rely on background memory review or session-end flush"
   echo "    - if legacy [managed:*] entries exist in \$HERMES_HOME/memories/MEMORY.md, remove only those entries and preserve unrelated entries plus Hermes § delimiters"
   echo "  report_contract:"
   echo "    - recurring success output: exactly 1 short line"
   echo "    - recurring warn/fail output: at most 2 short lines"
-  echo "    - recurring output should say only ArcLink sync, qmd indexing, memory status, and drift/blocked state"
   echo "    - preferred success form: 'ArcLink health ok: sync current, qmd indexed, managed context refreshed, drift=none.'"
   echo "  rails:"
-  echo "    - prefer qmd/MCP over filesystem access; direct local qmd service or CLI is fallback only when MCP is unavailable"
-  echo "    - prefer tool calls over bash mimicry; do not reach for scripts/curate-*.sh or python heredocs from a normal Hermes turn"
-  echo "    - prefer the deployed arclink-owned qmd/vault over repo-scaffold guesses"
+  echo "    - prefer qmd/MCP tools over filesystem access, shell mimicry, or repo-scaffold guesses"
   if [[ "$AGENT_QMD_URL_MODE" == "tailnet" && "$AGENT_QMD_ROUTE_STATUS" != "live" ]]; then
     echo "    - tailnet hostname is known but ${TAILSCALE_QMD_PATH} is not visibly published; republish Tailscale Serve if MCP test fails"
   fi
@@ -5495,7 +5494,7 @@ run_root_install() {
   maybe_run_org_profile_builder "$ARCLINK_REPO_DIR"
   chown_managed_paths
   ensure_upstream_git_deploy_key_material_root
-  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START=1 "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
   wipe_nextcloud_state_if_requested
 
   init_public_repo_if_needed
@@ -5508,6 +5507,10 @@ run_root_install() {
   if [[ -n "$hermes_runtime_after" && "$hermes_runtime_before" != "$hermes_runtime_after" ]]; then
     gateway_restart_policy="restart"
   fi
+  # Root-side install helpers can create or migrate shared state before the
+  # service user's units are installed. Repair ownership here so the first
+  # user-owned curator refresh does not inherit a root-owned control DB.
+  chown_managed_paths
   run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_ALLOW_NO_USER_BUS='${ARCLINK_ALLOW_NO_USER_BUS:-0}' '$ARCLINK_REPO_DIR/bin/install-user-services.sh'"
   chown_managed_paths
   run_as_user "$ARCLINK_USER" "env $(curator_bootstrap_env_prefix) '$ARCLINK_REPO_DIR/bin/bootstrap-curator.sh'"
@@ -5555,6 +5558,8 @@ run_root_install() {
     chown "$ARCLINK_USER:$ARCLINK_USER" "${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}" >/dev/null 2>&1 || true
     refresh_upgrade_check_state_root "$source_commit" "${ARCLINK_UPSTREAM_REPO_URL:-$source_repo_url}" "${ARCLINK_UPSTREAM_BRANCH:-$source_branch}"
   fi
+  start_system_provisioning_services_root
+  chown_managed_paths
 
   echo
   echo "Running health check..."
@@ -5637,7 +5642,7 @@ run_root_upgrade() {
     ENABLE_TAILSCALE_SERVE="${ENABLE_TAILSCALE_SERVE:-0}" \
     ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE="${ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE:-$ENABLE_TAILSCALE_SERVE}" \
     "$ARCLINK_REPO_DIR/bin/bootstrap-system.sh"
-  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
+  env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START=1 "$ARCLINK_REPO_DIR/bin/install-system-services.sh"
   hermes_runtime_before="$(shared_hermes_runtime_commit)"
   run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' '$ARCLINK_REPO_DIR/bin/bootstrap-userland.sh'"
   hermes_runtime_after="$(shared_hermes_runtime_commit)"
@@ -5645,6 +5650,10 @@ run_root_upgrade() {
   if [[ -n "$hermes_runtime_after" && "$hermes_runtime_before" != "$hermes_runtime_after" ]]; then
     gateway_restart_policy="restart"
   fi
+  # Root-side upgrade helpers can create or migrate shared state before the
+  # service user's units are installed. Repair ownership here so the first
+  # user-owned curator refresh does not inherit a root-owned control DB.
+  chown_managed_paths
   run_as_user "$ARCLINK_USER" "env ARCLINK_CONFIG_FILE='$CONFIG_TARGET' ARCLINK_ALLOW_NO_USER_BUS='${ARCLINK_ALLOW_NO_USER_BUS:-0}' '$ARCLINK_REPO_DIR/bin/install-user-services.sh'"
   chown_managed_paths
   run_as_user "$ARCLINK_USER" "env ARCLINK_CURATOR_SKIP_HERMES_SETUP='1' ARCLINK_CURATOR_SKIP_GATEWAY_SETUP='1' $(curator_bootstrap_env_prefix) '$ARCLINK_REPO_DIR/bin/bootstrap-curator.sh'"
@@ -5688,6 +5697,8 @@ run_root_upgrade() {
   write_release_state "upstream" "$upstream_commit" "$ARCLINK_UPSTREAM_REPO_URL" "$ARCLINK_UPSTREAM_BRANCH" ""
   chown "$ARCLINK_USER:$ARCLINK_USER" "${ARCLINK_RELEASE_STATE_FILE:-$STATE_DIR/arclink-release.json}" >/dev/null 2>&1 || true
   refresh_upgrade_check_state_root "$upstream_commit" "$ARCLINK_UPSTREAM_REPO_URL" "$ARCLINK_UPSTREAM_BRANCH"
+  start_system_provisioning_services_root
+  chown_managed_paths
 
   echo
   echo "Running health check..."

@@ -234,7 +234,7 @@ def test_completion_bundle_lists_resources_and_scrubs_password() -> None:
             expect("Tap @Guide and press Start" in telegram_followup, telegram_followup)
             expect("Use that bot chat from here on out." in telegram_followup, telegram_followup)
             expect(
-                "<code>curl -fsSL https://raw.githubusercontent.com/example/arclink/main/bin/setup-remote-hermes-client.sh "
+                f"<code>curl -fsSL https://raw.githubusercontent.com/example/arclink/{cfg.upstream_branch}/bin/setup-remote-hermes-client.sh "
                 "| bash -s -- --host arclink.example.test --user "
                 in telegram_followup,
                 telegram_followup,

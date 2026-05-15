@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import importlib.util
+import http.server
 import json
 import os
+import socket
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -304,6 +307,79 @@ def test_docker_port_allocation_skips_host_listeners() -> None:
         os.environ.update(old_env)
 
 
+def test_wait_for_http_reports_last_observation() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    access_mod = load_module(ACCESS_PY, "arclink_agent_access_wait_error")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    try:
+        access_mod.wait_for_http(f"http://127.0.0.1:{port}/", timeout_seconds=1, expected_statuses={200})
+    except RuntimeError as exc:
+        message = str(exc)
+        expect("timed out waiting for" in message, message)
+        expect("last error=" in message or "last status=" in message, message)
+        print("PASS test_wait_for_http_reports_last_observation")
+        return
+    raise AssertionError("wait_for_http should fail against an unused local port")
+
+
+def test_wait_for_http_uses_root_login_path_for_subpaths() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    access_mod = load_module(ACCESS_PY, "arclink_agent_access_wait_subpath")
+    seen_login_paths: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            seen_login_paths.append(self.path)
+            if self.path != "/__arclink/login":
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(303)
+            self.send_header("Location", "/code")
+            self.send_header("Set-Cookie", "session=ok; Path=/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/code" and "session=ok" in (self.headers.get("Cookie") or ""):
+                body = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(401)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            return
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        access_mod.wait_for_http(
+            f"http://127.0.0.1:{server.server_port}/code",
+            timeout_seconds=5,
+            expected_statuses={200},
+            username="agent",
+            password="secret",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    expect(seen_login_paths == ["/__arclink/login"], f"expected root login path for subpath probe, saw {seen_login_paths}")
+    print("PASS test_wait_for_http_uses_root_login_path_for_subpaths")
+
+
 def main() -> int:
     test_access_state_persists_password_and_dashboard_ports()
     test_access_state_avoids_ports_reserved_by_other_agents()
@@ -311,7 +387,9 @@ def main() -> int:
     test_publish_tailscale_https_uses_dashboard_port_for_plugins()
     test_clear_tailscale_https_removes_dedicated_ports()
     test_docker_port_allocation_skips_host_listeners()
-    print("PASS all 6 agent-access regression tests")
+    test_wait_for_http_reports_last_observation()
+    test_wait_for_http_uses_root_login_path_for_subpaths()
+    print("PASS all 8 agent-access regression tests")
     return 0
 
 

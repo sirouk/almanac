@@ -5729,3 +5729,69 @@ Known risks:
 - Wave 3 Pod migration remains the next implementation wave. The current tree
   has schema foundations, but reprovision/migration execution is not closed by
   this validation pass.
+
+## 2026-05-15 End-To-End Release Readiness Sweep
+
+Scope: exercised the committed ArcPod Captain Console Waves 0-6 work plus the
+install/upgrade/runtime hardening discovered during full local smoke. No private
+provider credentials, live payment mutation, public bot mutation, remote fleet
+host, production deploy, or production upgrade was used.
+
+Corrections made during the sweep:
+
+- Deferred root-side enrollment and Notion-claim provisioning jobs during
+  install/upgrade until shared-state ownership and user services are in place.
+- Repaired auto-provision token directory ownership before running headless
+  `init.sh` as the target user.
+- Made dashboard readiness probes use the auth proxy root login path for
+  mounted subpaths and report the last observed status/error on timeout.
+- Forced UTF-8 locale/Python stdio in generated user-agent service units so
+  Hermes dashboard startup is not locale-fragile.
+- Hardened the install smoke around `autoprovbot` cleanup, Notion webhook
+  install-window arming, loopback source-IP policy, MCP rate-limit semantics,
+  synthetic control-plane agent cleanup, and CPU-only qmd embedding backlog.
+- Treated stale deleted-user `user@UID.service` failures as resettable health
+  noise only when the failed units are exclusively deleted-user managers.
+
+Validation run:
+
+- `git diff --check` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 -m compileall -q python tests` passed.
+- `python3 tests/test_arclink_wrapped.py` passed.
+- `python3 tests/test_arclink_pod_comms.py` passed.
+- `python3 tests/test_arclink_crew_recipes.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_vault_watch_regressions.py` passed.
+- `python3 tests/test_arclink_agent_access.py` passed.
+- `python3 tests/test_arclink_enrollment_provisioner_regressions.py` passed.
+- `python3 tests/test_arclink_agent_user_services.py` passed.
+- `python3 tests/test_onboarding_completion_messages.py` passed.
+- Full Python sweep passed: `110 Python test files; failures=0`
+  (`completion_log/end_to_end_20260515_python_sweep_final.log`).
+- `./bin/ci-preflight.sh` passed.
+- `cd web && npm test && npm run lint && npm run build && npm run test:browser`
+  passed; browser suite reported 45 passed and 3 expected desktop-only skips.
+- `./test.sh` passed end-to-end
+  (`completion_log/end_to_end_20260515_test_sh_final20.log`): install smoke
+  completed successfully, health ended at 68 ok / 5 warn / 0 fail, and teardown
+  removed both `arclink` and `autoprovbot`.
+
+Expected non-blocking warnings observed:
+
+- The smoke install intentionally leaves `BACKUP_GIT_REMOTE` empty.
+- Shared Notion SSOT live write proof is skipped when Notion is not configured.
+- The upgrade-check notification dedup path skips the network-dependent branch
+  when upstream lookup is unavailable.
+- qmd reports CPU-only embedding warnings on hosts without GPU acceleration;
+  text indexing and MCP search were proven, and embedding retry is deferred.
+- The smoke deliberately creates malformed `.vault` fixtures to prove warning
+  paths; teardown removes the smoke state.
+
+Residual gates:
+
+- Live external/provider proof remains operator-gated: real Stripe checkout and
+  webhooks, Chutes provider mutation, Cloudflare DNS, Tailscale publication,
+  Telegram/Discord webhook delivery, Notion SSOT writes, remote SSH fleet
+  placement/migration, and production deploy/upgrade still require explicit
+  live credentials and an authorized maintenance window.

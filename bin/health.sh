@@ -48,14 +48,48 @@ failed_units_are_stale_podman_healthchecks() {
   done <<<"$output"
 }
 
+failed_units_are_stale_deleted_user_managers() {
+  local output="${1:-}" line="" unit="" uid=""
+  [[ -n "$output" ]] || return 1
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    unit="${line%%[[:space:]]*}"
+    if [[ "$unit" =~ ^user@([0-9]+)\.service$ ]]; then
+      uid="${BASH_REMATCH[1]}"
+      getent passwd "$uid" >/dev/null 2>&1 && return 1
+    else
+      return 1
+    fi
+  done <<<"$output"
+}
+
+reset_stale_deleted_user_manager_failures() {
+  local output="${1:-}" line="" unit=""
+  [[ -n "$output" ]] || return 0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    unit="${line%%[[:space:]]*}"
+    [[ "$unit" =~ ^user@[0-9]+\.service$ ]] || continue
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  done <<<"$output"
+}
+
 check_system_failed_units() {
-  local output=""
+  local output="" after_reset=""
   if ! command -v systemctl >/dev/null 2>&1; then
     return 0
   fi
   output="$(systemctl --failed --no-legend --plain 2>/dev/null || true)"
   if [[ -z "$output" ]]; then
     pass "no failed system units"
+  elif failed_units_are_stale_deleted_user_managers "$output"; then
+    reset_stale_deleted_user_manager_failures "$output"
+    after_reset="$(systemctl --failed --no-legend --plain 2>/dev/null || true)"
+    if [[ -z "$after_reset" ]]; then
+      pass "cleared stale deleted-user manager failures"
+    else
+      warn_or_fail "failed system units present: $(printf '%s\n' "$after_reset" | summarize_failed_units)"
+    fi
   else
     warn_or_fail "failed system units present: $(printf '%s\n' "$output" | summarize_failed_units)"
   fi

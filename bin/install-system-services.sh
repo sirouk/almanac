@@ -12,6 +12,7 @@ fi
 
 TARGET_DIR="/etc/systemd/system"
 CONFIG_PATH="${CONFIG_FILE:-$ARCLINK_PRIV_CONFIG_DIR/arclink.env}"
+DEFER_START="${ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START:-0}"
 mkdir -p "$TARGET_DIR"
 
 reject_systemd_unit_value() {
@@ -119,8 +120,16 @@ start_system_service_if_idle() {
 
 systemctl daemon-reload
 systemctl enable arclink-enrollment-provision.timer >/dev/null
-systemctl restart arclink-enrollment-provision.timer
-start_system_service_if_idle arclink-enrollment-provision.service
 systemctl enable arclink-notion-claim-poll.timer >/dev/null
-systemctl restart arclink-notion-claim-poll.timer
-start_system_service_if_idle arclink-notion-claim-poll.service
+if [[ "$DEFER_START" == "1" ]]; then
+  systemctl stop \
+    arclink-enrollment-provision.service \
+    arclink-enrollment-provision.timer \
+    arclink-notion-claim-poll.service \
+    arclink-notion-claim-poll.timer >/dev/null 2>&1 || true
+else
+  systemctl restart arclink-enrollment-provision.timer
+  start_system_service_if_idle arclink-enrollment-provision.service
+  systemctl restart arclink-notion-claim-poll.timer
+  start_system_service_if_idle arclink-notion-claim-poll.service
+fi

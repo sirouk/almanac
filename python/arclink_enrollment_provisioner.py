@@ -928,12 +928,14 @@ def _provision_user_access_surfaces(
     )
     wait_for_http(
         str(access["dashboard_local_url"]),
+        timeout_seconds=300,
         expected_statuses={200},
         username=str(access["username"]),
         password=str(access["password"]),
     )
     wait_for_http(
         str(access["code_local_url"]),
+        timeout_seconds=300,
         expected_statuses={200, 302},
         username=str(access["username"]),
         password=str(access["password"]),
@@ -2977,10 +2979,20 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
         model_preset = _model_preset(cfg, row)
         hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
         token_file = hermes_home / "secrets" / "arclink-bootstrap-token"
+        gid = pwd.getpwuid(uid).pw_gid
         token_file.parent.mkdir(parents=True, exist_ok=True)
+        for path in (hermes_home, token_file.parent):
+            try:
+                os.chown(path, uid, gid)
+            except OSError:
+                pass
+            try:
+                path.chmod(0o700)
+            except OSError:
+                pass
         token_file.write_text(str(token_payload["raw_token"]) + "\n", encoding="utf-8")
         try:
-            os.chown(token_file, uid, uid)
+            os.chown(token_file, uid, gid)
         except OSError:
             pass
         token_file.chmod(0o600)

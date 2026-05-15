@@ -227,7 +227,11 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
                 calls.append({"cmd": cmd, **kwargs})
                 return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
 
-            provisioner.ensure_unix_user_ready = lambda unix_user: {"home": str(root / "home" / unix_user), "uid": 1234}
+            provisioner._ensure_runtime_user_ready = lambda cfg, unix_user: {
+                "home": str(root / "home" / unix_user),
+                "uid": 1234,
+            }
+            provisioner.pwd.getpwuid = lambda uid: type("Pw", (), {"pw_gid": 1234})()
             provisioner._grant_auto_provision_access = lambda cfg, *, unix_user, agent_id: None
             provisioner._wait_for_user_bus = lambda uid, timeout_seconds=15: None
             provisioner.issue_auto_provision_token = lambda conn, request_id: {"raw_token": "tok_test"}

@@ -191,6 +191,10 @@ def test_qmd_pending_embeddings_count_reads_qmd_status_output() -> None:
     snippet = extract(body, "qmd_pending_embeddings_count() {", "\nconfigure_qmd_collections() {")
     script = f"""
 ensure_nvm() {{ :; }}
+timeout() {{
+  shift
+  "$@"
+}}
 qmd() {{
   printf 'Index: arclink\\nPending: 7 need embedding\\nEmbedded: 22\\n'
 }}
@@ -201,6 +205,7 @@ printf 'pending=%s\\n' "$(qmd_pending_embeddings_count)"
     result = bash(script)
     expect(result.returncode == 0, f"qmd pending count case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
     expect("pending=7" in result.stdout, result.stdout)
+    expect("timeout 3s qmd" in snippet, snippet)
     print("PASS test_qmd_pending_embeddings_count_reads_qmd_status_output")
 
 

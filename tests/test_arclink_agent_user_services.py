@@ -177,6 +177,17 @@ def test_generated_web_service_units_follow_access_state() -> None:
         installed_plugin_text = installed_plugin.read_text(encoding="utf-8")
         installed_start_hook_text = installed_start_hook.read_text(encoding="utf-8")
         expect("--port 19021" in dashboard_text, dashboard_text)
+        for unit_name, unit_text in (
+            ("dashboard", dashboard_text),
+            ("dashboard proxy", proxy_text),
+            ("gateway", gateway_text),
+        ):
+            expect('Environment="LANG=C.UTF-8"' in unit_text, f"{unit_name} should force UTF-8 LANG:\n{unit_text}")
+            expect('Environment="LC_ALL=C.UTF-8"' in unit_text, f"{unit_name} should force UTF-8 LC_ALL:\n{unit_text}")
+            expect(
+                'Environment="PYTHONIOENCODING=utf-8"' in unit_text,
+                f"{unit_name} should force UTF-8 Python stdio:\n{unit_text}",
+            )
         expect(f'Environment="DRIVE_WORKSPACE_ROOT={hermes_workspace}"' in dashboard_text, dashboard_text)
         expect(f'Environment="CODE_WORKSPACE_ROOT={hermes_workspace}"' in dashboard_text, dashboard_text)
         expect(f'Environment="TERMINAL_WORKSPACE_ROOT={hermes_workspace}"' in dashboard_text, dashboard_text)

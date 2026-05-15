@@ -29,7 +29,7 @@ is the authoritative closeout status for the six ArcPod Captain Console waves.
 | 3 | 1:1 Pod migration and executable `reprovision` admin action | Landed in `aec064e` |
 | 4 | Pod-to-Pod Comms, share-grant-gated cross-Captain comms, MCP tools, Captain/Operator Comms Console | Landed in `faf33dc` |
 | 5 | Crew Training, Crew Recipes, deterministic fallback generation, `/train-crew`, `/whats-changed`, additive SOUL overlay | Landed in `5fd4aff` |
-| 6 | ArcLink Wrapped report generation, scheduler, delivery, dashboard history, admin aggregate view, `/wrapped-frequency` | Complete in the final Wave 6 worktree; ready for final commit |
+| 6 | ArcLink Wrapped report generation, scheduler, delivery, dashboard history, admin aggregate view, `/wrapped-frequency` | Landed in `d229a5a` |
 
 Closeout notes:
 

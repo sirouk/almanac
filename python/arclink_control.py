@@ -2704,14 +2704,22 @@ def _arclink_rng_code(rng: Any | None, *, length: int = ARCLINK_PREFIX_CODE_LENG
 
 
 def generate_arclink_deployment_prefix(*, rng: Any | None = None) -> str:
-    prefix = "-".join(
-        (
-            _arclink_rng_choice(ARCLINK_PREFIX_ADJECTIVES, rng),
-            _arclink_rng_choice(ARCLINK_PREFIX_NOUNS, rng),
-            _arclink_rng_code(rng),
+    last_error: Exception | None = None
+    for _ in range(64):
+        prefix = "-".join(
+            (
+                _arclink_rng_choice(ARCLINK_PREFIX_ADJECTIVES, rng),
+                _arclink_rng_choice(ARCLINK_PREFIX_NOUNS, rng),
+                _arclink_rng_code(rng),
+            )
         )
-    )
-    return normalize_arclink_deployment_prefix(prefix)
+        try:
+            return normalize_arclink_deployment_prefix(prefix)
+        except ValueError as exc:
+            last_error = exc
+            if "reserved substring" not in str(exc):
+                raise
+    raise ValueError("ArcLink could not generate a safe deployment prefix after retries") from last_error
 
 
 def reserve_generated_arclink_deployment_prefix(

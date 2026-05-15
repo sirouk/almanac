@@ -15,6 +15,7 @@ REPO = Path(__file__).resolve().parents[1]
 DEPLOY_SH = REPO / "bin" / "deploy.sh"
 HEALTH_SH = REPO / "bin" / "health.sh"
 INSTALL_SYSTEM_SERVICES_SH = REPO / "bin" / "install-system-services.sh"
+CI_INSTALL_SMOKE_SH = REPO / "bin" / "ci-install-smoke.sh"
 CURATOR_GATEWAY_SH = REPO / "bin" / "curator-gateway.sh"
 QMD_REFRESH_SH = REPO / "bin" / "qmd-refresh.sh"
 VAULT_WATCH_SH = REPO / "bin" / "vault-watch.sh"
@@ -814,15 +815,16 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
 
     for skill_name in expected_skills:
         expect(
-            f"https://raw.githubusercontent.com/example/arclink/feature/smoke/skills/{skill_name}/SKILL.md" in payload,
+            f"/repo/skills/{skill_name}" in payload,
             payload,
         )
-        expect(f"example/arclink/skills/{skill_name}" in payload, payload)
-        expect(f'/repo/skills/{skill_name}' in payload, payload)
 
     for managed_key in expected_keys:
         expect(managed_key in payload, payload)
 
+    expect('source_ref: "example/arclink#feature/smoke"' in payload, payload)
+    expect("https://raw.githubusercontent.com/" not in payload, payload)
+    expect("skill_sources_github:" not in payload, payload)
     expect("scripts/curate-vaults.sh" not in payload, payload)
     expect("arclink-managed-context" in payload, payload)
     expect("inject ArcLink MCP auth" in payload, payload)
@@ -2710,6 +2712,23 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
         "run_root_install should use the scoped ownership helper instead of blanket chowning private state",
     )
     expect(
+        "ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START=1" in install
+        and "start_system_provisioning_services_root" in install
+        and install.index("ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START=1")
+        < install.index("bin/install-user-services.sh")
+        < install.index("start_system_provisioning_services_root"),
+        "run_root_install should defer root-owned provisioning jobs until after user services are installed",
+    )
+    install_user_services = "bin/install-user-services.sh"
+    install_user_services_index = install.index(install_user_services)
+    install_pre_user_chown_index = install.rfind("chown_managed_paths", 0, install_user_services_index)
+    expect(
+        install_pre_user_chown_index >= 0
+        and "bootstrap-userland.sh" not in install[install_pre_user_chown_index:install_user_services_index]
+        and "install-system-services.sh" not in install[install_pre_user_chown_index:install_user_services_index],
+        "run_root_install should repair shared-state ownership immediately before installing user services",
+    )
+    expect(
         "repair_active_agent_runtime_access" in upgrade,
         "run_root_upgrade should repair enrolled-user runtime access after syncing the shared repo",
     )
@@ -2723,6 +2742,22 @@ def test_deploy_reapplies_runtime_access_after_repo_sync() -> None:
     expect(
         "chown_managed_paths" in upgrade,
         "run_root_upgrade should use the scoped ownership helper instead of blanket chowning private state",
+    )
+    expect(
+        "ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START=1" in upgrade
+        and "start_system_provisioning_services_root" in upgrade
+        and upgrade.index("ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START=1")
+        < upgrade.index("bin/install-user-services.sh")
+        < upgrade.index("start_system_provisioning_services_root"),
+        "run_root_upgrade should defer root-owned provisioning jobs until after user services are installed",
+    )
+    upgrade_user_services_index = upgrade.index(install_user_services)
+    upgrade_pre_user_chown_index = upgrade.rfind("chown_managed_paths", 0, upgrade_user_services_index)
+    expect(
+        upgrade_pre_user_chown_index >= 0
+        and "bootstrap-userland.sh" not in upgrade[upgrade_pre_user_chown_index:upgrade_user_services_index]
+        and "install-system-services.sh" not in upgrade[upgrade_pre_user_chown_index:upgrade_user_services_index],
+        "run_root_upgrade should repair shared-state ownership immediately before installing user services",
     )
     expect(
         "run_service_user_cmd" in org_profile_apply and "run_root_env_cmd" not in org_profile_apply,
@@ -3107,6 +3142,13 @@ def test_install_system_services_includes_independent_notion_claim_poller() -> N
     expect("arclink-notion-claim-poll.timer" in text, "expected dedicated notion claim poll timer")
     expect("--claims-only" in text, "expected claim poller to use provisioner claims-only mode")
     expect("OnUnitActiveSec=2m" in text, "expected claim poll cadence to be configured")
+    expect(
+        "ARCLINK_INSTALL_SYSTEM_SERVICES_DEFER_START" in text
+        and "systemctl stop" in text
+        and "arclink-enrollment-provision.service" in text
+        and "arclink-notion-claim-poll.service" in text,
+        "install-system-services should support deferring root-owned provisioning jobs during install/upgrade",
+    )
     print("PASS test_install_system_services_includes_independent_notion_claim_poller")
 
 
@@ -3202,11 +3244,113 @@ def test_install_answer_file_has_exit_trap_cleanup() -> None:
     print("PASS test_install_answer_file_has_exit_trap_cleanup")
 
 
+def test_ci_install_smoke_force_removes_auto_provision_user() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    cleanup = extract(text, "remove_smoke_auto_provision_user() {", "preclean() {")
+    preclean = extract(text, "preclean() {", "on_exit() {")
+    expect("loginctl terminate-user" in cleanup, cleanup)
+    expect("pkill -KILL -u" in cleanup, cleanup)
+    expect("userdel -r" in cleanup, cleanup)
+    expect("run_login_user_systemctl" in cleanup and "disable --now" in cleanup, cleanup)
+    expect("remove_smoke_auto_provision_user" in preclean, preclean)
+    expect("remove_smoke_auto_provision_user" in extract(text, "teardown() {", "remove_smoke_auto_provision_user() {"), text)
+    print("PASS test_ci_install_smoke_force_removes_auto_provision_user")
+
+
+def test_ci_install_smoke_dashboard_login_uses_root_path_for_subpaths() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    helper = extract(text, "http_status_code() {", "wait_for_http_status() {")
+    expect('"/__arclink/login"' in helper, helper)
+    expect("urljoin(url.rstrip" not in helper, helper)
+    expect("next_path=" in helper and 'parsed.path or "/"' in helper, helper)
+    bearer = extract(text, "assert_dashboard_proxy_bearer_flow() {", "run_arclink_shell() {")
+    expect('"/__arclink/login"' in bearer, bearer)
+    expect("urljoin(dashboard_url.rstrip" not in bearer, bearer)
+    expect("NoRedirect" in bearer, bearer)
+    expect("http.cookies.SimpleCookie" in bearer and '"Cookie": cookie_header' in bearer, bearer)
+    print("PASS test_ci_install_smoke_dashboard_login_uses_root_path_for_subpaths")
+
+
+def test_ci_install_smoke_rate_limit_uses_actual_loopback_bucket() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    body = extract(text, "assert_bootstrap_rate_limit() {", "assert_admin_endpoint_auth() {")
+    expect("real bucket is 127.0.0.1" in body, body)
+    expect("SELECT COUNT(*) FROM rate_limits WHERE scope = 'ip' AND subject = '127.0.0.1'" in body, body)
+    expect("remaining=$((cap - current_count))" in body, body)
+    expect('"source_ip":"127.0.0.1"' in body, body)
+    expect('"source_ip":"100.64.55.1"' not in body, body)
+    expect("X-ArcLink-MCP-Error-Status".lower() in body.lower(), body)
+    expect("Expected effective 429" in body, body)
+    expect("DELETE FROM bootstrap_requests WHERE requester_identity LIKE 'rate-%'" in body, body)
+    expect("DELETE FROM notification_outbox WHERE message LIKE '%rate-%'" in body, body)
+    expect("DELETE FROM rate_limits WHERE scope IN ('ip', 'global')" in body, body)
+    print("PASS test_ci_install_smoke_rate_limit_uses_actual_loopback_bucket")
+
+
+def test_ci_install_smoke_admin_auth_respects_loopback_source_policy() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    body = extract(text, "assert_admin_endpoint_auth() {", "assert_token_reinstate() {")
+    expect("operator_token required" in body or "operator_token" in body, body)
+    expect("Loopback source_ip overrides are disabled" in body, body)
+    expect('SELECT source_ip FROM bootstrap_requests WHERE request_id' in body, body)
+    expect('stored_source" != "127.0.0.1"' in body, body)
+    expect('bootstrap.status' in body and '\\"source_ip\\":\\"100.64.200.99\\"' in body, body)
+    expect("DELETE FROM bootstrap_requests WHERE request_id" in body, body)
+    print("PASS test_ci_install_smoke_admin_auth_respects_loopback_source_policy")
+
+
+def test_ci_install_smoke_arms_notion_webhook_install_window() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    body = extract(text, "assert_notion_webhook_flow() {", "assert_notification_delivery_backlog() {")
+    expect("webhook-arm-install" in body, body)
+    expect("--actor ci-install-smoke" in body, body)
+    expect("--minutes 5" in body, body)
+    expect('"$resp" != "202" && "$resp" != "200"' in body, body)
+    expect(
+        body.index("webhook-arm-install") < body.index('--data \'{\\"verification_token\\"'),
+        "expected smoke to arm Notion webhook verification-token install before posting the token",
+    )
+    print("PASS test_ci_install_smoke_arms_notion_webhook_install_window")
+
+
+def test_ci_install_smoke_removes_synthetic_control_plane_agents_before_final_health() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    cleanup = extract(text, "cleanup_smoke_control_plane_agents() {", "assert_notification_delivery_backlog() {")
+    expect("user purge-enrollment" in cleanup, cleanup)
+    expect("smokebot ssotbot reinsbot" in cleanup, cleanup)
+    expect("--purge-rate-limits" in cleanup, cleanup)
+    expect("rm -rf /tmp/arclink-smoke-agent-home /tmp/arclink-smoke-ssot-home" in cleanup, cleanup)
+    tail = extract(text, 'echo "Checking notification delivery backlog routing..."', 'echo "Starting runtime checks..."')
+    expect("assert_notification_delivery_backlog" in tail, tail)
+    expect("cleanup_smoke_control_plane_agents" in tail, tail)
+    expect(tail.index("assert_notification_delivery_backlog") < tail.index("cleanup_smoke_control_plane_agents"), tail)
+    print("PASS test_ci_install_smoke_removes_synthetic_control_plane_agents_before_final_health")
+
+
+def test_ci_install_smoke_treats_qmd_embedding_backlog_as_retryable_after_search_proof() -> None:
+    text = CI_INSTALL_SMOKE_SH.read_text()
+    for marker in (
+        "direct markdown changes",
+        "direct text changes",
+        "PDF-derived markdown changes",
+    ):
+        idx = text.find(f"Warning: watcher-driven qmd embedding backlog did not clear after {marker}")
+        expect(idx >= 0, f"expected retryable qmd embedding warning for {marker}")
+        window = text[idx : idx + 420]
+        expect("return 1" not in window, window)
+        expect("show_pdf_ingest_diagnostics" not in window, window)
+        expect("embeddings will retry on the next refresh" in window, window)
+    print("PASS test_ci_install_smoke_treats_qmd_embedding_backlog_as_retryable_after_search_proof")
+
+
 def test_health_checks_failed_systemd_units_and_stale_podman_transients() -> None:
     text = HEALTH_SH.read_text()
     expect("check_system_failed_units" in text and "systemctl --failed --no-legend --plain" in text, text)
     expect("check_service_user_failed_units" in text and "systemctl --user --failed --no-legend --plain" in text, text)
     expect("failed_units_are_stale_podman_healthchecks" in text and "systemctl --user reset-failed" in text, text)
+    expect("failed_units_are_stale_deleted_user_managers" in text, text)
+    expect('^user@([0-9]+)\\.service$' in text and 'getent passwd "$uid"' in text, text)
+    expect('systemctl reset-failed "$unit"' in text, text)
     print("PASS test_health_checks_failed_systemd_units_and_stale_podman_transients")
 
 
@@ -3399,6 +3543,13 @@ def main() -> int:
         test_upgrade_fetch_is_noninteractive_and_requires_deploy_key_for_ssh,
         test_upgrade_refuses_non_arclink_branch_without_explicit_override,
         test_install_answer_file_has_exit_trap_cleanup,
+        test_ci_install_smoke_force_removes_auto_provision_user,
+        test_ci_install_smoke_dashboard_login_uses_root_path_for_subpaths,
+        test_ci_install_smoke_rate_limit_uses_actual_loopback_bucket,
+        test_ci_install_smoke_admin_auth_respects_loopback_source_policy,
+        test_ci_install_smoke_arms_notion_webhook_install_window,
+        test_ci_install_smoke_removes_synthetic_control_plane_agents_before_final_health,
+        test_ci_install_smoke_treats_qmd_embedding_backlog_as_retryable_after_search_proof,
         test_health_checks_failed_systemd_units_and_stale_podman_transients,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,

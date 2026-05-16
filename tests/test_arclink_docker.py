@@ -514,6 +514,7 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     expect("runtime_env_config_enabled()" in body, body)
     expect("write_runtime_env_config()" in body, body)
     expect("secrets.token_urlsafe(32)" in body, body)
+    expect("config_file_can_write()" in body and "config_file_can_repair()" in body, body)
     expect('repair_placeholder_secret POSTGRES_PASSWORD "$PRIV_DIR/state/nextcloud/db/PG_VERSION"' in body, body)
     expect(
         'repair_placeholder_secret NEXTCLOUD_ADMIN_PASSWORD "$PRIV_DIR/state/nextcloud/html/config/config.php"' in body,
@@ -536,6 +537,14 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     expect(
         "unable to seed private template defaults" in body and '[[ -d "$PRIV_DIR" && -w "$PRIV_DIR" ]]' in body,
         "Docker entrypoint must skip template seeding when split private mounts make the arclink-priv parent unwritable",
+    )
+    expect(
+        "unable to write Docker config" in body and "split private mounts may provide runtime config through Compose" in body,
+        "Docker entrypoint must not crash when split private mounts make the generated config path unwritable",
+    )
+    expect(
+        "unable to repair Docker config secrets" in body and "split private mounts may provide sealed runtime values" in body,
+        "Docker entrypoint must not crash when split private mounts make config secret repair impossible",
     )
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)

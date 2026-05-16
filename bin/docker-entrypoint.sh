@@ -255,6 +255,22 @@ print(secrets.token_urlsafe(32))
 PY
 }
 
+config_file_can_write() {
+  local config_dir=""
+  config_dir="$(dirname "$CONFIG_FILE")"
+
+  if [[ -e "$CONFIG_FILE" ]]; then
+    [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" && -w "$CONFIG_FILE" ]]
+    return
+  fi
+
+  [[ -d "$config_dir" && -w "$config_dir" ]]
+}
+
+config_file_can_repair() {
+  [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" && -w "$CONFIG_FILE" ]]
+}
+
 config_value() {
   local key="$1"
   [[ -f "$CONFIG_FILE" ]] || return 1
@@ -549,16 +565,24 @@ EOF
 }
 
 if [[ ! -f "$CONFIG_FILE" || "${ARCLINK_DOCKER_REWRITE_CONFIG:-0}" == "1" ]]; then
-  write_default_docker_config
+  if config_file_can_write; then
+    write_default_docker_config
+  else
+    echo "Warning: unable to write Docker config at $CONFIG_FILE; continuing because split private mounts may provide runtime config through Compose." >&2
+  fi
 fi
 
-repair_placeholder_secret POSTGRES_PASSWORD "$PRIV_DIR/state/nextcloud/db/PG_VERSION"
-repair_placeholder_secret NEXTCLOUD_ADMIN_PASSWORD "$PRIV_DIR/state/nextcloud/html/config/config.php"
-if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER 2>/dev/null || true)" || "$(config_value ARCLINK_SESSION_HASH_PEPPER 2>/dev/null || true)" == "change-me" ]]; then
-  set_config_value ARCLINK_SESSION_HASH_PEPPER "$(generate_secret)"
-fi
-if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED 2>/dev/null || true)" ]]; then
-  set_config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED "1"
+if config_file_can_repair; then
+  repair_placeholder_secret POSTGRES_PASSWORD "$PRIV_DIR/state/nextcloud/db/PG_VERSION"
+  repair_placeholder_secret NEXTCLOUD_ADMIN_PASSWORD "$PRIV_DIR/state/nextcloud/html/config/config.php"
+  if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER 2>/dev/null || true)" || "$(config_value ARCLINK_SESSION_HASH_PEPPER 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_SESSION_HASH_PEPPER "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED 2>/dev/null || true)" ]]; then
+    set_config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED "1"
+  fi
+else
+  echo "Warning: unable to repair Docker config secrets at $CONFIG_FILE; continuing because split private mounts may provide sealed runtime values." >&2
 fi
 
 ensure_nextcloud_config

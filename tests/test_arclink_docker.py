@@ -533,6 +533,10 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
         "split private mounts may provide it at runtime" in body,
         "Docker entrypoint must tolerate split private mounts with an unwritable arclink-priv symlink parent",
     )
+    expect(
+        "unable to seed private template defaults" in body and '[[ -d "$PRIV_DIR" && -w "$PRIV_DIR" ]]' in body,
+        "Docker entrypoint must skip template seeding when split private mounts make the arclink-priv parent unwritable",
+    )
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
     print("PASS test_docker_entrypoint_generates_fresh_secrets")

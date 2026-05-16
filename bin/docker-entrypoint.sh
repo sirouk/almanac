@@ -238,9 +238,13 @@ ensure_docker_state_dirs() {
 ensure_docker_state_dirs
 
 if [[ -d "$TEMPLATE_DIR" ]]; then
-  rsync -a --no-owner --no-group --no-perms --omit-dir-times --ignore-existing \
-    --exclude='/.gitignore' \
-    "$TEMPLATE_DIR"/ "$PRIV_DIR"/
+  if [[ -d "$PRIV_DIR" && -w "$PRIV_DIR" ]]; then
+    rsync -a --no-owner --no-group --no-perms --omit-dir-times --ignore-existing \
+      --exclude='/.gitignore' \
+      "$TEMPLATE_DIR"/ "$PRIV_DIR"/
+  else
+    echo "Warning: unable to seed private template defaults into $PRIV_DIR; continuing because split private mounts may provide the runtime directories." >&2
+  fi
 fi
 
 generate_secret() {

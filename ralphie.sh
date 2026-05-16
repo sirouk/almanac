@@ -1467,7 +1467,7 @@ DEFAULT_CLAUDE_ENDPOINT=""                    # empty = do not override ANTHROPI
 DEFAULT_CLAUDE_THINKING_OVERRIDE="high"       # none|off|low|medium|high|xhigh
 DEFAULT_AUTO_INIT_GIT_IF_MISSING="true"       # initialize git repo at startup when missing
 DEFAULT_AUTO_COMMIT_ON_PHASE_PASS="true"      # commit phase-approved local changes (no push)
-DEFAULT_YOLO="false"
+DEFAULT_YOLO="true"
 DEFAULT_AUTO_UPDATE="false"                  # check remote script and replace before startup
 DEFAULT_AUTO_UPDATE_URL=""                   # explicit raw ralphie.sh URL; derived from GitHub origin when empty
 DEFAULT_AUTO_UPDATE_ALLOW_DIRTY="false"      # refuse to overwrite local ralphie.sh edits by default

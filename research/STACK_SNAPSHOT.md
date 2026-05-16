@@ -1,71 +1,61 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-14
+- generated_at: 2026-05-16T00:00:00Z
 - project_root: repository root
-- primary_stack: Python control plane with Next.js dashboard and Shell/Compose runtime
-- primary_score: 087/100
+- primary_stack: Python control plane with Shell/Docker Compose runtime and Next.js dashboard
+- deterministic_confidence_score: 086/100
 - confidence: high
+
+## Scoring Rule
+
+The deterministic score is repository-evidence based:
+
+- 35 points: dominant Python source and test surface for control-plane logic.
+- 20 points: canonical shell/deploy scripts and Docker Compose runtime.
+- 15 points: SQLite schema and migration ownership in Python.
+- 15 points: Next.js/React dashboard present but secondary to fleet mission.
+- 10 points: focused tests exist for the target domain.
+- 5 points: penalty retained for live/provisioning behavior that cannot be
+  fully proven without operator-authorized hosts/providers.
+
+Score: `35 + 20 + 15 + 15 + 10 - 9 = 86`.
 
 ## Project Stack Ranking
 
-| rank | stack | score | evidence |
+| rank | stack hypothesis | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python | 087 | 189 Python files, SQLite control-plane schema, hosted API, bots, provisioning, notification delivery, tests |
-| 2 | Shell + Docker Compose | 071 | 82 shell scripts, canonical `deploy.sh`, `bin/docker-job-loop.sh`, `compose.yaml`, systemd templates |
-| 3 | Next.js / React / TypeScript | 064 | Web package manifest, 17 TSX files, 6 TS files, dashboard/admin/onboarding surfaces, Playwright tests |
-| 4 | SQLite | 058 | Embedded control-plane DB schema and migrations in Python; no standalone DB service required for local tests |
-| 5 | Node.js tooling | 044 | Web build/test/lint toolchain and marketing/dashboard assets |
-| 6 | Hermes plugin runtime | 037 | ArcLink-managed Hermes plugins and hooks, installed by wrapper scripts rather than edited in core |
-| 7 | External provider adapters | 025 | Stripe, Chutes, Telegram, Discord, Hetzner, Linode, Notion, Cloudflare, Tailscale boundaries are fake/default-gated |
-| 8 | Unknown / other | 000 | No Go, Rust, Java, Ruby, or .NET manifests detected in the active public implementation path |
+| 1 | Python control plane | 35 | `python/` modules own fleet, inventory, action worker, provisioning worker, executor, schema, hosted API, dashboard, tests. |
+| 2 | Shell + Docker Compose operations | 20 | `bin/deploy.sh`, `deploy.sh`, `bin/docker-job-loop.sh`, `compose.yaml`, host bootstrap scripts, operational tests. |
+| 3 | SQLite-backed state | 15 | `python/arclink_control.py` owns schema, indexes, drift checks, status contracts, and temporary DB tests. |
+| 4 | Next.js/React dashboard | 15 | `web/package.json`, Next 15, React 19, TypeScript, Playwright; relevant for operator health surfaces. |
+| 5 | External provider adapters | 6 | Hetzner/Linode modules and requests dependency exist, but provisioning is currently partial and live proof is gated. |
+| 6 | Hermes runtime integration | 5 | Pinned runtime, skills/plugins/hooks, but this mission must not modify Hermes core. |
 
-## Deterministic Confidence Score
+## Deterministic Alternatives Ranking
 
-Score formula:
+| rank | implementation path | confidence | rationale |
+| --- | --- | --- | --- |
+| 1 | Extend current Python/Shell/Compose architecture | 86 | Aligns with existing code, tests, deploy surface, and steering constraints. |
+| 2 | Add a separate fleet service/daemon with its own API and database | 31 | Could isolate fleet concerns, but violates small-patch/idempotent posture and duplicates control DB state. |
+| 3 | Move worker health to a pushed worker agent | 28 | Useful long term, but conflicts with the selected pull-based, low-footprint worker model. |
+| 4 | Introduce a new CLI binary for fleet operations | 18 | Technically simple, but conflicts with canonical `bin/deploy.sh control ...` operator surface. |
 
-```text
-primary_score =
-  30 points for dominant implementation language evidence
-  20 points for matching test suite evidence
-  15 points for runtime entrypoint evidence
-  15 points for web/dashboard manifest evidence
-  10 points for deployment/runtime orchestration evidence
-  10 points for docs/spec alignment evidence
-```
+## Runtime Hypotheses
 
-Applied score:
+| hypothesis | confidence | evidence | validation needed |
+| --- | --- | --- | --- |
+| Fleet placement is Python/SQLite-local and already production-shaped for single-host plus manual multi-host | High | `arclink_fleet.py`, schema, tests for placement, capacity, uniqueness, ASU | Extend tests for region-tier and strategy. |
+| Day-2 actions are the multi-host routing weak point | High | `arclink_action_worker.py` builds a single env executor; steering identifies this as load-bearing | Add two-host placement routing regression. |
+| Worker enrollment requires new schema/API/CLI surfaces | High | No `arclink_fleet_enrollments` or callback surface found in current source | Add Phase 2 tests and implementation. |
+| Periodic inventory probing is absent | High | Current `probe` is operator-triggered; no `arclink_fleet_inventory_worker.py` exists | Add daemon and Compose service. |
+| Cloud-provider create/delete is incomplete | High | Current provider CLI path lists servers only | Add fake provider provisioning workflows. |
+| Web/dashboard changes are secondary | Medium | Operator scale snapshot exists; fleet health may need dashboard addition | Only touch web if health surface is required by BUILD phase. |
 
-| Signal | Points | Evidence |
-| --- | --- | --- |
-| Dominant implementation language | 28/30 | Python owns API, schema, bots, provisioning, notifications, and tests. |
-| Test suite | 19/20 | Focused Python tests exist for most ArcLink surfaces; web tests exist. |
-| Runtime entrypoints | 14/15 | `deploy.sh`, `bin/arclink-ctl`, hosted API, public bots, job-loop scripts. |
-| Web/dashboard manifest | 12/15 | Next.js app with dashboard/admin/onboarding and Playwright tests. |
-| Orchestration | 8/10 | Compose and systemd paths exist; live deploy remains operator-gated. |
-| Docs/spec alignment | 6/10 | API reference/OpenAPI exist but need Wave 6 reconciliation. |
-| Total | 087/100 | High confidence. |
+## Alternatives To Keep Explicitly Deferred
 
-## Top 3 Stack Alternatives
-
-1. Python-first full-stack control plane: score 087.
-   Evidence: Python owns business logic, SQLite schema, hosted API, public bots,
-   notification delivery, and most tests. This is the correct implementation
-   lane for ArcLink Wrapped.
-
-2. Next.js-first product app: score 064.
-   Evidence: dashboard and onboarding are Next.js/React, but they consume
-   Python hosted API routes rather than owning core behavior.
-
-3. Shell/Compose operations substrate: score 071 as a runtime lane, not the
-   primary product logic.
-   Evidence: deploy/install/health/job-loop scripts and Compose services own
-   runtime orchestration. Wrapped scheduling should use this lane narrowly.
-
-## Alternatives And Rejections
-
-| Alternative | Why it is not primary |
-| --- | --- |
-| Pure Node.js service | The web app is significant, but control-plane state, API, and tests are Python/SQLite. |
-| New queue/scheduler infrastructure | Existing job-loop services are sufficient for Wrapped cadence and retry behavior. |
-| Direct Hermes-core implementation | ArcLink operating guide forbids modifying Hermes core for ArcLink behavior. |
-| Live-provider implementation path | BUILD is no-secret and local; live providers remain proof-gated. |
+- Worker-pushed heartbeat agent.
+- TPM/Secure Boot hardware attestation.
+- AWS/GCP/Azure/DigitalOcean provisioning.
+- Separate probe key distinct from deploy key.
+- Captain-visible fleet topology.
+- CI-driven live cloud or non-loopback SSH proof.

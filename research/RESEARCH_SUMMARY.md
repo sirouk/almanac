@@ -1,93 +1,97 @@
 # Research Summary
 
-<confidence>90</confidence>
+<confidence>86</confidence>
 
 ## Scope
 
-This PLAN pass inspected the public ArcLink repository, current research
-artifacts, the ArcPod Captain Console steering document, the Sovereign audit
-verification file, schema and drift checks, hosted API and dashboard patterns,
-public bot handlers, notification delivery rails, Docker job-loop scheduling,
-OpenAPI/docs surfaces, and focused tests.
+This PLAN pass inspected the public ArcLink repository, the fleet enrollment
+steering document, the verified Sovereign audit closure brief, existing fleet
+and inventory source, the action and provisioning workers, deploy/control CLI
+dispatch, Compose runtime services, focused tests, and operator docs.
 
-No private state, live secrets, user Hermes homes, deploy keys, production
-deploys, payment/provider mutations, live bot command registration, or Hermes
-core were inspected or changed.
+No private state, live secrets, deploy keys, user Hermes homes, production
+services, payment/provider mutations, real cloud-provider calls, public bot
+registration, remote SSH, or Hermes core were inspected or changed.
 
 ## Mission Reconciliation
 
-The prompt contains two active-looking directives:
+The active mission is ArcLink Sovereign Fleet enterprise-grade worker
+enrollment and placement. The live backlog is this repository's
+`IMPLEMENTATION_PLAN.md`, rewritten by this PLAN pass from
+`research/RALPHIE_ARCLINK_FLEET_ENROLLMENT_STEERING.md` and the user-provided
+goals.
 
-- Bootstrap objective: resolve the verified Sovereign audit backlog, starting
-  with Wave 1 security and trust-boundary repairs.
-- Project goals document: final ArcPod Captain Console run, landing Wave 6
-  ArcLink Wrapped plus the Mission Closeout sweep.
+The older Sovereign audit verification file remains useful context, but its
+closure revisit says the verified FACT and actionable PARTIAL source gaps were
+locally remediated by the prior pass. For this mission, the audit file is a
+regression-safety reference, not the primary backlog. The primary backlog is
+the fleet gap chain:
 
-Current source and completion notes show the audit Wave 1 trust-boundary items
-already have local source-level remediations and focused tests. Therefore the
-BUILD handoff treats audit Wave 1 as a verification gate: re-run and inspect
-those trust-boundary checks first, repair any regression found, ignore the two
-fiction/outdated audit items, then implement Wave 6 and closeout. This satisfies
-the audit directive without reworking fixed code blindly.
+- static day-2 action-worker routing;
+- missing attested worker enrollment;
+- missing periodic probe daemon and health summary;
+- incomplete scriptable CLI automation;
+- stub-only cloud-provider provisioning.
 
 ## Current Source Findings
 
-| Area | Finding |
-| --- | --- |
-| Waves 0-5 | Source now contains Wave 0-5 surfaces: vocabulary, Agent Name/Title onboarding, inventory/ASU, Pod migration, Pod Comms, Crew Training, hosted API routes, web dashboard pieces, and tests. The prior plan files were stale and still described Wave 5 as future work. |
-| Audit Wave 1 | Telegram webhook secret, Discord timestamp/replay checks, hosted API body caps, CIDR gate, session hash peppering, shared secret redaction, safer auth/body errors, and webhook rate-limit tests are present in source/tests. Docker socket scoping still deserves close verification because Compose has several intentional socket mounts. |
-| Wrapped schema/core | `arclink_wrapped_reports` and `arclink_users.wrapped_frequency` exist with drift checks. `python/arclink_wrapped.py`, core tests, scheduler service, and `captain-wrapped` delivery are now present; Wrapped API/routes, dashboard tab, and bot cadence command remain open. |
-| Data inputs | Wrapped can read `arclink_events`, `arclink_audit_log`, `arclink_pod_messages`, `memory_synthesis_cards`, deployment metadata/state roots, job status JSON, and `arclink-vault-reconciler.json` deltas. These reads must stay scoped to the Captain's deployments and temporary test fixtures. |
-| Delivery rail | `notification_outbox` supports durable delivery attempts. Wrapped now has a `target_kind='captain-wrapped'` path, quiet-hours scheduling semantics, and report delivered-state updates. |
-| Redaction | `arclink_evidence.redact_value` and `arclink_secrets_regex` exist. Wrapped report rendering must redact before storing or delivering narrative text. |
-| Web stack | Next.js dashboard has user/admin tabs and API helpers. No Wrapped tab or API client methods exist. |
-| Docs/OpenAPI | `docs/API_REFERENCE.md`, `docs/arclink/architecture.md`, `docs/DOC_STATUS.md`, and `docs/openapi/arclink-v1.openapi.json` document Waves through Crew Training/Comms but not Wrapped. |
+| Area | Current source signal | Planning consequence |
+| --- | --- | --- |
+| Fleet registry | `python/arclink_fleet.py` registers hosts, lists capacity, maintains active placements, filters unhealthy/draining/saturated hosts, and has an idempotent active-placement uniqueness path. | Keep and harden. Add region-tier priority and orphan reconciliation instead of replacing the registry. |
+| Inventory registry | `python/arclink_inventory.py` registers manual/local/cloud-discovered machines, probes over SSH, computes ASU, links to `arclink_fleet_hosts` through `machine_host_link`, and exposes a local CLI. | Extend with enrollment identity fields, JSON output, health summary, and daemon probe history. |
+| Schema and drift | `python/arclink_control.py` already creates `arclink_inventory_machines`, `arclink_fleet_hosts`, `arclink_deployment_placements`, active-placement uniqueness, and relationship drift checks. | Additive migrations only. Preserve both registry tables and formalize the 1:1 invariant. |
+| Provisioning worker | `python/arclink_sovereign_worker.py` already performs per-placement host lookup and has `_executor_for_host` for per-host SSH/local/fake executor selection. | Factor that helper into `python/arclink_executor.py` for reuse by the action worker. |
+| Action worker | `python/arclink_action_worker.py` still builds one executor from env, using `ARCLINK_ACTION_WORKER_SSH_HOST` / `ARCLINK_LOCAL_FLEET_SSH_HOST` for SSH mode. | Phase 1 is the load-bearing fix: resolve deployment placement per action and cache per-host executors. |
+| Control CLI | `bin/deploy.sh control fleet-key`, interactive `register-worker`, and `inventory list|probe|add|drain|remove|set-strategy` exist. | Extend `bin/deploy.sh`; do not introduce a new CLI binary. |
+| Cloud providers | `arclink_inventory_hetzner.py` and `arclink_inventory_linode.py` exist, but current `inventory add hetzner|linode` lists servers only. | Build idempotent create/bootstrap/remove workflows later in Phase 6. |
+| Runtime stack | Docker Compose has `control-provisioner` and `control-action-worker` job-loop services. Docker socket mounts are intentionally scoped for trusted operator services. | Add the inventory worker as another job-loop service and test its socket and secret posture. |
+| Tests | Focused suites exist for fleet, inventory providers, action worker, executor, sovereign worker, schema, hosted API, dashboard, and deploy regressions. | Add `test_arclink_fleet_inventory_worker.py` and `test_arclink_fleet_enrollment.py`; expand existing suites where behavior changes. |
 
 ## Implementation Path Comparison
 
 | Decision | Path A | Path B | Selected path |
 | --- | --- | --- | --- |
-| Audit Wave 1 handling | Verify current trust-boundary repairs first, patch only regressions | Re-implement all listed audit items from the historical report | Path A. Source and tests already show remediation; blind rewrites would widen risk. |
-| Wrapped core | Add `python/arclink_wrapped.py` with deterministic report generation, persistence, delivery enqueue, and due-cadence helpers | Scatter Wrapped SQL/rendering inside hosted API, dashboard, scheduler, and bot handlers | Path A. One module keeps scoring, redaction, and privacy boundaries testable. |
-| Scheduler | Add a named `arclink-wrapped` Compose job-loop service invoking a small `bin/arclink-wrapped.sh` runner that decides due reports | Fold Wrapped into `health-watch` or add a host cron | Path A. It matches existing Docker job-loop patterns, has visible status, and avoids unrelated health-watch coupling. |
-| Report inputs | Read existing ledgers and local fixture-safe state roots, with injected state-root/session scanners in tests | Require live Hermes homes or private state to prove session/memory inputs | Path A. BUILD must remain no-secret and no-private-state. |
-| Cadence changes | Expose `/user/wrapped-frequency` and public bot `/wrapped-frequency` with `daily|weekly|monthly` only | Let dashboard mutate `arclink_users` generically or accept arbitrary cron strings | Path A. It enforces the daily minimum and keeps the user API narrow. |
-| Delivery | Queue `notification_outbox` rows with `target_kind='captain-wrapped'`, `next_attempt_at` honoring quiet hours, and aggregate operator status only | Deliver directly from the scheduler or expose full narratives to Operator dashboards | Path A. It reuses durable notification retries and preserves Captain narrative privacy. |
-| Dashboard | Add a Captain "Wrapped" tab plus Operator aggregate status panel | Replace dashboard structure or put Wrapped in Crew Training | Path A. The current dashboard is tab-based and should stay scoped. |
+| Action routing | Resolve the active deployment placement in the action worker and construct a per-host executor using a shared helper | Keep static env host and ask operators to run one action worker per host | Path A. Static routing is the verified multi-worker breakage. |
+| Executor helper | Move/factor `_executor_for_host` into `python/arclink_executor.py` with minimal compatibility wrappers | Duplicate SSH executor construction in the action worker | Path A. One helper keeps SSH key validation, allowlists, fake/local/ssh modes, and secret materialization consistent. |
+| Enrollment trust | HMAC-bound, single-use, TTL enrollment tokens plus machine fingerprint attestation | SSH key-only registration | Path A. SSH key-only does not meet zero-trust or audit requirements. |
+| Registry model | Formalize `arclink_inventory_machines` for machine identity and `arclink_fleet_hosts` for placement target | Collapse both tables into one fleet table | Path A. Current code and tests already depend on both tables; collapse would be a migration risk. |
+| Probing model | Control-plane pull via SSH/probe wrapper with three cadences | Worker-pushed heartbeat agent | Path A. Pull preserves the current low-footprint worker model and operator-owned trust roots. |
+| CLI surface | Extend `bin/deploy.sh control ...` and document JSON/exit-code contracts | Add a new fleet CLI | Path A. `deploy.sh control` is the canonical operator surface. |
+| Cloud provisioning | Idempotent Hetzner/Linode create, cloud-init/bootstrap, callback enrollment, then provider-aware remove | Manual-only provisioning forever | Path A for v1 providers; manual remains supported for backward compatibility. |
+| Live proof | Operator-authorized two-host proof recorded as evidence | CI-driven real cloud/SSH proof | Path A. CI must not depend on live credentials or mutate real hosts. |
 
 ## Build Assumptions
 
-- Current source is the source of truth when historical research files disagree.
-- Audit fiction items `ME-11` and `ME-25` remain ignored except as regression
-  awareness.
-- Wrapped generation is read-only over Captain state. It may insert/update
-  `arclink_wrapped_reports` and queue notifications, but must not mutate
-  sessions, memories, vault content, Hermes core, or provider/payment state.
-- Captain-facing Wrapped narrative uses ArcPod, Pod, Agent, Captain, Crew,
-  Raven, Comms, and ArcLink Wrapped vocabulary.
-- Operator/admin views may show only aggregate Wrapped status, frequency,
-  novelty score, timestamps, and failure status. They must not show the
-  Captain's narrative or raw ledger snippets.
-- Any state-root or Hermes-session reading must be explicitly scoped to
-  deployments owned by the requested Captain and injectable for tests.
+- Current source is ground truth where historical research files disagree.
+- Existing single-host installs must keep working without operator action.
+- Fleet operations are operator-only. Captain-facing surfaces expose only
+  coarse ArcPod health, never host IDs, fleet topology, SSH coordinates, or
+  provider metadata.
+- New schema is additive and idempotent; migrations must run twice cleanly.
+- Enrollment tokens, fingerprints, SSH coordinates, cloud credentials, and
+  provider billing references must be redacted in logs and tests.
+- Hetzner and Linode live workflows remain fake-adapter tested until the
+  operator explicitly authorizes live proof.
+- The Docker/socket posture remains intentionally trusted for the provisioner
+  and action worker; this mission should not broaden socket access.
 
 ## Risks
 
-- Quiet-hours rules are not a fully normalized per-Captain scheduling API today;
-  Wrapped may need a conservative helper that delays delivery rather than
-  inventing new org-profile semantics.
-- `memory_synthesis_cards` is global. Wrapped must use only safe, bounded
-  summaries and avoid implying per-Captain ownership when source attribution is
-  ambiguous.
-- Compose still mounts the Docker socket for several trusted operator-action
-  services. The audit gate should verify current tests and document intentional
-  mounts rather than broadening Wrapped.
-- The Mission Closeout sweep is broad; docs/OpenAPI reconciliation should be
-  done after behavior is true, not before.
+- Factoring `_executor_for_host` touches provisioning and action-worker
+  trust-boundary code. Regression tests must prove fake/local/ssh behavior and
+  legacy env fallback.
+- Region-tier placement can alter host selection. It should be added after
+  preserving current deterministic headroom/ASU behavior with tests.
+- HMAC enrollment needs a durable control-plane signing secret. Missing secret
+  behavior must fail closed without printing token material.
+- Periodic probing can create noisy operator notifications if thresholds or
+  recovery rules are wrong. Start with deterministic fake-runner tests.
+- Cloud-provider provisioning has cost and deletion risk. BUILD should stop at
+  fake/idempotency tests unless Phase 7 is explicitly authorized.
 
 ## Verdict
 
-PLAN is ready for no-secret BUILD handoff after the required artifacts in this
-pass are updated. No blocker requires stopping BUILD, but the first BUILD task
-is a trust-boundary verification gate. Any regression there blocks Wrapped work
-until the focused repair and regression test land.
+PLAN is ready for BUILD handoff. The first BUILD steps should land Phase 0
+schema/reconciler work and Phase 1 action-worker routing before expanding into
+enrollment, daemon, CLI, and cloud-provider workflows. No live/private blocker
+prevents local BUILD work, but Phase 7 live proof remains operator-gated.

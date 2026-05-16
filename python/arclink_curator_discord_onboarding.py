@@ -37,6 +37,7 @@ from arclink_onboarding_flow import (
     BotIdentity,
     IncomingMessage,
     notify_session_state,
+    parse_notion_setup_callback_data,
     process_onboarding_message,
     resolve_curator_discord_bot_token,
 )
@@ -619,6 +620,34 @@ async def main() -> None:
                 text="/setup-backup",
             )
             await _send_replies(replies=replies, origin_chat_id=actual_chat, interaction=interaction)
+            return
+
+        notion_parsed = parse_notion_setup_callback_data(custom_id)
+        if notion_parsed is not None:
+            action, session_id = notion_parsed
+            actual_user = str(getattr(interaction.user, "id", "") or "")
+            actual_chat = str(getattr(interaction.channel, "id", "") or "")
+            if not actual_chat or not session_id:
+                await interaction.response.send_message("That Notion setup button is malformed.", ephemeral=True)
+                return
+            with connect_db(cfg) as conn:
+                session = get_onboarding_session(conn, session_id, redact_secrets=False)
+                if session is None:
+                    await interaction.response.send_message("That Notion setup session is no longer active.", ephemeral=True)
+                    return
+                if actual_user != str(session.get("sender_id") or "") or actual_chat != str(session.get("chat_id") or ""):
+                    await interaction.response.send_message("Only the onboarding recipient can use that Notion setup button.", ephemeral=True)
+                    return
+            await interaction.response.send_message("Notion choice received.", ephemeral=True)
+            text = {"ready": "ready", "skip": "skip", "verify": "/verify-notion"}.get(action, "")
+            replies = await _process_discord_input(
+                chat_id=actual_chat,
+                sender_id=actual_user,
+                sender_username=str(getattr(interaction.user, "name", "") or ""),
+                sender_display_name=str(getattr(interaction.user, "display_name", "") or ""),
+                text=text,
+            )
+            await _send_replies(replies=replies, origin_chat_id=actual_chat)
             return
 
         prefix = "arclink:onboarding-complete:ack:"

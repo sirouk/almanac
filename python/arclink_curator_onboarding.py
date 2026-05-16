@@ -43,6 +43,7 @@ from arclink_onboarding_flow import (
     BotIdentity,
     IncomingMessage,
     notify_session_state,
+    parse_notion_setup_callback_data,
     process_onboarding_message,
     resolve_curator_telegram_bot_token,
 )
@@ -656,6 +657,85 @@ def _handle_user_backup_callback(
     return True
 
 
+def _handle_user_notion_callback(
+    *,
+    cfg: Config,
+    bot_token: str,
+    callback_query: dict[str, Any],
+) -> bool:
+    callback_query_id = str(callback_query.get("id") or "")
+    data = str(callback_query.get("data") or "").strip()
+    parsed = parse_notion_setup_callback_data(data)
+    if not callback_query_id or parsed is None:
+        return False
+    action, session_id = parsed
+    message = callback_query.get("message") or {}
+    chat = message.get("chat") or {}
+    sender = callback_query.get("from") or {}
+    chat_id = str(chat.get("id") or "")
+    sender_id = str(sender.get("id") or "")
+    if not chat_id or not session_id:
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text="That Notion setup button is malformed.",
+            show_alert=True,
+        )
+        return True
+    with connect_db(cfg) as conn:
+        session = get_onboarding_session(conn, session_id, redact_secrets=False)
+        if session is None:
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="That Notion setup session is no longer active.",
+                show_alert=True,
+            )
+            return True
+        if sender_id != str(session.get("sender_id") or "") or chat_id != str(session.get("chat_id") or ""):
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="Only the onboarding recipient can use that Notion setup button.",
+                show_alert=True,
+            )
+            return True
+
+    telegram_answer_callback_query(
+        bot_token=bot_token,
+        callback_query_id=callback_query_id,
+        text="Notion choice received.",
+        show_alert=False,
+    )
+    display_name = " ".join(
+        item.strip()
+        for item in (str(sender.get("first_name") or ""), str(sender.get("last_name") or ""))
+        if item.strip()
+    )
+    text = {"ready": "ready", "skip": "skip", "verify": "/verify-notion"}.get(action, "")
+    replies = process_onboarding_message(
+        cfg,
+        IncomingMessage(
+            platform="telegram",
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_username=str(sender.get("username") or ""),
+            sender_display_name=display_name,
+            text=text,
+        ),
+        validate_bot_token=lambda token: BotIdentity(bot_id="unused"),
+    )
+    for reply in replies:
+        send_text(
+            bot_token,
+            reply.chat_id,
+            reply.text,
+            reply_markup=reply.telegram_reply_markup,
+            parse_mode=reply.telegram_parse_mode,
+        )
+    return True
+
+
 def _handle_operator_callback(
     *,
     cfg: Config,
@@ -911,6 +991,8 @@ def process_update(*, cfg: Config, bot_token: str, curator_bot_id: str, update: 
         if _handle_user_completion_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query):
             return
         if _handle_user_backup_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query):
+            return
+        if _handle_user_notion_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query):
             return
         _handle_operator_callback(cfg=cfg, bot_token=bot_token, callback_query=callback_query)
         return

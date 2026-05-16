@@ -112,6 +112,11 @@ _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR: ThreadPoolExecutor | None = None
 _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR_WORKERS = 0
 _PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE: threading.BoundedSemaphore | None = None
 _PUBLIC_AGENT_LIVE_TRIGGER_PENDING_LIMIT = 0
+_TELEGRAM_FAST_ACK_LOCK = threading.Lock()
+_TELEGRAM_FAST_ACK_EXECUTOR: ThreadPoolExecutor | None = None
+_TELEGRAM_FAST_ACK_EXECUTOR_WORKERS = 0
+_TELEGRAM_FAST_ACK_SEMAPHORE: threading.BoundedSemaphore | None = None
+_TELEGRAM_FAST_ACK_PENDING_LIMIT = 0
 
 # --- Configuration -----------------------------------------------------------
 
@@ -1680,6 +1685,139 @@ def _public_agent_live_trigger_pool(
         return _PUBLIC_AGENT_LIVE_TRIGGER_EXECUTOR, _PUBLIC_AGENT_LIVE_TRIGGER_SEMAPHORE
 
 
+def _telegram_fast_ack_enabled(config: HostedApiConfig) -> bool:
+    return str(config.env.get("ARCLINK_TELEGRAM_FAST_ACK_ENABLED", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _telegram_fast_ack_pool(
+    config: HostedApiConfig,
+) -> tuple[ThreadPoolExecutor, threading.BoundedSemaphore]:
+    """Return the bounded Telegram receipt executor.
+
+    Receipt reactions and typing indicators are useful feedback, but they are
+    never allowed to slow webhook acknowledgement. This lane is deliberately
+    separate from the heavier public-agent live trigger pool so thousands of
+    Captain messages do not queue cosmetic work behind Docker/Hermes delivery.
+    """
+    workers = _bounded_int_config(
+        config,
+        "ARCLINK_TELEGRAM_FAST_ACK_WORKERS",
+        2,
+        minimum=1,
+        maximum=32,
+    )
+    pending_limit = _bounded_int_config(
+        config,
+        "ARCLINK_TELEGRAM_FAST_ACK_MAX_PENDING",
+        1024,
+        minimum=1,
+        maximum=65536,
+    )
+    global _TELEGRAM_FAST_ACK_EXECUTOR
+    global _TELEGRAM_FAST_ACK_EXECUTOR_WORKERS
+    global _TELEGRAM_FAST_ACK_SEMAPHORE
+    global _TELEGRAM_FAST_ACK_PENDING_LIMIT
+    with _TELEGRAM_FAST_ACK_LOCK:
+        if _TELEGRAM_FAST_ACK_EXECUTOR is None or _TELEGRAM_FAST_ACK_EXECUTOR_WORKERS != workers:
+            old_executor = _TELEGRAM_FAST_ACK_EXECUTOR
+            _TELEGRAM_FAST_ACK_EXECUTOR = ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="arclink-telegram-fast-ack",
+            )
+            _TELEGRAM_FAST_ACK_EXECUTOR_WORKERS = workers
+            if old_executor is not None:
+                old_executor.shutdown(wait=False, cancel_futures=True)
+        if _TELEGRAM_FAST_ACK_SEMAPHORE is None or _TELEGRAM_FAST_ACK_PENDING_LIMIT != pending_limit:
+            _TELEGRAM_FAST_ACK_SEMAPHORE = threading.BoundedSemaphore(pending_limit)
+            _TELEGRAM_FAST_ACK_PENDING_LIMIT = pending_limit
+        return _TELEGRAM_FAST_ACK_EXECUTOR, _TELEGRAM_FAST_ACK_SEMAPHORE
+
+
+def _kick_telegram_fast_agent_ack(
+    *,
+    config: HostedApiConfig,
+    telegram_config: TelegramConfig,
+    chat_id: str,
+    message_id: str,
+    request_id: str,
+    telegram_transport: Any | None = None,
+) -> bool:
+    if not _telegram_fast_ack_enabled(config):
+        return False
+    clean_chat_id = str(chat_id or "").strip()
+    clean_message_id = str(message_id or "").strip()
+    if not clean_chat_id:
+        return False
+    executor, pending_gate = _telegram_fast_ack_pool(config)
+    if not pending_gate.acquire(blocking=False):
+        logger.warning(
+            "telegram_fast_ack_saturated chat_id=%s pending_limit=%s request_id=%s",
+            clean_chat_id,
+            _bounded_int_config(
+                config,
+                "ARCLINK_TELEGRAM_FAST_ACK_MAX_PENDING",
+                1024,
+                minimum=1,
+                maximum=65536,
+            ),
+            request_id,
+        )
+        return False
+
+    def _worker() -> None:
+        transport = telegram_transport
+        if transport is None:
+            if not telegram_config.is_live:
+                return
+            transport = LiveTelegramTransport(telegram_config)
+        if clean_message_id and hasattr(transport, "set_message_reaction"):
+            try:
+                transport.set_message_reaction(clean_chat_id, clean_message_id, "👀")
+            except Exception as exc:  # noqa: BLE001 - cosmetic, best-effort
+                logger.debug(
+                    "telegram_fast_reaction_failed chat_id=%s error=%s request_id=%s",
+                    clean_chat_id,
+                    _log_error_text(exc, limit=160),
+                    request_id,
+                )
+        if hasattr(transport, "send_chat_action"):
+            try:
+                transport.send_chat_action(clean_chat_id, "typing")
+            except Exception as exc:  # noqa: BLE001 - cosmetic, best-effort
+                logger.debug(
+                    "telegram_fast_typing_failed chat_id=%s error=%s request_id=%s",
+                    clean_chat_id,
+                    _log_error_text(exc, limit=160),
+                    request_id,
+                )
+
+    try:
+        future = executor.submit(_worker)
+    except Exception as exc:  # noqa: BLE001 - skip cosmetic ack under executor pressure
+        pending_gate.release()
+        logger.warning(
+            "telegram_fast_ack_submit_failed chat_id=%s error=%s request_id=%s",
+            clean_chat_id,
+            _log_error_text(exc, limit=160),
+            request_id,
+        )
+        return False
+
+    def _release_fast_ack_slot(_future: Any) -> None:
+        try:
+            pending_gate.release()
+        except ValueError:
+            logger.warning("telegram_fast_ack_slot_release_failed chat_id=%s request_id=%s", clean_chat_id, request_id)
+
+    future.add_done_callback(_release_fast_ack_slot)
+    return True
+
+
 def _kick_public_agent_live_trigger(
     *,
     config: HostedApiConfig,
@@ -1812,6 +1950,7 @@ def _handle_telegram_webhook(
     sent = False
     edited = False
     callback_acknowledged = False
+    fast_acknowledged = False
     callback_query_id = str(result.get("callback_query_id") or "").strip()
     callback_message_id = str(result.get("callback_message_id") or "").strip()
     should_edit_callback_message = (
@@ -1877,6 +2016,14 @@ def _handle_telegram_webhook(
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     live_triggered = False
     if str(result.get("action") or "") == "agent_message_queued":
+        fast_acknowledged = _kick_telegram_fast_agent_ack(
+            config=config,
+            telegram_config=telegram_config,
+            telegram_transport=telegram_transport,
+            chat_id=str(result.get("chat_id") or ""),
+            message_id=str(result.get("telegram_message_id") or ""),
+            request_id=request_id,
+        )
         live_triggered = _kick_public_agent_live_trigger(
             config=config,
             channel_kind="telegram",
@@ -1891,6 +2038,7 @@ def _handle_telegram_webhook(
             "sent": sent,
             "edited": edited,
             "callback_acknowledged": callback_acknowledged,
+            "fast_acknowledged": fast_acknowledged,
             "live_triggered": live_triggered,
         },
         request_id=request_id,

@@ -2537,10 +2537,20 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     class CaptureTransport:
         def __init__(self) -> None:
             self.sent_messages = []
+            self.message_reactions = []
+            self.chat_actions = []
 
         def send_message(self, chat_id: str, text: str, reply_markup=None):
             self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
             return {"message_id": len(self.sent_messages)}
+
+        def set_message_reaction(self, chat_id: str, message_id: str, emoji: str):
+            self.message_reactions.append({"chat_id": chat_id, "message_id": message_id, "emoji": emoji})
+            return {"ok": True}
+
+        def send_chat_action(self, chat_id: str, action: str = "typing"):
+            self.chat_actions.append({"chat_id": chat_id, "action": action})
+            return {"ok": True}
 
     transport = CaptureTransport()
     update = {
@@ -2591,6 +2601,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
             "reply_markup": None,
             "action": "agent_message_queued",
             "channel_identity": "tg:67890",
+            "telegram_message_id": "1",
             "callback_query_id": "",
         }
 
@@ -2631,9 +2642,11 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     old_handle = hosted.handle_telegram_update
     old_trigger = hosted.run_public_agent_turns_once
     old_pool = hosted._public_agent_live_trigger_pool
+    old_fast_pool = hosted._telegram_fast_ack_pool
     hosted.handle_telegram_update = queued_agent_turn
     hosted.run_public_agent_turns_once = fake_live_trigger
     hosted._public_agent_live_trigger_pool = fake_pool
+    hosted._telegram_fast_ack_pool = fake_pool
     quiet_transport = CaptureTransport()
     try:
         status, payload, _ = hosted._handle_telegram_webhook(
@@ -2649,11 +2662,15 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         hosted.handle_telegram_update = old_handle
         hosted.run_public_agent_turns_once = old_trigger
         hosted._public_agent_live_trigger_pool = old_pool
+        hosted._telegram_fast_ack_pool = old_fast_pool
     expect(status == 200, f"empty agent handoff should still ack webhook: {status} {payload}")
     expect(payload.get("sent") is False, str(payload))
+    expect(payload.get("fast_acknowledged") is True, str(payload))
     expect(payload.get("live_triggered") is True, str(payload))
     expect(live_gate.released is True, "live trigger slot should be released after the worker completes")
     expect(quiet_transport.sent_messages == [], str(quiet_transport.sent_messages))
+    expect(quiet_transport.message_reactions == [{"chat_id": "12345", "message_id": "1", "emoji": "👀"}], str(quiet_transport.message_reactions))
+    expect(quiet_transport.chat_actions == [{"chat_id": "12345", "action": "typing"}], str(quiet_transport.chat_actions))
     expect(live_trigger_calls == [{"channel_kind": "telegram", "target_id": "tg:67890"}], str(live_trigger_calls))
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
 
@@ -2693,6 +2710,49 @@ def test_public_agent_live_trigger_backpressure_defers_to_delivery_worker() -> N
         hosted._public_agent_live_trigger_pool = old_pool
     expect(triggered is False, "saturated live trigger should leave the queued row for notification-delivery")
     print("PASS test_public_agent_live_trigger_backpressure_defers_to_delivery_worker")
+
+
+def test_telegram_fast_ack_backpressure_is_cosmetic() -> None:
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_fast_ack_backpressure_test")
+    config = hosted.HostedApiConfig(
+        env={
+            "ARCLINK_BASE_DOMAIN": "example.test",
+            "ARCLINK_TELEGRAM_FAST_ACK_MAX_PENDING": "1",
+        }
+    )
+    telegram_config = hosted.TelegramConfig(
+        bot_token="test-token",
+        bot_username="raven_test_bot",
+        webhook_url="",
+        webhook_secret="secret",
+    )
+
+    class UnusedExecutor:
+        def submit(self, fn):
+            raise AssertionError("saturated fast ack must not submit cosmetic work")
+
+    class ClosedGate:
+        def acquire(self, *, blocking=False):
+            expect(blocking is False, "Telegram fast ack should never block webhook ingress")
+            return False
+
+        def release(self):
+            raise AssertionError("closed fast-ack gate should not be released")
+
+    old_pool = hosted._telegram_fast_ack_pool
+    hosted._telegram_fast_ack_pool = lambda _config: (UnusedExecutor(), ClosedGate())
+    try:
+        acknowledged = hosted._kick_telegram_fast_agent_ack(
+            config=config,
+            telegram_config=telegram_config,
+            chat_id="12345",
+            message_id="10",
+            request_id="req_fast_ack_saturated",
+        )
+    finally:
+        hosted._telegram_fast_ack_pool = old_pool
+    expect(acknowledged is False, "saturated cosmetic ack should be skipped, not queued behind ingress")
+    print("PASS test_telegram_fast_ack_backpressure_is_cosmetic")
 
 
 def test_public_agent_live_trigger_auto_mode_defers_without_docker_socket() -> None:
@@ -4215,6 +4275,7 @@ def main() -> int:
     test_telegram_webhook_secret_boundary()
     test_telegram_webhook_sends_reply_when_transport_is_available()
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
+    test_telegram_fast_ack_backpressure_is_cosmetic()
     test_public_agent_live_trigger_auto_mode_defers_without_docker_socket()
     test_telegram_webhook_acknowledges_button_callbacks()
     test_telegram_credential_ack_edits_original_secret_message()

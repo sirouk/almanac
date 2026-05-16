@@ -23,10 +23,17 @@
     "html." + PREVIEW_FULLSCREEN_CLASS + ",body." + PREVIEW_FULLSCREEN_CLASS + "{overflow:hidden!important;}" +
     "body." + PREVIEW_FULLSCREEN_CLASS + " aside," +
     "body." + PREVIEW_FULLSCREEN_CLASS + " nav," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " #app-sidebar," +
     "body." + PREVIEW_FULLSCREEN_CLASS + " [role='navigation']," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [aria-label*='navigation' i]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [aria-label*='sidebar' i]," +
     "body." + PREVIEW_FULLSCREEN_CLASS + " [data-sidebar]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [data-testid*='navigation' i]," +
     "body." + PREVIEW_FULLSCREEN_CLASS + " [data-testid*='sidebar' i]," +
     "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='sidebar' i]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='navigation' i]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='nav-rail' i]," +
+    "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='navRail' i]," +
     "body." + PREVIEW_FULLSCREEN_CLASS + " [class*='Sidebar']{" +
     "visibility:hidden!important;pointer-events:none!important;}" +
     "body." + PREVIEW_FULLSCREEN_CLASS + " .hermes-drive-preview-fullscreen," +
@@ -35,8 +42,12 @@
 
   function previewFullscreenDocuments() {
     const docs = [document];
+    function addDoc(doc) {
+      if (doc && docs.indexOf(doc) === -1) docs.push(doc);
+    }
     try {
-      if (window.parent && window.parent !== window && window.parent.document) docs.push(window.parent.document);
+      if (window.parent && window.parent !== window) addDoc(window.parent.document);
+      if (window.top && window.top !== window) addDoc(window.top.document);
     } catch (error) {
       // Cross-origin plugin hosts cannot be patched; the local overlay z-index still applies.
     }

@@ -142,10 +142,50 @@ def test_verify_notion_command_reopens_latest_completed_session() -> None:
             )
             expect(len(replies) == 1, str(replies))
             expect("Notion" in replies[0].text, replies[0].text)
+            buttons = str(replies[0].telegram_reply_markup or "")
+            expect("Set up Notion" in buttons and "Skip for now" in buttons, buttons)
             resumed = control.find_active_onboarding_session(conn, platform="telegram", sender_id="123456", redact_secrets=False)
             expect(resumed is not None, "expected resumed onboarding session")
             expect(str(resumed.get("state") or "") == "awaiting-notion-access", str(resumed))
             print("PASS test_verify_notion_command_reopens_latest_completed_session")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_verify_notion_discord_prompt_has_buttons() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_onboarding_notion_discord_buttons_test")
+    onboarding = load_module(ONBOARDING_PY, "arclink_onboarding_notion_discord_buttons_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            bootstrap_completed_session(control, cfg, conn, platform="discord")
+            replies = onboarding.process_onboarding_message(
+                cfg,
+                onboarding.IncomingMessage(
+                    platform="discord",
+                    chat_id="123456",
+                    sender_id="123456",
+                    sender_username="alex",
+                    sender_display_name="Alex",
+                    text="/verify-notion",
+                ),
+                validate_bot_token=lambda raw: None,
+            )
+            expect(len(replies) == 1, str(replies))
+            components = str(replies[0].discord_components or "")
+            expect("Set up Notion" in components and "Skip for now" in components, components)
+            expect("arclink:onboarding:notion:ready:" in components, components)
+            expect("arclink:onboarding:notion:skip:" in components, components)
+            print("PASS test_verify_notion_discord_prompt_has_buttons")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -195,7 +235,7 @@ def test_awaiting_notion_access_skip_returns_completion_bundle() -> None:
                     sender_id="123456",
                     sender_username="alex",
                     sender_display_name="Alex",
-                    text="skip",
+                    text="Skip for now",
                 ),
                 validate_bot_token=lambda raw: None,
             )
@@ -241,12 +281,14 @@ def test_awaiting_notion_access_ready_moves_to_email_step() -> None:
                     sender_id="123456",
                     sender_username="alex",
                     sender_display_name="Alex",
-                    text="ready",
+                    text="Set up Notion",
                 ),
                 validate_bot_token=lambda raw: None,
             )
             expect(len(replies) == 1, str(replies))
             expect("Notion email" in replies[0].text, replies[0].text)
+            buttons = str(replies[0].telegram_reply_markup or "")
+            expect("Skip for now" in buttons, buttons)
             refreshed = control.get_onboarding_session(conn, str(session["session_id"]), redact_secrets=False)
             expect(str(refreshed.get("state") or "") == "awaiting-notion-email", str(refreshed))
             print("PASS test_awaiting_notion_access_ready_moves_to_email_step")
@@ -572,13 +614,14 @@ def test_awaiting_notion_verification_skip_marks_claim_and_returns_completion_bu
 
 def main() -> int:
     test_verify_notion_command_reopens_latest_completed_session()
+    test_verify_notion_discord_prompt_has_buttons()
     test_awaiting_notion_access_skip_returns_completion_bundle()
     test_awaiting_notion_access_ready_moves_to_email_step()
     test_awaiting_notion_email_starts_claim_and_moves_to_verification()
     test_verify_notion_command_reissues_pending_claim_with_same_email()
     test_verify_notion_command_reissues_expired_claim_with_same_email()
     test_awaiting_notion_verification_skip_marks_claim_and_returns_completion_bundle()
-    print("PASS all 7 onboarding notion tests")
+    print("PASS all 8 onboarding notion tests")
     return 0
 
 

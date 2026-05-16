@@ -1,249 +1,285 @@
-# Implementation Plan: Audit Gate, Wave 6 ArcLink Wrapped, Mission Closeout
+# Implementation Plan: ArcLink Sovereign Fleet Enrollment And Placement
+
+Authoritative steering reference:
+`research/RALPHIE_ARCLINK_FLEET_ENROLLMENT_STEERING.md`
 
 ## Goal
 
-Complete the final ArcPod Captain Console run without touching private state or
-live infrastructure:
+Land enterprise-grade ArcLink Sovereign worker enrollment and placement while
+preserving existing single-host installs. The system must support attested
+worker registration, placement-aware day-2 action routing, periodic inventory
+health, scriptable operator CLI output, region-aware placement, idempotent
+Hetzner/Linode provisioning workflows, and an operator-gated two-host proof.
 
-1. Verify the previously remediated Sovereign audit Wave 1 trust-boundary items
-   still pass in current source.
-2. Land Wave 6 ArcLink Wrapped.
-3. Complete the Mission Closeout sweep for Waves 0-6.
+The verified Sovereign audit file remains a regression reference. Its closure
+revisit says the verified FACT/actionable PARTIAL source gaps were remediated,
+so BUILD should run the relevant trust-boundary tests early and patch only new
+regressions. Do not re-open fiction/outdated audit items `ME-11` or `ME-25`.
 
-## Build Status
+## Non-Goals And Boundaries
 
-Waves 0-5 are treated as landed in current source. They should not be retouched
-unless a direct regression blocks the audit gate, Wrapped, or closeout proof.
-
-Final status for this run: Wave 6 and the closeout sweep are source-complete in
-the current worktree. `research/BUILD_COMPLETION_NOTES.md` carries the
-six-wave mission closeout ledger, and
-`research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` carries the landing-status
-map. Remaining work after commit is operator-authorized live proof only.
-
-The historical audit verification file remains a regression checklist. Its two
-fiction/outdated items, `ME-11` and `ME-25`, must not become new backlog unless
-current source contradicts their fiction verdict.
-
-## Constraints
-
-- Do not touch `arclink-priv`, live secrets, user Hermes homes, deploy keys,
-  production services, payment/provider mutations, public bot command
-  registration, live deploys/upgrades, Docker install/upgrade, or Hermes core.
-- Keep Wrapped read-only over Captain state. It may write Wrapped report rows,
-  notification rows, audit/events, and scheduler status, but must not mutate
-  sessions, memory, vault content, providers, payments, or deployments.
-- Use existing ArcLink architecture: Python, SQLite, hosted API, public bot
-  handler patterns, `notification_outbox`, `docker-job-loop.sh`, Next.js
-  dashboard, and canonical docs/OpenAPI.
-- Preserve the Sovereign Control Node domain-or-Tailscale ingress contract; do
-  not collapse paid pod ingress into Shared Host Docker validation paths.
-- Captain-facing surfaces use ArcPod, Pod, Agent, Captain, Crew, Raven, Comms,
-  Crew Training, and ArcLink Wrapped. Operator/backend surfaces keep technical
-  vocabulary.
-- Operator Wrapped views expose aggregate status/score only, never Captain
-  narrative, markdown, report text, or raw ledger snippets.
+- Do not touch `arclink-priv`, live secrets, deploy keys, production services,
+  payment/provider mutations, public bot command registration, Docker
+  install/upgrade/reconfigure, live non-loopback SSH, real cloud-provider
+  calls, or Hermes core without explicit operator authorization.
+- Do not introduce a new CLI binary. Extend `bin/deploy.sh control ...`.
+- Do not collapse `arclink_inventory_machines` and `arclink_fleet_hosts`.
+- Do not expose host IDs, SSH coordinates, provider metadata, or fleet topology
+  to Captain-facing surfaces.
+- Do not claim fleet readiness without Phase 7 live two-host proof.
 
 ## Selected Implementation Path
 
-| Decision | Selected path | Rejected alternatives |
+| Decision | Selected path | Rejected or deferred alternatives |
 | --- | --- | --- |
-| Audit backlog | Verification gate first; repair only actual current regressions | Blindly re-implement historical audit items already fixed in source. |
-| Wrapped core | Add `python/arclink_wrapped.py` as the single source for scoring, rendering, persistence, cadence, and delivery enqueue | Duplicating Wrapped SQL/scoring in API, dashboard, bot, and scheduler handlers. |
-| Scheduler | Add a named `arclink-wrapped` job-loop service and thin runner | Host cron, new queue infrastructure, or piggybacking on health-watch. |
-| Data access | Scoped DB reads plus injectable read-only state/session scanners | Reading live user homes or private state during BUILD. |
-| Storage | Store rendered text/markdown and stats in `ledger_json` first; add columns only if tests show the existing schema is insufficient | Premature schema churn. |
-| Delivery | Queue `notification_outbox` with `target_kind='captain-wrapped'` and quiet-hours-aware `next_attempt_at` | Direct-send from scheduler or bypassing outbox retries. |
-| Dashboard | Add Captain Wrapped tab and admin aggregate panel using current tab/API patterns | Dashboard rewrite. |
-| Bot | Add pure `/wrapped-frequency` handler tests without live command registration | Mutating Telegram/Discord command menus during BUILD. |
+| Day-2 routing | Resolve deployment placement per action and construct/cache a host-specific executor | Static env host per worker is the current defect; worker-side router is deferred. |
+| Executor reuse | Factor `_executor_for_host` from `arclink_sovereign_worker.py` into `arclink_executor.py` | Copy/paste SSH runner construction into the action worker. |
+| Registry model | Formalize inventory machine vs fleet host separation and add reconciler warnings | Table collapse is rejected as high-risk migration churn. |
+| Enrollment | HMAC-bound single-use TTL token plus fingerprint attestation | SSH key-only registration and long-lived bearer tokens are rejected. |
+| Probing | Control-plane pull via SSH probe wrapper | Worker-pushed heartbeat agent is deferred. |
+| Scheduling | Docker job-loop service for inventory worker | New scheduler dependency or host cron. |
+| CLI | Harden existing `deploy.sh control` commands with JSON modes and documented exit codes | New CLI binary. |
+| Cloud v1 | Hetzner and Linode fake-tested create/bootstrap/remove workflows | AWS/GCP/Azure/DigitalOcean deferred. |
+| Live proof | Operator-authorized two-host evidence run | CI-driven live host/provider proof rejected. |
 
-## Validation Criteria
+## Audit Regression Gate
 
-BUILD is complete only when:
+Before touching fleet code, run or inspect the focused trust-boundary tests most
+likely to catch regressions from the verified audit closure:
 
-- audit Wave 1 trust-boundary verification passes or any current regression is
-  fixed with focused tests;
-- `generate_wrapped_report(conn, user_id, period, period_start, period_end)`
-  produces deterministic reports from scoped events, audit rows, Comms rows,
-  read-only session counts, vault-reconciler deltas, and memory cards;
-- the novelty-score formula is documented and tested;
-- each rich report emits at least five non-standard statistics;
-- both plain text and Markdown render forms are redacted before persistence,
-  dashboard display, and delivery;
-- per-Captain cadence supports only `daily`, `weekly`, and `monthly`, defaults
-  to daily, and rejects anything more frequent;
-- a named scheduler retries failed reports next cycle and emits operator
-  notification for persistent failure;
-- Captain delivery goes through `notification_outbox` with
-  `target_kind='captain-wrapped'` and respects quiet hours;
-- Captain dashboard "Wrapped" tab shows history and frequency controls;
-- Operator dashboard/API shows aggregate Wrapped status/score only;
-- public bot `/wrapped-frequency` works in pure handler tests;
-- all seven Mission Closeout items are satisfied or explicitly deferred with
-  operator-facing rationale;
-- focused and broad local validation is recorded in completion notes.
+- `python3 tests/test_arclink_telegram.py`
+- `python3 tests/test_arclink_discord.py`
+- `python3 tests/test_arclink_hosted_api.py`
+- `python3 tests/test_arclink_api_auth.py`
+- `python3 tests/test_arclink_secrets_regex.py`
+- `python3 tests/test_arclink_docker.py`
 
-## Actionable Tasks
+If one fails because of current source, fix that regression with a focused test
+before continuing. Do not rewrite closed audit work blindly.
 
-### Phase 0 - Audit Wave 1 Verification Gate
+## Phase 0: Schema Additions And Orphan Reconciler
 
-1. Re-run focused tests covering the trust-boundary repairs:
-   - Telegram webhook secret registration/verification.
-   - Discord timestamp tolerance and interaction replay.
-   - Hosted API body cap, invalid JSON, CORS on early errors, and CIDR gate.
-   - Logout/session revoke auth-before-CSRF.
-   - HMAC-peppered session/CSRF hashes and legacy migration.
-   - Shared secret redaction and redact-before-truncate behavior.
-   - Webhook/public bot/admin action rate limits.
-   - Docker non-root and socket-scoping regression checks.
-2. If any test fails because of current source behavior, fix that regression
-   before Wrapped work.
-3. Record `ME-11` and `ME-25` as fiction/outdated in completion notes, not as
-   open implementation tasks.
+Tasks:
 
-### Phase 1 - Wrapped Core And Tests
+- Add idempotent columns to `arclink_inventory_machines`: `enrollment_id`,
+  `machine_fingerprint`, `attested_at`, `audit_trail_chain`, and
+  `provider_billing_ref`.
+- Add idempotent columns to `arclink_fleet_hosts`: `region_tier`,
+  `placement_priority`, and `last_health_state`.
+- Add tables for `arclink_fleet_enrollments`,
+  `arclink_fleet_host_probes`, and `arclink_fleet_audit_chain`.
+- Add indexes for enrollment status/expiry, probe host/kind/time, audit-chain
+  inventory/time, and region-tier placement lookup.
+- Add status constants and drift checks for new tables and statuses.
+- Add a reconciler that detects inventory rows with missing host links and
+  fleet hosts with no non-removed inventory row. It should write audit warnings
+  and return structured drift, not destructively repair by default.
+- Preserve existing `register_fleet_host`, `register_inventory_machine`, and
+  `place_deployment` behavior.
 
-1. Create `tests/test_arclink_wrapped.py`.
-   - Seed users, deployments, events, audit rows, Comms messages, memory cards,
-     session-count fixtures, job-status fixtures, and vault-reconciler fixture
-     state.
-   - Assert deterministic output, period scoping, Captain scoping, redaction,
-     at least five non-standard stats, score stability, persistence, failed
-     retry eligibility, and admin aggregate privacy.
-2. Add `python/arclink_wrapped.py`.
-   - Normalize periods and frequencies.
-   - Resolve period windows for daily, weekly, and monthly.
-   - Collect scoped ledger data for a Captain's deployments.
-   - Read session counts and vault-reconciler deltas only through injectable,
-     scoped read-only helpers.
-   - Generate five or more non-standard stats from available signals.
-   - Compute deterministic novelty score.
-   - Render plain text and Markdown.
-   - Redact all narrative/stat/ledger text before returning or storing.
-   - Persist `arclink_wrapped_reports` rows using `ledger_json`.
-3. Document the novelty formula in a new or existing ArcLink docs page.
+Validation:
 
-### Phase 2 - Cadence, Scheduler, And Delivery
+- `python3 tests/test_arclink_schema.py`
+- `python3 tests/test_arclink_fleet.py`
+- `python3 tests/test_arclink_inventory.py`
+- targeted migration test proving `ensure_schema` runs twice.
 
-1. Add frequency helpers and API-auth mutations.
-   - Default missing frequency to daily.
-   - Accept only `daily`, `weekly`, `monthly`.
-   - Reject hourly, cron, or arbitrary interval values.
-   - Audit successful changes.
-2. Add scheduler helpers.
-   - Select due Captains by frequency and latest generated/delivered/failed
-     report.
-   - Regenerate failed reports on the next eligible cycle.
-   - Track persistent failures and queue an operator notification without
-     Captain narrative.
-3. Add `bin/arclink-wrapped.sh` if needed.
-   - Keep it a thin wrapper around the Python module.
-   - Do not read private config beyond normal ArcLink public runtime config.
-4. Add a named `arclink-wrapped` Compose job-loop service.
-   - Use `bin/docker-job-loop.sh`.
-   - Do not mount the Docker socket.
-   - Add deploy/Docker regression coverage.
-5. Queue `notification_outbox` rows for successful Captain reports.
-   - Use `target_kind='captain-wrapped'`.
-   - Include safe extra metadata for report id, period, score, and render kind.
-   - Set `next_attempt_at` to respect supported quiet-hours windows.
+## Phase 1: Action-Worker Placement Routing
 
-### Phase 3 - Hosted API, Dashboard, And Bot
+Tasks:
 
-1. Add hosted API routes.
-   - `GET /user/wrapped`
-   - `POST /user/wrapped-frequency`
-   - `GET /admin/wrapped`
-   - Include OpenAPI metadata after behavior is implemented.
-2. Add auth helpers in `python/arclink_api_auth.py`.
-   - User routes are user-scoped and CSRF-gated for mutation.
-   - Admin route is aggregate-only and CIDR/admin-session protected.
-3. Extend `python/arclink_dashboard.py`.
-   - User dashboard snapshot includes Wrapped history and current frequency.
-   - Admin/operator snapshot includes aggregate counts, latest score/status,
-     failure count, and due count only.
-4. Extend `web/src/lib/api.ts`.
-   - Add Wrapped history/frequency/admin helpers.
-5. Extend `web/src/app/dashboard/page.tsx`.
-   - Add "Wrapped" tab with history, text/Markdown display, and frequency
-     selector.
-   - Ensure mobile/desktop layout has stable dimensions and no text overflow.
-6. Extend `web/src/app/admin/page.tsx`.
-   - Add aggregate Wrapped view with no Captain narrative.
-7. Extend `python/arclink_public_bots.py`.
-   - Add `/wrapped-frequency daily|weekly|monthly`.
-   - Reject invalid values and keep tests pure.
+- Factor the provisioning worker's `_executor_for_host` logic into a public
+  helper in `python/arclink_executor.py`.
+- Keep compatibility wrappers or imports so `python/arclink_sovereign_worker.py`
+  behavior remains unchanged.
+- Teach `python/arclink_action_worker.py` to resolve the active placement for
+  deployment-scoped actions before executing side effects.
+- Look up the host row and build a per-host executor using the shared helper.
+- Cache executors by `(host_id, adapter)` for the worker process.
+- Preserve the existing `_executor_from_env` path when no placement exists.
+- Emit `arclink_audit_log` metadata for every action attempt with resolved
+  `host_id`, `adapter`, and fallback reason when applicable.
 
-### Phase 4 - Mission Closeout Sweep
+Validation:
 
-1. Vocabulary migration completeness.
-   - Sweep `web/src/**`, `python/arclink_public_bots.py`,
-     `python/arclink_onboarding*.py`,
-     `python/arclink_onboarding_completion.py`,
-     `docs/arclink/CREATIVE_BRIEF.md`,
-     `docs/arclink/raven-public-bot.md`,
-     `docs/arclink/first-day-user-guide.md`, `README.md`, and completion-bundle
-     copy.
-   - Keep backend/operator surfaces technical.
-   - Add focused grep or string tests for stale Captain-facing language.
-2. Original onboarding bug verification.
-   - Confirm web, Telegram, and Discord Agent Name + Agent Title input capture
-     and flow into deployment row and SOUL/identity projection.
-   - Add or strengthen assertions where thin.
-3. Cross-wave coherence.
-   - Verify `arclink_inventory_machines`, `arclink_pod_messages`,
-     `arclink_pod_migrations`, `arclink_crew_recipes`, and
-     `arclink_wrapped_reports` are each written and read by their owning wave.
-   - Check MCP tools, hosted API routes, `deploy.sh control inventory`, and
-     dashboard tabs for collisions.
-4. Doc reconciliation.
-   - Update `docs/DOC_STATUS.md`, `docs/arclink/architecture.md`,
-     `docs/API_REFERENCE.md`, and `docs/openapi/arclink-v1.openapi.json`.
-   - Ensure every route added across Waves 0-6 appears in OpenAPI and API
-     reference.
-5. Steering-doc reconciliation.
-   - Update `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` with a
-     closing status section or accurate checkbox status for Waves 0-6.
-6. Final completion notes.
-   - Add a comprehensive `research/BUILD_COMPLETION_NOTES.md` entry summarizing
-     all six waves, files changed per wave, schema deltas, env vars,
-     validation run, skipped live gates, and residual risks.
-7. Broad validation.
-   - Run the per-wave validation floors plus web, shell, compile, and browser
-     checks listed below.
+- `python3 tests/test_arclink_action_worker.py`
+- `python3 tests/test_arclink_executor.py`
+- `python3 tests/test_arclink_sovereign_worker.py`
+- new two-fake-host routing test: place deployment on host B, queue restart,
+  assert host B SSH coordinates are used.
+
+## Phase 2: Enrollment Mint, Callback API, And Audit Chain
+
+Tasks:
+
+- Implement enrollment token minting with 256-bit one-time token material,
+  HMAC-SHA256 token hash at rest, TTL default no longer than 30 minutes, and
+  cleartext returned exactly once.
+- Add `deploy.sh control enrollment mint|list|revoke` plumbing to the shared
+  Python boundary.
+- Add callback handling that validates the token, consumes it atomically,
+  captures hostname/outbound IP/SSH port/OS fields, binds
+  `machine_fingerprint`, writes `attested_at`, and creates or links inventory
+  and fleet host rows.
+- Reject expired, revoked, reused, malformed, or fingerprint-mismatched
+  callbacks fail-closed.
+- Implement `arclink_fleet_audit_chain` helpers for root and transition
+  entries, plus a chain verification helper used by health.
+- Use `arclink_evidence.redact_value` / shared redaction for all token and
+  fingerprint-adjacent errors.
+
+Validation:
+
+- new `python3 tests/test_arclink_fleet_enrollment.py`
+- hosted API tests if callback is exposed through `python/arclink_hosted_api.py`
+- schema and audit-chain tamper tests.
+
+## Phase 3: Worker Bootstrap And Probe Wrapper
+
+Tasks:
+
+- Add `bin/arclink-fleet-join.sh` as an idempotent worker bootstrap script for
+  supported Linux distributions.
+- Add `bin/arclink-fleet-probe-wrapper` that allowlists only `liveness`,
+  `capacity`, and `inventory` style probes and emits JSON.
+- Ensure bootstrap failure leaves the worker non-admitting and does not leave a
+  trusted key installed after failed callback.
+- Avoid putting tokens in committed docs, logs, argv examples with real values,
+  or persistent files.
+- Document bootstrap usage in the operator runbook after behavior is true.
+
+Validation:
+
+- `bash -n deploy.sh bin/*.sh test.sh`
+- `shellcheck bin/arclink-fleet-join.sh bin/arclink-fleet-probe-wrapper`
+- deploy regression tests for script presence and fail-closed patterns.
+
+## Phase 4: Inventory Worker Daemon And Health Derivation
+
+Tasks:
+
+- Add `python/arclink_fleet_inventory_worker.py`.
+- Add an `arclink-fleet-inventory` Compose job-loop service with no unnecessary
+  Docker socket or secret mounts.
+- Implement liveness, capacity, and inventory cadences independently.
+- Record probe rows in `arclink_fleet_host_probes`, with redacted payloads and
+  retention pruning.
+- Derive states: three liveness failures to degraded, ten to unreachable,
+  first success after degraded/unreachable back to active.
+- Update `last_health_state`, `last_seen_at`-equivalent data, ASU/load, and
+  linked inventory/fleet rows consistently.
+- Queue operator notifications for unreachable hosts, audit-chain failure, and
+  capacity thresholds.
+- Build fleet health summary helper with host counts, probe SLI, capacity,
+  region coverage, audit-chain status, and orphan drift.
+
+Validation:
+
+- new `python3 tests/test_arclink_fleet_inventory_worker.py`
+- `python3 tests/test_arclink_inventory.py`
+- `python3 tests/test_arclink_dashboard.py` if dashboard health is exposed.
+- Compose/deploy regression for service wiring and socket posture.
+
+## Phase 5: CLI Surface Hardening
+
+Tasks:
+
+- Add `--json` to every scriptable fleet/inventory/enrollment command.
+- Add documented exit codes: 0 success, 1 generic error, 2 invalid argv, 3 not
+  found, 4 conflict, 5 unauthorized.
+- Add non-interactive `register-worker` flags:
+  `--hostname`, `--ssh-host`, `--ssh-user`, `--region`, `--capacity-slots`,
+  `--tags-json`, `--metadata-json`, `--no-smoke-test`, and `--json`.
+- Add `fleet-key --rotate` with backup/confirmation flow.
+- Add `inventory health|rotate-key|re-attest|probe-all`, while preserving
+  existing `list|probe|add|drain|remove|set-strategy` forms.
+- Wire `set-strategy` into placement behavior where not already consumed and
+  add region-tier priority.
+- Write `docs/arclink/fleet-cli.md` and
+  `docs/arclink/fleet-operator-runbook.md`.
+
+Validation:
+
+- `python3 tests/test_deploy_regressions.py`
+- `python3 tests/test_arclink_fleet.py`
+- CLI JSON parse tests in `tests/test_arclink_inventory.py` or a new CLI suite.
+- docs/OpenAPI updates only after runtime/API behavior is true.
+
+## Phase 6: Cloud-Provider Provisioning
+
+Tasks:
+
+- Extend Hetzner and Linode inventory modules with fakeable create, wait,
+  bootstrap, discover, and delete operations.
+- Use ArcLink operation idempotency keys to prevent duplicate machine creation.
+- Add provider billing/resource references to inventory rows.
+- On create: provision machine, wait for SSH, mint enrollment, bootstrap via
+  cloud-init or controlled SSH, register callback, and admit host.
+- On remove: drain first, require no active placements, remove inventory/fleet
+  rows or mark removed/offline, then release provider resource.
+- Region-tier placement should prefer primary/secondary/dr in documented order
+  and exclude degraded/unreachable hosts from new placements.
+- Keep all real provider calls disabled in tests and fail closed without
+  credentials.
+
+Validation:
+
+- `python3 tests/test_arclink_inventory_hetzner.py`
+- `python3 tests/test_arclink_inventory_linode.py`
+- fake idempotency and teardown tests.
+
+## Phase 7: Operator-Gated Live Two-Host Proof
+
+Tasks:
+
+- Write a two-host live proof runbook under `research/` before execution.
+- Stop and request explicit operator authorization for the named live flow.
+- If authorized, run the proof with real timestamps and host IDs, redact
+  secrets, capture evidence, and record failures honestly.
+- Update `research/BUILD_COMPLETION_NOTES.md`.
+- Update `mission_status.md` if present, or create it, with no claim of fleet
+  readiness unless live proof succeeded.
+
+Validation:
+
+- Evidence file in `research/` with redacted timestamps, host IDs, commands
+  summarized, and health/smoke result.
+- No Phase 7 action runs without explicit authorization.
 
 ## Validation Floor
 
-Audit gate:
+Per touched Python surface:
 
 ```bash
-python3 tests/test_arclink_telegram.py
-python3 tests/test_arclink_discord.py
-python3 tests/test_arclink_hosted_api.py
-python3 tests/test_arclink_api_auth.py
-python3 tests/test_arclink_secrets_regex.py
-python3 tests/test_arclink_docker.py
-python3 tests/test_deploy_regressions.py
-```
-
-Wrapped focused:
-
-```bash
-git diff --check
-python3 -m py_compile python/arclink_wrapped.py python/arclink_api_auth.py python/arclink_hosted_api.py python/arclink_dashboard.py python/arclink_public_bots.py python/arclink_notification_delivery.py
-python3 tests/test_arclink_wrapped.py
-python3 tests/test_arclink_notification_delivery.py
-python3 tests/test_arclink_dashboard.py
-python3 tests/test_arclink_hosted_api.py
-python3 tests/test_arclink_api_auth.py
-python3 tests/test_arclink_public_bots.py
+python3 -m py_compile python/arclink_control.py python/arclink_fleet.py python/arclink_inventory.py python/arclink_executor.py python/arclink_sovereign_worker.py python/arclink_action_worker.py
+python3 tests/test_arclink_fleet.py
+python3 tests/test_arclink_inventory.py
+python3 tests/test_arclink_action_worker.py
+python3 tests/test_arclink_executor.py
+python3 tests/test_arclink_sovereign_worker.py
 python3 tests/test_arclink_schema.py
 ```
 
-Closeout and broad validation:
+As new phases land:
+
+```bash
+python3 tests/test_arclink_fleet_enrollment.py
+python3 tests/test_arclink_fleet_inventory_worker.py
+python3 tests/test_arclink_inventory_hetzner.py
+python3 tests/test_arclink_inventory_linode.py
+python3 tests/test_deploy_regressions.py
+```
+
+For shell changes:
 
 ```bash
 bash -n deploy.sh bin/*.sh test.sh
+shellcheck bin/arclink-fleet-join.sh bin/arclink-fleet-probe-wrapper bin/deploy.sh
+```
+
+For web/dashboard changes:
+
+```bash
 cd web
 npm test
 npm run lint
@@ -251,7 +287,36 @@ npm run build
 npm run test:browser
 ```
 
-Compile every touched Python module before completion. Live Stripe, Chutes,
-Cloudflare, Tailscale, Telegram, Discord, Notion, remote Docker host,
-deploy/upgrade, Docker install/upgrade, payment-flow, public-bot mutation, and
-production service restart proof remain explicitly operator-gated.
+Before final completion:
+
+```bash
+git diff --check
+./bin/ci-preflight.sh
+```
+
+Live host-mutating, real-cloud-provider, payment, public-bot mutation, Notion,
+Cloudflare/Tailscale, deploy, upgrade, and non-loopback SSH proof remain
+operator-gated.
+
+## Required Completion Notes
+
+`research/BUILD_COMPLETION_NOTES.md` must record:
+
+- phases completed and files changed;
+- schema changes and migration proof;
+- new/changed CLI commands and exit-code docs;
+- focused validation commands and results;
+- broad validation commands and results;
+- live/provider/deploy gates skipped or authorized;
+- residual risks and explicit deferrals.
+
+## Explicit Deferrals
+
+- Worker-pushed heartbeat agent.
+- Auto-migration of active Pods on host degradation.
+- GPU-aware placement constraints beyond recording inventory data.
+- DigitalOcean, AWS, GCP, and Azure provider workflows.
+- Separate probe key and deploy key.
+- TPM/Secure Boot hardware attestation.
+- Captain-visible fleet topology.
+- CI-driven live host or provider proof.

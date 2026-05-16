@@ -209,6 +209,41 @@ def telegram_edit_message_reply_markup(
     )
 
 
+def telegram_send_chat_action(
+    *,
+    bot_token: str,
+    chat_id: str,
+    action: str = "typing",
+) -> dict[str, Any]:
+    return _request_json(
+        _telegram_url(bot_token, "sendChatAction"),
+        method="POST",
+        payload={"chat_id": chat_id, "action": action},
+        timeout=3,
+    )
+
+
+def telegram_set_message_reaction(
+    *,
+    bot_token: str,
+    chat_id: str,
+    message_id: str | int,
+    emoji: str = "👀",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": int(message_id),
+        "reaction": [{"type": "emoji", "emoji": emoji}],
+        "is_big": False,
+    }
+    return _request_json(
+        _telegram_url(bot_token, "setMessageReaction"),
+        method="POST",
+        payload=payload,
+        timeout=3,
+    )
+
+
 def telegram_edit_message_text(
     *,
     bot_token: str,
@@ -903,6 +938,7 @@ def handle_telegram_update(
         "session_id": turn.session_id,
         "action": turn.action,
         "channel_identity": channel_identity,
+        "telegram_message_id": parsed.get("message_id", "") or parsed.get("telegram_message_id", ""),
         "callback_query_id": parsed.get("callback_query_id", ""),
         "callback_message_id": parsed.get("callback_message_id", ""),
         "command_scope": command_scope,
@@ -917,7 +953,7 @@ class LiveTelegramTransport:
             raise ArcLinkTelegramError("TELEGRAM_BOT_TOKEN is required for live transport")
         self.config = config
 
-    def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _call(self, method: str, params: dict[str, Any] | None = None, *, timeout: int = 60) -> dict[str, Any]:
         import json
         import urllib.request
         import urllib.error
@@ -926,7 +962,7 @@ class LiveTelegramTransport:
         data = json.dumps(params or {}).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
@@ -945,6 +981,23 @@ class LiveTelegramTransport:
         if text:
             payload["text"] = text[:200]
         result = self._call("answerCallbackQuery", payload)
+        return result.get("result", {})
+
+    def send_chat_action(self, chat_id: str, action: str = "typing") -> dict[str, Any]:
+        result = self._call("sendChatAction", {"chat_id": chat_id, "action": action}, timeout=3)
+        return result.get("result", {})
+
+    def set_message_reaction(self, chat_id: str, message_id: str | int, emoji: str = "👀") -> dict[str, Any]:
+        result = self._call(
+            "setMessageReaction",
+            {
+                "chat_id": chat_id,
+                "message_id": int(message_id),
+                "reaction": [{"type": "emoji", "emoji": emoji}],
+                "is_big": False,
+            },
+            timeout=3,
+        )
         return result.get("result", {})
 
     def edit_message_text(
@@ -974,6 +1027,8 @@ class FakeTelegramTransport:
     def __init__(self) -> None:
         self.sent_messages: list[dict[str, Any]] = []
         self.edited_messages: list[dict[str, Any]] = []
+        self.chat_actions: list[dict[str, Any]] = []
+        self.message_reactions: list[dict[str, Any]] = []
         self.updates_queue: list[dict[str, Any]] = []
 
     def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -985,6 +1040,16 @@ class FakeTelegramTransport:
 
     def answer_callback_query(self, callback_query_id: str, text: str = "") -> dict[str, Any]:
         return {"callback_query_id": callback_query_id, "text": text}
+
+    def send_chat_action(self, chat_id: str, action: str = "typing") -> dict[str, Any]:
+        payload = {"chat_id": chat_id, "action": action}
+        self.chat_actions.append(payload)
+        return payload
+
+    def set_message_reaction(self, chat_id: str, message_id: str | int, emoji: str = "👀") -> dict[str, Any]:
+        payload = {"chat_id": chat_id, "message_id": str(message_id), "emoji": emoji}
+        self.message_reactions.append(payload)
+        return payload
 
     def edit_message_text(
         self,
@@ -1073,7 +1138,18 @@ def run_telegram_polling(
                     telegram_bot_token=config.bot_token,
                 )
                 if result:
-                    transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+                    if result.get("action") == "agent_message_queued":
+                        message_id = str(result.get("telegram_message_id") or "").strip()
+                        try:
+                            if message_id and hasattr(transport, "set_message_reaction"):
+                                transport.set_message_reaction(result["chat_id"], message_id, "👀")
+                            if hasattr(transport, "send_chat_action"):
+                                transport.send_chat_action(result["chat_id"], "typing")
+                        except Exception:
+                            logger.exception("telegram_fast_agent_ack_failed chat_id=%s", result["chat_id"])
+                    reply_text = str(result.get("text") or "").strip()
+                    if reply_text:
+                        transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
                     logger.info("telegram_reply chat_id=%s action=%s", result["chat_id"], result["action"])
             except Exception:
                 logger.exception("telegram_update_error update_id=%s", update_id)

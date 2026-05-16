@@ -4,69 +4,73 @@
 
 | Goal / criterion | PLAN coverage | BUILD proof required |
 | --- | --- | --- |
-| Resolve audit Wave 1 posture | Phase 0 verifies current source against the trust-boundary audit items before Wrapped work | Focused audit/security tests pass; any regression is fixed with a new/updated regression. |
-| Ignore fiction items | Plan explicitly excludes `ME-11` and `ME-25` except as regression awareness | Completion notes state they were not backlogged as source gaps. |
-| Land ArcLink Wrapped | Plan adds `python/arclink_wrapped.py`, scheduler, delivery, API, bot, dashboard, docs, and tests | `tests/test_arclink_wrapped.py` and dependent suites pass. |
-| Deterministic report generation | Plan requires `generate_wrapped_report(conn, user_id, period, period_start, period_end)` | Tests seed events/audit/Comms/memory/session/vault fixtures and assert stable output. |
-| At least five non-standard stats | Plan requires a documented stats set and scoring formula | Tests assert five or more named non-standard statistics for a rich period and graceful sparse output. |
-| Novelty score | Plan defines a deterministic formula and docs page | Tests assert score inputs, score bounds, stable score, and prior-period deltas. |
-| Redaction | Plan reuses `arclink_evidence.redact_value`/shared redaction before render/store/delivery | Tests seed token-like strings and assert no secret-shaped text reaches `ledger_json`, text, markdown, or outbox. |
-| Cadence | Plan exposes daily/weekly/monthly only and rejects more frequent settings | API and bot tests cover valid/invalid frequencies, default daily, and mutation audit. |
-| Scheduler | Plan adds a named job-loop integration | Compose/deploy regression asserts service/runner exists and has no Docker socket; scheduler tests assert due/skip/retry behavior. |
-| Failed report retry | Plan keeps failed reports eligible next cycle | Wrapped tests assert failed rows do not permanently suppress later generation. |
-| Persistent failure notification | Plan queues operator notification after threshold | Wrapped/notification tests assert safe operator row with no Captain narrative. |
-| Captain delivery | Plan queues `notification_outbox` with `target_kind='captain-wrapped'` | Notification tests assert target/channel/extra shape and retry fields. |
-| Quiet hours | Plan computes delayed `next_attempt_at` where quiet-hours data is supported | Tests cover inside/outside quiet window and conservative unsupported fallback. |
-| Captain dashboard | Plan adds Wrapped tab/history/frequency selector | Web unit/smoke/browser tests assert tab rendering, history, no overflow, and frequency mutation. |
-| Operator privacy | Plan adds aggregate-only admin status | API/dashboard tests assert no narrative, markdown, snippets, or raw ledger in admin response. |
-| Public bot command | Plan adds `/wrapped-frequency daily|weekly|monthly` | Public bot tests prove command parsing and rejection without live bot mutation. |
-| Vocabulary closeout | Plan sweeps required Captain-facing surfaces | Grep/regression assertions prove stale user-facing phrases are removed or intentionally backend-only. |
-| Onboarding identity verification | Plan re-verifies web, Telegram, and Discord Agent Name/Title flows | Existing or added tests prove input acceptance and flow to deployment row and SOUL/identity projection. |
-| Cross-wave schema usage | Plan verifies five Wave 0 tables are written and read by owning waves | Tests or source assertions cover inventory, Comms, migration, Crew Recipes, and Wrapped. |
-| Docs/OpenAPI reconciliation | Plan updates docs after behavior is true | API reference, architecture, doc status, and OpenAPI list all final Wave 0-6 routes/surfaces. |
-| Steering-doc reconciliation | Plan updates steering status or closing commit/status section | Steering doc no longer implies landed waves are open without context. |
-| Completion notes | Plan requires a comprehensive six-wave entry | `research/BUILD_COMPLETION_NOTES.md` lists files changed per wave, schema deltas, env vars, validation, skipped live gates, and residual risks. |
-| Broad validation | Plan includes Python, shell, web, lint, build, browser checks | Completion notes record pass/fail/skip with rationale for unavailable live gates. |
+| Preserve existing single-host behavior | Phase 1 keeps the env-derived executor fallback when no placement row exists | Existing action-worker SSH/local/fake tests pass; new routing tests prove fallback remains. |
+| Formalize two registry tables | Phase 0 keeps `arclink_inventory_machines` and `arclink_fleet_hosts` separate with a 1:1 reconciler | Schema tests cover new columns/tables and orphan drift warnings. |
+| Add additive idempotent schema | Phase 0 lists enrollment, probe, audit-chain, and health fields as additive migrations | `ensure_schema` runs twice cleanly; drift checks include new relationships/statuses. |
+| Detect orphan inventory/host rows | Phase 0 adds reconciler and audit warnings | Tests seed inventory-only and host-only rows and assert warnings without destructive repair. |
+| Fix day-2 action routing | Phase 1 resolves placement per deployment-scoped action and uses host-specific executor | Two-host fake test proves restart/teardown-style actions route to placed host and write audit metadata. |
+| Reuse executor construction | Phase 1 factors `_executor_for_host` into `python/arclink_executor.py` | Sovereign worker and action worker tests cover fake/local/ssh helper behavior and key validation. |
+| HMAC-bound enrollment tokens | Phase 2 adds token mint/list/revoke and callback consumption | Enrollment tests cover TTL, single use, revoke, expired token, HMAC verification, no cleartext at rest. |
+| Machine fingerprint attestation | Phase 2 binds callback to immutable fingerprint and attestation timestamp | Tests cover first attestation, mismatch rejection, and explicit re-attest path. |
+| Audit-chain integrity | Phase 2 writes root and transition entries with prev/entry hashes | Health tests verify intact chain and tamper detection with P0 notification row. |
+| Bootstrap worker safely | Phase 3 adds idempotent join script and probe wrapper | Shell syntax/shellcheck plus fake command tests prove supported OS checks, fail-closed behavior, wrapper verb allowlist, and JSON output. |
+| Periodic probing daemon | Phase 4 adds `arclink_fleet_inventory_worker.py` and Compose job-loop service | Worker tests cover liveness/capacity/inventory cadences, state transitions, retention pruning, and no live SSH dependency. |
+| Health summary surface | Phase 4/5 adds `inventory health --json` and optional dashboard helper | Tests assert host counts, capacity, SLI, region coverage, audit-chain status, and no tenant topology leakage. |
+| JSON CLI automation | Phase 5 adds `--json` to scriptable inventory/enrollment/fleet commands | Deploy and inventory CLI tests parse JSON and verify documented exit codes. |
+| Non-interactive `register-worker` | Phase 5 adds flags for hostname, SSH target, region, capacity, tags, and smoke toggle | Tests call non-interactive path without TTY and assert it routes through the same registration boundary. |
+| New control subcommands | Phase 5 adds `enrollment mint|list|revoke` and `inventory health|rotate-key|re-attest|probe-all` | Deploy regression tests assert dispatch, help text, JSON support, and fail-closed invalid argv. |
+| Placement strategy consumed | Phase 5/6 ensures `set-strategy` affects placement | Fleet tests prove headroom and standard-unit strategy selection; region-tier preference tests preserve fallback order. |
+| Hetzner/Linode provisioning | Phase 6 adds idempotent create/bootstrap/register/remove workflows | Fake-provider tests cover create resume, duplicate prevention, bootstrap failure, drain/remove, and provider reference persistence. |
+| Region-tier placement | Phase 6 adds `region_tier`/priority filtering | Placement tests prove primary/secondary/dr preference, degraded exclusion, and explicit DR override. |
+| Operator notifications | Phases 2/4/6 enqueue safe notifications for expiry, unreachable, tamper, and capacity | Notification tests assert no tokens, fingerprints, or provider secrets in payloads. |
+| Operator runbook | Phase 5/6 writes `docs/arclink/fleet-operator-runbook.md` and CLI docs | Docs list mint, bootstrap, probe, drain, remove, key rotation, audit verification, and DR. |
+| Live two-host proof | Phase 7 is explicitly operator-gated | Research evidence file and completion notes are created only after authorization and real run. |
+| Mission status honesty | Phase 7 requires status update only after live proof | `mission_status.md` is updated if present or created with honest blocked/proven state. |
+| No private/live mutation in CI | All phases use fake runners/providers until Phase 7 | Test suite has no live credential dependency; blocked flows remain documented in `consensus/build_gate.md`. |
 
 ## Required Artifact Coverage
 
 | Artifact | PLAN status |
 | --- | --- |
-| `research/RESEARCH_SUMMARY.md` | Updated with `<confidence>`, mission reconciliation, findings, path comparison, assumptions, risks, and verdict. |
-| `research/CODEBASE_MAP.md` | Updated with current directory map, architecture rails, Wave 0-5 source state, and Wave 6 target surfaces. |
-| `research/DEPENDENCY_RESEARCH.md` | Updated with stack components, alternatives, external integration posture, risks, and validation dependencies. |
-| `research/COVERAGE_MATRIX.md` | Updated with audit gate, Wave 6, and Mission Closeout proof matrix. |
+| `research/RESEARCH_SUMMARY.md` | Updated with `<confidence>`, source findings, path comparison, assumptions, risks, and verdict. |
+| `research/CODEBASE_MAP.md` | Updated with fleet directories, entrypoints, architecture rails, current CLI surfaces, and missing BUILD surfaces. |
+| `research/DEPENDENCY_RESEARCH.md` | Updated with stack components, alternatives, external posture, dependency risks, and validation dependencies. |
+| `research/COVERAGE_MATRIX.md` | Updated with goal-to-proof coverage for all eight fleet phases. |
 | `research/STACK_SNAPSHOT.md` | Updated with ranked stack hypotheses, deterministic confidence score, and alternatives. |
-| `IMPLEMENTATION_PLAN.md` | Rewritten as project-specific audit-gate plus Wave 6 and closeout plan. |
-| `consensus/build_gate.md` | Updated from stale Wave 5 gate to no-secret Wave 6/closeout BUILD gate. |
+| `IMPLEMENTATION_PLAN.md` | Rewritten as a project-specific eight-phase fleet plan; no fallback marker remains. |
+| `consensus/build_gate.md` | Updated to authorize no-secret local BUILD for fleet phases and block live/private actions. |
 
 ## Focused Test Coverage Targets
 
 | Test file | Required proof |
 | --- | --- |
-| `tests/test_arclink_wrapped.py` | Report generation, source scoping, stats, novelty score, redaction, persistence, due cadence, failed retry, operator failure notification, admin aggregate privacy. |
-| `tests/test_arclink_notification_delivery.py` | `captain-wrapped` outbox target handling, retry fields, quiet-hours delay semantics, and safe failure text. |
-| `tests/test_arclink_dashboard.py` | User snapshot/history/frequency and admin aggregate-only Wrapped fields. |
-| `tests/test_arclink_hosted_api.py` | User Wrapped history/frequency routes, admin aggregate route, auth/CSRF/CIDR/body handling, OpenAPI route entries. |
-| `tests/test_arclink_api_auth.py` | Frequency validation, user scope, admin privacy, mutation audit. |
-| `tests/test_arclink_public_bots.py` | `/wrapped-frequency` command and invalid cadence rejection without live command registration. |
-| `tests/test_arclink_schema.py` | Existing Wrapped schema and any added columns/checks/drift probes. |
-| `tests/test_deploy_regressions.py` or Docker-focused suite | Compose/job-loop runner presence, no Docker socket for Wrapped service, shell syntax coverage. |
-| `web/tests/test_api_client.mjs` | Wrapped API client helpers. |
-| `web/tests/test_page_smoke.mjs` | Dashboard/Admin Wrapped tab smoke. |
-| `web/tests/browser/product-checks.spec.ts` | Captain Wrapped tab/frequency interaction and closeout vocabulary/onboarding proof. |
+| `tests/test_arclink_fleet.py` | New schema fields, strategy consumption, region-tier placement, orphan reconciler, active placement compatibility. |
+| `tests/test_arclink_inventory.py` | JSON listing/filtering, health summary inputs, probe result mapping, drain/remove behavior, no secret leakage. |
+| `tests/test_arclink_action_worker.py` | Placement-aware routing, executor cache, resolved host audit metadata, legacy env fallback, stale claim behavior unchanged. |
+| `tests/test_arclink_executor.py` | Shared host executor helper for fake/local/ssh, SSH key validation, allowlist enforcement, redacted errors. |
+| `tests/test_arclink_sovereign_worker.py` | Provisioning worker compatibility after helper factoring. |
+| `tests/test_arclink_fleet_enrollment.py` | Enrollment mint/list/revoke/callback, HMAC hashing, TTL, single use, fingerprint attestation, audit-chain root. |
+| `tests/test_arclink_fleet_inventory_worker.py` | Probe cadences, thresholds, recovery, retention pruning, notification enqueue, fake runner behavior. |
+| `tests/test_arclink_inventory_hetzner.py` | Fake Hetzner create/bootstrap/register/remove idempotency. |
+| `tests/test_arclink_inventory_linode.py` | Fake Linode create/bootstrap/register/remove idempotency. |
+| `tests/test_deploy_regressions.py` | `bin/deploy.sh` dispatch/help/aliases, JSON flags, non-interactive registration, new subcommands, bootstrap script references. |
+| `tests/test_arclink_schema.py` | Additive migrations, indexes, CHECK/status validation, relationship drift checks. |
+| `tests/test_arclink_hosted_api.py` | Enrollment callback route and any fleet-health admin API route, body caps and auth boundaries. |
+| `tests/test_arclink_dashboard.py` | Operator aggregate fleet health, Captain topology non-disclosure. |
 
 ## Completion Rules
 
 BUILD can claim complete only when:
 
-- audit Wave 1 verification passes or regressions are fixed;
-- ArcLink Wrapped is locally implemented with focused tests;
-- all seven Mission Closeout items are satisfied or explicitly deferred with
-  operator-facing rationale;
-- broad local validation is recorded;
-- live/private/provider/deploy gates remain blocked unless separately
-  authorized.
+- Phases 0-6 are implemented or explicitly deferred with operator-facing
+  rationale tied to a blocked live/provider decision;
+- Phase 1 action-worker placement routing is implemented, tested, and not
+  deferred;
+- fiction/outdated audit items are not reintroduced as backlog;
+- focused validation passes for every touched surface;
+- broad local validation is recorded in completion notes;
+- Phase 7 live proof is either completed with evidence or honestly marked
+  operator-gated in `mission_status.md` and completion notes.
 
-Do not route to terminal done while any Wrapped or Mission Closeout item remains
-unresolved or lacks a project-specific deferral.
+Do not route to terminal done while a phase task remains unresolved without a
+specific deferral and residual-risk note.

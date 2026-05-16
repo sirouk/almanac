@@ -61,7 +61,16 @@ CANCEL_COMMANDS = {"/cancel", "cancel"}
 VERIFY_NOTION_COMMANDS = {"/verify-notion", "/verify_notion", "verify-notion", "verify_notion", "verify notion"}
 SETUP_BACKUP_COMMANDS = {"/setup-backup", "/setup_backup", "setup-backup", "setup_backup", "setup backup", "/backup", "backup"}
 RETRY_CONTACT_COMMANDS = {"/retry-contact", "/retry_contact", "retry-contact", "retry_contact", "retry contact"}
-NOTION_READY_COMMANDS = {"ready"}
+NOTION_READY_COMMANDS = {
+    "ready",
+    "set up notion",
+    "setup notion",
+    "connect notion",
+    "configure notion",
+    "start notion",
+}
+NOTION_SKIP_COMMANDS = {"skip", "skip for now", "skip notion", "not now", "later"}
+NOTION_SETUP_CALLBACK_PREFIX = "arclink:onboarding:notion:"
 UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
 GITHUB_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SSH_PUBLIC_KEY_PATTERN = re.compile(
@@ -242,6 +251,72 @@ def send_session_message(
     return None
 
 
+def notion_setup_callback_data(session_id: str, action: str) -> str:
+    clean_action = re.sub(r"[^a-z0-9_-]", "", str(action or "").strip().lower())
+    return f"{NOTION_SETUP_CALLBACK_PREFIX}{clean_action}:{str(session_id or '').strip()}"[:100]
+
+
+def parse_notion_setup_callback_data(value: str) -> tuple[str, str] | None:
+    data = str(value or "").strip()
+    if not data.startswith(NOTION_SETUP_CALLBACK_PREFIX):
+        return None
+    remainder = data[len(NOTION_SETUP_CALLBACK_PREFIX):]
+    action, sep, session_id = remainder.partition(":")
+    clean_action = re.sub(r"[^a-z0-9_-]", "", action.strip().lower())
+    if not sep or clean_action not in {"ready", "skip", "verify"} or not session_id.strip():
+        return None
+    return clean_action, session_id.strip()
+
+
+def _notion_prompt_actions(session: dict[str, Any]) -> list[tuple[str, str, str]]:
+    state = str(session.get("state") or "").strip()
+    if state == "awaiting-notion-access":
+        return [("Set up Notion", "ready", "primary"), ("Skip for now", "skip", "secondary")]
+    if state == "awaiting-notion-email":
+        return [("Skip for now", "skip", "secondary")]
+    if state == "awaiting-notion-verification":
+        return [("Reissue claim", "verify", "primary"), ("Skip for now", "skip", "secondary")]
+    return []
+
+
+def session_prompt_telegram_reply_markup(session: dict[str, Any]) -> dict[str, Any] | None:
+    actions = _notion_prompt_actions(session)
+    if not actions:
+        return None
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        return None
+    return {
+        "inline_keyboard": [[
+            {
+                "text": label,
+                "callback_data": notion_setup_callback_data(session_id, action),
+            }
+            for label, action, _style in actions
+        ]]
+    }
+
+
+def session_prompt_discord_components(session: dict[str, Any]) -> list[dict[str, Any]] | None:
+    actions = _notion_prompt_actions(session)
+    if not actions:
+        return None
+    session_id = str(session.get("session_id") or "").strip()
+    if not session_id:
+        return None
+    components: list[dict[str, Any]] = []
+    for label, action, style in actions:
+        components.append(
+            {
+                "type": 2,
+                "style": 1 if style == "primary" else 2,
+                "label": label,
+                "custom_id": notion_setup_callback_data(session_id, action),
+            }
+        )
+    return [{"type": 1, "components": components}]
+
+
 def session_prompt_telegram_parse_mode(session: dict[str, Any]) -> str:
     platform = str(session.get("platform") or "").strip().lower()
     if platform != "telegram":
@@ -265,7 +340,9 @@ def notify_session_state(cfg: Config, session: dict[str, Any]) -> None:
         cfg,
         session,
         session_prompt(cfg, session),
+        telegram_reply_markup=session_prompt_telegram_reply_markup(session),
         telegram_parse_mode=session_prompt_telegram_parse_mode(session),
+        discord_components=session_prompt_discord_components(session),
     )
 
 
@@ -279,7 +356,9 @@ def _session_prompt_reply(
         incoming.chat_id,
         session_prompt(cfg, session),
         reply_to_message_id,
+        telegram_reply_markup=session_prompt_telegram_reply_markup(session),
         telegram_parse_mode=session_prompt_telegram_parse_mode(session),
+        discord_components=session_prompt_discord_components(session),
     )
 
 
@@ -1398,14 +1477,18 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
             "If Notion says `Request access`, ask the operator for edit access to that page. On free Notion, that usually means `Full access`, and they may need to invite you into the workspace or teamspace first."
         )
         lines.append("")
-        lines.append("Reply `ready` once you can open it.")
-        lines.append("Reply `skip` to finish now with shared Notion writes disabled.")
+        lines.append("Press Set up Notion once you can open it, or reply `ready`.")
+        lines.append(
+            "Press Skip for now if you want to talk with your Hermes Agent immediately. "
+            "Shared Notion writes stay disabled until you reply `/verify-notion` here later."
+        )
         return "\n".join(lines)
     if state == "awaiting-notion-email":
         return (
             "Shared Notion writes, step 2 of 3.\n\n"
             "Reply with the Notion email you use in this workspace.\n\n"
-            "Reply `skip` to finish now with shared Notion writes disabled."
+            "Press Skip for now, or reply `skip`, to talk with your Hermes Agent now. "
+            "You can configure Notion later with `/verify-notion`."
         )
     if state == "awaiting-notion-verification":
         claim_url = str(answers.get("notion_claim_url") or "").strip()
@@ -1442,7 +1525,10 @@ def session_prompt(cfg: Config, session: dict[str, Any]) -> str:
         lines.append(
             "If Notion says `Request access`, ask the operator for `Full access` to the shared ArcLink page. Once they fix it, reply `/verify-notion` here to reissue the claim."
         )
-        lines.append("Reply `skip` to finish now with shared Notion writes disabled.")
+        lines.append(
+            "Press Skip for now, or reply `skip`, to talk with your Hermes Agent now. "
+            "You can configure Notion later with `/verify-notion`."
+        )
         return "\n".join(lines)
     if state == "denied":
         reason = str(session.get("denial_reason") or "").strip()
@@ -2227,7 +2313,7 @@ def process_onboarding_message(
             return [_session_prompt_reply(cfg, incoming, session)]
 
         if state == "awaiting-notion-access":
-            if lower == "skip":
+            if lower in NOTION_SKIP_COMMANDS:
                 updated = save_onboarding_session(
                     conn,
                     session_id=str(session["session_id"]),
@@ -2282,6 +2368,9 @@ def process_onboarding_message(
                         OutboundMessage(
                             incoming.chat_id,
                             "Great. I opened a fresh Notion verification page for you.\n\n" + session_prompt(cfg, updated),
+                            telegram_reply_markup=session_prompt_telegram_reply_markup(updated),
+                            telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+                            discord_components=session_prompt_discord_components(updated),
                         )
                     ]
                 updated = save_onboarding_session(
@@ -2300,7 +2389,7 @@ def process_onboarding_message(
         if state == "awaiting-notion-email":
             if lower in NOTION_READY_COMMANDS:
                 return [_session_prompt_reply(cfg, incoming, session)]
-            if lower == "skip":
+            if lower in NOTION_SKIP_COMMANDS:
                 updated = save_onboarding_session(
                     conn,
                     session_id=str(session["session_id"]),
@@ -2353,7 +2442,7 @@ def process_onboarding_message(
             return [_session_prompt_reply(cfg, incoming, updated)]
 
         if state == "awaiting-notion-verification":
-            if lower == "skip":
+            if lower in NOTION_SKIP_COMMANDS:
                 claim_id = str((session.get("answers") or {}).get("notion_claim_id") or "").strip()
                 if claim_id:
                     try:
@@ -2414,6 +2503,9 @@ def process_onboarding_message(
                         OutboundMessage(
                             incoming.chat_id,
                             "I opened a fresh Notion verification page for you.\n\n" + session_prompt(cfg, updated),
+                            telegram_reply_markup=session_prompt_telegram_reply_markup(updated),
+                            telegram_parse_mode=session_prompt_telegram_parse_mode(updated),
+                            discord_components=session_prompt_discord_components(updated),
                         )
                     ]
                 updated = save_onboarding_session(

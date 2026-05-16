@@ -2,90 +2,85 @@
 
 ## Scope
 
-This map covers the public repository areas relevant to the audit verification
-gate, Wave 6 ArcLink Wrapped, and the Mission Closeout sweep. It excludes
-private state, live credentials, dependency folders, logs, generated browser
-artifacts, production service state, and Hermes core.
+This map covers the public repository surfaces relevant to ArcLink Sovereign
+Fleet enrollment, placement, inventory health, CLI hardening, and cloud
+provisioning. It excludes private state, live credentials, generated runtime
+state, dependency folders, logs, production service state, and Hermes core.
 
 ## Planning Entrypoints
 
 | Path | Role |
 | --- | --- |
-| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for audit-gate verification, Wave 6, and closeout. |
-| `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` | Product steering for Waves 0-6; Wave 6 section is the Wrapped feature reference. |
-| `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md` | Historical audit verification and Wave 1 trust-boundary checklist; use as a regression gate, not as proof of current gaps. |
-| `research/BUILD_COMPLETION_NOTES.md` | Prior wave and audit-closure validation record; must receive final six-wave completion notes after BUILD. |
-| `docs/arclink/vocabulary.md` | Captain/operator vocabulary boundary for all user-facing closeout sweeps. |
-| `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` | Hosted API contract to update after Wrapped behavior lands. |
+| `IMPLEMENTATION_PLAN.md` | BUILD handoff plan for the eight fleet phases. |
+| `research/RALPHIE_ARCLINK_FLEET_ENROLLMENT_STEERING.md` | Authoritative steering reference for this mission. |
+| `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md` | Historical audit verification and closure context; use for regression awareness. |
+| `docs/arclink/vocabulary.md` | Vocabulary split: operator surfaces stay technical; Captain surfaces use ArcPod/Pod/Agent/Captain/Crew/Raven. |
+| `docs/arclink/control-node-production-runbook.md` | Existing Sovereign Control Node operator runbook to extend or cross-link. |
+| `docs/arclink/sovereign-control-node.md` | Architecture/operator docs for the Control Node. |
+| `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` | API docs if enrollment callback or dashboard health APIs are exposed. |
 
 ## Directory Map
 
 | Directory | Responsibility |
 | --- | --- |
-| `python/` | Control DB, hosted API, auth/session/CSRF, dashboard read models, public bots, notification delivery, provisioning, inventory, migration, Comms, Crew Training, and the new Wrapped module. |
-| `bin/` | Canonical deploy/control scripts and Docker job-loop runners. Wrapped scheduler should add a small runner here if needed. |
-| `compose.yaml` | Shared Host Docker and Sovereign validation services. Wrapped should use a named job-loop service with no Docker socket. |
-| `tests/` | Focused Python regressions for security gates, Wrapped generation, cadence, delivery, API/auth, bots, dashboard snapshots, docs/OpenAPI parity, and closeout surfaces. |
-| `web/` | Next.js Captain dashboard and Operator dashboard. Wrapped needs API helpers, Captain tab/history, frequency control, and Operator aggregate-only panel. |
-| `docs/` | Canonical docs, API reference, OpenAPI spec, architecture and status maps. Closeout reconciles these after behavior is true. |
-| `research/` | Planning, steering, audit, and completion artifacts. |
-| `consensus/` | Build gate records for no-secret BUILD boundaries and blocked live/private flows. |
+| `python/` | Control DB, fleet registry, inventory registry, executor adapters, provisioning worker, action worker, hosted API, dashboard snapshots, evidence/redaction, notification delivery, provider clients, and tests' Python targets. |
+| `bin/` | Canonical operator/deploy/control shell surface. New fleet subcommands and thin daemon/bootstrap runners belong here. |
+| `compose.yaml` | Dockerized Sovereign Control Node services and job-loop workers. Add the inventory worker here when Phase 4 lands. |
+| `tests/` | Focused no-secret regression suites. Existing fleet/action/executor/inventory suites should be expanded; new enrollment and inventory-worker tests are required. |
+| `docs/` | Operator runbooks, API reference, OpenAPI, architecture docs, vocabulary canon, and status docs. |
+| `web/` | Next.js operator/Captain dashboard. Fleet detail remains operator-only; Captain visibility must remain coarse. |
+| `research/` | Ralphie steering, research artifacts, completion notes, live-proof evidence notes. |
+| `consensus/` | BUILD gate and blocked-flow rationale. |
 
-## Existing Architecture Rails
+## Fleet Architecture Rails
 
-| Rail | Files / patterns |
-| --- | --- |
-| Schema and drift checks | `python/arclink_control.py`, `tests/test_arclink_schema.py` |
-| Audit/events | `append_arclink_audit`, `append_arclink_event` in `python/arclink_control.py` |
-| Hosted API routing | `_handle_*`, route tables, body caps, CORS, CIDR gate, and OpenAPI metadata in `python/arclink_hosted_api.py` |
-| Auth and sessions | `python/arclink_api_auth.py`; HMAC session/CSRF hashes and CSRF-gated mutations |
-| Dashboard read models | `python/arclink_dashboard.py` |
-| Public bots | `python/arclink_public_bots.py`, `python/arclink_public_bot_commands.py`, `python/arclink_telegram.py`, `python/arclink_discord.py` |
-| Notification delivery | `notification_outbox` helpers in `python/arclink_control.py` and worker in `python/arclink_notification_delivery.py` |
-| Secret redaction | `python/arclink_evidence.py`, `python/arclink_secrets_regex.py` |
-| Docker scheduling | `bin/docker-job-loop.sh`, existing job services in `compose.yaml` |
-| Memory synthesis | `python/arclink_memory_synthesizer.py`, `memory_synthesis_cards` table |
-| Pod Comms | `python/arclink_pod_comms.py`, `/user/comms`, `/admin/comms`, MCP Comms tools |
-| Crew Training | `python/arclink_crew_recipes.py`, `/user/crew-recipe`, dashboard Crew tab, public bot `/train-crew` |
-
-## Wave 0-5 Current Source State
-
-| Surface | Current source signal |
-| --- | --- |
-| Vocabulary | `docs/arclink/vocabulary.md` exists and names ArcPod, Pod, Captain, Crew, Raven, Comms, Crew Training, and ArcLink Wrapped. |
-| Onboarding identity | Web, public bots, schema, Stripe metadata, dashboard rename/retitle, and identity projection include Agent Name and Agent Title. |
-| Inventory/ASU | Inventory modules for manual/Hetzner/Linode and ASU tests exist; `deploy.sh control inventory` is referenced by regressions. |
-| Pod migration | `python/arclink_pod_migration.py` and tests exist. |
-| Pod Comms | `python/arclink_pod_comms.py`, dashboard/admin Comms panels, OpenAPI, and tests exist. |
-| Crew Training | `python/arclink_crew_recipes.py`, template, API/auth routes, dashboard Crew tab, public bot commands, OpenAPI, and tests exist. |
-
-## Wave 6 Source Surfaces
-
-| Surface | Current state | BUILD target |
+| Rail | Current files / patterns | Notes |
 | --- | --- | --- |
-| Wrapped module | Present core | `python/arclink_wrapped.py` now owns report generation, scoring, rendering, persistence, cadence helpers, delivery enqueue, scheduler, and operator aggregate helpers. |
-| Wrapped schema | Present | Reuse `arclink_wrapped_reports` and `arclink_users.wrapped_frequency`; add columns only if a required deliverable cannot fit existing schema. |
-| Data collectors | Present core | Scoped collectors cover events, audit, same-Captain Comms, memory cards, injected read-only session counts, and injected vault-reconciler deltas. |
-| Novelty score | Present | `wrapped_novelty_v1` is documented and reports expose at least five non-standard stats. |
-| Redaction | Existing helpers | Redact all rendered text and ledger snippets before storage, dashboard display, or notification enqueue. |
-| Cadence | Present core | Helper validates and audits `daily`, `weekly`, `monthly`; hourly/cron/arbitrary intervals are rejected. |
-| Scheduler | Present Docker/core | Named `arclink-wrapped` job-loop service and `bin/arclink-wrapped.sh` runner are wired without Docker socket access. |
-| Delivery | Present core | Queues `notification_outbox` with `target_kind='captain-wrapped'`, resolves Captain channel, delays through supported quiet-hours windows, retries failed reports, and emits aggregate operator failure notifications. |
-| Hosted API | Missing | Add user history/frequency routes and admin aggregate routes with existing auth/CSRF/CIDR patterns. |
-| Public bot | Missing | Add `/wrapped-frequency daily|weekly|monthly` and optional `/wrapped` status/history summary without live command mutation. |
-| Web dashboard | Missing | Add Captain "Wrapped" tab with history and frequency selector; add Operator aggregate-only status panel. |
-| Docs/OpenAPI | Missing | Reconcile docs and generated/spec OpenAPI after behavior lands. |
+| Schema | `python/arclink_control.py` | Owns `arclink_inventory_machines`, `arclink_fleet_hosts`, `arclink_deployment_placements`, audit tables, indexes, drift checks, and status constants. |
+| Fleet placement | `python/arclink_fleet.py` | Registers hosts, updates drain/status/load, lists capacity, chooses placements, removes placements, reconciles observed load. |
+| Inventory | `python/arclink_inventory.py` | Registers/probes/drains/removes machines, computes ASU, links machines to fleet hosts, exposes a CLI used by `deploy.sh`. |
+| Provider clients | `python/arclink_inventory_hetzner.py`, `python/arclink_inventory_linode.py` | Current provider path lists resources; create/bootstrap/delete orchestration is still open. |
+| Executor adapters | `python/arclink_executor.py` | Docker Compose local/SSH runners, fake runner, secret resolvers, live-adapter fail-closed behavior. |
+| Provisioning worker | `python/arclink_sovereign_worker.py` | Already performs placement-aware provisioning and contains `_executor_for_host`, the helper to factor for action-worker reuse. |
+| Action worker | `python/arclink_action_worker.py` | Claims admin/day-2 action intents and currently builds one env-derived executor for the whole worker. |
+| Hosted API and dashboard | `python/arclink_hosted_api.py`, `python/arclink_dashboard.py` | Existing operator scale snapshot and admin surfaces; Phase 4/5 may add fleet health summary surfaces. |
+| Audit/events | `append_arclink_audit`, `append_arclink_event` in `python/arclink_control.py` | Fleet transitions and action routing must write structured audit entries. |
+| Notification rail | `notification_outbox`, `python/arclink_notification_delivery.py` | Use for unreachable hosts, audit-chain failures, token expiry, and capacity warnings. |
+| Secret redaction | `python/arclink_evidence.py`, `python/arclink_secrets_regex.py` | Reuse for enrollment token and provider/SSH error safety. |
+| Docker job-loop | `bin/docker-job-loop.sh`, existing Compose services | Use for `arclink_fleet_inventory_worker.py`; do not add a separate scheduler dependency. |
+
+## Existing CLI Entrypoints
+
+| Command | Current state | BUILD target |
+| --- | --- | --- |
+| `deploy.sh control fleet-key` | Generates/prints the fleet SSH public key path and guidance. | Add `--rotate` with safe backup and operator confirmation workflow. |
+| `deploy.sh control register-worker` | Interactive TTY-only remote worker registration; stores SSH metadata in fleet host metadata. | Add non-interactive flags and `--json`; keep interactive default. |
+| `deploy.sh control inventory list` | Calls `python/arclink_inventory.py list` and prints prose/table output. | Add `--json` and filtering. |
+| `deploy.sh control inventory probe` | Calls SSH probe for one target. | Add `--all` / `probe-all` and structured result output. |
+| `deploy.sh control inventory add manual` | Interactive manual registration. | Preserve and make scriptable as needed. |
+| `deploy.sh control inventory add hetzner|linode` | Lists existing provider resources when token exists. | Create/bootstrap/register/delete idempotently in Phase 6. |
+| `deploy.sh control inventory drain|remove` | Drains or removes a machine with placement guards. | Add `--json`, `--filter`, `--force` only where documented. |
+| `deploy.sh control inventory set-strategy` | Persists `ARCLINK_FLEET_PLACEMENT_STRATEGY`. | Ensure placement consumes strategy and add region-tier logic. |
+
+## Missing BUILD Surfaces
+
+| Surface | Target files |
+| --- | --- |
+| Enrollment schema and helpers | `python/arclink_control.py`, new or existing fleet module, `tests/test_arclink_fleet_enrollment.py` |
+| Enrollment callback API | `python/arclink_hosted_api.py` or a narrow control API route, API docs/tests |
+| Fleet audit chain | `python/arclink_control.py`, fleet/enrollment helpers, inventory health tests |
+| Probe history and worker daemon | `python/arclink_fleet_inventory_worker.py`, `compose.yaml`, `tests/test_arclink_fleet_inventory_worker.py` |
+| Bootstrap and probe wrapper scripts | `bin/arclink-fleet-join.sh`, `bin/arclink-fleet-probe-wrapper`, shell/deploy tests |
+| CLI JSON and new subcommands | `bin/deploy.sh`, `python/arclink_inventory.py`, docs and deploy regression tests |
+| Cloud create/bootstrap/delete | Provider client modules, inventory CLI, fake-provider tests |
+| Operator runbook | `docs/arclink/fleet-operator-runbook.md`, control-node docs |
+| Live proof notes | `research/` evidence note generated only after operator-authorized Phase 7 |
 
 ## Architecture Assumptions
 
-- ArcLink Wrapped is read-only over Captain state except for inserting/updating
-  Wrapped report rows and notification/audit/status rows.
-- It must never read arbitrary user homes or private state. Tests should use
-  temporary state roots and injected scanner functions.
-- It must not modify Hermes core, sessions, memories, vault content, provider
-  accounts, payments, or deployment state.
-- Operator/admin surfaces may expose only aggregate Wrapped status, score,
-  cadence, timestamps, and error state.
-- Captain-facing narrative and dashboard copy follow the vocabulary canon.
-- Scheduler work should reuse `docker-job-loop.sh` rather than adding a new
-  scheduler dependency.
+- `arclink_inventory_machines` is machine identity, hardware, provider, and lifecycle state.
+- `arclink_fleet_hosts` is placement capacity, region, drain, and executor metadata.
+- The one-to-one relationship is represented by `machine_host_link` and should be checked by a reconciler rather than collapsed.
+- New behavior must keep the legacy static env executor path for single-host installs with no active placement row.
+- Pull-based probing over SSH is the v1 worker-health model.
+- New fleet automation must not require live credentials or real remote hosts in CI.

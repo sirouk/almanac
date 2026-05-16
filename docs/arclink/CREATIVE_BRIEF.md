@@ -555,26 +555,27 @@ Check Status
 Triggered by `/connect_notion`.
 
 ```text
-Good. Let's wire Notion into your ArcLink pod.
+Good. Let's wire Notion into your ArcPod.
 
 I need this callback URL in the Notion webhook/subscription setup:
 {callback_url}
 
 Then share the page or database with the ArcLink integration. Keep tokens out of chat; when I need a secret, use the secure dashboard field.
 
-Reply `ready` when Notion sends the verification handshake, or `cancel` and I will close this lane.
+Press Set up Notion once the shared page opens, or reply `ready`.
+Press Skip for now if you want to talk with your Hermes Agent immediately. Shared Notion writes stay disabled until you reply `/verify-notion` later.
 ```
 
 Ready confirmed:
 
 ```text
-Good. I recorded Notion as ready for this pod. If the webhook still says verification is not configured, open the dashboard Notion panel so ArcLink can arm the verification-token install window.
+Good. I recorded Notion as ready for this ArcPod. If the webhook still says verification is not configured, open the dashboard Notion panel so ArcLink can arm the verification-token install window.
 ```
 
 Waiting:
 
 ```text
-Reply `ready` after Notion sends the verification handshake, or `cancel` to close the Notion workflow.
+Press Skip for now, or reply `skip`, to keep talking with your Hermes Agent now. Reply `/verify-notion` any time to resume Notion setup.
 ```
 
 ### Private Backup

@@ -529,6 +529,10 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
         "rsync -a --no-owner --no-group --no-perms --omit-dir-times --ignore-existing" in body,
         "rootless Docker entrypoint rsync must not preserve owner/group/perms or dir times on split bind mounts",
     )
+    expect(
+        "split private mounts may provide it at runtime" in body,
+        "Docker entrypoint must tolerate split private mounts with an unwritable arclink-priv symlink parent",
+    )
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
     print("PASS test_docker_entrypoint_generates_fresh_secrets")

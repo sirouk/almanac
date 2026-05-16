@@ -186,6 +186,7 @@ fi
 ensure_docker_state_dirs() {
   local qmd_config_dir="${XDG_CONFIG_HOME:-/home/arclink/.qmd/config}/qmd"
   local qmd_cache_dir="${XDG_CACHE_HOME:-/home/arclink/.qmd/cache}/qmd"
+  local dir=""
   local -a dirs=(
     "$CONFIG_DIR"
     "$PRIV_DIR/state"
@@ -215,7 +216,23 @@ ensure_docker_state_dirs() {
     "$qmd_cache_dir"
   )
 
-  mkdir -p "${dirs[@]}"
+  for dir in "${dirs[@]}"; do
+    if mkdir -p "$dir" 2>/dev/null; then
+      continue
+    fi
+    if [[ -d "$dir" ]]; then
+      continue
+    fi
+    case "$dir" in
+      "$CONFIG_DIR"|"$PRIV_DIR"/*|"$CONFIG_DIR"/*|"$qmd_config_dir"|"$qmd_cache_dir")
+        echo "Warning: unable to create Docker state directory $dir; continuing because split private mounts may provide it at runtime." >&2
+        ;;
+      *)
+        echo "Unable to create required Docker state directory $dir." >&2
+        return 1
+        ;;
+    esac
+  done
 }
 
 ensure_docker_state_dirs

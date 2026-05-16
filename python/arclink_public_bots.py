@@ -549,6 +549,8 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return "/help"
     if verb.startswith("agent_") and len(verb) > len("agent_"):
         return f"/agent-{verb[len('agent_'):]}"
+    if verb == "agent" and tail:
+        return f"/agent {tail}".strip()
     if verb in {"agent", "agents", "crew", "roster", "manifest"}:
         return "/agents"
     if verb in {"train", "train_crew", "train-crew", "crew_training"}:
@@ -780,6 +782,25 @@ def _agent_passthrough_message(message: str, command: str) -> str | None:
         if command.startswith(prefix):
             return str(message or "")[len(prefix) :].strip()
     return None
+
+
+def _agent_switch_request(message: str, command: str) -> tuple[str, bool]:
+    """Return a requested Agent selector plus whether it is a hard switch command.
+
+    `/agent-jeff` is always a switch attempt and should report a roster miss.
+    `/agent Jeff` is a convenience selector only when Jeff is actually on the
+    roster; otherwise it remains the explicit pass-through command for sending
+    text to the current Agent.
+    """
+    match = ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE.match(command)
+    if match:
+        return match.group(1), True
+    for prefix in ("/agent ", "agent "):
+        if command.startswith(prefix):
+            value = str(message or "")[len(prefix) :].strip()
+            if value and not value.startswith("/"):
+                return value, False
+    return "", False
 
 
 def _agent_bridge_channel_subject(channel: str, channel_identity: str) -> str:
@@ -1590,6 +1611,69 @@ def _agent_label(
 def _agent_slug(label: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(label or "").strip().lower()).strip("-")
     return slug or "agent"
+
+
+def _agent_selector_aliases(deployment: Mapping[str, Any], *, label: str, index: int) -> set[str]:
+    aliases: set[str] = set()
+
+    def add(value: str) -> None:
+        slug = _agent_slug(value)
+        if not slug:
+            return
+        aliases.add(slug)
+        if slug.startswith("agent-") and len(slug) > len("agent-"):
+            aliases.add(slug[len("agent-") :])
+
+    metadata = _metadata(deployment)
+    for candidate in (
+        label,
+        str(deployment.get("agent_name") or ""),
+        str(metadata.get("agent_name") or ""),
+        str(metadata.get("display_name") or ""),
+        str(deployment.get("agent_id") or ""),
+        str(deployment.get("deployment_id") or ""),
+    ):
+        if candidate.strip():
+            add(candidate)
+
+    prefix = str(deployment.get("prefix") or "").strip()
+    if prefix:
+        add(prefix)
+        tail = prefix.rsplit("-", 1)[-1]
+        if tail:
+            add(tail)
+            numeric_tail = re.sub(r"^[a-z]+", "", tail.lower()).strip()
+            if numeric_tail:
+                add(numeric_tail)
+
+    one_based = str(index + 1)
+    aliases.add(one_based)
+    aliases.add(f"agent-{one_based}")
+    return aliases
+
+
+def _agent_requested_aliases(requested: str) -> set[str]:
+    slug = _agent_slug(requested)
+    aliases = {slug}
+    if slug.startswith("agent-") and len(slug) > len("agent-"):
+        aliases.add(slug[len("agent-") :])
+    return {item for item in aliases if item}
+
+
+def _find_agent_deployment(
+    deployments: list[dict[str, Any]],
+    requested: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[dict[str, Any], str] | None:
+    requested_aliases = _agent_requested_aliases(requested)
+    if not requested_aliases:
+        return None
+    for index, item in enumerate(deployments):
+        label = _agent_label(item, index=index, conn=conn)
+        if requested_aliases & _agent_selector_aliases(item, label=label, index=index):
+            return item, label
+    return None
 
 
 def _metadata(row: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -2865,9 +2949,14 @@ def _agents_reply(
     for index, item in enumerate(deployments):
         label = _agent_label(item, index=index, conn=conn)
         status = str(item.get("status") or "unknown")
-        marker = "active" if str(item.get("deployment_id") or "") == active_id else status
+        if str(item.get("deployment_id") or "") == active_id:
+            marker = "at helm"
+        elif status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            marker = "ready"
+        else:
+            marker = status.replace("_", " ")
         lines.append(f"- {label}: {marker}")
-        if str(item.get("deployment_id") or "") != active_id:
+        if str(item.get("deployment_id") or "") != active_id and status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
             buttons.append(_button(f"Take Helm: {label}", command=f"/agent-{_agent_slug(label)}"))
     if deployments:
         buttons.append(_button("Add Agent", command="/add-agent"))
@@ -2900,27 +2989,26 @@ def _switch_agent_reply(
     if not session or not deployment:
         return _turn(channel=channel, channel_identity=channel_identity, action="switch_agent_unavailable", reply=_need_finished_onboarding_reply(), session=session)
     deployments = _deployments_for_user(conn, str(deployment.get("user_id") or ""))
-    requested = str(requested_slug or "").strip().lower()
-    for index, item in enumerate(deployments):
-        label = _agent_label(item, index=index, conn=conn)
-        if requested in {_agent_slug(label), _agent_slug(str(item.get("prefix") or "")), _agent_slug(str(item.get("agent_id") or ""))}:
-            updated = _update_session_metadata(
-                conn,
-                session_id=str(session["session_id"]),
-                updates={"active_deployment_id": str(item.get("deployment_id") or ""), "active_agent_label": label},
-            )
-            return _turn(
-                channel=channel,
-                channel_identity=channel_identity,
-                action="switch_agent",
-                reply=f"Focus moved. {label} is on the rail. Notion, backup, and status lanes will route to that agent until you choose another.",
-                session=updated,
-                deployment=item,
-                buttons=(
-                    _button("Show My Crew", command="/agents", style="secondary"),
-                    _button("Check Status", command="/status", style="secondary"),
-                ),
-            )
+    match = _find_agent_deployment(deployments, requested_slug, conn=conn)
+    if match is not None:
+        item, label = match
+        updated = _update_session_metadata(
+            conn,
+            session_id=str(session["session_id"]),
+            updates={"active_deployment_id": str(item.get("deployment_id") or ""), "active_agent_label": label},
+        )
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="switch_agent",
+            reply=f"Focus moved. {label} is at the helm. Notion, backup, status, and Agent messages will route there until you choose another.",
+            session=updated,
+            deployment=item,
+            buttons=(
+                _button("Show My Crew", command="/agents", style="secondary"),
+                _button("Check Status", command="/status", style="secondary"),
+            ),
+        )
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -4072,6 +4160,20 @@ def handle_arclink_public_bot_turn(
             deployment=deployment,
         )
 
+    switch_requested, switch_is_hard = _agent_switch_request(message, command)
+    if switch_requested:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        deployments = _deployments_for_user(conn, str((deployment or {}).get("user_id") or (session or {}).get("user_id") or ""))
+        if _find_agent_deployment(deployments, switch_requested, conn=conn) is not None or switch_is_hard:
+            return _switch_agent_reply(
+                conn,
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                requested_slug=switch_requested,
+                session=session,
+                deployment=deployment,
+            )
+
     agent_passthrough = _agent_passthrough_message(message, command)
     if agent_passthrough is not None:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
@@ -4230,18 +4332,6 @@ def handle_arclink_public_bot_turn(
             action="nothing_to_cancel",
             reply="No open ArcLink setup workflow is waiting on this channel. Send `/packages` when you want to start.",
             buttons=(_button("Take Me Aboard", command="/packages"),),
-        )
-
-    switch_match = ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE.match(command)
-    if switch_match:
-        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
-        return _switch_agent_reply(
-            conn,
-            channel=clean_channel,
-            channel_identity=clean_identity,
-            requested_slug=switch_match.group(1),
-            session=session,
-            deployment=deployment,
         )
 
     credential_target = _target_from_command(

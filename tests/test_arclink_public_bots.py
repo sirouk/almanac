@@ -859,6 +859,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         text="/agents",
     )
     expect(roster.action == "show_agents", str(roster))
+    expect("Agent #prime: at helm" in roster.reply, roster.reply)
     expect(any(button.command == "/add-agent" for button in roster.buttons), str(roster.buttons))
 
     upgrade = bots.handle_arclink_public_bot_turn(
@@ -960,6 +961,30 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         },
     )
     seed_credential_handoffs(control, conn, {"user_id": seeded["user_id"], "deployment_id": "arcdep_bob"})
+    roster_with_bob = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/agents",
+    )
+    expect("Agent #prime: at helm" in roster_with_bob.reply, roster_with_bob.reply)
+    expect("Bob: ready" in roster_with_bob.reply, roster_with_bob.reply)
+    soft_switched = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/agent Bob",
+    )
+    expect(soft_switched.action == "switch_agent", str(soft_switched))
+    expect(soft_switched.deployment_id == "arcdep_bob", str(soft_switched))
+    back_to_prime = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/agent prime",
+    )
+    expect(back_to_prime.action == "switch_agent", str(back_to_prime))
+    expect(back_to_prime.deployment_id == seeded["deployment_id"], str(back_to_prime))
     switched = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -987,6 +1012,109 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     expect(notion.action == "connect_notion", str(notion))
     expect("/u/arc-bob/notion/webhook" in notion.reply, notion.reply)
     print("PASS test_public_bot_agents_roster_add_agent_and_switch_are_account_aware")
+
+
+def test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthrough() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_agent_selector_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_agent_selector_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        prefix="lattice-carrier-9xrn",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET agent_name = ?, agent_title = ? WHERE deployment_id = ?",
+        ("Jeff", "Jack of all trades", seeded["deployment_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (
+            json.dumps({"active_deployment_id": seeded["deployment_id"], "active_agent_label": "Jeff"}, sort_keys=True),
+            seeded["session_id"],
+        ),
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_steel_berth_t587",
+        user_id=seeded["user_id"],
+        prefix="steel-berth-t587",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    conn.commit()
+
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        text="/agents",
+    )
+    expect("- Jeff: at helm" in roster.reply, roster.reply)
+    expect("- Agent #t587: ready" in roster.reply, roster.reply)
+    expect(": active" not in roster.reply, roster.reply)
+
+    by_label = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        text="/agent Agent #t587",
+    )
+    expect(by_label.action == "switch_agent", str(by_label))
+    expect(by_label.deployment_id == "arcdep_steel_berth_t587", str(by_label))
+
+    by_name = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        text="/agent Jeff",
+    )
+    expect(by_name.action == "switch_agent", str(by_name))
+    expect(by_name.deployment_id == seeded["deployment_id"], str(by_name))
+
+    by_numeric_tail = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        text="/agent-587",
+    )
+    expect(by_numeric_tail.action == "switch_agent", str(by_numeric_tail))
+    expect(by_numeric_tail.deployment_id == "arcdep_steel_berth_t587", str(by_numeric_tail))
+
+    by_raven_tail = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        text="/raven agent Jeff",
+    )
+    expect(by_raven_tail.action == "switch_agent", str(by_raven_tail))
+    expect(by_raven_tail.deployment_id == seeded["deployment_id"], str(by_raven_tail))
+
+    passthrough = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:selector",
+        text="/agent check the vault index",
+    )
+    expect(passthrough.action == "agent_message_queued", str(passthrough))
+    row = conn.execute(
+        """
+        SELECT message
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect(row["message"] == "check the vault index", str(dict(row)))
+    print("PASS test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthrough")
 
 
 def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> None:
@@ -1581,6 +1709,7 @@ def main() -> int:
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
+    test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthrough()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_pair_channel_refuses_existing_other_account()
     test_public_bot_share_approval_buttons_are_owner_scoped()
@@ -1594,7 +1723,7 @@ def main() -> int:
     test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
-    print("PASS all 29 ArcLink public bot tests")
+    print("PASS all 30 ArcLink public bot tests")
     return 0
 
 

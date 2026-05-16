@@ -377,12 +377,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="agent",
         telegram_command="agent",
         discord_command="agent",
-        description="Send a message or command to your active agent",
+        description="Take the helm of one of your Agents by name",
         discord_options=(
             {
                 "type": 3,
-                "name": "message",
-                "description": "Message or slash command for the active agent",
+                "name": "name",
+                "description": "Agent name from your Crew roster",
                 "required": True,
             },
         ),
@@ -775,31 +775,22 @@ def _store_raven_display_name(
     conn.commit()
 
 
-def _agent_passthrough_message(message: str, command: str) -> str | None:
-    if command in {"/agent", "agent"}:
-        return ""
-    for prefix in ("/agent ", "agent "):
-        if command.startswith(prefix):
-            return str(message or "")[len(prefix) :].strip()
-    return None
-
-
 def _agent_switch_request(message: str, command: str) -> tuple[str, bool]:
     """Return a requested Agent selector plus whether it is a hard switch command.
 
-    `/agent-jeff` is always a switch attempt and should report a roster miss.
-    `/agent Jeff` is a convenience selector only when Jeff is actually on the
-    roster; otherwise it remains the explicit pass-through command for sending
-    text to the current Agent.
+    `/agent Jeff` and `/agent-jeff` are Raven-owned switch attempts. They never
+    relay text to Hermes; once an Agent is at the helm, normal chat goes there
+    directly.
     """
     match = ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE.match(command)
     if match:
         return match.group(1), True
+    if command in {"/agent", "agent"}:
+        return "", True
     for prefix in ("/agent ", "agent "):
         if command.startswith(prefix):
             value = str(message or "")[len(prefix) :].strip()
-            if value and not value.startswith("/"):
-                return value, False
+            return value, True
     return "", False
 
 
@@ -4161,10 +4152,9 @@ def handle_arclink_public_bot_turn(
         )
 
     switch_requested, switch_is_hard = _agent_switch_request(message, command)
-    if switch_requested:
+    if switch_requested or switch_is_hard:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
-        deployments = _deployments_for_user(conn, str((deployment or {}).get("user_id") or (session or {}).get("user_id") or ""))
-        if _find_agent_deployment(deployments, switch_requested, conn=conn) is not None or switch_is_hard:
+        if switch_requested:
             return _switch_agent_reply(
                 conn,
                 channel=clean_channel,
@@ -4173,54 +4163,14 @@ def handle_arclink_public_bot_turn(
                 session=session,
                 deployment=deployment,
             )
-
-    agent_passthrough = _agent_passthrough_message(message, command)
-    if agent_passthrough is not None:
-        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
-        if not deployment or str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
-            return _turn(
-                channel=clean_channel,
-                channel_identity=clean_identity,
-                action="agent_message_unavailable",
-                reply=_need_finished_onboarding_reply(),
-                session=session,
-                deployment=deployment,
-                buttons=(_button("Take Me Aboard", command="/packages"),),
-            )
-        if not agent_passthrough:
-            return _turn(
-                channel=clean_channel,
-                channel_identity=clean_identity,
-                action="agent_message_missing",
-                reply=(
-                    "Tell me what to send to your active agent after `/agent`.\n\n"
-                    "Example: `/agent check the vault index` or `/agent /provider`."
-                ),
-                session=session,
-                deployment=deployment,
-                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
-            )
-        raven = _raven_display_name(
-            conn,
+        return _turn(
             channel=clean_channel,
             channel_identity=clean_identity,
+            action="switch_agent_missing",
+            reply="Open `/agents` or send `/agent Jeff` with an Agent name from your Crew roster. `/agent` is only for switching helm; normal messages go straight to the Agent already at helm.",
             session=session,
             deployment=deployment,
-        )
-        return _aboard_freeform_reply(
-            channel=clean_channel,
-            channel_identity=clean_identity,
-            session=session,
-            deployment={
-                **deployment,
-                "_public_bot_message": agent_passthrough,
-                "_public_bot_reply_to_message_id": reply_to_message_id,
-                "_public_bot_metadata": turn_metadata,
-            },
-            bot_display_name=raven,
-            conn=conn,
-            source_kind="agent_command" if agent_passthrough.startswith("/") else "agent_passthrough",
-            include_bridge_intro=False,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
         )
 
     pair_value = _pair_channel_value(message, command)

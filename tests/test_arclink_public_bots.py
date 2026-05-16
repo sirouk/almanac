@@ -400,7 +400,7 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     plan = next(item for item in discord if item["name"] == "plan")
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"founders", "sovereign", "scale"}, str(plan))
     agent = next(item for item in discord if item["name"] == "agent")
-    expect(agent["options"][0]["name"] == "message" and agent["options"][0]["required"] is True, str(agent))
+    expect(agent["options"][0]["name"] == "name" and agent["options"][0]["required"] is True, str(agent))
     wrapped = next(item for item in discord if item["name"] == "wrapped-frequency")
     expect({choice["value"] for choice in wrapped["options"][0]["choices"]} == {"daily", "weekly", "monthly"}, str(wrapped))
     print("PASS test_public_bot_action_catalog_has_real_platform_commands")
@@ -1014,7 +1014,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     print("PASS test_public_bot_agents_roster_add_agent_and_switch_are_account_aware")
 
 
-def test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthrough() -> None:
+def test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_agent_selector_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_agent_selector_test")
     conn = memory_db(control)
@@ -1097,24 +1097,23 @@ def test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthroug
     expect(by_raven_tail.action == "switch_agent", str(by_raven_tail))
     expect(by_raven_tail.deployment_id == seeded["deployment_id"], str(by_raven_tail))
 
-    passthrough = bots.handle_arclink_public_bot_turn(
+    not_a_selector = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:selector",
         text="/agent check the vault index",
     )
-    expect(passthrough.action == "agent_message_queued", str(passthrough))
+    expect(not_a_selector.action == "switch_agent_not_found", str(not_a_selector))
+    expect("not on your ArcLink roster" in not_a_selector.reply, not_a_selector.reply)
     row = conn.execute(
         """
-        SELECT message
+        SELECT COUNT(*) AS n
         FROM notification_outbox
         WHERE target_kind = 'public-agent-turn'
-        ORDER BY id DESC
-        LIMIT 1
         """
     ).fetchone()
-    expect(row["message"] == "check the vault index", str(dict(row)))
-    print("PASS test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthrough")
+    expect(row["n"] == 0, str(dict(row)))
+    print("PASS test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_agent_passthrough")
 
 
 def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> None:
@@ -1709,7 +1708,7 @@ def main() -> int:
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
-    test_public_bot_agent_switch_matches_live_roster_labels_and_keeps_passthrough()
+    test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_pair_channel_refuses_existing_other_account()
     test_public_bot_share_approval_buttons_are_owner_scoped()
@@ -1849,25 +1848,25 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     arbitrary_extra = json.loads(str(arbitrary_row["extra_json"] or "{}"))
     expect(arbitrary_extra.get("source_kind") == "agent_command", str(arbitrary_extra))
 
-    # /agent is an explicit Raven-owned pass-through for platforms whose slash
-    # command menus cannot expose every active Hermes command.
+    # /agent is Raven-owned selector syntax only. It must never become a prompt
+    # transport; ordinary text and bare Hermes slash commands already route to
+    # the active Agent without this prefix.
     agent_command = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:99",
         text="/agent /reload-mcp",
     )
-    expect(agent_command.action == "agent_message_queued", str(agent_command.action))
-    agent_row = conn.execute(
+    expect(agent_command.action == "switch_agent_not_found", str(agent_command.action))
+    count_row = conn.execute(
         """
-        SELECT message, extra_json
+        SELECT COUNT(*) AS n
         FROM notification_outbox
         WHERE target_kind = 'public-agent-turn'
-        ORDER BY id DESC
-        LIMIT 1
+          AND message = '/reload-mcp'
         """
     ).fetchone()
-    expect(agent_row["message"] == "/reload-mcp", str(dict(agent_row)))
+    expect(count_row["n"] == 0, str(dict(count_row)))
 
     # Raven's postlaunch control panel moves behind /raven when the active
     # agent owns the bare slash namespace.

@@ -352,10 +352,14 @@ Idempotent. Fail-closed. Single command after operator runs
 Steps:
 1. Validate `ARCLINK_FLEET_TOKEN` and `ARCLINK_FLEET_CALLBACK_URL` are set.
 2. Verify supported OS (Ubuntu 22.04+/Debian 12+/Rocky 9+ initially;
-   expand list as proof lands).
+   expand list as proof lands). Detect via `/etc/os-release`.
 3. Create `arclink` system user with restricted shell, no password.
-4. Verify Docker installed; if not, exit with operator guidance — do not
-   auto-install (operator policy).
+4. **Auto-install prerequisites** (see Prerequisite Auto-Installation
+   section below). The bootstrap script is responsible for ensuring
+   Docker Engine, the Docker Compose plugin, rsync, jq, curl, and
+   openssh-client are present. Operator may opt out via
+   `--skip-prereq-install`, but the default for a one-command bootstrap
+   is to install what's missing.
 5. Add `arclink` to `docker` group; verify `docker info` succeeds.
 6. Create `/arcdata` (or `$ARCLINK_STATE_ROOT`), owned by `arclink`,
    mode 0750.
@@ -366,10 +370,11 @@ Steps:
 9. Append the control-plane SSH public key to
    `~arclink/.ssh/authorized_keys` (mode 0600, `arclink`-owned).
 10. POST to callback URL with bearer token. Payload:
-    `{token, machine_fingerprint, hostname, outbound_ip, ssh_port, os_version}`.
-    On 200, the callback returns the assigned `inventory_id` for the
-    operator's records.
-11. Emit structured JSON status to stdout.
+    `{token, machine_fingerprint, hostname, outbound_ip, ssh_port,
+    os_version, installed_prereqs}`. On 200, the callback returns the
+    assigned `inventory_id` for the operator's records.
+11. Emit structured JSON status to stdout including which prereqs were
+    auto-installed vs already-present.
 
 Failure handling: every step that errors backs out the partial state
 (no SSH key in authorized_keys if the callback fails, no probe wrapper
@@ -377,6 +382,118 @@ installed if Docker is missing). The machine is in a known state at all
 times.
 
 `shellcheck` clean. `bash -n` clean.
+
+## Prerequisite Auto-Installation
+
+ArcLink must be installable end-to-end via a single command. The operator
+should be able to point at a clean Ubuntu/Debian/Rocky machine and run one
+script, and the system installs everything it needs — Docker, Compose,
+shell utilities, Python deps — without manual intervention. This applies
+to both the **control node install** (`deploy.sh control install` and the
+existing `bin/install-arclink.sh` wrapper) and the **worker bootstrap**
+(`bin/arclink-fleet-join.sh`).
+
+### Scope
+
+Required prerequisites for any ArcLink machine (control node or worker):
+
+| Prereq | Detection | Install strategy |
+|---|---|---|
+| Docker Engine | `command -v docker && docker info` | `curl -fsSL https://get.docker.com \| sh` (idiomatic upstream, distro-agnostic). Verify post-install. |
+| Docker Compose plugin | `docker compose version` | Installed by the `get.docker.com` script on supported distros; fall back to `apt-get install -y docker-compose-plugin` / `dnf install -y docker-compose-plugin` if absent. |
+| `curl` | `command -v curl` | `apt-get install -y curl` / `dnf install -y curl`. |
+| `jq` | `command -v jq` | `apt-get install -y jq` / `dnf install -y jq`. Used by deploy.sh in multiple places. |
+| `rsync` | `command -v rsync` | `apt-get install -y rsync` / `dnf install -y rsync`. Required by `SshDockerComposeRunner` for state-root sync. |
+| `openssh-client` | `command -v ssh` | `apt-get install -y openssh-client` / `dnf install -y openssh-clients`. |
+| `python3` ≥ 3.10 | `python3 --version` | `apt-get install -y python3 python3-pip python3-venv`. Reject older majors with clear guidance. |
+| Python packages (`PyYAML`, `jsonschema`, others used) | `python3 -c 'import ...'` | Existing pattern at `bin/deploy.sh:2473`: `pip install --upgrade --quiet ...`. |
+
+Optional prerequisites installed on operator-opt-in:
+- Tailscale (only if `ENABLE_TAILSCALE_SERVE=1` or operator chose
+  Tailscale ingress). Existing flag: `ARCLINK_INSTALL_TAILSCALE`.
+- Podman (alternative to Docker; existing flag:
+  `ARCLINK_INSTALL_PODMAN`).
+- Quarto (existing flag: `ENABLE_QUARTO`).
+
+Not in scope (out of band, operator handles):
+- Kernel upgrades, OS upgrades.
+- Firewall rules beyond opening ports the operator explicitly chose.
+- Cloud-provider host setup (handled by Phase 6 provisioning).
+
+### Behaviour
+
+- **Idempotent.** Every install step first detects whether the prereq is
+  present and at the required version. Re-running the installer on a
+  ready machine is a no-op.
+- **OS detection.** Read `/etc/os-release` once at start; dispatch to the
+  appropriate package manager (`apt-get` for Debian/Ubuntu, `dnf` for
+  Rocky/RHEL/Fedora). Unsupported OS exits with a clear message and the
+  list of OSes that are supported.
+- **Privilege handling.** The bootstrap is intended to be run as root (or
+  with `sudo`). If run as a non-root user and `sudo` is unavailable, exit
+  with operator guidance. Never call `sudo` from within the script with
+  hard-coded passwords; rely on existing operator privilege.
+- **Pinned Docker.** Use the upstream `https://get.docker.com` installer.
+  This is the same idiom recommended by Docker themselves and used by
+  Kubernetes, HashiCorp, and most enterprise installers. Capture the
+  installed version in `arclink_audit_log` for the control node and in
+  the inventory row for workers.
+- **Network availability.** Detect lack of network early (cannot reach
+  `https://get.docker.com`); fail fast with operator guidance rather
+  than producing a partial install.
+- **Operator opt-out.** Both installers accept `--skip-prereq-install`
+  (or env `ARCLINK_SKIP_PREREQ_INSTALL=1`). In that mode the installer
+  *verifies* prereqs are present and exits with structured guidance if
+  not, preserving the pre-mission behavior.
+- **Audit.** Every auto-install action writes an audit-log entry with
+  the package name and resolved version. On worker bootstrap, the
+  enrollment callback payload includes `installed_prereqs[]` for control
+  plane records.
+- **Reproducibility.** A successful install run on the same machine
+  produces the same final state. Distro/package versions captured in
+  audit log enable post-hoc reconstruction.
+
+### Code-organisation
+
+This work touches two surfaces:
+
+1. **Control node install** — extend `bin/deploy.sh` (specifically the
+   region around line 8955 where the installer currently tells operators
+   "install Docker yourself"). Add an `ensure_prereqs` helper that runs
+   the table above. Wire it into `run_control_install_flow` and
+   `run_docker_install_flow`. Default to auto-install; preserve the
+   advisory text behind `--skip-prereq-install`.
+2. **Worker bootstrap** — `bin/arclink-fleet-join.sh` (new in Phase 3)
+   calls the same `ensure_prereqs` helper, either by sourcing a shared
+   `bin/lib/ensure-prereqs.sh` library or by inlining the logic to keep
+   the bootstrap script self-contained for cloud-init usage.
+
+The shared library approach is preferred because Phase 6 cloud-provider
+provisioning will also need to run this on freshly created machines.
+
+### Validation
+
+- `shellcheck` clean on the prereq helper and any new scripts.
+- `bash -n` clean.
+- Unit test: a `tests/test_deploy_prereqs.py` or shell-test harness that
+  exercises the detection branches with `PATH` manipulation (no real
+  network calls, no real installs).
+- Operator runbook entry in `docs/arclink/fleet-operator-runbook.md`
+  covering: how to bootstrap a fresh machine, how to opt out, how to
+  verify prereqs after an install, how to view the install audit log.
+
+### Why this is enterprise grade
+
+- **One-command bootstrap** is the table-stakes UX for any enterprise
+  platform. Kubernetes (`kubeadm`), HashiCorp Vault, Nomad, Consul, and
+  every major cloud-init pattern install their prereqs without manual
+  operator intervention.
+- **Audit-logged**: every install action is reconstructable post-hoc.
+- **Idempotent + reproducible**: re-runs are safe; final state is
+  deterministic.
+- **Opt-out preserved**: operators who run inside hardened images
+  (golden AMIs, etc.) where prereqs are pre-installed get a
+  verify-only path.
 
 ## Cloud Provider Provisioning
 

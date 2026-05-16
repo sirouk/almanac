@@ -2831,6 +2831,19 @@ def test_arclink_managed_context_answers_resource_request_without_secrets() -> N
             expect("QMD MCP retrieval rail:" not in context, context)
             expect("ArcLink MCP control rail:" not in context, context)
             expect("/home/arclink" not in context, context)
+
+            natural = hook(
+                session_id="session-resources-natural",
+                user_message="send me a link to the dashboard",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(natural, dict) and natural.get("context"), f"expected natural dashboard link resource context, got {natural!r}")
+            expect("Hermes dashboard: https://arclink.example.test:30011/" in natural["context"], natural["context"])
+            expect("sup3r-secret" not in natural["context"], natural["context"])
             print("PASS test_arclink_managed_context_answers_resource_request_without_secrets")
         finally:
             os.environ.clear()

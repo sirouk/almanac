@@ -136,9 +136,13 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ARCLINK_DOCKER_SOCKET_GID: ${ARCLINK_DOCKER_SOCKET_GID:-0}" in body, body)
     expect("Intentional trusted-host boundary" in body, body)
     expect(
-        "- .:/home/arclink/arclink" in body
-        and "${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}" in body,
-        "agent-supervisor and curator-refresh must mount the live checkout for Docker operator actions",
+        "${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}" in body
+        and "without overlaying /home/arclink/arclink" in body,
+        "agent-supervisor and curator-refresh must keep the live checkout available without hiding split private mounts",
+    )
+    expect(
+        "\n      - .:/home/arclink/arclink\n" not in body,
+        "curator-refresh must not overlay the image repo with a host checkout that may contain an arclink-priv symlink",
     )
     socket_mounts = re.findall(r"^\s+- /var/run/docker\.sock:/var/run/docker\.sock(?::ro)?\s*$", body, re.MULTILINE)
     expect(len(socket_mounts) == 6, f"unexpected Docker socket mount count: {socket_mounts}\n{body}")

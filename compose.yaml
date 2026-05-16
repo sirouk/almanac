@@ -388,7 +388,6 @@ services:
       ARCLINK_CONTAINER_RUNTIME: docker
       ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor
     volumes:
-      - .:/home/arclink/arclink
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
@@ -396,6 +395,9 @@ services:
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - arclink-qmd:/home/arclink/.qmd
+      # Keep the live checkout available at its host path for queued Docker
+      # operator actions without overlaying /home/arclink/arclink; overlaying
+      # the repo can expose a private-state symlink and defeat split mounts.
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Intentional trusted-host boundary: the supervisor needs Docker API
       # access to reconcile per-agent containers, dashboard proxies, and
@@ -444,7 +446,6 @@ services:
     group_add:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
-      - .:/home/arclink/arclink
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
       - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
@@ -452,6 +453,9 @@ services:
       - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
       - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - arclink-qmd:/home/arclink/.qmd
+      # Keep the live checkout available at its host path for queued Docker
+      # operator actions without overlaying /home/arclink/arclink; overlaying
+      # the repo can expose a private-state symlink and defeat split mounts.
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
       # Trusted operator-action boundary: Curator refresh consumes queued
       # operator upgrade requests and needs to run Docker Compose on the host.

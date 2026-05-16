@@ -825,6 +825,67 @@ def test_public_agent_gateway_bridge_detaches_long_running_turns() -> None:
             os.environ.update(old_env)
 
 
+def test_public_agent_gateway_bridge_passes_streaming_policy_to_container() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_streaming_policy_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "STATE_DIR": str(root / "state"),
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            payloads: list[dict[str, object]] = []
+            delivery._deployment_service_container = lambda *, project_name, service: "gateway-container"
+
+            def fake_spawn(*, cmd, payload):
+                payloads.append(dict(payload))
+                return True, ""
+
+            delivery._spawn_public_agent_gateway_bridge = fake_spawn
+            ok, error = delivery._run_public_agent_gateway_turn(
+                deployment_id="arcdep_test",
+                prefix="arc-test",
+                channel_kind="telegram",
+                target_id="tg:123",
+                prompt="hello",
+                extra={},
+            )
+            expect(ok is True and error == "", error)
+            expect(payloads[-1]["streaming_enabled"] is False, payloads[-1])
+
+            write_config(
+                config_path,
+                {
+                    "STATE_DIR": str(root / "state"),
+                    "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+                    "ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING": "1",
+                },
+            )
+            ok, error = delivery._run_public_agent_gateway_turn(
+                deployment_id="arcdep_test",
+                prefix="arc-test",
+                channel_kind="telegram",
+                target_id="tg:123",
+                prompt="hello",
+                extra={},
+            )
+            expect(ok is True and error == "", error)
+            expect(payloads[-1]["streaming_enabled"] is True, payloads[-1])
+            print("PASS test_public_agent_gateway_bridge_passes_streaming_policy_to_container")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -896,12 +957,21 @@ def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
             os.environ.update(old_env)
 
 
-def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> None:
+def test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning() -> None:
     bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_contract_test")
     bridge_source = (PYTHON_DIR / "arclink_public_agent_bridge.py").read_text(encoding="utf-8")
     expect("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING" in bridge_source, bridge_source)
     expect("streaming.enabled = True" in bridge_source, bridge_source)
     expect("show_reasoning = True" not in bridge_source, bridge_source)
+    old_env = os.environ.copy()
+    try:
+        os.environ.pop("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", None)
+        expect(bridge._public_bridge_streaming_enabled() is False, "public bridge should default to final-send mode")
+        os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING"] = "1"
+        expect(bridge._public_bridge_streaming_enabled() is True, "streaming should remain operator opt-in")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
     expect("Update.de_json" in bridge_source, "Telegram rich updates should be replayed through Hermes/PTB")
     expect("_handle_media_message" in bridge_source, "Telegram media must use Hermes' own media handler")
     expect("_handle_callback_query" in bridge_source, "Telegram callback queries must use Hermes' own callback handler")
@@ -909,7 +979,7 @@ def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> No
     expect(bridge._is_slash_command("  /reload-mcp") is True, "leading whitespace slash command should be recognized")
     expect(bridge._is_slash_command("hello") is False, "chat text should not be a slash command")
     expect("message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT" in bridge_source, bridge_source)
-    print("PASS test_public_agent_bridge_enables_gateway_streaming_without_reasoning")
+    print("PASS test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning")
 
 
 def test_public_agent_bridge_drains_telegram_batch_tasks_before_done() -> None:
@@ -977,8 +1047,9 @@ def main() -> int:
     test_public_agent_live_trigger_claims_and_delivers_once()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_public_agent_gateway_bridge_detaches_long_running_turns()
+    test_public_agent_gateway_bridge_passes_streaming_policy_to_container()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
-    test_public_agent_bridge_enables_gateway_streaming_without_reasoning()
+    test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
     print("PASS all 14 notification delivery regression tests")

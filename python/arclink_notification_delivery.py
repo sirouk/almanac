@@ -440,6 +440,7 @@ def _run_public_agent_gateway_turn(
         "message_id": message_id,
         "display_name": str(extra.get("display_name") or extra.get("agent_label") or "").strip(),
         "chat_type": chat_type,
+        "streaming_enabled": _public_agent_bridge_streaming_enabled(),
     }
     if clean_channel == "telegram":
         for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
@@ -483,6 +484,23 @@ def _public_agent_bridge_detached_enabled() -> bool:
     start it and release its slot instead of imposing a hard turn timeout.
     """
     return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_DETACHED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _public_agent_bridge_streaming_enabled() -> bool:
+    """Return whether public Agent turns should opt into Hermes streaming.
+
+    The public bridge is a short-lived synthetic gateway process, separate from
+    Hermes' normal long-lived platform adapters. Default to final-message
+    delivery so a successful bridge means the Captain receives a visible answer;
+    operators can opt into the upstream streaming path after validating their
+    runtime with ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1.
+    """
+    return config_env_value("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "0").strip().lower() not in {
         "0",
         "false",
         "no",

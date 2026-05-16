@@ -75,13 +75,33 @@ def _is_slash_command(text: str) -> bool:
     return str(text or "").lstrip().startswith("/")
 
 
+FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _bool_payload(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in FALSE_VALUES:
+        return False
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
 def _public_bridge_streaming_enabled() -> bool:
-    return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
-    }
+    return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "0").strip().lower() not in FALSE_VALUES
+
+
+def _apply_public_bridge_options(payload: Mapping[str, Any]) -> None:
+    if "streaming_enabled" in payload:
+        os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING"] = (
+            "1" if _bool_payload(payload.get("streaming_enabled"), default=False) else "0"
+        )
 
 
 def _enable_public_bridge_gateway_defaults(cfg: Any) -> None:
@@ -450,6 +470,7 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
 
 
 async def _run(payload: Mapping[str, Any]) -> None:
+    _apply_public_bridge_options(payload)
     platform = str(payload.get("platform") or "").strip().lower()
     if platform == "telegram":
         await _run_telegram(payload)

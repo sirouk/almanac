@@ -332,6 +332,7 @@ write_default_docker_config() {
   local postgres_password="${POSTGRES_PASSWORD:-}"
   local nextcloud_admin_password="${NEXTCLOUD_ADMIN_PASSWORD:-}"
   local session_hash_pepper="${ARCLINK_SESSION_HASH_PEPPER:-}"
+  local fleet_enrollment_secret="${ARCLINK_FLEET_ENROLLMENT_SECRET:-}"
 
   if [[ -z "$postgres_password" || "$postgres_password" == "change-me" ]]; then
     postgres_password="$(generate_secret)"
@@ -341,6 +342,9 @@ write_default_docker_config() {
   fi
   if [[ -z "$session_hash_pepper" || "$session_hash_pepper" == "change-me" ]]; then
     session_hash_pepper="$(generate_secret)"
+  fi
+  if [[ -z "$fleet_enrollment_secret" || "$fleet_enrollment_secret" == "change-me" ]]; then
+    fleet_enrollment_secret="$(generate_secret)"
   fi
 
   cat >"$CONFIG_FILE" <<EOF
@@ -391,6 +395,7 @@ ARCLINK_CORS_ORIGIN=
 ARCLINK_COOKIE_DOMAIN=
 ARCLINK_SESSION_HASH_PEPPER=$session_hash_pepper
 ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1
+ARCLINK_FLEET_ENROLLMENT_SECRET=$fleet_enrollment_secret
 ARCLINK_DEFAULT_PRICE_ID=price_arclink_founders
 ARCLINK_FOUNDERS_PRICE_ID=price_arclink_founders
 ARCLINK_SOVEREIGN_PRICE_ID=price_arclink_sovereign
@@ -546,7 +551,10 @@ ensure_nextcloud_data_dir() {
   if [[ -d "$live_data" && ! -w "$live_data" ]]; then
     return 0
   fi
-  mkdir -p "$live_data"
+  if ! mkdir -p "$live_data" 2>/dev/null; then
+    echo "Warning: unable to create Nextcloud data directory $live_data; continuing because split private mounts may provide it to the Nextcloud service." >&2
+    return 0
+  fi
   if [[ ! -w "$live_data" ]]; then
     return 0
   fi
@@ -580,6 +588,9 @@ if config_file_can_repair; then
   fi
   if [[ -z "$(config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED 2>/dev/null || true)" ]]; then
     set_config_value ARCLINK_SESSION_HASH_PEPPER_REQUIRED "1"
+  fi
+  if [[ -z "$(config_value ARCLINK_FLEET_ENROLLMENT_SECRET 2>/dev/null || true)" || "$(config_value ARCLINK_FLEET_ENROLLMENT_SECRET 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_FLEET_ENROLLMENT_SECRET "$(generate_secret)"
   fi
 else
   echo "Warning: unable to repair Docker config secrets at $CONFIG_FILE; continuing because split private mounts may provide sealed runtime values." >&2

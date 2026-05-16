@@ -546,6 +546,10 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
         "unable to repair Docker config secrets" in body and "split private mounts may provide sealed runtime values" in body,
         "Docker entrypoint must not crash when split private mounts make config secret repair impossible",
     )
+    expect(
+        "unable to create Nextcloud data directory" in body and "split private mounts may provide it to the Nextcloud service" in body,
+        "Docker entrypoint must not crash when non-Nextcloud services lack the split Nextcloud data mount",
+    )
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
     print("PASS test_docker_entrypoint_generates_fresh_secrets")

@@ -8,8 +8,103 @@ source "$SCRIPT_DIR/common.sh"
 require_real_layout "Hermes docs sync"
 ensure_layout
 
+sync_arclink_docs_into_vault() {
+  if [[ "${ARCLINK_DOCS_SYNC_ENABLED:-1}" != "1" ]]; then
+    return 0
+  fi
+
+  local arclink_repo_dir=""
+  local arclink_target_dir=""
+  local arclink_legacy_target_dir=""
+  local arclink_meta_file=""
+  local arclink_resolved_commit=""
+  local tmp_dir=""
+  local source_path=""
+  local target_path=""
+
+  arclink_repo_dir="${ARCLINK_DOCS_REPO_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+  arclink_target_dir="${ARCLINK_DOCS_VAULT_DIR:-$VAULT_DIR/Agents_KB/arclink-docs}"
+  arclink_legacy_target_dir="$VAULT_DIR/Repos/arclink-docs"
+  arclink_meta_file="$arclink_target_dir/.arclink-source.json"
+
+  if [[ "$arclink_target_dir" == "$VAULT_DIR/Agents_KB/arclink-docs" && -d "$arclink_legacy_target_dir" ]]; then
+    mkdir -p "$(dirname "$arclink_target_dir")"
+    if [[ ! -e "$arclink_target_dir" ]]; then
+      mv "$arclink_legacy_target_dir" "$arclink_target_dir"
+    else
+      if command -v rsync >/dev/null 2>&1; then
+        rsync -a --ignore-existing "$arclink_legacy_target_dir"/ "$arclink_target_dir"/
+      else
+        cp -Rn "$arclink_legacy_target_dir"/. "$arclink_target_dir"/
+      fi
+      rm -rf "$arclink_legacy_target_dir"
+    fi
+  fi
+
+  if [[ ! -d "$arclink_repo_dir/docs/arclink" ]]; then
+    echo "ArcLink docs source directory is missing at $arclink_repo_dir/docs/arclink" >&2
+    return 0
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  mkdir -p "$tmp_dir"
+  for source_path in \
+    README.md \
+    AGENTS.md \
+    docs/API_REFERENCE.md \
+    docs/DOC_STATUS.md \
+    docs/hermes-qmd-config.yaml; do
+    if [[ -f "$arclink_repo_dir/$source_path" ]]; then
+      target_path="$tmp_dir/${source_path#docs/}"
+      mkdir -p "$(dirname "$target_path")"
+      cp "$arclink_repo_dir/$source_path" "$target_path"
+    fi
+  done
+  cp -R "$arclink_repo_dir/docs/arclink" "$tmp_dir/arclink"
+  if [[ -d "$arclink_repo_dir/docs/openapi" ]]; then
+    cp -R "$arclink_repo_dir/docs/openapi" "$tmp_dir/openapi"
+  fi
+
+  mkdir -p "$arclink_target_dir"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude='.git' \
+      --exclude='.github' \
+      "$tmp_dir"/ "$arclink_target_dir"/
+  else
+    find "$arclink_target_dir" -mindepth 1 -maxdepth 1 ! -name '.arclink-source.json' -exec rm -rf {} +
+    cp -R "$tmp_dir"/. "$arclink_target_dir"/
+  fi
+  rm -rf "$tmp_dir"
+
+  arclink_resolved_commit="$(git -C "$arclink_repo_dir" rev-parse HEAD 2>/dev/null || true)"
+  python3 - "$arclink_meta_file" "$arclink_repo_dir" "$arclink_resolved_commit" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+meta_path = Path(sys.argv[1])
+payload = {
+    "repo_dir": sys.argv[2],
+    "resolved_commit": sys.argv[3],
+    "source_paths": [
+        "README.md",
+        "AGENTS.md",
+        "docs/API_REFERENCE.md",
+        "docs/DOC_STATUS.md",
+        "docs/arclink",
+        "docs/openapi",
+    ],
+}
+meta_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+  echo "Synced ArcLink docs from $arclink_repo_dir${arclink_resolved_commit:+@$arclink_resolved_commit} into $arclink_target_dir"
+}
+
 if [[ "${ARCLINK_HERMES_DOCS_SYNC_ENABLED:-1}" != "1" ]]; then
   echo "Hermes docs sync is disabled."
+  sync_arclink_docs_into_vault
   exit 0
 fi
 
@@ -86,3 +181,4 @@ meta_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encod
 PY
 
 echo "Synced Hermes docs from $repo_url@$resolved_commit into $target_dir"
+sync_arclink_docs_into_vault

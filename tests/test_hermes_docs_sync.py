@@ -67,6 +67,12 @@ def test_sync_hermes_docs_into_vault_tracks_source_updates() -> None:
         expect((target_dir / "intro.md").read_text(encoding="utf-8") == "# Intro\n", str(list(target_dir.iterdir())))
         expect(not legacy_target_dir.exists(), "expected legacy Repos/hermes-agent-docs default to normalize into Agents_KB")
         expect((target_dir / ".arclink-source.json").is_file(), "expected sync metadata file")
+        arclink_docs_dir = root / "arclink-priv" / "vault" / "Agents_KB" / "arclink-docs"
+        expect((arclink_docs_dir / "README.md").is_file(), "expected top-level ArcLink README in synced docs")
+        expect((arclink_docs_dir / "arclink" / "vocabulary.md").is_file(), "expected canonical ArcLink docs in synced docs")
+        expect((arclink_docs_dir / "openapi" / "arclink-v1.openapi.json").is_file(), "expected OpenAPI docs in synced docs")
+        arclink_meta = json.loads((arclink_docs_dir / ".arclink-source.json").read_text(encoding="utf-8"))
+        expect("docs/arclink" in arclink_meta["source_paths"], str(arclink_meta))
 
         (docs_dir / "intro.md").unlink()
         (docs_dir / "advanced.mdx").write_text("# Advanced\n", encoding="utf-8")

@@ -11,6 +11,178 @@ CONFIG_PRIV_DIR="${ARCLINK_DOCKER_CONFIG_PRIV_DIR:-$CONFIG_REPO_DIR/arclink-priv
 CONFIG_RUNTIME_DIR="${ARCLINK_DOCKER_CONFIG_RUNTIME_DIR:-/opt/arclink/runtime}"
 CONFIG_AGENT_HOME_ROOT="$CONFIG_PRIV_DIR/state/docker/users"
 
+runtime_env_config_enabled() {
+  case "${ARCLINK_RUNTIME_ENV_CONFIG:-0}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+write_runtime_env_config() {
+  local target="${ARCLINK_RUNTIME_CONFIG_FILE:-/tmp/arclink-runtime.env}"
+  mkdir -p "$(dirname "$target")"
+  python3 - "$target" <<'PY'
+import os
+import shlex
+import sys
+
+target = sys.argv[1]
+state_dir = os.environ.get("STATE_DIR") or os.environ.get("ARCLINK_MEMORY_SYNTH_STATE_DIR") or "/srv/memory"
+repo_dir = os.environ.get("ARCLINK_REPO_DIR") or "/home/arclink/arclink"
+runtime_dir = os.environ.get("RUNTIME_DIR") or "/opt/arclink/runtime"
+defaults = {
+    "ARCLINK_NAME": "arclink",
+    "ARCLINK_USER": "arclink",
+    "ARCLINK_REPO_DIR": repo_dir,
+    "ARCLINK_HOME": "/home/arclink",
+    "ARCLINK_PRIV_DIR": f"{state_dir}/arclink-priv",
+    "ARCLINK_PRIV_CONFIG_DIR": f"{state_dir}/arclink-priv/config",
+    "VAULT_DIR": "/srv/vault",
+    "STATE_DIR": state_dir,
+    "RUNTIME_DIR": runtime_dir,
+    "PUBLISHED_DIR": f"{state_dir}/published",
+    "ARCLINK_DB_PATH": f"{state_dir}/arclink-control.sqlite3",
+    "ARCLINK_NOTION_INDEX_DIR": f"{state_dir}/notion-index",
+    "ARCLINK_NOTION_INDEX_MARKDOWN_DIR": f"{state_dir}/notion-index/markdown",
+    "PDF_INGEST_DIR": f"{state_dir}/pdf-ingest",
+    "PDF_INGEST_MARKDOWN_DIR": f"{state_dir}/pdf-ingest/markdown",
+    "PDF_INGEST_STATUS_FILE": f"{state_dir}/pdf-ingest/status.json",
+    "PDF_INGEST_MANIFEST_DB": f"{state_dir}/pdf-ingest/manifest.sqlite3",
+    "PDF_INGEST_LOCK_FILE": f"{state_dir}/pdf-ingest/ingest.lock",
+    "QMD_REFRESH_LOCK_FILE": f"{state_dir}/qmd-refresh.lock",
+    "ARCLINK_MEMORY_SYNTH_STATE_DIR": state_dir,
+    "ARCLINK_MEMORY_SYNTH_STATUS_FILE": f"{state_dir}/memory-synth/status.json",
+    "ARCLINK_MEMORY_SYNTH_LOCK_FILE": f"{state_dir}/memory-synth/synth.lock",
+}
+keys = [
+    "ARCLINK_NAME",
+    "ARCLINK_USER",
+    "ARCLINK_HOME",
+    "ARCLINK_REPO_DIR",
+    "ARCLINK_PRIV_DIR",
+    "ARCLINK_PRIV_CONFIG_DIR",
+    "VAULT_DIR",
+    "STATE_DIR",
+    "RUNTIME_DIR",
+    "PUBLISHED_DIR",
+    "ARCLINK_DB_PATH",
+    "ARCLINK_AGENTS_STATE_DIR",
+    "ARCLINK_NOTION_INDEX_DIR",
+    "ARCLINK_NOTION_INDEX_MARKDOWN_DIR",
+    "PDF_INGEST_DIR",
+    "PDF_INGEST_MARKDOWN_DIR",
+    "PDF_INGEST_STATUS_FILE",
+    "PDF_INGEST_MANIFEST_DB",
+    "PDF_INGEST_LOCK_FILE",
+    "QMD_REFRESH_LOCK_FILE",
+    "QMD_STATE_DIR",
+    "QMD_INDEX_NAME",
+    "QMD_COLLECTION_NAME",
+    "PDF_INGEST_COLLECTION_NAME",
+    "ARCLINK_NOTION_INDEX_COLLECTION_NAME",
+    "ARCLINK_NOTION_INDEX_ROOTS",
+    "ARCLINK_NOTION_INDEX_RUN_EMBED",
+    "VAULT_QMD_COLLECTION_MASK",
+    "QMD_RUN_EMBED",
+    "QMD_EMBED_PROVIDER",
+    "QMD_EMBED_ENDPOINT",
+    "QMD_EMBED_ENDPOINT_MODEL",
+    "QMD_EMBED_DIMENSIONS",
+    "QMD_EMBED_TIMEOUT_SECONDS",
+    "QMD_EMBED_MAX_DOCS_PER_BATCH",
+    "QMD_EMBED_MAX_BATCH_MB",
+    "QMD_EMBED_FORCE_ON_NEXT_REFRESH",
+    "QMD_MCP_PORT",
+    "QMD_MCP_CONTAINER_PORT",
+    "QMD_MCP_LOOPBACK_PORT",
+    "QMD_MCP_INTERNAL_PORT",
+    "QMD_PROXY_BIND_HOST",
+    "ARCLINK_MCP_HOST",
+    "ARCLINK_MCP_PORT",
+    "ARCLINK_MCP_URL",
+    "ARCLINK_BOOTSTRAP_URL",
+    "ARCLINK_NOTION_WEBHOOK_HOST",
+    "ARCLINK_NOTION_WEBHOOK_PORT",
+    "ARCLINK_NOTION_WEBHOOK_PUBLIC_URL",
+    "ARCLINK_MEMORY_SYNTH_ENABLED",
+    "ARCLINK_MEMORY_SYNTH_ENDPOINT",
+    "ARCLINK_MEMORY_SYNTH_MODEL",
+    "ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN",
+    "ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS",
+    "ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS",
+    "ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS",
+    "ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS",
+    "ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT",
+    "ARCLINK_MEMORY_SYNTH_STATE_DIR",
+    "ARCLINK_MEMORY_SYNTH_STATUS_FILE",
+    "ARCLINK_MEMORY_SYNTH_LOCK_FILE",
+    "ARCLINK_MEMORY_SYNTH_ON_VAULT_CHANGE",
+    "PDF_VISION_ENDPOINT",
+    "PDF_VISION_MODEL",
+    "PDF_VISION_MAX_PAGES",
+    "VAULT_WATCH_DEBOUNCE_SECONDS",
+    "VAULT_WATCH_MAX_BATCH_SECONDS",
+    "VAULT_WATCH_RUN_EMBED",
+    "HERMES_HOME",
+    "DRIVE_ROOT",
+    "CODE_WORKSPACE_ROOT",
+    "DRIVE_LINKED_ROOT",
+    "CODE_LINKED_ROOT",
+    "ARCLINK_LINKED_RESOURCES_ROOT",
+    "TERMINAL_WORKSPACE_ROOT",
+    "ARCLINK_DRIVE_ROOT",
+    "ARCLINK_CODE_WORKSPACE_ROOT",
+    "ARCLINK_TERMINAL_TUI_COMMAND",
+    "HERMES_TUI_DIR",
+    "ARCLINK_DEPLOYMENT_ID",
+    "ARCLINK_PREFIX",
+    "ARCLINK_DASHBOARD_HOST",
+    "ARCLINK_FILES_HOST",
+    "ARCLINK_CODE_HOST",
+    "ARCLINK_HERMES_HOST",
+    "ARCLINK_DASHBOARD_URL",
+    "ARCLINK_HERMES_URL",
+    "ARCLINK_FILES_URL",
+    "ARCLINK_CODE_URL",
+    "ARCLINK_NOTION_CALLBACK_URL",
+    "ARCLINK_NOTION_ROOT_URL",
+    "ARCLINK_CAPTAIN_NAME",
+    "ARCLINK_CAPTAIN_EMAIL",
+    "ARCLINK_AGENT_NAME",
+    "ARCLINK_AGENT_TITLE",
+    "ARCLINK_PRIMARY_PROVIDER",
+    "ARCLINK_CHUTES_BASE_URL",
+    "ARCLINK_CHUTES_DEFAULT_MODEL",
+    "ARCLINK_MODEL_REASONING_DEFAULT",
+    "TELEGRAM_REACTIONS",
+    "DISCORD_REACTIONS",
+]
+values = {key: defaults[key] for key in defaults}
+for key in keys:
+    if key in os.environ:
+        values[key] = os.environ[key]
+for key in keys:
+    if key not in values and key in defaults:
+        values[key] = defaults[key]
+with open(target, "w", encoding="utf-8") as handle:
+    handle.write("# Generated by bin/docker-entrypoint.sh from the per-Pod runtime environment.\n")
+    for key in keys:
+        if key in values:
+            handle.write(f"{key}={shlex.quote(str(values[key]))}\n")
+PY
+  chmod 600 "$target" 2>/dev/null || true
+}
+
+if runtime_env_config_enabled; then
+  CONFIG_FILE="${ARCLINK_RUNTIME_CONFIG_FILE:-/tmp/arclink-runtime.env}"
+  write_runtime_env_config
+  export ARCLINK_CONFIG_FILE="$CONFIG_FILE"
+  if [[ -d "$CONFIG_RUNTIME_DIR/hermes-venv" ]]; then
+    export PATH="$CONFIG_RUNTIME_DIR/hermes-venv/bin:$PATH"
+  fi
+  exec "$@"
+fi
+
 ensure_docker_state_dirs() {
   local qmd_config_dir="${XDG_CONFIG_HOME:-/home/arclink/.qmd/config}/qmd"
   local qmd_cache_dir="${XDG_CACHE_HOME:-/home/arclink/.qmd/cache}/qmd"

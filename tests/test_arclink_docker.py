@@ -511,6 +511,8 @@ def test_docker_agent_supervisor_replaces_user_systemd_units() -> None:
 def test_docker_entrypoint_generates_fresh_secrets() -> None:
     body = read("bin/docker-entrypoint.sh")
     expect("generate_secret()" in body, body)
+    expect("runtime_env_config_enabled()" in body, body)
+    expect("write_runtime_env_config()" in body, body)
     expect("secrets.token_urlsafe(32)" in body, body)
     expect('repair_placeholder_secret POSTGRES_PASSWORD "$PRIV_DIR/state/nextcloud/db/PG_VERSION"' in body, body)
     expect(
@@ -530,6 +532,51 @@ def test_docker_entrypoint_generates_fresh_secrets() -> None:
     expect('[[ -d "$live_data" && ! -w "$live_data" ]]' in body, body)
     expect('[[ ! -w "$(dirname "$nextcloud_config")" ]]' in body, body)
     print("PASS test_docker_entrypoint_generates_fresh_secrets")
+
+
+def test_docker_entrypoint_runtime_env_config_preserves_pod_paths_without_secret_spill() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        runtime_config = Path(tmp) / "runtime.env"
+        result = subprocess.run(
+            [
+                "bash",
+                str(REPO / "bin" / "docker-entrypoint.sh"),
+                "bash",
+                "-lc",
+                "source \"$ARCLINK_REPO_DIR/bin/common.sh\"; "
+                "printf 'config=%s\\nvault=%s\\nstate=%s\\nqmd=%s\\nmem=%s\\n' "
+                "\"$ARCLINK_CONFIG_FILE\" \"$VAULT_DIR\" \"$STATE_DIR\" \"$QMD_INDEX_NAME\" \"$ARCLINK_MEMORY_SYNTH_STATE_DIR\"",
+            ],
+            cwd=REPO,
+            env={
+                **os.environ,
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_RUNTIME_ENV_CONFIG": "1",
+                "ARCLINK_RUNTIME_CONFIG_FILE": str(runtime_config),
+                "ARCLINK_OPERATOR_ARTIFACT_FILE": str(Path(tmp) / "missing-operator.env"),
+                "VAULT_DIR": "/srv/vault",
+                "STATE_DIR": "/srv/memory",
+                "QMD_INDEX_NAME": "vault-dep_1",
+                "ARCLINK_MEMORY_SYNTH_STATE_DIR": "/srv/memory",
+                "ARCLINK_MEMORY_SYNTH_API_KEY": "must-not-be-written",
+                "CHUTES_API_KEY": "must-not-be-written-either",
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        expect(result.returncode == 0, f"entrypoint runtime config failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        expect(f"config={runtime_config}" in result.stdout, result.stdout)
+        expect("vault=/srv/vault" in result.stdout, result.stdout)
+        expect("state=/srv/memory" in result.stdout, result.stdout)
+        expect("qmd=vault-dep_1" in result.stdout, result.stdout)
+        expect("mem=/srv/memory" in result.stdout, result.stdout)
+        body = runtime_config.read_text(encoding="utf-8")
+        expect("ARCLINK_MEMORY_SYNTH_API_KEY" not in body, body)
+        expect("CHUTES_API_KEY" not in body, body)
+        expect("must-not-be-written" not in body, body)
+    print("PASS test_docker_entrypoint_runtime_env_config_preserves_pod_paths_without_secret_spill")
 
 
 def test_docker_health_script_checks_container_runtime() -> None:
@@ -648,13 +695,13 @@ def test_readme_distinguishes_control_shared_host_and_docker_paths() -> None:
 def test_sovereign_ingress_docs_cover_domain_and_tailscale_modes() -> None:
     ingress = read("docs/arclink/ingress-plan.md")
     live = read("docs/arclink/live-e2e-secrets-needed.md")
-    plan = read("IMPLEMENTATION_PLAN.md")
+    control_node = read("docs/arclink/sovereign-control-node.md")
     expect("ARCLINK_INGRESS_MODE=domain" in ingress and "ARCLINK_INGRESS_MODE=tailscale" in ingress, ingress)
     expect("u-{prefix}.{base_domain}" in ingress and "hermes-{prefix}.{base_domain}" in ingress, ingress)
     expect("https://{tailscale_dns_name}/u/{prefix}/drive" in ingress, ingress)
     expect("cloudflare_access_tcp" in ingress and "tailscale_direct_ssh" in ingress, ingress)
     expect("Domain mode:" in live and "Tailscale mode:" in live, live)
-    expect("domain-or-Tailscale ingress" in plan, plan)
+    expect("ARCLINK_INGRESS_MODE=domain" in control_node and "tailscale" in control_node, control_node)
     print("PASS test_sovereign_ingress_docs_cover_domain_and_tailscale_modes")
 
 
@@ -688,6 +735,7 @@ def main() -> int:
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
     test_docker_agent_supervisor_replaces_user_systemd_units()
     test_docker_entrypoint_generates_fresh_secrets()
+    test_docker_entrypoint_runtime_env_config_preserves_pod_paths_without_secret_spill()
     test_docker_health_script_checks_container_runtime()
     test_dockerignore_excludes_sensitive_and_generated_context()
     test_docker_docs_cover_socket_and_private_state_boundaries()
@@ -695,7 +743,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 15 ArcLink Docker regression tests")
+    print("PASS all 16 ArcLink Docker regression tests")
     return 0
 
 

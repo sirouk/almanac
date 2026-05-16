@@ -171,8 +171,16 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["QMD_MCP_CONTAINER_PORT"] == "8181", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_LOOPBACK_PORT"] == "18181", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_RUNTIME_ENV_CONFIG"] == "1", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_RUNTIME_CONFIG_FILE"] == "/tmp/arclink-runtime.env", str(intent["environment"]))
+    expect(intent["environment"]["STATE_DIR"] == "/srv/memory", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_NOTION_INDEX_DIR"] == "/srv/memory/notion-index", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_NOTION_INDEX_MARKDOWN_DIR"] == "/srv/memory/notion-index/markdown", str(intent["environment"]))
+    expect(intent["environment"]["PDF_INGEST_MARKDOWN_DIR"] == "/srv/memory/pdf-ingest/markdown", str(intent["environment"]))
+    expect(intent["environment"]["QMD_REFRESH_LOCK_FILE"] == "/srv/memory/qmd-refresh.lock", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATUS_FILE"] == "/srv/memory/memory-synth/status.json", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
-    for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "DRIVE_LINKED_ROOT", "CODE_LINKED_ROOT", "ARCLINK_LINKED_RESOURCES_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
+    for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "DRIVE_LINKED_ROOT", "CODE_LINKED_ROOT", "ARCLINK_LINKED_RESOURCES_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
         expect(not intent["environment"][key].startswith("/arcdata/"), f"{key} leaked host root")
     expect(services["nextcloud"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_html"], str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_HOST"] == "nextcloud-db", str(services["nextcloud"]))
@@ -193,7 +201,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     ], str(services["nextcloud-db"]))
     expect(services["nextcloud-db"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_db"], str(services["nextcloud-db"]))
     expect(services["nextcloud-redis"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_redis"], str(services["nextcloud-redis"]))
-    expect(services["qmd-mcp"]["volumes"][1]["target"] == intent["environment"]["QMD_STATE_DIR"], str(services["qmd-mcp"]))
+    qmd_mcp_volumes = {item["target"]: item["source"] for item in services["qmd-mcp"]["volumes"]}
+    expect(qmd_mcp_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["qmd-mcp"]))
+    expect(qmd_mcp_volumes[intent["environment"]["QMD_STATE_DIR"]] == intent["state_roots"]["qmd"], str(services["qmd-mcp"]))
+    expect(qmd_mcp_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["qmd-mcp"]))
     expect(services["qmd-mcp"]["environment"]["QMD_INDEX_NAME"] == "vault-dep_1", str(services["qmd-mcp"]))
     hermes_dashboard_volumes = {item["target"]: item["source"] for item in services["hermes-dashboard"]["volumes"]}
     expect(hermes_dashboard_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["hermes-dashboard"]))

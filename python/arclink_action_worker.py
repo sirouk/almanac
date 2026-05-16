@@ -36,8 +36,7 @@ from arclink_executor import (
     DockerComposeLifecycleRequest,
     FakeSecretResolver,
     StripeActionApplyRequest,
-    SubprocessDockerComposeRunner,
-    SshDockerComposeRunner,
+    executor_for_fleet_host,
 )
 from arclink_provisioning import render_arclink_state_roots
 from arclink_pod_migration import garbage_collect_pod_migrations, migrate_pod
@@ -53,6 +52,8 @@ _EXECUTOR_ACTIONS = frozenset({
 })
 
 _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
+_ActionExecutorCache = dict[tuple[str, str, str], ArcLinkExecutor]
+_ACTION_EXECUTOR_CACHE: _ActionExecutorCache = {}
 
 
 def _worker_id(prefix: str) -> str:
@@ -414,6 +415,130 @@ def _claim_next_queued_action(conn: sqlite3.Connection, *, worker_id: str) -> di
         raise
 
 
+def _active_action_placement_host(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT h.*
+        FROM arclink_deployment_placements p
+        JOIN arclink_fleet_hosts h ON h.host_id = p.host_id
+        WHERE p.deployment_id = ? AND p.status = 'active'
+        ORDER BY p.placed_at DESC
+        LIMIT 1
+        """,
+        (str(deployment_id or "").strip(),),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _secret_refs_for_action(metadata: Any) -> dict[str, str]:
+    refs: dict[str, str] = {}
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str) and value.startswith("secret://"):
+            refs[value] = "fake-secret-material"
+        elif isinstance(value, Mapping):
+            for nested in value.values():
+                walk(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                walk(nested)
+    walk(metadata)
+    return refs
+
+
+def _action_executor_cache_key(
+    *,
+    adapter: str,
+    host: Mapping[str, Any],
+    fake_secret_refs: Mapping[str, str] | None = None,
+) -> tuple[str, str, str]:
+    host_id = str(host.get("host_id") or "").strip()
+    if adapter != "fake":
+        return host_id, adapter, ""
+    ref_hash = hashlib.sha256(
+        json.dumps(sorted((fake_secret_refs or {}).keys()), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return host_id, adapter, ref_hash
+
+
+def _executor_for_action_host(
+    *,
+    env: Mapping[str, str],
+    host: Mapping[str, Any],
+    metadata: Any,
+    cache: _ActionExecutorCache,
+) -> ArcLinkExecutor:
+    adapter = str(env.get("ARCLINK_EXECUTOR_ADAPTER") or "").strip().lower()
+    if adapter not in {"fake", "local", "ssh"}:
+        raise ArcLinkActionWorkerError("ArcLink action worker placement routing requires ARCLINK_EXECUTOR_ADAPTER")
+    fake_secret_refs = _secret_refs_for_action(metadata) if adapter == "fake" else {}
+    cache_key = _action_executor_cache_key(adapter=adapter, host=host, fake_secret_refs=fake_secret_refs)
+    if cache_key in cache:
+        return cache[cache_key]
+    if adapter == "fake":
+        executor = executor_for_fleet_host(adapter=adapter, env=env, host=host, fake_secret_refs=fake_secret_refs)
+    else:
+        from arclink_sovereign_worker import SovereignSecretResolver
+        host_id = str(host.get("host_id") or "").strip()
+        secret_store_dir = Path(
+            env.get("ARCLINK_SECRET_STORE_DIR")
+            or "/home/arclink/arclink/arclink-priv/state/sovereign-secrets"
+        )
+        materialization_root = Path(
+            env.get("ARCLINK_ACTION_WORKER_SECRET_MATERIALIZATION_DIR")
+            or "/tmp/arclink-action-worker/secrets"
+        )
+        resolver = SovereignSecretResolver(
+            env=env,
+            secret_store_dir=secret_store_dir / str(host_id or "unknown-host"),
+            materialization_root=materialization_root,
+        )
+        executor = executor_for_fleet_host(adapter=adapter, env=env, host=host, secret_resolver=resolver)
+    cache[cache_key] = executor
+    return executor
+
+
+def _select_action_executor(
+    conn: sqlite3.Connection,
+    *,
+    intent: Mapping[str, Any],
+    metadata: Any,
+    fallback_executor: ArcLinkExecutor,
+    env: Mapping[str, str],
+    cache: _ActionExecutorCache,
+) -> tuple[ArcLinkExecutor, dict[str, Any]]:
+    target_kind = str(intent.get("target_kind") or "")
+    target_id = str(intent.get("target_id") or "")
+    routing = {
+        "host_id": "",
+        "hostname": "",
+        "adapter": fallback_executor.config.adapter_name,
+        "fallback_reason": "not_deployment_target" if target_kind != "deployment" else "no_active_placement",
+    }
+    if target_kind != "deployment":
+        return fallback_executor, routing
+    host = _active_action_placement_host(conn, deployment_id=target_id)
+    if host is None:
+        return fallback_executor, routing
+    adapter = str(env.get("ARCLINK_EXECUTOR_ADAPTER") or "").strip().lower()
+    if adapter not in {"fake", "local", "ssh"}:
+        routing.update(
+            {
+                "host_id": str(host.get("host_id") or ""),
+                "hostname": str(host.get("hostname") or ""),
+                "fallback_reason": "executor_injected",
+            }
+        )
+        return fallback_executor, routing
+    selected = _executor_for_action_host(env=env, host=host, metadata=metadata, cache=cache)
+    return selected, {
+        "host_id": str(host.get("host_id") or ""),
+        "hostname": str(host.get("hostname") or ""),
+        "adapter": selected.config.adapter_name,
+        "fallback_reason": "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Core worker entrypoint
 # ---------------------------------------------------------------------------
@@ -423,6 +548,8 @@ def process_next_arclink_action(
     *,
     executor: ArcLinkExecutor,
     worker_id: str = "",
+    env: Mapping[str, str] | None = None,
+    executor_cache: _ActionExecutorCache | None = None,
 ) -> dict[str, Any] | None:
     """Claim and execute the oldest queued action intent. Returns the result or None if empty."""
     clean_worker_id = str(worker_id or "").strip() or _worker_id("wrk")
@@ -430,7 +557,7 @@ def process_next_arclink_action(
     if intent is None:
         return None
 
-    return _execute_action(conn, intent=intent, executor=executor)
+    return _execute_action(conn, intent=intent, executor=executor, env=env, executor_cache=executor_cache)
 
 
 def process_arclink_action_batch(
@@ -439,6 +566,8 @@ def process_arclink_action_batch(
     executor: ArcLinkExecutor,
     batch_size: int = 10,
     worker_id: str = "",
+    env: Mapping[str, str] | None = None,
+    executor_cache: _ActionExecutorCache | None = None,
 ) -> list[dict[str, Any]]:
     """Process up to batch_size queued actions."""
     if batch_size < 1:
@@ -446,7 +575,13 @@ def process_arclink_action_batch(
     clean_worker_id = str(worker_id or "").strip() or _worker_id("wrk")
     results = []
     for _ in range(batch_size):
-        result = process_next_arclink_action(conn, executor=executor, worker_id=clean_worker_id)
+        result = process_next_arclink_action(
+            conn,
+            executor=executor,
+            worker_id=clean_worker_id,
+            env=env,
+            executor_cache=executor_cache,
+        )
         if result is None:
             break
         results.append(result)
@@ -458,15 +593,25 @@ def _execute_action(
     *,
     intent: dict[str, Any],
     executor: ArcLinkExecutor,
+    env: Mapping[str, str] | None = None,
+    executor_cache: _ActionExecutorCache | None = None,
 ) -> dict[str, Any]:
     action_id = str(intent["action_id"])
     action_type = str(intent["action_type"])
     target_kind = str(intent["target_kind"])
     target_id = str(intent["target_id"])
     metadata = json_loads_safe(intent.get("metadata_json", "{}"))
+    selected_executor, routing = _select_action_executor(
+        conn,
+        intent=intent,
+        metadata=metadata,
+        fallback_executor=executor,
+        env=dict(env or os.environ),
+        cache=executor_cache if executor_cache is not None else _ACTION_EXECUTOR_CACHE,
+    )
 
     attempt_id = _record_attempt(
-        conn, action_id=action_id, adapter=executor.config.adapter_name,
+        conn, action_id=action_id, adapter=selected_executor.config.adapter_name,
     )
     append_arclink_event(
         conn,
@@ -477,6 +622,7 @@ def _execute_action(
             "action_id": action_id,
             "attempt_id": attempt_id,
             "worker_id": str(intent.get("worker_id") or ""),
+            **routing,
         },
         commit=False,
     )
@@ -491,6 +637,7 @@ def _execute_action(
             "action_id": action_id,
             "attempt_id": attempt_id,
             "worker_id": str(intent.get("worker_id") or ""),
+            **routing,
         },
         commit=False,
     )
@@ -499,7 +646,7 @@ def _execute_action(
     try:
         result = _dispatch_action(
             conn=conn,
-            executor=executor,
+            executor=selected_executor,
             action_id=action_id,
             action_type=action_type,
             target_kind=target_kind,
@@ -531,7 +678,7 @@ def _execute_action(
             subject_kind=target_kind,
             subject_id=target_id,
             event_type=event_type,
-            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": outcome_status},
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": outcome_status, **routing},
             commit=False,
         )
         append_arclink_audit(
@@ -541,7 +688,7 @@ def _execute_action(
             target_kind=target_kind,
             target_id=target_id,
             reason=f"executed queued action {action_id}" if outcome_status == "succeeded" else f"action {action_id} not yet implemented: {action_type}",
-            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": outcome_status},
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "status": outcome_status, **routing},
             commit=False,
         )
         conn.commit()
@@ -562,7 +709,7 @@ def _execute_action(
             subject_kind=target_kind,
             subject_id=target_id,
             event_type=f"action_failed:{action_type}",
-            metadata={"action_id": action_id, "attempt_id": attempt_id, "error_code": error_code, "error": error_msg},
+            metadata={"action_id": action_id, "attempt_id": attempt_id, "error_code": error_code, "error": error_msg, **routing},
             commit=False,
         )
         conn.commit()
@@ -869,53 +1016,49 @@ def _executor_from_env(env: Mapping[str, str] | None = None) -> ArcLinkExecutor:
         )
     from arclink_sovereign_worker import SovereignSecretResolver
 
-    secret_store_dir = Path(source.get("ARCLINK_SECRET_STORE_DIR") or "/home/arclink/arclink/arclink-priv/state/sovereign-secrets")
-    materialization_root = Path(source.get("ARCLINK_ACTION_WORKER_SECRET_MATERIALIZATION_DIR") or "/tmp/arclink-action-worker/secrets")
+    secret_store_dir = Path(
+        source.get("ARCLINK_SECRET_STORE_DIR")
+        or "/home/arclink/arclink/arclink-priv/state/sovereign-secrets"
+    )
+    materialization_root = Path(
+        source.get("ARCLINK_ACTION_WORKER_SECRET_MATERIALIZATION_DIR")
+        or "/tmp/arclink-action-worker/secrets"
+    )
     resolver = SovereignSecretResolver(
         env=source,
         secret_store_dir=secret_store_dir,
         materialization_root=materialization_root,
     )
-    if adapter == "local":
-        runner = SubprocessDockerComposeRunner(docker_binary=str(source.get("ARCLINK_DOCKER_BINARY") or "docker"))
-    else:
-        host = str(source.get("ARCLINK_ACTION_WORKER_SSH_HOST") or source.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip()
-        if not _truthy(source.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or source.get("ARCLINK_ACTION_WORKER_SSH_ENABLED") or ""):
-            raise ArcLinkActionWorkerError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1")
-        allowed_hosts = _csv_values(
-            str(source.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or source.get("ARCLINK_ACTION_WORKER_SSH_HOST_ALLOWLIST") or "")
+    try:
+        return executor_for_fleet_host(
+            adapter=adapter,
+            env=source,
+            host={
+                "hostname": str(
+                    source.get("ARCLINK_ACTION_WORKER_SSH_HOST")
+                    or source.get("ARCLINK_LOCAL_FLEET_SSH_HOST")
+                    or "localhost"
+                ),
+                "metadata_json": json.dumps(
+                    {
+                        "ssh_host": str(
+                            source.get("ARCLINK_ACTION_WORKER_SSH_HOST")
+                            or source.get("ARCLINK_LOCAL_FLEET_SSH_HOST")
+                            or ""
+                        ),
+                        "ssh_user": str(
+                            source.get("ARCLINK_ACTION_WORKER_SSH_USER")
+                            or source.get("ARCLINK_LOCAL_FLEET_SSH_USER")
+                            or "arclink"
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+            },
+            secret_resolver=resolver,
         )
-        if not allowed_hosts:
-            raise ArcLinkActionWorkerError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
-        ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
-        key_path = str(source.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
-        known_hosts = str(source.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
-        if key_path:
-            ssh_options.extend(("-i", key_path))
-        if known_hosts:
-            ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
-        runner = SshDockerComposeRunner(
-            host=host,
-            user=str(source.get("ARCLINK_ACTION_WORKER_SSH_USER") or source.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink"),
-            ssh_binary=str(source.get("ARCLINK_SSH_BINARY") or "ssh"),
-            rsync_binary=str(source.get("ARCLINK_RSYNC_BINARY") or "rsync"),
-            docker_binary=str(source.get("ARCLINK_DOCKER_BINARY") or "docker"),
-            ssh_options=tuple(ssh_options),
-            allowed_hosts=tuple(allowed_hosts),
-        )
-    return ArcLinkExecutor(
-        config=ArcLinkExecutorConfig(live_enabled=True, adapter_name=adapter),
-        secret_resolver=resolver,
-        docker_runner=runner,
-    )
-
-
-def _truthy(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
-
-
-def _csv_values(value: str) -> list[str]:
-    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+    except ArcLinkExecutorError as exc:
+        raise ArcLinkActionWorkerError(str(exc) or "failed to build ArcLink action executor") from exc
 
 
 def _db_connect(path: str) -> sqlite3.Connection:
@@ -953,6 +1096,7 @@ def main(argv: list[str] | None = None) -> int:
 
     executor = _executor_from_env(os.environ)
     worker_id = _worker_id("wrk")
+    executor_cache: _ActionExecutorCache = {}
     with _db_connect(args.db) as conn:
         while True:
             recovered = recover_stale_actions(conn)
@@ -961,6 +1105,8 @@ def main(argv: list[str] | None = None) -> int:
                 executor=executor,
                 batch_size=max(1, args.batch_size),
                 worker_id=worker_id,
+                env=os.environ,
+                executor_cache=executor_cache,
             )
             migration_gc = run_pod_migration_gc(conn)
             payload = {"recovered": recovered, "processed": results}

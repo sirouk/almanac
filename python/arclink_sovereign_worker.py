@@ -40,6 +40,7 @@ from arclink_control import (
 from arclink_executor import (
     ArcLinkExecutor,
     ArcLinkExecutorConfig,
+    ArcLinkExecutorError,
     ArcLinkSecretResolutionError,
     ChutesKeyApplyRequest,
     CloudflareDnsApplyRequest,
@@ -48,11 +49,9 @@ from arclink_executor import (
     DockerComposeApplyRequest,
     DockerComposeApplyResult,
     DockerComposeLifecycleRequest,
-    FakeSecretResolver,
     FileMaterializingSecretResolver,
     ResolvedSecretFile,
-    SshDockerComposeRunner,
-    SubprocessDockerComposeRunner,
+    executor_for_fleet_host,
 )
 from arclink_fleet import ArcLinkFleetError, place_deployment, reconcile_fleet_observed_loads, register_fleet_host, remove_placement
 from arclink_ingress import arclink_dns_records_for_teardown, mark_arclink_dns_torn_down, persist_arclink_dns_records
@@ -1001,10 +1000,14 @@ def _executor_for_host(
     intent: Mapping[str, Any],
 ) -> ArcLinkExecutor:
     adapter = worker.executor_adapter
-    config = ArcLinkExecutorConfig(live_enabled=True, adapter_name=adapter)
     if adapter == "fake":
         refs = _secret_refs(intent)
-        return ArcLinkExecutor(config=config, secret_resolver=FakeSecretResolver({ref: "fake-secret-material" for ref in refs}))
+        return executor_for_fleet_host(
+            adapter=adapter,
+            env=worker.env,
+            host=host,
+            fake_secret_refs={ref: "fake-secret-material" for ref in refs},
+        )
     roots = intent.get("state_roots") if isinstance(intent.get("state_roots"), Mapping) else {}
     materialization_root = Path(str(roots.get("config") or "/tmp/arclink-secrets")) / "secrets"
     resolver = SovereignSecretResolver(
@@ -1012,56 +1015,10 @@ def _executor_for_host(
         secret_store_dir=worker.secret_store_dir / str(intent["deployment"]["deployment_id"]),
         materialization_root=materialization_root,
     )
-    host_meta = json_loads_safe(str(host.get("metadata_json") or "{}"))
-    if adapter == "local":
-        runner = SubprocessDockerComposeRunner(docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"))
-    elif adapter == "ssh":
-        host_name = str(host_meta.get("ssh_host") or host["hostname"]).strip()
-        if not _truthy(str(worker.env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or "")):
-            raise ArcLinkSovereignWorkerError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1")
-        allowed_hosts = _csv_values(str(worker.env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or ""))
-        if not allowed_hosts:
-            raise ArcLinkSovereignWorkerError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
-        ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
-        key_path = str(worker.env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
-        known_hosts = str(worker.env.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
-        if key_path:
-            _validate_ssh_key_path(key_path)
-            ssh_options.extend(("-i", key_path))
-        if known_hosts:
-            ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
-        runner = SshDockerComposeRunner(
-            host=host_name,
-            user=str(host_meta.get("ssh_user") or "arclink"),
-            ssh_binary=str(worker.env.get("ARCLINK_SSH_BINARY") or "ssh"),
-            rsync_binary=str(worker.env.get("ARCLINK_RSYNC_BINARY") or "rsync"),
-            docker_binary=str(worker.env.get("ARCLINK_DOCKER_BINARY") or "docker"),
-            ssh_options=tuple(ssh_options),
-            allowed_hosts=tuple(allowed_hosts),
-        )
-    else:
-        raise ArcLinkSovereignWorkerError(
-            "set ARCLINK_EXECUTOR_ADAPTER to fake, local, or ssh before enabling the Sovereign provisioner"
-        )
-    return ArcLinkExecutor(config=config, secret_resolver=resolver, docker_runner=runner)
-
-
-def _validate_ssh_key_path(key_path: str) -> None:
-    path = Path(key_path).expanduser()
     try:
-        stat_result = path.lstat()
-    except OSError as exc:
-        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key path is not readable") from exc
-    if path.is_symlink():
-        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key path must not be a symlink")
-    if not path.is_file():
-        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key path must be a regular file")
-    if stat_result.st_mode & 0o077:
-        raise ArcLinkSovereignWorkerError("ArcLink SSH executor key file must not be group/world accessible")
-
-
-def _csv_values(value: str) -> list[str]:
-    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+        return executor_for_fleet_host(adapter=adapter, env=worker.env, host=host, secret_resolver=resolver)
+    except ArcLinkExecutorError as exc:
+        raise ArcLinkSovereignWorkerError(str(exc) or "failed to build ArcLink fleet host executor") from exc
 
 
 def _access_urls_for_deployment(

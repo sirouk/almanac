@@ -67,12 +67,21 @@ def test_arclink_schema_creates_expected_tables_and_is_idempotent() -> None:
         "arclink_action_intents",
         "arclink_action_operation_links",
         "arclink_inventory_machines",
+        "arclink_fleet_enrollments",
+        "arclink_fleet_host_probes",
+        "arclink_fleet_audit_chain",
         "arclink_pod_messages",
         "arclink_pod_migrations",
         "arclink_crew_recipes",
         "arclink_wrapped_reports",
     }
     expect(expected <= names, f"missing ArcLink tables: {sorted(expected - names)}")
+    inventory_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(arclink_inventory_machines)").fetchall()}
+    for name in ("enrollment_id", "machine_fingerprint", "attested_at", "audit_trail_chain", "provider_billing_ref"):
+        expect(name in inventory_columns, str(inventory_columns))
+    host_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(arclink_fleet_hosts)").fetchall()}
+    for name in ("region_tier", "placement_priority", "last_health_state"):
+        expect(name in host_columns, str(host_columns))
     print("PASS test_arclink_schema_creates_expected_tables_and_is_idempotent")
 
 

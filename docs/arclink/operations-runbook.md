@@ -593,9 +593,11 @@ workflow without live provider credentials.
 
 | Area | Owner module | Notes |
 | --- | --- | --- |
-| Fleet hosts | `arclink_fleet.py` | Hostname, region, tags, capacity slots, drain flag, status |
+| Inventory machines | `arclink_inventory.py` | Operator-owned machine records, provider metadata, ASU sizing, and the optional link to an admitted fleet host |
+| Fleet hosts | `arclink_fleet.py` | Hostname, region, region tier, placement priority, tags, capacity slots, drain flag, status, and last health state |
+| Fleet reconciliation | `arclink_fleet.py` | Reports inventory/host registry orphans and writes audit warnings without repairing or deleting rows |
 | Placement | `arclink_fleet.py` | Active placement is one row per deployment; load increments on placement |
-| Admin action execution | `arclink_action_worker.py` | Claims queued intents, records attempts, dispatches to executor/local transitions |
+| Admin action execution | `arclink_action_worker.py` | Claims queued intents, resolves the deployment's active placement, records attempts, and dispatches to the selected host executor |
 | Rollouts | `arclink_rollout.py` | Version tag, wave count, current wave, pause/fail/rollback state |
 | Operator read model | `arclink_dashboard.py` | `build_scale_operations_snapshot()` powers the admin API route |
 
@@ -603,11 +605,41 @@ workflow without live provider credentials.
 
 - The executor remains fake unless `ArcLinkExecutorConfig.live_enabled` is set
   by the operator path.
+- For deployment-targeted actions, the control DB is the routing source of
+  truth. The action worker uses the deployment's latest active placement to
+  construct a host-specific executor; if the action does not target a
+  deployment, or no active placement exists, it falls back to the injected
+  executor path.
+- Remote fleet execution requires `ARCLINK_EXECUTOR_ADAPTER=ssh`,
+  `ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1`, an explicit
+  `ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST`, and a non-symlink SSH key file
+  that is not group/world accessible when `ARCLINK_FLEET_SSH_KEY_PATH` is set.
 - Action metadata, fleet metadata, rollout waves, and rollback plans must be
   secret-free. Secret-looking material is rejected before persistence.
 - Rollback plans for rollouts must include `preserve_state_roots`; state roots
   and vault data are not disposable rollout artifacts.
 - Placement is deterministic and capacity-based, not a general scheduler.
+- Inventory machines and fleet hosts are deliberately separate registries.
+  Orphan reconciliation reports drift for operator review; it does not infer a
+  repair, remove capacity, or rewrite machine links.
+
+**Fleet schema foundations:**
+
+The control schema includes proof-gated foundations for later fleet enrollment
+and health automation:
+
+- `arclink_inventory_machines.enrollment_id`, `machine_fingerprint`,
+  `attested_at`, `audit_trail_chain`, and `provider_billing_ref`.
+- `arclink_fleet_hosts.region_tier`, `placement_priority`, and
+  `last_health_state`.
+- `arclink_fleet_enrollments` for single-use enrollment-token state.
+- `arclink_fleet_host_probes` for liveness, capacity, and inventory probe
+  results.
+- `arclink_fleet_audit_chain` for machine lifecycle audit-chain records.
+
+These tables and columns are additive. Current local validation may create and
+check them, but token mint/callback handling, periodic probing, and live
+two-host fleet proof remain gated until those phases land.
 
 **Read scale state:**
 
@@ -653,7 +685,11 @@ PY
 2. Drain a host before planned maintenance; do not place new deployments there.
 3. Verify `/api/v1/admin/scale-operations` shows stale actions and recent
    attempts before enabling any recurring worker.
-4. Keep rollout rollback plans state-preserving; destructive cleanup remains a
+4. For deployment restart/reprovision/teardown actions, confirm the deployment
+   has exactly the expected active placement before starting a live worker.
+5. Review fleet orphan audit rows as drift signals, not as automatic repair
+   instructions.
+6. Keep rollout rollback plans state-preserving; destructive cleanup remains a
    separately confirmed executor/admin action.
 
 ## 11. Host Readiness

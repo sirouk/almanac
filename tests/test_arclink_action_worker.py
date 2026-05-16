@@ -865,6 +865,48 @@ def test_fake_executor_live_flag_is_false() -> None:
     print("PASS test_fake_executor_live_flag_is_false")
 
 
+def test_deployment_action_routes_to_active_placement_host() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_route")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_route")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_route")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_route")
+    conn = memory_db(control)
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_hosts (
+          host_id, hostname, region, tags_json, status, drain, capacity_slots,
+          observed_load, metadata_json, created_at, updated_at
+        ) VALUES
+          ('host_a', 'worker-a.example.test', '', '{}', 'active', 0, 4, 0,
+           '{"ssh_host":"10.0.0.41","ssh_user":"arclink"}', ?, ?),
+          ('host_b', 'worker-b.example.test', '', '{}', 'active', 0, 4, 0,
+           '{"ssh_host":"10.0.0.42","ssh_user":"arclink"}', ?, ?)
+        """,
+        (now, now, now, now),
+    )
+    conn.execute("INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at) VALUES ('plc_route', 'dep_route', 'host_b', 'active', ?)", (now,))
+    conn.commit()
+    _queue_action(dashboard, conn, action_type="restart", target_id="dep_route", key="route-host-b")
+    selected_hosts: list[dict[str, object]] = []
+    original = worker._executor_for_action_host
+    def recording_executor(*, env, host, metadata, cache):
+        selected_hosts.append(dict(host))
+        return _fake_executor(executor_mod)
+    try:
+        worker._executor_for_action_host = recording_executor
+        result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod), env={"ARCLINK_EXECUTOR_ADAPTER": "ssh"}, executor_cache={})
+    finally:
+        worker._executor_for_action_host = original
+    expect(result["status"] == "succeeded", str(result))
+    expect(selected_hosts and selected_hosts[0]["host_id"] == "host_b", str(selected_hosts))
+    expect("10.0.0.42" in str(selected_hosts[0]["metadata_json"]), str(selected_hosts))
+    audit = conn.execute("SELECT metadata_json FROM arclink_audit_log WHERE action = 'action_worker_attempt_started:restart' ORDER BY created_at DESC LIMIT 1").fetchone()
+    metadata = json.loads(audit["metadata_json"])
+    expect(metadata["host_id"] == "host_b", str(metadata))
+    print("PASS test_deployment_action_routes_to_active_placement_host")
+
+
 def test_disabled_action_worker_cli_exits_cleanly() -> None:
     load_module("arclink_control.py", "arclink_control_aw_disabled_cli")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_disabled_cli")
@@ -981,7 +1023,8 @@ if __name__ == "__main__":
     test_action_worker_returns_safe_error_code_for_executor_errors()
     test_legacy_unwired_action_rows_fail_safely()
     test_fake_executor_live_flag_is_false()
+    test_deployment_action_routes_to_active_placement_host()
     test_disabled_action_worker_cli_exits_cleanly()
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 31 action worker tests passed.")
+    print(f"\nAll 32 action worker tests passed.")

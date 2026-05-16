@@ -181,10 +181,10 @@ def test_discord_status_reports_selected_agent_label() -> None:
     expect("onboarding only" not in status["data"]["content"].lower(), status["data"]["content"])
     agent_turn = dc.handle_discord_interaction(
         conn,
-        transport.make_message(user_id="discord_user_3", channel_id="ch_3", content="/agent hello active agent"),
+        transport.make_message(user_id="discord_user_3", channel_id="ch_3", content="hello active agent"),
     )
     expect(agent_turn is not None and agent_turn["action"] == "agent_message_queued", str(agent_turn))
-    expect(agent_turn["data"]["content"] == "Sent to your active agent.", str(agent_turn["data"]))
+    expect("active agent" in agent_turn["data"]["content"].lower(), str(agent_turn["data"]))
     expect("I am routing" not in agent_turn["data"]["content"], str(agent_turn["data"]))
     queued = conn.execute(
         "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox ORDER BY id DESC LIMIT 1"

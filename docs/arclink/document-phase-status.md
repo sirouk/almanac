@@ -6,6 +6,62 @@ Updated: 2026-05-10 (Raven selected-agent bridge contract alignment)
 
 Updated: 2026-05-14 (ArcLink Wrapped runbook alignment)
 
+Updated: 2026-05-16 (Sovereign fleet Phase 0/1 documentation alignment)
+
+## 2026-05-16 Sovereign Fleet Phase 0/1 Documentation Update
+
+The current implementation plan and build notes show the first Sovereign fleet
+Phase 0/1 work landed locally: additive fleet enrollment/probe/audit-chain
+schema foundations, non-destructive inventory/host orphan reporting, shared
+per-host executor construction, and placement-aware action-worker routing for
+deployment-targeted admin actions. The current diff also tightens the Raven
+selected-agent public bridge so final-message delivery is the default and
+Hermes streaming is an explicit opt-in. This document pass updated the smallest
+canonical operator, architecture, and Raven docs for that behavior without
+claiming live two-host fleet readiness.
+
+### Files Updated
+
+| File | Change | Rationale |
+| --- | --- | --- |
+| `docs/arclink/operations-runbook.md` | Expanded Scale Operations ownership, assumptions, schema foundations, SSH executor gates, orphan-reconciliation behavior, and live-worker checks | The runbook still described fleet/action execution at the earlier static-host level and did not name the new additive schema or non-repairing orphan contract |
+| `docs/arclink/architecture.md` | Updated the module map and Scale Operations spine for per-host executor construction, inventory drift reporting, and placement-aware action dispatch | The architecture doc needed the current module boundaries and routing source of truth |
+| `docs/arclink/raven-public-bot.md` | Documented final-message default delivery for public selected-agent turns and the `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1` opt-in | The bridge runtime now treats streaming as an operator-validated path rather than the default |
+| `docs/arclink/document-phase-status.md` | Added this dated documentation status note | Keeps the document-phase handoff reproducible and separate from local-only evidence |
+
+### Docs Inspected
+
+| File | Verdict |
+| --- | --- |
+| `AGENTS.md` | Still aligned on Control Node scope, live mutation gates, and private-state safety |
+| `README.md` | Top-level Control Node and fleet overview remains accurate at product level |
+| `IMPLEMENTATION_PLAN.md` | Current Wave 1 plan is the steering source for fleet schema, placement-aware action routing, enrollment, probing, and live-proof gates |
+| `research/BUILD_COMPLETION_NOTES.md` | Records the Phase 0/1 build scope, validation, skipped live gates, and remaining fleet risks |
+| `docs/DOC_STATUS.md` | Classification remains valid; `architecture.md` and `operations-runbook.md` are canonical, while this file remains historical handoff status |
+| `docs/arclink/sovereign-control-node.md` | Already describes Control Node execution, fleet placement, live credential gates, and current proof boundary at a high level |
+| `docs/arclink/control-node-production-runbook.md` | Already covers production Control Node installation, inventory commands, ASU placement, proof-gated live execution, and teardown |
+| `docs/arclink/raven-public-bot.md` | Needed the selected-agent bridge delivery-default update applied above |
+| `docs/arclink/operations-runbook.md` | Needed the concrete Phase 0/1 ownership and runbook updates applied above |
+| `docs/arclink/architecture.md` | Needed the module-boundary updates applied above |
+
+### Open Questions And Risks
+
+- Fleet enrollment token mint/callback handling, worker bootstrap scripts,
+  periodic probe population, fleet health summaries, JSON CLI coverage, and
+  provider-backed fleet provisioning remain future phases.
+- Live non-loopback SSH, cloud-provider mutation, domain/Tailscale ingress
+  mutation, Docker install/upgrade, and production deploy/upgrade remain
+  operator-gated.
+- Public selected-agent bridge streaming remains opt-in until validated against
+  the deployed Hermes runtime and public-channel delivery path.
+- Fleet readiness is not claimed until the planned Phase 7 two-host live proof
+  passes with credentialed evidence.
+
+Docs are clear enough to proceed with the current Sovereign fleet Phase 0/1
+handoff. Canonical docs now describe ownership, assumptions, runbook behavior,
+and proof gates without local operator identity, private paths, secrets, command
+transcripts, or machine-only evidence.
+
 ## 2026-05-14 ArcLink Wrapped Documentation Update
 
 The current implementation plan and recent build notes show Wave 6 ArcLink

@@ -15,9 +15,9 @@ arclink_onboarding.py       Public onboarding sessions and funnel events (web, T
 arclink_ingress.py          Hostname generation, DNS drift detection, Traefik label intent
 arclink_access.py           Nextcloud isolation model, SSH access strategy guards
 arclink_provisioning.py     Dry-run provisioning renderer, job state, rollback planning
-arclink_executor.py         Guarded mutating boundary (Docker, ingress, Chutes, Stripe, rollback)
-arclink_fleet.py            Fleet host registry, deterministic placement, capacity summaries
-arclink_action_worker.py    Queued admin action execution, attempts, stale recovery
+arclink_executor.py         Guarded mutating boundary and per-host executor construction
+arclink_fleet.py            Fleet host registry, inventory drift reporting, placement, capacity summaries
+arclink_action_worker.py    Placement-aware queued admin action execution, attempts, stale recovery
 arclink_rollout.py          Durable rollout waves, pause/fail/rollback records, version drift
 arclink_dashboard.py        User/admin dashboard read models, queued admin action intent
 arclink_wrapped.py          ArcLink Wrapped scoring, redaction, cadence, persistence, scheduler
@@ -219,11 +219,18 @@ managed deployment:
 - `arclink_fleet.py` owns fleet host registration, health/drain status,
   capacity slots, observed load, and deterministic placement. Placement prefers
   active, non-draining hosts with the most headroom and breaks ties by hostname.
+  Inventory machines and fleet hosts stay separate registries; orphan
+  reconciliation audits missing links but does not repair or delete rows.
 - `arclink_action_worker.py` owns execution of queued admin actions. It records
-  attempts, updates intent status, writes events/audit rows, redacts executor
-  errors, links each dispatched executor operation in
-  `arclink_action_operation_links`, and can return stale running actions to the
-  queue.
+  attempts, resolves a deployment target to its latest active placement,
+  constructs or reuses the selected host executor, updates intent status,
+  writes events/audit rows with routing metadata, redacts executor errors,
+  links each dispatched executor operation in `arclink_action_operation_links`,
+  and can return stale running actions to the queue.
+- `arclink_executor.py` owns the shared `fake`, `local`, and `ssh` executor
+  construction used by the provisioner and action worker. SSH execution is
+  explicitly gated by machine-mode enablement, host allow-listing, and private
+  key file permission checks.
 - `arclink_rollout.py` owns durable rollout records. Rollouts advance in
   canary waves, can pause/fail/rollback, and rollback plans must include
   `preserve_state_roots`.

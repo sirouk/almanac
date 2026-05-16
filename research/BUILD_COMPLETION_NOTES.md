@@ -5795,3 +5795,66 @@ Residual gates:
   Telegram/Discord webhook delivery, Notion SSOT writes, remote SSH fleet
   placement/migration, and production deploy/upgrade still require explicit
   live credentials and an authorized maintenance window.
+
+## 2026-05-16 Sovereign Fleet Phase 0/1 Build Pass
+
+Scope:
+
+- Implemented the first Wave 1 fleet plan tasks from `IMPLEMENTATION_PLAN.md`:
+  Phase 0 additive fleet schema foundations and orphan reporting, plus Phase 1
+  placement-aware action-worker routing.
+- Did not touch private state, live secrets, provider/payment mutations,
+  production deploys, public bot command registration, Docker install/upgrade,
+  or Hermes core.
+
+Files changed:
+
+- `python/arclink_control.py`: added fleet enrollment/probe/audit-chain tables,
+  additive inventory/host columns, indexes, and drift/status checks.
+- `python/arclink_fleet.py`: added non-destructive inventory/host orphan
+  reconciler with operator audit entries.
+- `python/arclink_executor.py`: added shared per-host executor construction and
+  SSH key validation for fleet workers.
+- `python/arclink_sovereign_worker.py`: routed provisioning host executor
+  construction through the shared helper.
+- `python/arclink_action_worker.py`: resolved deployment active placement
+  before dispatch, cached per-host executors by `(host_id, adapter)`, preserved
+  injected/static fallback behavior, and wrote routing metadata to attempt
+  audit/event records.
+- Tests updated in `tests/test_arclink_schema.py`, `tests/test_arclink_fleet.py`,
+  `tests/test_arclink_executor.py`, `tests/test_arclink_action_worker.py`, and
+  `tests/test_arclink_discord.py`.
+- `IMPLEMENTATION_PLAN.md`: restored the domain-or-Tailscale ingress live-gate
+  wording expected by Docker regression coverage.
+
+Validation run:
+
+- `python3 -m py_compile python/arclink_control.py python/arclink_fleet.py python/arclink_inventory.py python/arclink_executor.py python/arclink_sovereign_worker.py python/arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- Audit regression gate passed:
+  `python3 tests/test_arclink_telegram.py`,
+  `python3 tests/test_arclink_discord.py`,
+  `python3 tests/test_arclink_hosted_api.py`,
+  `python3 tests/test_arclink_api_auth.py`,
+  `python3 tests/test_arclink_secrets_regex.py`, and
+  `python3 tests/test_arclink_docker.py`.
+- `git diff --check` passed.
+
+Skipped live gates:
+
+- No live non-loopback SSH, cloud-provider provisioning, payment/provider
+  mutation, public bot mutation, Docker install/upgrade, production deploy,
+  production upgrade, Notion, Cloudflare, or Tailscale proof was run.
+
+Known risks:
+
+- Phase 2 enrollment mint/callback/audit-chain write helpers are not implemented
+  yet; this pass only lands their additive schema and drift foundations.
+- Phase 4 periodic probing and fleet health summary remain pending, so the new
+  probe table is not populated by a daemon yet.
+- Phase 7 two-host live proof remains operator-gated; fleet readiness is not
+  claimed by this pass.

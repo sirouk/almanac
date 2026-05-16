@@ -276,6 +276,84 @@ def reconcile_fleet_observed_loads(conn: sqlite3.Connection, *, host_id: str = "
     return repaired
 
 
+def _audit_fleet_orphan(
+    conn: sqlite3.Connection,
+    *,
+    action: str,
+    target_kind: str,
+    target_id: str,
+    reason: str,
+    metadata: Mapping[str, Any],
+) -> None:
+    append_arclink_audit(
+        conn,
+        action=action,
+        actor_id="system:fleet_reconciler",
+        target_kind=target_kind,
+        target_id=target_id,
+        reason=reason,
+        metadata=metadata,
+        commit=False,
+    )
+
+
+def reconcile_fleet_inventory_orphans(conn: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
+    """Report inventory/host registry orphans without mutating either registry."""
+    inventory_orphans = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT machine_id, hostname, machine_host_link
+            FROM arclink_inventory_machines
+            WHERE status != 'removed'
+              AND (
+                machine_host_link = ''
+                OR machine_host_link NOT IN (SELECT host_id FROM arclink_fleet_hosts)
+              )
+            ORDER BY hostname, machine_id
+            """
+        ).fetchall()
+    ]
+    host_orphans = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT h.host_id, h.hostname
+            FROM arclink_fleet_hosts h
+            LEFT JOIN arclink_inventory_machines m
+              ON m.machine_host_link = h.host_id
+             AND m.status != 'removed'
+            WHERE m.machine_id IS NULL
+            ORDER BY h.hostname, h.host_id
+            """
+        ).fetchall()
+    ]
+    for row in inventory_orphans:
+        _audit_fleet_orphan(
+            conn,
+            action="fleet_inventory_orphan_detected",
+            target_kind="inventory_machine",
+            target_id=str(row["machine_id"] or ""),
+            reason="inventory machine has no linked active fleet host",
+            metadata={
+                "hostname": str(row["hostname"] or ""),
+                "machine_host_link": str(row["machine_host_link"] or ""),
+            },
+        )
+    for row in host_orphans:
+        _audit_fleet_orphan(
+            conn,
+            action="fleet_host_orphan_detected",
+            target_kind="fleet_host",
+            target_id=str(row["host_id"] or ""),
+            reason="fleet host has no non-removed linked inventory machine",
+            metadata={"hostname": str(row["hostname"] or "")},
+        )
+    if inventory_orphans or host_orphans:
+        conn.commit()
+    return {"inventory_orphans": inventory_orphans, "host_orphans": host_orphans}
+
+
 # ---------------------------------------------------------------------------
 # Placement
 # ---------------------------------------------------------------------------

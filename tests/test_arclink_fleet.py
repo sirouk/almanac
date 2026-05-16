@@ -362,6 +362,23 @@ def test_standard_unit_strategy_uses_inventory_asu_available() -> None:
     print("PASS test_standard_unit_strategy_uses_inventory_asu_available")
 
 
+def test_fleet_inventory_orphan_reconciler_reports_without_repairing() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_orphan")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_orphan")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_orphan")
+    conn = memory_db(control)
+    host = fleet.register_fleet_host(conn, hostname="host-orphan.example.test", capacity_slots=2)
+    machine = inventory.register_inventory_machine(conn, provider="manual", hostname="machine-orphan.example.test", status="ready", machine_host_link="host_missing")
+    drift = fleet.reconcile_fleet_inventory_orphans(conn)
+    expect([row["machine_id"] for row in drift["inventory_orphans"]] == [machine["machine_id"]], str(drift))
+    expect([row["host_id"] for row in drift["host_orphans"]] == [host["host_id"]], str(drift))
+    audits = conn.execute("SELECT action FROM arclink_audit_log WHERE action IN ('fleet_inventory_orphan_detected', 'fleet_host_orphan_detected')").fetchall()
+    expect(len(audits) == 2, str([dict(row) for row in audits]))
+    still_bad = conn.execute("SELECT machine_host_link FROM arclink_inventory_machines WHERE machine_id = ?", (machine["machine_id"],)).fetchone()
+    expect(still_bad["machine_host_link"] == "host_missing", str(dict(still_bad)))
+    print("PASS test_fleet_inventory_orphan_reconciler_reports_without_repairing")
+
+
 if __name__ == "__main__":
     test_register_fleet_host()
     test_register_existing_fleet_host_updates_config_without_touching_load()
@@ -380,4 +397,5 @@ if __name__ == "__main__":
     test_region_filter()
     test_placement_rejects_secret_required_tags()
     test_standard_unit_strategy_uses_inventory_asu_available()
-    print(f"\nAll 17 fleet tests passed.")
+    test_fleet_inventory_orphan_reconciler_reports_without_repairing()
+    print(f"\nAll 18 fleet tests passed.")

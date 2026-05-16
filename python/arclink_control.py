@@ -1315,6 +1315,11 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           hardware_summary_json TEXT NOT NULL DEFAULT '{}',
           connectivity_summary_json TEXT NOT NULL DEFAULT '{}',
           machine_host_link TEXT NOT NULL DEFAULT '',
+          enrollment_id TEXT NOT NULL DEFAULT '',
+          machine_fingerprint TEXT NOT NULL DEFAULT '',
+          attested_at TEXT NOT NULL DEFAULT '',
+          audit_trail_chain TEXT NOT NULL DEFAULT '',
+          provider_billing_ref TEXT NOT NULL DEFAULT '',
           registered_at TEXT NOT NULL,
           last_probed_at TEXT NOT NULL DEFAULT ''
         );
@@ -1911,8 +1916,11 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           host_id TEXT PRIMARY KEY,
           hostname TEXT NOT NULL,
           region TEXT NOT NULL DEFAULT '',
+          region_tier TEXT NOT NULL DEFAULT '',
+          placement_priority INTEGER NOT NULL DEFAULT 0,
           tags_json TEXT NOT NULL DEFAULT '{}',
           status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'degraded', 'offline')),
+          last_health_state TEXT NOT NULL DEFAULT '',
           drain INTEGER NOT NULL DEFAULT 0,
           capacity_slots INTEGER NOT NULL DEFAULT 10,
           observed_load INTEGER NOT NULL DEFAULT 0,
@@ -1965,12 +1973,65 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         );
         """
     )
+    for column, ddl in (
+        ("enrollment_id", "TEXT NOT NULL DEFAULT ''"),
+        ("machine_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+        ("attested_at", "TEXT NOT NULL DEFAULT ''"),
+        ("audit_trail_chain", "TEXT NOT NULL DEFAULT ''"),
+        ("provider_billing_ref", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        _ensure_column(conn, "arclink_inventory_machines", column, ddl)
+    for column, ddl in (
+        ("region_tier", "TEXT NOT NULL DEFAULT ''"),
+        ("placement_priority", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_health_state", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        _ensure_column(conn, "arclink_fleet_hosts", column, ddl)
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS arclink_fleet_enrollments (
+          enrollment_id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL,
+          created_by_user_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT NOT NULL DEFAULT '',
+          redeemed_by_inventory_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'revoked')),
+          audit_ref TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS arclink_fleet_host_probes (
+          probe_id TEXT PRIMARY KEY,
+          host_id TEXT NOT NULL,
+          probed_at TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('liveness', 'capacity', 'inventory')),
+          ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
+          latency_ms INTEGER NOT NULL DEFAULT 0,
+          payload_json TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS arclink_fleet_audit_chain (
+          entry_id TEXT PRIMARY KEY,
+          inventory_id TEXT NOT NULL,
+          event TEXT NOT NULL,
+          actor TEXT NOT NULL,
+          event_at TEXT NOT NULL,
+          prev_hash TEXT NOT NULL DEFAULT '',
+          entry_hash TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_fleet_hosts_hostname
         ON arclink_fleet_hosts (LOWER(hostname))
         """
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_hosts_region_tier ON arclink_fleet_hosts (region_tier, placement_priority, status, drain)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_enrollments_status_expiry ON arclink_fleet_enrollments (status, expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_host_probes_host_kind_time ON arclink_fleet_host_probes (host_id, kind, probed_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_audit_chain_inventory_time ON arclink_fleet_audit_chain (inventory_id, event_at)")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_deployment_placements_deployment
@@ -2414,6 +2475,9 @@ ARCLINK_ACTION_ATTEMPT_STATUSES = {"running", "succeeded", "failed"}
 ARCLINK_EVIDENCE_RUN_STATUSES = {"pending", "skipped", "passed", "failed", "blocked"}
 ARCLINK_FLEET_HOST_STATUSES = {"active", "degraded", "offline"}
 ARCLINK_INVENTORY_MACHINE_STATUSES = {"pending", "ready", "draining", "degraded", "removed"}
+ARCLINK_FLEET_ENROLLMENT_STATUSES = {"pending", "consumed", "expired", "revoked"}
+ARCLINK_FLEET_PROBE_KINDS = {"liveness", "capacity", "inventory"}
+ARCLINK_FLEET_AUDIT_CHAIN_EVENTS = {"enrolled", "verified", "activated", "degraded", "drained", "resumed", "removed", "re-attested"}
 ARCLINK_DEPLOYMENT_PLACEMENT_STATUSES = {"active", "removed"}
 ARCLINK_ROLLOUT_STATUSES = {"planned", "in_progress", "paused", "completed", "failed", "rolled_back"}
 ARCLINK_POD_MESSAGE_STATUSES = {"queued", "delivered", "failed", "redacted"}
@@ -3802,6 +3866,9 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
             "arclink_fleet_hosts",
             "host_id",
         ),
+        ("inventory_machine_enrollment_missing", "arclink_inventory_machines", "machine_id", "enrollment_id", "arclink_fleet_enrollments", "enrollment_id"),
+        ("fleet_probe_host_missing", "arclink_fleet_host_probes", "probe_id", "host_id", "arclink_fleet_hosts", "host_id"),
+        ("fleet_audit_chain_inventory_missing", "arclink_fleet_audit_chain", "entry_id", "inventory_id", "arclink_inventory_machines", "machine_id"),
         (
             "pod_message_sender_deployment_missing",
             "arclink_pod_messages",
@@ -3913,6 +3980,9 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
         ("action_attempt_status_invalid", "arclink_action_attempts", "attempt_id", "status", ARCLINK_ACTION_ATTEMPT_STATUSES),
         ("fleet_host_status_invalid", "arclink_fleet_hosts", "host_id", "status", ARCLINK_FLEET_HOST_STATUSES),
         ("inventory_machine_status_invalid", "arclink_inventory_machines", "machine_id", "status", ARCLINK_INVENTORY_MACHINE_STATUSES),
+        ("fleet_enrollment_status_invalid", "arclink_fleet_enrollments", "enrollment_id", "status", ARCLINK_FLEET_ENROLLMENT_STATUSES),
+        ("fleet_probe_kind_invalid", "arclink_fleet_host_probes", "probe_id", "kind", ARCLINK_FLEET_PROBE_KINDS),
+        ("fleet_audit_chain_event_invalid", "arclink_fleet_audit_chain", "entry_id", "event", ARCLINK_FLEET_AUDIT_CHAIN_EVENTS),
         ("placement_status_invalid", "arclink_deployment_placements", "placement_id", "status", ARCLINK_DEPLOYMENT_PLACEMENT_STATUSES),
         ("rollout_status_invalid", "arclink_rollouts", "rollout_id", "status", ARCLINK_ROLLOUT_STATUSES),
         ("evidence_status_invalid", "arclink_evidence_runs", "run_id", "status", ARCLINK_EVIDENCE_RUN_STATUSES),

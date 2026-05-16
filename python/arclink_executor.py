@@ -36,6 +36,82 @@ _SECRET_REF_RE = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
 _RUN_SECRET_RE = re.compile(r"^/run/secrets/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _csv_values(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _host_metadata(host: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(host.get("metadata_json") or "{}"))
+    except json.JSONDecodeError:
+        parsed = {}
+    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def validate_ssh_key_path(key_path: str) -> None:
+    path = Path(key_path).expanduser()
+    try:
+        stat_result = path.lstat()
+    except OSError as exc:
+        raise ArcLinkExecutorError("ArcLink SSH executor key path is not readable") from exc
+    if path.is_symlink():
+        raise ArcLinkExecutorError("ArcLink SSH executor key path must not be a symlink")
+    if not path.is_file():
+        raise ArcLinkExecutorError("ArcLink SSH executor key path must be a regular file")
+    if stat_result.st_mode & 0o077:
+        raise ArcLinkExecutorError("ArcLink SSH executor key file must not be group/world accessible")
+
+
+def executor_for_fleet_host(
+    *,
+    adapter: str,
+    env: Mapping[str, str],
+    host: Mapping[str, Any],
+    secret_resolver: SecretResolver | None = None,
+    fake_secret_refs: Mapping[str, str] | None = None,
+) -> ArcLinkExecutor:
+    clean_adapter = str(adapter or "").strip().lower()
+    config = ArcLinkExecutorConfig(live_enabled=True, adapter_name=clean_adapter)
+    if clean_adapter == "fake":
+        return ArcLinkExecutor(config=config, secret_resolver=FakeSecretResolver(dict(fake_secret_refs or {})))
+    if clean_adapter not in {"local", "ssh"}:
+        raise ArcLinkExecutorError("set ARCLINK_EXECUTOR_ADAPTER to fake, local, or ssh before running fleet actions")
+    if secret_resolver is None:
+        raise ArcLinkExecutorError("ArcLink fleet executor requires a secret resolver")
+    if clean_adapter == "local":
+        runner = SubprocessDockerComposeRunner(docker_binary=str(env.get("ARCLINK_DOCKER_BINARY") or "docker"))
+    else:
+        host_meta = _host_metadata(host)
+        host_name = str(host_meta.get("ssh_host") or host.get("hostname") or "").strip()
+        if not _truthy(env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED") or ""):
+            raise ArcLinkExecutorError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1")
+        allowed_hosts = _csv_values(str(env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or env.get("ARCLINK_ACTION_WORKER_SSH_HOST_ALLOWLIST") or ""))
+        if not allowed_hosts:
+            raise ArcLinkExecutorError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
+        ssh_options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+        key_path = str(env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
+        known_hosts = str(env.get("ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE") or "").strip()
+        if key_path:
+            validate_ssh_key_path(key_path)
+            ssh_options.extend(("-i", key_path))
+        if known_hosts:
+            ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
+        runner = SshDockerComposeRunner(
+            host=host_name,
+            user=str(host_meta.get("ssh_user") or env.get("ARCLINK_ACTION_WORKER_SSH_USER") or env.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink"),
+            ssh_binary=str(env.get("ARCLINK_SSH_BINARY") or "ssh"),
+            rsync_binary=str(env.get("ARCLINK_RSYNC_BINARY") or "rsync"),
+            docker_binary=str(env.get("ARCLINK_DOCKER_BINARY") or "docker"),
+            ssh_options=tuple(ssh_options),
+            allowed_hosts=tuple(allowed_hosts),
+        )
+    return ArcLinkExecutor(config=config, secret_resolver=secret_resolver, docker_runner=runner)
+
+
 def _require_secret_ref(secret_ref: str) -> str:
     clean = str(secret_ref or "").strip()
     if not _SECRET_REF_RE.fullmatch(clean):

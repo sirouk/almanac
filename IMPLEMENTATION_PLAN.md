@@ -20,8 +20,9 @@ regressions. Do not re-open fiction/outdated audit items `ME-11` or `ME-25`.
 
 - Do not touch `arclink-priv`, live secrets, deploy keys, production services,
   payment/provider mutations, public bot command registration, Docker
-  install/upgrade/reconfigure, live non-loopback SSH, real cloud-provider
-  calls, or Hermes core without explicit operator authorization.
+  install/upgrade/reconfigure, domain-or-Tailscale ingress live mutation, live
+  non-loopback SSH, real cloud-provider calls, or Hermes core without explicit
+  operator authorization.
 - Do not introduce a new CLI binary. Extend `bin/deploy.sh control ...`.
 - Do not collapse `arclink_inventory_machines` and `arclink_fleet_hosts`.
 - Do not expose host IDs, SSH coordinates, provider metadata, or fleet topology

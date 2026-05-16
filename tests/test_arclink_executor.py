@@ -1099,6 +1099,22 @@ def test_ssh_docker_runner_requires_explicit_host_allowlist() -> None:
     print("PASS test_ssh_docker_runner_requires_explicit_host_allowlist")
 
 
+def test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_fleet_host_helper")
+    executor = mod.executor_for_fleet_host(
+        adapter="ssh",
+        env={"ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED": "1", "ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST": "10.0.0.42"},
+        host={"host_id": "host_b", "hostname": "worker-b.example.test", "metadata_json": json.dumps({"ssh_host": "10.0.0.42", "ssh_user": "worker"})},
+        secret_resolver=mod.FakeSecretResolver({}),
+    )
+    runner = executor.docker_runner
+    expect(executor.config.adapter_name == "ssh", str(executor.config))
+    expect(runner.host == "10.0.0.42", str(runner))
+    expect(runner.user == "worker", str(runner))
+    expect(runner.allowed_hosts == ("10.0.0.42",), str(runner))
+    print("PASS test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata")
+
+
 def test_live_executor_requires_docker_runner() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_runner_required_test")
     intent = sample_intent()
@@ -1238,11 +1254,12 @@ def main() -> int:
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
     test_ssh_docker_runner_requires_explicit_host_allowlist()
+    test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata()
     test_live_executor_requires_docker_runner()
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 33 ArcLink executor tests")
+    print("PASS all 34 ArcLink executor tests")
     return 0
 
 

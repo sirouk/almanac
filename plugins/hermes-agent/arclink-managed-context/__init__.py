@@ -1067,14 +1067,29 @@ def _skill_snapshot(raw_value: object) -> str:
 def _access_overlay_payload(payload: dict[str, object]) -> dict[str, str]:
     overlay: dict[str, str] = {}
     dashboard_url = _clean_text(payload.get("dashboard_url"), limit=_MAX_URL_FIELD_CHARS)
+    drive_url = _clean_text(payload.get("drive_url"), limit=_MAX_URL_FIELD_CHARS)
     code_url = _clean_text(payload.get("code_url"), limit=_MAX_URL_FIELD_CHARS)
+    notion_callback_url = _clean_text(payload.get("notion_callback_url"), limit=_MAX_URL_FIELD_CHARS)
+    notion_root_url = _clean_text(payload.get("notion_root_url"), limit=_MAX_URL_FIELD_CHARS)
     tailscale_host = _clean_text(payload.get("tailscale_host"), limit=_MAX_LOCAL_FIELD_CHARS)
+    deployment_id = _clean_text(payload.get("deployment_id"), limit=80)
+    prefix = _clean_text(payload.get("prefix"), limit=80)
     if dashboard_url:
         overlay["dashboard_url"] = dashboard_url
+    if drive_url:
+        overlay["drive_url"] = drive_url
     if code_url:
         overlay["code_url"] = code_url
+    if notion_root_url:
+        overlay["notion_root_url"] = notion_root_url
+    if notion_callback_url:
+        overlay["notion_callback_url"] = notion_callback_url
     if tailscale_host:
         overlay["tailscale_host"] = tailscale_host
+    if deployment_id:
+        overlay["deployment_id"] = deployment_id
+    if prefix:
+        overlay["arcpod_prefix"] = prefix
     if not overlay:
         return {}
     overlay["credentials"] = "omitted"
@@ -1215,17 +1230,29 @@ def _resource_bundle(
 ) -> str:
     lines: list[str] = ["ArcLink resources:", "", "Web access:"]
     dashboard_url = _clean_resource_value(access_payload.get("dashboard_url"), limit=_MAX_URL_FIELD_CHARS)
+    drive_url = _clean_resource_value(access_payload.get("drive_url"), limit=_MAX_URL_FIELD_CHARS)
     code_url = _clean_resource_value(access_payload.get("code_url"), limit=_MAX_URL_FIELD_CHARS)
+    notion_root_url = _clean_resource_value(access_payload.get("notion_root_url"), limit=_MAX_URL_FIELD_CHARS)
+    notion_callback_url = _clean_resource_value(access_payload.get("notion_callback_url"), limit=_MAX_URL_FIELD_CHARS)
+    arcpod_prefix = _clean_resource_value(access_payload.get("prefix"), limit=80)
     username = _clean_resource_value(access_payload.get("username") or access_payload.get("unix_user"), limit=80)
     home_root = _home_root(access_payload)
     vault_root = _vault_root_for_home(home_root)
 
+    if arcpod_prefix:
+        lines.append(f"- ArcPod: {arcpod_prefix}")
     if dashboard_url:
         lines.append(f"- Hermes dashboard: {dashboard_url}")
     if username:
         lines.append(f"- Dashboard username: {username}")
+    if drive_url:
+        lines.append(f"- Drive tab: {drive_url}")
     if code_url:
         lines.append(f"- Code plugin: {code_url}")
+    if notion_root_url:
+        lines.append(f"- Shared Notion root: {notion_root_url}")
+    if notion_callback_url:
+        lines.append(f"- Notion callback: {notion_callback_url}")
     if home_root:
         lines.append(f"- Workspace root: {home_root}")
     lines.append(f"- ArcLink vault: {vault_root}")

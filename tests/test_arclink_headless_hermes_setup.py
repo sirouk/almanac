@@ -189,6 +189,13 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
                 "ARCLINK_CONFIG_FILE": str(arclink_config),
                 "FAKE_HERMES_CONFIG_PATH": str(hermes_config),
                 "PYTHONPATH": f"{fake_pkg_root}{os.pathsep}{REPO / 'python'}",
+                "ARCLINK_PREFIX": "kor-pod-1",
+                "ARCLINK_DEPLOYMENT_ID": "dep_kor_1",
+                "ARCLINK_HERMES_URL": "https://kor.example.test",
+                "ARCLINK_FILES_URL": "https://kor.example.test/drive",
+                "ARCLINK_CODE_URL": "https://kor.example.test/code",
+                "ARCLINK_NOTION_CALLBACK_URL": "https://kor.example.test/notion/webhook",
+                "ARCLINK_NOTION_ROOT_URL": "https://www.notion.so/Kor-Root-00000000000040008000000000000001",
             },
             text=True,
             capture_output=True,
@@ -226,8 +233,13 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         )
         expect("Notion is the shared source of truth when the operating context uses it" in soul_text, soul_text)
         expect("Check the current ArcLink verification state" in soul_text, soul_text)
-        expect("Hermes dashboard:" not in soul_text, soul_text)
-        expect("Code plugin:" not in soul_text, soul_text)
+        expect("ArcPod operating map:" in soul_text, soul_text)
+        expect("You occupy ArcPod `kor-pod-1` for Kora Reed. Deployment id: `dep_kor_1`." in soul_text, soul_text)
+        expect("Hermes dashboard: https://kor.example.test" in soul_text, soul_text)
+        expect("Drive tab: https://kor.example.test/drive" in soul_text, soul_text)
+        expect("Code tab: https://kor.example.test/code" in soul_text, soul_text)
+        expect("Shared Notion root: https://www.notion.so/Kor-Root-00000000000040008000000000000001" in soul_text, soul_text)
+        expect("Notion callback for this ArcPod: https://kor.example.test/notion/webhook" in soul_text, soul_text)
         expect("$" not in soul_text, soul_text)
 
         identity_state = json.loads(identity_state_path.read_text(encoding="utf-8"))
@@ -239,6 +251,10 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect(identity_state["org_primary_project"] == "Hermes deployment lane", identity_state)
         expect(identity_state["org_timezone"] == "America/New_York", identity_state)
         expect(identity_state["org_quiet_hours"] == "22:00-08:00 weekdays", identity_state)
+        expect(identity_state["arcpod_prefix"] == "kor-pod-1", identity_state)
+        expect(identity_state["deployment_id"] == "dep_kor_1", identity_state)
+        expect(identity_state["dashboard_url"] == "https://kor.example.test", identity_state)
+        expect(identity_state["notion_root_url"].startswith("https://www.notion.so/Kor-Root-"), identity_state)
 
         prefill_messages = json.loads(prefill_path.read_text(encoding="utf-8"))
         expect(prefill_messages[0]["role"] == "system", prefill_messages)

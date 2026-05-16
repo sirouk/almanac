@@ -804,6 +804,14 @@ def _render_services(
                 "ARCLINK_AGENT_NAME": env["ARCLINK_AGENT_NAME"],
                 "ARCLINK_AGENT_TITLE": env["ARCLINK_AGENT_TITLE"],
                 "ARCLINK_DASHBOARD_USERNAME": env["ARCLINK_DASHBOARD_USERNAME"],
+                "ARCLINK_CAPTAIN_NAME": env["ARCLINK_CAPTAIN_NAME"],
+                "ARCLINK_CAPTAIN_EMAIL": env["ARCLINK_CAPTAIN_EMAIL"],
+                "ARCLINK_DASHBOARD_URL": env["ARCLINK_DASHBOARD_URL"],
+                "ARCLINK_HERMES_URL": env["ARCLINK_HERMES_URL"],
+                "ARCLINK_FILES_URL": env["ARCLINK_FILES_URL"],
+                "ARCLINK_CODE_URL": env["ARCLINK_CODE_URL"],
+                "ARCLINK_NOTION_CALLBACK_URL": env["ARCLINK_NOTION_CALLBACK_URL"],
+                "ARCLINK_NOTION_ROOT_URL": env["ARCLINK_NOTION_ROOT_URL"],
                 "ARCLINK_PRIMARY_PROVIDER": env["ARCLINK_PRIMARY_PROVIDER"],
                 "ARCLINK_CHUTES_BASE_URL": env["ARCLINK_CHUTES_BASE_URL"],
                 "ARCLINK_CHUTES_DEFAULT_MODEL": env["ARCLINK_CHUTES_DEFAULT_MODEL"],
@@ -1010,6 +1018,14 @@ def render_arclink_provisioning_intent(
         "NOTION_TOKEN_REF": secret_refs["notion_token"],
         "NOTION_WEBHOOK_SECRET_REF": secret_refs["notion_webhook_secret"],
         "ARCLINK_NOTION_CALLBACK_URL": notion_callback_url,
+        "ARCLINK_NOTION_ROOT_URL": str(
+            source_env.get("ARCLINK_SSOT_NOTION_ROOT_PAGE_URL")
+            or source_env.get("ARCLINK_SSOT_NOTION_SPACE_URL")
+            or source_env.get("ARCLINK_NOTION_INDEX_ROOTS")
+            or ""
+        ).strip(),
+        "ARCLINK_CAPTAIN_NAME": str(user.get("display_name") or user.get("email") or deployment["user_id"]).strip(),
+        "ARCLINK_CAPTAIN_EMAIL": str(user.get("email") or "").strip(),
     }
     services = _render_services(
         deployment_id=deployment_id,

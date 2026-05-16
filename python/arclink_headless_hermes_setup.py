@@ -327,6 +327,10 @@ def _identity_value(value: str, default: str) -> str:
     return normalized or default
 
 
+def _env_identity_value(name: str, default: str = "") -> str:
+    return _identity_value(str(os.environ.get(name) or ""), default)
+
+
 def _upstream_soul_text() -> str:
     try:
         from hermes_cli.default_soul import DEFAULT_SOUL_MD
@@ -386,6 +390,20 @@ def _render_soul(bot_name: str, unix_user: str, user_name: str = "", agent_title
                     "agent_title": str(agent_title or "").strip(),
                     "unix_user": _identity_value(unix_user, "unknown"),
                     "user_name": _identity_value(user_name, "your enrolled user"),
+                    "arcpod_prefix": _env_identity_value("ARCLINK_PREFIX", "this ArcPod"),
+                    "deployment_id": _env_identity_value("ARCLINK_DEPLOYMENT_ID", "not recorded yet"),
+                    "dashboard_url": (
+                        _env_identity_value("ARCLINK_HERMES_URL")
+                        or _env_identity_value("ARCLINK_DASHBOARD_URL", "not published yet")
+                    ),
+                    "drive_url": _env_identity_value("ARCLINK_FILES_URL", "not published yet"),
+                    "code_url": _env_identity_value("ARCLINK_CODE_URL", "not published yet"),
+                    "notion_callback_url": _env_identity_value("ARCLINK_NOTION_CALLBACK_URL", "not configured yet"),
+                    "notion_root_url": (
+                        _env_identity_value("ARCLINK_NOTION_ROOT_URL")
+                        or _env_identity_value("ARCLINK_SSOT_NOTION_ROOT_PAGE_URL")
+                        or _env_identity_value("ARCLINK_SSOT_NOTION_SPACE_URL", "not configured yet")
+                    ),
                     "org_name": _identity_value(_config_value("ARCLINK_ORG_NAME"), "the organization you support"),
                     "org_mission": _identity_value(
                         _config_value("ARCLINK_ORG_MISSION"),
@@ -462,6 +480,17 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
         "agent_title": clean_agent_title,
         "unix_user": unix_user,
         "user_name": user_name,
+        "arcpod_prefix": _env_identity_value("ARCLINK_PREFIX"),
+        "deployment_id": _env_identity_value("ARCLINK_DEPLOYMENT_ID"),
+        "dashboard_url": _env_identity_value("ARCLINK_HERMES_URL") or _env_identity_value("ARCLINK_DASHBOARD_URL"),
+        "drive_url": _env_identity_value("ARCLINK_FILES_URL"),
+        "code_url": _env_identity_value("ARCLINK_CODE_URL"),
+        "notion_callback_url": _env_identity_value("ARCLINK_NOTION_CALLBACK_URL"),
+        "notion_root_url": (
+            _env_identity_value("ARCLINK_NOTION_ROOT_URL")
+            or _env_identity_value("ARCLINK_SSOT_NOTION_ROOT_PAGE_URL")
+            or _env_identity_value("ARCLINK_SSOT_NOTION_SPACE_URL")
+        ),
         "org_name": org_name,
         "org_mission": org_mission,
         "org_primary_project": org_primary_project,

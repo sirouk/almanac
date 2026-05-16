@@ -80,15 +80,33 @@ if password_file:
         password_from_file = ""
 password = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD") or password_from_file or existing.get("password") or secrets.token_urlsafe(24))
 session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
+dashboard_url = str(os.environ.get("ARCLINK_HERMES_URL") or os.environ.get("ARCLINK_DASHBOARD_URL") or "").strip()
+drive_url = str(os.environ.get("ARCLINK_FILES_URL") or "").strip()
+if not drive_url and dashboard_url:
+    drive_url = dashboard_url.rstrip("/") + "/drive"
+code_url = str(os.environ.get("ARCLINK_CODE_URL") or "").strip()
+if not code_url and dashboard_url:
+    code_url = dashboard_url.rstrip("/") + "/code"
 payload = {
     **existing,
     "auth_scheme": "signed-session",
     "username": username,
     "password": password,
     "session_secret": session_secret,
-    "dashboard_url": str(os.environ.get("ARCLINK_HERMES_URL") or ""),
-    "drive_url": (str(os.environ.get("ARCLINK_HERMES_URL") or "").rstrip("/") + "/drive") if os.environ.get("ARCLINK_HERMES_URL") else "",
-    "code_url": (str(os.environ.get("ARCLINK_HERMES_URL") or "").rstrip("/") + "/code") if os.environ.get("ARCLINK_HERMES_URL") else "",
+    "dashboard_url": dashboard_url,
+    "drive_url": drive_url,
+    "code_url": code_url,
+    "notion_callback_url": str(os.environ.get("ARCLINK_NOTION_CALLBACK_URL") or "").strip(),
+    "notion_root_url": str(
+        os.environ.get("ARCLINK_NOTION_ROOT_URL")
+        or os.environ.get("ARCLINK_SSOT_NOTION_ROOT_PAGE_URL")
+        or os.environ.get("ARCLINK_SSOT_NOTION_SPACE_URL")
+        or ""
+    ).strip(),
+    "deployment_id": str(os.environ.get("ARCLINK_DEPLOYMENT_ID") or "").strip(),
+    "prefix": str(os.environ.get("ARCLINK_PREFIX") or "").strip(),
+    "captain_name": str(os.environ.get("ARCLINK_CAPTAIN_NAME") or "").strip(),
+    "captain_email": str(os.environ.get("ARCLINK_CAPTAIN_EMAIL") or "").strip(),
 }
 path.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-web-access-", suffix=".tmp")
@@ -142,5 +160,5 @@ PY
     --bot-name "$agent_name" \
     --agent-title "$agent_title" \
     --unix-user "arclink" \
-    --user-name "${ARCLINK_PREFIX:-ArcLink}" >/dev/null
+    --user-name "${ARCLINK_CAPTAIN_NAME:-${ARCLINK_USER_NAME:-${ARCLINK_PREFIX:-ArcLink}}}" >/dev/null
 fi

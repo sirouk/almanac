@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import json
 import os
 import sys
@@ -764,6 +765,66 @@ def test_public_agent_turn_runner_prefers_running_gateway_container() -> None:
     print("PASS test_public_agent_turn_runner_prefers_running_gateway_container")
 
 
+def test_public_agent_gateway_bridge_detaches_long_running_turns() -> None:
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_detached_bridge_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        old_env = os.environ.copy()
+        os.environ["STATE_DIR"] = str(Path(tmp) / "state")
+        try:
+            calls: list[dict[str, object]] = []
+
+            class FakeStdin:
+                def __init__(self) -> None:
+                    self.payload = ""
+                    self.closed = False
+
+                def write(self, value: str) -> None:
+                    self.payload += value
+
+                def close(self) -> None:
+                    self.closed = True
+
+            class FakeProc:
+                def __init__(self) -> None:
+                    self.stdin = FakeStdin()
+
+                def wait(self, timeout=None):
+                    raise delivery.subprocess.TimeoutExpired(["bridge"], timeout)
+
+            def fake_popen(cmd, stdin=None, stdout=None, stderr=None, text=True, start_new_session=True):
+                proc = FakeProc()
+                calls.append(
+                    {
+                        "cmd": cmd,
+                        "stdin": stdin,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "text": text,
+                        "start_new_session": start_new_session,
+                        "proc": proc,
+                    }
+                )
+                return proc
+
+            delivery.subprocess.Popen = fake_popen
+            ok, error = delivery._spawn_public_agent_gateway_bridge(
+                cmd=["docker", "exec", "-i", "gateway", "bridge.py"],
+                payload={"platform": "telegram", "text": "long-running turn"},
+            )
+            expect(ok is True, error)
+            expect(error == "", error)
+            expect(calls and calls[0]["start_new_session"] is True, str(calls))
+            proc = calls[0]["proc"]
+            expect(json.loads(proc.stdin.payload)["text"] == "long-running turn", proc.stdin.payload)
+            expect(proc.stdin.closed is True, "bridge stdin should be closed after payload write")
+            expect((Path(tmp) / "state" / "docker" / "jobs" / "public-agent-bridge.log").parent.exists(), "bridge log dir missing")
+            print("PASS test_public_agent_gateway_bridge_detaches_long_running_turns")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -851,6 +912,46 @@ def test_public_agent_bridge_enables_gateway_streaming_without_reasoning() -> No
     print("PASS test_public_agent_bridge_enables_gateway_streaming_without_reasoning")
 
 
+def test_public_agent_bridge_drains_telegram_batch_tasks_before_done() -> None:
+    bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_batch_drain_test")
+
+    async def scenario() -> None:
+        events: list[str] = []
+
+        class Adapter:
+            def __init__(self) -> None:
+                self._background_tasks: set[asyncio.Task[None]] = set()
+                self._pending_text_batch_tasks: dict[str, asyncio.Task[None]] = {}
+                self._pending_photo_batch_tasks: dict[str, asyncio.Task[None]] = {}
+
+        adapter = Adapter()
+
+        async def agent_turn() -> None:
+            await asyncio.sleep(0)
+            events.append("agent-turn")
+
+        async def text_flush() -> None:
+            await asyncio.sleep(0)
+            events.append("text-flush")
+            task = asyncio.create_task(agent_turn())
+            adapter._background_tasks.add(task)
+            task.add_done_callback(adapter._background_tasks.discard)
+
+        task = asyncio.create_task(text_flush())
+        adapter._pending_text_batch_tasks["telegram:123"] = task
+        task.add_done_callback(lambda _task: adapter._pending_text_batch_tasks.pop("telegram:123", None))
+
+        await bridge._drain_bridge_adapter_tasks(adapter)
+        await asyncio.sleep(0)
+
+        expect(events == ["text-flush", "agent-turn"], str(events))
+        expect(adapter._pending_text_batch_tasks == {}, str(adapter._pending_text_batch_tasks))
+        expect(adapter._background_tasks == set(), str(adapter._background_tasks))
+
+    asyncio.run(scenario())
+    print("PASS test_public_agent_bridge_drains_telegram_batch_tasks_before_done")
+
+
 def test_notification_due_now_normalizes_z_and_offset_timestamps() -> None:
     delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_due_timestamp_test")
     fixed_now = datetime(2026, 5, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -875,10 +976,12 @@ def main() -> int:
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_live_trigger_claims_and_delivers_once()
     test_public_agent_turn_runner_prefers_running_gateway_container()
+    test_public_agent_gateway_bridge_detaches_long_running_turns()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_enables_gateway_streaming_without_reasoning()
+    test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
-    print("PASS all 12 notification delivery regression tests")
+    print("PASS all 14 notification delivery regression tests")
     return 0
 
 

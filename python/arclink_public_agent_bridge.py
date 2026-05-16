@@ -106,6 +106,32 @@ def _enable_public_bridge_gateway_defaults(cfg: Any) -> None:
         return
 
 
+async def _drain_bridge_adapter_tasks(adapter: Any) -> None:
+    """Wait for Hermes adapter work spawned by synthetic public turns.
+
+    Telegram text/media handlers intentionally debounce batches before calling
+    ``handle_message``. The bridge is a short-lived process, so exiting as soon
+    as the update handler returns can cancel that pending flush before Hermes
+    starts the Agent turn. Drain both those platform batch timers and the
+    standard gateway background tasks they may spawn.
+    """
+    while True:
+        pending: list[asyncio.Task[Any]] = []
+        background_tasks = getattr(adapter, "_background_tasks", None)
+        if background_tasks:
+            pending.extend(task for task in list(background_tasks) if task and not task.done())
+        for attr in ("_pending_text_batch_tasks", "_pending_photo_batch_tasks"):
+            task_map = getattr(adapter, attr, None)
+            if isinstance(task_map, dict):
+                pending.extend(task for task in list(task_map.values()) if task and not task.done())
+        if not pending:
+            return
+        results = await asyncio.gather(*pending, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                raise result
+
+
 async def _run_telegram(payload: Mapping[str, Any]) -> None:
     _add_runtime_paths()
 
@@ -177,11 +203,7 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
                 message_id=message_id,
             )
             await adapter.handle_message(event)
-        while getattr(adapter, "_background_tasks", None):
-            tasks = list(adapter._background_tasks)  # type: ignore[attr-defined]
-            if not tasks:
-                break
-            await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+        await _drain_bridge_adapter_tasks(adapter)
     finally:
         try:
             await bot.shutdown()
@@ -424,11 +446,7 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
             message_id=message_id or None,
         )
         await adapter.handle_message(event)
-        while getattr(adapter, "_background_tasks", None):
-            tasks = list(adapter._background_tasks)  # type: ignore[attr-defined]
-            if not tasks:
-                break
-            await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
+        await _drain_bridge_adapter_tasks(adapter)
 
 
 async def _run(payload: Mapping[str, Any]) -> None:

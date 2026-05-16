@@ -446,6 +446,8 @@ def _run_public_agent_gateway_turn(
             value = extra.get(key)
             if value not in (None, ""):
                 payload[key] = value
+    if _public_agent_bridge_detached_enabled():
+        return _spawn_public_agent_gateway_bridge(cmd=cmd, payload=payload)
     try:
         proc = subprocess.run(
             cmd,
@@ -470,6 +472,62 @@ def _run_public_agent_gateway_turn(
     if isinstance(payload_out, dict) and payload_out.get("ok") is True:
         return True, ""
     return False, "Hermes public gateway bridge completed without an ok response"
+
+
+def _public_agent_bridge_detached_enabled() -> bool:
+    """Return whether public Agent bridge turns should outlive the trigger worker.
+
+    Telegram/Discord webhooks must stay snappy, while Hermes turns can stream
+    for minutes or run much longer. The bridge process owns the synthetic
+    platform event until Hermes finishes, so the notification worker should
+    start it and release its slot instead of imposing a hard turn timeout.
+    """
+    return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_DETACHED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _public_agent_bridge_log_path() -> Path:
+    state_dir = config_env_value("STATE_DIR", "").strip() or os.environ.get("STATE_DIR", "").strip()
+    if not state_dir:
+        state_dir = str(Path.cwd() / "arclink-priv" / "state")
+    return Path(state_dir) / "docker" / "jobs" / "public-agent-bridge.log"
+
+
+def _spawn_public_agent_gateway_bridge(*, cmd: list[str], payload: dict[str, Any]) -> tuple[bool, str]:
+    log_path = _public_agent_bridge_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = log_path.open("a", encoding="utf-8")
+    except OSError as exc:
+        return False, f"could not open public gateway bridge log: {str(exc)[:180]}"
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=log_file,
+            stderr=log_file,
+            text=True,
+            start_new_session=True,
+        )
+        if proc.stdin is None:
+            return False, "could not open public gateway bridge stdin"
+        proc.stdin.write(json.dumps(payload, sort_keys=True))
+        proc.stdin.close()
+        try:
+            returncode = proc.wait(timeout=0.25)
+        except subprocess.TimeoutExpired:
+            return True, ""
+        if returncode == 0:
+            return True, ""
+        return False, f"Hermes public gateway bridge exited immediately with status {returncode}; see {log_path}"
+    except (BrokenPipeError, OSError) as exc:
+        return False, f"could not start Hermes public gateway bridge: {str(exc)[:180]}"
+    finally:
+        log_file.close()
 
 
 def _public_agent_quiet_fallback_enabled() -> bool:

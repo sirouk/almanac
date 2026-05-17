@@ -6757,3 +6757,25 @@ Live follow-up required after deploy:
   router service.
 - Reprovision or migrate pre-router active ArcPods so their Hermes gateway env
   moves from direct Chutes to the central router.
+
+## 2026-05-17 Pod Migration Root-Owned State Repair
+
+Scope: live reprovision of the two existing ArcPods exposed that
+`control-action-worker` could stop the source stack but could not stage
+root-owned Nextcloud/Redis bind-mount files while running as the unprivileged
+`arclink` user. The worker already has writeable Docker socket access and is
+therefore a trusted-host service; this pass makes that root boundary explicit
+instead of letting migrations fail midway on service-owned state.
+
+Files changed:
+
+- `compose.yaml`: `control-action-worker` now runs as `user: "0:0"` with a
+  comment explaining the Docker-socket plus migration-capture trust boundary.
+- `docs/docker.md` and `docs/arclink/data-safety.md`: document that
+  `control-action-worker` is root inside the container for Pod migration
+  capture of root-owned bind mounts.
+
+Validation:
+
+- Pending in this pass: focused Compose/docs regression tests, shell syntax,
+  redeploy, and live reprovision retry of the two active ArcPods.

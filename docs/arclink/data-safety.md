@@ -74,8 +74,10 @@ ArcPod Docker volumes follow the naming convention:
   config/state, not public docs or git history.
 - Docker socket writers are trusted-host services. In Docker mode,
   `agent-supervisor` intentionally runs as root inside its container so it can
-  create per-agent Unix users and launch sibling runtime/proxy containers; it
-  must stay inside the private host boundary.
+  create per-agent Unix users and launch sibling runtime/proxy containers, and
+  `control-action-worker` intentionally runs as root so Pod migration captures
+  can read root-owned service bind mounts. Both must stay inside the private
+  host boundary.
 
 ## Knowledge And Memory Rails
 

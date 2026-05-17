@@ -373,6 +373,10 @@ services:
 
   control-action-worker:
     <<: *arclink-app
+    # This worker already has trusted-host Docker socket authority. It also
+    # stages Pod migration captures, which can include root-owned container
+    # state from Redis/Postgres/Nextcloud bind mounts.
+    user: "0:0"
     environment:
       <<: [*arclink-env, *arclink-control-secret-env]
     group_add:

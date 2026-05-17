@@ -451,10 +451,11 @@ def _action_executor_cache_key(
     adapter: str,
     host: Mapping[str, Any],
     fake_secret_refs: Mapping[str, str] | None = None,
+    deployment_id: str = "",
 ) -> tuple[str, str, str]:
     host_id = str(host.get("host_id") or "").strip()
     if adapter != "fake":
-        return host_id, adapter, ""
+        return host_id, adapter, str(deployment_id or "")
     ref_hash = hashlib.sha256(
         json.dumps(sorted((fake_secret_refs or {}).keys()), separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -467,12 +468,18 @@ def _executor_for_action_host(
     host: Mapping[str, Any],
     metadata: Any,
     cache: _ActionExecutorCache,
+    deployment_id: str = "",
 ) -> ArcLinkExecutor:
     adapter = str(env.get("ARCLINK_EXECUTOR_ADAPTER") or "").strip().lower()
     if adapter not in {"fake", "local", "ssh"}:
         raise ArcLinkActionWorkerError("ArcLink action worker placement routing requires ARCLINK_EXECUTOR_ADAPTER")
     fake_secret_refs = _secret_refs_for_action(metadata) if adapter == "fake" else {}
-    cache_key = _action_executor_cache_key(adapter=adapter, host=host, fake_secret_refs=fake_secret_refs)
+    cache_key = _action_executor_cache_key(
+        adapter=adapter,
+        host=host,
+        fake_secret_refs=fake_secret_refs,
+        deployment_id=deployment_id,
+    )
     if cache_key in cache:
         return cache[cache_key]
     if adapter == "fake":
@@ -488,9 +495,10 @@ def _executor_for_action_host(
             env.get("ARCLINK_ACTION_WORKER_SECRET_MATERIALIZATION_DIR")
             or "/tmp/arclink-action-worker/secrets"
         )
+        secret_scope = str(deployment_id or host_id or "unknown-host").strip()
         resolver = SovereignSecretResolver(
             env=env,
-            secret_store_dir=secret_store_dir / str(host_id or "unknown-host"),
+            secret_store_dir=secret_store_dir / secret_scope,
             materialization_root=materialization_root,
         )
         executor = executor_for_fleet_host(adapter=adapter, env=env, host=host, secret_resolver=resolver)
@@ -530,7 +538,7 @@ def _select_action_executor(
             }
         )
         return fallback_executor, routing
-    selected = _executor_for_action_host(env=env, host=host, metadata=metadata, cache=cache)
+    selected = _executor_for_action_host(env=env, host=host, metadata=metadata, cache=cache, deployment_id=target_id)
     return selected, {
         "host_id": str(host.get("host_id") or ""),
         "hostname": str(host.get("hostname") or ""),
@@ -601,12 +609,13 @@ def _execute_action(
     target_kind = str(intent["target_kind"])
     target_id = str(intent["target_id"])
     metadata = json_loads_safe(intent.get("metadata_json", "{}"))
+    worker_env = dict(env or os.environ)
     selected_executor, routing = _select_action_executor(
         conn,
         intent=intent,
         metadata=metadata,
         fallback_executor=executor,
-        env=dict(env or os.environ),
+        env=worker_env,
         cache=executor_cache if executor_cache is not None else _ACTION_EXECUTOR_CACHE,
     )
 
@@ -653,6 +662,7 @@ def _execute_action(
             target_id=target_id,
             metadata=metadata,
             idempotency_key=str(intent.get("idempotency_key") or ""),
+            env=worker_env,
         )
         _reject_secrets(result, path="$.result")
 
@@ -733,6 +743,7 @@ def _dispatch_action(
     target_id: str,
     metadata: dict[str, Any],
     idempotency_key: str = "",
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Route action type to executor call. Returns redacted result metadata."""
     if action_type == "restart":
@@ -868,6 +879,8 @@ def _dispatch_action(
             target_id=target_id,
         )
         dry_run = _truthy(metadata.get("dry_run"))
+        metadata_env = {key: str(value) for key, value in dict(metadata.get("env") or {}).items()} if isinstance(metadata.get("env"), Mapping) else {}
+        migration_env = {**dict(env or os.environ), **metadata_env}
         result = migrate_pod(
             conn,
             executor=executor,
@@ -876,7 +889,7 @@ def _dispatch_action(
             migration_id=migration_id,
             reason=str(metadata.get("reason") or "operator queued reprovision action"),
             dry_run=dry_run,
-            env={key: str(value) for key, value in dict(metadata.get("env") or {}).items()} if isinstance(metadata.get("env"), Mapping) else None,
+            env=migration_env,
         )
         if str(result.get("status") or "") != "succeeded" and not (dry_run and str(result.get("status") or "") == "planned"):
             raise ArcLinkActionWorkerError(f"reprovision migration did not succeed: {result.get('status') or 'unknown'}")

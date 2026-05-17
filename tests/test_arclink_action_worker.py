@@ -463,10 +463,20 @@ def test_reprovision_dispatches_pod_migration() -> None:
             key="reprovision-action-1",
             metadata={"target_machine_id": "current"},
         )
-        result = worker.process_next_arclink_action(conn, executor=_fake_executor_with_secrets(executor_mod))
+        result = worker.process_next_arclink_action(
+            conn,
+            executor=_fake_executor_with_secrets(executor_mod),
+            env={
+                "ARCLINK_SECRET_STORE_DIR": str(Path(tmpdir) / "secrets"),
+                "ARCLINK_LLM_ROUTER_DEFAULT_MODEL": "model-a",
+            },
+        )
         expect(result["status"] == "succeeded", str(result))
         migration_row = conn.execute("SELECT * FROM arclink_pod_migrations WHERE deployment_id = 'dep_reprovision'").fetchone()
         expect(migration_row is not None and migration_row["status"] == "succeeded", str(dict(migration_row) if migration_row else None))
+        router_key = conn.execute("SELECT * FROM arclink_llm_router_keys WHERE deployment_id = 'dep_reprovision'").fetchone()
+        expect(router_key is not None and router_key["secret_ref"] == "secret://arclink/llm-router/dep_reprovision/api-key", str(dict(router_key) if router_key else None))
+        expect(str(router_key["key_hash"]).startswith("hmac-sha256$"), str(dict(router_key)))
         link = conn.execute(
             """
             SELECT *
@@ -890,7 +900,7 @@ def test_deployment_action_routes_to_active_placement_host() -> None:
     _queue_action(dashboard, conn, action_type="restart", target_id="dep_route", key="route-host-b")
     selected_hosts: list[dict[str, object]] = []
     original = worker._executor_for_action_host
-    def recording_executor(*, env, host, metadata, cache):
+    def recording_executor(*, env, host, metadata, cache, deployment_id=""):
         selected_hosts.append(dict(host))
         return _fake_executor(executor_mod)
     try:

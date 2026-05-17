@@ -9,11 +9,13 @@ private live state.
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import secrets
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -23,7 +25,9 @@ from arclink_control import (
     append_arclink_audit,
     append_arclink_event,
     complete_arclink_operation_idempotency,
+    ensure_llm_router_key,
     fail_arclink_operation_idempotency,
+    generate_llm_router_raw_key,
     reserve_arclink_operation_idempotency,
     upsert_arclink_service_health,
     utc_now_iso,
@@ -490,6 +494,88 @@ def _render_target_intent(
     )
 
 
+def _router_secret_store_dir(env: Mapping[str, str] | None, deployment_id: str) -> Path | None:
+    raw = str((env or os.environ).get("ARCLINK_SECRET_STORE_DIR") or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve() / str(deployment_id)
+
+
+def _router_secret_path(secret_store_dir: Path, secret_ref: str) -> Path:
+    return secret_store_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+
+
+def _router_key_value(secret_store_dir: Path, secret_ref: str) -> str:
+    path = _router_secret_path(secret_store_dir, secret_ref)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    lock_path = path.with_name(f".{path.name}.lock")
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    tmp_name = ""
+    try:
+        with os.fdopen(lock_fd, "w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            if path.exists():
+                return path.read_text(encoding="utf-8").strip()
+            value = generate_llm_router_raw_key()
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                delete=False,
+            ) as tmp:
+                tmp_name = tmp.name
+                tmp.write(value + "\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.chmod(tmp_name, 0o600)
+            os.replace(tmp_name, path)
+            return value
+    except Exception:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink()
+            except OSError:
+                pass
+        raise
+
+
+def _ensure_llm_router_key_for_intent(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    intent: Mapping[str, Any],
+    env: Mapping[str, str] | None,
+) -> dict[str, Any] | None:
+    secret_refs = intent.get("secret_refs") if isinstance(intent.get("secret_refs"), Mapping) else {}
+    secret_ref = str(secret_refs.get("llm_router_api_key") or "").strip()
+    if not secret_ref:
+        return None
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    user_id = str(deployment.get("user_id") or "").strip()
+    if not deployment_id or not user_id:
+        return None
+    secret_store_dir = _router_secret_store_dir(env, deployment_id)
+    if secret_store_dir is None:
+        return None
+    raw_key = _router_key_value(secret_store_dir, secret_ref)
+    model = str(
+        (env or os.environ).get("ARCLINK_LLM_ROUTER_DEFAULT_MODEL")
+        or (env or os.environ).get("ARCLINK_CHUTES_DEFAULT_MODEL")
+        or ""
+    ).strip()
+    return ensure_llm_router_key(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        secret_ref=secret_ref,
+        raw_key=raw_key,
+        allowed_models=[model] if model else None,
+        metadata={"source": "pod_migration"},
+    )
+
+
 def _mark_rollback(
     conn: sqlite3.Connection,
     *,
@@ -826,6 +912,7 @@ def migrate_pod(
         )
         conn.commit()
 
+        deployment = _load_deployment(conn, str(row["deployment_id"]))
         target_host = _host(conn, str(row["target_host_id"]))
         target_intent = _render_target_intent(
             conn,
@@ -834,6 +921,7 @@ def migrate_pod(
             fallback_base=str(Path(str(row["target_state_root"])).parent),
             env=env,
         )
+        _ensure_llm_router_key_for_intent(conn, deployment=deployment, intent=target_intent, env=env)
         _materialize_capture(Path(str(row["capture_dir"])), Path(str(target_intent["state_roots"]["root"])))
         docker_result = executor.docker_compose_apply(
             DockerComposeApplyRequest(

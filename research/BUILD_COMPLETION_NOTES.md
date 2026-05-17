@@ -6713,3 +6713,47 @@ Skipped live gates:
 - No live Chutes inference, Stripe purchase, provider-balance transfer,
   production deploy, or agent-message proof was run in this source-validation
   pass. Those are the next operator-authorized steps after commit/push/deploy.
+
+## 2026-05-17 LLM Router Production Cutover Repair
+
+Scope: closed the production cutover gap found during live deploy verification.
+The `control-llm-router` service came up but reported `configured=false`
+because the existing central Chutes credential was present as `CHUTES_API_KEY`
+while the router-specific key was absent. Existing active ArcPods also still
+had direct Chutes env because they predated the router cutover.
+
+Files changed:
+
+- `bin/deploy.sh` and `bin/docker-entrypoint.sh`: preserve/write
+  `ARCLINK_LLM_ROUTER_CHUTES_API_KEY`, defaulting it from the already collected
+  central `CHUTES_API_KEY` when the router-specific value is absent.
+- `python/arclink_action_worker.py`: deployment-target action executors now use
+  deployment-scoped secret stores instead of host-scoped stores, and
+  reprovision passes the worker env through to Pod migration.
+- `python/arclink_pod_migration.py`: live reprovision now registers the
+  rendered ArcPod router key before applying the refreshed Compose intent, using
+  the same generated-secret store layout as the Sovereign worker.
+- `tests/test_arclink_action_worker.py`: reprovision coverage asserts the
+  router key row is registered with a keyed HMAC digest.
+
+Validation run:
+
+- `python3 tests/test_arclink_action_worker.py` passed, 32/32.
+- `python3 tests/test_arclink_llm_router.py` passed, 16/16.
+- `python3 tests/test_arclink_sovereign_worker.py` passed, 17/17.
+- `python3 tests/test_arclink_provisioning.py` passed, 13/13.
+- `python3 tests/test_arclink_docker.py` passed, 16/16.
+- `python3 tests/test_deploy_regressions.py` passed, 115/115 with 2 documented
+  root-environment skips.
+- `python3 tests/test_documentation_truths.py` passed, 6/6.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/arclink_action_worker.py python/arclink_pod_migration.py python/arclink_control.py python/arclink_llm_router.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Live follow-up required after deploy:
+
+- Re-run Control Node upgrade/recreate so the router-specific env reaches the
+  router service.
+- Reprovision or migrate pre-router active ArcPods so their Hermes gateway env
+  moves from direct Chutes to the central router.

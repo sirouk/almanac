@@ -5996,6 +5996,8 @@ def latest_model_in_family(conn: sqlite3.Connection, *, provider: str, family: s
 LLM_ROUTER_KEY_PREFIX = "acpod_live_"
 LLM_ROUTER_KEY_ID_PREFIX = "llmk_"
 LLM_ROUTER_KEY_RE = re.compile(r"^acpod_live_([A-Za-z0-9]{8,32})_([A-Za-z0-9_-]{32,})$")
+LLM_ROUTER_KEY_HASH_ALGORITHM = "hmac-sha256"
+LLM_ROUTER_KEY_HASH_PREFIX = f"{LLM_ROUTER_KEY_HASH_ALGORITHM}$"
 
 
 def generate_llm_router_raw_key() -> str:
@@ -6008,6 +6010,27 @@ def _parse_llm_router_key_id(raw_key: str) -> str:
     if not match:
         raise ValueError("invalid ArcLink LLM router key format")
     return f"{LLM_ROUTER_KEY_ID_PREFIX}{match.group(1)}"
+
+
+def _llm_router_key_hash_pepper() -> str:
+    return (
+        str(os.environ.get("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER") or "").strip()
+        or str(os.environ.get("ARCLINK_SESSION_HASH_PEPPER") or "").strip()
+        or "arclink-dev-llm-router-key-hash-pepper"
+    )
+
+
+def _hash_llm_router_key(raw_key: str) -> str:
+    digest = hmac.new(
+        _llm_router_key_hash_pepper().encode("utf-8"),
+        str(raw_key or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{LLM_ROUTER_KEY_HASH_PREFIX}{digest}"
+
+
+def _legacy_hash_llm_router_key(raw_key: str) -> str:
+    return hash_token(raw_key)
 
 
 def _safe_llm_router_key_row(row: sqlite3.Row | Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -6056,7 +6079,7 @@ def ensure_llm_router_key(
             key_id,
             clean_deployment_id,
             clean_user_id,
-            hash_token(raw_key),
+            _hash_llm_router_key(raw_key),
             clean_secret_ref,
             json.dumps(models, sort_keys=True),
             json.dumps(dict(metadata or {}), sort_keys=True),
@@ -6076,16 +6099,18 @@ def verify_llm_router_key(conn: sqlite3.Connection, raw_key: str) -> dict[str, A
         _parse_llm_router_key_id(raw_key)
     except ValueError:
         return None
+    current_hash = _hash_llm_router_key(raw_key)
+    legacy_hash = _legacy_hash_llm_router_key(raw_key)
     row = conn.execute(
         """
         SELECT k.*, d.status AS deployment_status, u.status AS user_status
         FROM arclink_llm_router_keys k
         LEFT JOIN arclink_deployments d ON d.deployment_id = k.deployment_id
         LEFT JOIN arclink_users u ON u.user_id = k.user_id
-        WHERE k.key_hash = ?
+        WHERE k.key_hash IN (?, ?)
         LIMIT 2
         """,
-        (hash_token(raw_key),),
+        (current_hash, legacy_hash),
     ).fetchall()
     if len(row) != 1:
         return None
@@ -6097,9 +6122,13 @@ def verify_llm_router_key(conn: sqlite3.Connection, raw_key: str) -> dict[str, A
     if str(record.get("user_status") or "active") != "active":
         return None
     now_iso = utc_now_iso()
-    conn.execute("UPDATE arclink_llm_router_keys SET last_seen_at = ? WHERE key_id = ?", (now_iso, record["key_id"]))
+    conn.execute(
+        "UPDATE arclink_llm_router_keys SET key_hash = ?, last_seen_at = ? WHERE key_id = ?",
+        (current_hash, now_iso, record["key_id"]),
+    )
     conn.commit()
     record["last_seen_at"] = now_iso
+    record["key_hash"] = current_hash
     return _safe_llm_router_key_row(record)
 
 

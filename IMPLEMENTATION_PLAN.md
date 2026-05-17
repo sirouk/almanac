@@ -16,7 +16,7 @@ Security regression reference:
 
 ## Current Ground Truth
 
-- `python/arclink_llm_router.py` exists in the dirty tree and contains the
+- `python/arclink_llm_router.py` exists in the current source tree and contains the
   core FastAPI router, health/models/chat routes, non-streaming forwarding,
   streaming passthrough, preflight policy checks, budget reservation/settlement,
   and sanitized usage recording.
@@ -53,7 +53,7 @@ Security regression reference:
 | --- | --- | --- |
 | Router runtime | Dedicated FastAPI app run by uvicorn in `control-llm-router`. | Folding streaming routes into WSGI `control-api` rejected. |
 | Upstream relay | `httpx.AsyncClient.stream` for streaming and httpx async calls for non-streaming. | `requests`/urllib buffering rejected. |
-| Key storage | Per-deployment raw key generated once, hash stored in SQLite, raw materialized as deployment secret only. | Raw key DB/metadata storage rejected. |
+| Key storage | Per-deployment raw key generated once, keyed HMAC hash stored in SQLite with legacy SHA migration, raw materialized as deployment secret only. | Raw key DB/metadata storage rejected. |
 | ArcPod default | Router base URL and router key by default. | Direct Chutes default rejected; keep only behind `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1`. |
 | Budget handling | Reserve before forwarding; settle/release after response using provider usage or deterministic fallback. | Post-hoc-only metering rejected. |
 | Usage ledger | Router-specific request rows plus existing Chutes metadata update. | Metadata-only accounting rejected. |
@@ -85,9 +85,8 @@ Security regression reference:
 - [x] Key format follows `acpod_live_<short_key_id>_<urlsafe_secret>`.
 - [x] Tests assert raw router keys are absent from key, usage, event, and
   deployment metadata rows.
-- [x] Decided keyed hash/HMAC is deferred for router keys because ArcLink
-  generates high-entropy API keys; the rationale is recorded in
-  `docs/arclink/llm-router.md` and `research/BUILD_COMPLETION_NOTES.md`.
+- [x] Router key hashes use HMAC-SHA256 with a router-specific pepper when set,
+  session pepper fallback, and legacy SHA migration on successful verify.
 
 ### Phase 3 - Policy, Budget, Rate, And Concurrency Already Present, Revalidate
 

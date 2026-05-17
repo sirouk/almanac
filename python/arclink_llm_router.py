@@ -701,27 +701,27 @@ def _queue_arc_pod_fuel_notice(
         if _notice_already_queued(conn, deployment_id=clean_deployment, notice_key=notice_key):
             return
         channel = _captain_public_channel(conn, user_id=clean_user, deployment_id=clean_deployment)
-        notification_id = 0
-        if channel is not None:
-            cursor = conn.execute(
-                """
-                INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
-                VALUES ('public-bot-user', ?, ?, ?, ?, ?)
-                """,
-                (
-                    channel["target_id"],
-                    channel["channel_kind"],
-                    _fuel_notice_message(
-                        severity=severity,
-                        remaining_cents=remaining,
-                        monthly_budget_cents=monthly_budget,
-                        usage_percent=usage_percent,
-                    ),
-                    json.dumps(_fuel_notice_actions(), sort_keys=True),
-                    _utc_now_iso(),
+        if channel is None:
+            return
+        cursor = conn.execute(
+            """
+            INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
+            VALUES ('public-bot-user', ?, ?, ?, ?, ?)
+            """,
+            (
+                channel["target_id"],
+                channel["channel_kind"],
+                _fuel_notice_message(
+                    severity=severity,
+                    remaining_cents=remaining,
+                    monthly_budget_cents=monthly_budget,
+                    usage_percent=usage_percent,
                 ),
-            )
-            notification_id = int(cursor.lastrowid or 0)
+                json.dumps(_fuel_notice_actions(), sort_keys=True),
+                _utc_now_iso(),
+            ),
+        )
+        notification_id = int(cursor.lastrowid or 0)
         conn.execute(
             """
             INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)

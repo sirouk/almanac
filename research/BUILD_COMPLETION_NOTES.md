@@ -6660,3 +6660,56 @@ Known risks:
   ingestion, and upstream error redaction are still open.
 - The current reservation is released around the placeholder `501` response;
   actual settlement must replace that path when upstream relay lands.
+
+## 2026-05-17 LLM Router Hardening And Production Validation Prep
+
+Scope: closed the remaining local hardening gaps from the LLM Router/refueling
+audit before production deploy. No private state was read, no live provider
+mutation was run during source validation, and the unrelated `mission_status.md`
+worktree file was left untouched.
+
+Files changed:
+
+- `python/arclink_control.py`: router key rows now store
+  `hmac-sha256$...` keyed digests using `ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER`
+  or the session pepper fallback. Legacy SHA-256 router-key rows are accepted
+  only on successful verification and are migrated to HMAC immediately.
+- `python/arclink_llm_router.py`: low-fuel Raven notices no longer write the
+  `llm_router:arc_pod_fuel_notice_queued` dedupe event when no public Captain
+  channel exists, so a later channel repair can still queue the real warning.
+- `tests/test_arclink_llm_router.py`: added regression coverage for
+  no-channel notice recovery and router-key HMAC storage/legacy migration.
+- `compose.yaml` and `docs/arclink/llm-router.md`: documented and exposed the
+  optional router-key pepper.
+- `IMPLEMENTATION_PLAN.md` and `research/PRODUCT_REALITY_MATRIX.md`: removed
+  current drift around dirty-tree wording, deferred HMAC language, and old
+  Refuel Pod naming in favor of ArcPod Refueling / ArcPod fuel.
+
+Validation run:
+
+- `python3 tests/test_arclink_llm_router.py` passed, 16/16.
+- `python3 tests/test_arclink_control_db.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed, 17/17.
+- `python3 tests/test_arclink_docker.py` passed, 16/16.
+- `python3 tests/test_arclink_entitlements.py` passed, 25/25.
+- `python3 tests/test_arclink_hosted_api.py` passed, 76/76.
+- `python3 tests/test_arclink_public_bots.py` passed, 31/31.
+- `python3 tests/test_arclink_notification_delivery.py` passed, 14/14.
+- `python3 tests/test_documentation_truths.py` passed, 6/6.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_llm_router.py`
+  passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+- `./bin/ci-preflight.sh` passed.
+- `cd web && npm test && npm run lint && npm run build && npm run test:browser`
+  passed, including 69 Node tests and 45 Playwright tests with 3 documented
+  desktop-only mobile-layout skips.
+
+Skipped live gates:
+
+- No live Chutes inference, Stripe purchase, provider-balance transfer,
+  production deploy, or agent-message proof was run in this source-validation
+  pass. Those are the next operator-authorized steps after commit/push/deploy.

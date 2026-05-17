@@ -399,6 +399,96 @@ def test_chat_usage_queues_raven_low_fuel_notice_once() -> None:
     print("PASS test_chat_usage_queues_raven_low_fuel_notice_once")
 
 
+def test_low_fuel_notice_without_channel_does_not_poison_dedupe() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 20, "used_cents": 15}},
+        )
+        upstream = fake_upstream_transport(
+            {
+                "id": "chatcmpl_fuel",
+                "object": "chat.completion",
+                "model": "model-a",
+                "choices": [{"message": {"role": "assistant", "content": "still flying"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            },
+            upstream_transport=upstream,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(response.status_code == 200, response.text)
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            no_channel_notices = conn.execute("SELECT COUNT(*) AS count FROM notification_outbox").fetchone()["count"]
+            no_channel_events = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM arclink_events
+                WHERE event_type = 'llm_router:arc_pod_fuel_notice_queued'
+                """
+            ).fetchone()["count"]
+            conn.execute(
+                """
+                INSERT INTO arclink_onboarding_sessions (
+                  session_id, channel, channel_identity, status, user_id, deployment_id, created_at, updated_at
+                ) VALUES ('onb_fuel_late', 'telegram', 'tg:67890', 'completed', 'user_1', 'dep_1', '2026-05-16T00:00:00+00:00', '2026-05-16T00:00:00+00:00')
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        expect(no_channel_notices == 0, str(no_channel_notices))
+        expect(no_channel_events == 0, str(no_channel_events))
+
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hello again"}]},
+        )
+        expect(response.status_code == 200, response.text)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            notices = conn.execute(
+                """
+                SELECT target_kind, target_id, channel_kind, message
+                FROM notification_outbox
+                WHERE target_kind = 'public-bot-user'
+                """
+            ).fetchall()
+            events = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM arclink_events
+                WHERE event_type = 'llm_router:arc_pod_fuel_notice_queued'
+                """
+            ).fetchone()["count"]
+        finally:
+            conn.close()
+        expect(len(notices) == 1, str([dict(row) for row in notices]))
+        expect(notices[0]["target_id"] == "tg:67890", str(dict(notices[0])))
+        expect("ArcPod fuel is running low" in notices[0]["message"], notices[0]["message"])
+        expect(events == 1, str(events))
+    finally:
+        tmp.cleanup()
+    print("PASS test_low_fuel_notice_without_channel_does_not_poison_dedupe")
+
+
 def test_chat_uses_catalog_pricing_and_promotes_deprecated_models() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -762,6 +852,20 @@ def test_router_keys_verify_fail_closed_and_do_not_store_raw_material() -> None:
         expect(verified["deployment_id"] == "dep_1", str(verified))
         expect(verified["user_id"] == "user_1", str(verified))
         expect("key_hash" not in verified and "raw_key" not in verified, str(verified))
+        row = conn.execute("SELECT key_id, key_hash FROM arclink_llm_router_keys WHERE deployment_id = 'dep_1'").fetchone()
+        legacy_hash = control.hash_token(raw_key)
+        expect(str(row["key_hash"]).startswith("hmac-sha256$"), str(dict(row)))
+        expect(row["key_hash"] != legacy_hash, str(dict(row)))
+
+        conn.execute("UPDATE arclink_llm_router_keys SET key_hash = ? WHERE key_id = ?", (legacy_hash, row["key_id"]))
+        conn.commit()
+        migrated = control.verify_llm_router_key(conn, raw_key)
+        expect(migrated is not None, "legacy key hash did not verify")
+        migrated_hash = conn.execute("SELECT key_hash FROM arclink_llm_router_keys WHERE key_id = ?", (row["key_id"],)).fetchone()[
+            "key_hash"
+        ]
+        expect(str(migrated_hash).startswith("hmac-sha256$") and migrated_hash != legacy_hash, str(migrated_hash))
+
         expect(control.verify_llm_router_key(conn, "not-a-router-key") is None, "malformed key verified")
         expect(control.verify_llm_router_key(conn, raw_key + "x") is None, "invalid key verified")
 
@@ -968,6 +1072,7 @@ def main() -> int:
     test_health_and_models_report_configured_state_without_exposing_key()
     test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage()
     test_chat_usage_queues_raven_low_fuel_notice_once()
+    test_low_fuel_notice_without_channel_does_not_poison_dedupe()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()
     test_startup_refreshes_catalog_and_promotes_newer_family_model()
     test_chat_promotes_missing_requested_model_to_latest_same_family()
@@ -979,7 +1084,7 @@ def main() -> int:
     test_chat_streaming_passes_chunks_and_records_provider_usage()
     test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 15 ArcLink LLM router tests")
+    print("PASS all 16 ArcLink LLM router tests")
     return 0
 
 

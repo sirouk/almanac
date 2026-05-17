@@ -33,18 +33,16 @@ service with its own `/v1` routes.
 | `GET /v1/models` | Bearer router key | Returns the allowed model list for the ArcPod key, or the router default list |
 | `POST /v1/chat/completions` | Bearer router key | Validates policy, reserves budget, relays to Chutes, returns streaming or JSON response, and records sanitized usage |
 
-Router keys use the `acpod_live_...` format. Only hashes and metadata are stored
-in SQLite. Raw keys may be returned or materialized only at the one-time
-generation boundary and must not be logged, committed, or exposed through API
-responses.
+Router keys use the `acpod_live_...` format. Only keyed HMAC hashes and
+metadata are stored in SQLite. Raw keys may be returned or materialized only at
+the one-time generation boundary and must not be logged, committed, or exposed
+through API responses.
 
-The stored key digest currently uses the shared SHA-256 token hash helper. This
-is acceptable for the router production boundary because router keys are
-ArcLink-generated high-entropy API keys, not human-memorable passwords or short
-tokens. A keyed HMAC would add defense in depth if the SQLite DB is copied
-without the application environment, but it would require a migration and shared
-pepper distribution across worker and router processes. That migration is
-deferred until the wider session/token hash migration rail is revisited.
+The stored key digest uses HMAC-SHA256 with
+`ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER` when set, falling back to the existing
+`ARCLINK_SESSION_HASH_PEPPER`. Legacy SHA-256 router-key rows are accepted only
+for verification migration; the successful verify path rewrites them to the
+keyed HMAC format. Raw-key storage and prompt/completion storage stay rejected.
 
 ## Request Policy
 
@@ -169,6 +167,7 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_DB_PATH` | none | Control-plane SQLite path |
 | `ARCLINK_LLM_ROUTER_ENABLED` | `1` | Enables router policy and upstream forwarding |
 | `ARCLINK_LLM_ROUTER_CHUTES_API_KEY` | none | Central Chutes credential used only by the router |
+| `ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER` | session pepper fallback | Optional router-specific HMAC pepper for stored ArcPod router key hashes |
 | `ARCLINK_LLM_ROUTER_CHUTES_BASE_URL` | `https://llm.chutes.ai/v1` | Upstream Chutes-compatible base URL |
 | `ARCLINK_LLM_ROUTER_DEFAULT_MODEL` | Chutes Kimi default | Default model when no per-key allowlist is set |
 | `ARCLINK_LLM_ROUTER_ALLOWED_MODELS` | default model | Comma-separated router-level model allowlist |

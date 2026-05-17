@@ -74,6 +74,37 @@ settled usage use the selected model's `input_cents_per_million` and
 `output_cents_per_million`. The environment price values are only a fallback for
 unknown models or a stale catalog.
 
+## Inference Credit Top-Ups
+
+Raven can sell one-time inference-credit top-ups after a Captain has a live
+Agent. The product is `ArcLink Inference Credits`; operators can bind it to a
+stable Stripe Product by setting `ARCLINK_REFUEL_STRIPE_PRODUCT_ID`, or let
+Checkout use inline product data. Stripe Checkout uses `mode=payment`, not a
+subscription. On `checkout.session.completed`, ArcLink grants an
+`arclink_refuel_credits` row and applies it to the owning ArcPod's metered
+router budget.
+
+Default retail conversion keeps ArcLink profitable before Stripe/platform
+overhead:
+
+| Captain pays | Metered provider budget | Retained gross margin |
+| --- | --- | --- |
+| `$10` | `$7` | `$3` |
+| `$25` | `$17.50` | `$7.50` |
+| `$50` | `$35` | `$15` |
+| `$100` | `$70` | `$30` |
+
+Those numbers come from `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS=7000`. Change that
+single value to adjust gross margin. The available package sizes come from
+`ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS`, and custom amounts are bounded by
+`ARCLINK_REFUEL_TOPUP_MIN_CENTS` and `ARCLINK_REFUEL_TOPUP_MAX_CENTS`.
+
+The token capacity shown to the Captain is only a reference estimate. Real
+spend is settled by the router against the selected model's current catalog
+price. If a Captain changes models, or ArcLink promotes a fleet from Kimi K2.6
+to Kimi K2.7, the same dollar credit naturally buys the amount of usage allowed
+by the new catalog price.
+
 `/user/provider-state` and `/admin/provider-state` include an `llm_router`
 summary for each deployment plus aggregate counts in `chutes_summary`. Those
 payloads expose only credential counts, open reservation cents, request counts,
@@ -124,6 +155,13 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS` | `400` | Fallback output-token cost estimate for the default Kimi lane |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
 | `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS` | `0` | Compatibility flag to restore direct Chutes key mounting |
+| `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | none | Optional reusable Stripe Product id for inference-credit Checkout |
+| `ARCLINK_REFUEL_STRIPE_PRODUCT_NAME` | `ArcLink Inference Credits` | Inline Checkout product display name when no product id is configured |
+| `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS` | `1000,2500,5000,10000` | Raven top-up package sizes |
+| `ARCLINK_REFUEL_TOPUP_MIN_CENTS` | `500` | Minimum custom top-up amount |
+| `ARCLINK_REFUEL_TOPUP_MAX_CENTS` | `50000` | Maximum custom top-up amount |
+| `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS` | `7000` | Retail-to-metered-budget conversion basis points |
+| `ARCLINK_REFUEL_REFERENCE_MODEL` | router default model | Display-only model name used in top-up capacity estimates |
 
 ## Model Catalog And Promotion
 

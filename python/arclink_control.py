@@ -3430,6 +3430,123 @@ def refuel_credit_sku_config(env: Mapping[str, str] | None = None) -> dict[str, 
     }
 
 
+def _refuel_positive_int(source: Mapping[str, str], name: str, default: int, *, minimum: int = 1, maximum: int = 10_000_000) -> int:
+    try:
+        value = int(str(source.get(name) or "").strip())
+    except ValueError:
+        return default
+    if value < minimum or value > maximum:
+        return default
+    return value
+
+
+def _parse_refuel_amount_options(raw: str) -> list[int]:
+    values: list[int] = []
+    for item in str(raw or "").split(","):
+        text = item.strip()
+        if not text:
+            continue
+        try:
+            cents = int(text)
+        except ValueError:
+            continue
+        if cents > 0 and cents not in values:
+            values.append(cents)
+    return values
+
+
+def refuel_topup_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    source = env or os.environ
+    options = _parse_refuel_amount_options(str(source.get("ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS") or ""))
+    if not options:
+        options = [1000, 2500, 5000, 10000]
+    minimum = _refuel_positive_int(source, "ARCLINK_REFUEL_TOPUP_MIN_CENTS", 500, minimum=100, maximum=1_000_000)
+    maximum = _refuel_positive_int(source, "ARCLINK_REFUEL_TOPUP_MAX_CENTS", 50000, minimum=minimum, maximum=5_000_000)
+    provider_credit_bps = _refuel_positive_int(
+        source,
+        "ARCLINK_REFUEL_PROVIDER_CREDIT_BPS",
+        7000,
+        minimum=1,
+        maximum=10000,
+    )
+    reference_input_cents = _refuel_positive_int(
+        source,
+        "ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS",
+        95,
+        minimum=1,
+        maximum=1_000_000,
+    )
+    reference_output_cents = _refuel_positive_int(
+        source,
+        "ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS",
+        400,
+        minimum=1,
+        maximum=1_000_000,
+    )
+    return {
+        "sku_id": str(source.get("ARCLINK_REFUEL_SKU_ID") or "arclink-inference-credits").strip(),
+        "product_name": str(source.get("ARCLINK_REFUEL_STRIPE_PRODUCT_NAME") or "ArcLink Inference Credits").strip(),
+        "stripe_product_id": str(source.get("ARCLINK_REFUEL_STRIPE_PRODUCT_ID") or "").strip(),
+        "currency": str(source.get("ARCLINK_REFUEL_CURRENCY") or "usd").strip().lower() or "usd",
+        "amount_options_cents": [max(minimum, min(maximum, int(value))) for value in options],
+        "custom_min_cents": minimum,
+        "custom_max_cents": maximum,
+        "provider_credit_bps": provider_credit_bps,
+        "gross_margin_bps": max(0, 10000 - provider_credit_bps),
+        "reference_model": str(
+            source.get("ARCLINK_REFUEL_REFERENCE_MODEL")
+            or source.get("ARCLINK_LLM_ROUTER_DEFAULT_MODEL")
+            or "current routed model"
+        ).strip(),
+        "reference_input_cents_per_million": reference_input_cents,
+        "reference_output_cents_per_million": reference_output_cents,
+    }
+
+
+def quote_arclink_refuel_topup(
+    retail_cents: int,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    config = refuel_topup_config(env)
+    amount = int(retail_cents or 0)
+    if amount < int(config["custom_min_cents"]) or amount > int(config["custom_max_cents"]):
+        raise ValueError("ArcLink inference credit top-up amount is outside the configured range")
+    credit_cents = (amount * int(config["provider_credit_bps"])) // 10000
+    if credit_cents <= 0:
+        raise ValueError("ArcLink inference credit top-up amount is too small")
+    pair_cost = int(config["reference_input_cents_per_million"]) + int(config["reference_output_cents_per_million"])
+    return {
+        "sku_id": config["sku_id"],
+        "product_name": config["product_name"],
+        "stripe_product_id": config["stripe_product_id"],
+        "currency": config["currency"],
+        "retail_cents": amount,
+        "provider_credit_cents": credit_cents,
+        "gross_margin_cents": amount - credit_cents,
+        "provider_credit_bps": config["provider_credit_bps"],
+        "gross_margin_bps": config["gross_margin_bps"],
+        "reference_model": config["reference_model"],
+        "reference_input_cents_per_million": config["reference_input_cents_per_million"],
+        "reference_output_cents_per_million": config["reference_output_cents_per_million"],
+        "estimated_million_input_output_pairs": round(credit_cents / pair_cost, 2) if pair_cost > 0 else 0,
+    }
+
+
+def arclink_refuel_topup_options(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    config = refuel_topup_config(env)
+    return {
+        "currency": config["currency"],
+        "custom_min_cents": config["custom_min_cents"],
+        "custom_max_cents": config["custom_max_cents"],
+        "provider_credit_bps": config["provider_credit_bps"],
+        "gross_margin_bps": config["gross_margin_bps"],
+        "reference_model": config["reference_model"],
+        "reference_input_cents_per_million": config["reference_input_cents_per_million"],
+        "reference_output_cents_per_million": config["reference_output_cents_per_million"],
+        "options": [quote_arclink_refuel_topup(int(value), env) for value in config["amount_options_cents"]],
+    }
+
+
 def grant_arclink_refuel_credit(
     conn: sqlite3.Connection,
     *,

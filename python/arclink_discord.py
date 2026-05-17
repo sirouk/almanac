@@ -331,6 +331,9 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
                 text = f"name {option_values.get('display_name', '').strip()}".strip()
             elif name == "plan":
                 text = f"plan {option_values.get('tier', '').strip()}".strip()
+            elif name == "top-up":
+                amount = option_values.get("amount", "").strip()
+                text = f"/top-up {amount}".strip()
             elif name in {"pair-channel", "link-channel"}:
                 code = option_values.get("code", "").strip()
                 text = f"/{name} {code}".strip()

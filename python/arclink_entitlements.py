@@ -7,8 +7,10 @@ from typing import Any, Mapping
 
 from arclink_control import (
     advance_arclink_entitlement_gates_for_user,
+    apply_arclink_refuel_credit_to_chutes_budget,
     append_arclink_audit,
     append_arclink_event,
+    grant_arclink_refuel_credit,
     merge_arclink_user_identity_by_email,
     set_arclink_user_entitlement,
     upsert_arclink_user,
@@ -292,6 +294,42 @@ def _stripe_onboarding_session_id(obj: Mapping[str, Any]) -> str:
     ))
 
 
+def _stripe_deployment_id(obj: Mapping[str, Any]) -> str:
+    meta, sub_meta, parent_meta = _all_metadata_sources(obj)
+    return _first_nonempty((
+        meta.get("arclink_deployment_id"),
+        meta.get("deployment_id"),
+        sub_meta.get("arclink_deployment_id"),
+        sub_meta.get("deployment_id"),
+        parent_meta.get("arclink_deployment_id"),
+        parent_meta.get("deployment_id"),
+    ))
+
+
+def _stripe_purchase_kind(obj: Mapping[str, Any]) -> str:
+    meta, sub_meta, parent_meta = _all_metadata_sources(obj)
+    return _first_nonempty((
+        meta.get("arclink_purchase_kind"),
+        meta.get("purchase_kind"),
+        sub_meta.get("arclink_purchase_kind"),
+        sub_meta.get("purchase_kind"),
+        parent_meta.get("arclink_purchase_kind"),
+        parent_meta.get("purchase_kind"),
+    )).strip().lower()
+
+
+def _stripe_metadata_positive_int(obj: Mapping[str, Any], *keys: str) -> int:
+    for source in _all_metadata_sources(obj):
+        for key in keys:
+            try:
+                value = int(str(source.get(key) or "").strip())
+            except ValueError:
+                continue
+            if value > 0:
+                return value
+    return 0
+
+
 def _stripe_customer_email(obj: Mapping[str, Any]) -> str:
     customer_details = _safe_mapping(obj.get("customer_details"))
     return _first_nonempty((
@@ -474,6 +512,79 @@ def process_stripe_webhook(
             )
 
         obj = _event_object(event)
+        if event_type == "checkout.session.completed" and _stripe_purchase_kind(obj) == "inference_refuel":
+            user_id = _stripe_user_id(obj)
+            deployment_id = _stripe_deployment_id(obj)
+            credit_cents = _stripe_metadata_positive_int(obj, "credit_cents", "provider_credit_cents")
+            retail_cents = _stripe_metadata_positive_int(obj, "retail_cents", "amount_cents")
+            if not deployment_id:
+                raise ArcLinkEntitlementError("Stripe refuel checkout did not include an ArcLink deployment id")
+            if credit_cents <= 0:
+                raise ArcLinkEntitlementError("Stripe refuel checkout did not include positive credit cents")
+            stripe_customer_id = str(obj.get("customer") or "").strip()
+            stripe_customer_email = _stripe_customer_email(obj)
+            if stripe_customer_id:
+                upsert_arclink_user(
+                    conn,
+                    user_id=user_id,
+                    email=stripe_customer_email,
+                    stripe_customer_id=stripe_customer_id,
+                    commit=False,
+                )
+            credit = grant_arclink_refuel_credit(
+                conn,
+                user_id=user_id,
+                deployment_id=deployment_id,
+                actor_id="stripe",
+                reason="Stripe inference credit top-up paid",
+                credit_cents=credit_cents,
+                source_kind="stripe_checkout",
+                source_id=str(obj.get("id") or event_id),
+                metadata={
+                    "stripe_event_id": event_id,
+                    "stripe_checkout_session_id": str(obj.get("id") or ""),
+                    "stripe_customer_id": stripe_customer_id,
+                    "retail_cents": retail_cents,
+                    "credit_cents": credit_cents,
+                },
+                commit=False,
+            )
+            applied = apply_arclink_refuel_credit_to_chutes_budget(
+                conn,
+                user_id=user_id,
+                deployment_id=deployment_id,
+                requested_cents=credit_cents,
+                actor_id="stripe",
+                reason="Apply paid inference credit top-up to ArcPod budget",
+                commit=False,
+            )
+            append_arclink_event(
+                conn,
+                subject_kind="deployment",
+                subject_id=deployment_id,
+                event_type="stripe_refuel_checkout_processed",
+                metadata={
+                    "stripe_event_id": event_id,
+                    "stripe_checkout_session_id": str(obj.get("id") or ""),
+                    "user_id": user_id,
+                    "credit_id": str(credit.get("credit_id") or ""),
+                    "retail_cents": retail_cents,
+                    "credit_cents": credit_cents,
+                    "applied_cents": int(applied.get("applied_cents") or 0),
+                },
+                commit=False,
+            )
+            _mark_webhook_processed(conn, event_id=event_id, commit=False)
+            conn.commit()
+            return StripeWebhookResult(
+                event_id=event_id,
+                event_type=event_type,
+                user_id=user_id,
+                entitlement_state="refuel_paid",
+                replayed=not inserted,
+                advanced_deployments=(deployment_id,),
+            )
+
         subscription_id = _stripe_subscription_id(obj)
         stripe_customer_id = str(obj.get("customer") or "").strip()
         user_id = _first_nonempty((

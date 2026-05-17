@@ -19,9 +19,11 @@ from arclink_control import (
     ARCLINK_CREDENTIAL_HANDOFF_STATUSES,
     ARCLINK_SESSION_STATUSES,
     ARCLINK_SHARE_GRANT_STATUSES,
+    arclink_refuel_topup_options,
     append_arclink_audit,
     append_arclink_event,
     parse_utc_iso,
+    quote_arclink_refuel_topup,
     queue_notification,
     utc_after_seconds_iso,
     utc_now,
@@ -1312,6 +1314,126 @@ def create_user_portal_link_api(
         return ArcLinkApiResponse(status=400, payload={"error": "no_stripe_customer"})
     portal = stripe_client.create_portal_session(customer_id=customer_id, return_url=return_url)
     return ArcLinkApiResponse(status=200, payload={"portal_url": portal.get("url", "")})
+
+
+def _user_refuel_deployment(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str = "",
+) -> sqlite3.Row | None:
+    clean_deployment = str(deployment_id or "").strip()
+    if clean_deployment:
+        return conn.execute(
+            """
+            SELECT deployment_id, user_id, prefix, status
+            FROM arclink_deployments
+            WHERE deployment_id = ? AND user_id = ?
+            """,
+            (clean_deployment, user_id),
+        ).fetchone()
+    return conn.execute(
+        """
+        SELECT deployment_id, user_id, prefix, status
+        FROM arclink_deployments
+        WHERE user_id = ?
+          AND status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+
+
+def create_user_refuel_checkout_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    stripe_client: Any,
+    deployment_id: str = "",
+    amount_cents: int = 0,
+    success_url: str = "",
+    cancel_url: str = "",
+    env: Mapping[str, str] | None = None,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(session["user_id"] or "").strip()
+    deployment = _user_refuel_deployment(conn, user_id=target_user, deployment_id=deployment_id)
+    if deployment is None:
+        return ArcLinkApiResponse(status=404, payload={"error": "deployment_not_found"})
+    clean_status = str(deployment["status"] or "")
+    if clean_status in {"entitlement_required", "teardown_complete", "cancelled"}:
+        return ArcLinkApiResponse(status=409, payload={"error": "deployment_not_ready", "status": clean_status})
+    try:
+        quote = quote_arclink_refuel_topup(int(amount_cents or 0), env)
+    except ValueError as exc:
+        options = arclink_refuel_topup_options(env)
+        return ArcLinkApiResponse(
+            status=400,
+            payload={
+                "error": "invalid_refuel_amount",
+                "detail": str(exc),
+                "pricing": options,
+            },
+        )
+    root_success = str(success_url or "").strip() or "/checkout/success?kind=refuel"
+    root_cancel = str(cancel_url or "").strip() or "/dashboard?tab=billing"
+    metadata = {
+        "arclink_purchase_kind": "inference_refuel",
+        "purchase_kind": "inference_refuel",
+        "arclink_user_id": target_user,
+        "user_id": target_user,
+        "arclink_deployment_id": str(deployment["deployment_id"] or ""),
+        "deployment_id": str(deployment["deployment_id"] or ""),
+        "retail_cents": str(quote["retail_cents"]),
+        "credit_cents": str(quote["provider_credit_cents"]),
+        "provider_credit_bps": str(quote["provider_credit_bps"]),
+        "sku_id": str(quote["sku_id"]),
+    }
+    product_data: dict[str, Any]
+    if str(quote.get("stripe_product_id") or "").strip():
+        product_data = {"product": str(quote["stripe_product_id"]).strip()}
+    else:
+        product_data = {
+            "product_data": {
+                "name": str(quote["product_name"]),
+                "metadata": {
+                    "arclink_sku_id": str(quote["sku_id"]),
+                    "arclink_product_kind": "inference_refuel",
+                },
+            }
+        }
+    checkout = stripe_client.create_checkout_session(
+        user_id=target_user,
+        price_id="",
+        mode="payment",
+        success_url=root_success,
+        cancel_url=root_cancel,
+        client_reference_id=target_user,
+        metadata=metadata,
+        idempotency_key=f"refuel:{metadata['deployment_id']}:{metadata['retail_cents']}:{secrets.token_hex(8)}",
+        line_items=[
+            {
+                "price_data": {
+                    "currency": str(quote["currency"]),
+                    "unit_amount": int(quote["retail_cents"]),
+                    **product_data,
+                },
+                "quantity": 1,
+            }
+        ],
+    )
+    return ArcLinkApiResponse(
+        status=200,
+        payload={
+            "checkout_url": checkout.get("url", ""),
+            "checkout_session_id": checkout.get("id", ""),
+            "deployment_id": metadata["deployment_id"],
+            "quote": quote,
+            "pricing": arclink_refuel_topup_options(env),
+        },
+    )
 
 
 def read_user_provisioning_status_api(

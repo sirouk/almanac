@@ -96,6 +96,14 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
     }
     parsed_raven_name = dc.parse_discord_interaction(raven_name)
     expect(parsed_raven_name["text"] == "/raven-name account Valkyrie", str(parsed_raven_name))
+    top_up = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "top-up", "options": [{"name": "amount", "value": "25"}]},
+    }
+    parsed_top_up = dc.parse_discord_interaction(top_up)
+    expect(parsed_top_up["text"] == "/top-up 25", str(parsed_top_up))
     agent = {
         "type": 2,
         "channel_id": "ch_1",

@@ -763,6 +763,71 @@ def test_refuel_credit_rejects_empty_and_wrong_owner_targets() -> None:
     print("PASS test_refuel_credit_rejects_empty_and_wrong_owner_targets")
 
 
+def test_refuel_checkout_session_completed_grants_and_applies_credit() -> None:
+    control = load_module("arclink_control.py", "arclink_control_refuel_webhook_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_refuel_webhook_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_refuel_webhook_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_refuel_paid", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_refuel_paid",
+        user_id="user_refuel_paid",
+        prefix="refuel-paid",
+        status="active",
+        metadata={"chutes": {"monthly_budget_cents": 1000}},
+    )
+    payload = json.dumps({
+        "id": "evt_refuel_paid",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_refuel_paid",
+            "status": "complete",
+            "customer": "cus_refuel_paid",
+            "client_reference_id": "user_refuel_paid",
+            "customer_details": {"email": "refuel-paid@example.test"},
+            "metadata": {
+                "arclink_purchase_kind": "inference_refuel",
+                "arclink_user_id": "user_refuel_paid",
+                "arclink_deployment_id": "dep_refuel_paid",
+                "retail_cents": "2500",
+                "credit_cents": "1750",
+            },
+        }},
+    }, sort_keys=True)
+    result = entitlements.process_stripe_webhook(
+        conn,
+        payload=payload,
+        signature=sign(adapters, payload),
+        secret="whsec_test",
+    )
+    expect(result.entitlement_state == "refuel_paid", str(result))
+    expect(result.advanced_deployments == ("dep_refuel_paid",), str(result))
+    row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_refuel_paid'").fetchone()
+    metadata = json.loads(row["metadata_json"])
+    expect(metadata["chutes"]["monthly_budget_cents"] == 2750, str(metadata))
+    expect(metadata["chutes"]["refuel_applied_credit_cents"] == 1750, str(metadata))
+    credit = conn.execute("SELECT credit_cents, remaining_cents, status, source_kind, source_id FROM arclink_refuel_credits").fetchone()
+    expect(credit["credit_cents"] == 1750 and credit["remaining_cents"] == 0, str(dict(credit)))
+    expect(credit["status"] == "exhausted", str(dict(credit)))
+    expect(credit["source_kind"] == "stripe_checkout", str(dict(credit)))
+    event = conn.execute("SELECT event_type FROM arclink_events WHERE event_type = 'stripe_refuel_checkout_processed'").fetchone()
+    expect(event is not None, "missing refuel processed event")
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'user_refuel_paid'").fetchone()
+    expect(user["entitlement_state"] == "paid", str(dict(user)))
+    expect(user["stripe_customer_id"] == "cus_refuel_paid", str(dict(user)))
+    replay = entitlements.process_stripe_webhook(
+        conn,
+        payload=payload,
+        signature=sign(adapters, payload),
+        secret="whsec_test",
+    )
+    expect(replay.replayed, str(replay))
+    count = conn.execute("SELECT COUNT(*) AS n FROM arclink_refuel_credits").fetchone()["n"]
+    expect(count == 1, str(count))
+    print("PASS test_refuel_checkout_session_completed_grants_and_applies_credit")
+
+
 def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_test")
@@ -1040,12 +1105,13 @@ def main() -> int:
     test_refuel_credit_uses_fair_local_accounting_without_live_purchase()
     test_refuel_credit_concurrent_spend_does_not_overspend()
     test_refuel_credit_rejects_empty_and_wrong_owner_targets()
+    test_refuel_checkout_session_completed_grants_and_applies_credit()
     test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding()
     test_subscription_created_sets_paid_and_mirrors_subscription()
     test_subscription_deleted_cancels_entitlement_and_audits()
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
     test_stripe_webhook_merges_users_when_email_matches_existing_account()
-    print("PASS all 22 ArcLink entitlement tests")
+    print("PASS all 23 ArcLink entitlement tests")
     return 0
 
 

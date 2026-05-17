@@ -26,6 +26,7 @@ class FakeStripeClient:
         price_id: str,
         success_url: str,
         cancel_url: str,
+        mode: str = "subscription",
         client_reference_id: str = "",
         customer_email: str = "",
         metadata: dict[str, str] | None = None,
@@ -41,13 +42,15 @@ class FakeStripeClient:
             "id": session_id,
             "user_id": user_id,
             "price_id": price_id,
+            "mode": mode,
             "line_items": list(line_items or [{"price": price_id, "quantity": 1}]),
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,
             "customer_email": customer_email,
             "metadata": dict(metadata or {}),
-            "subscription_data": {"metadata": dict(metadata or {})},
+            "subscription_data": {"metadata": dict(metadata or {})} if mode == "subscription" else {},
+            "payment_intent_data": {"metadata": dict(metadata or {})} if mode == "payment" else {},
             "url": f"https://stripe.test/checkout/{session_id}",
         }
         self.checkout_sessions[session_id] = session
@@ -84,6 +87,7 @@ class LiveStripeClient:
         price_id: str,
         success_url: str,
         cancel_url: str,
+        mode: str = "subscription",
         client_reference_id: str = "",
         customer_email: str = "",
         metadata: dict[str, str] | None = None,
@@ -91,14 +95,16 @@ class LiveStripeClient:
         line_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         _stripe = self._stripe_module()
+        clean_mode = str(mode or "subscription").strip().lower()
+        if clean_mode not in {"subscription", "payment"}:
+            raise ValueError("Stripe checkout mode must be subscription or payment")
         params: dict[str, Any] = {
-            "mode": "subscription",
+            "mode": clean_mode,
             "line_items": list(line_items or [{"price": price_id, "quantity": 1}]),
             "success_url": success_url,
             "cancel_url": cancel_url,
             "client_reference_id": client_reference_id or user_id,
             "metadata": dict(metadata or {}),
-            "subscription_data": {"metadata": dict(metadata or {})},
             "allow_promotion_codes": True,
             "billing_address_collection": "auto",
             "custom_text": {
@@ -109,6 +115,10 @@ class LiveStripeClient:
                 }
             },
         }
+        if clean_mode == "subscription":
+            params["subscription_data"] = {"metadata": dict(metadata or {})}
+        else:
+            params["payment_intent_data"] = {"metadata": dict(metadata or {})}
         if str(customer_email or "").strip():
             params["customer_email"] = str(customer_email).strip()
         kwargs: dict[str, Any] = {}

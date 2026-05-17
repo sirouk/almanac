@@ -130,6 +130,24 @@ def test_fake_stripe_webhook_and_sessions() -> None:
         cancel_url="https://example.test/cancel",
     )
     expect(session["url"].startswith("https://stripe.test/checkout/"), str(session))
+    payment = stripe.create_checkout_session(
+        user_id="user_1",
+        price_id="",
+        mode="payment",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        metadata={"purchase_kind": "inference_refuel"},
+        line_items=[{
+            "price_data": {
+                "currency": "usd",
+                "unit_amount": 2500,
+                "product_data": {"name": "ArcLink Inference Credits"},
+            },
+            "quantity": 1,
+        }],
+    )
+    expect(payment["mode"] == "payment", str(payment))
+    expect(payment["payment_intent_data"]["metadata"]["purchase_kind"] == "inference_refuel", str(payment))
     payload = json.dumps({"id": "evt_test", "type": "checkout.session.completed"})
     signature = mod.sign_stripe_webhook(payload, "whsec_test", timestamp=int(time.time()))
     event = mod.verify_stripe_webhook(payload, signature, "whsec_test")

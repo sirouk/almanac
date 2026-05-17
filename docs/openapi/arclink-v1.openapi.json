@@ -1713,6 +1713,64 @@
         ]
       }
     },
+    "/api/v1/user/refuel-checkout": {
+      "post": {
+        "operationId": "user_refuel_checkout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "amount_cents": {
+                    "minimum": 100,
+                    "type": "integer"
+                  },
+                  "cancel_url": {
+                    "format": "uri",
+                    "type": "string"
+                  },
+                  "deployment_id": {
+                    "type": "string"
+                  },
+                  "success_url": {
+                    "format": "uri",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount_cents"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Payment-mode Checkout URL and quote returned"
+          },
+          "400": {
+            "description": "Invalid amount"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          },
+          "404": {
+            "description": "Deployment not found"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Generate Stripe Checkout link for inference credit top-up",
+        "tags": [
+          "user",
+          "billing"
+        ]
+      }
+    },
     "/api/v1/user/share-grants": {
       "post": {
         "operationId": "user_share_grant_create",

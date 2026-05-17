@@ -109,6 +109,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/comms` | Captain-scoped Pod Comms inbox/outbox with message narratives |
 | GET | `/user/billing` | Billing/entitlement status plus the local renewal lifecycle gate |
 | POST | `/user/portal` | Create Stripe portal link (CSRF) |
+| POST | `/user/refuel-checkout` | Create a Stripe Checkout payment link for Agent inference-credit top-up (CSRF) |
 | GET | `/user/provisioning` | Deployment provisioning status |
 | GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
 | POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |

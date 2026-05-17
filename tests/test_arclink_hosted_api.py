@@ -1674,6 +1674,76 @@ def test_user_portal_link_route() -> None:
     print("PASS test_user_portal_link_route")
 
 
+def test_user_refuel_checkout_route_quotes_payment_checkout() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_refuel_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_refuel_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_refuel_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_refuel_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_refuel_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_REFUEL_PROVIDER_CREDIT_BPS": "7000",
+        "ARCLINK_REFUEL_TOPUP_MIN_CENTS": "500",
+        "ARCLINK_REFUEL_TOPUP_MAX_CENTS": "50000",
+    })
+    stripe = adapters.FakeStripeClient()
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    conn.execute("UPDATE arclink_deployments SET status = 'active' WHERE deployment_id = ?", (prepared["deployment_id"],))
+    conn.commit()
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_refuel")
+
+    status, _, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/refuel-checkout",
+        headers=browser_auth_headers(session),
+        body=json.dumps({"deployment_id": prepared["deployment_id"], "amount_cents": 2500}),
+        config=config,
+        stripe_client=stripe,
+    )
+    expect(status == 401, f"expected 401 without CSRF got {status}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/refuel-checkout",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({"deployment_id": prepared["deployment_id"], "amount_cents": 100}),
+        config=config,
+        stripe_client=stripe,
+    )
+    expect(status == 400, f"expected invalid amount got {status}: {payload}")
+    expect(payload["pricing"]["options"][0]["retail_cents"] == 1000, str(payload))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/refuel-checkout",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({
+            "deployment_id": prepared["deployment_id"],
+            "amount_cents": 2500,
+            "success_url": "https://example.test/checkout/success",
+            "cancel_url": "https://example.test/dashboard",
+        }),
+        config=config,
+        stripe_client=stripe,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["quote"]["retail_cents"] == 2500, str(payload))
+    expect(payload["quote"]["provider_credit_cents"] == 1750, str(payload))
+    session_id = payload["checkout_session_id"]
+    checkout = stripe.checkout_sessions[session_id]
+    expect(checkout["mode"] == "payment", str(checkout))
+    expect(checkout["metadata"]["arclink_purchase_kind"] == "inference_refuel", str(checkout))
+    expect(checkout["metadata"]["arclink_deployment_id"] == prepared["deployment_id"], str(checkout))
+    line_item = checkout["line_items"][0]
+    expect(line_item["price_data"]["unit_amount"] == 2500, str(line_item))
+    expect(line_item["price_data"]["product_data"]["name"] == "ArcLink Inference Credits", str(line_item))
+    print("PASS test_user_refuel_checkout_route_quotes_payment_checkout")
+
+
 def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_userlogin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_userlogin_test")
@@ -4345,6 +4415,7 @@ def main() -> int:
     test_admin_events_route()
     test_admin_queued_actions_list_route()
     test_user_portal_link_route()
+    test_user_refuel_checkout_route_quotes_payment_checkout()
     test_user_login_sets_session_cookies_and_logout_clears_them()
     test_public_onboarding_checkout_route()
     test_public_onboarding_checkout_resolves_live_stripe_from_config()
@@ -4397,7 +4468,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 75 ArcLink hosted API tests")
+    print("PASS all 76 ArcLink hosted API tests")
     return 0
 
 

@@ -1717,12 +1717,13 @@ def main() -> int:
     test_public_bot_canonicalizes_tailscale_path_resource_urls()
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
+    test_public_bot_refuel_lists_options_and_opens_payment_checkout()
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_can_rename_and_retitle_live_agent()
     test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
-    print("PASS all 30 ArcLink public bot tests")
+    print("PASS all 31 ArcLink public bot tests")
     return 0
 
 
@@ -1886,6 +1887,48 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
     expect(package.action == "show_help", str(package.action))
 
     print("PASS test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding")
+
+
+def test_public_bot_refuel_lists_options_and_opens_payment_checkout() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_refuel_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_refuel_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_refuel_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(control, conn, channel="telegram", channel_identity="tg:refuel", prefix="arc-refuel")
+    stripe = adapters.FakeStripeClient()
+
+    options = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:refuel",
+        text="/top-up",
+        stripe_client=stripe,
+        base_domain="control.example.test",
+    )
+    expect(options.action == "show_refuel_options", str(options.action))
+    expect("Inference credits" in options.reply, options.reply)
+    expect("Top-up | Metered inference budget" in options.reply, options.reply)
+    expect([button.label for button in options.buttons][:2] == ["Top Up $10", "Top Up $25"], str(options.buttons))
+
+    checkout = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:refuel",
+        text="/top-up 25",
+        stripe_client=stripe,
+        base_domain="control.example.test",
+    )
+    expect(checkout.action == "open_refuel_checkout", str(checkout.action))
+    expect(checkout.checkout_url.startswith("https://stripe.test/checkout/"), checkout.checkout_url)
+    session = next(iter(stripe.checkout_sessions.values()))
+    expect(session["mode"] == "payment", str(session))
+    expect(session["metadata"]["arclink_purchase_kind"] == "inference_refuel", str(session))
+    expect(session["metadata"]["arclink_deployment_id"] == seeded["deployment_id"], str(session))
+    expect(session["metadata"]["retail_cents"] == "2500", str(session))
+    expect(session["metadata"]["credit_cents"] == "1750", str(session))
+    event = conn.execute("SELECT event_type FROM arclink_events WHERE event_type = 'refuel_checkout_opened'").fetchone()
+    expect(event is not None, "missing refuel checkout event")
+    print("PASS test_public_bot_refuel_lists_options_and_opens_payment_checkout")
 
 
 def test_public_bot_agent_label_does_not_use_user_display_name() -> None:

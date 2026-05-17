@@ -55,6 +55,7 @@ from arclink_api_auth import (
     create_arclink_user_login_session_api,
     create_user_share_grant_api,
     create_user_portal_link_api,
+    create_user_refuel_checkout_api,
     deny_user_share_grant_api,
     extract_arclink_csrf_token,
     extract_arclink_browser_session_credentials,
@@ -991,6 +992,35 @@ def _handle_user_portal_link(
         conn, session_id=creds["session_id"], session_token=creds["session_token"],
         stripe_client=stripe_client,
         return_url=str(body.get("return_url") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_refuel_checkout(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+    stripe_client: Any,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind="user")
+    try:
+        amount_cents = int(body.get("amount_cents") or 0)
+    except (TypeError, ValueError):
+        amount_cents = 0
+    result = create_user_refuel_checkout_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        stripe_client=stripe_client,
+        deployment_id=str(body.get("deployment_id") or ""),
+        amount_cents=amount_cents,
+        success_url=str(body.get("success_url") or ""),
+        cancel_url=str(body.get("cancel_url") or ""),
+        env=config.env,
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -2301,6 +2331,22 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "requestBody": _openapi_json_body({"return_url": {"type": "string", "format": "uri"}}),
         "responses": {"200": {"description": "Portal URL returned"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_refuel_checkout": {
+        "summary": "Generate Stripe Checkout link for inference credit top-up",
+        "tags": ["user", "billing"],
+        "requestBody": _openapi_json_body({
+            "deployment_id": {"type": "string"},
+            "amount_cents": {"type": "integer", "minimum": 100},
+            "success_url": {"type": "string", "format": "uri"},
+            "cancel_url": {"type": "string", "format": "uri"},
+        }, required=["amount_cents"]),
+        "responses": {
+            "200": {"description": "Payment-mode Checkout URL and quote returned"},
+            "400": {"description": "Invalid amount"},
+            "401": {"description": "Unauthorized or missing CSRF"},
+            "404": {"description": "Deployment not found"},
+        },
+    },
     "user_provisioning_status": {
         "summary": "Read user provisioning and deployment status",
         "tags": ["user"],
@@ -2689,6 +2735,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/comms"): "user_comms",
     ("GET", "/user/billing"): "user_billing",
     ("POST", "/user/portal"): "user_portal_link",
+    ("POST", "/user/refuel-checkout"): "user_refuel_checkout",
     ("GET", "/user/provisioning"): "user_provisioning_status",
     ("GET", "/user/credentials"): "user_credentials",
     ("POST", "/user/credentials/acknowledge"): "user_credential_ack",
@@ -2783,6 +2830,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_logout",
     "admin_logout",
     "user_portal_link",
+    "user_refuel_checkout",
     "user_credential_ack",
     "user_agent_identity",
     "user_wrapped_frequency",
@@ -2929,6 +2977,8 @@ def route_arclink_hosted_api(
             result = _handle_user_billing(conn, headers, request_id, cfg)
         elif route_key == "user_portal_link":
             result = _handle_user_portal_link(conn, headers, parsed_body, request_id, cfg, stripe)
+        elif route_key == "user_refuel_checkout":
+            result = _handle_user_refuel_checkout(conn, headers, parsed_body, request_id, cfg, stripe)
         elif route_key == "user_provisioning_status":
             result = _handle_user_provisioning_status(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_credentials":

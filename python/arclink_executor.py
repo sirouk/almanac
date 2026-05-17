@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -618,6 +619,7 @@ class ArcLinkExecutor:
                 compose_file=str(plan["compose_file"]),
             )
         except Exception:
+            _cleanup_materialized_secret_root(Path(str(plan["compose_file"])).parent / "secrets")
             _cleanup_materialized_secret_files(resolved.values())
             raise
         return DockerComposeApplyResult(
@@ -1534,9 +1536,13 @@ def _materialize_docker_compose_files(
     config_root.mkdir(parents=True, exist_ok=True)
     secrets_root.mkdir(parents=True, exist_ok=True)
     secrets_root.chmod(0o700)
-    for resolved in resolved_secrets.values():
-        if resolved.source_path:
-            Path(resolved.source_path).chmod(0o600)
+    secret_file_paths: dict[str, str] = {}
+    for name, resolved in resolved_secrets.items():
+        secret_file_paths[str(name)] = _materialize_compose_secret_file(
+            name=str(name),
+            resolved=resolved,
+            secrets_root=secrets_root,
+        )
 
     services = dict((intent.get("compose") or {}).get("services") or {}) if isinstance(intent.get("compose"), Mapping) else {}
     _ensure_volume_roots(services)
@@ -1553,10 +1559,7 @@ def _materialize_docker_compose_files(
         for name, service in services.items()
         if isinstance(service, Mapping)
     }
-    compose_secrets = {
-        name: {"file": _compose_secret_file_path(name=name, resolved=resolved)}
-        for name, resolved in resolved_secrets.items()
-    }
+    compose_secrets = {name: {"file": path} for name, path in secret_file_paths.items()}
     compose_doc: dict[str, Any] = {"services": compose_services}
     compose_networks = dict((intent.get("compose") or {}).get("networks") or {}) if isinstance(intent.get("compose"), Mapping) else {}
     if compose_networks:
@@ -1612,9 +1615,20 @@ def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _compose_secret_file_path(*, name: str, resolved: ResolvedSecretFile) -> str:
+def _materialize_compose_secret_file(*, name: str, resolved: ResolvedSecretFile, secrets_root: Path) -> str:
     if resolved.source_path:
-        return resolved.source_path
+        source = Path(resolved.source_path)
+        source.chmod(0o600)
+        target = secrets_root / name
+        try:
+            if source.resolve() != target.resolve():
+                shutil.copyfile(source, target)
+                target.chmod(0o600)
+            else:
+                target.chmod(0o600)
+        except OSError as exc:
+            raise ArcLinkSecretResolutionError(f"failed to materialize ArcLink compose secret {name!r}") from exc
+        return str(target)
     raise ArcLinkSecretResolutionError(f"ArcLink live compose secret {name!r} was not materialized to a source file")
 
 

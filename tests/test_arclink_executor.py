@@ -974,7 +974,12 @@ def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_resta
     secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir) / "materialized"
-        runner = mod.FakeDockerRunner()
+
+        class RecordingRunner:
+            def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+                return {"status": "ok"}
+
+        runner = RecordingRunner()
         resolver = mod.FileMaterializingSecretResolver(
             value_provider=lambda ref: "sk_test_secret" if ref == secret_ref else "",
             materialization_root=root,
@@ -988,9 +993,14 @@ def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_resta
             mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="cleanup-1")
         )
         secret_copy = root / "nextcloud_db_password"
+        compose_secret_copy = Path(result.compose_file).parent / "secrets" / "nextcloud_db_password"
+        compose_doc = json.loads(Path(result.compose_file).read_text(encoding="utf-8"))
         expect(result.status == "applied", str(result))
         expect(secret_copy.is_file(), f"compose secret source must remain for docker restart: {secret_copy}")
+        expect(compose_secret_copy.is_file(), f"compose-visible secret copy must remain for docker restart: {compose_secret_copy}")
+        expect(compose_doc["secrets"]["nextcloud_db_password"]["file"] == str(compose_secret_copy), str(compose_doc))
         expect(secret_copy.stat().st_mode & 0o777 == 0o600, oct(secret_copy.stat().st_mode & 0o777))
+        expect(compose_secret_copy.stat().st_mode & 0o777 == 0o600, oct(compose_secret_copy.stat().st_mode & 0o777))
     print("PASS test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart")
 
 

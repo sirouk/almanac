@@ -6779,3 +6779,38 @@ Validation:
 
 - Pending in this pass: focused Compose/docs regression tests, shell syntax,
   redeploy, and live reprovision retry of the two active ArcPods.
+
+## 2026-05-17 Compose Secret Materialization Host-Path Repair
+
+Scope: the root-owned state repair allowed live reprovision to stage the source
+tree, but Compose apply then failed because the action-worker resolver had
+materialized secrets under the container-local `/tmp/arclink-action-worker`
+path. Docker Compose evaluates secret file paths from the host daemon, so that
+path was not visible to the daemon.
+
+Files changed:
+
+- `python/arclink_executor.py`: live Compose apply now copies every resolved
+  secret into the deployment config's durable `config/secrets/` directory and
+  writes the Compose secret file path to that host-visible location. On runner
+  failure it cleans both the compose-visible copy and the resolver's temporary
+  materialization path.
+- `tests/test_arclink_executor.py`: live secret persistence coverage now
+  asserts the host-visible `config/secrets/<name>` copy exists, has `0600`
+  permissions, and is the path written into the Compose file.
+
+Validation:
+
+- `python3 tests/test_arclink_executor.py` passed, 34/34.
+- `python3 tests/test_arclink_action_worker.py` passed, 32/32.
+- `python3 tests/test_arclink_provisioning.py` passed, 13/13.
+- `python3 -m py_compile python/arclink_executor.py python/arclink_action_worker.py python/arclink_pod_migration.py python/arclink_control.py python/arclink_llm_router.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Live follow-up required after deploy:
+
+- Re-run Control Node upgrade/recreate so the host-visible Compose secret
+  materialization reaches `control-action-worker`.
+- Retry live reprovision of the two active ArcPods and confirm their Hermes
+  gateway env now points at the central LLM router.

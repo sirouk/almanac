@@ -129,9 +129,11 @@
 
 .hermes-code-panel-tabs,
 .hermes-code-repo-row,
+.hermes-code-repo-actions,
 .hermes-code-repo-top-actions,
 .hermes-code-source-actions,
 .hermes-code-source-head,
+.hermes-code-source-summary,
 .hermes-code-source-group-title,
 .hermes-code-commit {
   align-items: center;
@@ -158,23 +160,36 @@
 }
 
 .hermes-code-repo-row {
-  align-items: stretch;
+  align-items: center;
   border-bottom: 1px solid color-mix(in srgb, var(--midground-base) 12%, transparent);
-  flex-direction: column;
-  padding-bottom: 0.55rem;
+  flex-wrap: nowrap;
+  min-height: 2.4rem;
+  padding-bottom: 0.45rem;
 }
 
 .hermes-code-repo-top-actions {
   flex-wrap: wrap;
 }
 
+.hermes-code-repo-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.hermes-code-repo-row > button {
+  flex: 0 0 auto;
+}
+
 .hermes-code-repo-row select,
 .hermes-code-commit input {
   flex: 1 1 10rem;
+  min-width: 0;
 }
 
 .hermes-code-repo-row select {
-  width: 100%;
+  min-height: 2.05rem;
+  padding: 0.22rem 0.55rem;
+  width: auto;
 }
 
 .hermes-code-icon-button {
@@ -212,6 +227,34 @@
 .hermes-code-source-head span {
   color: color-mix(in srgb, var(--midground-base) 62%, transparent);
   font-size: 0.75rem;
+}
+
+.hermes-code-source-summary {
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 13%, transparent);
+  justify-content: space-between;
+  margin-top: 0.22rem;
+  min-height: 1.95rem;
+  padding-top: 0.42rem;
+}
+
+.hermes-code-source-summary strong,
+.hermes-code-source-summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-code-source-summary strong {
+  font-size: 0.76rem;
+  max-width: 62%;
+  text-transform: uppercase;
+}
+
+.hermes-code-source-summary span {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  font-size: 0.68rem;
+  text-align: right;
 }
 
 .hermes-code-path {
@@ -537,6 +580,60 @@
   font-size: 0.78rem;
   padding: 0.65rem;
   text-align: center;
+}
+
+.hermes-code-commit-history {
+  border-top: 1px solid color-mix(in srgb, var(--midground-base) 13%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.32rem;
+  padding-top: 0.52rem;
+}
+
+.hermes-code-commit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.16rem;
+}
+
+.hermes-code-commit-row {
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--midground-base) 12%, transparent);
+  display: grid;
+  gap: 0.38rem;
+  grid-template-columns: 4.6rem minmax(0, 1fr);
+  min-height: 2.1rem;
+  padding: 0.3rem 0.42rem;
+}
+
+.hermes-code-commit-hash {
+  color: color-mix(in srgb, var(--hermes-code-editor-accent, #61afef) 78%, var(--midground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.hermes-code-commit-subject,
+.hermes-code-commit-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-code-commit-subject {
+  color: var(--midground);
+  font-size: 0.78rem;
+}
+
+.hermes-code-commit-meta {
+  color: color-mix(in srgb, var(--midground-base) 58%, transparent);
+  font-size: 0.66rem;
+  grid-column: 2;
+}
+
+.hermes-code-more-button {
+  align-self: stretch;
+  min-height: 1.9rem;
 }
 
 .hermes-code-editor {

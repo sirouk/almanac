@@ -93,6 +93,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/webhooks/stripe` | Stripe webhook receiver |
 | POST | `/webhooks/telegram` | Telegram Bot API webhook; requires `X-Telegram-Bot-Api-Secret-Token` matching `TELEGRAM_WEBHOOK_SECRET` |
 | POST | `/webhooks/discord` | Discord interaction webhook; verifies signature timestamp tolerance and interaction replay |
+| POST | `/fleet/enrollment/callback` | Worker fleet enrollment attestation callback; requires bearer enrollment token |
 | POST | `/auth/login` | Create a user or admin session based on credentials |
 | POST | `/auth/admin/login` | Legacy route to create admin session |
 | POST | `/auth/user/login` | Legacy route to create user session with email plus the user-scoped dashboard password |
@@ -123,7 +124,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/user/share-grants/accept` | Recipient accepts an approved share grant (CSRF) |
 | POST | `/user/share-grants/revoke` | Owner revokes a share grant and removes accepted linked-resource visibility (CSRF) |
 | GET | `/user/linked-resources` | Accepted linked resources for the authenticated user |
-| GET | `/user/provider-state` | Provider adapter state, including sanitized Chutes budget, credential, and billing-suspension boundary |
+| GET | `/user/provider-state` | Provider adapter state, including sanitized Chutes budget, credential, billing-suspension boundary, and LLM router usage/quota |
 
 ### Admin (session_kind=admin)
 
@@ -143,7 +144,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/admin/crew-recipe/apply` | Apply Crew Training on a Captain's behalf with admin mutation auth, CIDR/CSRF protection, and audit logging |
 | GET | `/admin/reconciliation` | Reconciliation drift summary |
 | GET | `/admin/operator-snapshot` | Operator snapshot (host readiness, diagnostics, journey blockers, evidence status) |
-| GET | `/admin/provider-state` | Provider adapter state, including sanitized Chutes budget summaries |
+| GET | `/admin/provider-state` | Provider adapter state, including sanitized Chutes budget and LLM router usage summaries |
 | GET | `/admin/scale-operations` | Fleet capacity, placements, stale actions, rollouts, last executor result |
 | POST | `/admin/sessions/revoke` | Revoke any session (CSRF) |
 
@@ -174,6 +175,7 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_SESSION_HASH_PEPPER` | dev fallback | HMAC pepper for session and CSRF token hashes |
 | `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `1` | Require a configured pepper before issuing sessions |
 | `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
+| `ARCLINK_FLEET_ENROLLMENT_SECRET` | (none) | HMAC root for single-use fleet enrollment token minting and callback verification |
 | `ARCLINK_HOSTED_API_MAX_BODY_BYTES` | `1048576` | General request body cap |
 | `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES` | `2097152` | Webhook request body cap |
 | `ARCLINK_CREW_RECIPE_FALLBACK_MODEL` | (none) | Optional Chutes-compatible model id used for Crew Recipe generation when the existing scoped Chutes boundary allows inference |
@@ -234,6 +236,30 @@ provider-budget credit accounting stays separate from live
 purchase/provider-balance proof, and threshold continuation guidance remains
 policy-gated until public continuation copy and self-service provider-change
 policy exists.
+
+The provider-state payload includes sanitized ArcLink LLM Router consumption
+when router rows exist: request/status counts, stream counts, token totals,
+estimated/actual cents, open reservation cents, credential counts, and the
+current budget/quota view. It does not return raw router keys, central Chutes
+credentials, secret refs, prompts, or completions.
+
+## LLM Router
+
+The Control Node LLM router is exposed separately from the hosted `/api/v1`
+surface:
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/v1/models` | `Authorization: Bearer <ArcLink router key>` | Return the model allowlist for the ArcPod key |
+| POST | `/v1/chat/completions` | `Authorization: Bearer <ArcLink router key>` | Relay OpenAI-compatible streaming or non-streaming chat completions through Chutes |
+
+Router failures use OpenAI-style error objects. Auth failures return `401`,
+billing/budget/quota boundary failures return `402`, request/rate/concurrency
+limits return `400` or `429`, and missing router DB/upstream credential
+configuration returns `503`. Live Chutes proof is disabled unless the operator
+explicitly sets `ARCLINK_LLM_ROUTER_LIVE_CHUTES_PROOF=1` together with the
+bounded live-proof model, credential, and max-cents variables documented in
+`docs/arclink/llm-router.md`.
 
 The user dashboard (`web/src/app/dashboard/page.tsx`) consumes
 `/user/dashboard`, `/user/billing`, `/user/provisioning`, `/user/provider-state`,

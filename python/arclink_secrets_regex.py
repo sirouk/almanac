@@ -37,6 +37,8 @@ PLAINTEXT_SECRET_RE = re.compile(
     r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b|"
     r"\bntn_[A-Za-z0-9_-]{8,}\b|"
     r"\bcloudflare[a-z0-9_-]*token[a-z0-9_-]*\b|"
+    r"\barcfleet_v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{32,}\b|"
+    r"\bacpod_live_[A-Za-z0-9]{8,32}_[A-Za-z0-9_-]{32,}\b|"
     r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b"  # Telegram bot token
     r")"
 )

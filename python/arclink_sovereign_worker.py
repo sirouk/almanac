@@ -30,6 +30,8 @@ from arclink_control import (
     arclink_deployment_can_provision,
     connect_db,
     create_arclink_provisioning_job,
+    ensure_llm_router_key,
+    generate_llm_router_raw_key,
     parse_utc_iso,
     queue_notification,
     transition_arclink_provisioning_job,
@@ -140,7 +142,10 @@ class SovereignSecretResolver(FileMaterializingSecretResolver):
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 if path.exists():
                     return path.read_text(encoding="utf-8").strip(), False
-                value = f"arc_{secrets.token_urlsafe(36)}"
+                if secret_ref.startswith("secret://arclink/llm-router/"):
+                    value = generate_llm_router_raw_key()
+                else:
+                    value = f"arc_{secrets.token_urlsafe(36)}"
                 with tempfile.NamedTemporaryFile(
                     "w",
                     encoding="utf-8",
@@ -646,6 +651,7 @@ def _apply_deployment(
     )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
+    _ensure_llm_router_key_registered(conn, deployment=deployment, worker=worker, intent=intent)
     selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
     if worker.ingress_mode == "domain" and intent["dns"]:
         _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
@@ -1002,11 +1008,21 @@ def _executor_for_host(
     adapter = worker.executor_adapter
     if adapter == "fake":
         refs = _secret_refs(intent)
+        deployment_id = str((intent.get("deployment") or {}).get("deployment_id") or "")
+        resolver = SovereignSecretResolver(
+            env=worker.env,
+            secret_store_dir=worker.secret_store_dir / deployment_id,
+            materialization_root=Path("/tmp/arclink-fake-compose-secrets"),
+        )
+        fake_values = {
+            ref: resolver._value_for_ref(ref) if ref.startswith("secret://arclink/llm-router/") else "fake-secret-material"
+            for ref in refs
+        }
         return executor_for_fleet_host(
             adapter=adapter,
             env=worker.env,
             host=host,
-            fake_secret_refs={ref: "fake-secret-material" for ref in refs},
+            fake_secret_refs=fake_values,
         )
     roots = intent.get("state_roots") if isinstance(intent.get("state_roots"), Mapping) else {}
     materialization_root = Path(str(roots.get("config") or "/tmp/arclink-secrets")) / "secrets"
@@ -1098,6 +1114,43 @@ def _secret_refs(intent: Mapping[str, Any]) -> list[str]:
         if isinstance(spec, Mapping) and spec.get("secret_ref"):
             refs.append(str(spec["secret_ref"]))
     return refs
+
+
+def _ensure_llm_router_key_registered(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    intent: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    secret_refs = intent.get("secret_refs") if isinstance(intent.get("secret_refs"), Mapping) else {}
+    secret_ref = str(secret_refs.get("llm_router_api_key") or "").strip()
+    if not secret_ref:
+        return None
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    user_id = str(deployment.get("user_id") or "").strip()
+    if not deployment_id or not user_id:
+        return None
+    resolver = SovereignSecretResolver(
+        env=worker.env,
+        secret_store_dir=worker.secret_store_dir / deployment_id,
+        materialization_root=Path("/tmp/arclink-llm-router-key-registration"),
+    )
+    raw_key = resolver._value_for_ref(secret_ref)
+    model = str(
+        worker.env.get("ARCLINK_LLM_ROUTER_DEFAULT_MODEL")
+        or worker.env.get("ARCLINK_CHUTES_DEFAULT_MODEL")
+        or ""
+    ).strip()
+    return ensure_llm_router_key(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        secret_ref=secret_ref,
+        raw_key=raw_key,
+        allowed_models=[model] if model else None,
+        metadata={"source": "sovereign_worker"},
+    )
 
 
 def _sync_dashboard_password_hash_from_secret(

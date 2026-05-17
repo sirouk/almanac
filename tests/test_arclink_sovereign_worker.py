@@ -89,6 +89,7 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
 def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_apply")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_sovereign_apply")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_sovereign_apply")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_apply")
     conn = memory_db(control)
     seed_ready_deployment(control, conn)
@@ -115,8 +116,15 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     )
     expect(claimed.action == "pair_channel_claimed", str(claimed))
     expect(claimed.deployment_id == "dep_1", str(claimed))
-    with tempfile.TemporaryDirectory() as tmpdir:
-        results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    tmpctx = tempfile.TemporaryDirectory()
+    tmpdir = tmpctx.name
+    cfg = worker_config(worker_mod, tmpdir)
+    results = worker_mod.process_sovereign_batch(conn, worker=cfg)
+    raw_router_key = worker_mod.SovereignSecretResolver(
+        env=cfg.env,
+        secret_store_dir=cfg.secret_store_dir / "dep_1",
+        materialization_root=Path(tmpdir) / "materialized",
+    )._value_for_ref("secret://arclink/llm-router/dep_1/api-key")
 
     expect(len(results) == 1, str(results))
     result = results[0]
@@ -132,6 +140,24 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     expect(dns_statuses == {"provisioned"}, str(dns_statuses))
     health_statuses = {row["status"] for row in conn.execute("SELECT status FROM arclink_service_health").fetchall()}
     expect(health_statuses == {"healthy"}, str(health_statuses))
+    router_keys = [dict(row) for row in conn.execute("SELECT key_id, deployment_id, user_id, key_hash, secret_ref, status FROM arclink_llm_router_keys").fetchall()]
+    expect(len(router_keys) == 1, str(router_keys))
+    expect(router_keys[0]["deployment_id"] == "dep_1" and router_keys[0]["user_id"] == "user_1", str(router_keys))
+    expect(router_keys[0]["secret_ref"] == "secret://arclink/llm-router/dep_1/api-key", str(router_keys))
+    expect(router_keys[0]["status"] == "active", str(router_keys))
+    expect(raw_router_key.startswith("acpod_live_"), raw_router_key)
+    expect(control.verify_llm_router_key(conn, raw_router_key)["deployment_id"] == "dep_1", str(router_keys))
+    conn.execute("DELETE FROM arclink_llm_router_keys")
+    conn.commit()
+    intent = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep_1")
+    repaired = worker_mod._ensure_llm_router_key_registered(
+        conn,
+        deployment=dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()),
+        worker=cfg,
+        intent=intent,
+    )
+    expect(repaired is not None and repaired["secret_ref"] == "secret://arclink/llm-router/dep_1/api-key", str(repaired))
+    expect(control.verify_llm_router_key(conn, raw_router_key)["deployment_id"] == "dep_1", str(repaired))
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
     expect({"sovereign_provisioning_started", "sovereign_pod_applied", "user_handoff_ready", "public_bot:vessel_online_ping_queued"} <= event_types, str(event_types))
     notifications = [
@@ -191,6 +217,7 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     queued_meta = json.loads(queued_event["metadata_json"])
     expect(queued_meta["notification_count"] == 2, str(queued_meta))
     expect(queued_meta["channels"] == ["discord", "telegram"], str(queued_meta))
+    tmpctx.cleanup()
     print("PASS test_fake_sovereign_worker_applies_ready_deployment")
 
 

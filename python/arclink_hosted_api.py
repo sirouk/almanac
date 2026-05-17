@@ -95,6 +95,10 @@ from arclink_discord import (
     DiscordConfig,
     handle_discord_webhook_request,
 )
+from arclink_fleet_enrollment import (
+    ArcLinkFleetEnrollmentError,
+    consume_fleet_enrollment,
+)
 from arclink_notification_delivery import run_public_agent_turns_once
 from arclink_pod_comms import list_all_pod_messages, list_pod_messages
 from arclink_product import base_domain as default_base_domain, chutes_default_model
@@ -169,6 +173,7 @@ class HostedApiConfig:
             maximum=32 * 1024 * 1024,
         )
         self.backend_allowed_cidrs: str = str(e.get("ARCLINK_BACKEND_ALLOWED_CIDRS", "")).strip()
+        self.fleet_enrollment_secret: str = str(e.get("ARCLINK_FLEET_ENROLLMENT_SECRET", "")).strip()
         self.webhook_rate_limit_window_seconds: int = _bounded_env_int(
             e,
             "ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS",
@@ -1409,6 +1414,31 @@ def _handle_provider_state(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_fleet_enrollment_callback(
+    conn: sqlite3.Connection,
+    body: dict[str, Any],
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    auth = _api_header(headers, "authorization")
+    scheme, _, token = auth.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return _json_response(401, {"error": "unauthorized", "request_id": request_id}, request_id=request_id)
+    try:
+        result = consume_fleet_enrollment(
+            conn,
+            token=token.strip(),
+            payload=body,
+            secret=config.fleet_enrollment_secret,
+            actor="worker-bootstrap",
+            source_ip=_api_header(headers, "x-real-ip") or _api_header(headers, "x-forwarded-for"),
+        )
+    except ArcLinkFleetEnrollmentError:
+        return _json_response(401, {"error": "unauthorized", "request_id": request_id}, request_id=request_id)
+    return _json_response(201, {"worker": result, "request_id": request_id}, request_id=request_id)
+
+
 
 def _handle_admin_operator_snapshot(
     conn: sqlite3.Connection,
@@ -2183,6 +2213,23 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "requestBody": _WEBHOOK_BODY,
         "responses": {"200": {"description": "Interaction handled"}, "401": {"description": "Invalid signature"}},
     },
+    "fleet_enrollment_callback": {
+        "summary": "Worker fleet enrollment attestation callback",
+        "tags": ["fleet"],
+        "requestBody": _openapi_json_body({
+            "hostname": {"type": "string"},
+            "machine_fingerprint": {"type": "string"},
+            "ssh_host": {"type": "string"},
+            "ssh_user": {"type": "string"},
+            "region": {"type": "string"},
+            "capacity_slots": {"type": "integer"},
+            "hardware_summary": {"type": "object"},
+            "connectivity_summary": {"type": "object"},
+            "prereq_audit": {"type": "object"},
+            "tags": {"type": "object"},
+        }, required=["hostname", "machine_fingerprint"]),
+        "responses": {"201": {"description": "Worker attested"}, "401": {"description": "Invalid or unavailable enrollment token"}},
+    },
     "login": {
         "summary": "Login and resolve user or admin role",
         "tags": ["auth"],
@@ -2517,6 +2564,56 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
 }
 
 
+_LLM_ROUTER_OPENAPI_PATHS: dict[str, Any] = {
+    "/v1/models": {
+        "get": {
+            "operationId": "llm_router_models",
+            "summary": "List OpenAI-compatible models allowed for the ArcPod router key",
+            "tags": ["llm-router"],
+            "security": [{"routerBearerAuth": []}],
+            "responses": {
+                "200": {"description": "Model list"},
+                "401": {"description": "Missing, invalid, revoked, or suspended router key"},
+                "503": {"description": "Router database or upstream credential is unavailable"},
+            },
+        }
+    },
+    "/v1/chat/completions": {
+        "post": {
+            "operationId": "llm_router_chat_completions",
+            "summary": "Relay OpenAI-compatible chat completions through the ArcLink LLM Router",
+            "tags": ["llm-router"],
+            "security": [{"routerBearerAuth": []}],
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "model": {"type": "string"},
+                                "messages": {"type": "array", "items": {"type": "object"}},
+                                "stream": {"type": "boolean"},
+                                "max_tokens": {"type": "integer"},
+                            },
+                            "required": ["model", "messages"],
+                            "additionalProperties": True,
+                        }
+                    }
+                }
+            },
+            "responses": {
+                "200": {"description": "OpenAI-compatible JSON or text/event-stream response"},
+                "400": {"description": "Invalid body, unsupported model, or request limit exceeded"},
+                "401": {"description": "Missing, invalid, revoked, or suspended router key"},
+                "402": {"description": "Billing, budget, or quota boundary blocks inference"},
+                "429": {"description": "Per-key, per-deployment, per-Captain, or concurrency limit exceeded"},
+                "503": {"description": "Router database or central Chutes credential is unavailable"},
+            },
+        }
+    },
+}
+
+
 def build_arclink_openapi_spec() -> dict[str, Any]:
     """Build an OpenAPI 3.1 spec from the canonical _ROUTES table."""
     paths: dict[str, Any] = {}
@@ -2542,6 +2639,8 @@ def build_arclink_openapi_spec() -> dict[str, Any]:
 
         paths.setdefault(full_path, {})[method.lower()] = operation
 
+    paths.update(_LLM_ROUTER_OPENAPI_PATHS)
+
     return {
         "openapi": "3.1.0",
         "info": {
@@ -2559,6 +2658,11 @@ def build_arclink_openapi_spec() -> dict[str, Any]:
                     "name": "X-ArcLink-Session-Id",
                     "description": "Session-based auth via cookies or headers.",
                 },
+                "routerBearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "Per-deployment ArcLink LLM router key. Raw keys are materialized only into ArcPods and are never returned by provider-state APIs.",
+                },
             },
         },
     }
@@ -2575,6 +2679,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/webhooks/stripe"): "stripe_webhook",
     ("POST", "/webhooks/telegram"): "telegram_webhook",
     ("POST", "/webhooks/discord"): "discord_webhook",
+    ("POST", "/fleet/enrollment/callback"): "fleet_enrollment_callback",
     ("POST", "/auth/login"): "login",
     ("POST", "/auth/admin/login"): "admin_login",
     ("POST", "/auth/user/login"): "user_login",
@@ -2637,6 +2742,7 @@ _PUBLIC_ROUTES = frozenset({
     "stripe_webhook",
     "telegram_webhook",
     "discord_webhook",
+    "fleet_enrollment_callback",
     "login",
     "admin_login",
     "user_login",
@@ -2670,6 +2776,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "public_onboarding_answer",
     "public_onboarding_checkout",
     "telegram_webhook",
+    "fleet_enrollment_callback",
     "login",
     "admin_login",
     "user_login",
@@ -2795,6 +2902,8 @@ def route_arclink_hosted_api(
             result = _handle_telegram_webhook(conn, parsed_body, request_id, cfg, stripe, headers=headers)
         elif route_key == "discord_webhook":
             result = _handle_discord_webhook(conn, body, headers, request_id, cfg, None, stripe)
+        elif route_key == "fleet_enrollment_callback":
+            result = _handle_fleet_enrollment_callback(conn, parsed_body, headers, request_id, cfg)
         elif route_key == "login":
             login_client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
             result = _handle_login(

@@ -327,7 +327,7 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
 ## 4. Chutes Provider
 
 **Modules:** `python/arclink_chutes.py`, `python/arclink_chutes_live.py`,
-`python/arclink_chutes_oauth.py`
+`python/arclink_chutes_oauth.py`, `python/arclink_llm_router.py`
 
 **Operations:**
 | Function | Purpose |
@@ -343,6 +343,17 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
 - Rotate: new generation increments the key ID.
 - Revoke: teardown removes key state for the deployment.
 - Per-deployment key state tracked in `arclink_chutes_keys` table.
+
+**Router boundary:** The source-level ArcLink LLM Router moves production
+inference toward a central Control Node service instead of mounting the central
+Chutes key into ArcPods. It verifies a per-deployment ArcLink router key,
+enforces billing/budget/model/rate/concurrency checks, reserves budget before
+forwarding, relays streaming or non-streaming chat completions to Chutes, and
+records sanitized usage rows without prompts or completions. The router is
+documented in `docs/arclink/llm-router.md`. Control Node Compose wiring and
+ArcPod provider defaults are router-first locally; direct Chutes remains only
+behind `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1`. Live Chutes proof is still
+operator-gated.
 
 **Access boundary:** Local provider evaluation fails closed unless all of these
 are true: billing is current, a scoped per-user or per-deployment `secret://`

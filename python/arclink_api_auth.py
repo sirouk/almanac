@@ -2827,6 +2827,161 @@ def read_admin_queued_actions_api(
     return _read_admin_dashboard_slice_api(conn, session_id=session_id, session_token=session_token, payload_key="actions", dashboard_key="action_intents", **filters)
 
 
+def _zero_llm_router_usage_summary() -> dict[str, Any]:
+    return {
+        "request_count": 0,
+        "succeeded_count": 0,
+        "failed_count": 0,
+        "cancelled_count": 0,
+        "stream_request_count": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "estimated_cents": 0,
+        "actual_cents": 0,
+        "last_request_at": "",
+    }
+
+
+def _llm_router_provider_state(conn: sqlite3.Connection, deployment_ids: list[str]) -> dict[str, dict[str, Any]]:
+    clean_ids = [str(item or "").strip() for item in deployment_ids if str(item or "").strip()]
+    if not clean_ids:
+        return {}
+    placeholders = ",".join("?" for _ in clean_ids)
+    summaries: dict[str, dict[str, Any]] = {
+        deployment_id: {
+            "mode": "arclink_llm_router",
+            "credential_material": "never_returned",
+            "secret_ref_present": False,
+            "active_credential_count": 0,
+            "total_credential_count": 0,
+            "usage": _zero_llm_router_usage_summary(),
+            "reservations": {
+                "open_count": 0,
+                "reserved_cents": 0,
+            },
+        }
+        for deployment_id in clean_ids
+    }
+    for row in conn.execute(
+        f"""
+        SELECT
+          deployment_id,
+          COUNT(*) AS total_credential_count,
+          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_credential_count
+        FROM arclink_llm_router_keys
+        WHERE deployment_id IN ({placeholders})
+        GROUP BY deployment_id
+        """,
+        clean_ids,
+    ).fetchall():
+        deployment_id = str(row["deployment_id"] or "")
+        if deployment_id in summaries:
+            summaries[deployment_id]["secret_ref_present"] = int(row["total_credential_count"] or 0) > 0
+            summaries[deployment_id]["active_credential_count"] = int(row["active_credential_count"] or 0)
+            summaries[deployment_id]["total_credential_count"] = int(row["total_credential_count"] or 0)
+    for row in conn.execute(
+        f"""
+        SELECT
+          deployment_id,
+          COUNT(*) AS request_count,
+          SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded_count,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+          SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
+          SUM(CASE WHEN stream != 0 THEN 1 ELSE 0 END) AS stream_request_count,
+          SUM(input_tokens) AS input_tokens,
+          SUM(output_tokens) AS output_tokens,
+          SUM(total_tokens) AS total_tokens,
+          SUM(estimated_cents) AS estimated_cents,
+          SUM(actual_cents) AS actual_cents,
+          MAX(COALESCE(NULLIF(completed_at, ''), started_at)) AS last_request_at
+        FROM arclink_llm_usage_events
+        WHERE deployment_id IN ({placeholders})
+        GROUP BY deployment_id
+        """,
+        clean_ids,
+    ).fetchall():
+        deployment_id = str(row["deployment_id"] or "")
+        if deployment_id not in summaries:
+            continue
+        summaries[deployment_id]["usage"] = {
+            "request_count": int(row["request_count"] or 0),
+            "succeeded_count": int(row["succeeded_count"] or 0),
+            "failed_count": int(row["failed_count"] or 0),
+            "cancelled_count": int(row["cancelled_count"] or 0),
+            "stream_request_count": int(row["stream_request_count"] or 0),
+            "input_tokens": int(row["input_tokens"] or 0),
+            "output_tokens": int(row["output_tokens"] or 0),
+            "total_tokens": int(row["total_tokens"] or 0),
+            "estimated_cents": int(row["estimated_cents"] or 0),
+            "actual_cents": int(row["actual_cents"] or 0),
+            "last_request_at": str(row["last_request_at"] or ""),
+        }
+    for row in conn.execute(
+        f"""
+        SELECT
+          deployment_id,
+          COUNT(*) AS open_count,
+          SUM(reserved_cents) AS reserved_cents
+        FROM arclink_llm_budget_reservations
+        WHERE deployment_id IN ({placeholders}) AND status = 'reserved'
+        GROUP BY deployment_id
+        """,
+        clean_ids,
+    ).fetchall():
+        deployment_id = str(row["deployment_id"] or "")
+        if deployment_id in summaries:
+            summaries[deployment_id]["reservations"] = {
+                "open_count": int(row["open_count"] or 0),
+                "reserved_cents": int(row["reserved_cents"] or 0),
+            }
+    return summaries
+
+
+def _sum_llm_router_usage(summaries: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    total = _zero_llm_router_usage_summary()
+    open_count = 0
+    reserved_cents = 0
+    active_credentials = 0
+    last_request_at = ""
+    for item in summaries.values():
+        usage = item.get("usage") if isinstance(item, Mapping) else {}
+        if not isinstance(usage, Mapping):
+            usage = {}
+        for key in (
+            "request_count",
+            "succeeded_count",
+            "failed_count",
+            "cancelled_count",
+            "stream_request_count",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "estimated_cents",
+            "actual_cents",
+        ):
+            total[key] += int(usage.get(key) or 0)
+        observed_at = str(usage.get("last_request_at") or "")
+        if observed_at > last_request_at:
+            last_request_at = observed_at
+        reservations = item.get("reservations") if isinstance(item, Mapping) else {}
+        if isinstance(reservations, Mapping):
+            open_count += int(reservations.get("open_count") or 0)
+            reserved_cents += int(reservations.get("reserved_cents") or 0)
+        active_credentials += int(item.get("active_credential_count") or 0)
+    total["last_request_at"] = last_request_at
+    return {
+        "mode": "arclink_llm_router",
+        "deployment_count": len(summaries),
+        "active_credential_count": active_credentials,
+        "usage": total,
+        "reservations": {
+            "open_count": open_count,
+            "reserved_cents": reserved_cents,
+        },
+    }
+
+
 def read_provider_state_api(
     conn: sqlite3.Connection,
     *,
@@ -2868,6 +3023,8 @@ def read_provider_state_api(
     default_model = chutes_default_model(env_source)
     deployment_models = []
     state_counts: dict[str, int] = {}
+    deployment_ids = [str(row["deployment_id"] or "") for row in deployments]
+    router_state = _llm_router_provider_state(conn, deployment_ids)
     for row in deployments:
         meta = json_loads_safe(row["metadata_json"] or "{}")
         model_id = str(meta.get("selected_model_id") or meta.get("model_id") or default_model)
@@ -2885,6 +3042,11 @@ def read_provider_state_api(
             item["allow_inference"] = boundary.allow_inference
             item["chutes"] = public_boundary
             item["provider_detail"] = public_boundary
+            llm_router = router_state.get(str(row["deployment_id"] or ""), {})
+            if llm_router:
+                llm_router = dict(llm_router)
+                llm_router["quota"] = dict(public_boundary.get("budget", {}))
+                item["llm_router"] = llm_router
             state_counts[boundary.credential_state] = state_counts.get(boundary.credential_state, 0) + 1
         deployment_models.append(item)
     payload = {
@@ -2920,6 +3082,7 @@ def read_provider_state_api(
             "deployment_count": len(deployment_models),
             "credential_states": state_counts,
             "blocked_count": sum(1 for item in deployment_models if not item.get("allow_inference")),
+            "llm_router": _sum_llm_router_usage(router_state),
         }
     return ArcLinkApiResponse(status=200, payload=payload)
 

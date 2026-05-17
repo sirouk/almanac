@@ -28,6 +28,10 @@ The control path delegates to Docker Compose, but it does not mean
   `ARCLINK_EXECUTOR_ADAPTER` and provider credentials.
 - `control-action-worker`: the admin-action consumer for restart, DNS/key,
   Stripe, and entitlement actions queued from the admin dashboard.
+- `control-llm-router`: the dedicated ASGI service for OpenAI-compatible
+  ArcPod inference through ArcLink. Compose and ArcPod provisioning default to
+  router mode locally; live Chutes proof remains operator-gated before claiming
+  real upstream provider proof.
 - `arclink-mcp`, `qmd-mcp`, `notion-webhook`, job loops, Redis/Postgres, and
   Nextcloud as the local control-node substrate.
 
@@ -136,7 +140,21 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
    deployment `torn_down`. Compose volumes are preserved unless teardown
    metadata explicitly requests removal.
 
-8. **Handoff**
+8. **LLM routing**
+   - `python/arclink_llm_router.py` is the intended Control Node provider
+     boundary for ArcPod inference. Hermes sees an OpenAI-compatible `/v1`
+     provider; the router verifies a per-deployment ArcLink key, enforces
+     Chutes billing and budget policy, relays with the central server-side
+     Chutes credential, and records sanitized usage.
+   - The current source-level router does not store raw prompts or completions.
+     Raw router keys are one-time materialization secrets; only hashes and
+     metadata are stored in the control database.
+   - Control Node Compose and ArcPod provisioning are router-first. Direct
+     Chutes remains only behind `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1`, and
+     live router proof is not claimed without the explicit live-proof gate. See
+     `docs/arclink/llm-router.md`.
+
+9. **Handoff**
    - The user dashboard reads `/api/v1/user/dashboard`,
      `/api/v1/user/billing`, `/api/v1/user/provisioning`, and
      `/api/v1/user/comms`.

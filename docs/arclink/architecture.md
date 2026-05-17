@@ -9,6 +9,7 @@ map, data flow, and integration boundaries.
 ```text
 arclink_product.py          Config resolution, ARCLINK_*/ARCLINK_* precedence
 arclink_chutes.py           Chutes catalog client, model discovery
+arclink_llm_router.py       OpenAI-compatible Control Node LLM router, Chutes relay, usage settlement
 arclink_adapters.py         Fake/live adapter registry (Stripe, ingress, Chutes, bots)
 arclink_entitlements.py     Stripe webhook verification, entitlement state machine, comp helpers
 arclink_onboarding.py       Public onboarding sessions and funnel events (web, Telegram, Discord)
@@ -70,7 +71,7 @@ Customer ──► Public Onboarding (web / Telegram / Discord)
                 │
                 ├── Docker Compose services
                 ├── Domain/Tailscale ingress and SSH intent
-                ├── Chutes key lifecycle intent
+                ├── Chutes/router key lifecycle intent
                 ├── Traefik labels and ingress
                 ├── State roots, workspace mounts, and secret references
                 ├── Dashboard plugin environment for Drive, Code, Terminal
@@ -192,12 +193,28 @@ The rationale is to keep ArcLink-specific workspace behavior additive and
 replaceable. Hermes owns the dashboard plugin host; ArcLink owns the plugin
 files, allowed-root policy, secret redaction, and Docker mount wiring.
 
+### LLM Router
+
+`python/arclink_llm_router.py` is the source-level Control Node router for
+OpenAI-compatible ArcPod inference. It exposes `GET /v1/models` and
+`POST /v1/chat/completions`, verifies a per-deployment ArcLink router key,
+enforces billing, budget, model, body-size, rate, and concurrency policy, relays
+to Chutes with the central server-side credential, streams responses without
+buffering completions, and records sanitized usage without prompts or
+completions.
+
+The router is separate from the WSGI hosted API and is not part of the
+`/api/v1` route catalog. Current source behavior is documented in
+`docs/arclink/llm-router.md`. Compose service wiring, ArcPod provisioning
+defaults, and live Chutes proof remain proof-gated follow-up work.
+
 ### External Providers (gated behind executor)
 
 - **Stripe**: checkout, webhooks, subscription lifecycle, refunds, portal.
 - **Ingress**: Cloudflare DNS/Access in domain mode; Tailscale publication and
   direct SSH in Tailscale mode.
-- **Chutes**: per-deployment API key lifecycle, model catalog.
+- **Chutes**: model catalog, direct-provider compatibility, and the upstream
+  provider behind the ArcLink LLM Router.
 - **Telegram/Discord**: public onboarding bot clients (skeleton only today).
 
 All provider interactions use fake adapters by default. Live adapters require

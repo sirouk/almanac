@@ -23,6 +23,7 @@ TAILSCALE_NEXTCLOUD_SERVE_SH = REPO / "bin" / "tailscale-nextcloud-serve.sh"
 TAILSCALE_NOTION_FUNNEL_SH = REPO / "bin" / "tailscale-notion-webhook-funnel.sh"
 CONTROL_PY = REPO / "python" / "arclink_control.py"
 BOOTSTRAP_SYSTEM_SH = REPO / "bin" / "bootstrap-system.sh"
+ENSURE_PREREQS_SH = REPO / "bin" / "lib" / "ensure-prereqs.sh"
 
 
 def load_module(path: Path, name: str):
@@ -2160,11 +2161,21 @@ def test_control_reset_modes_have_separate_confirmations() -> None:
 
 def test_control_fleet_worker_registration_is_first_class() -> None:
     text = DEPLOY_SH.read_text()
+    fleet_key = extract(text, "run_control_fleet_ssh_key() {", "is_safe_local_fleet_user() {")
     register = extract(text, "register_control_remote_fleet_worker() {", "publish_control_tailscale_ingress() {")
     expect("deploy.sh control fleet-key" in text, "usage should expose fleet-key")
+    expect("deploy.sh control fleet-key --rotate --json" in text, "usage should expose fleet key rotation JSON")
     expect("deploy.sh control register-worker" in text, "usage should expose register-worker")
+    expect("--hostname worker-1 --ssh-host 203.0.113.10 --ssh-user arclink --json" in text, "usage should expose non-interactive worker registration")
     expect("run_control_fleet_ssh_key()" in text, "expected first-class public key command")
+    expect("--rotate" in fleet_key and '"rotated"' in fleet_key, "fleet-key should support audited scriptable rotation output")
+    expect('"public_key"' in fleet_key and '"key_path"' in fleet_key, "fleet-key JSON should expose only public key metadata")
     expect("ensure_control_fleet_ssh_key" in register, "worker registration should reuse the Sovereign control SSH key")
+    expect("--hostname" in register and "--ssh-host" in register and "--ssh-user" in register, "worker registration should parse non-interactive target flags")
+    expect("--tags-json" in register and "json.loads(tags_raw or \"{}\")" in register, "worker registration should accept JSON placement tags")
+    expect("--no-smoke-test" in register and "--smoke-test" in register, "worker registration should gate live SSH smoke in scriptable mode")
+    expect('"$json" != "1" || "$smoke_requested" == "1"' in register, "JSON worker registration should not contaminate stdout with default smoke output")
+    expect('"restart_required"' in register, "JSON worker registration should report that control workers need refresh")
     expect("Fleet inventory hostname" in register, "worker registration should ask for placement hostname")
     expect("SSH host" in register and "SSH user" in register, "worker registration should ask for SSH target")
     expect("Remote deployment state root base" in register, "worker registration should collect per-worker state root")
@@ -2183,15 +2194,47 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
 
 def test_control_inventory_submenu_and_aliases_are_first_class() -> None:
     text = DEPLOY_SH.read_text()
+    docs = (REPO / "docs" / "arclink" / "fleet-cli.md").read_text(encoding="utf-8")
     inventory = extract(text, "run_control_inventory() {", "publish_control_tailscale_ingress() {")
     expect("deploy.sh control inventory list" in text, "usage should expose inventory list")
+    expect("deploy.sh control inventory health --json" in text, "usage should expose inventory health JSON")
+    expect("deploy.sh control inventory rotate-key --json" in text, "usage should expose inventory key rotation JSON")
+    expect("deploy.sh control inventory re-attest" in text, "usage should expose explicit re-attestation")
     expect("Inventory and ASU placement" in text, "control menu should expose inventory")
     expect("control-inventory-list" in text, "shortcut alias should expose inventory list")
+    expect("control-inventory-health" in text, "shortcut alias should expose inventory health")
+    expect("control-inventory-rotate-key" in text, "shortcut alias should expose inventory key rotation")
+    expect("control-inventory-re-attest" in text, "shortcut alias should expose re-attestation")
     expect("python/arclink_inventory.py" in inventory, "inventory should route through the Python inventory CLI")
+    expect("health" in inventory and "re-attest" in inventory, "inventory command should expose health and re-attest")
+    expect("rotate-key" in inventory and "run_control_fleet_ssh_key" in inventory, "inventory rotate-key should route to fleet key rotation")
     expect("add manual" in inventory and "add hetzner" in text and "add linode" in text, "inventory providers should be exposed")
     expect("ARCLINK_FLEET_PLACEMENT_STRATEGY" in inventory, "set-strategy should persist placement strategy")
+    expect("python3 - \"$strategy\"" in inventory, "set-strategy should support clean JSON output")
     expect("HETZNER_API_TOKEN" in text and "LINODE_API_TOKEN" in text, "provider tokens should be config/env backed")
+    expect("--filter status=ready" in docs and "Exit Codes" in docs, "fleet CLI docs should cover filters and exit codes")
     print("PASS test_control_inventory_submenu_and_aliases_are_first_class")
+
+
+def test_control_enrollment_submenu_and_secret_are_first_class() -> None:
+    text = DEPLOY_SH.read_text()
+    compose = (REPO / "compose.yaml").read_text(encoding="utf-8")
+    docker_helper = (REPO / "bin" / "arclink-docker.sh").read_text(encoding="utf-8")
+    entrypoint = (REPO / "bin" / "docker-entrypoint.sh").read_text(encoding="utf-8")
+    enrollment = extract(text, "run_control_enrollment() {", "run_control_inventory() {")
+
+    expect("deploy.sh control enrollment mint" in text, "usage should expose enrollment mint")
+    expect("control-enrollment-mint" in text, "shortcut alias should expose enrollment mint")
+    expect("control-enrollment-rotate-secret" in text, "shortcut alias should expose enrollment HMAC root rotation")
+    expect("python/arclink_fleet_enrollment.py" in enrollment, "control enrollment should route through Python enrollment CLI")
+    expect("ARCLINK_FLEET_ENROLLMENT_SECRET" in enrollment, "control enrollment should require a dedicated HMAC root")
+    expect("write_docker_runtime_config" in enrollment, "control enrollment should backfill missing enrollment secret")
+    expect("mint" in enrollment and "list" in enrollment and "revoke" in enrollment and "rotate-secret" in enrollment, "enrollment command should expose mint/list/revoke/rotate-secret")
+    expect("random_secret" in enrollment and "fleet_enrollment_hmac_root_rotated" in (REPO / "python" / "arclink_fleet_enrollment.py").read_text(encoding="utf-8"), "rotation should mint a new HMAC root and audit the event")
+    expect("ARCLINK_FLEET_ENROLLMENT_SECRET: ${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" in compose, "Compose should pass fleet enrollment secret")
+    expect('ensure_env_file_value ARCLINK_FLEET_ENROLLMENT_SECRET "$(random_secret)"' in docker_helper, "Docker bootstrap should seed fleet enrollment secret")
+    expect("ARCLINK_FLEET_ENROLLMENT_SECRET=$fleet_enrollment_secret" in entrypoint, "Docker entrypoint should seed fleet enrollment secret")
+    print("PASS test_control_enrollment_submenu_and_secret_are_first_class")
 
 
 def test_control_docker_bootstrap_seeds_session_hash_pepper() -> None:
@@ -2236,6 +2279,149 @@ def test_control_upgrade_syncs_checkout_from_upstream_before_build() -> None:
         "control upgrade should verify a clean tree, sync upstream, then build",
     )
     print("PASS test_control_upgrade_syncs_checkout_from_upstream_before_build")
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def test_ensure_prereqs_ready_fake_system_is_noop() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fakebin = tmp_path / "bin"
+        state = tmp_path / "state"
+        fakebin.mkdir()
+        state.mkdir()
+        _write_executable(fakebin / "apt-get", "#!/bin/bash\necho apt-get should-not-run >&2\nexit 99\n")
+        _write_executable(fakebin / "curl", "#!/bin/bash\necho curl should-not-run >&2\nexit 99\n")
+        _write_executable(fakebin / "jq", "#!/bin/bash\nexit 0\n")
+        _write_executable(fakebin / "rsync", "#!/bin/bash\nexit 0\n")
+        _write_executable(fakebin / "ssh", "#!/bin/bash\nexit 0\n")
+        _write_executable(
+            fakebin / "docker",
+            "#!/bin/bash\nif [[ ${1:-} == compose && ${2:-} == version ]]; then echo 'Docker Compose v2.0.0'; exit 0; fi\nexit 0\n",
+        )
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "STATE_DIR": str(state),
+                "ARCLINK_PREREQ_AUDIT_FILE": str(state / "audit.jsonl"),
+            }
+        )
+        result = subprocess.run(
+            ["/bin/bash", str(ENSURE_PREREQS_SH), "--surface", "control-node", "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd=str(REPO),
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected ready fake system to pass: {result.stderr}\n{result.stdout}")
+        expect('"ok": true' in result.stdout and '"surface": "control-node"' in result.stdout, result.stdout)
+        audit = (state / "audit.jsonl").read_text(encoding="utf-8")
+        expect('"action": "ensure_prereqs"' in audit and '"status": "completed"' in audit, audit)
+    print("PASS test_ensure_prereqs_ready_fake_system_is_noop")
+
+
+def test_ensure_prereqs_check_only_plans_missing_without_mutation() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fakebin = tmp_path / "bin"
+        fakebin.mkdir()
+        _write_executable(fakebin / "apt-get", "#!/bin/bash\necho apt-get should-not-run >&2\nexit 99\n")
+        env = os.environ.copy()
+        env.update({"PATH": str(fakebin), "ARCLINK_SKIP_PREREQ_INSTALL": "1"})
+        result = subprocess.run(
+            ["/bin/bash", str(ENSURE_PREREQS_SH), "--surface", "control-node", "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd=str(REPO),
+            check=False,
+        )
+        expect(result.returncode == 1, f"expected verify-only mode to fail when prereqs are missing: {result.stdout}")
+        expect("packages:" in result.stdout and "docker-compose-plugin" in result.stdout, result.stdout)
+        expect("should-not-run" not in result.stderr, result.stderr)
+    print("PASS test_ensure_prereqs_check_only_plans_missing_without_mutation")
+
+
+def test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fakebin = tmp_path / "bin"
+        state = tmp_path / "state"
+        fakebin.mkdir()
+        state.mkdir()
+        log = tmp_path / "commands.log"
+        _write_executable(
+            fakebin / "apt-get",
+            f"#!/bin/bash\nprintf 'apt-get %s\\n' \"$*\" >> {shlex.quote(str(log))}\nexit 0\n",
+        )
+        _write_executable(
+            fakebin / "curl",
+            f"""#!/bin/bash
+printf 'curl %s\\n' "$*" >> {shlex.quote(str(log))}
+cat <<'SH'
+#!/usr/bin/env sh
+cat > "$FAKEBIN/docker" <<'DOCKER'
+#!/usr/bin/env sh
+if [ "$1" = compose ] && [ "$2" = version ]; then
+  echo "Docker Compose v2.0.0"
+  exit 0
+fi
+exit 0
+DOCKER
+chmod +x "$FAKEBIN/docker"
+SH
+""",
+        )
+        _write_executable(fakebin / "jq", "#!/bin/bash\nexit 0\n")
+        (fakebin / "python3").symlink_to(sys.executable)
+        (fakebin / "mkdir").symlink_to("/bin/mkdir")
+        (fakebin / "dirname").symlink_to("/usr/bin/dirname")
+        (fakebin / "cat").symlink_to("/bin/cat")
+        (fakebin / "chmod").symlink_to("/bin/chmod")
+        (fakebin / "sh").symlink_to("/bin/sh")
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": str(fakebin),
+                "FAKEBIN": str(fakebin),
+                "STATE_DIR": str(state),
+                "ARCLINK_PREREQ_AUDIT_FILE": str(state / "audit.jsonl"),
+            }
+        )
+        result = subprocess.run(
+            ["/bin/bash", str(ENSURE_PREREQS_SH), "--surface", "control-node"],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd=str(REPO),
+            check=False,
+        )
+        expect(result.returncode == 0, f"fake prereq install failed: {result.stderr}\n{result.stdout}")
+        rendered_log = log.read_text(encoding="utf-8")
+        expect("apt-get update" in rendered_log and "apt-get install -y" in rendered_log, rendered_log)
+        expect("https://get.docker.com" in rendered_log, rendered_log)
+        audit = (state / "audit.jsonl").read_text(encoding="utf-8")
+        expect('"action": "install_packages"' in audit and '"action": "install_docker"' in audit, audit)
+    print("PASS test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom")
+
+
+def test_control_install_wires_prereq_auto_installation_with_skip_opt_out() -> None:
+    text = DEPLOY_SH.read_text(encoding="utf-8")
+    flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
+    expect('"$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"' in flow, flow)
+    expect("--skip-prereq-install" in flow, flow)
+    expect("ARCLINK_SKIP_PREREQ_INSTALL=1" in flow, flow)
+    expect(
+        flow.index('"$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"') < flow.index("run_arclink_docker bootstrap"),
+        "control prereqs must run before Docker bootstrap/build",
+    )
+    expect("deploy.sh control install --skip-prereq-install" in text, "usage should document hardened-image prereq opt-out")
+    print("PASS test_control_install_wires_prereq_auto_installation_with_skip_opt_out")
 
 
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
@@ -3522,8 +3708,13 @@ def main() -> int:
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,
         test_control_inventory_submenu_and_aliases_are_first_class,
+        test_control_enrollment_submenu_and_secret_are_first_class,
         test_control_docker_bootstrap_seeds_session_hash_pepper,
         test_control_upgrade_syncs_checkout_from_upstream_before_build,
+        test_ensure_prereqs_ready_fake_system_is_noop,
+        test_ensure_prereqs_check_only_plans_missing_without_mutation,
+        test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom,
+        test_control_install_wires_prereq_auto_installation_with_skip_opt_out,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,

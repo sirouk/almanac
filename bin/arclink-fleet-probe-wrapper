@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_FILE="${ARCLINK_FLEET_WORKER_CONFIG:-/etc/arclink/fleet-worker.env}"
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+STATE_ROOT="${ARCLINK_FLEET_STATE_ROOT:-/var/lib/arclink-fleet}"
+ADMISSION_FILE="${ARCLINK_FLEET_ADMISSION_FILE:-$STATE_ROOT/admission.state}"
+FINGERPRINT_FILE="${ARCLINK_FLEET_FINGERPRINT_FILE:-$STATE_ROOT/machine-fingerprint}"
+HOSTNAME_VALUE="${ARCLINK_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
+SSH_PORT="${ARCLINK_FLEET_SSH_PORT:-22}"
+
+if [[ $# -eq 0 && -n "${SSH_ORIGINAL_COMMAND:-}" ]]; then
+  # Split the forced-command payload into words without evaluating it.
+  # shellcheck disable=SC2086
+  set -- $SSH_ORIGINAL_COMMAND
+  if [[ "${1:-}" == "arclink-fleet-probe-wrapper" || "${1:-}" == */arclink-fleet-probe-wrapper ]]; then
+    shift
+  fi
+fi
+
+kind="${1:-}"
+admission_state="disabled"
+if [[ -f "$ADMISSION_FILE" ]]; then
+  IFS= read -r admission_state <"$ADMISSION_FILE" || admission_state="disabled"
+fi
+admitting=false
+if [[ "$admission_state" == "admitting" ]]; then
+  admitting=true
+fi
+
+fingerprint=""
+if [[ -f "$FINGERPRINT_FILE" ]]; then
+  IFS= read -r fingerprint <"$FINGERPRINT_FILE" || fingerprint=""
+fi
+
+json_probe() {
+  local probe_kind="$1"
+  local vcpu="${2:-0}"
+  local mem_kib="${3:-0}"
+  local disk_kib="${4:-0}"
+  local docker_version="${5:-}"
+  local compose_version="${6:-}"
+  python3 - "$probe_kind" "$admitting" "$HOSTNAME_VALUE" "$SSH_PORT" "$fingerprint" "$vcpu" "$mem_kib" "$disk_kib" "$docker_version" "$compose_version" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+kind, admitting, hostname, ssh_port, fingerprint, vcpu, mem_kib, disk_kib, docker_version, compose_version = sys.argv[1:11]
+payload = {
+    "ok": True,
+    "kind": kind,
+    "admitting": admitting == "true",
+    "hostname": hostname,
+    "ssh_port": int(ssh_port or 22),
+    "observed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+}
+if kind in {"capacity", "inventory"}:
+    payload["hardware_summary"] = {
+        "vcpu_cores": int(vcpu or 0),
+        "ram_gib": round(int(mem_kib or 0) / 1024 / 1024, 2) if int(mem_kib or 0) else 0,
+        "disk_gib": round(int(disk_kib or 0) / 1024 / 1024, 2) if int(disk_kib or 0) else 0,
+        "docker_version": docker_version,
+        "docker_compose_version": compose_version,
+    }
+if kind == "inventory":
+    payload["machine_fingerprint"] = fingerprint
+print(json.dumps(payload, sort_keys=True))
+PY
+}
+
+capacity_values() {
+  local vcpu="0" mem_kib="0" disk_kib="0" docker_version="" compose_version=""
+  vcpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || printf '0')"
+  if [[ -r /proc/meminfo ]]; then
+    mem_kib="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || printf '0')"
+  fi
+  disk_kib="$(df -Pk /var/lib/docker / 2>/dev/null | awk 'NR > 1 {if ($2 > max) max=$2} END {printf "%.0f\n", max+0}')"
+  docker_version="$(docker --version 2>/dev/null || true)"
+  compose_version="$(docker compose version 2>/dev/null || true)"
+  json_probe "$1" "$vcpu" "$mem_kib" "$disk_kib" "$docker_version" "$compose_version"
+}
+
+case "$kind" in
+  liveness)
+    json_probe "liveness"
+    ;;
+  capacity)
+    capacity_values "capacity"
+    ;;
+  inventory)
+    capacity_values "inventory"
+    ;;
+  *)
+    echo "ArcLink fleet probe command is not allowlisted: ${kind:-<empty>}" >&2
+    exit 64
+    ;;
+esac

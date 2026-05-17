@@ -83,6 +83,7 @@ def test_compose_defines_full_stack_services() -> None:
         "qmd-mcp:",
         "notion-webhook:",
         "control-api:",
+        "control-llm-router:",
         "control-web:",
         "control-ingress:",
         "control-provisioner:",
@@ -93,6 +94,7 @@ def test_compose_defines_full_stack_services() -> None:
         "notification-delivery:",
         "arclink-wrapped:",
         "health-watch:",
+        "fleet-inventory-worker:",
         "curator-refresh:",
         "qmd-refresh:",
         "pdf-ingest:",
@@ -106,8 +108,16 @@ def test_compose_defines_full_stack_services() -> None:
     expect("127.0.0.1:${QMD_MCP_PORT:-8181}:8181" in body, body)
     expect("127.0.0.1:${NEXTCLOUD_PORT:-18080}:80" in body, body)
     expect("127.0.0.1:${ARCLINK_API_PORT:-8900}:8900" in body, body)
+    expect("127.0.0.1:${ARCLINK_LLM_ROUTER_PORT:-8090}:8090" in body, body)
     expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080" in body, body)
     expect("python/arclink_hosted_api.py" in body and "cd web && npm run start" in body, body)
+    expect('"uvicorn", "arclink_llm_router:app"' in body, body)
+    expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in body, body)
+    expect("ARCLINK_LLM_ROUTER_CHUTES_API_KEY:" in body and "ARCLINK_LLM_ROUTER_CHUTES_BASE_URL:" in body, body)
+    expect("traefik.http.routers.arclink-control-llm-router.rule=PathPrefix(`/v1`)" in body, body)
+    llm_router_block = extract(body, "  control-llm-router:", "\n\n")
+    expect("<<: *arclink-control-secret-env" not in llm_router_block, llm_router_block)
+    expect("STRIPE_SECRET_KEY:" not in llm_router_block and "CLOUDFLARE_API_TOKEN:" not in llm_router_block, llm_router_block)
     expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)
     expect("python/arclink_action_worker.py" in body and "control-action-worker" in body, body)
     expect(
@@ -119,6 +129,11 @@ def test_compose_defines_full_stack_services() -> None:
         '["./bin/docker-job-loop.sh", "arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"]'
         in body,
         "ArcLink Wrapped should run as its own named job-loop service",
+    )
+    expect(
+        '["./bin/docker-job-loop.sh", "fleet-inventory-worker", "30", "python3", "python/arclink_fleet_inventory_worker.py", "--once", "--json", "--notify"]'
+        in body,
+        "fleet inventory worker should run as a low-latency job-loop service",
     )
     expect("./arclink-priv/secrets/ssh:/root/.ssh" not in body, body)
     expect("./arclink-priv/secrets/ssh:/home/arclink/.ssh" in body, body)
@@ -154,6 +169,10 @@ def test_compose_defines_full_stack_services() -> None:
         expect("group_add:" in block, f"{socket_service} missing socket gid group_add\n{block}")
     wrapped_block = extract(body, "  arclink-wrapped:", "\n\n")
     expect("/var/run/docker.sock" not in wrapped_block, wrapped_block)
+    fleet_inventory_block = extract(body, "  fleet-inventory-worker:", "\n\n")
+    expect("/var/run/docker.sock" not in fleet_inventory_block, fleet_inventory_block)
+    llm_router_block = extract(body, "  control-llm-router:", "\n\n")
+    expect("/var/run/docker.sock" not in llm_router_block and "group_add:" not in llm_router_block, llm_router_block)
     expect(
         "/var/run/docker.sock:/var/run/docker.sock" in body,
         "agent-supervisor must intentionally mount the Docker socket to reconcile per-agent containers",

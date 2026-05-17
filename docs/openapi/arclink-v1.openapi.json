@@ -1,6 +1,11 @@
 {
   "components": {
     "securitySchemes": {
+      "routerBearerAuth": {
+        "description": "Per-deployment ArcLink LLM router key. Raw keys are materialized only into ArcPods and are never returned by provider-state APIs.",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "sessionAuth": {
         "description": "Session-based auth via cookies or headers.",
         "in": "header",
@@ -846,6 +851,68 @@
         "summary": "User logout (revokes session)",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/fleet/enrollment/callback": {
+      "post": {
+        "operationId": "fleet_enrollment_callback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "capacity_slots": {
+                    "type": "integer"
+                  },
+                  "connectivity_summary": {
+                    "type": "object"
+                  },
+                  "hardware_summary": {
+                    "type": "object"
+                  },
+                  "hostname": {
+                    "type": "string"
+                  },
+                  "machine_fingerprint": {
+                    "type": "string"
+                  },
+                  "prereq_audit": {
+                    "type": "object"
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "ssh_host": {
+                    "type": "string"
+                  },
+                  "ssh_user": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "hostname",
+                  "machine_fingerprint"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Worker attested"
+          },
+          "401": {
+            "description": "Invalid or unavailable enrollment token"
+          }
+        },
+        "summary": "Worker fleet enrollment attestation callback",
+        "tags": [
+          "fleet"
         ]
       }
     },
@@ -2030,6 +2097,96 @@
         "summary": "Telegram Bot API webhook receiver",
         "tags": [
           "webhooks"
+        ]
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "llm_router_chat_completions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "max_tokens": {
+                    "type": "integer"
+                  },
+                  "messages": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "model",
+                  "messages"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible JSON or text/event-stream response"
+          },
+          "400": {
+            "description": "Invalid body, unsupported model, or request limit exceeded"
+          },
+          "401": {
+            "description": "Missing, invalid, revoked, or suspended router key"
+          },
+          "402": {
+            "description": "Billing, budget, or quota boundary blocks inference"
+          },
+          "429": {
+            "description": "Per-key, per-deployment, per-Captain, or concurrency limit exceeded"
+          },
+          "503": {
+            "description": "Router database or central Chutes credential is unavailable"
+          }
+        },
+        "security": [
+          {
+            "routerBearerAuth": []
+          }
+        ],
+        "summary": "Relay OpenAI-compatible chat completions through the ArcLink LLM Router",
+        "tags": [
+          "llm-router"
+        ]
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "llm_router_models",
+        "responses": {
+          "200": {
+            "description": "Model list"
+          },
+          "401": {
+            "description": "Missing, invalid, revoked, or suspended router key"
+          },
+          "503": {
+            "description": "Router database or upstream credential is unavailable"
+          }
+        },
+        "security": [
+          {
+            "routerBearerAuth": []
+          }
+        ],
+        "summary": "List OpenAI-compatible models allowed for the ArcPod router key",
+        "tags": [
+          "llm-router"
         ]
       }
     }

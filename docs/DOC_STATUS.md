@@ -27,6 +27,7 @@ tests as truth, then update the closest canonical doc.
 | `docs/arclink/foundation.md` | Canonical | Behavior notes for no-secret foundation and proof-gated execution boundaries. |
 | `docs/arclink/foundation-runbook.md` | Canonical | Repair and validation runbook for foundation behavior. |
 | `docs/arclink/operations-runbook.md` | Canonical | Operator runbook for hosted/control operations and workspace plugins. |
+| `docs/arclink/llm-router.md` | Canonical | Source-level Control Node LLM Router behavior, ownership, config, policy, and proof boundary. |
 | `docs/arclink/data-safety.md` | Canonical | State, secret, and teardown safety across Shared Host, Docker, and Control Node modes. |
 | `docs/arclink/vocabulary.md` | Canonical | User-facing ArcPod/Captain/Crew/Raven vocabulary and Operator/backend boundary rules. |
 | `docs/arclink/wrapped.md` | Canonical | ArcLink Wrapped ownership, privacy boundary, scheduler/delivery behavior, and novelty-score rationale. |

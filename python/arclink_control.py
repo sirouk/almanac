@@ -1197,6 +1197,52 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           PRIMARY KEY (provider, model_id)
         );
 
+        CREATE TABLE IF NOT EXISTS arclink_llm_router_keys (
+          key_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          key_hash TEXT NOT NULL,
+          secret_ref TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'suspended')),
+          allowed_models_json TEXT NOT NULL DEFAULT '[]',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_llm_usage_events (
+          usage_id TEXT PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          deployment_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          total_tokens INTEGER NOT NULL DEFAULT 0,
+          estimated_cents INTEGER NOT NULL DEFAULT 0,
+          actual_cents INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN ('reserved', 'succeeded', 'failed', 'cancelled')),
+          stream INTEGER NOT NULL DEFAULT 0,
+          source_kind TEXT NOT NULL DEFAULT '',
+          error_summary TEXT NOT NULL DEFAULT '',
+          started_at TEXT NOT NULL,
+          completed_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_llm_budget_reservations (
+          reservation_id TEXT PRIMARY KEY,
+          request_id TEXT NOT NULL,
+          deployment_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          reserved_cents INTEGER NOT NULL,
+          settled_cents INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed')),
+          created_at TEXT NOT NULL,
+          settled_at TEXT NOT NULL DEFAULT ''
+        );
+
         CREATE TABLE IF NOT EXISTS arclink_onboarding_sessions (
           session_id TEXT PRIMARY KEY,
           channel TEXT NOT NULL,
@@ -1320,6 +1366,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           attested_at TEXT NOT NULL DEFAULT '',
           audit_trail_chain TEXT NOT NULL DEFAULT '',
           provider_billing_ref TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
           registered_at TEXT NOT NULL,
           last_probed_at TEXT NOT NULL DEFAULT ''
         );
@@ -1609,6 +1656,37 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_refuel_credits_user_status
         ON arclink_refuel_credits (user_id, status, deployment_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_llm_router_keys_active_hash
+        ON arclink_llm_router_keys (key_hash)
+        WHERE status = 'active'
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_router_keys_deployment_status
+        ON arclink_llm_router_keys (deployment_id, status, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_usage_deployment_time
+        ON arclink_llm_usage_events (deployment_id, started_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_usage_user_time
+        ON arclink_llm_usage_events (user_id, started_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_llm_reservations_request_status
+        ON arclink_llm_budget_reservations (request_id, status)
         """
     )
     conn.execute(
@@ -1979,6 +2057,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ("attested_at", "TEXT NOT NULL DEFAULT ''"),
         ("audit_trail_chain", "TEXT NOT NULL DEFAULT ''"),
         ("provider_billing_ref", "TEXT NOT NULL DEFAULT ''"),
+        ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
     ):
         _ensure_column(conn, "arclink_inventory_machines", column, ddl)
     for column, ddl in (
@@ -5383,6 +5462,186 @@ def list_ssot_access_audit(
 
 def hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+LLM_ROUTER_KEY_PREFIX = "acpod_live_"
+LLM_ROUTER_KEY_ID_PREFIX = "llmk_"
+LLM_ROUTER_KEY_RE = re.compile(r"^acpod_live_([A-Za-z0-9]{8,32})_([A-Za-z0-9_-]{32,})$")
+
+
+def generate_llm_router_raw_key() -> str:
+    short_key_id = secrets.token_hex(6)
+    return f"{LLM_ROUTER_KEY_PREFIX}{short_key_id}_{secrets.token_urlsafe(36)}"
+
+
+def _parse_llm_router_key_id(raw_key: str) -> str:
+    match = LLM_ROUTER_KEY_RE.fullmatch(str(raw_key or "").strip())
+    if not match:
+        raise ValueError("invalid ArcLink LLM router key format")
+    return f"{LLM_ROUTER_KEY_ID_PREFIX}{match.group(1)}"
+
+
+def _safe_llm_router_key_row(row: sqlite3.Row | Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    data = dict(row)
+    data.pop("key_hash", None)
+    data["allowed_models"] = json_loads(str(data.pop("allowed_models_json", "[]") or "[]"), [])
+    data["metadata"] = json_loads(str(data.pop("metadata_json", "{}") or "{}"), {})
+    return data
+
+
+def ensure_llm_router_key(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    user_id: str,
+    secret_ref: str,
+    raw_key: str,
+    allowed_models: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    key_id = _parse_llm_router_key_id(raw_key)
+    clean_deployment_id = str(deployment_id or "").strip()
+    clean_user_id = str(user_id or "").strip()
+    clean_secret_ref = str(secret_ref or "").strip()
+    if not clean_deployment_id or not clean_user_id or not clean_secret_ref:
+        raise ValueError("deployment_id, user_id, and secret_ref are required for ArcLink LLM router keys")
+    now_iso = utc_now_iso()
+    models = [str(model).strip() for model in (allowed_models or []) if str(model).strip()]
+    conn.execute(
+        """
+        INSERT INTO arclink_llm_router_keys (
+          key_id, deployment_id, user_id, key_hash, secret_ref, status,
+          allowed_models_json, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        ON CONFLICT(key_id) DO UPDATE SET
+          deployment_id = excluded.deployment_id,
+          user_id = excluded.user_id,
+          key_hash = excluded.key_hash,
+          secret_ref = excluded.secret_ref,
+          allowed_models_json = excluded.allowed_models_json,
+          metadata_json = excluded.metadata_json
+        """,
+        (
+            key_id,
+            clean_deployment_id,
+            clean_user_id,
+            hash_token(raw_key),
+            clean_secret_ref,
+            json.dumps(models, sort_keys=True),
+            json.dumps(dict(metadata or {}), sort_keys=True),
+            now_iso,
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM arclink_llm_router_keys WHERE key_id = ?", (key_id,)).fetchone()
+    result = _safe_llm_router_key_row(row)
+    if result is None:
+        raise RuntimeError("failed to register ArcLink LLM router key")
+    return result
+
+
+def verify_llm_router_key(conn: sqlite3.Connection, raw_key: str) -> dict[str, Any] | None:
+    try:
+        _parse_llm_router_key_id(raw_key)
+    except ValueError:
+        return None
+    row = conn.execute(
+        """
+        SELECT k.*, d.status AS deployment_status, u.status AS user_status
+        FROM arclink_llm_router_keys k
+        LEFT JOIN arclink_deployments d ON d.deployment_id = k.deployment_id
+        LEFT JOIN arclink_users u ON u.user_id = k.user_id
+        WHERE k.key_hash = ?
+        LIMIT 2
+        """,
+        (hash_token(raw_key),),
+    ).fetchall()
+    if len(row) != 1:
+        return None
+    record = dict(row[0])
+    if record.get("status") != "active":
+        return None
+    if str(record.get("deployment_status") or "") in {"cancelled", "torn_down", "teardown_complete"}:
+        return None
+    if str(record.get("user_status") or "active") != "active":
+        return None
+    now_iso = utc_now_iso()
+    conn.execute("UPDATE arclink_llm_router_keys SET last_seen_at = ? WHERE key_id = ?", (now_iso, record["key_id"]))
+    conn.commit()
+    record["last_seen_at"] = now_iso
+    return _safe_llm_router_key_row(record)
+
+
+def revoke_llm_router_key(
+    conn: sqlite3.Connection,
+    key_id: str,
+    *,
+    actor_id: str = "",
+    reason: str = "",
+) -> dict[str, Any] | None:
+    now_iso = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_llm_router_keys
+        SET status = 'revoked', revoked_at = ?
+        WHERE key_id = ?
+        """,
+        (now_iso, str(key_id or "").strip()),
+    )
+    if actor_id or reason:
+        append_arclink_event(
+            conn,
+            subject_kind="llm_router_key",
+            subject_id=str(key_id or "").strip(),
+            event_type="llm_router_key_revoked",
+            metadata={"actor_id": actor_id, "reason": reason},
+        )
+    else:
+        conn.commit()
+    row = conn.execute("SELECT * FROM arclink_llm_router_keys WHERE key_id = ?", (str(key_id or "").strip(),)).fetchone()
+    return _safe_llm_router_key_row(row)
+
+
+def rotate_llm_router_key(
+    conn: sqlite3.Connection,
+    *,
+    old_key_id: str,
+    deployment_id: str,
+    user_id: str,
+    secret_ref: str,
+    allowed_models: Sequence[str] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    actor_id: str = "",
+    reason: str = "",
+) -> dict[str, Any]:
+    revoke_llm_router_key(conn, old_key_id, actor_id=actor_id, reason=reason or "rotate")
+    raw_key = generate_llm_router_raw_key()
+    record = ensure_llm_router_key(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        secret_ref=secret_ref,
+        raw_key=raw_key,
+        allowed_models=allowed_models,
+        metadata=metadata,
+    )
+    record["raw_key"] = raw_key
+    return record
+
+
+def list_llm_router_keys_for_deployment(conn: sqlite3.Connection, deployment_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_llm_router_keys
+        WHERE deployment_id = ?
+        ORDER BY created_at DESC, key_id DESC
+        """,
+        (str(deployment_id or "").strip(),),
+    ).fetchall()
+    return [row for row in (_safe_llm_router_key_row(item) for item in rows) if row is not None]
 
 
 def generate_token_id() -> str:

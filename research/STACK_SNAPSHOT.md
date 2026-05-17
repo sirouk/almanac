@@ -1,61 +1,48 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-16T00:00:00Z
-- project_root: repository root
-- primary_stack: Python control plane with Shell/Docker Compose runtime and Next.js dashboard
-- deterministic_confidence_score: 086/100
-- confidence: high
+- generated_at: 2026-05-16
+- project_type: existing public repository
+- primary_stack: Python ASGI + SQLite + Docker Compose
+- deterministic_confidence_score: 94/100
 
-## Scoring Rule
+## Ranked Stack Hypotheses
 
-The deterministic score is repository-evidence based:
-
-- 35 points: dominant Python source and test surface for control-plane logic.
-- 20 points: canonical shell/deploy scripts and Docker Compose runtime.
-- 15 points: SQLite schema and migration ownership in Python.
-- 15 points: Next.js/React dashboard present but secondary to fleet mission.
-- 10 points: focused tests exist for the target domain.
-- 5 points: penalty retained for live/provisioning behavior that cannot be
-  fully proven without operator-authorized hosts/providers.
-
-Score: `35 + 20 + 15 + 15 + 10 - 9 = 86`.
-
-## Project Stack Ranking
-
-| rank | stack hypothesis | score | evidence |
+| Rank | Stack hypothesis | Score | Evidence |
 | --- | --- | --- | --- |
-| 1 | Python control plane | 35 | `python/` modules own fleet, inventory, action worker, provisioning worker, executor, schema, hosted API, dashboard, tests. |
-| 2 | Shell + Docker Compose operations | 20 | `bin/deploy.sh`, `deploy.sh`, `bin/docker-job-loop.sh`, `compose.yaml`, host bootstrap scripts, operational tests. |
-| 3 | SQLite-backed state | 15 | `python/arclink_control.py` owns schema, indexes, drift checks, status contracts, and temporary DB tests. |
-| 4 | Next.js/React dashboard | 15 | `web/package.json`, Next 15, React 19, TypeScript, Playwright; relevant for operator health surfaces. |
-| 5 | External provider adapters | 6 | Hetzner/Linode modules and requests dependency exist, but provisioning is currently partial and live proof is gated. |
-| 6 | Hermes runtime integration | 5 | Pinned runtime, skills/plugins/hooks, but this mission must not modify Hermes core. |
+| 1 | Python backend/control plane with SQLite and shell-managed runtime | 94 | About 191 Python files, 79 shell scripts, `requirements-dev.txt`, large `python/arclink_control.py`, router/provisioning/worker modules, and Python test suite. |
+| 2 | Docker Compose Control Node runtime | 86 | Root `compose.yaml`, `Dockerfile`, Docker-focused tests, Control Node services, and operator docker commands. |
+| 3 | Next.js dashboard adjunct | 58 | `web/package.json`, React/Next/TypeScript files, Playwright tests; relevant for provider-state display but not router core. |
+| 4 | Static docs/OpenAPI surface | 52 | `docs/API_REFERENCE.md`, `docs/openapi/arclink-v1.openapi.json`, router runbook/docs. |
+| 5 | Standalone Node.js primary app | 18 | Some TypeScript/JavaScript exists, but backend/control/router surfaces are Python. |
 
-## Deterministic Alternatives Ranking
+## Deterministic Scoring Notes
 
-| rank | implementation path | confidence | rationale |
-| --- | --- | --- | --- |
-| 1 | Extend current Python/Shell/Compose architecture | 86 | Aligns with existing code, tests, deploy surface, and steering constraints. |
-| 2 | Add a separate fleet service/daemon with its own API and database | 31 | Could isolate fleet concerns, but violates small-patch/idempotent posture and duplicates control DB state. |
-| 3 | Move worker health to a pushed worker agent | 28 | Useful long term, but conflicts with the selected pull-based, low-footprint worker model. |
-| 4 | Introduce a new CLI binary for fleet operations | 18 | Technically simple, but conflicts with canonical `bin/deploy.sh control ...` operator surface. |
+Scoring used repository-level signals only:
 
-## Runtime Hypotheses
+- Backend/control source count and mission files: +40 Python.
+- Existing test surface for target mission: +20 Python.
+- Runtime declarations and Compose service model: +20 Compose/Python.
+- Shell/deploy orchestration weight: +10 Python-adjacent runtime.
+- Web/frontend relevance: capped because it is not the router core.
 
-| hypothesis | confidence | evidence | validation needed |
-| --- | --- | --- | --- |
-| Fleet placement is Python/SQLite-local and already production-shaped for single-host plus manual multi-host | High | `arclink_fleet.py`, schema, tests for placement, capacity, uniqueness, ASU | Extend tests for region-tier and strategy. |
-| Day-2 actions are the multi-host routing weak point | High | `arclink_action_worker.py` builds a single env executor; steering identifies this as load-bearing | Add two-host placement routing regression. |
-| Worker enrollment requires new schema/API/CLI surfaces | High | No `arclink_fleet_enrollments` or callback surface found in current source | Add Phase 2 tests and implementation. |
-| Periodic inventory probing is absent | High | Current `probe` is operator-triggered; no `arclink_fleet_inventory_worker.py` exists | Add daemon and Compose service. |
-| Cloud-provider create/delete is incomplete | High | Current provider CLI path lists servers only | Add fake provider provisioning workflows. |
-| Web/dashboard changes are secondary | Medium | Operator scale snapshot exists; fleet health may need dashboard addition | Only touch web if health surface is required by BUILD phase. |
+The earlier Node-first snapshot was rejected because it over-weighted a small
+frontend file count and under-weighted the Python control-plane source and
+tests.
 
-## Alternatives To Keep Explicitly Deferred
+## Selected Stack For BUILD
 
-- Worker-pushed heartbeat agent.
-- TPM/Secure Boot hardware attestation.
-- AWS/GCP/Azure/DigitalOcean provisioning.
-- Separate probe key distinct from deploy key.
-- Captain-visible fleet topology.
-- CI-driven live cloud or non-loopback SSH proof.
+- FastAPI app in `python/arclink_llm_router.py`.
+- uvicorn `control-llm-router` Compose service.
+- httpx async upstream client and streaming relay.
+- SQLite tables and helpers in `python/arclink_control.py`.
+- Existing Chutes boundary logic in `python/arclink_chutes.py`.
+- Existing provisioning/worker surfaces for ArcPod router URL/key rollout.
+
+## Alternatives
+
+| Alternative | Disposition |
+| --- | --- |
+| Reuse WSGI `control-api` for OpenAI-compatible streaming | Rejected; ASGI is a better fit and avoids hosted API session coupling. |
+| Add Redis/Postgres hot counters in v1 | Deferred; SQLite-first matches current Control Node architecture. |
+| Add tokenizer dependency now | Deferred; provider usage plus deterministic fallback is enough for source-level v1. |
+| Continue direct Chutes keys in ArcPods by default | Rejected; violates the router mission. |

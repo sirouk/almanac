@@ -376,6 +376,24 @@ def _secret_ref(metadata: Mapping[str, Any], key: str, default: str) -> str:
     return value or default
 
 
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _allow_direct_chutes(env: Mapping[str, str] | None) -> bool:
+    return _truthy((env or {}).get("ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS"))
+
+
+def _llm_router_base_url(env: Mapping[str, str] | None) -> str:
+    source = env or {}
+    value = str(
+        source.get("ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL")
+        or source.get("ARCLINK_LLM_ROUTER_BASE_URL")
+        or "http://control-llm-router:8090/v1"
+    ).strip()
+    return value.rstrip("/") or "http://control-llm-router:8090/v1"
+
+
 def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
     explicit = str(metadata.get("dashboard_password_ref") or "").strip()
     if explicit:
@@ -386,9 +404,24 @@ def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata:
     return f"secret://arclink/dashboard/{deployment_id}/password"
 
 
-def _render_secret_refs(deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> dict[str, str]:
+def _render_secret_refs(
+    deployment_id: str,
+    user_id: str,
+    metadata: Mapping[str, Any],
+    *,
+    direct_chutes: bool = False,
+) -> dict[str, str]:
+    provider_key = {
+        "chutes_api_key": _secret_ref(metadata, "chutes_secret_ref", f"secret://arclink/chutes/{deployment_id}")
+    } if direct_chutes else {
+        "llm_router_api_key": _secret_ref(
+            metadata,
+            "llm_router_api_key_ref",
+            f"secret://arclink/llm-router/{deployment_id}/api-key",
+        )
+    }
     return {
-        "chutes_api_key": _secret_ref(metadata, "chutes_secret_ref", f"secret://arclink/chutes/{deployment_id}"),
+        **provider_key,
         "dashboard_password": dashboard_password_secret_ref(deployment_id=deployment_id, user_id=user_id, metadata=metadata),
         "nextcloud_admin_password": _secret_ref(
             metadata,
@@ -632,6 +665,7 @@ def _render_services(
 ) -> dict[str, dict[str, Any]]:
     app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
+    provider_secret_name = "chutes_api_key" if "chutes_api_key" in secret_target else "llm_router_api_key"
     nextcloud_db_name = _postgres_db_name(prefix="nextcloud", deployment_id=deployment_id)
     memory_volume = {"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR}
     hermes_host_ports: list[str] = []
@@ -661,6 +695,7 @@ def _render_services(
             environment=env,
             volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
             depends_on=["qmd-mcp", "managed-context-install"],
+            secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
             deploy=_limits("hermes-gateway"),
         ),
         "hermes-dashboard": _service(
@@ -676,7 +711,7 @@ def _render_services(
             ports=hermes_host_ports,
             labels=labels["hermes"],
             depends_on=["managed-context-install"],
-            secrets=[{"source": "chutes_api_key", "target": secret_target["chutes_api_key"]}],
+            secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
             deploy=_limits("hermes-dashboard"),
             networks=_control_network(prefix, "hermes"),
         ),
@@ -817,7 +852,7 @@ def _render_services(
                 "ARCLINK_CHUTES_BASE_URL": env["ARCLINK_CHUTES_BASE_URL"],
                 "ARCLINK_CHUTES_DEFAULT_MODEL": env["ARCLINK_CHUTES_DEFAULT_MODEL"],
                 "ARCLINK_MODEL_REASONING_DEFAULT": env["ARCLINK_MODEL_REASONING_DEFAULT"],
-                "ARCLINK_CHUTES_API_KEY_FILE": secret_target["chutes_api_key"],
+                "ARCLINK_CHUTES_API_KEY_FILE": secret_target[provider_secret_name],
                 "ARCLINK_DASHBOARD_PASSWORD_FILE": secret_target["dashboard_password"],
             },
             volumes=[
@@ -825,7 +860,7 @@ def _render_services(
                 {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
             ],
             secrets=[
-                {"source": "chutes_api_key", "target": secret_target["chutes_api_key"]},
+                {"source": provider_secret_name, "target": secret_target[provider_secret_name]},
                 {"source": "dashboard_password", "target": secret_target["dashboard_password"]},
             ],
             deploy=_limits("managed-context-install"),
@@ -926,7 +961,14 @@ def render_arclink_provisioning_intent(
         tailscale_host_strategy=clean_tailscale_strategy,
         docker_network=control_network_name,
     )
-    secret_refs = _render_secret_refs(deployment_id, str(deployment["user_id"]), metadata)
+    direct_chutes = _allow_direct_chutes(env)
+    provider_secret_name = "chutes_api_key" if direct_chutes else "llm_router_api_key"
+    secret_refs = _render_secret_refs(
+        deployment_id,
+        str(deployment["user_id"]),
+        metadata,
+        direct_chutes=direct_chutes,
+    )
     compose_secrets = _render_compose_secrets(secret_refs)
     tailnet_service_ports = _clean_tailnet_service_ports(metadata.get("tailnet_service_ports"))
     access_urls = arclink_access_urls(
@@ -985,11 +1027,13 @@ def render_arclink_provisioning_intent(
         "ARCLINK_CODE_URL": access_urls["code"],
         "ARCLINK_HERMES_URL": access_urls["hermes"],
         "ARCLINK_PRIMARY_PROVIDER": primary_provider(env),
-        "ARCLINK_CHUTES_BASE_URL": chutes_base_url(env),
+        "ARCLINK_CHUTES_BASE_URL": chutes_base_url(env) if direct_chutes else _llm_router_base_url(env),
         "ARCLINK_CHUTES_DEFAULT_MODEL": chutes_default_model(env),
         "ARCLINK_MODEL_REASONING_DEFAULT": model_reasoning_default(env),
-        "ARCLINK_CHUTES_API_KEY_REF": secret_refs["chutes_api_key"],
-        "ARCLINK_CHUTES_API_KEY_FILE": compose_secrets["chutes_api_key"]["target"],
+        "ARCLINK_CHUTES_API_KEY_REF": secret_refs[provider_secret_name],
+        "ARCLINK_CHUTES_API_KEY_FILE": compose_secrets[provider_secret_name]["target"],
+        "ARCLINK_LLM_ROUTER_BASE_URL": _llm_router_base_url(env),
+        "ARCLINK_LLM_ROUTER_API_KEY_REF": secret_refs.get("llm_router_api_key", ""),
         "NEXTCLOUD_ADMIN_PASSWORD_REF": secret_refs["nextcloud_admin_password"],
         "NEXTCLOUD_DB_PASSWORD_REF": secret_refs["nextcloud_db_password"],
         "HERMES_HOME": CONTAINER_HERMES_HOME,
@@ -1098,7 +1142,7 @@ def render_arclink_provisioning_intent(
             "app_ref_resolver_required": [
                 name
                 for name in (
-                    "chutes_api_key",
+                    provider_secret_name,
                     "dashboard_password",
                     "telegram_bot_token",
                     "discord_bot_token",

@@ -169,6 +169,13 @@ def _clean_text(value: Any, limit: int = 160) -> str:
     return text[:limit]
 
 
+def _form_value(value: Any, fallback: Any = "") -> Any:
+    default = getattr(value, "default", None)
+    if default is not None and value.__class__.__module__.startswith("fastapi."):
+        return default
+    return fallback if value is None else value
+
+
 def _env_first(*keys: str) -> str:
     for key in keys:
         value = str(os.environ.get(key) or "").strip()
@@ -1442,17 +1449,18 @@ async def upload(
     directories: str = Form(""),
     files: list[UploadFile] | None = File(None),
 ) -> dict[str, Any]:
+    root = _form_value(root, "")
     ctx: dict[str, Any] | None = _root_context(root) if root else None
     if ctx is not None:
         _assert_writable_root(ctx["id"])
     backend = _backend()
     uploaded: list[dict[str, Any]] = []
-    target_dir_path = _clean_relative_path(path)
-    policy = str(conflict or "reject").strip().lower()
+    target_dir_path = _clean_relative_path(_form_value(path, "/"))
+    policy = str(_form_value(conflict, "reject") or "reject").strip().lower()
     if policy not in {"reject", "keep-both"}:
         raise HTTPException(status_code=400, detail="Unsupported conflict policy")
     file_items = list(files or [])
-    relative_path_metadata = _json_list_form(relative_paths)
+    relative_path_metadata = _json_list_form(_form_value(relative_paths, ""))
     uploaded_paths = [
         _clean_upload_relative_path(
             relative_path_metadata[index] if index < len(relative_path_metadata) else "",
@@ -1462,7 +1470,7 @@ async def upload(
     ]
     directory_paths = [
         _clean_upload_relative_path(item, item)
-        for item in _json_list_form(directories)
+        for item in _json_list_form(_form_value(directories, ""))
         if str(item or "").strip()
     ]
     if len(uploaded_paths) != len(file_items):

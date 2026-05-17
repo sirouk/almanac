@@ -90,6 +90,9 @@ RUN pin_value() { \
     "PyNaCl>=1.5,<2" \
     "PyYAML>=6.0,<7" \
     "requests>=2.32,<3" \
+    "fastapi>=0.115,<1" \
+    "uvicorn>=0.30,<1" \
+    "httpx>=0.27,<1" \
     "stripe>=10,<14" \
   && if [ -d /opt/arclink/runtime/hermes-agent-src/web ]; then \
        cd /opt/arclink/runtime/hermes-agent-src/web \

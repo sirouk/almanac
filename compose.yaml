@@ -49,6 +49,7 @@ x-arclink-app: &arclink-app
     ARCLINK_COOKIE_DOMAIN: ${ARCLINK_COOKIE_DOMAIN:-}
     ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}
     ARCLINK_SESSION_HASH_PEPPER_REQUIRED: ${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-1}
+    ARCLINK_FLEET_ENROLLMENT_SECRET: ${ARCLINK_FLEET_ENROLLMENT_SECRET:-}
     ARCLINK_DEFAULT_PRICE_ID: ${ARCLINK_DEFAULT_PRICE_ID:-price_arclink_founders}
     ARCLINK_FOUNDERS_PRICE_ID: ${ARCLINK_FOUNDERS_PRICE_ID:-price_arclink_founders}
     ARCLINK_SOVEREIGN_PRICE_ID: ${ARCLINK_SOVEREIGN_PRICE_ID:-price_arclink_sovereign}
@@ -65,6 +66,7 @@ x-arclink-app: &arclink-app
     ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS: ${ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_CENTS:-7900}
     ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS: ${ARCLINK_ADDITIONAL_AGENT_MONTHLY_CENTS:-9900}
     ARCLINK_API_INTERNAL_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}
+    ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL: ${ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL:-}
     ARCLINK_CONTROL_PROVISIONER_ENABLED: ${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}
     ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS: ${ARCLINK_CONTROL_PROVISIONER_INTERVAL_SECONDS:-30}
     ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE: ${ARCLINK_CONTROL_PROVISIONER_BATCH_SIZE:-5}
@@ -112,6 +114,7 @@ x-arclink-app: &arclink-app
 x-arclink-control-secret-env: &arclink-control-secret-env
   STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
   STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  ARCLINK_FLEET_ENROLLMENT_SECRET: ${ARCLINK_FLEET_ENROLLMENT_SECRET:-}
   CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
   CLOUDFLARE_API_TOKEN_REF: ${CLOUDFLARE_API_TOKEN_REF:-}
   CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:-}
@@ -264,6 +267,31 @@ services:
     healthcheck:
       <<: *healthcheck-http
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8900/api/v1/health >/dev/null"]
+
+  control-llm-router:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-env
+      ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+      ARCLINK_LLM_ROUTER_ENABLED: ${ARCLINK_LLM_ROUTER_ENABLED:-1}
+      ARCLINK_LLM_ROUTER_CHUTES_BASE_URL: ${ARCLINK_LLM_ROUTER_CHUTES_BASE_URL:-https://llm.chutes.ai/v1}
+      ARCLINK_LLM_ROUTER_CHUTES_API_KEY: ${ARCLINK_LLM_ROUTER_CHUTES_API_KEY:-}
+      ARCLINK_LLM_ROUTER_DEFAULT_MODEL: ${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}
+      ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS: ${ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS:-2500}
+      ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS: ${ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS:-20}
+      ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS: ${ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS:-80}
+    command: ["python3", "-m", "uvicorn", "arclink_llm_router:app", "--app-dir", "python", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "127.0.0.1:${ARCLINK_LLM_ROUTER_PORT:-8090}:8090"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.arclink-control-llm-router.rule=PathPrefix(`/v1`)"
+      - "traefik.http.routers.arclink-control-llm-router.entrypoints=web"
+      - "traefik.http.routers.arclink-control-llm-router.priority=180"
+      - "traefik.http.services.arclink-control-llm-router.loadbalancer.server.port=8090"
+    healthcheck:
+      <<: *healthcheck-http
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/health >/dev/null"]
 
   control-web:
     <<: *arclink-app
@@ -440,6 +468,19 @@ services:
       <<: *arclink-env
       ARCLINK_HEALTH_WATCH_HEALTH_CMD: ./bin/docker-health.sh
     command: ["./bin/docker-job-loop.sh", "health-watch", "300", "./bin/health-watch.sh"]
+
+  fleet-inventory-worker:
+    <<: *arclink-job
+    volumes:
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/vault:/home/arclink/arclink/arclink-priv/vault
+      - ./arclink-priv/published:/home/arclink/arclink/arclink-priv/published
+      - ./arclink-priv/quarto:/home/arclink/arclink/arclink-priv/quarto
+      - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
+      - ./arclink-priv/secrets/ssh:/home/arclink/arclink/arclink-priv/secrets/ssh
+      - arclink-qmd:/home/arclink/.qmd
+    command: ["./bin/docker-job-loop.sh", "fleet-inventory-worker", "30", "python3", "python/arclink_fleet_inventory_worker.py", "--once", "--json", "--notify"]
 
   curator-refresh:
     <<: *arclink-job

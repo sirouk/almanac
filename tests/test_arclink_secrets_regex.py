@@ -24,6 +24,7 @@ def test_secret_detection_covers_provider_token_families() -> None:
         "ANTHROPIC_API_KEY=sk-ant-" + "B" * 32,
         "AWS_ACCESS_KEY_ID=AKIA" + "C" * 16,
         "CHUTES_API_KEY=cpk_test_secret_value_12345",
+        "ARCLINK_LLM_ROUTER_KEY=acpod_live_0123456789ab_" + "F" * 36,
         "DISCORD_BOT_TOKEN=discord-bot-token-plaintext",
         "GITLAB_TOKEN=glpat-" + "D" * 24,
         "TELEGRAM_BOT_TOKEN=123456:" + "e" * 24,
@@ -36,6 +37,7 @@ def test_secret_detection_covers_provider_token_families() -> None:
         expect("[REDACTED]" in redacted, redacted)
         expect("sk-proj-" not in redacted and "sk-ant-" not in redacted, redacted)
         expect("AKIA" not in redacted and "cpk_test_secret" not in redacted, redacted)
+        expect("acpod_live_" not in redacted, redacted)
         expect("glpat-" not in redacted and "BEGIN PRIVATE KEY" not in redacted, redacted)
     print("PASS test_secret_detection_covers_provider_token_families")
 

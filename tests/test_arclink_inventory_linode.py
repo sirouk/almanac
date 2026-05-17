@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -70,7 +71,58 @@ def test_linode_provider_lists_instances_and_redacts_errors() -> None:
     print("PASS test_linode_provider_lists_instances_and_redacts_errors")
 
 
+class FakeLinodeClient:
+    def __init__(self) -> None:
+        self.created = 0
+
+    def provision_server(self, *, label, linode_type, image, region, authorized_keys):
+        self.created += 1
+        return {
+            "provider": "linode",
+            "provider_resource_id": "l-456",
+            "hostname": label,
+            "ssh_host": "203.0.113.20",
+            "region": region,
+            "status": "provisioning",
+            "hardware_summary": {"vcpu_cores": 4, "ram_gib": 8, "disk_gib": 160},
+        }
+
+
+def test_linode_cloud_create_records_bootstrap_failure_without_secret_leak() -> None:
+    control = load_module("arclink_control.py", "arclink_control_linode_bootstrap")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_linode_bootstrap")
+    conn = __import__("sqlite3").connect(":memory:")
+    conn.row_factory = __import__("sqlite3").Row
+    control.ensure_schema(conn)
+    client = FakeLinodeClient()
+
+    def failing_bootstrap(context):
+        expect(context["prereq_library"] == "bin/lib/ensure-prereqs.sh", str(context))
+        raise RuntimeError("join failed with token=linode-secret-token-value")
+
+    result = inventory.create_cloud_inventory_machine(
+        conn,
+        provider="linode",
+        client=client,
+        hostname="worker-us-east",
+        server_type="g6-standard-2",
+        image="linode/ubuntu24.04",
+        region="us-east",
+        ssh_keys=["ssh-rsa AAAA..."],
+        idempotency_key="linode-create-1",
+        bootstrap_runner=failing_bootstrap,
+    )
+    expect(result["status"] == "degraded", str(result))
+    metadata = json.loads(result["machine"]["metadata_json"])
+    metadata_text = json.dumps(metadata, sort_keys=True)
+    expect(metadata["provider_bootstrap"]["status"] == "failed", metadata_text)
+    expect("linode-secret-token-value" not in metadata_text, metadata_text)
+    expect("sensitive detail redacted" in metadata_text, metadata_text)
+    print("PASS test_linode_cloud_create_records_bootstrap_failure_without_secret_leak")
+
+
 if __name__ == "__main__":
     test_linode_provider_fails_closed_without_token()
     test_linode_provider_lists_instances_and_redacts_errors()
+    test_linode_cloud_create_records_bootstrap_failure_without_secret_leak()
     print("\nAll Linode inventory tests passed.")

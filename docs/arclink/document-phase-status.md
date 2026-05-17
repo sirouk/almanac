@@ -8,6 +8,54 @@ Updated: 2026-05-14 (ArcLink Wrapped runbook alignment)
 
 Updated: 2026-05-16 (Sovereign fleet Phase 0/1 documentation alignment)
 
+Updated: 2026-05-16 (Sovereign LLM Router source-level documentation alignment)
+
+## 2026-05-16 Sovereign LLM Router Documentation Update
+
+The current implementation plan and source tree show the LLM Router has moved
+past a bare skeleton into source-level behavior for FastAPI health/models/chat
+routes, per-deployment router-key verification, policy preflight, Chutes relay,
+streaming passthrough, sanitized usage settlement, and fake-upstream tests.
+Control Node Compose wiring, ArcPod provisioning defaults, and live Chutes
+proof remain follow-up gates, so this document pass updated project-facing docs
+without claiming production router deployment.
+
+### Files Updated
+
+| File | Change | Rationale |
+| --- | --- | --- |
+| `docs/arclink/llm-router.md` | Added the canonical source-level router behavior, ownership, route contract, policy checks, config, data-retention boundary, and proof gates | No canonical project-facing doc described the new router behavior or its rationale |
+| `docs/arclink/architecture.md` | Added the router to the module map and integration boundaries | Architecture still described Chutes as only the direct provider/key lifecycle surface |
+| `docs/arclink/sovereign-control-node.md` | Added the planned `control-llm-router` service role and LLM routing logic trace | The Control Node trace needed the router boundary while keeping Compose/live proof unclaimed |
+| `docs/arclink/operations-runbook.md` | Added the router boundary under Chutes Provider operations | Operators need to know direct Chutes is now a compatibility path until router mode is wired end to end |
+| `README.md` and `docs/DOC_STATUS.md` | Linked and classified the new canonical doc | New public docs must be discoverable and classified |
+| `docs/arclink/document-phase-status.md` | Added this dated documentation status note | Keeps the document-phase handoff reproducible |
+
+### Docs Inspected
+
+| File | Verdict |
+| --- | --- |
+| `AGENTS.md` | Still aligned on Control Node versus Shared Host boundaries, private-state safety, and deploy/live-proof gates |
+| `IMPLEMENTATION_PLAN.md` | Current steering source for the LLM Router phases and remaining Compose/provisioning/live-proof tasks |
+| `research/RALPHIE_ARCLINK_LLM_ROUTER_STEERING.md` | Matched the product contract and security rationale for per-deployment router keys |
+| `research/BUILD_COMPLETION_NOTES.md` and `mission_status.md` | Current fleet handoff notes remain separate; they do not document the router surface |
+| `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` | Still describe the hosted WSGI `/api/v1` API; the router is a separate OpenAI-compatible ASGI service |
+| `docs/arclink/fleet-cli.md` and `docs/arclink/fleet-operator-runbook.md` | Already describe the current fleet CLI/runbook proof boundary and did not need router changes |
+
+### Open Questions And Risks
+
+- Control Node Compose does not yet run `control-llm-router`.
+- ArcPod provisioning does not yet default Hermes to the router base URL and
+  router key secret.
+- The one-time raw router-key materialization boundary still needs to be wired
+  into deployment secret generation.
+- Live Chutes proof remains operator-gated and was not run or claimed.
+
+Docs are clear enough to proceed with the next router implementation slice.
+Canonical docs now describe current behavior and remaining gates without local
+operator identity, private paths, secrets, command transcripts, or
+machine-only evidence.
+
 ## 2026-05-16 Sovereign Fleet Phase 0/1 Documentation Update
 
 The current implementation plan and build notes show the first Sovereign fleet

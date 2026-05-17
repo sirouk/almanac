@@ -3004,6 +3004,46 @@ def test_user_provider_state_route() -> None:
             prepared["deployment_id"],
         ),
     )
+    raw_router_key = control.generate_llm_router_raw_key()
+    control.ensure_llm_router_key(
+        conn,
+        deployment_id=prepared["deployment_id"],
+        user_id=prepared["user_id"],
+        secret_ref=f"secret://arclink/llm-router/{prepared['deployment_id']}/api-key",
+        raw_key=raw_router_key,
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_llm_usage_events (
+          usage_id, request_id, deployment_id, user_id, provider, model,
+          input_tokens, output_tokens, total_tokens, estimated_cents,
+          actual_cents, status, stream, source_kind, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, 'chutes', ?, 11, 7, 18, 2, 3, 'succeeded', 1, 'router', ?, ?)
+        """,
+        (
+            "llm_usage_user_provider_1",
+            "router_req_user_provider_1",
+            prepared["deployment_id"],
+            prepared["user_id"],
+            "model-hosted",
+            "2026-05-16T10:00:00Z",
+            "2026-05-16T10:00:03Z",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_llm_budget_reservations (
+          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
+        ) VALUES (?, ?, ?, ?, 5, 'reserved', ?)
+        """,
+        (
+            "llm_res_user_provider_1",
+            "router_req_user_provider_2",
+            prepared["deployment_id"],
+            prepared["user_id"],
+            "2026-05-16T10:01:00Z",
+        ),
+    )
     conn.commit()
     session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_uprov")
 
@@ -3025,6 +3065,8 @@ def test_user_provider_state_route() -> None:
     provider_text = json.dumps(payload, sort_keys=True)
     expect("raw_operator_secret_value" not in provider_text, provider_text)
     expect(f"secret://arclink/chutes/{prepared['deployment_id']}" not in provider_text, provider_text)
+    expect(raw_router_key not in provider_text, provider_text)
+    expect(f"secret://arclink/llm-router/{prepared['deployment_id']}/api-key" not in provider_text, provider_text)
     model = payload["deployment_models"][0]
     expect(model["credential_state"] == "budget_warning", str(model))
     expect(model["allow_inference"] is True, str(model))
@@ -3039,8 +3081,21 @@ def test_user_provider_state_route() -> None:
     expect(lifecycle["canonical_mode"] == "scoped_secret_ref_per_user_or_deployment", str(lifecycle))
     expect(lifecycle["current_mode"] == "per_deployment_secret_ref", str(lifecycle))
     expect(lifecycle["posture"] == "active_scoped_secret_ref", str(lifecycle))
+    router_usage = model["llm_router"]
+    expect(router_usage["mode"] == "arclink_llm_router", str(router_usage))
+    expect(router_usage["credential_material"] == "never_returned", str(router_usage))
+    expect(router_usage["active_credential_count"] == 1, str(router_usage))
+    expect(router_usage["usage"]["request_count"] == 1, str(router_usage))
+    expect(router_usage["usage"]["input_tokens"] == 11, str(router_usage))
+    expect(router_usage["usage"]["output_tokens"] == 7, str(router_usage))
+    expect(router_usage["usage"]["actual_cents"] == 3, str(router_usage))
+    expect(router_usage["reservations"]["open_count"] == 1, str(router_usage))
+    expect(router_usage["quota"]["remaining_cents"] == 1500, str(router_usage))
     expect(payload["provider_boundary"]["credential_lifecycle"]["live_key_creation"] == "proof_gated", str(payload["provider_boundary"]))
     expect(payload["provider_boundary"]["threshold_continuation"]["status"] == "policy_question", str(payload["provider_boundary"]))
+    summary = payload["chutes_summary"]["llm_router"]
+    expect(summary["usage"]["request_count"] == 1, str(summary))
+    expect(summary["reservations"]["reserved_cents"] == 5, str(summary))
     settings = payload["provider_settings"]
     expect(settings["self_service_provider_add"] == "policy_question", str(settings))
     expect(settings["dashboard_mutation"] == "disabled", str(settings))
@@ -3128,6 +3183,32 @@ def test_admin_provider_state_route() -> None:
             prepared["deployment_id"],
         ),
     )
+    raw_router_key = control.generate_llm_router_raw_key()
+    control.ensure_llm_router_key(
+        conn,
+        deployment_id=prepared["deployment_id"],
+        user_id=prepared["user_id"],
+        secret_ref=f"secret://arclink/llm-router/{prepared['deployment_id']}/api-key",
+        raw_key=raw_router_key,
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_llm_usage_events (
+          usage_id, request_id, deployment_id, user_id, provider, model,
+          input_tokens, output_tokens, total_tokens, estimated_cents,
+          actual_cents, status, stream, source_kind, error_summary, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, 'chutes', ?, 4, 0, 4, 1, 0, 'failed', 0, 'router', 'upstream_unavailable', ?, ?)
+        """,
+        (
+            "llm_usage_admin_provider_1",
+            "router_req_admin_provider_1",
+            prepared["deployment_id"],
+            prepared["user_id"],
+            "model-hosted",
+            "2026-05-16T11:00:00Z",
+            "2026-05-16T11:00:01Z",
+        ),
+    )
     conn.commit()
     api.upsert_arclink_admin(conn, admin_id="admin_aprov", email="aprov@example.test", role="ops")
     session = api.create_arclink_admin_session(conn, admin_id="admin_aprov", session_id="asess_aprov")
@@ -3149,11 +3230,16 @@ def test_admin_provider_state_route() -> None:
     provider_text = json.dumps(payload, sort_keys=True)
     expect("raw_operator_secret_value" not in provider_text, provider_text)
     expect(f"secret://arclink/chutes/{prepared['deployment_id']}" not in provider_text, provider_text)
+    expect(raw_router_key not in provider_text, provider_text)
+    expect(f"secret://arclink/llm-router/{prepared['deployment_id']}/api-key" not in provider_text, provider_text)
     expect(payload["chutes_summary"]["blocked_count"] == 1, str(payload))
+    expect(payload["chutes_summary"]["llm_router"]["usage"]["failed_count"] == 1, str(payload))
     model = payload["deployment_models"][0]
     expect(model["credential_state"] == "budget_exhausted", str(model))
     expect(model["allow_inference"] is False, str(model))
     expect(model["chutes"]["key_id"] == "key_admin_visible", str(model))
+    expect(model["llm_router"]["usage"]["request_count"] == 1, str(model))
+    expect(model["llm_router"]["usage"]["failed_count"] == 1, str(model))
     lifecycle = model["chutes"]["credential_lifecycle"]
     expect(lifecycle["current_mode"] == "per_deployment_secret_ref", str(lifecycle))
     expect(lifecycle["posture"] == "suspended_or_exhausted", str(lifecycle))

@@ -1279,6 +1279,7 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
             opened_repo = asyncio.run(code_api.open_repo(JsonRequest({"path": "/demo"})))
             expect(opened_repo["repo"]["path"] == "/demo", str(opened_repo))
             expect("status" in opened_repo and opened_repo["status"]["repo"] == "/demo", str(opened_repo))
+            expect(opened_repo["status"]["commits"][0]["subject"] == "initial", str(opened_repo["status"]))
             try:
                 asyncio.run(code_api.open_repo(JsonRequest({"path": "/"})))
             except Exception as exc:
@@ -1288,6 +1289,7 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
             status = asyncio.run(code_api.git_status(repo="/demo"))
             expect(any(item["path"] == "app.py" for item in status["unstaged"]), str(status))
             expect(any(item["path"] == "notes.md" for item in status["untracked"]), str(status))
+            expect(status["commits"] and status["commits"][0]["short_hash"], str(status))
 
             diff = asyncio.run(code_api.git_diff(repo="/demo", path="app.py"))
             expect(diff["mode"] == "working-tree", str(diff))
@@ -1344,6 +1346,12 @@ def test_arclink_code_source_control_reports_and_updates_git_state() -> None:
                 code_api.git_commit(JsonRequest({"repo": "/demo", "message": "commit from source control"}))
             )
             expect(not any(item["path"] == "app.py" for item in committed["status"]["staged"]), str(committed))
+            expect(committed["status"]["commits"][0]["subject"] == "commit from source control", str(committed))
+            first_page = asyncio.run(code_api.git_commits(repo="/demo", limit=1))
+            expect(first_page["commits"][0]["subject"] == "commit from source control", str(first_page))
+            expect(first_page["has_more"] is True and first_page["next_offset"] == 1, str(first_page))
+            second_page = asyncio.run(code_api.git_commits(repo="/demo", limit=1, offset=first_page["next_offset"]))
+            expect(second_page["commits"][0]["subject"] == "initial", str(second_page))
 
             source.write_text("print('dirty')\n", encoding="utf-8")
             discarded = asyncio.run(
@@ -1519,6 +1527,8 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect('"/ops/trash"' in body and "Move \" + item.path + \" to trash?" in body, "Code UI should confirmation-gate trash")
     expect('"/search?q="' in body and "renderSearch()" in body, "Code UI should expose workspace search")
     expect('"/repos/open"' in body and "Open Source" in body and "Sources" in body, "Code UI should expose explicit Sources picker")
+    expect('"/git/commits?repo="' in body and "function renderCommitHistory" in body and "Recent commits" in body, "Code UI should expose paged recent commit history")
+    expect("hermes-code-repo-actions" in body and "hermes-code-source-summary" in body, "Code Source row should keep source controls compact and right-aligned")
     expect("function sourceIconButton" in body and "Refresh status" in body and "Stage all" in body and "Unstage all" in body, "Source-control bulk actions should use compact icon controls")
     expect("function buildChangeTree" in body and "function renderChangeTreeNode" in body and "hermes-code-change-folder" in body, "Source-control changes should render as a folder tree")
     expect("renderSearchBox()" in body and "state.leftPanel === \"search\"" not in body, "Code UI should use inline search instead of a separate Search panel")

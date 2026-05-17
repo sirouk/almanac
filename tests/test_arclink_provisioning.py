@@ -158,7 +158,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["HERMES_TUI_DIR"] == "/opt/arclink/runtime/hermes-agent-src/ui-tui", str(intent["environment"]))
     expect(intent["environment"]["TELEGRAM_REACTIONS"] == "true", str(intent["environment"]))
     expect(intent["environment"]["DISCORD_REACTIONS"] == "true", str(intent["environment"]))
-    expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/chutes_api_key", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_BASE_URL"] == "http://control-llm-router:8090/v1", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_REF"] == "secret://arclink/llm-router/dep_1/api-key", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/llm_router_api_key", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_LLM_ROUTER_API_KEY_REF"] == "secret://arclink/llm-router/dep_1/api-key", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] == "1", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CAPTAIN_NAME"] == "person@example.test", str(intent["environment"]))
@@ -242,9 +245,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",
         str(services["managed-context-install"]),
     )
-    expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
+    expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "dashboard_password", "target": "/run/secrets/dashboard_password"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
-    expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
+    expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["hermes-gateway"]["secrets"], str(services["hermes-gateway"]))
+    expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))
     expect(
         intent["runtime_resolution"]["stock_image_file_env"]["nextcloud"] == [
@@ -254,7 +258,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         str(intent["runtime_resolution"]),
     )
     expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
-    expect("chutes_api_key" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
+    expect("llm_router_api_key" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
     expect("dashboard_password" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
     expect(services["hermes-gateway"]["labels"] == {}, str(services["hermes-gateway"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-dashboard"]))
@@ -338,7 +342,7 @@ def test_secret_validator_fails_job_and_same_idempotency_key_can_resume_after_fi
     control = load_module("arclink_control.py", "arclink_control_provisioning_resume_test")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_resume_test")
     conn = memory_db(control)
-    seed_deployment(control, conn, metadata={"chutes_secret_ref": "sk_live_plaintext"})
+    seed_deployment(control, conn, metadata={"llm_router_api_key_ref": "sk_live_plaintext"})
     try:
         provisioning.render_arclink_provisioning_dry_run(conn, deployment_id="dep_1", idempotency_key="dry-run-resume")
     except provisioning.ArcLinkSecretReferenceError as exc:
@@ -350,7 +354,7 @@ def test_secret_validator_fails_job_and_same_idempotency_key_can_resume_after_fi
     expect("plaintext" in failed["error"], str(dict(failed)))
     conn.execute(
         "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = 'dep_1'",
-        (json.dumps({"chutes_secret_ref": "secret://arclink/chutes/dep_1"}, sort_keys=True),),
+        (json.dumps({"llm_router_api_key_ref": "secret://arclink/llm-router/dep_1/api-key"}, sort_keys=True),),
     )
     conn.commit()
     resumed = provisioning.render_arclink_provisioning_dry_run(conn, deployment_id="dep_1", idempotency_key="dry-run-resume")
@@ -435,9 +439,9 @@ def test_secret_validator_rejects_plaintext_provider_and_gateway_values() -> Non
             },
             "compose": {
                 "secrets": {
-                    "chutes_api_key": {
-                        "source": "chutes_api_key",
-                        "target": "/run/secrets/chutes_api_key",
+                    "llm_router_api_key": {
+                        "source": "llm_router_api_key",
+                        "target": "/run/secrets/llm_router_api_key",
                     }
                 }
             },
@@ -467,10 +471,31 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect(
-        intent["runtime_resolution"]["app_ref_resolver_required"] == ["chutes_api_key", "dashboard_password", "notion_webhook_secret"],
+        intent["runtime_resolution"]["app_ref_resolver_required"] == ["llm_router_api_key", "dashboard_password", "notion_webhook_secret"],
         str(intent["runtime_resolution"]),
     )
     print("PASS test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit")
+
+
+def test_direct_chutes_provider_secret_requires_explicit_compatibility_flag() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_direct_chutes_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_direct_chutes_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        env={
+            "ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS": "1",
+            "ARCLINK_CHUTES_BASE_URL": "https://llm.chutes.ai/v1",
+        },
+    )
+    expect(intent["secret_refs"]["chutes_api_key"] == "secret://arclink/chutes/dep_1", str(intent["secret_refs"]))
+    expect("llm_router_api_key" not in intent["secret_refs"], str(intent["secret_refs"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_BASE_URL"] == "https://llm.chutes.ai/v1", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_API_KEY_FILE"] == "/run/secrets/chutes_api_key", str(intent["environment"]))
+    expect({"source": "chutes_api_key", "target": "/run/secrets/chutes_api_key"} in intent["compose"]["services"]["managed-context-install"]["secrets"], str(intent["compose"]["services"]["managed-context-install"]))
+    print("PASS test_direct_chutes_provider_secret_requires_explicit_compatibility_flag")
 
 
 def test_nextcloud_postgres_database_name_is_identifier_safe() -> None:
@@ -665,12 +690,13 @@ def main() -> int:
     test_failed_provisioning_retry_clears_stale_timestamps_and_error()
     test_secret_validator_rejects_plaintext_provider_and_gateway_values()
     test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit()
+    test_direct_chutes_provider_secret_requires_explicit_compatibility_flag()
     test_nextcloud_postgres_database_name_is_identifier_safe()
     test_failed_execution_job_gets_idempotent_rollback_plan_event()
     test_rendered_services_include_resource_limits_and_healthchecks()
     test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
     test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
-    print("PASS all 12 ArcLink provisioning tests")
+    print("PASS all 13 ArcLink provisioning tests")
     return 0
 
 

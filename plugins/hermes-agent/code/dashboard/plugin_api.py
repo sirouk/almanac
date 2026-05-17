@@ -92,6 +92,8 @@ _MAX_DIFF_BYTES = 400_000
 _MAX_SEARCH_FILE_BYTES = 400_000
 _MAX_SEARCH_RESULTS = 80
 _MAX_REPOS = 80
+_MAX_COMMIT_HISTORY_LIMIT = 25
+_DEFAULT_COMMIT_HISTORY_LIMIT = 5
 _MAX_REPO_SCAN_DEPTH = 4
 _MAX_TREE_DEPTH = 4
 _MAX_TREE_CHILDREN = 200
@@ -766,6 +768,63 @@ def _git_branch(repo: Path) -> str:
     return short or "detached"
 
 
+def _bounded_commit_limit(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = _DEFAULT_COMMIT_HISTORY_LIMIT
+    return max(1, min(parsed, _MAX_COMMIT_HISTORY_LIMIT))
+
+
+def _bounded_commit_offset(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = 0
+    return max(0, parsed)
+
+
+def _git_commits_payload(repo: Path, *, limit: Any = _DEFAULT_COMMIT_HISTORY_LIMIT, offset: Any = 0) -> dict[str, Any]:
+    bounded_limit = _bounded_commit_limit(limit)
+    bounded_offset = _bounded_commit_offset(offset)
+    output = _run_git(
+        repo,
+        [
+            "log",
+            f"--max-count={bounded_limit + 1}",
+            f"--skip={bounded_offset}",
+            "--date=iso-strict",
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%s",
+        ],
+        check=False,
+    )
+    rows = [line for line in output.splitlines() if line.strip()]
+    commits: list[dict[str, str]] = []
+    for row in rows[:bounded_limit]:
+        parts = row.split("\x1f", 4)
+        if len(parts) != 5:
+            continue
+        full_hash, short_hash, author, date, subject = parts
+        commits.append(
+            {
+                "hash": full_hash,
+                "short_hash": short_hash,
+                "author": _clean_text(author, 120),
+                "date": _clean_text(date, 80),
+                "subject": _clean_text(subject, 240) or "(no subject)",
+            }
+        )
+    has_more = len(rows) > bounded_limit
+    next_offset = bounded_offset + len(commits)
+    return {
+        "commits": commits,
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "limit": bounded_limit,
+        "offset": bounded_offset,
+    }
+
+
 def _repo_item(root: Path, repo: Path, root_id: str = "workspace", root_label: str = "Workspace") -> dict[str, Any]:
     display = _repo_display_path(repo, root)
     return {
@@ -840,7 +899,13 @@ def _change_record(path: str, x_status: str, y_status: str, old_path: str = "") 
     }
 
 
-def _git_status_payload(repo: Path, repo_relative: str, root_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+def _git_status_payload(
+    repo: Path,
+    repo_relative: str,
+    root_ctx: dict[str, Any] | None = None,
+    *,
+    commit_limit: Any = _DEFAULT_COMMIT_HISTORY_LIMIT,
+) -> dict[str, Any]:
     output = _run_git(repo, ["status", "--porcelain=v1", "-z", "-b"])
     records = output.split("\0")
     branch = _git_branch(repo)
@@ -872,6 +937,7 @@ def _git_status_payload(repo: Path, repo_relative: str, root_ctx: dict[str, Any]
             untracked.append(change)
         elif change["unstaged"]:
             unstaged.append(change)
+    commit_history = _git_commits_payload(repo, limit=commit_limit, offset=0)
     return {
         "repo": _display_path(repo_relative),
         "root": str(root_ctx.get("id")) if root_ctx else "workspace",
@@ -881,6 +947,9 @@ def _git_status_payload(repo: Path, repo_relative: str, root_ctx: dict[str, Any]
         "unstaged": unstaged,
         "untracked": untracked,
         "clean": not staged and not unstaged and not untracked,
+        "commits": commit_history["commits"],
+        "commits_has_more": commit_history["has_more"],
+        "commits_next_offset": commit_history["next_offset"],
     }
 
 
@@ -988,9 +1057,30 @@ async def open_repo(request: Request) -> dict[str, Any]:
 
 
 @router.get("/git/status")
-async def git_status(repo: str = "/", root: str = "workspace") -> dict[str, Any]:
+async def git_status(repo: str = "/", root: str = "workspace", commit_limit: int = _DEFAULT_COMMIT_HISTORY_LIMIT) -> dict[str, Any]:
     target, relative, root_ctx = _resolve_repo(repo, root)
-    return _git_status_payload(target, relative, root_ctx)
+    return _git_status_payload(target, relative, root_ctx, commit_limit=commit_limit)
+
+
+@router.get("/git/commits")
+async def git_commits(
+    repo: str = "/",
+    root: str = "workspace",
+    limit: int = _DEFAULT_COMMIT_HISTORY_LIMIT,
+    offset: int = 0,
+) -> dict[str, Any]:
+    target, relative, root_ctx = _resolve_repo(repo, root)
+    history = _git_commits_payload(target, limit=limit, offset=offset)
+    return {
+        "repo": _display_path(relative),
+        "root": str(root_ctx.get("id")) if root_ctx else "workspace",
+        "root_label": str(root_ctx.get("label")) if root_ctx else "Workspace",
+        "commits": history["commits"],
+        "has_more": history["has_more"],
+        "next_offset": history["next_offset"],
+        "limit": history["limit"],
+        "offset": history["offset"],
+    }
 
 
 @router.get("/git/diff")

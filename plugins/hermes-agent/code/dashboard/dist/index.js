@@ -227,6 +227,13 @@
     return api("/preview?path=" + encodeURIComponent(item.path || "") + "&root=" + encodeURIComponent(itemRoot(item)));
   }
 
+  function formatCommitDate(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
   function changeSort(a, b) {
     return String(a.path).localeCompare(String(b.path));
   }
@@ -248,6 +255,7 @@
       repo: null,
       source: null,
       sourceBusy: false,
+      commitBusy: false,
       gitMessage: "",
       errorMessage: "",
       diff: null,
@@ -315,13 +323,43 @@
 
     function loadSource(repo) {
       if (!repo) return;
-      patch({ sourceBusy: true, errorMessage: "" });
-      fetchJSON(api("/git/status?repo=" + encodeURIComponent(repo.path || "/") + "&root=" + encodeURIComponent(repo.root_id || repo.root || "workspace")))
+      patch({ sourceBusy: true, commitBusy: false, errorMessage: "" });
+      fetchJSON(api("/git/status?repo=" + encodeURIComponent(repo.path || "/") + "&root=" + encodeURIComponent(repo.root_id || repo.root || "workspace") + "&commit_limit=5"))
         .then(function (data) {
           patch({ sourceBusy: false, source: data });
         })
         .catch(function (error) {
           patch({ sourceBusy: false, source: null, errorMessage: error.message || "Unable to load source control" });
+        });
+    }
+
+    function loadMoreCommits() {
+      if (!state.repo || !state.source || state.commitBusy) return;
+      const currentCommits = state.source.commits || [];
+      const offset = typeof state.source.commits_next_offset === "number" ? state.source.commits_next_offset : currentCommits.length;
+      patch({ commitBusy: true, errorMessage: "" });
+      fetchJSON(
+        api(
+          "/git/commits?repo=" +
+            encodeURIComponent(state.repo.path || "/") +
+            "&root=" +
+            encodeURIComponent(state.repo.root_id || state.repo.root || "workspace") +
+            "&offset=" +
+            encodeURIComponent(String(offset)) +
+            "&limit=5"
+        )
+      )
+        .then(function (data) {
+          patch(function (current) {
+            const source = Object.assign({}, current.source || {});
+            source.commits = (source.commits || []).concat(data.commits || []);
+            source.commits_has_more = !!data.has_more;
+            source.commits_next_offset = data.next_offset;
+            return { commitBusy: false, source: source };
+          });
+        })
+        .catch(function (error) {
+          patch({ commitBusy: false, errorMessage: error.message || "Unable to load commits" });
         });
     }
 
@@ -1339,6 +1377,46 @@
       );
     }
 
+    function renderCommitHistory(source) {
+      const commits = (source && source.commits) || [];
+      return h(
+        "section",
+        { className: "hermes-code-commit-history" },
+        h(
+          "div",
+          { className: "hermes-code-source-group-title" },
+          h("span", null, "Recent commits"),
+          h("strong", null, commits.length)
+        ),
+        commits.length
+          ? h(
+              "div",
+              { className: "hermes-code-commit-list" },
+              commits.map(function (commit) {
+                return h(
+                  "div",
+                  { className: "hermes-code-commit-row", key: commit.hash || commit.short_hash },
+                  h("span", { className: "hermes-code-commit-hash" }, commit.short_hash || ""),
+                  h(
+                    "span",
+                    { className: "hermes-code-commit-subject", title: commit.subject || "" },
+                    commit.subject || "(no subject)"
+                  ),
+                  h(
+                    "small",
+                    { className: "hermes-code-commit-meta" },
+                    [commit.author, formatCommitDate(commit.date)].filter(Boolean).join(" · ")
+                  )
+                );
+              })
+            )
+          : h("div", { className: "hermes-code-source-empty" }, "No commits yet"),
+        source && source.commits_has_more
+          ? h("button", { type: "button", className: "hermes-code-more-button", onClick: loadMoreCommits, disabled: state.commitBusy || state.sourceBusy }, state.commitBusy ? "Loading" : "More")
+          : null
+      );
+    }
+
     function renderSourceControl() {
       const source = state.source || { staged: [], unstaged: [], untracked: [], clean: true };
       const hasStaged = source.staged && source.staged.length;
@@ -1351,13 +1429,7 @@
         h(
           "div",
           { className: "hermes-code-repo-row" },
-          h(
-            "div",
-            { className: "hermes-code-repo-top-actions" },
-            h("button", { type: "button", onClick: openSourcePicker }, "Open Source"),
-            sourceIconButton("Refresh sources", "↻", function () { loadRepos(false); }, state.sourceBusy),
-            sourceIconButton("Close source", "×", closeRepo, !state.repo)
-          ),
+          h("button", { type: "button", onClick: openSourcePicker }, "Open Source"),
           h(
             "select",
             {
@@ -1373,6 +1445,12 @@
             state.repos.map(function (repo) {
               return h("option", { key: repoKey(repo), value: repoKey(repo) }, (repo.root_label || "Workspace") + " " + repo.path + "  " + repo.branch);
             })
+          ),
+          h(
+            "div",
+            { className: "hermes-code-repo-actions" },
+            sourceIconButton("Refresh repositories", "↻", function () { loadRepos(false); }, state.sourceBusy),
+            sourceIconButton("Close repo", "×", closeRepo, !state.repo)
           )
         ),
         state.repo
@@ -1420,7 +1498,8 @@
                     renderChangeGroup("Changes", source.unstaged || [], "unstaged"),
                     renderChangeGroup("Untracked", source.untracked || [], "untracked")
                   ),
-              h("div", { className: "hermes-code-source-head" }, h("strong", null, repoLabel), h("span", null, branchLabel))
+              h("div", { className: "hermes-code-source-summary" }, h("strong", { title: repoLabel }, repoLabel), h("span", { title: branchLabel }, branchLabel)),
+              renderCommitHistory(source)
             )
           : h(
               "div",

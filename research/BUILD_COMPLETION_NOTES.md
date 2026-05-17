@@ -1,5 +1,478 @@
 # Build Completion Notes
 
+## 2026-05-16 Sovereign LLM Router Review Button-Up
+
+Scope: reviewed the completed LLM Router work against the follow-up audit and
+closed the remaining local testing-rigor and isolation gaps without touching
+`arclink-priv`, live secrets, production services, deploy/upgrade flows, or
+Hermes core.
+
+Files changed:
+
+- `tests/test_arclink_llm_router.py`: strengthened budget, billing, rate-limit,
+  and concurrency tests to assert blocked requests do not reach the upstream
+  Chutes transport; added coverage that legacy `CHUTES_API_KEY` alone does not
+  configure the router.
+- `python/arclink_llm_router.py`: removed the legacy `CHUTES_API_KEY` fallback;
+  the router now requires `ARCLINK_LLM_ROUTER_CHUTES_API_KEY` explicitly.
+- `compose.yaml` and `tests/test_arclink_docker.py`: kept
+  `control-llm-router` off the broad control-secret environment anchor so the
+  central router Chutes credential is isolated to the router service.
+- `python/arclink_secrets_regex.py`, `python/arclink_evidence.py`, and
+  `tests/test_arclink_secrets_regex.py`: added redaction coverage for
+  `acpod_live_...` ArcPod router keys and the
+  `ARCLINK_LLM_ROUTER_CHUTES_API_KEY` env name.
+- `docs/arclink/llm-router.md`: documented the explicit router credential
+  requirement with no `CHUTES_API_KEY` fallback.
+
+Validation run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_llm_router.py python/arclink_chutes.py
+  python/arclink_control.py python/arclink_provisioning.py
+  python/arclink_sovereign_worker.py python/arclink_secrets_regex.py
+  python/arclink_evidence.py` passed.
+- `python3 tests/test_arclink_llm_router.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_evidence.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks:
+
+- No live Chutes proof, production deploy, or provider mutation was run; those
+  remain explicit operator-gated steps.
+
+## 2026-05-16 Sovereign LLM Router Phase 6 Slice
+
+Scope: completed the remaining local router provider-state/docs slice without
+touching `arclink-priv`, live secrets, production services, payment/provider
+mutations, deploy/upgrade flows, or Hermes core.
+
+Files changed:
+
+- `python/arclink_api_auth.py`: added sanitized ArcLink LLM Router usage,
+  reservation, credential-count, and quota summaries to provider-state payloads.
+- `tests/test_arclink_hosted_api.py`: added user/admin provider-state coverage
+  proving router usage is visible and raw keys/secret refs are not returned.
+- `python/arclink_hosted_api.py` and `docs/openapi/arclink-v1.openapi.json`:
+  documented `/v1/models` and `/v1/chat/completions` in the OpenAPI catalog.
+- `docs/API_REFERENCE.md`, `docs/arclink/llm-router.md`,
+  `docs/arclink/operations-runbook.md`, and
+  `docs/arclink/sovereign-control-node.md`: updated router topology,
+  ArcPod defaults, compatibility flag, live-proof gate, and provider-state
+  consumption notes.
+- `IMPLEMENTATION_PLAN.md`: marked the local router acceptance criteria that
+  this pass completed.
+
+Implementation rationale:
+
+- Kept router key storage on the existing SHA-256 token digest because ArcLink
+  router keys are generated high-entropy API keys; a keyed-HMAC migration is
+  useful defense-in-depth but is better handled with the broader token hash
+  migration rail.
+- Exposed only aggregate usage/quota data through provider-state. Raw router
+  keys, central Chutes credentials, secret refs, prompts, and completions remain
+  outside the payload.
+
+Validation run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_llm_router.py python/arclink_chutes.py
+  python/arclink_control.py python/arclink_provisioning.py
+  python/arclink_sovereign_worker.py python/arclink_api_auth.py
+  python/arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_llm_router.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks:
+
+- No live Chutes proof, production deploy, or provider mutation was run; those
+  remain explicit operator-gated steps.
+
+## 2026-05-16 Sovereign Fleet Handoff Artifact Repair
+
+Scope: repaired missing handoff artifacts after the prior BUILD validation
+handoff failure. This pass preserved the existing fleet/provider worktree,
+did not touch `arclink-priv`, live secrets, production services, payment or
+provider state, remote SSH, deploy/upgrade flows, or Hermes core, and did not
+claim live fleet readiness.
+
+Files changed:
+
+- `mission_status.md`: added an honest mission status showing local/fake
+  validation complete while Phase 7 live two-host proof remains
+  operator-gated.
+- `research/SOVEREIGN_FLEET_TWO_HOST_LIVE_PROOF_CHECKLIST_20260516.md`: added
+  the Phase 7 authorization, preflight, live-step, evidence, and completion
+  checklist required before any live proof can run.
+- `research/BUILD_COMPLETION_NOTES.md`: recorded this artifact repair pass.
+
+Validation run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_fleet.py
+  python/arclink_inventory.py python/arclink_executor.py
+  python/arclink_sovereign_worker.py python/arclink_action_worker.py
+  python/arclink_fleet_enrollment.py python/arclink_fleet_inventory_worker.py
+  python/arclink_hosted_api.py python/arclink_secrets_regex.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh bin/arclink-fleet-probe-wrapper
+  test.sh` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_enrollment.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_inventory_worker.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_join.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory_hetzner.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory_linode.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_action_worker.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_executor.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_sovereign_worker.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_deploy_regressions.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_schema.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_telegram.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_discord.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_hosted_api.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_api_auth.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_secrets_regex.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_docker.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_documentation_truths.py` passed.
+- `npm --prefix web test` passed.
+- `npm --prefix web run lint` passed.
+- `npm --prefix web run build` passed.
+- `npm --prefix web run test:browser` passed with 45 passed and 3 skipped.
+
+Known risks before terminal fleet readiness:
+
+- No live clean-host prerequisite install, worker join, non-loopback SSH probe,
+  real provider creation/deletion, production deploy, or two-host proof was
+  run. Those remain explicit Operator-authorized gates.
+- `shellcheck` is not installed in this environment, so shellcheck validation
+  was not run.
+
+## 2026-05-16 Sovereign Fleet Validation Retry
+
+Scope: reran the local BUILD validation floor after the prior handoff
+validation failure. This pass preserved the existing fleet/provider worktree,
+did not touch `arclink-priv`, live secrets, production services, payment or
+provider state, remote SSH, deploy/upgrade flows, or Hermes core, and found no
+additional source repair needed before the live/operator gates.
+
+Files changed:
+
+- `research/BUILD_COMPLETION_NOTES.md`: recorded the validation-only retry,
+  outcomes, and residual live-proof risks.
+
+Validation run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_fleet.py
+  python/arclink_inventory.py python/arclink_executor.py
+  python/arclink_sovereign_worker.py python/arclink_action_worker.py
+  python/arclink_fleet_enrollment.py python/arclink_fleet_inventory_worker.py
+  python/arclink_hosted_api.py python/arclink_secrets_regex.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh bin/arclink-fleet-probe-wrapper
+  test.sh` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_enrollment.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_inventory_worker.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_join.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory_hetzner.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory_linode.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_action_worker.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_executor.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_sovereign_worker.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_deploy_regressions.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_schema.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_telegram.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_discord.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_hosted_api.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_api_auth.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_secrets_regex.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_docker.py` passed.
+- `npm --prefix web test` passed.
+- `npm --prefix web run lint` passed.
+- `npm --prefix web run build` passed.
+- `npm --prefix web run test:browser` passed with 45 passed and 3 skipped.
+
+Known risks:
+
+- `shellcheck` is not installed in this environment, so shellcheck validation
+  was not run.
+- No live clean-host prerequisite install, worker join, non-loopback SSH probe,
+  provider creation, production deploy, or two-host proof was run. Those remain
+  explicit Operator-authorized gates, and fleet readiness is not claimed.
+- At the time of that validation-only retry, this checkout did not contain
+  `mission_status.md`; the handoff artifact repair entry above supersedes that
+  gap with an honest status file.
+
+## 2026-05-16 Sovereign Fleet Provider Inventory Phase 6 Slice
+
+Scope: implemented the next local Phase 6 provider-inventory slice without
+touching `arclink-priv`, live secrets, production services, live provider
+accounts, payment/provider mutations, remote SSH, deploy/upgrade flows, or
+Hermes core.
+
+Files changed:
+
+- `python/arclink_inventory.py`: added idempotent Hetzner/Linode
+  create/register/remove orchestration, duplicate-hostname prevention,
+  provider delete guardrails, bootstrap metadata tied to
+  `bin/arclink-fleet-join.sh` and `bin/lib/ensure-prereqs.sh`, provider
+  billing-ref persistence, and CLI flags for provider create/remove.
+- `python/arclink_control.py`: added additive
+  `arclink_inventory_machines.metadata_json` migration support.
+- `bin/deploy.sh`: forwards `control inventory add hetzner|linode` arguments
+  into the inventory CLI.
+- `tests/test_arclink_inventory_hetzner.py` and
+  `tests/test_arclink_inventory_linode.py`: added fake-provider coverage for
+  create replay, duplicate prevention, bootstrap failure redaction, and
+  guarded provider destroy replay.
+- `docs/arclink/fleet-cli.md`,
+  `docs/arclink/fleet-operator-runbook.md`, and `IMPLEMENTATION_PLAN.md`:
+  documented the provider slice and kept live proof/operator gates explicit.
+
+Implementation rationale:
+
+- Reused `arclink_operation_idempotency` instead of adding a provider-specific
+  replay table.
+- Stored provider bootstrap state as inventory metadata while leaving worker
+  admission dependent on enrollment callback and probe health.
+- Kept live SSH wait/join execution out of this local pass; the code exposes a
+  bootstrap hook for fake proof and future authorized live proof without
+  passing enrollment tokens through argv.
+
+Validation run:
+
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory_hetzner.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory_linode.py`
+  passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_schema.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_deploy_regressions.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_enrollment.py`
+  passed.
+- `python3 -m py_compile python/arclink_control.py python/arclink_inventory.py
+  python/arclink_inventory_hetzner.py python/arclink_inventory_linode.py`
+  passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- No real Hetzner/Linode API call, remote SSH wait, worker join, clean-host
+  prereq install, or two-host proof was run. Those remain
+  Operator-authorized live gates.
+- `shellcheck` is not installed in this environment, so shellcheck validation
+  was not run.
+
+## 2026-05-16 Sovereign Fleet CLI Hardening Phase 5 Slice
+
+Scope: implemented the next open `IMPLEMENTATION_PLAN.md` Phase 5 operator CLI
+surface without touching `arclink-priv`, live secrets, deploy keys,
+production services, Docker install/upgrade, remote SSH proof, providers,
+payment systems, or Hermes core.
+
+Files changed:
+
+- `bin/deploy.sh`: added `fleet-key --rotate --json`, `inventory rotate-key`,
+  non-interactive `control register-worker --hostname --ssh-host --ssh-user`
+  with JSON output, JSON-safe default smoke behavior, probe argument forwarding,
+  and JSON `inventory set-strategy`.
+- `python/arclink_inventory.py`: added scriptable inventory list filters and
+  JSON support for strategy/provider subcommands while preserving existing
+  table output.
+- `docs/arclink/fleet-cli.md` and
+  `docs/arclink/fleet-operator-runbook.md`: documented command contracts,
+  exit codes, JSON examples, key rotation, re-attestation, health, drain/remove,
+  and recovery.
+- `tests/test_arclink_inventory.py` and `tests/test_deploy_regressions.py`:
+  added regression coverage for filters, non-interactive registration, key
+  rotation aliases, JSON contracts, and docs.
+- `IMPLEMENTATION_PLAN.md`: marked the Phase 5 CLI slice as implemented
+  locally and left live proof/provider work gated.
+
+Implementation rationale:
+
+- Kept the canonical surface in `deploy.sh control` instead of introducing a
+  new binary.
+- Made JSON worker registration skip live SSH smoke by default so stdout stays
+  parseable; `--smoke-test` opts into operator-authorized live proof.
+
+Validation run:
+
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh bin/arclink-fleet-probe-wrapper test.sh` passed.
+- `python3 -m py_compile python/arclink_inventory.py python/arclink_fleet_enrollment.py python/arclink_fleet_inventory_worker.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_inventory.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_deploy_regressions.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_inventory_worker.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet_join.py` passed.
+- `PYTHONPATH=python:tests python3 tests/test_arclink_fleet.py` passed.
+- `./deploy.sh control register-worker --help` passed.
+- `./deploy.sh control fleet-key --help` passed.
+- `PYTHONPATH=python python3 python/arclink_inventory.py set-strategy headroom --json` passed.
+
+Known risks:
+
+- No live key rotation, non-loopback SSH registration, clean-host worker join,
+  provider provisioning, or two-host proof was run. Phase 6 and Phase 7 remain
+  open/operator-gated, and fleet readiness is not claimed.
+- `shellcheck` is not installed in this environment, so shellcheck validation
+  was not run.
+
+## 2026-05-16 Sovereign Fleet Enrollment HMAC Rotation Follow-Through
+
+Scope: closed the remaining Phase 2 enrollment HMAC-root rotation UX from
+`IMPLEMENTATION_PLAN.md`. This pass stayed local and did not touch
+`arclink-priv`, live secrets, deploy keys, production services, Docker
+install/upgrade, remote SSH, providers, payment systems, or Hermes core.
+
+Files changed:
+
+- `python/arclink_fleet_enrollment.py`: added `rotate-secret` support that
+  records an audit event and revokes pending enrollment tokens without
+  rendering token or root material.
+- `bin/deploy.sh`: exposed `deploy.sh control enrollment rotate-secret` and
+  shortcut alias `control-enrollment-rotate-secret`, generating and persisting a
+  fresh private HMAC root through the existing runtime-config writer.
+- `python/arclink_secrets_regex.py`: redacts `arcfleet_v1...` enrollment
+  tokens at shared boundaries.
+- `tests/test_arclink_fleet_enrollment.py` and
+  `tests/test_deploy_regressions.py`: added coverage for pending-token
+  revocation, audit redaction, and control command routing.
+- `IMPLEMENTATION_PLAN.md`: marked Phase 2 HMAC rotation follow-through as
+  implemented.
+
+Implementation rationale:
+
+- Chose rotation plus pending-token revocation instead of dual-root token
+  validation. Pending enrollments are one-time bootstrap credentials; after a
+  root rotation, accepting old pending tokens would weaken the operator's trust
+  boundary.
+
+Validation run:
+
+- `python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 -m py_compile python/arclink_fleet_enrollment.py python/arclink_secrets_regex.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Phase 3 worker join/probe wrapper, Phase 4 periodic inventory worker, Phase 6
+  provider provisioning, and Phase 7 live two-host proof remain open or
+  operator-gated. Fleet readiness is not claimed by this pass.
+
+## 2026-05-16 Sovereign Fleet Enrollment Phase 2 Slice
+
+Scope: implemented the highest-priority open `IMPLEMENTATION_PLAN.md` Phase 2
+surface for worker enrollment and audit-chain trust, while treating the
+historical Wave 1 audit report as a regression gate. This pass stayed local:
+no `arclink-priv`, live secrets, deploy keys, production services,
+provider/payment mutation, remote SSH, Docker install/upgrade, deploy/upgrade,
+or Hermes core path was touched.
+
+Files changed:
+
+- `python/arclink_fleet_enrollment.py`: added HMAC-bound single-use enrollment
+  token mint/list/revoke/expiry/consume helpers and JSON CLI commands, worker
+  attestation into the existing inventory and fleet-host registries, immutable
+  fingerprint mismatch rejection, audit-chain append/verify, and P0 operator
+  notification on chain tampering.
+- `python/arclink_hosted_api.py`: added public
+  `POST /api/v1/fleet/enrollment/callback` with bearer enrollment-token
+  validation, existing hosted JSON/body posture, and non-secret response shape.
+- `bin/deploy.sh`, `bin/arclink-docker.sh`, `bin/docker-entrypoint.sh`, and
+  `compose.yaml`: wired `deploy.sh control enrollment mint|list|revoke`,
+  generated a dedicated `ARCLINK_FLEET_ENROLLMENT_SECRET`, and passed it into
+  control services without relying on the session hash pepper.
+- `tests/test_arclink_fleet_enrollment.py`: added focused regression coverage
+  for stored-token hashing, fail-closed token states, hosted callback
+  attestation, fingerprint mismatch, audit-chain tamper detection, and
+  non-secret CLI/list/revoke output.
+- `tests/test_deploy_regressions.py`: added source-level coverage for the
+  first-class control enrollment command and Docker secret seeding.
+- `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json`: recorded
+  the callback route and `ARCLINK_FLEET_ENROLLMENT_SECRET` contract.
+
+Implementation rationale:
+
+- Chose HMAC-bound bearer enrollment tokens over SSH-only registration because
+  SSH key possession does not attest machine identity or one-time enrollment
+  intent. Client certificates remain deferred because the current bootstrap
+  path can satisfy the Phase 2 trust boundary with less operational ceremony.
+- Stored only HMAC token hashes in SQLite and returned the cleartext token only
+  from mint. Callback responses intentionally expose IDs/status only, not token
+  material or machine fingerprints.
+- Reused `arclink_inventory_machines` plus `arclink_fleet_hosts` rather than
+  introducing another registry, preserving the formal inventory/placement split.
+
+Validation run:
+
+- `python3 -m py_compile python/arclink_fleet_enrollment.py python/arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_schema.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_inventory_hetzner.py` passed.
+- `python3 tests/test_arclink_inventory_linode.py` passed.
+- `python3 -m py_compile python/arclink_fleet_enrollment.py python/arclink_hosted_api.py python/arclink_inventory.py python/arclink_fleet.py python/arclink_control.py python/arclink_executor.py python/arclink_sovereign_worker.py python/arclink_action_worker.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+- Manual temp-DB smoke for `python/arclink_fleet_enrollment.py --db ... mint`
+  and `list` JSON parsing passed.
+- `python3 tests/test_arclink_inventory.py` was not run because this checkout
+  does not contain that file; current inventory coverage lives in the fleet and
+  provider-specific inventory tests listed above.
+
+Known risks and deferrals:
+
+- Worker join script, probe wrapper, inventory daemon, cloud-provider
+  bootstrap, and live two-host proof remain open in Phases 3-7.
+- Enrollment secret rotation was left for follow-through in this slice and is
+  closed by the later 2026-05-16 HMAC rotation entry above.
+- No live callback, remote host, provider, or deploy proof was run.
+
 ## 2026-05-14 ArcPod Captain Console Mission Closeout
 
 Scope: final closeout for the ArcPod Captain Console mission. This entry
@@ -5858,3 +6331,276 @@ Known risks:
   probe table is not populated by a daemon yet.
 - Phase 7 two-host live proof remains operator-gated; fleet readiness is not
   claimed by this pass.
+
+## 2026-05-16 Sovereign Fleet Phase 2 Follow-Through Build Pass
+
+Scope:
+
+- Extended the existing fleet enrollment/audit-chain slice with operator-facing
+  health verification, expiry notification, and explicit re-attestation.
+- Preserved the existing `deploy.sh control ...` surface and did not touch
+  private state, live secrets, provider/payment mutations, production deploys,
+  Docker install/upgrade, or Hermes core.
+- Rationale: this pass kept health verification in the existing inventory CLI
+  instead of adding a separate binary or daemon, because Phase 4 owns periodic
+  probing and the canonical operator surface remains `deploy.sh control ...`.
+
+Files changed:
+
+- `python/arclink_fleet_enrollment.py`: added notification-aware pending-token
+  expiry and explicit inventory-machine re-attestation that updates the stored
+  fingerprint, appends a `re-attested` chain event, and avoids rendering
+  fingerprint material in command output or audit metadata.
+- `python/arclink_inventory.py`: added `fleet_inventory_health()` with
+  audit-chain verification, enrollment expiry cleanup, host/inventory counts,
+  capacity, probe SLI fields, and JSON CLI support for `health`; added
+  `re-attest` CLI dispatch.
+- `bin/deploy.sh`: exposed `deploy.sh control inventory health --json` and
+  `deploy.sh control inventory re-attest ...` plus shortcut aliases.
+- `tests/test_arclink_fleet_enrollment.py` and
+  `tests/test_deploy_regressions.py`: covered health expiry notification,
+  audit-chain verification, re-attestation, and deploy command routing.
+- `IMPLEMENTATION_PLAN.md`: updated Phase 2 status to leave only enrollment
+  HMAC-root rotation UX as remaining follow-through.
+
+Validation run:
+
+- `python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 -m py_compile python/arclink_fleet_enrollment.py python/arclink_inventory.py python/arclink_hosted_api.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Skipped live gates:
+
+- No live non-loopback SSH, cloud-provider provisioning, payment/provider
+  mutation, public bot mutation, Docker install/upgrade, production deploy,
+  production upgrade, Notion, Cloudflare, Tailscale, or two-host proof was run.
+
+Known risks:
+
+- Enrollment HMAC-root rotation UX is closed by the later 2026-05-16 HMAC
+  rotation entry above.
+- Phase 3 worker join/probe wrapper, Phase 4 periodic inventory worker, Phase 6
+  provider provisioning, and Phase 7 live two-host proof remain unimplemented or
+  operator-gated, so fleet readiness is not claimed by this pass.
+
+## 2026-05-16 Sovereign Fleet Phase 8 Control-Prereq Build Slice
+
+Scope:
+
+- Added the shared prerequisite auto-installation library and wired it into
+  `deploy.sh control install|upgrade` before Docker Compose bootstrap/build.
+- Preserved the existing Shared Host Docker install/upgrade flows and did not
+  run live Docker installation, production deploys, remote SSH, provider calls,
+  or private-state mutations.
+- Rationale: the prereq behavior lives in `bin/lib/ensure-prereqs.sh` instead
+  of inline `deploy.sh` snippets so the future worker join script and
+  provider-bootstrap paths can reuse the same apt/dnf/Docker/check-only logic.
+
+Files changed:
+
+- `bin/lib/ensure-prereqs.sh`: added apt/dnf prerequisite detection and
+  installation, Docker Engine/Compose installation via `https://get.docker.com`,
+  `--skip-prereq-install`/verify-only behavior, JSON output, optional Python
+  package checks, and JSONL audit entries.
+- `bin/deploy.sh`: routed Control Node install/upgrade through the prereq
+  library and documented `deploy.sh control install --skip-prereq-install`.
+- `tests/test_deploy_regressions.py`: added fake-system tests for no-op ready
+  hosts, verify-only missing-prereq planning, fake apt/get.docker.com install
+  flow, audit output, and deploy wiring.
+- `IMPLEMENTATION_PLAN.md`: marked Phase 8 as partially landed for the Control
+  Node path while keeping worker/provider follow-through pending.
+
+Validation run:
+
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Skipped validation:
+
+- `shellcheck bin/lib/ensure-prereqs.sh` was not run because `shellcheck` is
+  not installed in this environment.
+- No live prerequisite installation, Docker install/upgrade, non-loopback SSH,
+  cloud-provider provisioning, payment/provider mutation, public bot mutation,
+  production deploy, production upgrade, Notion, Cloudflare, Tailscale, or
+  two-host proof was run.
+
+Known risks:
+
+- Phase 8 worker join wiring and provider-bootstrap reuse remain pending.
+- The Control Node prereq installer is fake-tested only; live clean-host proof
+  remains operator-gated.
+- Phase 3 worker join/probe wrapper, Phase 4 periodic inventory worker, Phase 6
+  provider provisioning, and Phase 7 live two-host proof remain open, so fleet
+  readiness is not claimed by this pass.
+
+## 2026-05-16 Sovereign Fleet Phase 3 Worker-Join Build Slice
+
+Scope:
+
+- Added a manual worker bootstrap script and a pull-probe wrapper for the
+  Sovereign fleet path.
+- Preserved existing enrollment callback semantics and did not run live
+  non-loopback SSH, production deploys, Docker install/upgrade, provider calls,
+  payment/provider mutations, public bot mutations, or private-state reads.
+- Rationale: token input is limited to file/stdin and callback posting is done
+  inside Python with the token read from stdin, so enrollment token material is
+  not placed in command argv or persisted by ArcLink.
+
+Files changed:
+
+- `bin/arclink-fleet-join.sh`: added idempotent worker-local setup for the
+  service/SSH user, authorized key, state root, probe wrapper, Docker-group
+  membership, machine fingerprint, prereq audit summary, and enrollment
+  callback; failures leave `admission.state` disabled.
+- `bin/arclink-fleet-probe-wrapper`: added strict allowlisted
+  `liveness`, `capacity`, and `inventory` JSON probes.
+- `tests/test_arclink_fleet_join.py`: added fake-root regression coverage for
+  token boundary rejection, idempotency/no token persistence, callback-failure
+  non-admission, and probe allowlisting.
+- `IMPLEMENTATION_PLAN.md`: recorded the Phase 3 local slice as implemented
+  while keeping live proof and later daemon/provider work open.
+
+Validation run:
+
+- `python3 tests/test_arclink_fleet_join.py` passed.
+- `python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_action_worker.py` passed.
+- `python3 tests/test_arclink_executor.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 -m py_compile python/arclink_fleet_enrollment.py python/arclink_inventory.py python/arclink_hosted_api.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh bin/arclink-fleet-probe-wrapper test.sh` passed.
+- `git diff --check` passed.
+
+Skipped validation:
+
+- `shellcheck bin/arclink-fleet-join.sh bin/arclink-fleet-probe-wrapper bin/lib/ensure-prereqs.sh` was not run because `shellcheck` is not installed in this environment.
+
+Known risks:
+
+- The worker join path is fake-root tested only; clean-host live bootstrap is
+  still Phase 7 operator-gated.
+- The installed SSH key is not forced to the probe wrapper because current
+  day-2 SSH executor paths still share the worker SSH lane; a separate probe
+  key remains a deferred hardening item.
+- Phase 4 inventory daemon, Phase 6 provider provisioning, and Phase 7 live
+  two-host proof remain open, so fleet readiness is not claimed.
+
+## 2026-05-16 Sovereign Fleet Phase 4 Inventory Worker Build Slice
+
+Scope:
+
+- Added the pull-based inventory worker daemon slice for the Sovereign fleet
+  path and kept all proof local/fake-runner only.
+- Did not run live non-loopback SSH, production deploys, Docker
+  install/upgrade, provider calls, payment/provider mutations, public bot
+  mutations, private-state reads, or two-host proof.
+- Rationale: the worker keeps the existing control-plane pull model over SSH
+  and uses the worker-local allowlisted probe wrapper instead of introducing a
+  worker-pushed heartbeat service.
+
+Files changed:
+
+- `python/arclink_fleet_inventory_worker.py`: added due-probe scheduling,
+  SSH probe runner, redacted probe persistence, liveness thresholds
+  (3 failures degraded, 10 failures unreachable/offline), recovery handling,
+  linked inventory capacity/health updates, operator notifications, and probe
+  retention pruning.
+- `python/arclink_inventory.py`: surfaced fleet host health states in
+  `inventory health` and added `probe-all` to force a worker probe pass.
+- `bin/deploy.sh`: exposed `deploy.sh control inventory probe-all --json` and
+  the matching shortcut alias.
+- `compose.yaml`: added a `fleet-inventory-worker` job-loop service without a
+  Docker socket mount.
+- `tests/test_arclink_fleet_inventory_worker.py`: added fake-runner coverage
+  for cadences, capacity updates, thresholds, recovery, redaction, and pruning.
+- `tests/test_arclink_docker.py`: asserted the new service exists and does not
+  broaden Docker socket access.
+- `IMPLEMENTATION_PLAN.md`: recorded the Phase 4 local slice and the remaining
+  live/dashboard follow-through.
+
+Validation run:
+
+- `python3 tests/test_arclink_fleet_inventory_worker.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `python3 tests/test_deploy_regressions.py` passed.
+- `python3 tests/test_arclink_fleet.py` passed.
+- `python3 tests/test_arclink_fleet_enrollment.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_secrets_regex.py` passed.
+- `python3 tests/test_arclink_telegram.py` passed.
+- `python3 tests/test_arclink_discord.py` passed.
+- `python3 tests/test_arclink_api_auth.py` passed.
+- `python3 -m py_compile python/arclink_fleet_inventory_worker.py python/arclink_inventory.py python/arclink_control.py python/arclink_fleet.py python/arclink_fleet_enrollment.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Skipped validation:
+
+- `shellcheck bin/arclink-fleet-join.sh bin/arclink-fleet-probe-wrapper bin/lib/ensure-prereqs.sh` was not run because `shellcheck` is not installed in this environment.
+
+Known risks:
+
+- The worker's SSH path is fake-tested only; live remote probe proof remains
+  Phase 7 operator-gated.
+- Dashboard-specific fleet health aggregation beyond the CLI health summary is
+  still pending.
+- Phase 6 provider provisioning and Phase 7 live two-host proof remain open,
+  so fleet readiness is not claimed.
+
+## 2026-05-16 ArcLink LLM Router Phase 3 Preflight Enforcement Build Slice
+
+Scope:
+
+- Implemented the router policy gate before upstream forwarding: JSON/body
+  caps, model allowlist, billing and budget boundary evaluation, per-key /
+  deployment / Captain rate limits, deployment concurrency checks, and budget
+  reservations with release on handled responses.
+- Kept the relay boundary intentionally preflight-only. Non-streaming and
+  streaming Chutes forwarding remain Phase 4 so live/provider behavior is not
+  mixed into the policy slice.
+- Rationale: reusing `evaluate_chutes_deployment_boundary`,
+  `rate_limits`, and SQLite reservation rows keeps the trust boundary local to
+  the Control Node without introducing Redis/Postgres or a new gateway layer.
+
+Files changed:
+
+- `python/arclink_llm_router.py`: added Phase 3 router config, request parsing,
+  policy/budget/rate/concurrency preflight, reservation creation, and release.
+- `tests/test_arclink_llm_router.py`: added focused regression coverage for
+  invalid model, request limits, missing/exhausted budget, past-due billing,
+  rate limiting, concurrency limiting, and reservation cleanup.
+- `IMPLEMENTATION_PLAN.md`: marked Phase 3 policy enforcement tasks and
+  validation criteria complete.
+
+Validation run:
+
+- `git diff --check` passed.
+- `python3 -m py_compile python/arclink_llm_router.py python/arclink_chutes.py python/arclink_control.py python/arclink_provisioning.py python/arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_llm_router.py` passed.
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed.
+- `python3 tests/test_arclink_provisioning.py` passed.
+- `python3 tests/test_arclink_sovereign_worker.py` passed.
+- `python3 tests/test_arclink_hosted_api.py` passed.
+- `python3 tests/test_arclink_docker.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+
+Known risks:
+
+- Phase 4 forwarding, streaming passthrough, usage settlement, Chutes metadata
+  ingestion, and upstream error redaction are still open.
+- The current reservation is released around the placeholder `501` response;
+  actual settlement must replace that path when upstream relay lands.

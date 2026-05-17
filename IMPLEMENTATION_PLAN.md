@@ -1,284 +1,201 @@
-# Implementation Plan: ArcLink Sovereign Fleet Enrollment And Placement
-
-Authoritative steering reference:
-`research/RALPHIE_ARCLINK_FLEET_ENROLLMENT_STEERING.md`
+# Implementation Plan: ArcLink Sovereign LLM Router
 
 ## Goal
 
-Land enterprise-grade ArcLink Sovereign worker enrollment and placement while
-preserving existing single-host installs. The system must support attested
-worker registration, placement-aware day-2 action routing, periodic inventory
-health, scriptable operator CLI output, region-aware placement, idempotent
-Hetzner/Linode provisioning workflows, and an operator-gated two-host proof.
+Land the ArcLink Sovereign LLM Router: a Control Node service that gives every
+ArcPod a per-deployment ArcLink LLM key, verifies that key like an
+OpenAI-compatible provider key, relays requests to the central Chutes account,
+streams responses back to Hermes, enforces billing/quota/rate/concurrency
+limits, and records sanitized token/cost usage per ArcPod and Captain.
 
-The verified Sovereign audit file remains a regression reference. Its closure
-revisit says the verified FACT/actionable PARTIAL source gaps were remediated,
-so BUILD should run the relevant trust-boundary tests early and patch only new
-regressions. Do not re-open fiction/outdated audit items `ME-11` or `ME-25`.
+Authoritative steering reference:
+`research/RALPHIE_ARCLINK_LLM_ROUTER_STEERING.md`
 
-## Non-Goals And Boundaries
+Security regression reference:
+`research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md`
+
+## Current Ground Truth
+
+- `python/arclink_llm_router.py` exists in the dirty tree and contains the
+  core FastAPI router, health/models/chat routes, non-streaming forwarding,
+  streaming passthrough, preflight policy checks, budget reservation/settlement,
+  and sanitized usage recording.
+- `tests/test_arclink_llm_router.py` exists and exercises the core router
+  behavior through fake upstream transports and temporary SQLite DBs.
+- `python/arclink_control.py` contains router schema, indexes, and key
+  lifecycle helpers.
+- `Dockerfile` and `requirements-dev.txt` already include FastAPI, uvicorn, and
+  httpx.
+- `compose.yaml` includes a dedicated `control-llm-router` service.
+- ArcPod provisioning defaults to router base URL/key refs and keeps direct
+  Chutes only behind `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1`.
+- `python/arclink_sovereign_worker.py` materializes/registers router keys
+  idempotently for deployments.
+- Docs/OpenAPI and provider-state surfaces include the local router integration
+  and live-proof guard.
+
+## Build Constraints
 
 - Do not touch `arclink-priv`, live secrets, deploy keys, production services,
-  payment/provider mutations, public bot command registration, Docker
-  install/upgrade/reconfigure, domain-or-Tailscale ingress live mutation, live
-  non-loopback SSH, real cloud-provider calls, or Hermes core without explicit
-  operator authorization.
-- Do not introduce a new CLI binary. Extend `bin/deploy.sh control ...`.
-- Do not collapse `arclink_inventory_machines` and `arclink_fleet_hosts`.
-- Do not expose host IDs, SSH coordinates, provider metadata, or fleet topology
-  to Captain-facing surfaces.
-- Do not claim fleet readiness without Phase 7 live two-host proof.
+  public bot registrations, payment/provider mutations, or Hermes core.
+- Do not run live Chutes calls unless the operator explicitly sets the live
+  router proof env gate.
+- Do not persist raw prompts, completions, central Chutes keys, or raw router
+  keys.
+- Preserve unrelated dirty work. If a touched file has unrelated hunks, make
+  the smallest compatible patch and report it.
+- Keep changes in the existing Python, shell, SQLite, Compose, docs, and
+  Next/web stack. Do not introduce Redis/Postgres or a new gateway framework.
 
-## Selected Implementation Path
+## Selected Path
 
-| Decision | Selected path | Rejected or deferred alternatives |
+| Decision | Selected path | Rejected / deferred alternatives |
 | --- | --- | --- |
-| Day-2 routing | Resolve deployment placement per action and construct/cache a host-specific executor | Static env host per worker is the current defect; worker-side router is deferred. |
-| Executor reuse | Factor `_executor_for_host` from `arclink_sovereign_worker.py` into `arclink_executor.py` | Copy/paste SSH runner construction into the action worker. |
-| Registry model | Formalize inventory machine vs fleet host separation and add reconciler warnings | Table collapse is rejected as high-risk migration churn. |
-| Enrollment | HMAC-bound single-use TTL token plus fingerprint attestation | SSH key-only registration and long-lived bearer tokens are rejected. |
-| Probing | Control-plane pull via SSH probe wrapper | Worker-pushed heartbeat agent is deferred. |
-| Scheduling | Docker job-loop service for inventory worker | New scheduler dependency or host cron. |
-| CLI | Harden existing `deploy.sh control` commands with JSON modes and documented exit codes | New CLI binary. |
-| Cloud v1 | Hetzner and Linode fake-tested create/bootstrap/remove workflows | AWS/GCP/Azure/DigitalOcean deferred. |
-| Live proof | Operator-authorized two-host evidence run | CI-driven live host/provider proof rejected. |
+| Router runtime | Dedicated FastAPI app run by uvicorn in `control-llm-router`. | Folding streaming routes into WSGI `control-api` rejected. |
+| Upstream relay | `httpx.AsyncClient.stream` for streaming and httpx async calls for non-streaming. | `requests`/urllib buffering rejected. |
+| Key storage | Per-deployment raw key generated once, hash stored in SQLite, raw materialized as deployment secret only. | Raw key DB/metadata storage rejected. |
+| ArcPod default | Router base URL and router key by default. | Direct Chutes default rejected; keep only behind `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1`. |
+| Budget handling | Reserve before forwarding; settle/release after response using provider usage or deterministic fallback. | Post-hoc-only metering rejected. |
+| Usage ledger | Router-specific request rows plus existing Chutes metadata update. | Metadata-only accounting rejected. |
+| Live proof | Explicit env-gated scratch proof only. | CI/live-by-default proof rejected. |
 
-## Audit Regression Gate
+## Phase Tasks
 
-Before touching fleet code, run or inspect the focused trust-boundary tests most
-likely to catch regressions from the verified audit closure:
+### Phase 1 - Core Router Already Present, Revalidate First
 
-- `python3 tests/test_arclink_telegram.py`
-- `python3 tests/test_arclink_discord.py`
-- `python3 tests/test_arclink_hosted_api.py`
-- `python3 tests/test_arclink_api_auth.py`
-- `python3 tests/test_arclink_secrets_regex.py`
-- `python3 tests/test_arclink_docker.py`
+- [x] FastAPI, uvicorn, and httpx are present in runtime/dev dependency lanes.
+- [x] `python/arclink_llm_router.py` provides the FastAPI app, config loader,
+  `/health`, `GET /v1/models`, and `POST /v1/chat/completions`.
+- [x] `tests/test_arclink_llm_router.py` provides fake async upstream
+  transport and temporary SQLite DB coverage.
+- [x] `/health` reports unhealthy when router is enabled without the central
+  Chutes credential and does not expose secret material.
+- [x] Re-run `python3 -m py_compile python/arclink_llm_router.py` and
+  `python3 tests/test_arclink_llm_router.py` before editing downstream
+  integration.
 
-If one fails because of current source, fix that regression with a focused test
-before continuing. Do not rewrite closed audit work blindly.
+### Phase 2 - Schema, Key Lifecycle, And Auth Already Present, Revalidate
 
-## Phase 0: Schema Additions And Orphan Reconciler
+- [x] SQLite schema exists for `arclink_llm_router_keys`,
+  `arclink_llm_usage_events`, and `arclink_llm_budget_reservations`.
+- [x] Indexes exist for active key lookup, usage by deployment/user/time, and
+  open reservations by request/status.
+- [x] `ensure_llm_router_key`, `verify_llm_router_key`,
+  `revoke_llm_router_key`, `rotate_llm_router_key`, and list helpers exist.
+- [x] Key format follows `acpod_live_<short_key_id>_<urlsafe_secret>`.
+- [x] Tests assert raw router keys are absent from key, usage, event, and
+  deployment metadata rows.
+- [x] Decided keyed hash/HMAC is deferred for router keys because ArcLink
+  generates high-entropy API keys; the rationale is recorded in
+  `docs/arclink/llm-router.md` and `research/BUILD_COMPLETION_NOTES.md`.
 
-Tasks:
+### Phase 3 - Policy, Budget, Rate, And Concurrency Already Present, Revalidate
 
-- Add idempotent columns to `arclink_inventory_machines`: `enrollment_id`,
-  `machine_fingerprint`, `attested_at`, `audit_trail_chain`, and
-  `provider_billing_ref`.
-- Add idempotent columns to `arclink_fleet_hosts`: `region_tier`,
-  `placement_priority`, and `last_health_state`.
-- Add tables for `arclink_fleet_enrollments`,
-  `arclink_fleet_host_probes`, and `arclink_fleet_audit_chain`.
-- Add indexes for enrollment status/expiry, probe host/kind/time, audit-chain
-  inventory/time, and region-tier placement lookup.
-- Add status constants and drift checks for new tables and statuses.
-- Add a reconciler that detects inventory rows with missing host links and
-  fleet hosts with no non-removed inventory row. It should write audit warnings
-  and return structured drift, not destructively repair by default.
-- Preserve existing `register_fleet_host`, `register_inventory_machine`, and
-  `place_deployment` behavior.
+- [x] Router evaluates Chutes billing/budget state through
+  `evaluate_chutes_deployment_boundary`.
+- [x] Router fails closed for missing budget, exhausted budget, past-due
+  billing, missing central credential, invalid/revoked/suspended keys, invalid
+  models, request caps, rate limit, and concurrency cap.
+- [x] Router creates budget reservations before upstream forwarding and
+  settles/releases them after success/failure.
+- [x] Re-run focused router tests and extend only if a new provisioning/worker
+  behavior changes preflight assumptions.
 
-Validation:
+### Phase 4 - Chutes Relay And Usage Settlement Already Present, Revalidate
 
-- `python3 tests/test_arclink_schema.py`
-- `python3 tests/test_arclink_fleet.py`
-- `python3 tests/test_arclink_inventory.py`
-- targeted migration test proving `ensure_schema` runs twice.
+- [x] Non-streaming forwarding uses the central server-side Chutes credential.
+- [x] Streaming forwarding uses `httpx.AsyncClient.stream` and
+  `text/event-stream` passthrough.
+- [x] Streaming requests add `stream_options.include_usage=true` when
+  compatible.
+- [x] Router extracts provider usage when present and falls back to
+  deterministic estimates.
+- [x] Router records sanitized usage events and updates Chutes metadata without
+  storing prompts/completions.
+- [x] Upstream errors are redacted before response/storage.
+- [x] Re-run router tests after any docs/Compose/provider-state changes to
+  confirm no regressions.
 
-## Phase 1: Action-Worker Placement Routing
+### Phase 5 - Provisioning, Worker, And Compose Wiring
 
-Tasks:
+- [x] Change provisioning defaults to render router base URL and
+  `secret://arclink/llm-router/<deployment_id>/api-key`.
+- [x] Keep direct Chutes key behavior only behind
+  `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1`.
+- [x] Ensure `managed-context-install`, `hermes-gateway`, and
+  `hermes-dashboard` receive the router key file and router `/v1` base URL by
+  default.
+- [x] Update `python/arclink_sovereign_worker.py` to generate/materialize the
+  router key secret and register its hash in SQLite during apply.
+- [x] Add `control-llm-router` to `compose.yaml` with no Docker socket,
+  `ARCLINK_DB_PATH`, router env, Chutes credential env, healthcheck, and
+  appropriate internal/public routing.
+- [x] Support `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` for remote fleet ArcPods and
+  same-network `http://control-llm-router:8090/v1` for local Control Node
+  deployments.
 
-- Factor the provisioning worker's `_executor_for_host` logic into a public
-  helper in `python/arclink_executor.py`.
-- Keep compatibility wrappers or imports so `python/arclink_sovereign_worker.py`
-  behavior remains unchanged.
-- Teach `python/arclink_action_worker.py` to resolve the active placement for
-  deployment-scoped actions before executing side effects.
-- Look up the host row and build a per-host executor using the shared helper.
-- Cache executors by `(host_id, adapter)` for the worker process.
-- Preserve the existing `_executor_from_env` path when no placement exists.
-- Emit `arclink_audit_log` metadata for every action attempt with resolved
-  `host_id`, `adapter`, and fallback reason when applicable.
+Validation criteria:
 
-Validation:
+- [x] Provisioning tests prove no central Chutes key is mounted into ArcPods by
+  default.
+- [x] Worker tests prove router key secret generation is stable/idempotent and
+  hash registration is repaired if missing.
+- [x] Docker tests prove the router service exists, is healthchecked, has no
+  Docker socket, and has the expected env.
 
-- `python3 tests/test_arclink_action_worker.py`
-- `python3 tests/test_arclink_executor.py`
-- `python3 tests/test_arclink_sovereign_worker.py`
-- new two-fake-host routing test: place deployment on host B, queue restart,
-  assert host B SSH coordinates are used.
+### Phase 6 - Provider-State, Docs, OpenAPI, And Live-Proof Guard
 
-## Phase 2: Enrollment Mint, Callback API, And Audit Chain
+- [x] Extend provider-state/dashboard surfaces, if needed, to show sanitized
+  router usage/quota per deployment/Captain.
+- [x] Update `docs/API_REFERENCE.md` and
+  `docs/openapi/arclink-v1.openapi.json` for `/v1/models`,
+  `/v1/chat/completions`, auth failures, quota failures, and live-proof policy.
+- [x] Update `docs/arclink/llm-router.md` and related Control Node runbooks
+  with the router topology, default ArcPod provider config, compatibility flag,
+  and operational health checks.
+- [x] Document live proof env gate:
+  `ARCLINK_LLM_ROUTER_LIVE_CHUTES_PROOF=1`,
+  `ARCLINK_LLM_ROUTER_CHUTES_API_KEY`,
+  `ARCLINK_LLM_ROUTER_LIVE_MODEL`, and
+  `ARCLINK_LLM_ROUTER_LIVE_MAX_CENTS`.
+- [x] Ensure tests never call live Chutes unless the explicit gate is set.
+- [x] Update completion notes after BUILD with validation and residual risks.
 
-Tasks:
+Validation criteria:
 
-- Implement enrollment token minting with 256-bit one-time token material,
-  HMAC-SHA256 token hash at rest, TTL default no longer than 30 minutes, and
-  cleartext returned exactly once.
-- Add `deploy.sh control enrollment mint|list|revoke` plumbing to the shared
-  Python boundary.
-- Add callback handling that validates the token, consumes it atomically,
-  captures hostname/outbound IP/SSH port/OS fields, binds
-  `machine_fingerprint`, writes `attested_at`, and creates or links inventory
-  and fleet host rows.
-- Reject expired, revoked, reused, malformed, or fingerprint-mismatched
-  callbacks fail-closed.
-- Implement `arclink_fleet_audit_chain` helpers for root and transition
-  entries, plus a chain verification helper used by health.
-- Use `arclink_evidence.redact_value` / shared redaction for all token and
-  fingerprint-adjacent errors.
+- [x] API docs contain no synthetic secrets beyond clearly fake fixtures.
+- [x] Live proof path is disabled by default and bounded when explicitly
+  enabled.
+- [x] Provider-state payloads contain usage/quota only, not keys, secret refs,
+  prompts, or completions.
 
-Validation:
+## Wave 1 Security Regression Gate
 
-- new `python3 tests/test_arclink_fleet_enrollment.py`
-- hosted API tests if callback is exposed through `python/arclink_hosted_api.py`
-- schema and audit-chain tamper tests.
-
-## Phase 3: Worker Bootstrap And Probe Wrapper
-
-Tasks:
-
-- Add `bin/arclink-fleet-join.sh` as an idempotent worker bootstrap script for
-  supported Linux distributions.
-- Add `bin/arclink-fleet-probe-wrapper` that allowlists only `liveness`,
-  `capacity`, and `inventory` style probes and emits JSON.
-- Ensure bootstrap failure leaves the worker non-admitting and does not leave a
-  trusted key installed after failed callback.
-- Avoid putting tokens in committed docs, logs, argv examples with real values,
-  or persistent files.
-- Document bootstrap usage in the operator runbook after behavior is true.
-
-Validation:
-
-- `bash -n deploy.sh bin/*.sh test.sh`
-- `shellcheck bin/arclink-fleet-join.sh bin/arclink-fleet-probe-wrapper`
-- deploy regression tests for script presence and fail-closed patterns.
-
-## Phase 4: Inventory Worker Daemon And Health Derivation
-
-Tasks:
-
-- Add `python/arclink_fleet_inventory_worker.py`.
-- Add an `arclink-fleet-inventory` Compose job-loop service with no unnecessary
-  Docker socket or secret mounts.
-- Implement liveness, capacity, and inventory cadences independently.
-- Record probe rows in `arclink_fleet_host_probes`, with redacted payloads and
-  retention pruning.
-- Derive states: three liveness failures to degraded, ten to unreachable,
-  first success after degraded/unreachable back to active.
-- Update `last_health_state`, `last_seen_at`-equivalent data, ASU/load, and
-  linked inventory/fleet rows consistently.
-- Queue operator notifications for unreachable hosts, audit-chain failure, and
-  capacity thresholds.
-- Build fleet health summary helper with host counts, probe SLI, capacity,
-  region coverage, audit-chain status, and orphan drift.
-
-Validation:
-
-- new `python3 tests/test_arclink_fleet_inventory_worker.py`
-- `python3 tests/test_arclink_inventory.py`
-- `python3 tests/test_arclink_dashboard.py` if dashboard health is exposed.
-- Compose/deploy regression for service wiring and socket posture.
-
-## Phase 5: CLI Surface Hardening
-
-Tasks:
-
-- Add `--json` to every scriptable fleet/inventory/enrollment command.
-- Add documented exit codes: 0 success, 1 generic error, 2 invalid argv, 3 not
-  found, 4 conflict, 5 unauthorized.
-- Add non-interactive `register-worker` flags:
-  `--hostname`, `--ssh-host`, `--ssh-user`, `--region`, `--capacity-slots`,
-  `--tags-json`, `--metadata-json`, `--no-smoke-test`, and `--json`.
-- Add `fleet-key --rotate` with backup/confirmation flow.
-- Add `inventory health|rotate-key|re-attest|probe-all`, while preserving
-  existing `list|probe|add|drain|remove|set-strategy` forms.
-- Wire `set-strategy` into placement behavior where not already consumed and
-  add region-tier priority.
-- Write `docs/arclink/fleet-cli.md` and
-  `docs/arclink/fleet-operator-runbook.md`.
-
-Validation:
-
-- `python3 tests/test_deploy_regressions.py`
-- `python3 tests/test_arclink_fleet.py`
-- CLI JSON parse tests in `tests/test_arclink_inventory.py` or a new CLI suite.
-- docs/OpenAPI updates only after runtime/API behavior is true.
-
-## Phase 6: Cloud-Provider Provisioning
-
-Tasks:
-
-- Extend Hetzner and Linode inventory modules with fakeable create, wait,
-  bootstrap, discover, and delete operations.
-- Use ArcLink operation idempotency keys to prevent duplicate machine creation.
-- Add provider billing/resource references to inventory rows.
-- On create: provision machine, wait for SSH, mint enrollment, bootstrap via
-  cloud-init or controlled SSH, register callback, and admit host.
-- On remove: drain first, require no active placements, remove inventory/fleet
-  rows or mark removed/offline, then release provider resource.
-- Region-tier placement should prefer primary/secondary/dr in documented order
-  and exclude degraded/unreachable hosts from new placements.
-- Keep all real provider calls disabled in tests and fail closed without
-  credentials.
-
-Validation:
-
-- `python3 tests/test_arclink_inventory_hetzner.py`
-- `python3 tests/test_arclink_inventory_linode.py`
-- fake idempotency and teardown tests.
-
-## Phase 7: Operator-Gated Live Two-Host Proof
-
-Tasks:
-
-- Write a two-host live proof runbook under `research/` before execution.
-- Stop and request explicit operator authorization for the named live flow.
-- If authorized, run the proof with real timestamps and host IDs, redact
-  secrets, capture evidence, and record failures honestly.
-- Update `research/BUILD_COMPLETION_NOTES.md`.
-- Update `mission_status.md` if present, or create it, with no claim of fleet
-  readiness unless live proof succeeded.
-
-Validation:
-
-- Evidence file in `research/` with redacted timestamps, host IDs, commands
-  summarized, and health/smoke result.
-- No Phase 7 action runs without explicit authorization.
+Before and after router BUILD slices, verify current trust-boundary surfaces
+from `research/RALPHIE_SOVEREIGN_AUDIT_VERIFICATION_20260511.md`: Telegram and
+Discord webhooks, hosted API body/auth/CIDR/JSON/CORS behavior, session/CSRF
+hashing, shared redaction, webhook rate limiting, and Docker user/socket
+posture. If source or tests show a current regression, fix it with a focused
+test before continuing router work. Do not re-open fiction/outdated items
+without fresh source evidence.
 
 ## Validation Floor
 
-Per touched Python surface:
+Run at minimum:
 
 ```bash
-python3 -m py_compile python/arclink_control.py python/arclink_fleet.py python/arclink_inventory.py python/arclink_executor.py python/arclink_sovereign_worker.py python/arclink_action_worker.py
-python3 tests/test_arclink_fleet.py
-python3 tests/test_arclink_inventory.py
-python3 tests/test_arclink_action_worker.py
-python3 tests/test_arclink_executor.py
+git diff --check
+python3 -m py_compile python/arclink_llm_router.py python/arclink_chutes.py python/arclink_control.py python/arclink_provisioning.py python/arclink_sovereign_worker.py
+python3 tests/test_arclink_llm_router.py
+python3 tests/test_arclink_chutes_and_adapters.py
+python3 tests/test_arclink_provisioning.py
 python3 tests/test_arclink_sovereign_worker.py
-python3 tests/test_arclink_schema.py
-```
-
-As new phases land:
-
-```bash
-python3 tests/test_arclink_fleet_enrollment.py
-python3 tests/test_arclink_fleet_inventory_worker.py
-python3 tests/test_arclink_inventory_hetzner.py
-python3 tests/test_arclink_inventory_linode.py
-python3 tests/test_deploy_regressions.py
-```
-
-For shell changes:
-
-```bash
+python3 tests/test_arclink_hosted_api.py
+python3 tests/test_arclink_docker.py
 bash -n deploy.sh bin/*.sh test.sh
-shellcheck bin/arclink-fleet-join.sh bin/arclink-fleet-probe-wrapper bin/deploy.sh
 ```
 
-For web/dashboard changes:
+When web files change:
 
 ```bash
 cd web
@@ -288,36 +205,28 @@ npm run build
 npm run test:browser
 ```
 
-Before final completion:
+## Done Means
 
-```bash
-git diff --check
-./bin/ci-preflight.sh
-```
-
-Live host-mutating, real-cloud-provider, payment, public-bot mutation, Notion,
-Cloudflare/Tailscale, deploy, upgrade, and non-loopback SSH proof remain
-operator-gated.
-
-## Required Completion Notes
-
-`research/BUILD_COMPLETION_NOTES.md` must record:
-
-- phases completed and files changed;
-- schema changes and migration proof;
-- new/changed CLI commands and exit-code docs;
-- focused validation commands and results;
-- broad validation commands and results;
-- live/provider/deploy gates skipped or authorized;
-- residual risks and explicit deferrals.
+- [x] A new Control Node LLM router service exists and is wired into Compose.
+- [x] ArcPods get per-deployment ArcLink LLM keys by default.
+- [x] Router verifies keys and maps each request to exactly one
+  deployment/Captain.
+- [x] Router enforces billing, budget, model allowlist, request limits, rate
+  limits, and concurrency before forwarding.
+- [x] Router streams and non-streams through Chutes using the central server
+  credential only.
+- [x] Usage is recorded per ArcPod/Captain without storing prompt/completion
+  text.
+- [x] Provider-state/dashboard surfaces can show sanitized consumption.
+- [x] Tests prove invalid/revoked/exhausted/past-due paths and success paths.
+- [x] Live Chutes proof remains explicitly operator-gated unless the operator
+  enables the live proof environment variables.
 
 ## Explicit Deferrals
 
-- Worker-pushed heartbeat agent.
-- Auto-migration of active Pods on host degradation.
-- GPU-aware placement constraints beyond recording inventory data.
-- DigitalOcean, AWS, GCP, and Azure provider workflows.
-- Separate probe key and deploy key.
-- TPM/Secure Boot hardware attestation.
-- Captain-visible fleet topology.
-- CI-driven live host or provider proof.
+- Redis/Postgres-backed hot counters.
+- Exact tokenizer dependency for model-specific token accounting.
+- Multi-provider router support beyond Chutes.
+- Public internet ingress automation for remote fleet workers beyond honoring
+  `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL`.
+- Live Chutes proof without operator env gate and bounded scratch deployment.

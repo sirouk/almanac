@@ -588,6 +588,7 @@ def _mark_rollback(
     rollback_metadata = json_loads_safe(str(row.get("rollback_metadata_json") or "{}"))
     if not isinstance(rollback_metadata, Mapping):
         rollback_metadata = {}
+    capture_cleanup = _cleanup_rolled_back_capture(row)
     rollback_payload = dict(rollback_metadata)
     rollback_payload.update(
         {
@@ -595,6 +596,7 @@ def _mark_rollback(
             "source_placement_id": str(row["source_placement_id"]),
             "target_placement_id": str(row.get("target_placement_id") or ""),
             "lifecycle": dict(lifecycle_metadata or {}),
+            "capture_cleanup": capture_cleanup,
         }
     )
     if str(row.get("target_placement_id") or "") and str(row["target_placement_id"]) != str(row["source_placement_id"]):
@@ -613,11 +615,20 @@ def _mark_rollback(
             verification_json = ?,
             rollback_metadata_json = ?,
             error = ?,
+            source_garbage_collected_at = ?,
             updated_at = ?,
             completed_at = ?
         WHERE migration_id = ?
         """,
-        (_json_dumps(verification), _json_dumps(rollback_payload), error[:1000], now, now, str(row["migration_id"])),
+        (
+            _json_dumps(verification),
+            _json_dumps(rollback_payload),
+            error[:1000],
+            now if capture_cleanup.get("removed") or capture_cleanup.get("missing") else "",
+            now,
+            now,
+            str(row["migration_id"]),
+        ),
     )
     append_arclink_event(
         conn,
@@ -638,6 +649,22 @@ def _mark_rollback(
         commit=False,
     )
     conn.commit()
+
+
+def _cleanup_rolled_back_capture(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = str(row.get("capture_dir") or "").strip()
+    if not raw:
+        return {"removed": False, "reason": "no_capture_dir"}
+    path = Path(raw)
+    if ".migrations" not in path.parts:
+        return {"removed": False, "reason": "unsafe_capture_dir"}
+    if not path.exists():
+        return {"removed": False, "missing": True}
+    try:
+        shutil.rmtree(path)
+    except OSError as exc:
+        return {"removed": False, "error": str(exc)[:240]}
+    return {"removed": True}
 
 
 def _mark_success(

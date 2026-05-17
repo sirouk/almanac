@@ -220,12 +220,15 @@ def test_migration_rolls_back_on_verification_failure() -> None:
         }
         expect({"stop", "teardown", "restart"}.issubset(lifecycle), str(lifecycle))
         row = conn.execute(
-            "SELECT rollback_metadata_json FROM arclink_pod_migrations WHERE migration_id = ?",
+            "SELECT rollback_metadata_json, capture_dir, source_garbage_collected_at FROM arclink_pod_migrations WHERE migration_id = ?",
             (result["migration_id"],),
         ).fetchone()
         rollback = json.loads(row["rollback_metadata_json"])
         expect(rollback["lifecycle"]["target_teardown"]["action"] == "teardown", str(rollback))
         expect(rollback["lifecycle"]["source_restart"]["action"] == "restart", str(rollback))
+        expect(rollback["capture_cleanup"]["removed"] is True, str(rollback))
+        expect(row["source_garbage_collected_at"], str(dict(row)))
+        expect(not Path(row["capture_dir"]).exists(), row["capture_dir"])
         replay = migration.migrate_pod(
             conn,
             executor=fake_executor(executor_mod),
@@ -262,12 +265,15 @@ def test_redeploy_in_place_rollback_restarts_source_without_target_teardown() ->
         expect("stop" in lifecycle and "restart" in lifecycle, str(lifecycle))
         expect("teardown" not in lifecycle, str(lifecycle))
         row = conn.execute(
-            "SELECT rollback_metadata_json FROM arclink_pod_migrations WHERE migration_id = ?",
+            "SELECT rollback_metadata_json, capture_dir, source_garbage_collected_at FROM arclink_pod_migrations WHERE migration_id = ?",
             (result["migration_id"],),
         ).fetchone()
         rollback = json.loads(row["rollback_metadata_json"])
         expect("target_teardown" not in rollback["lifecycle"], str(rollback))
         expect(rollback["lifecycle"]["source_restart"]["action"] == "restart", str(rollback))
+        expect(rollback["capture_cleanup"]["removed"] is True, str(rollback))
+        expect(row["source_garbage_collected_at"], str(dict(row)))
+        expect(not Path(row["capture_dir"]).exists(), row["capture_dir"])
     print("PASS test_redeploy_in_place_rollback_restarts_source_without_target_teardown")
 
 

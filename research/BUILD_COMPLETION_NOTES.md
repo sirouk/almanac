@@ -6814,3 +6814,36 @@ Live follow-up required after deploy:
   materialization reaches `control-action-worker`.
 - Retry live reprovision of the two active ArcPods and confirm their Hermes
   gateway env now points at the central LLM router.
+
+## 2026-05-17 Rolled-Back Pod Migration Capture Cleanup
+
+Scope: live router cutover retries produced rolled-back migration captures
+while exercising failure paths. Successful migrations intentionally retain their
+captures until the retention window expires, but rolled-back attempts do not
+need to keep copied service state after source restart/target teardown has
+completed.
+
+Files changed:
+
+- `python/arclink_pod_migration.py`: `_mark_rollback` now removes safe
+  `.migrations/<migration_id>` capture directories, records
+  `capture_cleanup` metadata, and marks `source_garbage_collected_at` when the
+  cleanup succeeds or the directory is already gone.
+- `tests/test_arclink_pod_migration.py`: rollback coverage now asserts capture
+  cleanup for both cross-host migration rollback and in-place reprovision
+  rollback.
+
+Validation:
+
+- `python3 tests/test_arclink_pod_migration.py` passed, 5/5.
+- `python3 tests/test_arclink_action_worker.py` passed, 32/32.
+- `python3 -m py_compile python/arclink_pod_migration.py python/arclink_action_worker.py python/arclink_executor.py` passed.
+- `bash -n deploy.sh bin/*.sh bin/lib/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Live follow-up required after deploy:
+
+- Re-run Control Node upgrade/recreate if this cleanup behavior is promoted
+  immediately.
+- Remove old rolled-back capture directories from the live router-cutover
+  attempts and mark those rows collected.

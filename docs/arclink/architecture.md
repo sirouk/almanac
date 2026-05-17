@@ -203,10 +203,17 @@ to Chutes with the central server-side credential, streams responses without
 buffering completions, and records sanitized usage without prompts or
 completions.
 
+The router also refreshes the Chutes model catalog into
+`arclink_model_catalog`, stores provider pricing, and resolves old/deprecated
+same-family requests to the current active upstream model when auto-promotion is
+enabled. That gives the Control Node one fleet-wide place to move Captains from
+Kimi K2.6 to Kimi K2.7-style replacements without rewriting every ArcPod first.
+
 The router is separate from the WSGI hosted API and is not part of the
 `/api/v1` route catalog. Current source behavior is documented in
-`docs/arclink/llm-router.md`. Compose service wiring, ArcPod provisioning
-defaults, and live Chutes proof remain proof-gated follow-up work.
+`docs/arclink/llm-router.md`. Compose service wiring and ArcPod provisioning
+defaults are source-level behavior; live Chutes proof remains explicitly
+operator-gated.
 
 ### External Providers (gated behind executor)
 

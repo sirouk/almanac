@@ -392,6 +392,10 @@ direct provider balance application remain proof-gated.
 | Var | Purpose |
 |-----|---------|
 | `CHUTES_API_KEY` | Owner key for model catalog and key management |
+| `ARCLINK_LLM_ROUTER_CHUTES_API_KEY` | Central Chutes credential used only by the Control Node LLM router |
+| `ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP` | Refresh Chutes `/models` into the Control Node catalog on router startup |
+| `ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE` | Route older, deprecated, or unavailable same-family model requests to the latest active model |
+| `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS` | Emergency `old-model=new-model` overrides for fleet-wide model moves |
 | `ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS` | Local monthly provider budget before any applied credit |
 | `ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT` | Warning threshold for local budget status |
 | `ARCLINK_CHUTES_HARD_LIMIT_PERCENT` | Hard stop threshold for local budget status |

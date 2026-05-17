@@ -1,5 +1,61 @@
 # Build Completion Notes
 
+## 2026-05-16 LLM Router Model Catalog And Promotion
+
+Scope: upgraded the Control Node LLM router so model pricing and lifecycle
+resolution are catalog-driven instead of frozen to a single default estimate.
+No live Chutes request, deployment, provider mutation, or private-state read was
+performed.
+
+What changed:
+
+- `python/arclink_chutes.py`: Chutes catalog parsing now extracts per-million
+  input/output prices from common Chutes/OpenAI-compatible shapes, including
+  string prices such as `$0.95 / 1M tokens`.
+- `python/arclink_control.py`: `arclink_model_catalog` now stores pricing,
+  status, replacement model id, inferred family, version sort key, first/last
+  seen timestamps, and raw provider metadata. New helpers upsert model catalog
+  rows, preserve deliberate deprecation replacements across refreshes, mark
+  missing rows unavailable after successful refreshes, and find the latest
+  active model in a family.
+- `python/arclink_llm_router.py`: router startup refreshes Chutes `/models`
+  into the catalog, health exposes sanitized refresh status, reservations and
+  settlement use catalog pricing when available, and requests are resolved to a
+  replacement/latest upstream model before forwarding. This supports both
+  Kimi-K2.6 -> Kimi-K2.7 while 2.6 remains active and the case where 2.6 has
+  disappeared from a fresh catalog.
+- `compose.yaml`: surfaced the router model-promotion and startup catalog
+  refresh env vars.
+- `docs/arclink/llm-router.md`, `docs/API_REFERENCE.md`,
+  `docs/arclink/architecture.md`, and `docs/arclink/operations-runbook.md`:
+  documented catalog pricing, startup refresh, auto-promotion, emergency
+  replacements, and fallback estimator values.
+- `tests/test_arclink_llm_router.py` and
+  `tests/test_arclink_chutes_and_adapters.py`: added regression coverage for
+  pricing parse, lifecycle rows, explicit deprecation replacement, startup
+  catalog refresh, newer same-family auto-promotion, and disappeared old-model
+  promotion.
+
+Validation run:
+
+- `python3 -m py_compile python/arclink_chutes.py python/arclink_control.py python/arclink_llm_router.py` passed.
+- `python3 tests/test_arclink_llm_router.py` passed (14/14).
+- `python3 tests/test_arclink_chutes_and_adapters.py` passed (23/23).
+- `python3 tests/test_arclink_schema.py` passed (10/10).
+- `python3 tests/test_arclink_provisioning.py` passed (13/13).
+- `python3 tests/test_arclink_docker.py` passed (16/16).
+- `python3 tests/test_arclink_hosted_api.py` passed (75/75).
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `git diff --check` passed.
+
+Known risks:
+
+- Live Chutes catalog and inference proof remain operator-gated. The source
+  path is locally tested with fixture transports only.
+- The inferred model-family heuristic handles conventional version strings such
+  as `Kimi-K2.6-TEE` -> `Kimi-K2.7-TEE`; unusual provider renames may still
+  require `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS`.
+
 ## 2026-05-16 Sovereign LLM Router Review Button-Up
 
 Scope: reviewed the completed LLM Router work against the follow-up audit and

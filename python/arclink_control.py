@@ -1192,6 +1192,14 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           display_name TEXT NOT NULL DEFAULT '',
           capabilities_json TEXT NOT NULL DEFAULT '{}',
           confidential_compute INTEGER NOT NULL DEFAULT 0,
+          input_cents_per_million INTEGER NOT NULL DEFAULT 0,
+          output_cents_per_million INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deprecated', 'unavailable')),
+          replacement_model_id TEXT NOT NULL DEFAULT '',
+          family TEXT NOT NULL DEFAULT '',
+          version_sort_key TEXT NOT NULL DEFAULT '',
+          first_seen_at TEXT NOT NULL DEFAULT '',
+          last_seen_at TEXT NOT NULL DEFAULT '',
           raw_json TEXT NOT NULL DEFAULT '{}',
           updated_at TEXT NOT NULL,
           PRIMARY KEY (provider, model_id)
@@ -1797,6 +1805,14 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_admins", "totp_enabled", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "arclink_admins", "totp_secret_ref", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_admins", "totp_verified_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_model_catalog", "input_cents_per_million", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "arclink_model_catalog", "output_cents_per_million", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "arclink_model_catalog", "status", "TEXT NOT NULL DEFAULT 'active'")
+    _ensure_column(conn, "arclink_model_catalog", "replacement_model_id", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_model_catalog", "family", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_model_catalog", "version_sort_key", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_model_catalog", "first_seen_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_model_catalog", "last_seen_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "worker_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "claimed_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_pod_migrations", "source_placement_id", "TEXT NOT NULL DEFAULT ''")
@@ -5462,6 +5478,205 @@ def list_ssot_access_audit(
 
 def hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _model_family_key(model_id: str) -> str:
+    text = str(model_id or "").strip().lower()
+    if "/" in text:
+        provider, _, name = text.partition("/")
+        text = provider + "/" + re.sub(r"\d+(?:\.\d+)*", "#", name)
+    else:
+        text = re.sub(r"\d+(?:\.\d+)*", "#", text)
+    text = re.sub(r"[^a-z0-9#/_-]+", "-", text)
+    return re.sub(r"-+", "-", text).strip("-")
+
+
+def model_family_key(model_id: str) -> str:
+    return _model_family_key(model_id)
+
+
+def _model_version_sort_key(model_id: str) -> str:
+    numbers = re.findall(r"\d+(?:\.\d+)*", str(model_id or ""))
+    if not numbers:
+        return "000000"
+    parts: list[str] = []
+    for group in numbers:
+        parts.extend(group.split("."))
+    return ".".join(f"{int(part):06d}" for part in parts if part.isdigit()) or "000000"
+
+
+def _safe_model_catalog_row(row: sqlite3.Row | Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    data = dict(row)
+    data["capabilities"] = json_loads(str(data.pop("capabilities_json", "{}") or "{}"), {})
+    data["raw"] = json_loads(str(data.pop("raw_json", "{}") or "{}"), {})
+    for key in ("confidential_compute", "input_cents_per_million", "output_cents_per_million"):
+        try:
+            data[key] = int(data.get(key) or 0)
+        except (TypeError, ValueError):
+            data[key] = 0
+    return data
+
+
+def upsert_model_catalog(
+    conn: sqlite3.Connection,
+    *,
+    provider: str,
+    models: Mapping[str, Any],
+    mark_missing_unavailable: bool = False,
+) -> list[dict[str, Any]]:
+    clean_provider = str(provider or "").strip().lower()
+    if not clean_provider:
+        raise ValueError("provider is required")
+    now_iso = utc_now_iso()
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for model_id, model in models.items():
+        clean_model_id = str(model_id or "").strip()
+        if not clean_model_id:
+            continue
+        data = model if isinstance(model, Mapping) else getattr(model, "__dict__", {})
+        capabilities = dict(data.get("capabilities") or {})
+        for flag, value in (
+            ("tools", data.get("supports_tools")),
+            ("reasoning", data.get("supports_reasoning")),
+            ("structured_outputs", data.get("supports_structured_outputs")),
+        ):
+            if value is not None:
+                capabilities[flag] = bool(value)
+        raw = dict(data.get("raw") or {})
+        input_cents = int(data.get("input_cents_per_million") or raw.get("input_cents_per_million") or 0)
+        output_cents = int(data.get("output_cents_per_million") or raw.get("output_cents_per_million") or 0)
+        family = str(data.get("family") or "").strip() or _model_family_key(clean_model_id)
+        version_sort_key = str(data.get("version_sort_key") or "").strip() or _model_version_sort_key(clean_model_id)
+        display_name = str(data.get("display_name") or raw.get("name") or clean_model_id).strip()
+        confidential = 1 if bool(data.get("confidential_compute") or capabilities.get("confidential_compute")) else 0
+        conn.execute(
+            """
+            INSERT INTO arclink_model_catalog (
+              provider, model_id, display_name, capabilities_json, confidential_compute,
+              input_cents_per_million, output_cents_per_million, status,
+              replacement_model_id, family, version_sort_key, first_seen_at,
+              last_seen_at, raw_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', '', ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(provider, model_id) DO UPDATE SET
+              display_name = excluded.display_name,
+              capabilities_json = excluded.capabilities_json,
+              confidential_compute = excluded.confidential_compute,
+              input_cents_per_million = excluded.input_cents_per_million,
+              output_cents_per_million = excluded.output_cents_per_million,
+              status = CASE
+                WHEN arclink_model_catalog.status = 'deprecated'
+                  AND arclink_model_catalog.replacement_model_id != ''
+                THEN arclink_model_catalog.status
+                ELSE 'active'
+              END,
+              replacement_model_id = CASE
+                WHEN arclink_model_catalog.status = 'deprecated'
+                  AND arclink_model_catalog.replacement_model_id != ''
+                THEN arclink_model_catalog.replacement_model_id
+                ELSE ''
+              END,
+              family = excluded.family,
+              version_sort_key = excluded.version_sort_key,
+              last_seen_at = excluded.last_seen_at,
+              raw_json = excluded.raw_json,
+              updated_at = excluded.updated_at
+            """,
+            (
+                clean_provider,
+                clean_model_id,
+                display_name,
+                json.dumps(capabilities, sort_keys=True),
+                confidential,
+                max(0, input_cents),
+                max(0, output_cents),
+                family,
+                version_sort_key,
+                now_iso,
+                now_iso,
+                json.dumps(raw, sort_keys=True),
+                now_iso,
+            ),
+        )
+        seen.add(clean_model_id)
+    if mark_missing_unavailable:
+        existing = conn.execute(
+            "SELECT model_id FROM arclink_model_catalog WHERE provider = ? AND status = 'active'",
+            (clean_provider,),
+        ).fetchall()
+        for row in existing:
+            old_model_id = str(row["model_id"] if isinstance(row, sqlite3.Row) else row[0])
+            if old_model_id not in seen:
+                conn.execute(
+                    """
+                    UPDATE arclink_model_catalog
+                    SET status = 'unavailable', updated_at = ?
+                    WHERE provider = ? AND model_id = ? AND status = 'active'
+                    """,
+                    (now_iso, clean_provider, old_model_id),
+                )
+    conn.commit()
+    if seen:
+        placeholders = ",".join("?" for _ in seen)
+        rows_raw = conn.execute(
+            f"SELECT * FROM arclink_model_catalog WHERE provider = ? AND model_id IN ({placeholders}) ORDER BY model_id",
+            (clean_provider, *sorted(seen)),
+        ).fetchall()
+        rows = [row for row in (_safe_model_catalog_row(item) for item in rows_raw) if row is not None]
+    return rows
+
+
+def set_model_replacement(
+    conn: sqlite3.Connection,
+    *,
+    provider: str,
+    model_id: str,
+    replacement_model_id: str,
+    status: str = "deprecated",
+) -> dict[str, Any] | None:
+    clean_status = str(status or "deprecated").strip().lower()
+    if clean_status not in {"deprecated", "unavailable"}:
+        clean_status = "deprecated"
+    conn.execute(
+        """
+        UPDATE arclink_model_catalog
+        SET status = ?, replacement_model_id = ?, updated_at = ?
+        WHERE provider = ? AND model_id = ?
+        """,
+        (
+            clean_status,
+            str(replacement_model_id or "").strip(),
+            utc_now_iso(),
+            str(provider or "").strip().lower(),
+            str(model_id or "").strip(),
+        ),
+    )
+    conn.commit()
+    return get_model_catalog_entry(conn, provider=provider, model_id=model_id)
+
+
+def get_model_catalog_entry(conn: sqlite3.Connection, *, provider: str, model_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM arclink_model_catalog WHERE provider = ? AND model_id = ?",
+        (str(provider or "").strip().lower(), str(model_id or "").strip()),
+    ).fetchone()
+    return _safe_model_catalog_row(row)
+
+
+def latest_model_in_family(conn: sqlite3.Connection, *, provider: str, family: str) -> dict[str, Any] | None:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_model_catalog
+        WHERE provider = ? AND family = ? AND status = 'active'
+        ORDER BY version_sort_key DESC, updated_at DESC, model_id DESC
+        LIMIT 1
+        """,
+        (str(provider or "").strip().lower(), str(family or "").strip()),
+    ).fetchall()
+    return _safe_model_catalog_row(rows[0]) if rows else None
 
 
 LLM_ROUTER_KEY_PREFIX = "acpod_live_"

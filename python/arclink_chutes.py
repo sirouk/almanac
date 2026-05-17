@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
@@ -32,6 +33,8 @@ class ChutesModel:
     supports_reasoning: bool
     supports_structured_outputs: bool
     confidential_compute: bool
+    input_cents_per_million: int
+    output_cents_per_million: int
     raw: Mapping[str, Any]
 
     def missing_capabilities(self, *, require_confidential_compute: bool = True) -> tuple[str, ...]:
@@ -226,6 +229,45 @@ def _bool_from_model(model: Mapping[str, Any], *keys: str) -> bool:
     return False
 
 
+def _nested_value(source: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = source
+    for segment in path:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(segment)
+    return current
+
+
+def _money_to_cents_per_million(value: Any, *, value_is_cents: bool = False) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        amount = float(value)
+    else:
+        text = str(value).strip().replace(",", "")
+        match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+        if not match:
+            return 0
+        amount = float(match.group(0))
+        lowered = text.lower()
+        if "cent" in lowered or lowered.endswith("c"):
+            value_is_cents = True
+    cents = amount if value_is_cents else amount * 100.0
+    return max(0, int(round(cents)))
+
+
+def _price_cents_from_model(model: Mapping[str, Any], *paths: tuple[str, ...]) -> int:
+    for path in paths:
+        value = _nested_value(model, path)
+        if value is None:
+            continue
+        joined = ".".join(path).lower()
+        cents = _money_to_cents_per_million(value, value_is_cents="cent" in joined or "cpm" in joined)
+        if cents > 0:
+            return cents
+    return 0
+
+
 def parse_chutes_models(payload: Mapping[str, Any]) -> dict[str, ChutesModel]:
     data = payload.get("data")
     if not isinstance(data, list):
@@ -243,6 +285,32 @@ def parse_chutes_models(payload: Mapping[str, Any]) -> dict[str, ChutesModel]:
             supports_reasoning=_bool_from_model(item, "reasoning", "thinking"),
             supports_structured_outputs=_bool_from_model(item, "structured_outputs", "json_schema"),
             confidential_compute=_bool_from_model(item, "confidential_compute", "tee", "trusted_execution"),
+            input_cents_per_million=_price_cents_from_model(
+                item,
+                ("input_cents_per_million",),
+                ("input_price_cents_per_million",),
+                ("pricing", "input_cents_per_million"),
+                ("pricing", "prompt_cents_per_million"),
+                ("pricing", "input"),
+                ("pricing", "prompt"),
+                ("price", "input"),
+                ("price", "prompt"),
+                ("input_price",),
+                ("prompt_price",),
+            ),
+            output_cents_per_million=_price_cents_from_model(
+                item,
+                ("output_cents_per_million",),
+                ("output_price_cents_per_million",),
+                ("pricing", "output_cents_per_million"),
+                ("pricing", "completion_cents_per_million"),
+                ("pricing", "output"),
+                ("pricing", "completion"),
+                ("price", "output"),
+                ("price", "completion"),
+                ("output_price",),
+                ("completion_price",),
+            ),
             raw=dict(item),
         )
     return models

@@ -54,7 +54,8 @@ Before forwarding a chat request upstream, the router:
 2. Verifies the active key maps to exactly one deployment and one Captain.
 3. Rejects torn-down deployments, inactive users, revoked keys, and suspended
    keys.
-4. Enforces the key/deployment model allowlist.
+4. Enforces the key/deployment model allowlist, then resolves configured model
+   replacements or catalog-marked deprecations before forwarding.
 5. Enforces request body, prompt estimate, and `max_tokens` caps.
 6. Evaluates the Chutes billing and budget boundary.
 7. Checks per-key, per-deployment, and per-Captain request-per-minute limits.
@@ -64,9 +65,14 @@ Before forwarding a chat request upstream, the router:
 Successful and failed upstream calls settle or release reservations. The router
 records token and cost usage in `arclink_llm_usage_events` and updates the
 existing Chutes metadata ledger. It stores request id, deployment id, user id,
-model, token counts, estimated/actual cents, status, stream flag, source kind,
-safe error summary, and timestamps. It does not store raw prompts or
-completions.
+resolved upstream model, token counts, estimated/actual cents, status, stream
+flag, source kind, safe error summary, and timestamps. It does not store raw
+prompts or completions.
+
+When `arclink_model_catalog` contains current Chutes pricing, reservations and
+settled usage use the selected model's `input_cents_per_million` and
+`output_cents_per_million`. The environment price values are only a fallback for
+unknown models or a stale catalog.
 
 `/user/provider-state` and `/admin/provider-state` include an `llm_router`
 summary for each deployment plus aggregate counts in `chutes_summary`. Those
@@ -101,6 +107,11 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_CHUTES_BASE_URL` | `https://llm.chutes.ai/v1` | Upstream Chutes-compatible base URL |
 | `ARCLINK_LLM_ROUTER_DEFAULT_MODEL` | Chutes Kimi default | Default model when no per-key allowlist is set |
 | `ARCLINK_LLM_ROUTER_ALLOWED_MODELS` | default model | Comma-separated router-level model allowlist |
+| `ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE` | `1` | Allows newer/deprecated/unavailable catalog rows to route to their replacement or latest same-family active model |
+| `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS` | none | Comma-separated `old-model=new-model` overrides for emergency promotion |
+| `ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP` | `1` | Refreshes Chutes `/models` into `arclink_model_catalog` when the router starts |
+| `ARCLINK_LLM_ROUTER_MARK_MISSING_MODELS_UNAVAILABLE` | `1` | Marks previously active catalog rows unavailable after a successful refresh omits them |
+| `ARCLINK_LLM_ROUTER_MODEL_CATALOG_AUTH_STRATEGY` | `bearer` | Auth strategy for catalog refresh: `bearer`, `x-api-key`, or `none` |
 | `ARCLINK_LLM_ROUTER_MAX_BODY_BYTES` | `1048576` | Request body cap |
 | `ARCLINK_LLM_ROUTER_PROMPT_ESTIMATE_TOKEN_CAP` | `120000` | Prompt estimate cap |
 | `ARCLINK_LLM_ROUTER_MAX_TOKENS_CAP` | `8192` | Output token request cap |
@@ -109,10 +120,32 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_DEPLOYMENT_REQUESTS_PER_MINUTE` | `120` | Per-deployment request limit |
 | `ARCLINK_LLM_ROUTER_USER_REQUESTS_PER_MINUTE` | `300` | Per-Captain request limit |
 | `ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS` | `0` | Router-side Chutes budget fallback |
-| `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS` | `20` | Fallback input-token cost estimate |
-| `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS` | `80` | Fallback output-token cost estimate |
+| `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS` | `95` | Fallback input-token cost estimate for the default Kimi lane |
+| `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS` | `400` | Fallback output-token cost estimate for the default Kimi lane |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
 | `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS` | `0` | Compatibility flag to restore direct Chutes key mounting |
+
+## Model Catalog And Promotion
+
+The Control Node stores Chutes model catalog rows in `arclink_model_catalog`.
+Rows include capabilities, confidential-compute support, per-million input and
+output cents, status, replacement model, inferred family, version sort key, and
+raw provider metadata. On router startup, ArcLink refreshes the catalog from
+Chutes `/models` with the central router credential and marks omitted active
+models `unavailable` only after that refresh succeeds.
+
+Promotion policy is centralized in the router:
+
+- If `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS` maps the requested model, the
+  router forwards to the configured replacement.
+- If the catalog row is `deprecated` or `unavailable` and has
+  `replacement_model_id`, the router forwards to that replacement.
+- If auto-promotion is enabled and no explicit replacement exists, the router
+  forwards old active, deprecated, or unavailable requests to the latest active
+  model in the same inferred family when a newer version appears.
+- The Captain/Agent can keep requesting the old allowed model id; the router
+  records and bills the resolved upstream model. This lets the Operator move a
+  whole fleet from Kimi K2.6 to K2.7 without rewriting every ArcPod immediately.
 
 ## Proof Boundary
 

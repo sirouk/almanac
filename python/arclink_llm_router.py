@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import uuid
@@ -12,8 +13,17 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from arclink_chutes import evaluate_chutes_deployment_boundary, record_chutes_usage_event
-from arclink_control import ensure_schema, rate_limit_count, record_rate_limit_event, verify_llm_router_key
+from arclink_chutes import ChutesCatalogClient, ChutesCatalogError, evaluate_chutes_deployment_boundary, record_chutes_usage_event
+from arclink_control import (
+    ensure_schema,
+    get_model_catalog_entry,
+    latest_model_in_family,
+    model_family_key,
+    rate_limit_count,
+    record_rate_limit_event,
+    upsert_model_catalog,
+    verify_llm_router_key,
+)
 from arclink_secrets_regex import redact_then_truncate
 
 
@@ -27,8 +37,8 @@ DEFAULT_KEY_REQUESTS_PER_MINUTE = 60
 DEFAULT_DEPLOYMENT_REQUESTS_PER_MINUTE = 120
 DEFAULT_USER_REQUESTS_PER_MINUTE = 300
 DEFAULT_MIN_RESERVATION_CENTS = 1
-DEFAULT_INPUT_CENTS_PER_MILLION = 20
-DEFAULT_OUTPUT_CENTS_PER_MILLION = 80
+DEFAULT_INPUT_CENTS_PER_MILLION = 95
+DEFAULT_OUTPUT_CENTS_PER_MILLION = 400
 
 
 def _truthy(value: str | None, *, default: bool = False) -> bool:
@@ -72,6 +82,11 @@ class RouterConfig:
     chutes_api_key: str
     default_model: str
     allowed_models: tuple[str, ...]
+    model_auto_promote: bool
+    model_replacements: Mapping[str, str]
+    refresh_model_catalog_on_startup: bool
+    mark_missing_models_unavailable: bool
+    model_catalog_auth_strategy: str
     max_body_bytes: int
     prompt_estimate_token_cap: int
     max_tokens_cap: int
@@ -102,6 +117,8 @@ class RouterConfig:
             "chutes_base_url": self.chutes_base_url,
             "db_configured": bool(self.db_path.strip()),
             "model_count": len(self.allowed_models),
+            "model_auto_promote": self.model_auto_promote,
+            "model_catalog_refresh_on_startup": self.refresh_model_catalog_on_startup,
         }
 
 
@@ -117,6 +134,11 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
     allowed_models = _clean_csv(source.get("ARCLINK_LLM_ROUTER_ALLOWED_MODELS"))
     if not allowed_models:
         allowed_models = (default_model,)
+    replacements: dict[str, str] = {}
+    for item in _clean_csv(source.get("ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS")):
+        old, sep, new = item.partition("=")
+        if sep and old.strip() and new.strip():
+            replacements[old.strip()] = new.strip()
     return RouterConfig(
         enabled=_truthy(source.get("ARCLINK_LLM_ROUTER_ENABLED"), default=True),
         db_path=_env_text(source, "ARCLINK_DB_PATH"),
@@ -124,6 +146,21 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
         chutes_api_key=chutes_key,
         default_model=default_model,
         allowed_models=allowed_models,
+        model_auto_promote=_truthy(source.get("ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE"), default=True),
+        model_replacements=replacements,
+        refresh_model_catalog_on_startup=_truthy(
+            source.get("ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP"),
+            default=True,
+        ),
+        mark_missing_models_unavailable=_truthy(
+            source.get("ARCLINK_LLM_ROUTER_MARK_MISSING_MODELS_UNAVAILABLE"),
+            default=True,
+        ),
+        model_catalog_auth_strategy=_env_text(
+            source,
+            "ARCLINK_LLM_ROUTER_MODEL_CATALOG_AUTH_STRATEGY",
+            default="bearer",
+        ).lower(),
         max_body_bytes=_bounded_env_int(source, "ARCLINK_LLM_ROUTER_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, minimum=1),
         prompt_estimate_token_cap=_bounded_env_int(
             source,
@@ -211,6 +248,37 @@ def _open_control_conn(config: RouterConfig) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     ensure_schema(conn)
     return conn
+
+
+def _refresh_model_catalog_once(config: RouterConfig, *, http_client: Any | None = None) -> dict[str, Any]:
+    if not config.enabled:
+        return {"status": "skipped", "reason": "router_disabled"}
+    if not config.configured:
+        return {"status": "skipped", "reason": "router_not_configured"}
+    strategy = config.model_catalog_auth_strategy
+    if strategy not in {"bearer", "x-api-key", "none"}:
+        strategy = "bearer"
+    catalog = ChutesCatalogClient(http_client, base_url=config.chutes_base_url)
+    models = catalog.list_models(
+        api_key="" if strategy == "none" else config.chutes_api_key,
+        auth_strategy="x-api-key" if strategy == "x-api-key" else "bearer",
+    )
+    conn = _open_control_conn(config)
+    try:
+        rows = upsert_model_catalog(
+            conn,
+            provider="chutes",
+            models=models,
+            mark_missing_unavailable=config.mark_missing_models_unavailable,
+        )
+    finally:
+        conn.close()
+    return {
+        "status": "ok",
+        "model_count": len(rows),
+        "mark_missing_unavailable": config.mark_missing_models_unavailable,
+        "auth_strategy": strategy,
+    }
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -337,23 +405,72 @@ def _requested_max_tokens(payload: Mapping[str, Any]) -> int:
     return 0
 
 
-def _estimate_reservation_cents(config: RouterConfig, input_tokens: int, max_tokens: int) -> int:
+def _model_price_cents(config: RouterConfig, catalog_entry: Mapping[str, Any] | None) -> tuple[int, int, str]:
+    if catalog_entry:
+        input_cents = _clean_int(catalog_entry.get("input_cents_per_million"), 0)
+        output_cents = _clean_int(catalog_entry.get("output_cents_per_million"), 0)
+        if input_cents > 0 and output_cents > 0:
+            return input_cents, output_cents, "catalog"
+    return config.input_cents_per_million, config.output_cents_per_million, "router_default"
+
+
+def _estimate_reservation_cents_for_model(
+    config: RouterConfig,
+    catalog_entry: Mapping[str, Any] | None,
+    input_tokens: int,
+    max_tokens: int,
+) -> int:
+    input_cents, output_cents, _ = _model_price_cents(config, catalog_entry)
     output_tokens = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
-    estimated = (
-        (max(0, input_tokens) * config.input_cents_per_million)
-        + (max(0, output_tokens) * config.output_cents_per_million)
-        + 999999
-    ) // 1000000
+    estimated = ((max(0, input_tokens) * input_cents) + (max(0, output_tokens) * output_cents) + 999999) // 1000000
     return max(config.min_reservation_cents, int(estimated))
 
 
-def _estimate_usage_cents(config: RouterConfig, input_tokens: int, output_tokens: int) -> int:
+def _estimate_usage_cents(config: RouterConfig, input_tokens: int, output_tokens: int, catalog_entry: Mapping[str, Any] | None = None) -> int:
+    input_cents, output_cents, _ = _model_price_cents(config, catalog_entry)
     estimated = (
-        (max(0, input_tokens) * config.input_cents_per_million)
-        + (max(0, output_tokens) * config.output_cents_per_million)
+        (max(0, input_tokens) * input_cents)
+        + (max(0, output_tokens) * output_cents)
         + 999999
     ) // 1000000
     return max(0, int(estimated))
+
+
+def _resolve_router_model(
+    conn: sqlite3.Connection,
+    config: RouterConfig,
+    requested_model: str,
+    allowed_models: tuple[str, ...],
+) -> tuple[str, dict[str, Any] | None, dict[str, Any]]:
+    requested = str(requested_model or "").strip()
+    replacement_reason = ""
+    replacement = str(config.model_replacements.get(requested) or "").strip()
+    entry = get_model_catalog_entry(conn, provider="chutes", model_id=requested)
+    if not replacement and entry and str(entry.get("replacement_model_id") or "").strip():
+        replacement = str(entry.get("replacement_model_id") or "").strip()
+        replacement_reason = f"catalog_{entry.get('status') or 'replacement'}"
+    if not replacement and config.model_auto_promote:
+        family = str((entry or {}).get("family") or "").strip() or model_family_key(requested)
+        latest = latest_model_in_family(conn, provider="chutes", family=family)
+        entry_status = str((entry or {}).get("status") or "missing")
+        latest_sort = str((latest or {}).get("version_sort_key") or "")
+        entry_sort = str((entry or {}).get("version_sort_key") or "")
+        if (
+            latest
+            and str(latest.get("model_id") or "") != requested
+            and (entry_status != "active" or (latest_sort and entry_sort and latest_sort > entry_sort))
+        ):
+            replacement = str(latest.get("model_id") or "")
+            replacement_reason = "latest_family_model" if entry_status != "active" else "newer_family_model"
+    if replacement:
+        target_entry = get_model_catalog_entry(conn, provider="chutes", model_id=replacement)
+        metadata = {
+            "requested_model": requested,
+            "upstream_model": replacement,
+            "replacement_reason": replacement_reason or "env_replacement",
+        }
+        return replacement, target_entry, metadata
+    return requested, entry, {"requested_model": requested, "upstream_model": requested, "replacement_reason": ""}
 
 
 def _safe_upstream_error(value: Any) -> str:
@@ -486,6 +603,7 @@ def _preflight_chat_request(
     allowed_models = tuple(auth_record.get("allowed_models") or ()) or config.allowed_models
     if model not in allowed_models:
         return None, _router_error(403, "model_not_allowed", "Requested model is not allowed for this ArcPod.")
+    upstream_model, catalog_entry, model_resolution = _resolve_router_model(conn, config, model, allowed_models)
 
     prompt_tokens = _estimate_prompt_tokens(payload, body)
     if prompt_tokens > config.prompt_estimate_token_cap:
@@ -528,7 +646,7 @@ def _preflight_chat_request(
             retry_after=1,
         )
 
-    reserved_cents = _estimate_reservation_cents(config, prompt_tokens, max_tokens)
+    reserved_cents = _estimate_reservation_cents_for_model(config, catalog_entry, prompt_tokens, max_tokens)
     if boundary.remaining_cents < reserved_cents:
         return None, _router_error(402, "budget_exhausted", "Chutes budget remaining is below the required request reservation.")
 
@@ -543,11 +661,18 @@ def _preflight_chat_request(
     )
     reservation["input_token_estimate"] = prompt_tokens
     reservation["output_token_estimate"] = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
+    reservation["requested_model"] = model
+    reservation["upstream_model"] = upstream_model
+    reservation["model_pricing"] = dict(catalog_entry or {})
+    reservation["model_resolution"] = model_resolution
+    reservation["pricing_source"] = _model_price_cents(config, catalog_entry)[2]
     return reservation, None
 
 
-def _prepare_upstream_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _prepare_upstream_payload(payload: Mapping[str, Any], *, model: str = "") -> dict[str, Any]:
     prepared = dict(payload)
+    if model:
+        prepared["model"] = model
     if _truthy(str(prepared.get("stream") or "")):
         stream_options = prepared.get("stream_options")
         if not isinstance(stream_options, dict):
@@ -589,7 +714,8 @@ def _record_router_usage(
     source_kind: str,
     error_summary: str = "",
 ) -> int:
-    actual_cents = _estimate_usage_cents(config, input_tokens, output_tokens) if status == "succeeded" else 0
+    pricing_entry = reservation.get("model_pricing") if isinstance(reservation.get("model_pricing"), Mapping) else None
+    actual_cents = _estimate_usage_cents(config, input_tokens, output_tokens, pricing_entry) if status == "succeeded" else 0
     estimated_cents = int(reservation.get("reserved_cents") or 0)
     now = _utc_now_iso()
     usage_id = f"llmuse_{uuid.uuid4().hex[:24]}"
@@ -664,7 +790,8 @@ async def _forward_non_streaming(
     payload: Mapping[str, Any],
 ) -> JSONResponse:
     model = str(payload.get("model") or "").strip()
-    upstream_payload = _prepare_upstream_payload(payload)
+    upstream_model = str(reservation.get("upstream_model") or model).strip()
+    upstream_payload = _prepare_upstream_payload(payload, model=upstream_model)
     try:
         async with _upstream_client(config, request.app.state) as client:
             upstream = await client.post(
@@ -681,7 +808,7 @@ async def _forward_non_streaming(
                 config,
                 reservation=reservation,
                 auth_record=auth_record,
-                model=model,
+                model=upstream_model,
                 stream=False,
                 status="failed",
                 input_tokens=int(reservation.get("input_token_estimate") or 0),
@@ -703,7 +830,7 @@ async def _forward_non_streaming(
                 config,
                 reservation=reservation,
                 auth_record=auth_record,
-                model=model,
+                model=upstream_model,
                 stream=False,
                 status="failed",
                 input_tokens=int(reservation.get("input_token_estimate") or 0),
@@ -727,7 +854,7 @@ async def _forward_non_streaming(
                 config,
                 reservation=reservation,
                 auth_record=auth_record,
-                model=model,
+                model=upstream_model,
                 stream=False,
                 status="failed",
                 input_tokens=int(reservation.get("input_token_estimate") or 0),
@@ -754,7 +881,7 @@ async def _forward_non_streaming(
             config,
             reservation=reservation,
             auth_record=auth_record,
-            model=model,
+            model=upstream_model,
             stream=False,
             status="succeeded",
             input_tokens=input_tokens,
@@ -776,6 +903,7 @@ async def _stream_upstream_response(
     payload: Mapping[str, Any],
 ) -> AsyncIterator[bytes]:
     model = str(payload.get("model") or "").strip()
+    upstream_model = str(reservation.get("upstream_model") or model).strip()
     input_tokens = int(reservation.get("input_token_estimate") or 0)
     output_tokens = 0
     total_tokens = input_tokens
@@ -787,7 +915,7 @@ async def _stream_upstream_response(
             async with client.stream(
                 "POST",
                 _upstream_url(config, "chat/completions"),
-                json=_prepare_upstream_payload(payload),
+                json=_prepare_upstream_payload(payload, model=upstream_model),
                 headers=_upstream_headers(config),
             ) as upstream:
                 if upstream.status_code >= 400:
@@ -824,7 +952,7 @@ async def _stream_upstream_response(
                 config,
                 reservation=reservation,
                 auth_record=auth_record,
-                model=model,
+                model=upstream_model,
                 stream=True,
                 status=status,
                 input_tokens=input_tokens,
@@ -837,15 +965,39 @@ async def _stream_upstream_response(
             conn.close()
 
 
-def create_app(config: RouterConfig | None = None, *, upstream_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+def create_app(
+    config: RouterConfig | None = None,
+    *,
+    upstream_transport: httpx.AsyncBaseTransport | None = None,
+    catalog_http_client: Any | None = None,
+) -> FastAPI:
     router_config = config or load_router_config()
     app = FastAPI(title="ArcLink LLM Router", version="0.1.0")
     app.state.router_config = router_config
     app.state.router_upstream_transport = upstream_transport
+    app.state.router_catalog_refresh = {"status": "pending" if router_config.refresh_model_catalog_on_startup else "disabled"}
+
+    @app.on_event("startup")
+    async def refresh_model_catalog_on_startup() -> None:
+        if not router_config.refresh_model_catalog_on_startup:
+            app.state.router_catalog_refresh = {"status": "disabled"}
+            return
+        try:
+            app.state.router_catalog_refresh = await asyncio.to_thread(
+                _refresh_model_catalog_once,
+                router_config,
+                http_client=catalog_http_client,
+            )
+        except (ChutesCatalogError, sqlite3.Error, OSError, ValueError) as exc:
+            app.state.router_catalog_refresh = {
+                "status": "failed",
+                "error": _safe_upstream_error(str(exc)),
+            }
 
     @app.get("/health")
     async def health() -> JSONResponse:
         payload = router_config.public_status()
+        payload["model_catalog_refresh"] = dict(getattr(app.state, "router_catalog_refresh", {}) or {})
         status_code = 200 if router_config.configured else 503
         return JSONResponse(status_code=status_code, content=payload)
 

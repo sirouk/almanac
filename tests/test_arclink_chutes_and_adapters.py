@@ -326,6 +326,47 @@ def test_chutes_catalog_refresh_picks_up_new_models() -> None:
     print("PASS test_chutes_catalog_refresh_picks_up_new_models")
 
 
+def test_chutes_catalog_parses_pricing_and_tracks_model_lifecycle() -> None:
+    chutes = load_module("arclink_chutes.py", "arclink_chutes_pricing_test")
+    control = load_module("arclink_control.py", "arclink_control_model_catalog_pricing_test")
+    catalog = {
+        "data": [
+            {
+                "id": "moonshotai/Kimi-K2.6-TEE",
+                "capabilities": {"tools": True, "reasoning": True, "structured_outputs": True, "confidential_compute": True},
+                "pricing": {"input": "$0.95 / 1M tokens", "output": "$4.00 / 1M tokens"},
+            },
+            {
+                "id": "moonshotai/Kimi-K2.7-TEE",
+                "capabilities": {"tools": True, "reasoning": True, "structured_outputs": True, "confidential_compute": True},
+                "input_cents_per_million": 90,
+                "output_cents_per_million": 380,
+            },
+        ]
+    }
+    models = chutes.parse_chutes_models(catalog)
+    expect(models["moonshotai/Kimi-K2.6-TEE"].input_cents_per_million == 95, str(models["moonshotai/Kimi-K2.6-TEE"]))
+    expect(models["moonshotai/Kimi-K2.6-TEE"].output_cents_per_million == 400, str(models["moonshotai/Kimi-K2.6-TEE"]))
+    with memory_db(control) as conn:
+        rows = control.upsert_model_catalog(conn, provider="chutes", models=models)
+        expect(len(rows) == 2, str(rows))
+        old = control.get_model_catalog_entry(conn, provider="chutes", model_id="moonshotai/Kimi-K2.6-TEE")
+        new = control.get_model_catalog_entry(conn, provider="chutes", model_id="moonshotai/Kimi-K2.7-TEE")
+        expect(old["family"] == new["family"], f"{old} vs {new}")
+        expect(new["version_sort_key"] > old["version_sort_key"], f"{old} vs {new}")
+        control.set_model_replacement(
+            conn,
+            provider="chutes",
+            model_id="moonshotai/Kimi-K2.6-TEE",
+            replacement_model_id="moonshotai/Kimi-K2.7-TEE",
+        )
+        old = control.get_model_catalog_entry(conn, provider="chutes", model_id="moonshotai/Kimi-K2.6-TEE")
+        expect(old["status"] == "deprecated" and old["replacement_model_id"] == "moonshotai/Kimi-K2.7-TEE", str(old))
+        latest = control.latest_model_in_family(conn, provider="chutes", family=old["family"])
+        expect(latest["model_id"] == "moonshotai/Kimi-K2.7-TEE", str(latest))
+    print("PASS test_chutes_catalog_parses_pricing_and_tracks_model_lifecycle")
+
+
 def test_chutes_boundary_fails_closed_without_scoped_secret_or_budget() -> None:
     mod = load_module("arclink_chutes.py", "arclink_chutes_boundary_closed_test")
     state = mod.evaluate_chutes_deployment_boundary(
@@ -675,6 +716,7 @@ def main() -> int:
     test_fake_stripe_billing_portal_session()
     test_fake_cloudflare_propagation_check_after_provision()
     test_chutes_catalog_refresh_picks_up_new_models()
+    test_chutes_catalog_parses_pricing_and_tracks_model_lifecycle()
     test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded()
     test_chutes_boundary_fails_closed_without_scoped_secret_or_budget()
     test_chutes_boundary_publishes_defined_credential_lifecycle()
@@ -684,7 +726,7 @@ def main() -> int:
     test_fake_inference_enforces_chutes_boundary()
     test_chutes_usage_ingestion_updates_budget_boundary_without_secrets()
     test_chutes_usage_ingestion_blocks_after_hard_limit()
-    print("PASS all 22 ArcLink Chutes/adapter tests")
+    print("PASS all 23 ArcLink Chutes/adapter tests")
     return 0
 
 

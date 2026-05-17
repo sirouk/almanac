@@ -261,6 +261,13 @@ explicitly sets `ARCLINK_LLM_ROUTER_LIVE_CHUTES_PROOF=1` together with the
 bounded live-proof model, credential, and max-cents variables documented in
 `docs/arclink/llm-router.md`.
 
+The router refreshes the Chutes model catalog into `arclink_model_catalog`,
+stores per-million input/output pricing, and resolves deprecated, unavailable,
+or older same-family model requests to the current upstream model when
+auto-promotion is enabled. The ArcPod key can keep requesting the Captain's
+configured model id while billing and usage rows record the resolved upstream
+model.
+
 The user dashboard (`web/src/app/dashboard/page.tsx`) consumes
 `/user/dashboard`, `/user/billing`, `/user/provisioning`, `/user/provider-state`,
 `/user/credentials`, `/user/credentials/acknowledge`, and

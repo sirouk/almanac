@@ -616,6 +616,58 @@ def _deliver_public_bot_user(
     return f"public-bot-user delivery for channel_kind={channel_kind!r} not implemented yet"
 
 
+def _public_delivery_identity(channel: str, channel_identity: str) -> str:
+    clean_channel = str(channel or "").strip().lower()
+    clean_identity = str(channel_identity or "").strip()
+    if clean_channel not in {"telegram", "discord"} or not clean_identity:
+        return ""
+    base_identity = clean_identity.split("#", 1)[0].strip()
+    if clean_channel == "telegram":
+        return base_identity if base_identity.startswith("tg:") else f"tg:{base_identity}"
+    if clean_channel == "discord":
+        return base_identity if base_identity.startswith("discord:") else f"discord:{base_identity}"
+    return ""
+
+
+def _resolve_captain_wrapped_public_channel(cfg: Config, *, user_id: str) -> tuple[str, str]:
+    clean_user_id = str(user_id or "").strip()
+    if not clean_user_id:
+        return "", ""
+    try:
+        with connect_db(cfg) as conn:
+            row = conn.execute(
+                """
+                SELECT channel, channel_identity, status
+                FROM arclink_onboarding_sessions
+                WHERE user_id = ?
+                  AND channel IN ('telegram', 'discord')
+                  AND channel_identity != ''
+                  AND status NOT IN ('payment_cancelled', 'payment_expired', 'payment_failed', 'abandoned', 'expired')
+                ORDER BY
+                  CASE status
+                    WHEN 'first_contacted' THEN 0
+                    WHEN 'completed' THEN 1
+                    WHEN 'provisioning_ready' THEN 2
+                    WHEN 'paid' THEN 3
+                    ELSE 4
+                  END,
+                  updated_at DESC,
+                  completed_at DESC,
+                  created_at DESC,
+                  session_id DESC
+                LIMIT 1
+                """,
+                (clean_user_id,),
+            ).fetchone()
+    except Exception:  # noqa: BLE001 - delivery must fail closed without leaking internals.
+        return "", ""
+    if row is None:
+        return "", ""
+    channel_kind = str(row["channel"] or "").strip().lower()
+    target_id = _public_delivery_identity(channel_kind, str(row["channel_identity"] or ""))
+    return (channel_kind, target_id) if target_id else ("", "")
+
+
 def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str, Any]) -> str | None:
     channel_kind = str(row.get("channel_kind") or "").lower()
     target_id = str(row.get("target_id") or "")
@@ -841,10 +893,20 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
         # outreach, but carries a distinct target kind so reports can be
         # audited and retried independently from normal public bot messages.
         channel_kind = (row.get("channel_kind") or "").lower()
+        target_id = str(row.get("target_id") or "")
+        if channel_kind not in {"telegram", "discord"}:
+            resolved_kind, resolved_target = _resolve_captain_wrapped_public_channel(
+                cfg,
+                user_id=str(extra.get("user_id") or ""),
+            )
+            channel_kind = resolved_kind
+            target_id = resolved_target
+        if channel_kind not in {"telegram", "discord"} or not target_id:
+            return "captain-wrapped public delivery channel is not available"
         return _deliver_public_bot_user(
             cfg,
             channel_kind=channel_kind,
-            target_id=str(row.get("target_id") or ""),
+            target_id=target_id,
             message=str(row.get("message") or ""),
             extra=extra,
         )

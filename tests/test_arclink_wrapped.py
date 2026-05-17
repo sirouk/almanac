@@ -355,6 +355,69 @@ def test_wrapped_delivery_queue_respects_quiet_hours_and_marks_cadence() -> None
     print("PASS test_wrapped_delivery_queue_respects_quiet_hours_and_marks_cadence")
 
 
+def test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel() -> None:
+    wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_delivery_contacts")
+    conn = memory_db()
+    seed_wrapped_fixture(conn)
+    conn.execute(
+        """
+        INSERT INTO arclink_onboarding_sessions (
+          session_id, channel, channel_identity, status, current_step,
+          email_hint, display_name_hint, agent_name, agent_title,
+          selected_plan_id, selected_model_id, user_id, deployment_id,
+          checkout_state, metadata_json, created_at, updated_at, completed_at
+        ) VALUES (
+          'sess_add', 'telegram', 'tg:42#add:abc123', 'provisioning_ready', 'done',
+          'captain@example.test', 'Captain One', 'Beryl', 'Comms Agent',
+          'agent_expansion_founders', 'moonshotai/Kimi-K2.6-TEE', 'user_1', 'dep_b',
+          'paid', '{}', '2026-05-02T00:00:00+00:00',
+          '2026-05-14T00:00:00+00:00', ''
+        )
+        """
+    )
+    conn.commit()
+    report = wrapped.generate_wrapped_report(
+        conn,
+        "user_1",
+        "daily",
+        "2026-05-12T00:00:00+00:00",
+        "2026-05-13T00:00:00+00:00",
+        report_id="wrap_add_contact",
+        created_at="2026-05-13T20:05:00+00:00",
+    )
+    notification_id = wrapped.enqueue_wrapped_report_notification(
+        conn,
+        report["report_id"],
+        now="2026-05-13T20:10:00+00:00",
+    )
+    outbox = conn.execute("SELECT target_id, channel_kind FROM notification_outbox WHERE id = ?", (notification_id,)).fetchone()
+    expect(outbox["target_id"] == "tg:42", str(dict(outbox)))
+    expect(outbox["channel_kind"] == "telegram", str(dict(outbox)))
+
+    report_without_channel = wrapped.generate_wrapped_report(
+        conn,
+        "user_2",
+        "daily",
+        "2026-05-12T00:00:00+00:00",
+        "2026-05-13T00:00:00+00:00",
+        report_id="wrap_no_channel",
+        created_at="2026-05-13T20:05:00+00:00",
+    )
+    skipped_id = wrapped.enqueue_wrapped_report_notification(
+        conn,
+        report_without_channel["report_id"],
+        now="2026-05-13T20:10:00+00:00",
+    )
+    expect(skipped_id == 0, str(skipped_id))
+    missing = conn.execute("SELECT delivery_channel FROM arclink_wrapped_reports WHERE report_id = 'wrap_no_channel'").fetchone()
+    expect(missing["delivery_channel"] == "unavailable", str(dict(missing)))
+    queued_missing = conn.execute(
+        "SELECT COUNT(*) AS count FROM notification_outbox WHERE extra_json LIKE '%wrap_no_channel%'"
+    ).fetchone()["count"]
+    expect(queued_missing == 0, str(queued_missing))
+    print("PASS test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel")
+
+
 def test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persistent_failure() -> None:
     wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_scheduler")
     conn = memory_db()
@@ -391,8 +454,9 @@ def main() -> int:
     test_wrapped_report_score_is_deterministic_for_same_inputs()
     test_wrapped_frequency_periods_due_and_admin_privacy()
     test_wrapped_delivery_queue_respects_quiet_hours_and_marks_cadence()
+    test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel()
     test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persistent_failure()
-    print("PASS all 5 ArcLink Wrapped tests")
+    print("PASS all 6 ArcLink Wrapped tests")
     return 0
 
 

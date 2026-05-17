@@ -41,6 +41,7 @@ from arclink_secrets_regex import contains_secret_material, redact_secret_materi
 
 WRAPPED_FREQUENCIES = {"daily", "weekly", "monthly"}
 WRAPPED_STATUSES = {"pending", "generated", "delivered", "failed"}
+WRAPPED_PUBLIC_DELIVERY_CHANNELS = {"telegram", "discord"}
 _TERMINAL_DEPLOYMENT_STATUSES = {"cancelled", "teardown_complete", "torn_down"}
 _PERSISTENT_FAILURE_THRESHOLD = 3
 
@@ -733,23 +734,55 @@ def next_attempt_after_quiet_hours(now: str | datetime | None = None, *, quiet_h
     return _iso(current)
 
 
-def _captain_delivery_channel(conn: sqlite3.Connection, user_id: str) -> dict[str, str]:
+def _public_delivery_identity(channel: str, channel_identity: str) -> str:
+    clean_channel = str(channel or "").strip().lower()
+    clean_identity = str(channel_identity or "").strip()
+    if clean_channel not in WRAPPED_PUBLIC_DELIVERY_CHANNELS or not clean_identity:
+        return ""
+    base_identity = clean_identity.split("#", 1)[0].strip()
+    if clean_channel == "telegram":
+        if base_identity.startswith("tg:"):
+            return base_identity
+        return f"tg:{base_identity}" if base_identity else ""
+    if clean_channel == "discord":
+        if base_identity.startswith("discord:"):
+            return base_identity
+        return f"discord:{base_identity}" if base_identity else ""
+    return ""
+
+
+def _captain_delivery_channel(conn: sqlite3.Connection, user_id: str) -> dict[str, str] | None:
     row = conn.execute(
         """
-        SELECT channel, channel_identity
+        SELECT channel, channel_identity, status
         FROM arclink_onboarding_sessions
         WHERE user_id = ?
           AND channel IN ('telegram', 'discord')
           AND channel_identity != ''
-          AND status IN ('paid', 'provisioning_ready', 'completed')
-        ORDER BY completed_at DESC, updated_at DESC, created_at DESC, session_id DESC
+          AND status NOT IN ('payment_cancelled', 'payment_expired', 'payment_failed', 'abandoned', 'expired')
+        ORDER BY
+          CASE status
+            WHEN 'first_contacted' THEN 0
+            WHEN 'completed' THEN 1
+            WHEN 'provisioning_ready' THEN 2
+            WHEN 'paid' THEN 3
+            ELSE 4
+          END,
+          updated_at DESC,
+          completed_at DESC,
+          created_at DESC,
+          session_id DESC
         LIMIT 1
         """,
         (str(user_id or "").strip(),),
     ).fetchone()
     if row is None:
-        return {"channel_kind": "user-agent", "target_id": str(user_id or "").strip()}
-    return {"channel_kind": str(row["channel"]), "target_id": str(row["channel_identity"])}
+        return None
+    channel_kind = str(row["channel"] or "").strip().lower()
+    target_id = _public_delivery_identity(channel_kind, str(row["channel_identity"] or ""))
+    if not target_id:
+        return None
+    return {"channel_kind": channel_kind, "target_id": target_id}
 
 
 def enqueue_wrapped_report_notification(
@@ -778,6 +811,17 @@ def enqueue_wrapped_report_notification(
     message = _redact_text(str(ledger.get("plain_text") or "ArcLink Wrapped is ready."))
     channel = _captain_delivery_channel(conn, str(row["user_id"]))
     created_at = _iso(_parse_dt(now or utc_now_iso()))
+    if channel is None:
+        conn.execute(
+            """
+            UPDATE arclink_wrapped_reports
+            SET delivery_channel = 'unavailable'
+            WHERE report_id = ?
+            """,
+            (str(row["report_id"]),),
+        )
+        conn.commit()
+        return 0
     next_attempt_at = next_attempt_after_quiet_hours(created_at, quiet_hours=quiet_hours)
     extra = {
         "report_id": str(row["report_id"]),
@@ -910,8 +954,9 @@ def run_wrapped_scheduler_once(
                 created_at=_iso(_parse_dt(now or utc_now_iso())),
             )
             summary["generated"] += 1
-            enqueue_wrapped_report_notification(conn, report["report_id"], now=now, quiet_hours=quiet_hours)
-            summary["queued"] += 1
+            notification_id = enqueue_wrapped_report_notification(conn, report["report_id"], now=now, quiet_hours=quiet_hours)
+            if notification_id > 0:
+                summary["queued"] += 1
         except Exception as exc:  # noqa: BLE001
             summary["failed"] += 1
             _record_wrapped_failure(

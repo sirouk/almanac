@@ -461,6 +461,9 @@ Stripe Dashboard event destination during install.
 | `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS` | Comma-separated Raven top-up packages; default `1000,2500,5000,10000` |
 | `ARCLINK_REFUEL_TOPUP_MIN_CENTS` / `ARCLINK_REFUEL_TOPUP_MAX_CENTS` | Custom amount bounds; defaults `$5` to `$500` |
 | `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS` | Portion of retail dollars converted into metered provider budget; default `7000` (70%) |
+| `ARCLINK_SUBSCRIPTION_INFERENCE_CREDIT_BPS` | Portion of plan retail replenished as included inference budget on paid monthly invoices; default `2000` (20%) |
+| `ARCLINK_FOUNDERS_MONTHLY_INFERENCE_CREDIT_CENTS` / `ARCLINK_SOVEREIGN_MONTHLY_INFERENCE_CREDIT_CENTS` / `ARCLINK_SCALE_MONTHLY_INFERENCE_CREDIT_CENTS` | Optional plan-specific included inference-budget overrides |
+| `ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS` / `ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS` | Optional extra-Agent included inference-budget overrides |
 
 **Stripe Dashboard event destination:**
 - Destination URL: `https://<control-host>/api/v1/webhooks/stripe`.
@@ -493,8 +496,18 @@ price. If Chutes reprices a model or a Captain changes model, token capacity
 changes automatically because metering is catalog-driven. The Stripe webhook
 branch for `checkout.session.completed` with metadata
 `arclink_purchase_kind=inference_refuel` grants an `arclink_refuel_credits`
-row and applies it to the owning deployment's Chutes budget. Subscription
-entitlement state is not changed by refuel purchases.
+row and applies it to the owning deployment's Chutes budget only after the
+Checkout customer, `client_reference_id`, Captain account, and target ArcPod
+match. Subscription entitlement state is not changed by refuel purchases.
+
+**Monthly included inference budget:** Paid subscription invoices replenish
+inference budget through the same credit ledger. By default ArcLink converts
+20% of plan retail into included provider budget each month: Founders `$29.80`,
+Sovereign `$39.80`, Scale `$55.00`, Sovereign extra Agent `$19.80`, and Scale
+extra Agent `$15.80`. `invoice.payment_succeeded` and `invoice.paid` are
+idempotent per invoice and ArcPod (`<invoice_id>:<deployment_id>`), so Stripe's
+duplicate/alias events do not double-credit. If a Captain has multiple active
+ArcPods on the same plan, the plan allowance is split across those Pods.
 
 **Reconciliation:** `detect_stripe_reconciliation_drift` compares local
 entitlement/subscription records against what Stripe reports. Drift items

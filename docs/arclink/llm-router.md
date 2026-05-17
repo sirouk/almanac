@@ -82,7 +82,9 @@ stable Stripe Product by setting `ARCLINK_REFUEL_STRIPE_PRODUCT_ID`, or let
 Checkout use inline product data. Stripe Checkout uses `mode=payment`, not a
 subscription. On `checkout.session.completed`, ArcLink grants an
 `arclink_refuel_credits` row and applies it to the owning ArcPod's metered
-router budget.
+router budget. The webhook validates that the Checkout customer,
+`client_reference_id`, Captain account, and target ArcPod all match before any
+credit is granted.
 
 Default retail conversion keeps ArcLink profitable before Stripe/platform
 overhead:
@@ -104,6 +106,32 @@ spend is settled by the router against the selected model's current catalog
 price. If a Captain changes models, or ArcLink promotes a fleet from Kimi K2.6
 to Kimi K2.7, the same dollar credit naturally buys the amount of usage allowed
 by the new catalog price.
+
+## Monthly Subscription Inference Allowance
+
+Paid monthly subscription renewals also replenish inference budget. When Stripe
+sends `invoice.payment_succeeded` or `invoice.paid` for a paid invoice, ArcLink
+resolves the Captain from subscription/customer local state, applies the
+configured plan allowance to that Captain's active ArcPods, and records each
+grant as `source_kind='stripe_subscription_renewal'`. The source id is
+`<invoice_id>:<deployment_id>`, so duplicate Stripe aliases for the same invoice
+are idempotent.
+
+By default the monthly allowance is 20% of plan retail:
+
+| Plan | Retail/month | Default monthly inference allowance |
+| --- | ---: | ---: |
+| Founders | `$149` | `$29.80` |
+| Sovereign | `$199` | `$39.80` |
+| Scale | `$275` | `$55.00` |
+| Sovereign extra Agent | `$99` | `$19.80` |
+| Scale extra Agent | `$79` | `$15.80` |
+
+`ARCLINK_SUBSCRIPTION_INFERENCE_CREDIT_BPS` controls the global percentage, and
+the plan-specific `ARCLINK_*_MONTHLY_INFERENCE_CREDIT_CENTS` variables override
+individual rows. When multiple active ArcPods share the same plan, ArcLink
+splits that plan's monthly allowance across them deterministically instead of
+granting the full plan amount to every Pod.
 
 `/user/provider-state` and `/admin/provider-state` include an `llm_router`
 summary for each deployment plus aggregate counts in `chutes_summary`. Those
@@ -162,6 +190,12 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_REFUEL_TOPUP_MAX_CENTS` | `50000` | Maximum custom top-up amount |
 | `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS` | `7000` | Retail-to-metered-budget conversion basis points |
 | `ARCLINK_REFUEL_REFERENCE_MODEL` | router default model | Display-only model name used in top-up capacity estimates |
+| `ARCLINK_SUBSCRIPTION_INFERENCE_CREDIT_BPS` | `2000` | Monthly subscription retail converted into included inference budget |
+| `ARCLINK_FOUNDERS_MONTHLY_INFERENCE_CREDIT_CENTS` | `$29.80` | Override Founders monthly included inference budget |
+| `ARCLINK_SOVEREIGN_MONTHLY_INFERENCE_CREDIT_CENTS` | `$39.80` | Override Sovereign monthly included inference budget |
+| `ARCLINK_SCALE_MONTHLY_INFERENCE_CREDIT_CENTS` | `$55.00` | Override Scale monthly included inference budget |
+| `ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS` | `$19.80` | Override Sovereign extra-Agent monthly included inference budget |
+| `ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS` | `$15.80` | Override Scale extra-Agent monthly included inference budget |
 
 ## Model Catalog And Promotion
 

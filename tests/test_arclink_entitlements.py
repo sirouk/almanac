@@ -828,6 +828,157 @@ def test_refuel_checkout_session_completed_grants_and_applies_credit() -> None:
     print("PASS test_refuel_checkout_session_completed_grants_and_applies_credit")
 
 
+def test_refuel_checkout_rejects_mismatched_stripe_customer() -> None:
+    control = load_module("arclink_control.py", "arclink_control_refuel_mismatch_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_refuel_mismatch_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_refuel_mismatch_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(
+        conn,
+        user_id="user_refuel_owner",
+        stripe_customer_id="cus_owner",
+        entitlement_state="paid",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_refuel_owner",
+        user_id="user_refuel_owner",
+        prefix="refuel-owner",
+        status="active",
+        metadata={"chutes": {"monthly_budget_cents": 1000}},
+    )
+    payload = json.dumps({
+        "id": "evt_refuel_customer_mismatch",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_refuel_customer_mismatch",
+            "status": "complete",
+            "customer": "cus_other",
+            "client_reference_id": "user_refuel_owner",
+            "metadata": {
+                "arclink_purchase_kind": "inference_refuel",
+                "arclink_user_id": "user_refuel_owner",
+                "arclink_deployment_id": "dep_refuel_owner",
+                "retail_cents": "2500",
+                "credit_cents": "1750",
+            },
+        }},
+    }, sort_keys=True)
+    try:
+        entitlements.process_stripe_webhook(
+            conn,
+            payload=payload,
+            signature=sign(adapters, payload),
+            secret="whsec_test",
+        )
+    except entitlements.ArcLinkEntitlementError as exc:
+        expect("customer does not match" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected mismatched Stripe customer to be rejected")
+    credit_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_refuel_credits").fetchone()["n"]
+    expect(credit_count == 0, str(credit_count))
+    dep = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_refuel_owner'").fetchone()
+    metadata = json.loads(dep["metadata_json"])
+    expect(metadata["chutes"]["monthly_budget_cents"] == 1000, str(metadata))
+    print("PASS test_refuel_checkout_rejects_mismatched_stripe_customer")
+
+
+def test_invoice_payment_tops_up_subscription_inference_allowance_once() -> None:
+    control = load_module("arclink_control.py", "arclink_control_subscription_allowance_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_subscription_allowance_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_subscription_allowance_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(
+        conn,
+        user_id="user_scale",
+        stripe_customer_id="cus_scale",
+        entitlement_state="paid",
+    )
+    control.upsert_arclink_subscription_mirror(
+        conn,
+        subscription_id="stripe:sub_scale",
+        user_id="user_scale",
+        stripe_customer_id="cus_scale",
+        stripe_subscription_id="sub_scale",
+        status="active",
+        current_period_end="",
+        raw={},
+    )
+    for index in range(3):
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id=f"dep_scale_{index}",
+            user_id="user_scale",
+            prefix=f"scale-{index}",
+            status="active",
+            metadata={"selected_plan_id": "scale", "chutes": {"monthly_budget_cents": 0}},
+        )
+    payload = json.dumps({
+        "id": "evt_scale_invoice_paid",
+        "type": "invoice.payment_succeeded",
+        "data": {"object": {
+            "id": "in_scale_1",
+            "customer": "cus_scale",
+            "subscription": "sub_scale",
+            "status": "paid",
+            "metadata": {},
+        }},
+    }, sort_keys=True)
+    result = entitlements.process_stripe_webhook(
+        conn,
+        payload=payload,
+        signature=sign(adapters, payload),
+        secret="whsec_test",
+    )
+    expect(result.user_id == "user_scale", str(result))
+    budgets: list[int] = []
+    for index in range(3):
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (f"dep_scale_{index}",),
+        ).fetchone()
+        metadata = json.loads(row["metadata_json"])
+        budgets.append(int(metadata["chutes"]["monthly_budget_cents"]))
+    expect(sorted(budgets) == [1833, 1833, 1834], str(budgets))
+    expect(sum(budgets) == 5500, str(budgets))
+    credit_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_refuel_credits WHERE source_kind = 'stripe_subscription_renewal'"
+    ).fetchone()["n"]
+    expect(credit_count == 3, str(credit_count))
+
+    replay_payload = json.dumps({
+        "id": "evt_scale_invoice_paid_alias",
+        "type": "invoice.paid",
+        "data": {"object": {
+            "id": "in_scale_1",
+            "customer": "cus_scale",
+            "subscription": "sub_scale",
+            "status": "paid",
+            "metadata": {},
+        }},
+    }, sort_keys=True)
+    replay = entitlements.process_stripe_webhook(
+        conn,
+        payload=replay_payload,
+        signature=sign(adapters, replay_payload),
+        secret="whsec_test",
+    )
+    expect(replay.entitlement_state == "paid", str(replay))
+    replay_credit_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_refuel_credits WHERE source_kind = 'stripe_subscription_renewal'"
+    ).fetchone()["n"]
+    expect(replay_credit_count == 3, str(replay_credit_count))
+    replay_budgets: list[int] = []
+    for index in range(3):
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (f"dep_scale_{index}",),
+        ).fetchone()
+        replay_budgets.append(int(json.loads(row["metadata_json"])["chutes"]["monthly_budget_cents"]))
+    expect(replay_budgets == budgets, str(replay_budgets))
+    print("PASS test_invoice_payment_tops_up_subscription_inference_allowance_once")
+
+
 def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_checkout_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_test")
@@ -1106,12 +1257,14 @@ def main() -> int:
     test_refuel_credit_concurrent_spend_does_not_overspend()
     test_refuel_credit_rejects_empty_and_wrong_owner_targets()
     test_refuel_checkout_session_completed_grants_and_applies_credit()
+    test_refuel_checkout_rejects_mismatched_stripe_customer()
+    test_invoice_payment_tops_up_subscription_inference_allowance_once()
     test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding()
     test_subscription_created_sets_paid_and_mirrors_subscription()
     test_subscription_deleted_cancels_entitlement_and_audits()
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
     test_stripe_webhook_merges_users_when_email_matches_existing_account()
-    print("PASS all 23 ArcLink entitlement tests")
+    print("PASS all 25 ArcLink entitlement tests")
     return 0
 
 

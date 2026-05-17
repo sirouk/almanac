@@ -3547,6 +3547,203 @@ def arclink_refuel_topup_options(env: Mapping[str, str] | None = None) -> dict[s
     }
 
 
+ARCLINK_PLAN_RETAIL_CENTS = {
+    "founders": 14900,
+    "sovereign": 19900,
+    "scale": 27500,
+    "sovereign_agent_expansion": 9900,
+    "scale_agent_expansion": 7900,
+}
+
+
+def normalize_arclink_plan_id(value: str) -> str:
+    clean = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if clean in {"starter", "founder", "limited", "limited_founders", "limited_100_founders"}:
+        return "founders"
+    if clean.startswith("agent_expansion_scale") or clean.startswith("scale_agent_expansion"):
+        return "scale_agent_expansion"
+    if clean.startswith("agent_expansion") or clean.startswith("sovereign_agent_expansion"):
+        return "sovereign_agent_expansion"
+    if clean.startswith("scale"):
+        return "scale"
+    if clean.startswith("founders"):
+        return "founders"
+    return "sovereign"
+
+
+def subscription_inference_allowance_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    source = env or os.environ
+    bps = _refuel_positive_int(
+        source,
+        "ARCLINK_SUBSCRIPTION_INFERENCE_CREDIT_BPS",
+        2000,
+        minimum=0,
+        maximum=10000,
+    )
+
+    def _allowance(name: str, plan: str) -> int:
+        default = (ARCLINK_PLAN_RETAIL_CENTS[plan] * bps) // 10000
+        return _refuel_positive_int(source, name, default, minimum=0, maximum=5_000_000)
+
+    allowances = {
+        "founders": _allowance("ARCLINK_FOUNDERS_MONTHLY_INFERENCE_CREDIT_CENTS", "founders"),
+        "sovereign": _allowance("ARCLINK_SOVEREIGN_MONTHLY_INFERENCE_CREDIT_CENTS", "sovereign"),
+        "scale": _allowance("ARCLINK_SCALE_MONTHLY_INFERENCE_CREDIT_CENTS", "scale"),
+        "sovereign_agent_expansion": _allowance(
+            "ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS",
+            "sovereign_agent_expansion",
+        ),
+        "scale_agent_expansion": _allowance(
+            "ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS",
+            "scale_agent_expansion",
+        ),
+    }
+    return {
+        "currency": str(source.get("ARCLINK_REFUEL_CURRENCY") or "usd").strip().lower() or "usd",
+        "basis_points": bps,
+        "allowances": allowances,
+        "source": "env_or_default_plan_retail_basis_points",
+    }
+
+
+def _deployment_plan_id_from_metadata(row: Mapping[str, Any]) -> str:
+    try:
+        raw_metadata = row["metadata_json"]  # type: ignore[index]
+    except (KeyError, IndexError, TypeError):
+        raw_metadata = "{}"
+    metadata = json_loads(str(raw_metadata or "{}"), {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return normalize_arclink_plan_id(str(metadata.get("selected_plan_id") or metadata.get("plan_id") or ""))
+
+
+def apply_subscription_inference_allowance(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    stripe_event_id: str,
+    invoice_id: str,
+    subscription_id: str = "",
+    actor_id: str = "stripe",
+    reason: str = "Stripe subscription inference allowance",
+    env: Mapping[str, str] | None = None,
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        raise ValueError("ArcLink subscription allowance requires a user id")
+    clean_invoice = str(invoice_id or "").strip() or str(stripe_event_id or "").strip()
+    if not clean_invoice:
+        raise ValueError("ArcLink subscription allowance requires an invoice or event id")
+    config = subscription_inference_allowance_config(env)
+    rows = conn.execute(
+        """
+        SELECT deployment_id, user_id, metadata_json, status
+        FROM arclink_deployments
+        WHERE user_id = ?
+          AND status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+        ORDER BY created_at ASC, deployment_id ASC
+        """,
+        (clean_user,),
+    ).fetchall()
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(_deployment_plan_id_from_metadata(row), []).append(row)
+
+    applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    allowances = dict(config.get("allowances") or {})
+    for plan, deployments in grouped.items():
+        total_allowance = int(allowances.get(plan) or allowances.get("sovereign") or 0)
+        if total_allowance <= 0 or not deployments:
+            continue
+        share, remainder = divmod(total_allowance, len(deployments))
+        for index, deployment in enumerate(deployments):
+            amount = share + (1 if index < remainder else 0)
+            if amount <= 0:
+                continue
+            deployment_id = str(deployment["deployment_id"] or "")
+            source_id = f"{clean_invoice}:{deployment_id}"
+            existing = conn.execute(
+                """
+                SELECT credit_id
+                FROM arclink_refuel_credits
+                WHERE user_id = ?
+                  AND deployment_id = ?
+                  AND source_kind = 'stripe_subscription_renewal'
+                  AND source_id = ?
+                LIMIT 1
+                """,
+                (clean_user, deployment_id, source_id),
+            ).fetchone()
+            if existing is not None:
+                skipped.append({"deployment_id": deployment_id, "plan_id": plan, "source_id": source_id})
+                continue
+            credit = grant_arclink_refuel_credit(
+                conn,
+                user_id=clean_user,
+                deployment_id=deployment_id,
+                actor_id=actor_id,
+                reason=reason,
+                credit_cents=amount,
+                source_kind="stripe_subscription_renewal",
+                source_id=source_id,
+                metadata={
+                    "stripe_event_id": str(stripe_event_id or ""),
+                    "stripe_invoice_id": clean_invoice,
+                    "stripe_subscription_id": str(subscription_id or ""),
+                    "plan_id": plan,
+                    "plan_total_allowance_cents": total_allowance,
+                    "deployment_count_for_plan": len(deployments),
+                },
+                commit=False,
+            )
+            result = apply_arclink_refuel_credit_to_chutes_budget(
+                conn,
+                user_id=clean_user,
+                deployment_id=deployment_id,
+                requested_cents=amount,
+                actor_id=actor_id,
+                reason=reason,
+                commit=False,
+            )
+            applied.append(
+                {
+                    "deployment_id": deployment_id,
+                    "plan_id": plan,
+                    "credit_id": str(credit.get("credit_id") or ""),
+                    "applied_cents": int(result.get("applied_cents") or 0),
+                    "source_id": source_id,
+                }
+            )
+    if applied:
+        append_arclink_event(
+            conn,
+            subject_kind="user",
+            subject_id=clean_user,
+            event_type="stripe_subscription_inference_allowance_applied",
+            metadata={
+                "stripe_event_id": str(stripe_event_id or ""),
+                "stripe_invoice_id": clean_invoice,
+                "stripe_subscription_id": str(subscription_id or ""),
+                "applied_cents": sum(item["applied_cents"] for item in applied),
+                "deployments": applied,
+                "skipped": skipped,
+            },
+            commit=False,
+        )
+    _arclink_commit(conn, commit=commit)
+    return {
+        "user_id": clean_user,
+        "stripe_invoice_id": clean_invoice,
+        "stripe_subscription_id": str(subscription_id or ""),
+        "applied_cents": sum(item["applied_cents"] for item in applied),
+        "deployments": applied,
+        "skipped": skipped,
+        "allowance_config": config,
+    }
+
+
 def grant_arclink_refuel_credit(
     conn: sqlite3.Connection,
     *,

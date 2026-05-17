@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from arclink_control import (
     advance_arclink_entitlement_gates_for_user,
     apply_arclink_refuel_credit_to_chutes_budget,
+    apply_subscription_inference_allowance,
     append_arclink_audit,
     append_arclink_event,
     grant_arclink_refuel_credit,
@@ -330,6 +331,62 @@ def _stripe_metadata_positive_int(obj: Mapping[str, Any], *keys: str) -> int:
     return 0
 
 
+def _assert_refuel_checkout_account(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    stripe_customer_id: str,
+    client_reference_id: str,
+) -> None:
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    clean_customer = str(stripe_customer_id or "").strip()
+    clean_reference = str(client_reference_id or "").strip()
+    if clean_reference and clean_reference != clean_user:
+        raise ArcLinkEntitlementError("Stripe refuel checkout client reference does not match ArcLink account")
+    user_row = conn.execute(
+        """
+        SELECT stripe_customer_id
+        FROM arclink_users
+        WHERE user_id = ?
+        LIMIT 1
+        """,
+        (clean_user,),
+    ).fetchone()
+    if user_row is None:
+        raise ArcLinkEntitlementError("Stripe refuel checkout targeted an unknown ArcLink account")
+    local_customer = str(user_row["stripe_customer_id"] or "").strip()
+    if local_customer and clean_customer and local_customer != clean_customer:
+        raise ArcLinkEntitlementError("Stripe refuel checkout customer does not match ArcLink account")
+    if clean_customer:
+        other_row = conn.execute(
+            """
+            SELECT user_id
+            FROM arclink_users
+            WHERE stripe_customer_id = ?
+              AND user_id != ?
+            LIMIT 1
+            """,
+            (clean_customer, clean_user),
+        ).fetchone()
+        if other_row is not None:
+            raise ArcLinkEntitlementError("Stripe refuel checkout customer is already bound to another ArcLink account")
+    deployment_row = conn.execute(
+        """
+        SELECT user_id
+        FROM arclink_deployments
+        WHERE deployment_id = ?
+        LIMIT 1
+        """,
+        (clean_deployment,),
+    ).fetchone()
+    if deployment_row is None:
+        raise ArcLinkEntitlementError("Stripe refuel checkout targeted an unknown ArcPod")
+    if str(deployment_row["user_id"] or "").strip() != clean_user:
+        raise ArcLinkEntitlementError("Stripe refuel checkout ArcPod does not belong to ArcLink account")
+
+
 def _stripe_customer_email(obj: Mapping[str, Any]) -> str:
     customer_details = _safe_mapping(obj.get("customer_details"))
     return _first_nonempty((
@@ -523,6 +580,13 @@ def process_stripe_webhook(
                 raise ArcLinkEntitlementError("Stripe refuel checkout did not include positive credit cents")
             stripe_customer_id = str(obj.get("customer") or "").strip()
             stripe_customer_email = _stripe_customer_email(obj)
+            _assert_refuel_checkout_account(
+                conn,
+                user_id=user_id,
+                deployment_id=deployment_id,
+                stripe_customer_id=stripe_customer_id,
+                client_reference_id=str(obj.get("client_reference_id") or ""),
+            )
             if stripe_customer_id:
                 upsert_arclink_user(
                     conn,
@@ -684,6 +748,18 @@ def process_stripe_webhook(
                 stripe_customer_id=stripe_customer_id,
                 commit=False,
             )
+        inference_allowance: dict[str, Any] = {}
+        if event_type in {"invoice.payment_succeeded", "invoice.paid"} and entitlement_state == "paid":
+            inference_allowance = apply_subscription_inference_allowance(
+                conn,
+                user_id=user_id,
+                stripe_event_id=event_id,
+                invoice_id=str(obj.get("id") or ""),
+                subscription_id=subscription_id,
+                actor_id="stripe",
+                reason="Stripe subscription invoice paid inference allowance",
+                commit=False,
+            )
         append_arclink_event(
             conn,
             subject_kind="user",
@@ -695,6 +771,7 @@ def process_stripe_webhook(
                 "stripe_subscription_id": subscription_id,
                 "entitlement_state": entitlement_state,
                 "advanced_deployments": list(advanced),
+                "inference_allowance": inference_allowance,
             },
             commit=False,
         )

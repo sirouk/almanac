@@ -238,6 +238,14 @@ purchase/provider-balance proof, and threshold continuation guidance remains
 policy-gated until public continuation copy and self-service provider-change
 policy exists.
 
+Inference-credit top-ups use Stripe Checkout `mode=payment` through
+`POST /api/v1/user/refuel-checkout`. The Stripe webhook grants credit only when
+the Checkout customer, `client_reference_id`, Captain account, and target
+ArcPod match. Paid monthly subscription invoices also replenish included
+inference budget through the same credit ledger; duplicate
+`invoice.payment_succeeded` / `invoice.paid` events are idempotent per invoice
+and ArcPod.
+
 The provider-state payload includes sanitized ArcLink LLM Router consumption
 when router rows exist: request/status counts, stream counts, token totals,
 estimated/actual cents, open reservation cents, credential counts, and the

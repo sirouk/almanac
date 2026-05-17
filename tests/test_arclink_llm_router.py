@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -315,6 +316,87 @@ def test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage() -> Non
     finally:
         tmp.cleanup()
     print("PASS test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage")
+
+
+def test_chat_usage_queues_raven_low_fuel_notice_once() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={"chutes": {"monthly_budget_cents": 20, "used_cents": 15}},
+        )
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(
+                """
+                INSERT INTO arclink_onboarding_sessions (
+                  session_id, channel, channel_identity, status, user_id, deployment_id, created_at, updated_at
+                ) VALUES ('onb_fuel', 'telegram', 'tg:12345', 'completed', 'user_1', 'dep_1', '2026-05-16T00:00:00+00:00', '2026-05-16T00:00:00+00:00')
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        upstream = fake_upstream_transport(
+            {
+                "id": "chatcmpl_fuel",
+                "object": "chat.completion",
+                "model": "model-a",
+                "choices": [{"message": {"role": "assistant", "content": "still flying"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            }
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            },
+            upstream_transport=upstream,
+        )
+        for _ in range(2):
+            response = client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": f"Bearer {raw_key}"},
+                json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
+            )
+            expect(response.status_code == 200, response.text)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            notices = conn.execute(
+                """
+                SELECT target_kind, target_id, channel_kind, message, extra_json
+                FROM notification_outbox
+                WHERE target_kind = 'public-bot-user'
+                """
+            ).fetchall()
+            events = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM arclink_events
+                WHERE event_type = 'llm_router:arc_pod_fuel_notice_queued'
+                """
+            ).fetchone()["count"]
+            metadata = json.loads(
+                conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()[
+                    "metadata_json"
+                ]
+            )
+        finally:
+            conn.close()
+        expect(len(notices) == 1, str([dict(row) for row in notices]))
+        notice = notices[0]
+        expect(notice["channel_kind"] == "telegram" and notice["target_id"] == "tg:12345", str(dict(notice)))
+        expect("ArcPod fuel is running low" in notice["message"], notice["message"])
+        expect("Refuel ArcPod" in notice["extra_json"], notice["extra_json"])
+        expect(events == 1, str(events))
+        expect(metadata["chutes"]["used_cents"] == 17, str(metadata))
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_usage_queues_raven_low_fuel_notice_once")
 
 
 def test_chat_uses_catalog_pricing_and_promotes_deprecated_models() -> None:
@@ -885,6 +967,7 @@ def main() -> int:
     test_health_reports_unhealthy_without_central_chutes_key()
     test_health_and_models_report_configured_state_without_exposing_key()
     test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage()
+    test_chat_usage_queues_raven_low_fuel_notice_once()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()
     test_startup_refreshes_catalog_and_promotes_newer_family_model()
     test_chat_promotes_missing_requested_model_to_latest_same_family()
@@ -896,7 +979,7 @@ def main() -> int:
     test_chat_streaming_passes_chunks_and_records_provider_usage()
     test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 14 ArcLink LLM router tests")
+    print("PASS all 15 ArcLink LLM router tests")
     return 0
 
 

@@ -1764,7 +1764,7 @@
             "sessionAuth": []
           }
         ],
-        "summary": "Generate Stripe Checkout link for inference credit top-up",
+        "summary": "Generate Stripe Checkout link for ArcPod Refueling",
         "tags": [
           "user",
           "billing"

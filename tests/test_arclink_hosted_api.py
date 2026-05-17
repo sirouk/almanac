@@ -1740,7 +1740,7 @@ def test_user_refuel_checkout_route_quotes_payment_checkout() -> None:
     expect(checkout["metadata"]["arclink_deployment_id"] == prepared["deployment_id"], str(checkout))
     line_item = checkout["line_items"][0]
     expect(line_item["price_data"]["unit_amount"] == 2500, str(line_item))
-    expect(line_item["price_data"]["product_data"]["name"] == "ArcLink Inference Credits", str(line_item))
+    expect(line_item["price_data"]["product_data"]["name"] == "ArcPod Refueling", str(line_item))
     print("PASS test_user_refuel_checkout_route_quotes_payment_checkout")
 
 

@@ -456,9 +456,9 @@ Stripe Dashboard event destination during install.
 |-----|---------|
 | `STRIPE_SECRET_KEY` | Live API calls (portal links, subscription reads) |
 | `STRIPE_WEBHOOK_SECRET` | Signature verification on incoming webhooks |
-| `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | Optional reusable Stripe Product id for ArcLink Inference Credits; when absent Checkout uses inline product data |
-| `ARCLINK_REFUEL_STRIPE_PRODUCT_NAME` | Stripe product display name; default `ArcLink Inference Credits` |
-| `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS` | Comma-separated Raven top-up packages; default `1000,2500,5000,10000` |
+| `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | Optional reusable Stripe Product id for ArcPod Refueling; when absent Checkout uses inline product data |
+| `ARCLINK_REFUEL_STRIPE_PRODUCT_NAME` | Stripe product display name; default `ArcPod Refueling` |
+| `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS` | Comma-separated Raven refueling packages; default `1000,2500,5000,10000` |
 | `ARCLINK_REFUEL_TOPUP_MIN_CENTS` / `ARCLINK_REFUEL_TOPUP_MAX_CENTS` | Custom amount bounds; defaults `$5` to `$500` |
 | `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS` | Portion of retail dollars converted into metered provider budget; default `7000` (70%) |
 | `ARCLINK_SUBSCRIPTION_INFERENCE_CREDIT_BPS` | Portion of plan retail replenished as included inference budget on paid monthly invoices; default `2000` (20%) |
@@ -479,26 +479,31 @@ Stripe Dashboard event destination during install.
 **Billing portal:** User requests via `POST /api/v1/user/portal`. Requires
 active user session + CSRF. Fake mode returns a placeholder URL.
 
-**Inference-credit top-ups:** Raven exposes `/top-up`, `/refuel`, and
-`/credits` after an Agent is live. A bare command shows the package table and
-buttons. `/top-up 25` opens a Stripe Checkout session in `payment` mode for a
-one-time inference-credit purchase. The default packages are:
+**ArcPod Refueling:** Raven exposes `/refuel`, `/top-up`, and `/credits` after
+an Agent is live. A bare command shows the fuel package table and buttons.
+`/refuel 25` opens a Stripe Checkout session in `payment` mode for a one-time
+ArcPod fuel purchase. The default packages are:
 
-| Retail paid by Captain | Metered ArcPod inference budget | Default gross margin before Stripe/platform costs |
+| Retail paid by Captain | ArcPod model fuel added | Default gross margin before Stripe/platform costs |
 |------------------------|---------------------------------|---------------------------------------------------|
 | `$10` | `$7` | `$3` |
 | `$25` | `$17.50` | `$7.50` |
 | `$50` | `$35` | `$15` |
 | `$100` | `$70` | `$30` |
 
-The router spends the metered budget at the selected model's current catalog
-price. If Chutes reprices a model or a Captain changes model, token capacity
-changes automatically because metering is catalog-driven. The Stripe webhook
+The router spends model fuel at the selected model's current catalog price. If
+Chutes reprices a model or a Captain changes model, token capacity changes
+automatically because metering is catalog-driven. The Stripe webhook
 branch for `checkout.session.completed` with metadata
 `arclink_purchase_kind=inference_refuel` grants an `arclink_refuel_credits`
-row and applies it to the owning deployment's Chutes budget only after the
+row and applies it to the owning ArcPod's fuel tank only after the
 Checkout customer, `client_reference_id`, Captain account, and target ArcPod
 match. Subscription entitlement state is not changed by refuel purchases.
+
+Raven low-fuel pings are automatic: when router usage crosses the configured
+warning threshold, the Control Node queues a `public-bot-user` notification with
+a **Refuel ArcPod** button. The notification is deduped per fuel tank and is
+queued off the Agent response path.
 
 **Monthly included inference budget:** Paid subscription invoices replenish
 inference budget through the same credit ledger. By default ArcLink converts

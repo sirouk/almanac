@@ -600,7 +600,7 @@ def process_stripe_webhook(
                 user_id=user_id,
                 deployment_id=deployment_id,
                 actor_id="stripe",
-                reason="Stripe inference credit top-up paid",
+                reason="Stripe ArcPod Refueling paid",
                 credit_cents=credit_cents,
                 source_kind="stripe_checkout",
                 source_id=str(obj.get("id") or event_id),
@@ -619,7 +619,7 @@ def process_stripe_webhook(
                 deployment_id=deployment_id,
                 requested_cents=credit_cents,
                 actor_id="stripe",
-                reason="Apply paid inference credit top-up to ArcPod budget",
+                reason="Apply paid ArcPod fuel to ArcPod budget",
                 commit=False,
             )
             append_arclink_event(

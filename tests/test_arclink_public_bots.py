@@ -1901,20 +1901,20 @@ def test_public_bot_refuel_lists_options_and_opens_payment_checkout() -> None:
         conn,
         channel="telegram",
         channel_identity="tg:refuel",
-        text="/top-up",
+        text="/refuel",
         stripe_client=stripe,
         base_domain="control.example.test",
     )
     expect(options.action == "show_refuel_options", str(options.action))
-    expect("Inference credits" in options.reply, options.reply)
-    expect("Top-up | Metered inference budget" in options.reply, options.reply)
-    expect([button.label for button in options.buttons][:2] == ["Top Up $10", "Top Up $25"], str(options.buttons))
+    expect("ArcPod fuel" in options.reply, options.reply)
+    expect("Refuel | Model fuel added" in options.reply, options.reply)
+    expect([button.label for button in options.buttons][:2] == ["Refuel $10", "Refuel $25"], str(options.buttons))
 
     checkout = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:refuel",
-        text="/top-up 25",
+        text="/refuel 25",
         stripe_client=stripe,
         base_domain="control.example.test",
     )

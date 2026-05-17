@@ -100,10 +100,13 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
         "type": 2,
         "channel_id": "ch_1",
         "member": {"user": {"id": "u_1"}},
-        "data": {"name": "top-up", "options": [{"name": "amount", "value": "25"}]},
+        "data": {"name": "refuel", "options": [{"name": "amount", "value": "25"}]},
     }
     parsed_top_up = dc.parse_discord_interaction(top_up)
-    expect(parsed_top_up["text"] == "/top-up 25", str(parsed_top_up))
+    expect(parsed_top_up["text"] == "/refuel 25", str(parsed_top_up))
+    legacy_top_up = {**top_up, "data": {"name": "top-up", "options": [{"name": "amount", "value": "10"}]}}
+    parsed_legacy_top_up = dc.parse_discord_interaction(legacy_top_up)
+    expect(parsed_legacy_top_up["text"] == "/refuel 10", str(parsed_legacy_top_up))
     agent = {
         "type": 2,
         "channel_id": "ch_1",

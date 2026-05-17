@@ -3421,7 +3421,7 @@ def refuel_credit_sku_config(env: Mapping[str, str] | None = None) -> dict[str, 
         return value if value > 0 else default
 
     return {
-        "sku_id": str(source.get("ARCLINK_REFUEL_SKU_ID") or "refuel-local-credit").strip(),
+        "sku_id": str(source.get("ARCLINK_REFUEL_SKU_ID") or "arclink-arcpod-fuel").strip(),
         "credit_cents": _positive_int("ARCLINK_REFUEL_CREDIT_CENTS", 2500),
         "currency": str(source.get("ARCLINK_REFUEL_CURRENCY") or "usd").strip().lower() or "usd",
         "accounting_model": "fair_credit_local_ledger",
@@ -3484,8 +3484,8 @@ def refuel_topup_config(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         maximum=1_000_000,
     )
     return {
-        "sku_id": str(source.get("ARCLINK_REFUEL_SKU_ID") or "arclink-inference-credits").strip(),
-        "product_name": str(source.get("ARCLINK_REFUEL_STRIPE_PRODUCT_NAME") or "ArcLink Inference Credits").strip(),
+        "sku_id": str(source.get("ARCLINK_REFUEL_SKU_ID") or "arclink-arcpod-fuel").strip(),
+        "product_name": str(source.get("ARCLINK_REFUEL_STRIPE_PRODUCT_NAME") or "ArcPod Refueling").strip(),
         "stripe_product_id": str(source.get("ARCLINK_REFUEL_STRIPE_PRODUCT_ID") or "").strip(),
         "currency": str(source.get("ARCLINK_REFUEL_CURRENCY") or "usd").strip().lower() or "usd",
         "amount_options_cents": [max(minimum, min(maximum, int(value))) for value in options],
@@ -3510,10 +3510,10 @@ def quote_arclink_refuel_topup(
     config = refuel_topup_config(env)
     amount = int(retail_cents or 0)
     if amount < int(config["custom_min_cents"]) or amount > int(config["custom_max_cents"]):
-        raise ValueError("ArcLink inference credit top-up amount is outside the configured range")
+        raise ValueError("ArcPod Refueling amount is outside the configured range")
     credit_cents = (amount * int(config["provider_credit_bps"])) // 10000
     if credit_cents <= 0:
-        raise ValueError("ArcLink inference credit top-up amount is too small")
+        raise ValueError("ArcPod Refueling amount is too small")
     pair_cost = int(config["reference_input_cents_per_million"]) + int(config["reference_output_cents_per_million"])
     return {
         "sku_id": config["sku_id"],

@@ -2332,7 +2332,7 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "responses": {"200": {"description": "Portal URL returned"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "user_refuel_checkout": {
-        "summary": "Generate Stripe Checkout link for inference credit top-up",
+        "summary": "Generate Stripe Checkout link for ArcPod Refueling",
         "tags": ["user", "billing"],
         "requestBody": _openapi_json_body({
             "deployment_id": {"type": "string"},

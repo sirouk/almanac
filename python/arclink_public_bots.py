@@ -384,10 +384,10 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         description="Show what changed in the current Crew Recipe",
     ),
     ArcLinkPublicBotAction(
-        key="top_up",
-        telegram_command="top_up",
-        discord_command="top-up",
-        description="Top up Agent inference credits",
+        key="refuel",
+        telegram_command="refuel",
+        discord_command="refuel",
+        description="Refuel your ArcPod's model fuel",
         discord_options=(
             {
                 "type": 3,
@@ -582,7 +582,7 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
     if verb in {"whats_changed", "whats-changed", "changed", "changes"}:
         return "/whats-changed"
     if verb in {"top_up", "top-up", "topup", "refuel", "credits"}:
-        return f"/top-up {tail}".strip()
+        return f"/refuel {tail}".strip()
     if verb in {"status", "health"}:
         return "/status"
     if verb in {"credentials", "credential"}:
@@ -1177,8 +1177,8 @@ def _active_raven_callback_command(command: str) -> str:
         "/train_crew": "/raven train_crew",
         "/whats-changed": "/raven whats_changed",
         "/whats_changed": "/raven whats_changed",
-        "/top-up": "/raven top_up",
-        "/top_up": "/raven top_up",
+        "/top-up": "/raven refuel",
+        "/top_up": "/raven refuel",
         "/refuel": "/raven refuel",
         "/credits": "/raven credits",
         "/credentials": "/raven credentials",
@@ -1199,7 +1199,7 @@ def _active_raven_callback_command(command: str) -> str:
     if value.startswith("/credentials "):
         return f"/raven credentials {value.split(maxsplit=1)[1].strip()}".strip()
     if value.startswith("/top-up ") or value.startswith("/top_up ") or value.startswith("/refuel ") or value.startswith("/credits "):
-        return f"/raven top_up {value.split(maxsplit=1)[1].strip()}".strip()
+        return f"/raven refuel {value.split(maxsplit=1)[1].strip()}".strip()
     if value.startswith("/credentials-stored ") or value.startswith("/credentials_stored "):
         return f"/raven credentials_stored {value.split(maxsplit=1)[1].strip()}".strip()
     if value.startswith("/agent-") or value.startswith("/agent_"):
@@ -1763,10 +1763,10 @@ def _parse_refuel_amount_cents(value: str) -> int:
 def _refuel_quote_lines(pricing: Mapping[str, Any]) -> list[str]:
     currency = str(pricing.get("currency") or "usd")
     lines = [
-        "Inference credits are prepaid metered budget for your active Agent.",
-        "Raven sells the top-up, then the LLM router spends the metered credit at the selected model's current catalog price.",
+        "ArcPod fuel is prepaid model budget for your active Agent.",
+        "Raven opens ArcPod Refueling, then the Control Node spends fuel at the selected model's current catalog price.",
         "",
-        "| Top-up | Metered inference budget | Reference capacity |",
+        "| Refuel | Model fuel added | Reference capacity |",
         "| --- | --- | --- |",
     ]
     for quote in pricing.get("options") or ():
@@ -1787,10 +1787,10 @@ def _refuel_quote_lines(pricing: Mapping[str, Any]) -> list[str]:
                 f"and {_money(int(pricing.get('reference_output_cents_per_million') or 0), currency=currency)}/1M output."
             ),
             (
-                f"Custom top-ups are available from "
+                f"Custom refueling is available from "
                 f"{_money(int(pricing.get('custom_min_cents') or 0), currency=currency)} to "
                 f"{_money(int(pricing.get('custom_max_cents') or 0), currency=currency)}. "
-                "Send `/top-up 40` for a custom $40 checkout."
+                "Send `/refuel 40` or `/top-up 40` for a custom $40 checkout."
             ),
         ]
     )
@@ -1813,7 +1813,7 @@ def _refuel_checkout_metadata(
         "retail_cents": str(int(quote.get("retail_cents") or 0)),
         "credit_cents": str(int(quote.get("provider_credit_cents") or 0)),
         "provider_credit_bps": str(int(quote.get("provider_credit_bps") or 0)),
-        "sku_id": str(quote.get("sku_id") or "arclink-inference-credits"),
+        "sku_id": str(quote.get("sku_id") or "arclink-arcpod-fuel"),
     }
 
 
@@ -1827,9 +1827,9 @@ def _refuel_line_items(quote: Mapping[str, Any]) -> list[dict[str, Any]]:
         price_data["product"] = product_id
     else:
         price_data["product_data"] = {
-            "name": str(quote.get("product_name") or "ArcLink Inference Credits"),
+            "name": str(quote.get("product_name") or "ArcPod Refueling"),
             "metadata": {
-                "arclink_sku_id": str(quote.get("sku_id") or "arclink-inference-credits"),
+                "arclink_sku_id": str(quote.get("sku_id") or "arclink-arcpod-fuel"),
                 "arclink_product_kind": "inference_refuel",
             },
         }
@@ -1872,8 +1872,8 @@ def _refuel_reply(
     if amount_cents <= 0:
         buttons = tuple(
             _button(
-                f"Top Up {_money(int(quote.get('retail_cents') or 0), currency=str(pricing.get('currency') or 'usd'))}",
-                command=f"/top-up {int(quote.get('retail_cents') or 0) // 100}",
+                f"Refuel {_money(int(quote.get('retail_cents') or 0), currency=str(pricing.get('currency') or 'usd'))}",
+                command=f"/refuel {int(quote.get('retail_cents') or 0) // 100}",
             )
             for quote in pricing.get("options") or ()
             if isinstance(quote, Mapping)
@@ -1888,7 +1888,7 @@ def _refuel_reply(
             buttons=buttons,
         )
     if stripe_client is None:
-        raise ArcLinkPublicBotError("inference credit top-up requires an injected Stripe client")
+        raise ArcLinkPublicBotError("ArcPod Refueling requires an injected Stripe client")
     try:
         quote = quote_arclink_refuel_topup(amount_cents)
     except ValueError as exc:
@@ -1900,7 +1900,7 @@ def _refuel_reply(
             session=session,
             deployment=deployment,
             buttons=(
-                _button("Show Top-Ups", command="/top-up", style="secondary"),
+                _button("Show Refueling", command="/refuel", style="secondary"),
             ),
         )
     user_id = str(deployment.get("user_id") or session.get("user_id") or "").strip()
@@ -1935,13 +1935,13 @@ def _refuel_reply(
         channel_identity=channel_identity,
         action="open_refuel_checkout",
         reply=(
-            f"I opened a {_money(int(quote['retail_cents']), currency=str(quote['currency']))} inference-credit checkout. "
-            f"When Stripe clears it, {_money(int(quote['provider_credit_cents']), currency=str(quote['currency']))} becomes metered LLM budget for this ArcPod."
+            f"I opened ArcPod Refueling for {_money(int(quote['retail_cents']), currency=str(quote['currency']))}. "
+            f"When Stripe clears it, {_money(int(quote['provider_credit_cents']), currency=str(quote['currency']))} becomes model fuel for this ArcPod."
         ),
         session=checkout_session,
         deployment=deployment,
         buttons=(
-            _button(f"Top Up {_money(int(quote['retail_cents']), currency=str(quote['currency']))}", url=str(checkout.get("url") or "")),
+            _button(f"Refuel {_money(int(quote['retail_cents']), currency=str(quote['currency']))}", url=str(checkout.get("url") or "")),
             _button("Show My Crew", command="/agents", style="secondary"),
         ),
     )

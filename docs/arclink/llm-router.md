@@ -74,15 +74,16 @@ settled usage use the selected model's `input_cents_per_million` and
 `output_cents_per_million`. The environment price values are only a fallback for
 unknown models or a stale catalog.
 
-## Inference Credit Top-Ups
+## ArcPod Refueling
 
-Raven can sell one-time inference-credit top-ups after a Captain has a live
-Agent. The product is `ArcLink Inference Credits`; operators can bind it to a
-stable Stripe Product by setting `ARCLINK_REFUEL_STRIPE_PRODUCT_ID`, or let
-Checkout use inline product data. Stripe Checkout uses `mode=payment`, not a
-subscription. On `checkout.session.completed`, ArcLink grants an
-`arclink_refuel_credits` row and applies it to the owning ArcPod's metered
-router budget. The webhook validates that the Checkout customer,
+Raven can open ArcPod Refueling after a Captain has a live Agent. ArcPod fuel is
+the prepaid model budget available to that Agent's Pod. The default Checkout
+product is `ArcPod Refueling`; operators can bind it to a stable Stripe Product
+by setting `ARCLINK_REFUEL_STRIPE_PRODUCT_ID`, or let Checkout use inline
+product data. Stripe Checkout uses `mode=payment`, not a subscription. On
+`checkout.session.completed`, ArcLink grants an `arclink_refuel_credits` ledger
+row and applies it to the owning ArcPod's metered router budget. The webhook
+validates that the Checkout customer,
 `client_reference_id`, Captain account, and target ArcPod all match before any
 credit is granted.
 
@@ -97,7 +98,7 @@ overhead:
 | `$100` | `$70` | `$30` |
 
 Those numbers come from `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS=7000`. Change that
-single value to adjust gross margin. The available package sizes come from
+single value to adjust gross margin. The available refueling package sizes come from
 `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS`, and custom amounts are bounded by
 `ARCLINK_REFUEL_TOPUP_MIN_CENTS` and `ARCLINK_REFUEL_TOPUP_MAX_CENTS`.
 
@@ -106,6 +107,11 @@ spend is settled by the router against the selected model's current catalog
 price. If a Captain changes models, or ArcLink promotes a fleet from Kimi K2.6
 to Kimi K2.7, the same dollar credit naturally buys the amount of usage allowed
 by the new catalog price.
+
+When the router records usage that crosses the warning threshold, it queues a
+Raven `public-bot-user` notification with a **Refuel ArcPod** button. The notice
+is deduped per ArcPod fuel tank so usage accounting stays automatic without
+slowing the Agent's response path.
 
 ## Monthly Subscription Inference Allowance
 
@@ -183,13 +189,13 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS` | `400` | Fallback output-token cost estimate for the default Kimi lane |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
 | `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS` | `0` | Compatibility flag to restore direct Chutes key mounting |
-| `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | none | Optional reusable Stripe Product id for inference-credit Checkout |
-| `ARCLINK_REFUEL_STRIPE_PRODUCT_NAME` | `ArcLink Inference Credits` | Inline Checkout product display name when no product id is configured |
-| `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS` | `1000,2500,5000,10000` | Raven top-up package sizes |
-| `ARCLINK_REFUEL_TOPUP_MIN_CENTS` | `500` | Minimum custom top-up amount |
-| `ARCLINK_REFUEL_TOPUP_MAX_CENTS` | `50000` | Maximum custom top-up amount |
+| `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | none | Optional reusable Stripe Product id for ArcPod Refueling Checkout |
+| `ARCLINK_REFUEL_STRIPE_PRODUCT_NAME` | `ArcPod Refueling` | Inline Checkout product display name when no product id is configured |
+| `ARCLINK_REFUEL_TOPUP_AMOUNTS_CENTS` | `1000,2500,5000,10000` | Raven refueling package sizes |
+| `ARCLINK_REFUEL_TOPUP_MIN_CENTS` | `500` | Minimum custom refueling amount |
+| `ARCLINK_REFUEL_TOPUP_MAX_CENTS` | `50000` | Maximum custom refueling amount |
 | `ARCLINK_REFUEL_PROVIDER_CREDIT_BPS` | `7000` | Retail-to-metered-budget conversion basis points |
-| `ARCLINK_REFUEL_REFERENCE_MODEL` | router default model | Display-only model name used in top-up capacity estimates |
+| `ARCLINK_REFUEL_REFERENCE_MODEL` | router default model | Display-only model name used in refueling capacity estimates |
 | `ARCLINK_SUBSCRIPTION_INFERENCE_CREDIT_BPS` | `2000` | Monthly subscription retail converted into included inference budget |
 | `ARCLINK_FOUNDERS_MONTHLY_INFERENCE_CREDIT_CENTS` | `$29.80` | Override Founders monthly included inference budget |
 | `ARCLINK_SOVEREIGN_MONTHLY_INFERENCE_CREDIT_CENTS` | `$39.80` | Override Sovereign monthly included inference budget |

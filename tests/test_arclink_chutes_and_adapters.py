@@ -141,7 +141,7 @@ def test_fake_stripe_webhook_and_sessions() -> None:
             "price_data": {
                 "currency": "usd",
                 "unit_amount": 2500,
-                "product_data": {"name": "ArcLink Inference Credits"},
+                "product_data": {"name": "ArcPod Refueling"},
             },
             "quantity": 1,
         }],

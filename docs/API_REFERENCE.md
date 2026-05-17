@@ -109,7 +109,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/comms` | Captain-scoped Pod Comms inbox/outbox with message narratives |
 | GET | `/user/billing` | Billing/entitlement status plus the local renewal lifecycle gate |
 | POST | `/user/portal` | Create Stripe portal link (CSRF) |
-| POST | `/user/refuel-checkout` | Create a Stripe Checkout payment link for Agent inference-credit top-up (CSRF) |
+| POST | `/user/refuel-checkout` | Create a Stripe Checkout payment link for ArcPod Refueling (CSRF) |
 | GET | `/user/provisioning` | Deployment provisioning status |
 | GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
 | POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |
@@ -238,13 +238,12 @@ purchase/provider-balance proof, and threshold continuation guidance remains
 policy-gated until public continuation copy and self-service provider-change
 policy exists.
 
-Inference-credit top-ups use Stripe Checkout `mode=payment` through
-`POST /api/v1/user/refuel-checkout`. The Stripe webhook grants credit only when
-the Checkout customer, `client_reference_id`, Captain account, and target
-ArcPod match. Paid monthly subscription invoices also replenish included
-inference budget through the same credit ledger; duplicate
-`invoice.payment_succeeded` / `invoice.paid` events are idempotent per invoice
-and ArcPod.
+ArcPod Refueling uses Stripe Checkout `mode=payment` through
+`POST /api/v1/user/refuel-checkout`. The Stripe webhook adds model fuel only
+when the Checkout customer, `client_reference_id`, Captain account, and target
+ArcPod match. Paid monthly subscription invoices also replenish included ArcPod
+fuel through the same credit ledger; duplicate `invoice.payment_succeeded` /
+`invoice.paid` events are idempotent per invoice and ArcPod.
 
 The provider-state payload includes sanitized ArcLink LLM Router consumption
 when router rows exist: request/status counts, stream counts, token totals,

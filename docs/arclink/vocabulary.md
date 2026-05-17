@@ -25,6 +25,8 @@ the Operator term.
 | **Crew** | The inventory of Agents managed by one Captain. Sovereign / Founders is a Crew of one. Scale is a Crew of three. Agentic Expansion grows the Crew. | Captain-facing copy: "Show My Crew", "Train Your Crew", "your Crew member &lt;name&gt;". | n/a |
 | **Comms** | Inter-Pod messages within a Captain's Crew, and (in the Operator view) across Captains. | Captain Comms tab, Operator Comms Console, agent tooling, audit reasons surfaced to Captains. | n/a |
 | **Comms Console** | The Captain's unified view of all Crew comms, and the Operator's view across all Captains. | Captain dashboard "Comms" tab, admin dashboard "Comms" tab. | n/a |
+| **ArcPod Fuel** | The metered model budget available to one ArcPod. It is counted by the Control Node as the Agent uses the LLM router. | Raven low-fuel warnings, Captain billing copy, provider-state summaries, ArcPod Refueling copy. | Raw schema/env names that use `refuel`, `budget`, or `credits`. |
+| **ArcPod Refueling** | The Captain-facing purchase flow that adds model fuel to an ArcPod. `/refuel` is the primary Raven command; `/top-up` remains a supported alias. | Raven buttons, checkout copy, billing docs, low-fuel messages. | Speculative product claims; backend table names like `arclink_refuel_credits`. |
 | **Crew Training** | The character-creation-style flow that captures the Captain's role, mission, and treatment preference; picks a preset and capacity; produces a Crew Recipe; and applies it as an additive SOUL overlay to every Pod in the Crew. | Captain dashboard Crew tab, public bot `/train-crew`, API route `/user/crew-recipe`. | n/a |
 | **Crew Recipe** | The combined `preset × capacity × role × mission` definition that drives the SOUL overlay. Internally `arclink_crew_recipes`. | Captain-facing copy. | n/a |
 | **ArcLink Wrapped** | The periodic Captain-facing insights report. Default cadence is daily; weekly and monthly are operator-selectable per Captain. Includes at least five novel non-standard statistics per period. | Captain dashboard "Wrapped" tab, delivery messages. Internal module name is `arclink_wrapped`. | n/a |
@@ -69,12 +71,16 @@ though the underlying queue rows are keyed on technical identifiers.
 5. "Operator" is reserved for the platform owner and never used to address the paying
    Captain. The hosted API can keep its `actor_id="operator:..."` audit fields; that
    text is operator-facing.
+6. Low-balance model budget copy says "ArcPod fuel" and "ArcPod Refueling." The words
+   "top-up" and "credits" are allowed as aliases or technical ledger descriptions, but
+   Raven's primary Captain-facing CTA is "Refuel ArcPod."
 
 ## Examples
 
 - Web onboarding hero: "Name your Agent. Raven runs the rest."
 - Paid ping: "Captain Atlas, payment cleared. I'm provisioning your ArcPod now."
 - Vessel-online ping: "Captain Atlas, your Pod is live. Open Helm."
+- Low-fuel ping: "ArcPod fuel is running low. Raven can open ArcPod Refueling."
 - Share-grant: "Approve sharing this Drive folder with Captain Vega's Crew?"
 - Wrapped greeting: "Captain Atlas — this week your Crew shipped 14 commits and Bob, the know-it-all, answered 47 inbound questions."
 - Admin dashboard Captain detail: "Captain Atlas · Pod `dep_abc12` · Hetzner host `fsn1-arc-3`."

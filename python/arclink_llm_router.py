@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sqlite3
 import uuid
@@ -590,6 +591,167 @@ def _release_budget_reservation(conn: sqlite3.Connection, reservation_id: str, *
     conn.commit()
 
 
+def _money(cents: int) -> str:
+    whole, remainder = divmod(max(0, int(cents or 0)), 100)
+    return f"${whole}.{remainder:02d}" if remainder else f"${whole}"
+
+
+def _captain_public_channel(conn: sqlite3.Connection, *, user_id: str, deployment_id: str) -> dict[str, str] | None:
+    row = conn.execute(
+        """
+        SELECT channel, channel_identity
+        FROM arclink_onboarding_sessions
+        WHERE user_id = ?
+          AND channel IN ('telegram', 'discord')
+          AND channel_identity != ''
+          AND status IN ('paid', 'provisioning_ready', 'first_contacted', 'completed')
+        ORDER BY
+          CASE WHEN deployment_id = ? THEN 0 ELSE 1 END,
+          updated_at DESC,
+          created_at DESC,
+          session_id DESC
+        LIMIT 1
+        """,
+        (str(user_id or "").strip(), str(deployment_id or "").strip()),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"channel_kind": str(row["channel"] or ""), "target_id": str(row["channel_identity"] or "")}
+
+
+def _fuel_notice_actions() -> dict[str, Any]:
+    return {
+        "telegram_reply_markup": {
+            "inline_keyboard": [[{"text": "Refuel ArcPod", "callback_data": "arclink:/raven refuel"}]]
+        },
+        "discord_components": [
+            {
+                "type": 1,
+                "components": [
+                    {"type": 2, "label": "Refuel ArcPod", "style": 1, "custom_id": "arclink:/raven refuel"}
+                ],
+            }
+        ],
+    }
+
+
+def _fuel_notice_message(*, severity: str, remaining_cents: int, monthly_budget_cents: int, usage_percent: float) -> str:
+    if severity == "empty":
+        headline = "ArcPod fuel is empty."
+        detail = "Your Agent's Pod has used its available model fuel."
+    else:
+        headline = "ArcPod fuel is running low."
+        detail = (
+            f"Your Agent's Pod has about {_money(remaining_cents)} of model fuel left "
+            f"from {_money(monthly_budget_cents)}."
+        )
+    return "\n".join(
+        [
+            headline,
+            "",
+            detail,
+            f"Current burn is {round(float(usage_percent or 0.0), 2)}% of the configured fuel tank.",
+            "",
+            "Raven can open ArcPod Refueling whenever you're ready. Use `/refuel` or tap Refuel ArcPod.",
+        ]
+    )
+
+
+def _notice_already_queued(conn: sqlite3.Connection, *, deployment_id: str, notice_key: str) -> bool:
+    rows = conn.execute(
+        """
+        SELECT metadata_json
+        FROM arclink_events
+        WHERE subject_kind = 'deployment'
+          AND subject_id = ?
+          AND event_type = 'llm_router:arc_pod_fuel_notice_queued'
+        ORDER BY created_at DESC
+        LIMIT 25
+        """,
+        (deployment_id,),
+    ).fetchall()
+    for row in rows:
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except Exception:
+            metadata = {}
+        if isinstance(metadata, dict) and str(metadata.get("notice_key") or "") == notice_key:
+            return True
+    return False
+
+
+def _queue_arc_pod_fuel_notice(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    user_id: str,
+    boundary: Any,
+    severity: str,
+    commit: bool = True,
+) -> None:
+    try:
+        clean_deployment = str(deployment_id or "").strip()
+        clean_user = str(user_id or "").strip()
+        monthly_budget = int(getattr(boundary, "monthly_budget_cents", 0) or 0)
+        remaining = int(getattr(boundary, "remaining_cents", 0) or 0)
+        usage_percent = float(getattr(boundary, "usage_percent", 0.0) or 0.0)
+        if not clean_deployment or not clean_user or monthly_budget <= 0:
+            return
+        notice_key = f"{severity}:{monthly_budget}:{int(float(getattr(boundary, 'warning_threshold_percent', 0.0) or 0.0))}"
+        if _notice_already_queued(conn, deployment_id=clean_deployment, notice_key=notice_key):
+            return
+        channel = _captain_public_channel(conn, user_id=clean_user, deployment_id=clean_deployment)
+        notification_id = 0
+        if channel is not None:
+            cursor = conn.execute(
+                """
+                INSERT INTO notification_outbox (target_kind, target_id, channel_kind, message, extra_json, created_at)
+                VALUES ('public-bot-user', ?, ?, ?, ?, ?)
+                """,
+                (
+                    channel["target_id"],
+                    channel["channel_kind"],
+                    _fuel_notice_message(
+                        severity=severity,
+                        remaining_cents=remaining,
+                        monthly_budget_cents=monthly_budget,
+                        usage_percent=usage_percent,
+                    ),
+                    json.dumps(_fuel_notice_actions(), sort_keys=True),
+                    _utc_now_iso(),
+                ),
+            )
+            notification_id = int(cursor.lastrowid or 0)
+        conn.execute(
+            """
+            INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
+            VALUES (?, 'deployment', ?, 'llm_router:arc_pod_fuel_notice_queued', ?, ?)
+            """,
+            (
+                f"evt_{uuid.uuid4().hex}",
+                clean_deployment,
+                json.dumps(
+                    {
+                        "user_id": clean_user,
+                        "notice_key": notice_key,
+                        "severity": severity,
+                        "remaining_cents": remaining,
+                        "monthly_budget_cents": monthly_budget,
+                        "usage_percent": usage_percent,
+                        "notification_id": notification_id,
+                    },
+                    sort_keys=True,
+                ),
+                _utc_now_iso(),
+            ),
+        )
+        if commit:
+            conn.commit()
+    except Exception:
+        # Fuel notices must never slow or fail the Agent's actual inference path.
+        return
+
+
 def _preflight_chat_request(
     conn: sqlite3.Connection,
     config: RouterConfig,
@@ -626,6 +788,14 @@ def _preflight_chat_request(
     )
     if not boundary.allow_inference:
         status_code = 402 if boundary.credential_state in {"billing_suspended", "budget_unconfigured", "budget_exhausted"} else 403
+        if boundary.credential_state == "budget_exhausted":
+            _queue_arc_pod_fuel_notice(
+                conn,
+                deployment_id=str(auth_record.get("deployment_id") or ""),
+                user_id=str(auth_record.get("user_id") or ""),
+                boundary=boundary,
+                severity="empty",
+            )
         return None, _router_error(status_code, boundary.credential_state, boundary.reason)
 
     for scope, subject, limit in (
@@ -648,6 +818,13 @@ def _preflight_chat_request(
 
     reserved_cents = _estimate_reservation_cents_for_model(config, catalog_entry, prompt_tokens, max_tokens)
     if boundary.remaining_cents < reserved_cents:
+        _queue_arc_pod_fuel_notice(
+            conn,
+            deployment_id=str(auth_record.get("deployment_id") or ""),
+            user_id=str(auth_record.get("user_id") or ""),
+            boundary=boundary,
+            severity="low",
+        )
         return None, _router_error(402, "budget_exhausted", "Chutes budget remaining is below the required request reservation.")
 
     _record_rate_limits(conn, auth_record)
@@ -750,7 +927,7 @@ def _record_router_usage(
         ),
     )
     if status == "succeeded":
-        record_chutes_usage_event(
+        usage_result = record_chutes_usage_event(
             conn,
             deployment_id=deployment_id,
             user_id=user_id,
@@ -772,6 +949,15 @@ def _record_router_usage(
             },
             commit=False,
         )
+        if usage_result.boundary.budget_status in {"warning", "exhausted"}:
+            _queue_arc_pod_fuel_notice(
+                conn,
+                deployment_id=deployment_id,
+                user_id=user_id,
+                boundary=usage_result.boundary,
+                severity="empty" if usage_result.boundary.budget_status == "exhausted" else "low",
+                commit=False,
+            )
     _release_budget_reservation(
         conn,
         str(reservation.get("reservation_id") or ""),

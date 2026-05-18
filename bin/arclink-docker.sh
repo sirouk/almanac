@@ -1244,7 +1244,7 @@ docker_refresh_deployment_managed_plugins() {
 
     if compose_service_secrets_available "$compose_file" managed-context-install; then
       env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-        docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install >/dev/null
+        docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install </dev/null >/dev/null
     fi
 
     while IFS= read -r legacy_container; do
@@ -1275,7 +1275,7 @@ docker_refresh_deployment_managed_plugins() {
           continue
         fi
         env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-          docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate "$service_name" >/dev/null
+          docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate "$service_name" </dev/null >/dev/null
       fi
     done
     refreshed=$((refreshed + 1))

@@ -270,6 +270,13 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
     expect("sync-dashboard-user-passwords.py" in body and "control-provisioner" in body, body)
     expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
+    refresh_block = extract(body, "docker_refresh_deployment_managed_plugins()", "\ndocker_reconcile()")
+    expect(
+        "run --rm --no-deps managed-context-install </dev/null >/dev/null" in refresh_block
+        and "up -d --no-deps --force-recreate \"$service_name\" </dev/null >/dev/null" in refresh_block,
+        "deployment plugin refresh must not let docker compose consume the find-loop stdin and skip later ArcPods\n"
+        + refresh_block,
+    )
     expect("--force-recreate dashboard" in body, body)
     expect("--force-recreate nextcloud" in body, body)
     expect("--force-recreate memory-synth" in body, body)

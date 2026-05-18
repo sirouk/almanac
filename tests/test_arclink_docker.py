@@ -228,6 +228,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect("reserve_docker_ports()" in body, body)
     expect("repair_docker_app_named_volumes()" in body and "arclink_arclink-qmd" in body, body)
     expect("compose up -d --no-build" in body, body)
+    up_block = extract(body, "    up)", "\n      ;;")
+    expect(
+        "docker_repair_deployment_dashboard_plugin_mounts || true" in up_block
+        and "docker_refresh_deployment_managed_plugins || true" in up_block,
+        "ordinary Docker/control upgrades must refresh existing ArcPod dashboard plugin copies\n" + up_block,
+    )
     expect("show_ports()" in body, body)
     expect("docker_port_set_available()" in body, body)
     expect("host_port_available_for_service \"$web_port\" control-ingress 8080" in body, body)

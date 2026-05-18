@@ -2146,6 +2146,8 @@ main() {
       prepare_compose
       repair_docker_app_named_volumes
       compose up -d --no-build "$@"
+      docker_repair_deployment_dashboard_plugin_mounts || true
+      docker_refresh_deployment_managed_plugins || true
       ;;
     reconcile)
       docker_reconcile "$@"

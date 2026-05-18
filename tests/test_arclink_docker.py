@@ -285,6 +285,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect('"checkout_commit": checkout_commit' in body, body)
     expect('"baked_image_commit": baked_commit' in body, body)
     expect('"image_name": image_name' in body and '"image_created": image_created' in body, body)
+    expect(
+        "arclink-upgrade-check" in body
+        and "arclink_upgrade_last_seen_sha" in body
+        and "recorded by Docker release" in body,
+        "Docker record-release should refresh upgrade-check DB state so health does not false-warn after a clean upgrade",
+    )
     expect("docker_live_agent_smoke()" in body and "./bin/live-agent-tool-smoke.sh" in body, body)
     expect("COMPOSE_PROFILES=curator,quarto,backup" in body, body)
     expect("FAIL Docker Compose config is valid, but no ArcLink services are running." in body, body)

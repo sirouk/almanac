@@ -1425,6 +1425,68 @@ payload = {
 }
 target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+  local db_path="$REPO_DIR/arclink-priv/state/arclink-control.sqlite3"
+  if [[ -n "$commit" && -f "$db_path" ]]; then
+    python3 - "$db_path" "$commit" "$upstream_url" "$upstream_branch" <<'PY' || true
+import datetime as dt
+import sqlite3
+import sys
+
+db_path, deployed_commit, tracked_repo, tracked_branch = sys.argv[1:5]
+now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+short = deployed_commit[:12]
+note = f"up to date at {short} from {tracked_repo}#{tracked_branch} (recorded by Docker release)"
+conn = sqlite3.connect(db_path)
+conn.execute(
+    """
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """
+)
+conn.execute(
+    """
+    CREATE TABLE IF NOT EXISTS refresh_jobs (
+      job_name TEXT PRIMARY KEY,
+      job_kind TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      schedule TEXT,
+      last_run_at TEXT,
+      last_status TEXT,
+      last_note TEXT
+    )
+    """
+)
+for key, value in [
+    ("arclink_upgrade_last_seen_sha", deployed_commit),
+    ("arclink_upgrade_relation", "equal"),
+]:
+    conn.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+        """,
+        (key, value, now),
+    )
+conn.execute(
+    """
+    INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
+    VALUES ('arclink-upgrade-check', 'upgrade-check', 'arclink', 'every 1h', ?, 'ok', ?)
+    ON CONFLICT(job_name) DO UPDATE SET
+      target_id = excluded.target_id,
+      schedule = excluded.schedule,
+      last_run_at = excluded.last_run_at,
+      last_status = excluded.last_status,
+      last_note = excluded.last_note
+    """,
+    (now, note),
+)
+conn.commit()
+PY
+  fi
   echo "Docker release state recorded: $target"
 }
 

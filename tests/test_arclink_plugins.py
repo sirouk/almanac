@@ -1539,7 +1539,16 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     expect("function extensionColor(item)" in body and "long-ext" in body, "Code file icons should derive compact, readable extension colors")
     expect("function renderCodePreview(file)" in body and 'api("/preview?path="' in body, "Code UI should open previewable files in editor tabs")
     explorer_block = body.split("function renderExplorer()", 1)[1].split("function renderSourcePicker()", 1)[0]
-    expect('if (item.kind === "folder")' in explorer_block and "loadItems(item.path, root);" in explorer_block, "Code Explorer single-click should select/load folders without expanding them")
+    expect(
+        'if (item.kind === "folder")' in explorer_block and "deferExplorerFolderOpen(item, root);" in explorer_block,
+        "Code Explorer single-click should defer folder selection so double-click can toggle without a rerender race",
+    )
+    expect(
+        "function clearExplorerFolderClickTimer()" in body
+        and "function deferExplorerFolderOpen(item, root)" in body
+        and "loadItems(item.path, root);" in body,
+        "Code Explorer deferred single-click should still load folder contents when no double-click follows",
+    )
     expect("toggleExplorerNode(item.path, root);" in explorer_block, "Code Explorer double-click should toggle folder expansion")
     expect("openItem(item, true);" in explorer_block, "Code Explorer double-click should still pin/open files")
     expect("hermes-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")

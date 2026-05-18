@@ -276,11 +276,27 @@
     });
     const state = statePair[0];
     const setState = statePair[1];
+    let explorerFolderClickTimer = null;
 
     function patch(next) {
       setState(function (current) {
         return Object.assign({}, current, typeof next === "function" ? next(current) : next);
       });
+    }
+
+    function clearExplorerFolderClickTimer() {
+      if (explorerFolderClickTimer) {
+        clearTimeout(explorerFolderClickTimer);
+        explorerFolderClickTimer = null;
+      }
+    }
+
+    function deferExplorerFolderOpen(item, root) {
+      clearExplorerFolderClickTimer();
+      explorerFolderClickTimer = setTimeout(function () {
+        explorerFolderClickTimer = null;
+        loadItems(item.path, root);
+      }, 180);
     }
 
     function confirmCleanSlate() {
@@ -1156,13 +1172,14 @@
                 style: { paddingLeft: 0.42 + depth * 0.8 + "rem" },
                 onClick: function () {
                   if (item.kind === "folder") {
-                    loadItems(item.path, root);
+                    deferExplorerFolderOpen(item, root);
                   } else {
                     openItem(item);
                   }
                 },
                 onDoubleClick: function () {
                   if (item.kind === "folder") {
+                    clearExplorerFolderClickTimer();
                     toggleExplorerNode(item.path, root);
                   } else {
                     openItem(item, true);

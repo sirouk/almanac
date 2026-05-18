@@ -307,7 +307,7 @@ PY
         if [[ "$age_status" == "running_stale" ]]; then
           fail "Docker job $job_name: running since $started_at"
         else
-          warn "Docker job $job_name: currently running${started_at:+ since $started_at}"
+          pass "Docker job $job_name: running${started_at:+ since $started_at}"
         fi ;;
       error|failed|fail)
         fail "Docker job $job_name: $status (exit $last_exit)" ;;

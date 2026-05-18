@@ -12,6 +12,7 @@ so it drops out of the undelivered queue but remains readable via
 from __future__ import annotations
 
 import argparse
+import secrets
 import json
 import os
 import re
@@ -212,6 +213,7 @@ def _strip_public_channel_prefix(target_id: str, prefix: str) -> str:
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+PUBLIC_AGENT_BRIDGE_DEFERRED = "DEFERRED_TO_PUBLIC_AGENT_BRIDGE"
 
 
 def _int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1800) -> int:
@@ -359,6 +361,7 @@ def _run_public_agent_gateway_turn(
     target_id: str,
     prompt: str,
     extra: dict[str, Any],
+    notification_id: int | None = None,
 ) -> tuple[bool, str]:
     """Try to route a public bot turn through Hermes' native gateway pipeline.
 
@@ -448,7 +451,14 @@ def _run_public_agent_gateway_turn(
             if value not in (None, ""):
                 payload[key] = value
     if _public_agent_bridge_detached_enabled():
-        return _spawn_public_agent_gateway_bridge(cmd=cmd, payload=payload)
+        started, error = _spawn_public_agent_gateway_bridge(
+            cmd=cmd,
+            payload=payload,
+            notification_id=notification_id,
+        )
+        if started and notification_id is not None:
+            return True, PUBLIC_AGENT_BRIDGE_DEFERRED
+        return started, error
     try:
         proc = subprocess.run(
             cmd,
@@ -508,6 +518,16 @@ def _public_agent_bridge_streaming_enabled() -> bool:
     }
 
 
+def _public_agent_bridge_max_seconds() -> int:
+    return _int_env("ARCLINK_PUBLIC_AGENT_BRIDGE_MAX_SECONDS", 7200, minimum=60, maximum=86400)
+
+
+def _public_agent_turn_lease_seconds() -> int:
+    if _public_agent_bridge_detached_enabled():
+        return _public_agent_bridge_max_seconds() + 300
+    return _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900) + 90
+
+
 def _public_agent_bridge_log_path() -> Path:
     state_dir = config_env_value("STATE_DIR", "").strip() or os.environ.get("STATE_DIR", "").strip()
     if not state_dir:
@@ -515,7 +535,178 @@ def _public_agent_bridge_log_path() -> Path:
     return Path(state_dir) / "docker" / "jobs" / "public-agent-bridge.log"
 
 
-def _spawn_public_agent_gateway_bridge(*, cmd: list[str], payload: dict[str, Any]) -> tuple[bool, str]:
+def _public_agent_bridge_job_dir() -> Path:
+    return _public_agent_bridge_log_path().parent / "public-agent-bridge-jobs"
+
+
+def _write_public_agent_bridge_job(
+    *,
+    notification_id: int,
+    cmd: list[str],
+    payload: dict[str, Any],
+) -> Path:
+    job_dir = _public_agent_bridge_job_dir()
+    job_dir.mkdir(parents=True, exist_ok=True)
+    body = {
+        "notification_id": int(notification_id),
+        "cmd": [str(part) for part in cmd],
+        "payload": payload,
+        "timeout_seconds": _public_agent_bridge_max_seconds(),
+    }
+    nonce = secrets.token_hex(4)
+    tmp_path = job_dir / f"bridge-{int(notification_id)}-{os.getpid()}-{nonce}.json.tmp"
+    job_path = job_dir / f"bridge-{int(notification_id)}-{os.getpid()}-{nonce}.json"
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(body, handle, sort_keys=True)
+        handle.write("\n")
+    os.replace(tmp_path, job_path)
+    return job_path
+
+
+def _load_public_agent_bridge_job(job_path: Path) -> dict[str, Any]:
+    try:
+        raw = job_path.read_text(encoding="utf-8")
+    finally:
+        try:
+            job_path.unlink()
+        except OSError:
+            pass
+    body = json.loads(raw)
+    if not isinstance(body, dict):
+        raise RuntimeError("public Agent bridge job must be a JSON object")
+    return body
+
+
+def _append_public_agent_bridge_log(message: str) -> None:
+    try:
+        log_path = _public_agent_bridge_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(message.rstrip() + "\n")
+    except OSError:
+        return
+
+
+def _run_public_agent_bridge_worker(job_path: Path) -> int:
+    try:
+        job = _load_public_agent_bridge_job(job_path)
+        notification_id = int(job.get("notification_id") or 0)
+        cmd = [str(part) for part in job.get("cmd") or []]
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        timeout_seconds = int(job.get("timeout_seconds") or _public_agent_bridge_max_seconds())
+        if notification_id <= 0:
+            raise RuntimeError("public Agent bridge job is missing notification_id")
+        if not cmd:
+            raise RuntimeError("public Agent bridge job is missing cmd")
+        cfg = Config.from_env()
+        _append_public_agent_bridge_log(
+            json.dumps(
+                {
+                    "event": "public_agent_bridge_started",
+                    "notification_id": notification_id,
+                    "timeout_seconds": timeout_seconds,
+                },
+                sort_keys=True,
+            )
+        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(payload, sort_keys=True),
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            with connect_db(cfg) as conn:
+                mark_notification_error(conn, notification_id, "Hermes public gateway bridge timed out")
+            _append_public_agent_bridge_log(
+                json.dumps({"event": "public_agent_bridge_timeout", "notification_id": notification_id}, sort_keys=True)
+            )
+            return 1
+        if proc.stdout:
+            _append_public_agent_bridge_log(proc.stdout)
+        if proc.stderr:
+            _append_public_agent_bridge_log(proc.stderr)
+        if proc.returncode != 0:
+            detail = ANSI_RE.sub("", (proc.stderr or proc.stdout or "")).strip().splitlines()
+            tail = detail[-1][:220] if detail else f"exit status {proc.returncode}"
+            with connect_db(cfg) as conn:
+                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {tail}")
+            _append_public_agent_bridge_log(
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_failed",
+                        "notification_id": notification_id,
+                        "returncode": proc.returncode,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return proc.returncode or 1
+        try:
+            payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            payload_out = {}
+        if isinstance(payload_out, dict) and payload_out.get("ok") is True:
+            with connect_db(cfg) as conn:
+                mark_notification_delivered(conn, notification_id)
+            _append_public_agent_bridge_log(
+                json.dumps({"event": "public_agent_bridge_delivered", "notification_id": notification_id}, sort_keys=True)
+            )
+            return 0
+        with connect_db(cfg) as conn:
+            mark_notification_error(
+                conn,
+                notification_id,
+                "Hermes public gateway bridge completed without an ok response",
+            )
+        _append_public_agent_bridge_log(
+            json.dumps({"event": "public_agent_bridge_no_ok", "notification_id": notification_id}, sort_keys=True)
+        )
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        _append_public_agent_bridge_log(
+            json.dumps({"event": "public_agent_bridge_worker_error", "error": str(exc)[:500]}, sort_keys=True)
+        )
+        return 1
+
+
+def _spawn_public_agent_gateway_bridge(
+    *,
+    cmd: list[str],
+    payload: dict[str, Any],
+    notification_id: int | None = None,
+) -> tuple[bool, str]:
+    if notification_id is not None:
+        try:
+            job_path = _write_public_agent_bridge_job(notification_id=notification_id, cmd=cmd, payload=payload)
+        except OSError as exc:
+            return False, f"could not write public gateway bridge job: {str(exc)[:180]}"
+        log_path = _public_agent_bridge_log_path()
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as log_file:
+                proc = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve()), "--public-agent-bridge-worker", str(job_path)],
+                    stdout=log_file,
+                    stderr=log_file,
+                    text=True,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+                try:
+                    returncode = proc.wait(timeout=0.25)
+                except subprocess.TimeoutExpired:
+                    return True, ""
+                if returncode == 0:
+                    return True, ""
+                return False, f"Hermes public gateway bridge worker exited immediately with status {returncode}; see {log_path}"
+        except OSError as exc:
+            return False, f"could not start Hermes public gateway bridge worker: {str(exc)[:180]}"
+
     log_path = _public_agent_bridge_log_path()
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -685,8 +876,11 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
         target_id=target_id,
         prompt=prompt,
         extra={**extra, "agent_label": label},
+        notification_id=int(row["id"]) if str(row.get("id") or "").isdigit() else None,
     )
     if bridged:
+        if _bridge_error == PUBLIC_AGENT_BRIDGE_DEFERRED:
+            return PUBLIC_AGENT_BRIDGE_DEFERRED
         return None
     if not _public_agent_quiet_fallback_enabled():
         message = f"{label} did not answer through the Hermes gateway bridge yet.\n\n{_bridge_error}"
@@ -762,6 +956,7 @@ def run_public_agent_turns_once(
         "errors": 0,
         "not_due": 0,
         "claimed_elsewhere": 0,
+        "deferred_public_agent_bridge": 0,
     }
     clean_channel = str(channel_kind or "").strip().lower()
     clean_target = str(target_id or "").strip()
@@ -794,7 +989,7 @@ def run_public_agent_turns_once(
             if not _claim_notification_for_delivery(
                 conn,
                 int(row["id"]),
-                lease_seconds=_int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900) + 90,
+                lease_seconds=_public_agent_turn_lease_seconds(),
             ):
                 summary["claimed_elsewhere"] += 1
                 continue
@@ -808,6 +1003,9 @@ def run_public_agent_turns_once(
             except Exception as exc:  # noqa: BLE001
                 error = f"exception: {exc}"
             if error:
+                if error == PUBLIC_AGENT_BRIDGE_DEFERRED:
+                    summary["deferred_public_agent_bridge"] += 1
+                    continue
                 mark_notification_error(conn, int(row["id"]), error)
                 summary["errors"] += 1
                 if verbose:
@@ -958,6 +1156,8 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
         "curator_fanout_batches": 0,
         "curator_fanout_agents": 0,
         "deferred_to_agent": 0,
+        "deferred_public_agent_bridge": 0,
+        "claimed_elsewhere": 0,
         "deferred_during_deploy": 0,
     }
     with connect_db(cfg) as conn:
@@ -984,6 +1184,15 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
             if not _notification_due_now(row):
                 continue
             summary["processed"] += 1
+            if str(row.get("target_kind") or "").lower() == "public-agent-turn" and not (
+                _claim_notification_for_delivery(
+                    conn,
+                    int(row["id"]),
+                    lease_seconds=_public_agent_turn_lease_seconds(),
+                )
+            ):
+                summary["claimed_elsewhere"] += 1
+                continue
             if deploy_operation is not None and _is_operator_upgrade_notification(row):
                 summary["deferred_during_deploy"] += 1
                 if verbose:
@@ -999,6 +1208,9 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
 
             if error == "DEFERRED_TO_AGENT":
                 summary["deferred_to_agent"] += 1
+                continue
+            if error == PUBLIC_AGENT_BRIDGE_DEFERRED:
+                summary["deferred_public_agent_bridge"] += 1
                 continue
             if error == "HANDLED_BY_CONSUMER":
                 # Safety: any remaining curator rows are already handled above.
@@ -1021,11 +1233,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Deliver queued ArcLink notifications.")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--public-agent-bridge-worker", default="", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.public_agent_bridge_worker:
+        raise SystemExit(_run_public_agent_bridge_worker(Path(args.public_agent_bridge_worker)))
     cfg = Config.from_env()
     summary = run_once(cfg, limit=args.limit, verbose=args.verbose)
     json.dump(summary, sys.stdout, indent=2, sort_keys=True)

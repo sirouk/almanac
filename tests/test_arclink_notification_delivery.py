@@ -747,7 +747,7 @@ def test_public_agent_turn_delivery_bridges_discord_channel_metadata() -> None:
             os.environ.update(old_env)
 
 
-def test_public_agent_live_trigger_claims_and_delivers_once() -> None:
+def test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     control = load_module(CONTROL_PY, "arclink_control_notification_delivery_live_trigger_test")
@@ -799,12 +799,19 @@ def test_public_agent_live_trigger_claims_and_delivers_once() -> None:
 
             def fake_gateway_turn(**kwargs):
                 bridge_calls.append(kwargs)
-                return True, ""
+                expect(kwargs["notification_id"] == notification_id, str(kwargs))
+                return True, delivery.PUBLIC_AGENT_BRIDGE_DEFERRED
 
             delivery._run_public_agent_gateway_turn = fake_gateway_turn
             first = delivery.run_public_agent_turns_once(cfg, channel_kind="telegram", target_id="tg:123", limit=1)
             second = delivery.run_public_agent_turns_once(cfg, channel_kind="telegram", target_id="tg:123", limit=1)
-            expect(first["processed"] == 1 and first["delivered"] == 1 and first["errors"] == 0, str(first))
+            expect(
+                first["processed"] == 1
+                and first["delivered"] == 0
+                and first["errors"] == 0
+                and first["deferred_public_agent_bridge"] == 1,
+                str(first),
+            )
             expect(second["processed"] == 0 and second["delivered"] == 0, str(second))
             expect(len(bridge_calls) == 1, str(bridge_calls))
             expect(bridge_calls[0]["prompt"] == "live trigger please", str(bridge_calls))
@@ -813,9 +820,10 @@ def test_public_agent_live_trigger_claims_and_delivers_once() -> None:
                     "SELECT delivered_at, last_attempt_at, next_attempt_at FROM notification_outbox WHERE id = ?",
                     (notification_id,),
                 ).fetchone()
-            expect(row["delivered_at"], dict(row))
+            expect(row["delivered_at"] is None, dict(row))
             expect(row["last_attempt_at"], dict(row))
-            print("PASS test_public_agent_live_trigger_claims_and_delivers_once")
+            expect(row["next_attempt_at"], dict(row))
+            print("PASS test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -920,6 +928,89 @@ def test_public_agent_gateway_bridge_detaches_long_running_turns() -> None:
             os.environ.update(old_env)
 
 
+def test_public_agent_bridge_worker_marks_delivery_after_bridge_success() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_bridge_worker_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_worker_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                notification_id = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="finish later",
+                    extra={"deployment_id": "arcdep_test"},
+                )
+
+            class Proc:
+                returncode = 0
+                stdout = '{"delivered": true, "ok": true}\n'
+                stderr = ""
+
+            run_calls: list[dict[str, object]] = []
+
+            def fake_run(cmd, input="", check=False, text=True, capture_output=True, timeout=None):
+                run_calls.append(
+                    {
+                        "cmd": cmd,
+                        "input": input,
+                        "check": check,
+                        "text": text,
+                        "capture_output": capture_output,
+                        "timeout": timeout,
+                    }
+                )
+                return Proc()
+
+            delivery.subprocess.run = fake_run
+            job_path = delivery._write_public_agent_bridge_job(
+                notification_id=notification_id,
+                cmd=["docker", "exec", "-i", "gateway", "bridge.py"],
+                payload={"platform": "telegram", "text": "finish later"},
+            )
+            result = delivery._run_public_agent_bridge_worker(job_path)
+            expect(result == 0, str(result))
+            expect(run_calls and run_calls[0]["cmd"] == ["docker", "exec", "-i", "gateway", "bridge.py"], str(run_calls))
+            expect(json.loads(str(run_calls[0]["input"]))["text"] == "finish later", str(run_calls))
+            expect(not job_path.exists(), "bridge job file should be removed after worker loads it")
+            with control.connect_db(cfg) as conn:
+                row = conn.execute("SELECT delivered_at, delivery_error FROM notification_outbox WHERE id = ?", (notification_id,)).fetchone()
+            expect(row["delivered_at"] and not row["delivery_error"], dict(row))
+            print("PASS test_public_agent_bridge_worker_marks_delivery_after_bridge_success")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_gateway_bridge_passes_streaming_policy_to_container() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -941,7 +1032,8 @@ def test_public_agent_gateway_bridge_passes_streaming_policy_to_container() -> N
             payloads: list[dict[str, object]] = []
             delivery._deployment_service_container = lambda *, project_name, service: "gateway-container"
 
-            def fake_spawn(*, cmd, payload):
+            def fake_spawn(*, cmd, payload, notification_id=None):
+                del notification_id
                 payloads.append(dict(payload))
                 return True, ""
 
@@ -1140,15 +1232,16 @@ def main() -> int:
     test_public_agent_turn_delivery_fails_closed_without_quiet_fallback()
     test_public_agent_turn_delivery_prefers_gateway_bridge_when_available()
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
-    test_public_agent_live_trigger_claims_and_delivers_once()
+    test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes()
     test_public_agent_turn_runner_prefers_running_gateway_container()
     test_public_agent_gateway_bridge_detaches_long_running_turns()
+    test_public_agent_bridge_worker_marks_delivery_after_bridge_success()
     test_public_agent_gateway_bridge_passes_streaming_policy_to_container()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
     test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
-    print("PASS all 15 notification delivery regression tests")
+    print("PASS all 16 notification delivery regression tests")
     return 0
 
 

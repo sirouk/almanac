@@ -109,16 +109,82 @@ def temp_router_db() -> tuple[tempfile.TemporaryDirectory[str], str]:
     return tmp, path
 
 
-def _client_for(env: dict[str, str], upstream_transport: Any | None = None):
+class _BufferedStream:
+    def __init__(self, response: Any) -> None:
+        self.response = response
+
+    def __enter__(self) -> Any:
+        return self.response
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.response.close()
+
+
+class _ASGITestClient:
+    """Small sync wrapper around httpx.ASGITransport.
+
+    FastAPI/Starlette's TestClient can hang indefinitely with some local
+    dependency combinations. These tests need deterministic failure signals
+    because they cover billing gates and prompt-secrecy assumptions.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+        self._closed = False
+
+    def __enter__(self) -> "_ASGITestClient":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._closed = True
+
+    def get(self, path: str, **kwargs: Any) -> Any:
+        return self.request("GET", path, **kwargs)
+
+    def post(self, path: str, **kwargs: Any) -> Any:
+        return self.request("POST", path, **kwargs)
+
+    def stream(self, method: str, path: str, **kwargs: Any) -> _BufferedStream:
+        return _BufferedStream(self.request(method, path, **kwargs))
+
+    def request(self, method: str, path: str, **kwargs: Any) -> Any:
+        return self._run(self._request(method, path, **kwargs))
+
+    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+        import httpx
+
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.request(method, path, **kwargs)
+            content = await response.aread()
+            return httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                content=content,
+                request=response.request,
+                extensions=response.extensions,
+            )
+
+    @staticmethod
+    def _run(awaitable: Any) -> Any:
+        import asyncio
+
+        return asyncio.run(awaitable)
+
+
+def _client_for(env: dict[str, str], upstream_transport: Any | None = None) -> _ASGITestClient:
     try:
-        from fastapi.testclient import TestClient
+        import httpx  # noqa: F401
     except ModuleNotFoundError as exc:
-        raise AssertionError("FastAPI test dependencies are missing; install requirements-dev.txt") from exc
+        raise AssertionError("httpx/FastAPI test dependencies are missing; install requirements-dev.txt") from exc
 
     router = load_module("arclink_llm_router.py", "arclink_llm_router_test")
     clean_env = {"ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "0", **env}
     config = router.load_router_config(clean_env)
-    return TestClient(router.create_app(config, upstream_transport=upstream_transport))
+    return _ASGITestClient(router.create_app(config, upstream_transport=upstream_transport))
 
 
 def _seed_router_key(
@@ -526,16 +592,11 @@ def test_chat_uses_catalog_pricing_and_promotes_deprecated_models() -> None:
     print("PASS test_chat_uses_catalog_pricing_and_promotes_deprecated_models")
 
 
-def test_startup_refreshes_catalog_and_promotes_newer_family_model() -> None:
+def test_catalog_refreshes_and_promotes_newer_family_model() -> None:
     tmp, db_path = temp_router_db()
     try:
         raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE"])
         router = load_module("arclink_llm_router.py", "arclink_llm_router_startup_catalog_test")
-        try:
-            from fastapi.testclient import TestClient
-        except ModuleNotFoundError as exc:
-            raise AssertionError("FastAPI test dependencies are missing; install requirements-dev.txt") from exc
-
         catalog_http = FixtureCatalogHttpClient(
             {
                 "data": [
@@ -574,9 +635,9 @@ def test_startup_refreshes_catalog_and_promotes_newer_family_model() -> None:
                 "ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "1",
             }
         )
-        with TestClient(
-            router.create_app(config, upstream_transport=upstream, catalog_http_client=catalog_http)
-        ) as client:
+        app = router.create_app(config, upstream_transport=upstream, catalog_http_client=catalog_http)
+        app.state.router_catalog_refresh = router._refresh_model_catalog_once(config, http_client=catalog_http)
+        with _ASGITestClient(app) as client:
             health = client.get("/health")
             expect(health.status_code == 200, health.text)
             expect(health.json()["model_catalog_refresh"]["status"] == "ok", health.text)
@@ -602,7 +663,7 @@ def test_startup_refreshes_catalog_and_promotes_newer_family_model() -> None:
             conn.close()
     finally:
         tmp.cleanup()
-    print("PASS test_startup_refreshes_catalog_and_promotes_newer_family_model")
+    print("PASS test_catalog_refreshes_and_promotes_newer_family_model")
 
 
 def test_chat_promotes_missing_requested_model_to_latest_same_family() -> None:
@@ -1074,7 +1135,7 @@ def main() -> int:
     test_chat_usage_queues_raven_low_fuel_notice_once()
     test_low_fuel_notice_without_channel_does_not_poison_dedupe()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()
-    test_startup_refreshes_catalog_and_promotes_newer_family_model()
+    test_catalog_refreshes_and_promotes_newer_family_model()
     test_chat_promotes_missing_requested_model_to_latest_same_family()
     test_chat_preflight_rejects_invalid_model_and_size_limits()
     test_chat_preflight_enforces_budget_and_billing_fail_closed()

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from arclink_control import Config, connect_db, ensure_agent_mcp_bootstrap_token, json_loads
+from arclink_onboarding import default_arclink_agent_profile
 
 
 STOP = False
@@ -137,6 +138,22 @@ def docker_rm_container(name: str) -> None:
     subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
 
+def _theme_profile(metadata: dict[str, Any]) -> dict[str, str]:
+    try:
+        index = int(str(metadata.get("bundle_agent_index") or metadata.get("agent_index") or "1"))
+    except (TypeError, ValueError):
+        index = 1
+    profile = default_arclink_agent_profile(
+        index,
+        plan_id=str(metadata.get("selected_plan_id") or metadata.get("plan_id") or ""),
+    )
+    return {
+        "dashboard_theme": str(metadata.get("dashboard_theme") or profile.get("dashboard_theme") or "arclink"),
+        "theme_label": str(metadata.get("theme_label") or profile.get("theme_label") or "ArcLink Signal Orange"),
+        "theme_accent_hex": str(metadata.get("theme_accent_hex") or profile.get("theme_accent_hex") or "#FB5005"),
+    }
+
+
 def active_agents(cfg: Config) -> list[dict[str, Any]]:
     with connect_db(cfg) as conn:
         rows = conn.execute(
@@ -164,9 +181,10 @@ def active_agents(cfg: Config) -> list[dict[str, Any]]:
         metadata = json_loads(str(agent.pop("deployment_metadata_json") or "{}"), {})
         if not isinstance(metadata, dict):
             metadata = {}
-        agent["dashboard_theme"] = str(metadata.get("dashboard_theme") or "")
-        agent["theme_label"] = str(metadata.get("theme_label") or "")
-        agent["theme_accent_hex"] = str(metadata.get("theme_accent_hex") or "")
+        theme_profile = _theme_profile(metadata)
+        agent["dashboard_theme"] = theme_profile["dashboard_theme"]
+        agent["theme_label"] = theme_profile["theme_label"]
+        agent["theme_accent_hex"] = theme_profile["theme_accent_hex"]
         agents.append(agent)
     return agents
 

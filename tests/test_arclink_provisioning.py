@@ -685,6 +685,25 @@ def test_tailscale_ingress_uses_dedicated_app_ports_when_recorded() -> None:
     print("PASS test_tailscale_ingress_uses_dedicated_app_ports_when_recorded")
 
 
+def test_dashboard_theme_falls_back_to_agent_index_variant() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_theme_variant_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_theme_variant_test")
+    conn = memory_db(control)
+    seed_deployment(
+        control,
+        conn,
+        metadata={"selected_plan_id": "scale", "bundle_agent_index": 2},
+        agent_name="Vela",
+        agent_title="Signal Strategist",
+    )
+    intent = provisioning.render_arclink_provisioning_intent(conn, deployment_id="dep_1")
+    env = intent["environment"]
+    expect(env["ARCLINK_DASHBOARD_THEME"] == "arclink-violet", str(env))
+    expect(env["ARCLINK_DASHBOARD_THEME_LABEL"] == "Deep Violet", str(env))
+    expect(env["ARCLINK_DASHBOARD_ACCENT_HEX"] == "#8B5CF6", str(env))
+    print("PASS test_dashboard_theme_falls_back_to_agent_index_variant")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso()
@@ -699,7 +718,8 @@ def main() -> int:
     test_rendered_services_include_resource_limits_and_healthchecks()
     test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
     test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
-    print("PASS all 13 ArcLink provisioning tests")
+    test_dashboard_theme_falls_back_to_agent_index_variant()
+    print("PASS all 14 ArcLink provisioning tests")
     return 0
 
 

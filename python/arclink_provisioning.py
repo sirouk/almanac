@@ -22,7 +22,7 @@ from arclink_control import (
 from arclink_access import build_arclink_ssh_access_record
 from arclink_adapters import arclink_access_urls, arclink_hostnames, arclink_tailscale_hostnames
 from arclink_ingress import desired_arclink_ingress_records, render_traefik_dynamic_labels
-from arclink_onboarding import clean_arclink_agent_name, clean_arclink_agent_title
+from arclink_onboarding import clean_arclink_agent_name, clean_arclink_agent_title, default_arclink_agent_profile
 from arclink_product import chutes_base_url, chutes_default_model, model_reasoning_default, primary_provider
 from arclink_secrets_regex import (
     contains_secret_material,
@@ -74,6 +74,20 @@ def _json_loads(value: str | None) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ArcLinkProvisioningError("ArcLink deployment metadata must be a JSON object")
     return dict(parsed)
+
+
+def _deployment_theme_profile(metadata: Mapping[str, Any]) -> dict[str, str]:
+    try:
+        index = int(str(metadata.get("bundle_agent_index") or metadata.get("agent_index") or "1"))
+    except (TypeError, ValueError):
+        index = 1
+    plan_id = str(metadata.get("selected_plan_id") or metadata.get("plan_id") or "").strip()
+    profile = default_arclink_agent_profile(index, plan_id=plan_id)
+    return {
+        "dashboard_theme": str(metadata.get("dashboard_theme") or profile.get("dashboard_theme") or "arclink").strip(),
+        "theme_label": str(metadata.get("theme_label") or profile.get("theme_label") or "ArcLink Signal Orange").strip(),
+        "theme_accent_hex": str(metadata.get("theme_accent_hex") or profile.get("theme_accent_hex") or "#FB5005").strip(),
+    }
 
 
 def _safe_segment(value: str) -> str:
@@ -223,14 +237,15 @@ def project_arclink_deployment_identity_context(
     payload = dict(existing)
     agent_label = str(deployment.get("agent_name") or "").strip() or str(deployment.get("prefix") or "").strip()
     agent_title = str(deployment.get("agent_title") or user.get("agent_title") or "").strip()
+    theme_profile = _deployment_theme_profile(metadata)
     payload.update(
         {
             "agent_label": agent_label or "your ArcLink agent",
             "agent_title": agent_title,
             "agent_personality": str(metadata.get("agent_personality") or payload.get("agent_personality") or "").strip(),
-            "dashboard_theme": str(metadata.get("dashboard_theme") or payload.get("dashboard_theme") or "").strip(),
-            "theme_label": str(metadata.get("theme_label") or payload.get("theme_label") or "").strip(),
-            "theme_accent_hex": str(metadata.get("theme_accent_hex") or payload.get("theme_accent_hex") or "").strip(),
+            "dashboard_theme": str(metadata.get("dashboard_theme") or payload.get("dashboard_theme") or theme_profile["dashboard_theme"]).strip(),
+            "theme_label": str(metadata.get("theme_label") or payload.get("theme_label") or theme_profile["theme_label"]).strip(),
+            "theme_accent_hex": str(metadata.get("theme_accent_hex") or payload.get("theme_accent_hex") or theme_profile["theme_accent_hex"]).strip(),
             "deployment_id": str(deployment["deployment_id"]),
             "user_id": str(deployment["user_id"]),
             "user_name": str(user.get("display_name") or payload.get("user_name") or "").strip(),
@@ -945,9 +960,10 @@ def render_arclink_provisioning_intent(
     prefix = str(deployment["prefix"])
     agent_name = str(deployment.get("agent_name") or "").strip()
     agent_title = str(deployment.get("agent_title") or user.get("agent_title") or "").strip()
-    dashboard_theme = str(metadata.get("dashboard_theme") or "arclink").strip()
-    dashboard_theme_label = str(metadata.get("theme_label") or "ArcLink Signal Orange").strip()
-    dashboard_accent_hex = str(metadata.get("theme_accent_hex") or "#FB5005").strip()
+    theme_profile = _deployment_theme_profile(metadata)
+    dashboard_theme = theme_profile["dashboard_theme"]
+    dashboard_theme_label = theme_profile["theme_label"]
+    dashboard_accent_hex = theme_profile["theme_accent_hex"]
     roots = render_arclink_state_roots(deployment_id=deployment_id, prefix=prefix, state_root_base=state_root_base)
     if clean_ingress_mode == "tailscale":
         hostnames = arclink_tailscale_hostnames(prefix, clean_tailscale_dns_name, strategy=clean_tailscale_strategy)

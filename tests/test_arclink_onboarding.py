@@ -156,8 +156,10 @@ def test_onboarding_agent_identity_flows_to_deployments_and_checkout_metadata() 
         """,
         (opened["user_id"],),
     ).fetchall()
-    expect([row["agent_name"] for row in rows] == ["Atlas", "Atlas (Chief)", "Atlas (Bosun)"], str([dict(row) for row in rows]))
-    expect({row["agent_title"] for row in rows} == {"the right hand"}, str([dict(row) for row in rows]))
+    expect([row["agent_name"] for row in rows] == ["Atlas", "Vela", "Forge"], str([dict(row) for row in rows]))
+    expect([row["agent_title"] for row in rows] == ["the right hand", "Signal Strategist", "Systems Builder"], str([dict(row) for row in rows]))
+    themes = [json.loads(row["metadata_json"]).get("theme_label") for row in rows]
+    expect(themes == ["ArcLink Signal Orange", "Deep Violet", "Matrix Green"], str(themes))
     user = conn.execute("SELECT agent_title FROM arclink_users WHERE user_id = ?", (opened["user_id"],)).fetchone()
     expect(user["agent_title"] == "the right hand", str(dict(user)))
     print("PASS test_onboarding_agent_identity_flows_to_deployments_and_checkout_metadata")

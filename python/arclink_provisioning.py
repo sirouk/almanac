@@ -227,6 +227,10 @@ def project_arclink_deployment_identity_context(
         {
             "agent_label": agent_label or "your ArcLink agent",
             "agent_title": agent_title,
+            "agent_personality": str(metadata.get("agent_personality") or payload.get("agent_personality") or "").strip(),
+            "dashboard_theme": str(metadata.get("dashboard_theme") or payload.get("dashboard_theme") or "").strip(),
+            "theme_label": str(metadata.get("theme_label") or payload.get("theme_label") or "").strip(),
+            "theme_accent_hex": str(metadata.get("theme_accent_hex") or payload.get("theme_accent_hex") or "").strip(),
             "deployment_id": str(deployment["deployment_id"]),
             "user_id": str(deployment["user_id"]),
             "user_name": str(user.get("display_name") or payload.get("user_name") or "").strip(),
@@ -941,6 +945,9 @@ def render_arclink_provisioning_intent(
     prefix = str(deployment["prefix"])
     agent_name = str(deployment.get("agent_name") or "").strip()
     agent_title = str(deployment.get("agent_title") or user.get("agent_title") or "").strip()
+    dashboard_theme = str(metadata.get("dashboard_theme") or "arclink").strip()
+    dashboard_theme_label = str(metadata.get("theme_label") or "ArcLink Signal Orange").strip()
+    dashboard_accent_hex = str(metadata.get("theme_accent_hex") or "#FB5005").strip()
     roots = render_arclink_state_roots(deployment_id=deployment_id, prefix=prefix, state_root_base=state_root_base)
     if clean_ingress_mode == "tailscale":
         hostnames = arclink_tailscale_hostnames(prefix, clean_tailscale_dns_name, strategy=clean_tailscale_strategy)
@@ -1006,6 +1013,11 @@ def render_arclink_provisioning_intent(
         "ARCLINK_PREFIX": prefix,
         "ARCLINK_AGENT_NAME": agent_name,
         "ARCLINK_AGENT_TITLE": agent_title,
+        "ARCLINK_DASHBOARD_AGENT_LABEL": agent_name or prefix,
+        "ARCLINK_DASHBOARD_AGENT_TITLE": agent_title,
+        "ARCLINK_DASHBOARD_THEME": dashboard_theme,
+        "ARCLINK_DASHBOARD_THEME_LABEL": dashboard_theme_label,
+        "ARCLINK_DASHBOARD_ACCENT_HEX": dashboard_accent_hex,
         "ARCLINK_BASE_DOMAIN": clean_base_domain,
         "ARCLINK_INGRESS_MODE": clean_ingress_mode,
         "ARCLINK_TAILSCALE_DNS_NAME": clean_tailscale_dns_name,

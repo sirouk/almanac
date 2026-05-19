@@ -293,6 +293,11 @@
 
     function deferExplorerFolderOpen(item, root) {
       clearExplorerFolderClickTimer();
+      patch(function (current) {
+        const expanded = Object.assign({}, current.expanded || {});
+        expanded[pathKey(root || itemRoot(item), item.path)] = true;
+        return { expanded: expanded };
+      });
       explorerFolderClickTimer = setTimeout(function () {
         explorerFolderClickTimer = null;
         loadItems(item.path, root);

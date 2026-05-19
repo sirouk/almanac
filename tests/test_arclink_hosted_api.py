@@ -1338,6 +1338,71 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
         expect(status == 200, f"linked resources after revoke expected 200 got {status}: {payload}")
         expect(payload["linked_resources"] == [], str(payload))
 
+        notion_body = {
+            "recipient_user_id": recipient["user_id"],
+            "owner_deployment_id": owner["deployment_id"],
+            "resource_kind": "notion",
+            "resource_root": "ssot",
+            "resource_path": "/ArcLink HQ/Launch OS",
+            "display_name": "Launch OS",
+            "metadata": {"notion_page_id": "page_launch_os", "inherit_subpages": True},
+        }
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants",
+            headers=browser_auth_headers(owner_session, csrf=True),
+            body=json.dumps(notion_body),
+            config=config,
+        )
+        expect(status == 201, f"Notion share create expected 201 got {status}: {payload}")
+        notion_grant_id = payload["grant"]["grant_id"]
+        expect(payload["grant"]["resource_kind"] == "notion", str(payload["grant"]))
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/approve",
+            headers=browser_auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": notion_grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"Notion owner approve expected 200 got {status}: {payload}")
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/accept",
+            headers=browser_auth_headers(recipient_session, csrf=True),
+            body=json.dumps({"grant_id": notion_grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"Notion recipient accept expected 200 got {status}: {payload}")
+        notion_projection = payload["grant"]["projection"]
+        expect(notion_projection["status"] == "materialized", str(notion_projection))
+        expect(notion_projection["linked_root"] == "notion", str(notion_projection))
+        expect(notion_projection["projection_mode"] == "ssot_inherited_subtree", str(notion_projection))
+        expect(notion_projection["inherited_subpages"] is True, str(notion_projection))
+        expect(notion_projection["linked_path"] == "/ArcLink HQ/Launch OS", str(notion_projection))
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="GET",
+            path="/api/v1/user/linked-resources",
+            headers=auth_headers(recipient_session),
+            config=config,
+        )
+        expect(status == 200, f"linked resources with Notion expected 200 got {status}: {payload}")
+        expect(len(payload["linked_resources"]) == 1, str(payload))
+        expect(payload["linked_resources"][0]["projection"]["projection_mode"] == "ssot_inherited_subtree", str(payload))
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/revoke",
+            headers=browser_auth_headers(owner_session, csrf=True),
+            body=json.dumps({"grant_id": notion_grant_id}),
+            config=config,
+        )
+        expect(status == 200, f"Notion share revoke expected 200 got {status}: {payload}")
+        expect(payload["grant"]["projection"]["status"] == "removed", str(payload["grant"]))
+
         status, payload, _ = hosted.route_arclink_hosted_api(
             conn,
             method="POST",
@@ -2041,7 +2106,7 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
         text="/packages",
         base_domain="example.test",
     )
-    expect([button.label for button in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
+    expect([button.label for button in package.buttons] == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], str(package.buttons))
     expect(all(button.url for button in package.buttons), str(package.buttons))
 
     scale_url = package.buttons[1].url
@@ -2895,7 +2960,7 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
     expect(payload.get("sent") is True, str(payload))
     expect(payload.get("callback_acknowledged") is True, str(payload))
     expect(transport.answered_callbacks == [{"callback_query_id": "cb_start", "text": ""}], str(transport.answered_callbacks))
-    expect(transport.sent_messages and "Raven here" in transport.sent_messages[0]["text"], str(transport.sent_messages))
+    expect(transport.sent_messages and "Raven on the line, Captain." in transport.sent_messages[0]["text"], str(transport.sent_messages))
     print("PASS test_telegram_webhook_acknowledges_button_callbacks")
 
 

@@ -480,6 +480,17 @@ ensure_systemd_workspace_env() {
   ensure_unit_environment_line "$unit" "Environment=DRIVE_LINKED_ROOT=$TARGET_LINKED_DIR"
   ensure_unit_environment_line "$unit" "Environment=CODE_LINKED_ROOT=$TARGET_LINKED_DIR"
   ensure_unit_environment_line "$unit" "Environment=ARCLINK_LINKED_RESOURCES_ROOT=$TARGET_LINKED_DIR"
+  ensure_unit_environment_line "$unit" "Environment=ARCLINK_DASHBOARD_AGENT_LABEL=${ARCLINK_DASHBOARD_AGENT_LABEL:-$AGENT_ID}"
+  ensure_unit_environment_line "$unit" "Environment=ARCLINK_DASHBOARD_AGENT_TITLE=${ARCLINK_DASHBOARD_AGENT_TITLE:-}"
+  if [[ -n "${ARCLINK_DASHBOARD_THEME:-}" ]]; then
+    ensure_unit_environment_line "$unit" "Environment=ARCLINK_DASHBOARD_THEME=$ARCLINK_DASHBOARD_THEME"
+  fi
+  if [[ -n "${ARCLINK_DASHBOARD_THEME_LABEL:-}" ]]; then
+    ensure_unit_environment_line "$unit" "Environment=ARCLINK_DASHBOARD_THEME_LABEL=$ARCLINK_DASHBOARD_THEME_LABEL"
+  fi
+  if [[ -n "${ARCLINK_DASHBOARD_ACCENT_HEX:-}" ]]; then
+    ensure_unit_environment_line "$unit" "Environment=ARCLINK_DASHBOARD_ACCENT_HEX=$ARCLINK_DASHBOARD_ACCENT_HEX"
+  fi
 
   if [[ "$before" != "1" && "$SYSTEMD_ENV_UPDATED" == "1" ]]; then
     SERVICE_NOTES+=("    - systemd env: repaired dashboard workspace and linked roots")

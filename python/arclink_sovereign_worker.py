@@ -1500,31 +1500,31 @@ def _public_bot_target_for_session(session: Mapping[str, Any]) -> tuple[str, str
     return None
 
 
-def _vessel_online_message(*, urls: Mapping[str, Any]) -> str:
+def _vessel_online_message(*, deployment: Mapping[str, Any], urls: Mapping[str, Any]) -> str:
     dashboard = str(urls.get("dashboard") or "").strip()
-    files = str(urls.get("files") or "").strip()
-    code = str(urls.get("code") or "").strip()
-    hermes = str(urls.get("hermes") or "").strip()
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    label = str(deployment.get("agent_name") or "").strip() or f"Agent #{str(deployment.get('prefix') or '').rsplit('-', 1)[-1]}"
+    title = str(deployment.get("agent_title") or "").strip() or "ArcLink Agent"
+    theme = str(metadata.get("theme_label") or "").strip()
+    theme_line = f"Theme: {theme}" if theme else ""
     lines = [
-        "Agent online.",
+        f"{label} online.",
         "",
-        "Stage 4 complete: your ArcLink agent is ready. Drive, Code, Terminal, memory, and deployment health are lit.",
+        f"Stage 4 complete: {label} - {title} is ready. Drive, Code, Terminal, memory, and deployment health are lit.",
         "",
     ]
-    for label, url in (
-        ("Dashboard", dashboard),
-        ("Drive", files),
-        ("Code", code),
-        ("Hermes", hermes),
-    ):
-        if url:
-            lines.append(f"{label}: {url}")
+    if theme_line:
+        lines.append(theme_line)
+    if dashboard:
+        lines.append(f"Helm: {dashboard}")
     lines.extend(
         [
             "",
-            "Raven keeps the dashboard credential handoff in this chat until you store it. Use /credentials or tap Credentials, then confirm with /credentials-stored.",
+            "Drive, Code, and Terminal are inside that Helm as Hermes dashboard plugins. One dashboard credential works across the Crew control interfaces.",
             "",
-            "Use /raven for ArcLink controls, roster, Notion, backups, and linked channels. Bare slash commands belong to your active agent.",
+            "Raven keeps the credential handoff in this chat until you store it. Use /credentials or tap Credentials, then confirm with /credentials-stored.",
+            "",
+            "Use Train My Crew to curate the roster, or Show My Crew for every Agent and Helm link. Bare slash commands belong to your active agent.",
         ]
     )
     return "\n".join(lines)
@@ -1541,6 +1541,7 @@ def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any]) -> di
     telegram_row.extend(
         [
             {"text": "Credentials", "callback_data": f"arclink:{credential_command}"[:64]},
+            {"text": "Train My Crew", "callback_data": "arclink:/raven train_crew"},
             {"text": "Show My Crew", "callback_data": "arclink:/raven agents"},
             {"text": "Link Channel", "callback_data": "arclink:/raven link-channel"},
         ]
@@ -1548,6 +1549,7 @@ def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any]) -> di
     discord_buttons.extend(
         [
             {"type": 2, "label": "Credentials", "style": 2, "custom_id": f"arclink:{credential_command}"[:100]},
+            {"type": 2, "label": "Train My Crew", "style": 2, "custom_id": "arclink:/train-crew"},
             {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
             {"type": 2, "label": "Link Channel", "style": 2, "custom_id": "arclink:/link-channel"},
         ]
@@ -1570,8 +1572,11 @@ def _focus_public_bot_session_on_deployment(
         return
     metadata = json_loads_safe(str(session.get("metadata_json") or "{}"))
     metadata["active_deployment_id"] = deployment_id
+    label = str(deployment.get("agent_name") or "").strip()
     prefix = str(deployment.get("prefix") or "").strip()
-    if prefix:
+    if label:
+        metadata["active_agent_label"] = label
+    elif prefix:
         metadata["active_agent_label"] = f"Agent #{prefix.rsplit('-', 1)[-1]}"
     conn.execute(
         """
@@ -1626,7 +1631,7 @@ def _queue_vessel_online_notifications(
     ).fetchall()
     seen: set[tuple[str, str]] = set()
     queued = 0
-    message = _vessel_online_message(urls=urls)
+    message = _vessel_online_message(deployment=dict(deployment), urls=urls)
     extra = _vessel_online_actions(deployment_id=deployment_id, urls=urls)
     for row in rows:
         session = dict(row)

@@ -284,6 +284,71 @@ for line in manifest_file.read_text(encoding="utf-8").splitlines():
 PY
 }
 
+render_dashboard_theme_file() {
+  local src_file="$1"
+  local dst_file="$2"
+  local agent_label="${ARCLINK_DASHBOARD_AGENT_LABEL:-${ARCLINK_AGENT_NAME:-ArcLink Agent}}"
+  local theme_label="${ARCLINK_DASHBOARD_THEME_LABEL:-ArcLink Signal Orange}"
+  local accent_hex="${ARCLINK_DASHBOARD_ACCENT_HEX:-#FB5005}"
+
+  python3 - "$src_file" "$dst_file" "$agent_label" "$theme_label" "$accent_hex" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+agent_label = sys.argv[3].strip() or "ArcLink Agent"
+theme_label = sys.argv[4].strip() or "ArcLink Signal Orange"
+accent_hex = sys.argv[5].strip() or "#FB5005"
+
+text = src.read_text(encoding="utf-8")
+text = text.replace("__ARCLINK_AGENT_LABEL__", json.dumps(agent_label)[1:-1])
+text = text.replace("__ARCLINK_THEME_LABEL__", json.dumps(theme_label)[1:-1])
+text = text.replace("__ARCLINK_THEME_ACCENT_HEX__", json.dumps(accent_hex)[1:-1])
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(text, encoding="utf-8")
+dst.chmod(0o644)
+PY
+}
+
+generate_arclink_theme_variants() {
+  local theme_dir="$1"
+  local base_file="$theme_dir/arclink.yaml"
+  [[ -f "$base_file" ]] || return 0
+
+  python3 - "$base_file" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+base = Path(sys.argv[1])
+text = base.read_text(encoding="utf-8")
+variants = {
+    "arclink-violet": ("ArcLink Deep Violet", "#8B5CF6", "139, 92, 246"),
+    "arclink-matrix": ("ArcLink Matrix Green", "#00E676", "0, 230, 118"),
+    "arclink-blue": ("ArcLink Electric Blue", "#2075FE", "32, 117, 254"),
+    "arclink-gold": ("ArcLink Solar Gold", "#FFD166", "255, 209, 102"),
+    "arclink-crimson": ("ArcLink Crimson Pulse", "#FF3864", "255, 56, 100"),
+}
+for name, (label, hex_value, rgb_value) in variants.items():
+    body = text
+    body = body.replace("name: arclink", f"name: {name}", 1)
+    body = body.replace('label: "ArcLink"', f'label: "{label}"', 1)
+    body = body.replace(
+        'description: "Carbon workspace with ArcLink signal orange, electric blue, and live-status green."',
+        f'description: "Carbon ArcLink workspace with the {label} accent lane."',
+        1,
+    )
+    body = body.replace("#FB5005", hex_value).replace("#fb5005", hex_value.lower())
+    body = body.replace("251, 80, 5", rgb_value)
+    (base.parent / f"{name}.yaml").write_text(body, encoding="utf-8")
+PY
+}
+
 install_plugin_dashboard_themes() {
   local plugin_name="$1"
   local src_dir="$PLUGINS_ROOT/$plugin_name"
@@ -295,9 +360,12 @@ install_plugin_dashboard_themes() {
     [[ -d "$candidate" ]] || continue
     mkdir -p "$theme_dir"
     while IFS= read -r -d '' theme_file; do
-      install -m 0644 "$theme_file" "$theme_dir/$(basename "$theme_file")"
+      render_dashboard_theme_file "$theme_file" "$theme_dir/$(basename "$theme_file")"
     done < <(find "$candidate" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | sort -z)
   done
+  if [[ "$plugin_name" == "arclink-theme" ]]; then
+    generate_arclink_theme_variants "$theme_dir"
+  fi
 
   plugin_dashboard_default_theme "$src_dir/plugin.yaml"
 }
@@ -376,6 +444,9 @@ for plugin_name in "${normalized_plugins[@]}"; do
     dashboard_theme="$plugin_theme"
   fi
 done
+if [[ -n "${ARCLINK_DASHBOARD_THEME:-}" ]]; then
+  dashboard_theme="$ARCLINK_DASHBOARD_THEME"
+fi
 
 sync_plugin_config "${normalized_plugins[@]}"
 sync_dashboard_theme_config "$dashboard_theme"

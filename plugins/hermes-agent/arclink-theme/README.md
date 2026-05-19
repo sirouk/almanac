@@ -6,4 +6,7 @@ left-hand dashboard menu item for it.
 
 ArcLink's agent install and refresh scripts copy `dashboard-themes/arclink.yaml`
 into `HERMES_HOME/dashboard-themes/` and set `dashboard.theme: arclink` in
-`config.yaml` when this plugin is enabled.
+`config.yaml` when this plugin is enabled. Those installers also render the
+per-agent label/accent placeholders and generate the bundled ArcLink variants
+for secondary Crew members, so upgrades can refresh the theme without patching
+Hermes core.

@@ -1126,11 +1126,49 @@
       return api("/preview?path=" + encodeURIComponent(item.path) + "&root=" + encodeURIComponent(itemRoot(item) || ""));
     }
 
+    function renderMarkdownPreview(content) {
+      const nodes = [];
+      const lines = String(content || "").split(/\r?\n/);
+      let codeLines = [];
+      function flushCode(key) {
+        if (!codeLines.length) return;
+        nodes.push(h("pre", { key: "code:" + key }, codeLines.join("\n")));
+        codeLines = [];
+      }
+      lines.forEach(function (line, index) {
+        if (/^```/.test(line)) {
+          if (codeLines.length) flushCode(index);
+          else codeLines = [""];
+          return;
+        }
+        if (codeLines.length) {
+          codeLines.push(line);
+          return;
+        }
+        const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+        if (heading) {
+          nodes.push(h("h" + heading[1].length, { key: "h:" + index }, heading[2]));
+          return;
+        }
+        const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+        if (bullet) {
+          nodes.push(h("li", { key: "li:" + index }, bullet[1]));
+          return;
+        }
+        nodes.push(line.trim() ? h("p", { key: "p:" + index }, line) : h("div", { key: "sp:" + index, className: "hermes-drive-markdown-space" }));
+      });
+      flushCode("tail");
+      return h("div", { className: "hermes-drive-markdown-preview" }, nodes);
+    }
+
     function renderPreviewBody(preview) {
       if (!preview) return h("div", { className: "hermes-drive-preview-empty" }, "Select a previewable file.");
       if (preview.kind === "loading") return h("div", { className: "hermes-drive-preview-empty" }, "Loading preview");
       if (preview.kind === "unsupported") return h("div", { className: "hermes-drive-preview-empty" }, preview.message || "No preview available for this file type.");
-      if (preview.kind === "text" || preview.kind === "markdown") {
+      if (preview.kind === "markdown") {
+        return renderMarkdownPreview(preview.content || "");
+      }
+      if (preview.kind === "text") {
         return h("pre", { className: "hermes-drive-text-preview" }, preview.content || "");
       }
       if (preview.kind === "pdf") {

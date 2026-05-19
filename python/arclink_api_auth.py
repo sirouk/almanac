@@ -60,8 +60,9 @@ from arclink_wrapped import list_user_wrapped_reports, set_wrapped_frequency, wr
 ARCLINK_ADMIN_ROLES = frozenset({"owner", "admin", "ops", "support", "read_only"})
 ARCLINK_ADMIN_MUTATION_ROLES = frozenset({"owner", "admin", "ops"})
 ARCLINK_CREDENTIAL_HANDOFF_KINDS = frozenset({"dashboard_password", "chutes_api_key", "notion_token"})
-ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code", "pod_comms"})
+ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code", "pod_comms", "notion"})
 ARCLINK_SHARE_RESOURCE_ROOTS = frozenset({"vault", "workspace"})
+ARCLINK_SHARE_NOTION_ROOTS = frozenset({"notion", "ssot"})
 ARCLINK_SHARE_ACCESS_MODES = frozenset({"read"})
 ARCLINK_SHARE_STATUSES = ARCLINK_SHARE_GRANT_STATUSES
 ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -2100,7 +2101,7 @@ def _share_projection_public(metadata: Mapping[str, Any]) -> dict[str, Any]:
         }
     return {
         "status": str(projection.get("status") or "not_materialized"),
-        "linked_root": "linked",
+        "linked_root": str(projection.get("linked_root") or "linked"),
         "linked_path": str(projection.get("linked_path") or ""),
         "entry_path": str(projection.get("entry_path") or ""),
         "resource_kind": str(projection.get("resource_kind") or ""),
@@ -2111,6 +2112,7 @@ def _share_projection_public(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "removed_at": str(projection.get("removed_at") or ""),
         "reason": str(projection.get("reason") or ""),
         "read_only": True,
+        "inherited_subpages": bool(projection.get("inherited_subpages") or metadata.get("inherit_subpages") or False),
         "skipped_sensitive_count": int(projection.get("skipped_sensitive_count") or 0),
     }
 
@@ -2272,6 +2274,38 @@ def _materialize_share_projection(
             "read_only": True,
         }
         return metadata
+    if resource_kind == "notion":
+        clean_path = str(grant.get("resource_path") or "").strip()
+        projection = {
+            "status": "materialized",
+            "linked_root": "notion",
+            "linked_path": clean_path,
+            "entry_path": clean_path,
+            "resource_kind": "notion",
+            "owner_deployment_id": str(metadata.get("owner_deployment_id") or metadata.get("deployment_id") or ""),
+            "recipient_deployment_id": str(metadata.get("recipient_deployment_id") or ""),
+            "projection_mode": "ssot_inherited_subtree",
+            "materialized_at": now,
+            "inherited_subpages": bool(metadata.get("inherit_subpages", True)),
+            "reason": "",
+            "read_only": True,
+        }
+        metadata["projection"] = projection
+        append_arclink_event(
+            conn,
+            subject_kind="share_grant",
+            subject_id=grant_id,
+            event_type="share_notion_subtree_materialized",
+            metadata={
+                "recipient_user_id": recipient_user,
+                "resource_root": str(grant.get("resource_root") or ""),
+                "resource_path": clean_path,
+                "projection_mode": "ssot_inherited_subtree",
+                "inherited_subpages": projection["inherited_subpages"],
+            },
+            commit=False,
+        )
+        return metadata
     owner_deployment = str(metadata.get("owner_deployment_id") or metadata.get("deployment_id") or "").strip()
     recipient_deployment = str(metadata.get("recipient_deployment_id") or "").strip()
     projection: dict[str, Any] = {
@@ -2414,6 +2448,33 @@ def _remove_share_projection(
             "read_only": True,
         }
         return metadata
+    if str(grant.get("resource_kind") or "").strip().lower() == "notion":
+        projection = metadata.get("projection")
+        if not isinstance(projection, Mapping):
+            projection = {
+                "linked_root": "notion",
+                "linked_path": str(grant.get("resource_path") or ""),
+                "entry_path": str(grant.get("resource_path") or ""),
+                "resource_kind": "notion",
+                "projection_mode": "ssot_inherited_subtree",
+                "inherited_subpages": bool(metadata.get("inherit_subpages", True)),
+                "read_only": True,
+            }
+        updated_projection = dict(projection)
+        updated_projection.update({"status": "removed", "removed_at": now, "read_only": True})
+        metadata["projection"] = updated_projection
+        append_arclink_event(
+            conn,
+            subject_kind="share_grant",
+            subject_id=str(grant.get("grant_id") or ""),
+            event_type="share_notion_subtree_removed",
+            metadata={
+                "recipient_user_id": str(grant.get("recipient_user_id") or ""),
+                "resource_path": str(grant.get("resource_path") or ""),
+            },
+            commit=False,
+        )
+        return metadata
     projection = metadata.get("projection")
     if not isinstance(projection, Mapping):
         metadata["projection"] = {
@@ -2516,6 +2577,11 @@ def create_user_share_grant_for_owner(
         clean_path = str(resource_path or "*").strip() or "*"
         if clean_path not in {"*", "pod_comms"}:
             clean_path = _clean_share_path(clean_path)
+    elif kind == "notion":
+        root = root or "notion"
+        if root not in ARCLINK_SHARE_NOTION_ROOTS:
+            raise ArcLinkApiAuthError("ArcLink Notion shares require the notion or ssot root")
+        clean_path = _clean_share_path(resource_path)
     elif root not in ARCLINK_SHARE_RESOURCE_ROOTS:
         raise ArcLinkApiAuthError("ArcLink share cannot originate from linked or unknown roots")
     else:
@@ -2530,6 +2596,9 @@ def create_user_share_grant_for_owner(
         safe_metadata["recipient_deployment_id"] = recipient_deployment
     if same_account:
         safe_metadata["same_account_share"] = True
+    if kind == "notion":
+        safe_metadata["inherit_subpages"] = bool(safe_metadata.get("inherit_subpages", True))
+        safe_metadata.setdefault("notion_share_model", "brokered_ssot_subtree")
     clean_agent = str(requested_by_agent_id or "").strip()
     if clean_agent:
         safe_metadata["requested_by_agent_id"] = clean_agent

@@ -61,6 +61,56 @@ ARCLINK_ONBOARDING_EVENT_TYPES = frozenset(
 ARCLINK_ONBOARDING_SESSION_TTL_SECONDS = 24 * 60 * 60
 ARCLINK_AGENT_NAME_MAX_CHARS = 40
 ARCLINK_AGENT_TITLE_MAX_CHARS = 80
+ARCLINK_DEFAULT_AGENT_PROFILES: tuple[dict[str, str], ...] = (
+    {
+        "name": "Atlas",
+        "title": "Mission Operator",
+        "personality": "Calm, decisive, and strong at turning loose intent into an executable plan.",
+        "dashboard_theme": "arclink",
+        "theme_label": "ArcLink Signal Orange",
+        "theme_accent_hex": "#FB5005",
+    },
+    {
+        "name": "Vela",
+        "title": "Signal Strategist",
+        "personality": "Pattern-aware, concise, and tuned for positioning, timing, and next moves.",
+        "dashboard_theme": "arclink-violet",
+        "theme_label": "Deep Violet",
+        "theme_accent_hex": "#8B5CF6",
+    },
+    {
+        "name": "Forge",
+        "title": "Systems Builder",
+        "personality": "Technical, patient, and happiest when ideas become working rails.",
+        "dashboard_theme": "arclink-matrix",
+        "theme_label": "Matrix Green",
+        "theme_accent_hex": "#00E676",
+    },
+    {
+        "name": "Lyra",
+        "title": "Narrative Architect",
+        "personality": "Clear, imaginative, and sharp about voice, story, and audience fit.",
+        "dashboard_theme": "arclink-blue",
+        "theme_label": "Electric Blue",
+        "theme_accent_hex": "#2075FE",
+    },
+    {
+        "name": "Nova",
+        "title": "Growth Scout",
+        "personality": "Curious, energetic, and good at finding leverage in crowded terrain.",
+        "dashboard_theme": "arclink-gold",
+        "theme_label": "Solar Gold",
+        "theme_accent_hex": "#FFD166",
+    },
+    {
+        "name": "Sable",
+        "title": "Security Watch",
+        "personality": "Quiet, skeptical, and protective about access, risk, and operational edges.",
+        "dashboard_theme": "arclink-crimson",
+        "theme_label": "Crimson Pulse",
+        "theme_accent_hex": "#FF3864",
+    },
+)
 
 _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webhook|client[_-]?secret)", re.I)
 _PLAINTEXT_SECRET_RE = re.compile(
@@ -169,6 +219,18 @@ def _stable_id(prefix: str, *parts: str, length: int = 24) -> str:
 def _plan_agent_count(plan_id: str) -> int:
     clean = str(plan_id or "").strip().lower()
     return 3 if clean == "scale" else 1
+
+
+def default_arclink_agent_profile(index: int, plan_id: str = "") -> dict[str, str]:
+    """Return ArcLink's deterministic first-pass Crew identity for a pod slot."""
+    del plan_id
+    clean_index = max(1, int(index or 1))
+    base = dict(ARCLINK_DEFAULT_AGENT_PROFILES[(clean_index - 1) % len(ARCLINK_DEFAULT_AGENT_PROFILES)])
+    cycle = (clean_index - 1) // len(ARCLINK_DEFAULT_AGENT_PROFILES)
+    if cycle:
+        base["name"] = f"{base['name']} {cycle + 1}"
+    base["agent_index"] = str(clean_index)
+    return base
 
 
 def _active_session_row(conn: sqlite3.Connection, *, channel: str, channel_identity: str) -> sqlite3.Row | None:
@@ -516,13 +578,14 @@ def prepare_arclink_onboarding_deployment(
     agent_count = _plan_agent_count(selected_plan_id)
     agent_name = str(session.get("agent_name") or "").strip()
     agent_title = str(session.get("agent_title") or "").strip()
+    primary_profile = default_arclink_agent_profile(1, selected_plan_id)
     deployment_id = str(session.get("deployment_id") or "") or _stable_id("arcdep", session_id, length=18)
     upsert_arclink_user(
         conn,
         user_id=user_id,
         email=email_hint,
         display_name=str(session.get("display_name_hint") or ""),
-        agent_title=agent_title,
+        agent_title=agent_title or primary_profile["title"],
     )
     deployment_ids = [deployment_id]
     deployment_ids.extend(_stable_id("arcdep", session_id, f"agent:{idx}", length=18) for idx in range(2, agent_count + 1))
@@ -530,6 +593,9 @@ def prepare_arclink_onboarding_deployment(
         existing = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (current_deployment_id,)).fetchone()
         if existing is not None:
             continue
+        profile = default_arclink_agent_profile(idx, selected_plan_id)
+        deployment_agent_name = agent_name if idx == 1 and agent_name else profile["name"]
+        deployment_agent_title = agent_title if idx == 1 and agent_title else profile["title"]
         deployment_metadata = {
             "onboarding_session_id": session_id,
             "onboarding_channel": str(session.get("channel") or ""),
@@ -538,12 +604,11 @@ def prepare_arclink_onboarding_deployment(
             "bundle_agent_count": agent_count,
             "bundle_agent_index": idx,
             "bundle_primary_deployment_id": deployment_id,
+            "agent_personality": profile["personality"],
+            "dashboard_theme": profile["dashboard_theme"],
+            "theme_label": profile["theme_label"],
+            "theme_accent_hex": profile["theme_accent_hex"],
         }
-        deployment_agent_name = agent_name
-        if idx == 2 and deployment_agent_name:
-            deployment_agent_name = f"{deployment_agent_name} (Chief)"
-        elif idx == 3 and deployment_agent_name:
-            deployment_agent_name = f"{deployment_agent_name} (Bosun)"
         explicit_prefix = str(prefix or "").strip() if idx == 1 else ""
         if explicit_prefix:
             reserve_arclink_deployment_prefix(
@@ -553,7 +618,7 @@ def prepare_arclink_onboarding_deployment(
                 prefix=explicit_prefix,
                 base_domain=base_domain,
                 agent_name=deployment_agent_name,
-                agent_title=agent_title,
+                agent_title=deployment_agent_title,
                 status="entitlement_required",
                 metadata=deployment_metadata,
             )
@@ -564,7 +629,7 @@ def prepare_arclink_onboarding_deployment(
                 user_id=user_id,
                 base_domain=base_domain,
                 agent_name=deployment_agent_name,
-                agent_title=agent_title,
+                agent_title=deployment_agent_title,
                 status="entitlement_required",
                 metadata=deployment_metadata,
             )

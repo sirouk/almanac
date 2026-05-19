@@ -156,8 +156,8 @@ def test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout() -> 
     stripe = adapters.FakeStripeClient()
 
     started = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:42", text="/start")
-    expect(started.action == "prompt_name", str(started))
-    expect("Founders or Scale" in started.reply, started.reply)
+    expect(started.action == "prompt_package", str(started))
+    expect("Founders Offer" in started.reply and "3X Scale Plan" in started.reply, started.reply)
     named = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -259,9 +259,9 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     package = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="Scale Buyer",
     )
-    expect(package.action == "prompt_agent_name", str(package))
+    expect(package.action == "prompt_package", str(package))
     package = capture_agent_identity(bots, conn, channel_identity="tg:scale", name="Vane", title="the navigator")
-    expect([b.label for b in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
+    expect([b.label for b in package.buttons] == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], str(package.buttons))
     expect(all(button.url and "/api/v1/onboarding/public-bot-checkout" in button.url for button in package.buttons), str(package.buttons))
     standard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="/packages standard",
@@ -270,7 +270,7 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     planned = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:scale", text="scale",
     )
-    expect("Scale is locked" in planned.reply, planned.reply)
+    expect("3X Scale Plan is locked" in planned.reply, planned.reply)
     expect("Three Agents live on ArcLink with Federation" in planned.reply, planned.reply)
 
     checkout = bots.handle_arclink_public_bot_turn(
@@ -310,10 +310,9 @@ def test_public_bot_founders_checkout_uses_founders_price() -> None:
     stripe = adapters.FakeStripeClient()
 
     bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:founders", text="/start", display_name_hint="Founder")
-    capture_agent_identity(bots, conn, channel_identity="tg:founders")
     planned = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:founders", text="/plan founders")
-    expect("Limited 100 Founders is locked" in planned.reply, planned.reply)
-    expect([b.label for b in planned.buttons] == ["Hire Founders - $149/month", "Change Package"], str(planned.buttons))
+    expect("Founders Offer is locked" in planned.reply, planned.reply)
+    expect([b.label for b in planned.buttons] == ["Fire Up Founders Offer - $149/month", "Change Package"], str(planned.buttons))
 
     checkout = bots.handle_arclink_public_bot_turn(
         conn,
@@ -328,7 +327,7 @@ def test_public_bot_founders_checkout_uses_founders_price() -> None:
     )
     checkout_session = stripe.checkout_sessions[checkout.checkout_url.rsplit("/", 1)[1]]
     expect(checkout_session["price_id"] == "price_founders_test", str(checkout_session))
-    expect(checkout.buttons[0].label == "Hire Founders - $149/month", str(checkout.buttons))
+    expect(checkout.buttons[0].label == "Fire Up Founders Offer - $149/month", str(checkout.buttons))
     session = conn.execute(
         "SELECT selected_plan_id FROM arclink_onboarding_sessions WHERE session_id = ?",
         (checkout.session_id,),
@@ -345,7 +344,6 @@ def test_public_bot_plan_selection_opens_checkout_when_stripe_is_available() -> 
     stripe = adapters.FakeStripeClient()
 
     bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:auto", text="/start", display_name_hint="Buyer")
-    capture_agent_identity(bots, conn, channel_identity="tg:auto")
     opened = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -361,7 +359,7 @@ def test_public_bot_plan_selection_opens_checkout_when_stripe_is_available() -> 
     expect("Finish the secure Stripe checkout below" in opened.reply, opened.reply)
     expect("Stage " not in opened.reply, opened.reply)
     expect(opened.buttons and opened.buttons[0].url == opened.checkout_url, str(opened.buttons))
-    expect([button.label for button in opened.buttons] == ["Hire Founders - $149/month"], str(opened.buttons))
+    expect([button.label for button in opened.buttons] == ["Fire Up Founders Offer - $149/month"], str(opened.buttons))
     checkout_session = stripe.checkout_sessions[opened.checkout_url.rsplit("/", 1)[1]]
     expect(checkout_session["price_id"] == "price_founders_test", str(checkout_session))
     row = conn.execute(
@@ -859,7 +857,8 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         text="/agents",
     )
     expect(roster.action == "show_agents", str(roster))
-    expect("Agent #prime: at helm" in roster.reply, roster.reply)
+    expect("Agent #prime - Mission Operator" in roster.reply, roster.reply)
+    expect("Helm: https://control.example.ts.net/u/arc-prime" in roster.reply, roster.reply)
     expect(any(button.command == "/add-agent" for button in roster.buttons), str(roster.buttons))
 
     upgrade = bots.handle_arclink_public_bot_turn(
@@ -998,8 +997,8 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
         channel_identity="tg:42",
         text="/agents",
     )
-    expect("Agent #prime: at helm" in roster_with_bob.reply, roster_with_bob.reply)
-    expect("Bob: ready" in roster_with_bob.reply, roster_with_bob.reply)
+    expect("Agent #prime - Mission Operator" in roster_with_bob.reply, roster_with_bob.reply)
+    expect("Bob - Signal Strategist" in roster_with_bob.reply, roster_with_bob.reply)
     soft_switched = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -1073,8 +1072,8 @@ def test_public_bot_retire_agent_preserves_state_and_stops_routing() -> None:
     conn.commit()
 
     roster = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/agents")
-    expect("Bob: ready" in roster.reply, roster.reply)
-    expect(any(button.command == "/retire-agent-bob" for button in roster.buttons), str(roster.buttons))
+    expect("Bob - Signal Strategist" in roster.reply, roster.reply)
+    expect(not any(button.command == "/retire-agent-bob" for button in roster.buttons), str(roster.buttons))
 
     switched = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/agent Bob")
     expect(switched.action == "switch_agent", str(switched))
@@ -1178,6 +1177,19 @@ def test_public_bot_retire_agent_confirmation_label_does_not_switch_helm() -> No
     session_meta = json.loads(session["metadata_json"])
     expect(session_meta.get("public_bot_workflow") == "retire_agent_final_confirm", str(session_meta))
     expect(session_meta.get("active_deployment_id") != "arcdep_retire_label_t587", str(session_meta))
+    roster = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-label",
+        text="/agents",
+    )
+    expect(roster.action == "show_agents", str(roster))
+    session = conn.execute(
+        "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (seeded["session_id"],),
+    ).fetchone()
+    session_meta = json.loads(session["metadata_json"])
+    expect("retire_agent" not in session_meta and "public_bot_workflow" not in session_meta, str(session_meta))
     print("PASS test_public_bot_retire_agent_confirmation_label_does_not_switch_helm")
 
 
@@ -1224,8 +1236,8 @@ def test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrou
         channel_identity="tg:selector",
         text="/agents",
     )
-    expect("- Jeff: at helm" in roster.reply, roster.reply)
-    expect("- Agent #t587: ready" in roster.reply, roster.reply)
+    expect("- Jeff - Jack of all trades" in roster.reply, roster.reply)
+    expect("- Agent #t587 - Signal Strategist" in roster.reply, roster.reply)
     expect(": active" not in roster.reply, roster.reply)
 
     by_label = bots.handle_arclink_public_bot_turn(
@@ -1670,7 +1682,7 @@ def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
         channel_identity="tg:alias",
         text="/start",
     )
-    expect("Starling here. ArcLink is in range." in started.reply, started.reply)
+    expect("Starling on the line, Captain." in started.reply, started.reply)
 
     try:
         bots.handle_arclink_public_bot_turn(
@@ -1890,7 +1902,7 @@ def main() -> int:
     test_public_bot_agent_label_does_not_use_user_display_name()
     test_public_bot_can_rename_and_retitle_live_agent()
     test_public_bot_can_update_wrapped_frequency()
-    test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
+    test_public_bot_greets_by_captured_display_name_and_offers_checkout_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
     print("PASS all 33 ArcLink public bot tests")
@@ -2248,11 +2260,10 @@ def test_public_bot_can_update_wrapped_frequency() -> None:
     print("PASS test_public_bot_can_update_wrapped_frequency")
 
 
-def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> None:
+def test_public_bot_greets_by_captured_display_name_and_offers_checkout_buttons() -> None:
     """The /start greeting must address the user by the name we picked up
-    from the channel profile (Telegram first_name, Discord global_name) and
-    offer exactly two buttons: Take Me Aboard and Update Name. No status
-    check button on the cold-open greeting. That has nothing to read yet.
+    from the channel profile (Telegram first_name, Discord global_name), then
+    offer package checkout lanes without asking for a separate onboarding name.
     """
     control = load_module("arclink_control.py", "arclink_control_public_bot_greet_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_greet_test")
@@ -2265,28 +2276,27 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         text="/start",
         display_name_hint="Chris",
     )
-    expect("Welcome aboard, Chris" in started.reply, f"expected greeting by name, got: {started.reply}")
-    expect("Founders or Scale" in started.reply, started.reply)
+    expect("Captain Chris" in started.reply, f"expected greeting by name, got: {started.reply}")
+    expect("Founders Offer" in started.reply and "3X Scale Plan" in started.reply, started.reply)
     labels = [b.label for b in started.buttons]
-    expect(labels == ["Take Me Aboard", "Update Name"], f"unexpected buttons: {labels}")
+    expect(labels == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], f"unexpected buttons: {labels}")
     expect("Check Status" not in labels, "no status-check on cold-open greeting")
-    expect("Update Name" in labels, "Update Name belongs on the cold-open greeting")
 
-    # Take Me Aboard opens the Agent identity lane before package choice.
+    # Take Me Aboard/packages opens package choice directly.
     aboard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:9001",
         text="/packages", display_name_hint="Chris",
     )
-    expect(aboard.action == "prompt_agent_name", str(aboard.action))
+    expect(aboard.action == "prompt_package", str(aboard.action))
     package = capture_agent_identity(bots, conn, channel_identity="tg:9001", name="Atlas", title="the right hand")
     expect(package.action == "prompt_package", str(package.action))
-    expect([b.label for b in package.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(package.buttons))
+    expect([b.label for b in package.buttons] == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], str(package.buttons))
     expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in package.buttons), str(package.buttons))
     aboard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:9001",
         text="/packages", display_name_hint="Chris",
     )
-    expect([b.label for b in aboard.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(aboard.buttons))
+    expect([b.label for b in aboard.buttons] == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], str(aboard.buttons))
     expect(all(b.url and "/api/v1/onboarding/public-bot-checkout" in b.url for b in aboard.buttons), str(aboard.buttons))
     standard = bots.handle_arclink_public_bot_turn(
         conn, channel="telegram", channel_identity="tg:9001",
@@ -2308,17 +2318,17 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
         text="Sirouk",
         display_name_hint="Chris",
     )
-    expect("Welcome aboard, Sirouk" in renamed.reply or renamed.action == "prompt_package", renamed.reply)
-    expect([b.label for b in renamed.buttons] == ["Founders $149/mo", "Scale $275/mo"], str(renamed.buttons))
+    expect("Captain Sirouk" in renamed.reply or renamed.action == "prompt_package", renamed.reply)
+    expect([b.label for b in renamed.buttons] == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], str(renamed.buttons))
 
     # If no display name was provided by the channel, the greeting falls back
     # to the generic line and the buttons are unchanged.
     fresh = bots.handle_arclink_public_bot_turn(
         conn, channel="discord", channel_identity="discord:9002", text="/start",
     )
-    expect("Raven here. ArcLink is in range." in fresh.reply, fresh.reply)
-    expect([b.label for b in fresh.buttons] == ["Take Me Aboard", "Update Name"], str(fresh.buttons))
-    print("PASS test_public_bot_greets_by_captured_display_name_and_offers_two_buttons")
+    expect("Raven on the line, Captain." in fresh.reply, fresh.reply)
+    expect([b.label for b in fresh.buttons] == ["Founders Offer $149/mo", "3X Scale Plan $275/mo"], str(fresh.buttons))
+    print("PASS test_public_bot_greets_by_captured_display_name_and_offers_checkout_buttons")
 
 
 def test_public_bot_new_onboarding_workflow_wins_over_retired_history() -> None:
@@ -2350,23 +2360,22 @@ def test_public_bot_new_onboarding_workflow_wins_over_retired_history() -> None:
         text="/packages",
         display_name_hint="Chris",
     )
-    expect(opened.action == "prompt_agent_name", str(opened))
-    named = bots.handle_arclink_public_bot_turn(
+    expect(opened.action == "prompt_package", str(opened))
+    planned = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
         channel_identity="tg:retired_history",
-        text="Atlas",
+        text="/plan founders",
         display_name_hint="Chris",
     )
-    expect(named.action == "prompt_agent_title", str(named))
-    expect("Give your Agent for Atlas a title" in named.reply, named.reply)
+    expect(planned.action in {"prompt_checkout", "open_checkout"}, str(planned))
     row = conn.execute(
         "SELECT session_id, agent_name, status, current_step FROM arclink_onboarding_sessions WHERE session_id = ?",
-        (named.session_id,),
+        (planned.session_id,),
     ).fetchone()
     expect(row["session_id"] != seeded["session_id"], str(dict(row)))
-    expect(row["agent_name"] == "Atlas", str(dict(row)))
-    expect(row["status"] == "collecting" and row["current_step"] == "agent_title", str(dict(row)))
+    expect(row["agent_name"] == "", str(dict(row)))
+    expect(row["status"] in {"collecting", "checkout_open"} and row["current_step"] in {"plan", "checkout"}, str(dict(row)))
     print("PASS test_public_bot_new_onboarding_workflow_wins_over_retired_history")
 
 

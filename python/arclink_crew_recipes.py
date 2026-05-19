@@ -13,6 +13,7 @@ from typing import Any, Mapping, Protocol
 from arclink_chutes import evaluate_chutes_deployment_boundary
 from arclink_control import append_arclink_audit, append_arclink_event, utc_now_iso
 from arclink_memory_synthesizer import UNSAFE_OUTPUT_PATTERNS
+from arclink_onboarding import default_arclink_agent_profile
 
 
 ALLOWED_CREW_PRESETS = {
@@ -48,6 +49,13 @@ CAPACITY_NOTES = {
     "development": "ship working systems through clear technical execution",
     "life coaching": "build momentum through reflective questions and accountable plans",
     "companionship": "stay present, useful, and warm without pretending to replace people",
+}
+CAPACITY_AGENT_TITLES = {
+    "sales": ("Revenue Operator", "Pipeline Scout", "Deal Systems Builder", "Account Signal Watch"),
+    "marketing": ("Market Signal Operator", "Campaign Architect", "Audience Researcher", "Brand Systems Builder"),
+    "development": ("Mission Operator", "Systems Builder", "Code Cartographer", "Release Watch"),
+    "life coaching": ("Momentum Coach", "Reflection Guide", "Routine Architect", "Accountability Watch"),
+    "companionship": ("Presence Guide", "Memory Companion", "Conversation Steward", "Care Signal Watch"),
 }
 TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "templates" / "CREW_RECIPE.md.tmpl"
 MAX_PROVIDER_ATTEMPTS = 3
@@ -178,6 +186,36 @@ def _pod_count_and_agents(deployments: list[Mapping[str, Any]]) -> tuple[int, st
         if title:
             titles.append(f"{label}: {title}" if label else title)
     return len(deployments), ", ".join(names), "; ".join(titles)
+
+
+def curated_crew_agent_profiles(
+    deployments: list[Mapping[str, Any]],
+    *,
+    preset: str,
+    capacity: str,
+) -> list[dict[str, str]]:
+    clean_preset = normalize_crew_preset(preset)
+    clean_capacity = normalize_crew_capacity(capacity)
+    titles = CAPACITY_AGENT_TITLES.get(clean_capacity, ())
+    profiles: list[dict[str, str]] = []
+    for index, deployment in enumerate(deployments, start=1):
+        base = default_arclink_agent_profile(index)
+        title = titles[index - 1] if index <= len(titles) else str(base["title"])
+        profiles.append(
+            {
+                "deployment_id": str(deployment.get("deployment_id") or ""),
+                "agent_name": str(base["name"]),
+                "agent_title": title,
+                "agent_personality": (
+                    f"{base['personality']} Crew Training tunes this Agent for "
+                    f"{CAPACITY_NOTES[clean_capacity]} in a {PRESET_NOTES[clean_preset]} posture."
+                ),
+                "dashboard_theme": str(base["dashboard_theme"]),
+                "theme_label": str(base["theme_label"]),
+                "theme_accent_hex": str(base["theme_accent_hex"]),
+            }
+        )
+    return profiles
 
 
 def deterministic_crew_recipe(
@@ -335,6 +373,8 @@ def preview_crew_recipe(
         capacity=clean_capacity,
         applied_at=now,
     )
+    crew_agents = curated_crew_agent_profiles(deployments, preset=clean_preset, capacity=clean_capacity)
+    fallback["soul_overlay"]["crew_agents"] = crew_agents
     effective_env = dict(os.environ if env is None else env)
     provider = _provider_context(conn, user_id=user_id, deployments=deployments, env=effective_env)
     pod_count, agent_names, agent_titles = _pod_count_and_agents(deployments)
@@ -431,6 +471,11 @@ def apply_crew_recipe(
     clean_actor = str(actor_id or clean_user_id).strip()
     now = str(preview["soul_overlay"]["applied_at"])
     recipe_id = _recipe_id()
+    crew_agents = [
+        dict(item)
+        for item in preview["soul_overlay"].get("crew_agents", [])
+        if isinstance(item, Mapping)
+    ]
     conn.execute(
         """
         UPDATE arclink_crew_recipes
@@ -458,6 +503,41 @@ def apply_crew_recipe(
             now,
         ),
     )
+    deployments = _deployment_rows(conn, clean_user_id)
+    profiles_by_deployment = {str(item.get("deployment_id") or ""): item for item in crew_agents}
+    for index, deployment in enumerate(deployments, start=1):
+        deployment_id = str(deployment.get("deployment_id") or "")
+        profile = profiles_by_deployment.get(deployment_id)
+        if profile is None:
+            profile = curated_crew_agent_profiles([deployment], preset=str(preview["soul_overlay"]["crew_preset"]), capacity=normalize_crew_capacity(capacity))[0]
+        metadata = _json_loads(str(deployment.get("metadata_json") or "{}"), {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.update(
+            {
+                "crew_recipe_id": recipe_id,
+                "crew_training_applied_at": now,
+                "agent_personality": str(profile.get("agent_personality") or ""),
+                "dashboard_theme": str(profile.get("dashboard_theme") or metadata.get("dashboard_theme") or ""),
+                "theme_label": str(profile.get("theme_label") or metadata.get("theme_label") or ""),
+                "theme_accent_hex": str(profile.get("theme_accent_hex") or metadata.get("theme_accent_hex") or ""),
+            }
+        )
+        conn.execute(
+            """
+            UPDATE arclink_deployments
+            SET agent_name = ?, agent_title = ?, metadata_json = ?, updated_at = ?
+            WHERE deployment_id = ? AND user_id = ?
+            """,
+            (
+                str(profile.get("agent_name") or deployment.get("agent_name") or ""),
+                str(profile.get("agent_title") or deployment.get("agent_title") or ""),
+                _json_dumps(metadata),
+                now,
+                deployment_id,
+                clean_user_id,
+            ),
+        )
     conn.execute(
         """
         UPDATE arclink_users

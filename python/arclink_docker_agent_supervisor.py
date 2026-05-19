@@ -147,15 +147,28 @@ def active_agents(cfg: Config) -> list[dict[str, Any]]:
               a.display_name,
               a.hermes_home,
               a.channels_json,
-              COALESCE(NULLIF(ai.agent_name, ''), a.display_name, a.unix_user) AS agent_label,
-              COALESCE(NULLIF(ai.human_display_name, ''), a.unix_user) AS user_label
+              COALESCE(NULLIF(d.agent_name, ''), NULLIF(ai.agent_name, ''), a.display_name, a.unix_user) AS agent_label,
+              COALESCE(NULLIF(ai.human_display_name, ''), a.unix_user) AS user_label,
+              COALESCE(NULLIF(d.agent_title, ''), '') AS agent_title,
+              COALESCE(d.metadata_json, '{}') AS deployment_metadata_json
             FROM agents a
             LEFT JOIN agent_identity ai ON ai.agent_id = a.agent_id
+            LEFT JOIN arclink_deployments d ON d.agent_id = a.agent_id
             WHERE a.role = 'user' AND a.status = 'active'
             ORDER BY a.agent_id
             """
         ).fetchall()
-    return [dict(row) for row in rows]
+    agents: list[dict[str, Any]] = []
+    for row in rows:
+        agent = dict(row)
+        metadata = json_loads(str(agent.pop("deployment_metadata_json") or "{}"), {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        agent["dashboard_theme"] = str(metadata.get("dashboard_theme") or "")
+        agent["theme_label"] = str(metadata.get("theme_label") or "")
+        agent["theme_accent_hex"] = str(metadata.get("theme_accent_hex") or "")
+        agents.append(agent)
+    return agents
 
 
 def home_from_hermes(hermes_home: Path) -> Path:
@@ -200,6 +213,11 @@ def user_env(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: Path) 
             "CODE_WORKSPACE_ROOT": str(workspace_root),
             "TERMINAL_WORKSPACE_ROOT": str(workspace_root),
             "ARCLINK_AGENT_ID": str(agent["agent_id"]),
+            "ARCLINK_DASHBOARD_AGENT_LABEL": str(agent.get("agent_label") or agent["agent_id"]),
+            "ARCLINK_DASHBOARD_AGENT_TITLE": str(agent.get("agent_title") or ""),
+            "ARCLINK_DASHBOARD_THEME": str(agent.get("dashboard_theme") or ""),
+            "ARCLINK_DASHBOARD_THEME_LABEL": str(agent.get("theme_label") or ""),
+            "ARCLINK_DASHBOARD_ACCENT_HEX": str(agent.get("theme_accent_hex") or ""),
         }
     )
     return env

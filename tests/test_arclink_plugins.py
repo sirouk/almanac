@@ -1144,6 +1144,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect('"selection"' in body and "Trash Selected" in body and "Restore Selected" in body, "Drive selected group context menu should expose batch actions")
     expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
     expect("function previewKind(item)" in body and 'api("/preview?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/preview routes")
+    expect("function renderMarkdownPreview(content)" in body and "hermes-drive-markdown-preview" in body, "Drive UI should render Markdown previews instead of raw preformatted text")
     expect("function itemKey(item)" in body and "state.selectedPaths[itemKey(item)]" in body, "Drive UI row rendering should not call an undefined selection key helper")
     selection_block = body.split("function selectListItem", 1)[1].split("function handleListItemClick", 1)[0]
     expect("let next = (additive || ranged)" in selection_block, "Drive shift-range selection should extend existing selected paths")
@@ -1605,6 +1606,7 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
         and "loadItems(item.path, root);" in body,
         "Code Explorer deferred single-click should still load folder contents when no double-click follows",
     )
+    expect("expanded[pathKey(root || itemRoot(item), item.path)] = true;" in body, "Code Explorer single-click should immediately expand folders")
     expect("toggleExplorerNode(item.path, root);" in explorer_block, "Code Explorer double-click should toggle folder expansion")
     expect("openItem(item, true);" in explorer_block, "Code Explorer double-click should still pin/open files")
     expect("hermes-code-preview-fullscreen" in body and "Markdown Preview" in body, "Code previews should be expandable and include markdown rendering")

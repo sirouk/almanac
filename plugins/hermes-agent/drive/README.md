@@ -31,14 +31,15 @@ Hermes `v2026.4.30` or newer.
 - Right-click share-link creation is not exposed from Drive until a live
   ArcLink browser broker or approved Nextcloud-backed adapter is enabled.
   Agents can use the governed ArcLink MCP `shares.request` rail for named
-  Vault/Workspace paths when that path is appropriate.
+  Vault/Workspace paths and brokered Notion/SSOT subtrees when that path is
+  appropriate.
 - Linked is read-only: browse, search, preview, and download are allowed;
   upload, rename, move, delete, restore, and sharing are disabled. Copy and
   duplicate from Linked create a new owned copy in Vault or Workspace and do not
   grant resharing on the original linked resource.
 - Delete moves local files into `.drive-trash`.
-- Text, Markdown, PDF, image, audio, and video previews render in place when
-  browser-supported.
+- Text, Markdown, JSON, CSV/TSV, PDF, image, audio, video, and browser-native
+  file previews render in place when browser-supported.
 
 ## Check
 

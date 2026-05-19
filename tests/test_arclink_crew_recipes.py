@@ -153,6 +153,35 @@ def test_provider_success_and_unsafe_retry_fallback() -> None:
     print("PASS test_provider_success_and_unsafe_retry_fallback")
 
 
+def test_operator_configured_provider_can_train_without_deployment_boundary() -> None:
+    control = load_module("arclink_control.py", "arclink_control_crew_external_provider_test")
+    crew = load_module("arclink_crew_recipes.py", "arclink_crew_external_provider_test")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seeded = seed_user_and_deployments(control, conn, tmpdir, provider_ready=False)
+        safe_client = FakeRecipeClient(['{"recipe_text":"The Crew should run tight discovery loops and ship one useful artifact per day."}'])
+        preview = crew.preview_crew_recipe(
+            conn,
+            user_id=seeded["user_id"],
+            role="founder",
+            mission="launch an agent product",
+            treatment="Captain",
+            preset="Frontier",
+            capacity="development",
+            provider_client=safe_client,
+            env={
+                "ARCLINK_CREW_RECIPE_ENDPOINT": "https://llm.example.test/v1",
+                "ARCLINK_CREW_RECIPE_MODEL": "crew/recipe-model",
+            },
+        )
+        expect(preview["mode"] == "provider", str(preview))
+        expect(preview["provider_deployment_id"] == "crew-recipe-provider", str(preview))
+        expect(preview["model"] == "crew/recipe-model", str(preview))
+        expect("one useful artifact per day" in preview["recipe_text"], str(preview))
+        expect(len(safe_client.calls) == 1, str(safe_client.calls))
+    print("PASS test_operator_configured_provider_can_train_without_deployment_boundary")
+
+
 def test_confirm_archives_prior_audits_and_projects_overlay_without_memory_writes() -> None:
     control = load_module("arclink_control.py", "arclink_control_crew_confirm_test")
     crew = load_module("arclink_crew_recipes.py", "arclink_crew_confirm_test")
@@ -239,5 +268,6 @@ def test_whats_changed_diff() -> None:
 if __name__ == "__main__":
     test_validation_and_deterministic_fallback()
     test_provider_success_and_unsafe_retry_fallback()
+    test_operator_configured_provider_can_train_without_deployment_boundary()
     test_confirm_archives_prior_audits_and_projects_overlay_without_memory_writes()
     test_whats_changed_diff()

@@ -546,6 +546,8 @@
 .hermes-drive-text-preview,
 .hermes-drive-markdown-preview,
 .hermes-drive-pdf-preview,
+.hermes-drive-browser-preview,
+.hermes-drive-table-preview,
 .hermes-drive-media-preview {
   background: color-mix(in srgb, var(--background-base) 94%, #111);
   border: 1px solid color-mix(in srgb, var(--midground-base) 12%, transparent);
@@ -633,6 +635,41 @@
   width: 100%;
 }
 
+.hermes-drive-browser-preview {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.hermes-drive-table-preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.hermes-drive-table-preview table {
+  border-collapse: collapse;
+  font-size: 0.76rem;
+  min-width: 100%;
+}
+
+.hermes-drive-table-preview th,
+.hermes-drive-table-preview td {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 12%, transparent);
+  max-width: 22rem;
+  overflow: hidden;
+  padding: 0.42rem 0.5rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-drive-table-preview th {
+  background: color-mix(in srgb, var(--accent-base, #ff6a3d) 12%, transparent);
+  color: color-mix(in srgb, var(--midground-base) 92%, var(--background-base));
+}
+
 .hermes-drive-media-preview {
   display: block;
   flex: 1 1 auto;
@@ -665,6 +702,8 @@
 .hermes-drive-preview-fullscreen .hermes-drive-text-preview,
 .hermes-drive-preview-fullscreen .hermes-drive-markdown-preview,
 .hermes-drive-preview-fullscreen .hermes-drive-pdf-preview,
+.hermes-drive-preview-fullscreen .hermes-drive-browser-preview,
+.hermes-drive-preview-fullscreen .hermes-drive-table-preview,
 .hermes-drive-preview-fullscreen .hermes-drive-media-preview,
 .hermes-drive-preview-fullscreen .hermes-drive-preview-empty {
   flex: 1 1 auto;

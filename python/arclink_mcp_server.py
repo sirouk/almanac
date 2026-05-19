@@ -82,7 +82,7 @@ TOOLS = {
     "vault.search-and-fetch": "Fast bounded search of shared/private vault knowledge and fetched text for top hits. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default and does not rerank. A leading Markdown YAML metadata block stays inline in text when fetched from the top and is also duplicated into metadata when present.",
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload used by the managed-context plugin, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
-    "shares.request": "Request a read-only Drive/Code share for one of the caller's Vault or Workspace paths. The request stays pending for owner approval, then recipient acceptance, and never shares Linked resources onward.",
+    "shares.request": "Request a read-only Drive/Code share or Notion subtree share. The request stays pending for owner approval, then recipient acceptance, and never shares Linked resources onward.",
     "pod_comms.list": "List the caller's Pod Comms inbox/outbox for one authenticated deployment. Results are scoped to the caller's own deployment.",
     "pod_comms.send": "Send a Pod Comms message from the caller's deployment. Same-Captain Crew messages are allowed; cross-Captain messages require an active pod_comms share grant.",
     "pod_comms.share-file": "Create a Drive/Code share-grant reference that can be attached to Pod Comms after the recipient accepts it. Raw files are never embedded in message bodies.",
@@ -336,9 +336,10 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "recipient_user_id": {"type": "string", "description": "ArcLink recipient user id. Use this when already known."},
             "recipient_email": {"type": "string", "description": "Recipient ArcLink account email. Used only to resolve an existing user."},
             "recipient_deployment_id": {"type": "string", "description": "Target deployment id. Required for same-account agent-to-agent shares."},
-            "resource_kind": {"type": "string", "enum": ["drive", "code"], "description": "Surface that owns the named resource."},
-            "resource_root": {"type": "string", "enum": ["vault", "workspace"], "description": "Origin root. Linked resources cannot be reshared."},
+            "resource_kind": {"type": "string", "enum": ["drive", "code", "notion"], "description": "Surface that owns the named resource."},
+            "resource_root": {"type": "string", "enum": ["vault", "workspace", "ssot", "notion"], "description": "Origin root. Linked resources cannot be reshared."},
             "resource_path": {"type": "string", "minLength": 1, "description": "Named file or directory path under the selected root."},
+            "inherit_subpages": {"type": "boolean", "default": True, "description": "For Notion/SSOT shares, include inherited subpages in the brokered subtree."},
             "display_name": {"type": "string", "description": "Optional human label for the approval prompt."},
             "deployment_id": {"type": "string", "description": "Optional deployment id when the caller has multiple linked deployments."},
             "actor": ACTOR_PROP,
@@ -1002,6 +1003,8 @@ def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, A
         "owner_deployment_id": owner["deployment_id"],
         "actor": str(arguments.get("actor") or agent_id),
     }
+    if str(arguments.get("resource_kind") or "").strip().lower() == "notion":
+        metadata["inherit_subpages"] = _bool_arg(arguments, "inherit_subpages", default=True)
     result = create_user_share_grant_for_owner(
         conn,
         owner_user_id=owner["user_id"],
@@ -1020,8 +1023,8 @@ def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, A
         "ok": True,
         "agent_id": agent_id,
         "deployment_id": owner["deployment_id"],
-        "approval_required": True,
-        "recipient_acceptance_required": True,
+        "approval_required": str(result.payload.get("grant", {}).get("status") or "") != "accepted",
+        "recipient_acceptance_required": str(result.payload.get("grant", {}).get("status") or "") != "accepted",
         "linked_root": "Linked",
         "reshare_allowed": False,
         "copy_duplicate_policy": "policy_question",

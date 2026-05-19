@@ -381,6 +381,27 @@ def test_agent_share_request_tool_creates_scoped_pending_grant() -> None:
     expect(same_grant["recipient_deployment_id"] == "arcdep_share_owner_second", str(same_grant))
     expect(same_account["owner_notification"]["reason"] == "same_account_auto_accepted", str(same_account))
 
+    notion = mod._create_agent_share_request(
+        conn,
+        {
+            "token": token_payload["raw_token"],
+            "recipient_email": "recipient@example.test",
+            "resource_kind": "notion",
+            "resource_root": "ssot",
+            "resource_path": "/ArcLink HQ/Launch OS",
+            "display_name": "Launch OS",
+            "inherit_subpages": True,
+        },
+    )
+    notion_grant = notion["grant"]
+    expect(notion_grant["resource_kind"] == "notion", str(notion_grant))
+    expect(notion_grant["resource_root"] == "ssot", str(notion_grant))
+    expect(notion_grant["status"] == "pending_owner_approval", str(notion_grant))
+    notion_stored = conn.execute("SELECT metadata_json FROM arclink_share_grants WHERE grant_id = ?", (notion_grant["grant_id"],)).fetchone()
+    notion_metadata = json.loads(notion_stored["metadata_json"])
+    expect(notion_metadata["inherit_subpages"] is True, notion_metadata)
+    expect(notion_metadata["notion_share_model"] == "brokered_ssot_subtree", notion_metadata)
+
     try:
         mod._create_agent_share_request(
             conn,

@@ -1145,6 +1145,8 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("function extensionColor(item)" in body and "long-ext" in body, "Drive file icons should derive compact, readable extension colors")
     expect("function previewKind(item)" in body and 'api("/preview?path="' in body and 'api("/content?path="' in body, "Drive UI should preview text and rich media through content/preview routes")
     expect("function renderMarkdownPreview(content)" in body and "hermes-drive-markdown-preview" in body, "Drive UI should render Markdown previews instead of raw preformatted text")
+    expect("function renderJsonPreview(content)" in body and "function renderDelimitedPreview(content, kind)" in body, "Drive UI should render JSON and CSV/TSV previews with specialized views")
+    expect("hermes-drive-browser-preview" in body and 'return "browser"' in body, "Drive UI should fall back to browser-native previews for safe file types")
     expect("function itemKey(item)" in body and "state.selectedPaths[itemKey(item)]" in body, "Drive UI row rendering should not call an undefined selection key helper")
     selection_block = body.split("function selectListItem", 1)[1].split("function handleListItemClick", 1)[0]
     expect("let next = (additive || ranged)" in selection_block, "Drive shift-range selection should extend existing selected paths")
@@ -1171,7 +1173,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect(".hermes-drive-fileicon.long-ext" in style and "max-width: 1.02rem" in style, "Drive CSS should keep long extension labels inside file icons")
     expect(".hermes-drive-content.has-selection .hermes-drive-items" in style, "Drive CSS should keep selected-item previews visible")
     expect("z-index: 2147483000" in style, "Drive fullscreen preview should sit above the Hermes nav")
-    expect(".hermes-drive-pdf-preview" in style and ".hermes-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
+    expect(".hermes-drive-pdf-preview" in style and ".hermes-drive-browser-preview" in style and ".hermes-drive-table-preview" in style and ".hermes-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
     expect(".hermes-drive-selection-actions" in style and "flex-wrap: nowrap" in style, "Drive selected actions should stay on one row under the count")
     expect(".hermes-drive-destination" in style and ".hermes-drive-destination-body" in style, "Drive CSS should style the destination picker modal")
     expect("@media (max-width: 900px)" in style and ".hermes-drive-destination-body" in style and "grid-template-columns: 1fr;" in style, "Drive destination picker should collapse on mobile")
@@ -2161,12 +2163,21 @@ def test_arclink_managed_context_plugin_registers_hook_and_uses_local_revision()
                 {
                     "agent_label": "Guide",
                     "agent_title": "the research lead",
+                    "agent_personality": "Direct, careful, and tuned for research synthesis.",
                     "user_name": "Kora Reed",
                     "org_name": "Acme Labs",
                     "org_mission": "Make serious research more legible and actionable.",
                     "org_primary_project": "Hermes deployment lane",
                     "org_timezone": "America/New_York",
                     "org_quiet_hours": "22:00-08:00 weekdays",
+                    "crew_preset": "Frontier",
+                    "crew_capacity": "Development",
+                    "captain_role": "founder",
+                    "captain_mission": "launch the research lane",
+                    "captain_treatment": "Captain Kora",
+                    "crew_recipe_text": "Operate as a focused research crew and ship daily findings.",
+                    "theme_label": "ArcLink Cyan",
+                    "theme_accent_hex": "#00f5ff",
                 },
                 indent=2,
                 sort_keys=True,
@@ -2218,6 +2229,10 @@ def test_arclink_managed_context_plugin_registers_hook_and_uses_local_revision()
             expect("Vault update: Projects" in first["context"], first["context"])
             expect("[local:identity]" in first["context"], first["context"])
             expect('"agent_title": "the research lead"' in first["context"], first["context"])
+            expect('"agent_personality": "Direct, careful, and tuned for research synthesis."' in first["context"], first["context"])
+            expect('"crew_recipe": "Operate as a focused research crew and ship daily findings."' in first["context"], first["context"])
+            expect('"captain_treatment": "Captain Kora"' in first["context"], first["context"])
+            expect('"theme_accent": "#00f5ff"' in first["context"], first["context"])
             expect('"quiet_hours": "22:00-08:00 weekdays"' in first["context"], first["context"])
             expect("[local:model-runtime]" in first["context"], first["context"])
             expect("Current turn model (authoritative): test-model" in first["context"], first["context"])

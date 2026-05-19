@@ -54,7 +54,7 @@ _SECTION_LIMITS = {
     "model-runtime": 1000,
     "resource-ref-live": 700,
     "recent-events": 1200,
-    "identity": 900,
+    "identity": 1800,
 }
 _RECALL_BUDGET_ALIASES = {
     "": "mid",
@@ -1407,6 +1407,7 @@ def _identity_payload(payload: dict[str, object]) -> dict[str, str]:
     field_map = (
         ("agent_label", "public_bot_name"),
         ("agent_title", "agent_title"),
+        ("agent_personality", "agent_personality"),
         ("user_name", "user"),
         ("human_display_name", "profile_user"),
         ("preferred_name", "preferred_name"),
@@ -1420,6 +1421,15 @@ def _identity_payload(payload: dict[str, object]) -> dict[str, str]:
         ("org_timezone", "timezone"),
         ("org_quiet_hours", "quiet_hours"),
         ("org_profile_revision", "org_profile_revision"),
+        ("crew_preset", "crew_preset"),
+        ("crew_capacity", "crew_capacity"),
+        ("captain_role", "captain_role"),
+        ("captain_mission", "captain_mission"),
+        ("captain_treatment", "captain_treatment"),
+        ("crew_recipe_text", "crew_recipe"),
+        ("theme_label", "theme_label"),
+        ("theme_accent_hex", "theme_accent"),
+        ("dashboard_theme", "dashboard_theme"),
     )
     identity: dict[str, str] = {}
     for key, label in field_map:

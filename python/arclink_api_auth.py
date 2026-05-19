@@ -2182,6 +2182,35 @@ def _share_approval_button_extra(*, channel: str, grant_id: str) -> dict[str, An
     return {}
 
 
+def _share_accept_button_extra(*, channel: str, grant_id: str) -> dict[str, Any]:
+    accept_command = f"/share-accept {grant_id}"
+    if channel == "telegram":
+        return {
+            "telegram_reply_markup": {
+                "inline_keyboard": [[
+                    {"text": "Accept Share", "callback_data": f"arclink:/raven accept {grant_id}"},
+                ]]
+            }
+        }
+    if channel == "discord":
+        return {
+            "discord_components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 1,
+                            "label": "Accept Share",
+                            "custom_id": f"arclink:{accept_command}",
+                        },
+                    ],
+                }
+            ]
+        }
+    return {}
+
+
 def _queue_share_grant_owner_notification(
     conn: sqlite3.Connection,
     *,
@@ -2246,6 +2275,74 @@ def _queue_share_grant_owner_notification(
         subject_kind="share_grant",
         subject_id=grant_id,
         event_type="share_grant_owner_notification_queued",
+        metadata={"channel": channel, "notification_id": notification_id},
+    )
+    return {"queued": True, "channel": channel, "notification_id": notification_id}
+
+
+def queue_share_grant_recipient_notification(
+    conn: sqlite3.Connection,
+    *,
+    grant: Mapping[str, Any],
+) -> dict[str, Any]:
+    recipient_user = str(grant.get("recipient_user_id") or "").strip()
+    grant_id = str(grant.get("grant_id") or "").strip()
+    if not recipient_user or not grant_id:
+        return {"queued": False, "reason": "missing_recipient_or_grant"}
+    row = conn.execute(
+        """
+        SELECT channel, channel_identity
+        FROM arclink_onboarding_sessions
+        WHERE user_id = ?
+          AND LOWER(channel) IN ('telegram', 'discord')
+          AND channel_identity != ''
+        ORDER BY
+          CASE WHEN deployment_id != '' THEN 0 ELSE 1 END,
+          updated_at DESC,
+          created_at DESC,
+          session_id DESC
+        LIMIT 1
+        """,
+        (recipient_user,),
+    ).fetchone()
+    if row is None:
+        return {"queued": False, "reason": "no_public_channel"}
+
+    channel = str(row["channel"] or "").strip().lower()
+    target = str(row["channel_identity"] or "").strip()
+    if channel not in {"telegram", "discord"} or not target:
+        return {"queued": False, "reason": "unsupported_public_channel"}
+
+    resource_label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource").strip()
+    resource_kind = str(grant.get("resource_kind") or "").strip().lower()
+    resource_root = str(grant.get("resource_root") or "").strip()
+    resource_path = str(grant.get("resource_path") or "").strip()
+    inherited = " with inherited subpages" if resource_kind == "notion" else ""
+    message = (
+        "Raven share ready.\n\n"
+        f"The owner approved read-only access to `{resource_label}` from `{resource_root}:{resource_path}`{inherited}.\n\n"
+        "Accept to add it to your Linked resources. Linked resources stay read-only and cannot be reshared."
+    )
+    notification_id = queue_notification(
+        conn,
+        target_kind="public-bot-user",
+        target_id=target,
+        channel_kind=channel,
+        message=message,
+        extra={
+            "share_grant_id": grant_id,
+            "owner_user_id": str(grant.get("owner_user_id") or ""),
+            "resource_kind": resource_kind,
+            "resource_root": resource_root,
+            "resource_path": resource_path,
+            **_share_accept_button_extra(channel=channel, grant_id=grant_id),
+        },
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_grant",
+        subject_id=grant_id,
+        event_type="share_grant_recipient_notification_queued",
         metadata={"channel": channel, "notification_id": notification_id},
     )
     return {"queued": True, "channel": channel, "notification_id": notification_id}
@@ -2784,7 +2881,8 @@ def approve_user_share_grant_api(
     )
     conn.commit()
     grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
-    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+    recipient_notification = queue_share_grant_recipient_notification(conn, grant=grant)
+    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant), "recipient_notification": recipient_notification})
 
 
 def deny_user_share_grant_api(
@@ -2828,25 +2926,22 @@ def deny_user_share_grant_api(
     return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
 
 
-def accept_user_share_grant_api(
+def accept_share_grant_for_recipient(
     conn: sqlite3.Connection,
     *,
-    session_id: str,
-    session_token: str,
-    csrf_token: str,
+    recipient_user_id: str,
     grant_id: str,
-) -> ArcLinkApiResponse:
-    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
-    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
-    expire_revealable_user_material(conn)
-    recipient = str(session["user_id"] or "")
+    actor_id: str = "",
+    reason: str = "recipient accepted read-only linked resource",
+    commit: bool = True,
+) -> dict[str, Any]:
+    recipient = str(recipient_user_id or "").strip()
     clean_grant = str(grant_id or "").strip()
     row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
     if row is None or str(row["recipient_user_id"] or "") != recipient:
         raise ArcLinkApiAuthError("ArcLink user session cannot accept another user's share")
     if str(row["status"] or "") == "accepted":
-        grant = rowdict(row)
-        return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+        return _public_share_grant(rowdict(row))
     if str(row["status"] or "") != "approved":
         raise ArcLinkApiAuthError("ArcLink share is not ready to accept")
     now = utc_now_iso()
@@ -2862,15 +2957,32 @@ def accept_user_share_grant_api(
     append_arclink_audit(
         conn,
         action="share_grant_accepted",
-        actor_id=recipient,
+        actor_id=str(actor_id or recipient).strip(),
         target_kind="share_grant",
         target_id=clean_grant,
-        reason="recipient accepted read-only linked resource",
+        reason=reason,
         commit=False,
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
-    return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+    return _public_share_grant(grant)
+
+
+def accept_user_share_grant_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    grant_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
+    recipient = str(session["user_id"] or "")
+    grant = accept_share_grant_for_recipient(conn, recipient_user_id=recipient, grant_id=grant_id, actor_id=recipient)
+    return ArcLinkApiResponse(status=200, payload={"grant": grant})
 
 
 def revoke_user_share_grant_api(

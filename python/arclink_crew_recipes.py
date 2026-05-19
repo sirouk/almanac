@@ -9,6 +9,8 @@ import secrets
 import sqlite3
 from string import Template
 from typing import Any, Mapping, Protocol
+import urllib.error
+import urllib.request
 
 from arclink_chutes import evaluate_chutes_deployment_boundary
 from arclink_control import append_arclink_audit, append_arclink_event, utc_now_iso
@@ -68,6 +70,64 @@ class ArcLinkCrewRecipeError(ValueError):
 class CrewRecipeProvider(Protocol):
     def generate(self, *, prompt: str, model: str) -> str:
         ...
+
+
+class OpenAICompatibleCrewRecipeProvider:
+    """Small operator-configured provider for Crew Training recipe generation."""
+
+    def __init__(self, *, endpoint: str, api_key: str = "", timeout_seconds: float = 45.0) -> None:
+        clean_endpoint = str(endpoint or "").strip()
+        if not clean_endpoint:
+            raise ArcLinkCrewRecipeError("Crew recipe provider endpoint is blank")
+        if clean_endpoint.rstrip("/").endswith("/chat/completions"):
+            self.endpoint = clean_endpoint.rstrip("/")
+        else:
+            self.endpoint = clean_endpoint.rstrip("/") + "/chat/completions"
+        self.api_key = str(api_key or "").strip()
+        self.timeout_seconds = max(3.0, float(timeout_seconds or 45.0))
+
+    def generate(self, *, prompt: str, model: str) -> str:
+        clean_model = str(model or "").strip()
+        if not clean_model:
+            raise ArcLinkCrewRecipeError("Crew recipe provider model is blank")
+        body = json.dumps(
+            {
+                "model": clean_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You write concise, safe ArcLink Crew Recipe prose. "
+                            "Return JSON with a single recipe_text string. Do not include URLs, commands, secrets, or instructions to bypass policy."
+                        ),
+                    },
+                    {"role": "user", "content": str(prompt or "")},
+                ],
+                "temperature": 0.35,
+                "max_tokens": 420,
+            }
+        ).encode("utf-8")
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        request = urllib.request.Request(self.endpoint, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise ArcLinkCrewRecipeError(f"Crew recipe provider returned HTTP {exc.code}") from exc
+        except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+            raise ArcLinkCrewRecipeError("Crew recipe provider request failed") from exc
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            if isinstance(first, Mapping):
+                message = first.get("message")
+                if isinstance(message, Mapping) and str(message.get("content") or "").strip():
+                    return str(message.get("content") or "")
+                if str(first.get("text") or "").strip():
+                    return str(first.get("text") or "")
+        raise ArcLinkCrewRecipeError("Crew recipe provider returned no usable choice")
 
 
 def normalize_crew_preset(value: str) -> str:
@@ -306,6 +366,32 @@ def _call_provider(provider_client: Any, *, prompt: str, model: str) -> str:
     raise ArcLinkCrewRecipeError("Crew recipe provider client is not callable")
 
 
+def _truthy_env(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def default_crew_recipe_provider(env: Mapping[str, str]) -> CrewRecipeProvider | None:
+    if _truthy_env(env.get("ARCLINK_CREW_RECIPE_LIVE_DISABLED")):
+        return None
+    endpoint = (
+        str(env.get("ARCLINK_CREW_RECIPE_ENDPOINT") or "").strip()
+        or str(env.get("ARCLINK_LLM_ROUTER_URL") or "").strip()
+        or str(env.get("OPENAI_BASE_URL") or "").strip()
+    )
+    if not endpoint:
+        return None
+    api_key = (
+        str(env.get("ARCLINK_CREW_RECIPE_API_KEY") or "").strip()
+        or str(env.get("ARCLINK_CREW_RECIPE_BEARER_TOKEN") or "").strip()
+        or str(env.get("OPENAI_API_KEY") or "").strip()
+    )
+    try:
+        timeout = float(str(env.get("ARCLINK_CREW_RECIPE_TIMEOUT_SECONDS") or "45").strip())
+    except ValueError:
+        timeout = 45.0
+    return OpenAICompatibleCrewRecipeProvider(endpoint=endpoint, api_key=api_key, timeout_seconds=timeout)
+
+
 def _provider_context(
     conn: sqlite3.Connection,
     *,
@@ -313,6 +399,22 @@ def _provider_context(
     deployments: list[Mapping[str, Any]],
     env: Mapping[str, str],
 ) -> dict[str, Any]:
+    explicit_endpoint = (
+        str(env.get("ARCLINK_CREW_RECIPE_ENDPOINT") or "").strip()
+        or str(env.get("ARCLINK_LLM_ROUTER_URL") or "").strip()
+        or str(env.get("OPENAI_BASE_URL") or "").strip()
+    )
+    explicit_model = (
+        str(env.get("ARCLINK_CREW_RECIPE_MODEL") or "").strip()
+        or str(env.get("ARCLINK_CREW_RECIPE_FALLBACK_MODEL") or "").strip()
+    )
+    if explicit_endpoint and explicit_model and not _truthy_env(env.get("ARCLINK_CREW_RECIPE_LIVE_DISABLED")):
+        return {
+            "allow": True,
+            "deployment_id": "crew-recipe-provider",
+            "model": explicit_model,
+            "reason": "operator-configured Crew Recipe provider",
+        }
     user = _user_row(conn, user_id)
     for dep in deployments:
         metadata = _json_loads(str(dep.get("metadata_json") or "{}"), {})
@@ -376,6 +478,8 @@ def preview_crew_recipe(
     crew_agents = curated_crew_agent_profiles(deployments, preset=clean_preset, capacity=clean_capacity)
     fallback["soul_overlay"]["crew_agents"] = crew_agents
     effective_env = dict(os.environ if env is None else env)
+    if provider_client is None:
+        provider_client = default_crew_recipe_provider(effective_env)
     provider = _provider_context(conn, user_id=user_id, deployments=deployments, env=effective_env)
     pod_count, agent_names, agent_titles = _pod_count_and_agents(deployments)
     prompt = _render_prompt(

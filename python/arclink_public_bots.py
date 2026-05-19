@@ -12,9 +12,11 @@ from urllib.parse import urlencode
 
 from arclink_api_auth import (
     ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS,
+    accept_share_grant_for_recipient,
     check_arclink_rate_limit,
     _dashboard_password_ref_for_handoff,
     expire_revealable_user_material,
+    queue_share_grant_recipient_notification,
     _resolve_revealable_credential_secret,
     _stable_handoff_id,
 )
@@ -239,7 +241,7 @@ ARCLINK_PUBLIC_BOT_ADD_AGENT_ANCHOR_STATUSES = (
 )
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
-ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny)\s+(share_[0-9a-f]{32})$")
+ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny|accept)\s+(share_[0-9a-f]{32})$")
 ARCLINK_PUBLIC_BOT_CREDENTIAL_TARGET_PREFIXES = (
     "/credentials ",
     "/credential ",
@@ -679,6 +681,8 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return f"/share-approve {tail}".strip()
     if verb in {"deny", "share_deny", "share-deny"}:
         return f"/share-deny {tail}".strip()
+    if verb in {"accept", "share_accept", "share-accept"}:
+        return f"/share-accept {tail}".strip()
     if verb in {"upgrade", "upgrade_hermes", "upgrade-hermes", "update"}:
         return "/upgrade_hermes"
     if verb in {"cancel", "stop"}:
@@ -1302,7 +1306,7 @@ def _active_raven_callback_command(command: str) -> str:
         return f"/raven {value.lstrip('/')}"
     share_match = ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE.match(value.lower())
     if share_match:
-        action = "approve" if share_match.group(1) == "approve" else "deny"
+        action = str(share_match.group(1) or "")
         return f"/raven {action} {share_match.group(2)}"
     return mapping.get(value, value)
 
@@ -1397,6 +1401,32 @@ def _plan_agent_count(plan: str) -> int:
     return 3 if str(plan or "").strip().lower() == "scale" else 1
 
 
+def _fleet_capacity_block(conn: sqlite3.Connection, *, required_slots: int, label: str) -> str:
+    try:
+        from arclink_fleet import fleet_capacity_summary
+
+        summary = fleet_capacity_summary(conn)
+    except Exception:
+        return ""
+    if int(summary.get("total_hosts") or 0) <= 0:
+        return ""
+    available = 0
+    for host in summary.get("hosts") or []:
+        if not isinstance(host, Mapping):
+            continue
+        if str(host.get("status") or "") != "active" or bool(host.get("drain")):
+            continue
+        available += max(0, int(host.get("headroom") or 0))
+    if available >= required_slots:
+        return ""
+    slot_word = "slot" if required_slots == 1 else "slots"
+    return (
+        f"{label} needs {required_slots} open ArcPod {slot_word}, but the ArcLink fleet has {available} available right now.\n\n"
+        "I will not open checkout until capacity is ready, so you are not charged for a launch that cannot complete. "
+        "Check Status after capacity is added, then try again."
+    )
+
+
 def _plan_checkout_label(plan: str) -> str:
     clean = str(plan or "").strip().lower()
     if clean == "scale":
@@ -1441,6 +1471,19 @@ def _open_first_agent_checkout_turn(
     bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
 ) -> ArcLinkPublicBotTurn:
     root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
+    plan_label = _plan_label(selected_plan)
+    capacity_message = _fleet_capacity_block(conn, required_slots=_plan_agent_count(selected_plan), label=plan_label)
+    if capacity_message:
+        return _reply(
+            session,
+            action="checkout_capacity_blocked",
+            reply=capacity_message,
+            buttons=(
+                _button("Check Status", command="/status", style="secondary"),
+                _button("Change Package", command="/packages", style="secondary"),
+            ),
+            bot_display_name=bot_display_name,
+        )
     checkout_price_id = _checkout_price_id_for_plan(
         selected_plan,
         price_id=price_id,
@@ -1456,7 +1499,6 @@ def _open_first_agent_checkout_turn(
         cancel_url=f"{root}/checkout/cancel?session={str(session['session_id'])}",
         base_domain=base_domain or default_base_domain({}),
     )
-    plan_label = _plan_label(selected_plan)
     return _reply(
         session,
         action="open_checkout",
@@ -4002,6 +4044,20 @@ def _add_agent_reply(
         raise ArcLinkPublicBotError("Agentic Expansion checkout requires a configured expansion Stripe price")
 
     user_id = str(deployment.get("user_id") or session.get("user_id") or "").strip()
+    capacity_message = _fleet_capacity_block(conn, required_slots=1, label="Agentic Expansion")
+    if capacity_message:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="add_agent_capacity_blocked",
+            reply=capacity_message,
+            session=session,
+            deployment=deployment,
+            buttons=(
+                _button("Check Status", command="/status", style="secondary"),
+                _button("Back To My Crew", command="/agents", style="secondary"),
+            ),
+        )
     root = f"https://{str(base_domain or default_base_domain({})).strip().strip('/')}"
     add_token = secrets.token_hex(10)
     extra_identity = f"{channel_identity}#add:{add_token}"
@@ -4077,14 +4133,14 @@ def _share_grant_action_reply(
             deployment=deployment,
             buttons=(_button("Link Channel", command="/link-channel", style="secondary"),),
         )
-    owner_user = str(session.get("user_id") or "").strip()
+    session_user = str(session.get("user_id") or "").strip()
     row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()
-    if row is None or str(row["owner_user_id"] or "") != owner_user:
+    if row is None:
         return _turn(
             channel=channel,
             channel_identity=channel_identity,
             action="share_grant_not_found",
-            reply="I cannot find a pending share approval for this ArcLink account.",
+            reply="I cannot find a share action for this ArcLink account.",
             session=session,
             deployment=deployment,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -4092,6 +4148,68 @@ def _share_grant_action_reply(
     grant = dict(row)
     current_status = str(grant.get("status") or "")
     label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource")
+    if requested_action == "accept":
+        if str(grant.get("recipient_user_id") or "") != session_user:
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="share_grant_not_found",
+                reply="I cannot accept that share from this ArcLink account.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+            )
+        if current_status == "accepted":
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="share_grant_noop",
+                reply=f"`{label}` is already accepted in your Linked resources.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+            )
+        try:
+            accepted = accept_share_grant_for_recipient(
+                conn,
+                recipient_user_id=session_user,
+                grant_id=grant_id,
+                actor_id=session_user,
+                reason="recipient accepted read-only linked resource via Raven",
+            )
+        except Exception:
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="share_grant_noop",
+                reply=f"No change made. `{label}` is not ready to accept.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+            )
+        projection = accepted.get("projection") if isinstance(accepted, Mapping) else {}
+        linked_path = str((projection or {}).get("linked_path") or "").strip()
+        location = f" at `{linked_path}`" if linked_path else ""
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_grant_accepted",
+            reply=f"Accepted. `{label}` is now available as a read-only Linked resource{location}. It cannot be reshared.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    owner_user = session_user
+    if str(grant.get("owner_user_id") or "") != owner_user:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_grant_not_found",
+            reply="I cannot approve that share from this ArcLink account.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
     if current_status != "pending_owner_approval":
         return _turn(
             channel=channel,
@@ -4158,6 +4276,13 @@ def _share_grant_action_reply(
         commit=False,
     )
     conn.commit()
+    recipient_notification = {"queued": False, "reason": "not_approved"}
+    if requested_action == "approve":
+        updated = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()
+        if updated is not None:
+            recipient_notification = queue_share_grant_recipient_notification(conn, grant=dict(updated))
+        if recipient_notification.get("queued"):
+            reply += " I also notified the recipient so they can accept it now."
     return _turn(
         channel=channel,
         channel_identity=channel_identity,

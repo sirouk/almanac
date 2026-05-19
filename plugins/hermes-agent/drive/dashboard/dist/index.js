@@ -1108,14 +1108,17 @@
       if (!item || item.kind !== "file") return "";
       const ext = fileExtension(item);
       const mime = String(item.mime || "").toLowerCase();
+      const lowerName = String(item.name || item.path || "").toLowerCase();
       if (ext === "pdf" || mime === "application/pdf") return "pdf";
       if (mime.indexOf("image/") === 0 || ["gif", "jpeg", "jpg", "png", "svg", "webp"].indexOf(ext) !== -1) return "image";
       if (mime.indexOf("audio/") === 0 || ["mp3", "wav", "ogg", "m4a"].indexOf(ext) !== -1) return "audio";
       if (mime.indexOf("video/") === 0 || ["mov", "mp4", "webm"].indexOf(ext) !== -1) return "video";
-      if (item.text || mime.indexOf("text/") === 0 || ["css", "csv", "env", "html", "ini", "js", "json", "log", "md", "mdx", "py", "sh", "sql", "toml", "ts", "txt", "xml", "yaml", "yml"].indexOf(ext) !== -1) {
+      if (ext === "csv" || ext === "tsv") return "table";
+      if (ext === "json") return "json";
+      if (item.text || mime.indexOf("text/") === 0 || ["c", "cfg", "conf", "cpp", "css", "diff", "dockerfile", "env", "go", "h", "hpp", "html", "ini", "java", "js", "jsx", "lock", "log", "md", "mdx", "patch", "php", "py", "rb", "rs", "rst", "sh", "sql", "toml", "ts", "tsx", "txt", "xml", "yaml", "yml"].indexOf(ext) !== -1 || ["dockerfile", "makefile"].indexOf(lowerName) !== -1) {
         return ext === "md" || ext === "mdx" ? "markdown" : "text";
       }
-      return "";
+      return "browser";
     }
 
     function downloadUrl(item) {
@@ -1161,12 +1164,49 @@
       return h("div", { className: "hermes-drive-markdown-preview" }, nodes);
     }
 
+    function renderJsonPreview(content) {
+      let rendered = String(content || "");
+      try {
+        rendered = JSON.stringify(JSON.parse(rendered), null, 2);
+      } catch (error) {
+        // Keep the raw body if the file is JSON-like but currently invalid.
+      }
+      return h("pre", { className: "hermes-drive-text-preview hermes-drive-json-preview" }, rendered);
+    }
+
+    function renderDelimitedPreview(content, kind) {
+      const delimiter = kind === "tsv" ? "\t" : ",";
+      const rows = String(content || "").split(/\r?\n/).filter(Boolean).slice(0, 80).map(function (line) {
+        return line.split(delimiter).slice(0, 12);
+      });
+      if (!rows.length) return h("div", { className: "hermes-drive-preview-empty" }, "No rows to preview.");
+      return h(
+        "div",
+        { className: "hermes-drive-table-preview" },
+        h(
+          "table",
+          null,
+          h("tbody", null, rows.map(function (row, rowIndex) {
+            return h("tr", { key: "row:" + rowIndex }, row.map(function (cell, cellIndex) {
+              return h(rowIndex === 0 ? "th" : "td", { key: "cell:" + rowIndex + ":" + cellIndex }, cell);
+            }));
+          }))
+        )
+      );
+    }
+
     function renderPreviewBody(preview) {
       if (!preview) return h("div", { className: "hermes-drive-preview-empty" }, "Select a previewable file.");
       if (preview.kind === "loading") return h("div", { className: "hermes-drive-preview-empty" }, "Loading preview");
       if (preview.kind === "unsupported") return h("div", { className: "hermes-drive-preview-empty" }, preview.message || "No preview available for this file type.");
       if (preview.kind === "markdown") {
         return renderMarkdownPreview(preview.content || "");
+      }
+      if (preview.kind === "json") {
+        return renderJsonPreview(preview.content || "");
+      }
+      if (preview.kind === "table") {
+        return renderDelimitedPreview(preview.content || "", preview.ext || "");
       }
       if (preview.kind === "text") {
         return h("pre", { className: "hermes-drive-text-preview" }, preview.content || "");
@@ -1181,13 +1221,20 @@
       if (preview.kind === "image") return h("img", { className: "hermes-drive-media-preview", src: preview.url, alt: preview.name || "Preview" });
       if (preview.kind === "audio") return h("audio", { className: "hermes-drive-audio-preview", src: preview.url, controls: true });
       if (preview.kind === "video") return h("video", { className: "hermes-drive-media-preview", src: preview.url, controls: true });
+      if (preview.kind === "browser") {
+        return h(
+          "iframe",
+          { className: "hermes-drive-browser-preview", src: preview.url, title: preview.name || "File preview" },
+          h("a", { href: preview.url, target: "_blank", rel: "noreferrer" }, "Open file")
+        );
+      }
       return h("div", { className: "hermes-drive-preview-empty" }, "Preview unavailable");
     }
 
     function renderPreviewPanel() {
       const preview = state.preview;
       if (!preview || !preview.kind) return null;
-      const canFullscreen = ["text", "markdown", "pdf", "image", "audio", "video"].indexOf(preview.kind) !== -1;
+      const canFullscreen = ["text", "markdown", "json", "table", "pdf", "image", "audio", "video", "browser"].indexOf(preview.kind) !== -1;
       return h(
         "section",
         { className: "hermes-drive-preview" },
@@ -1543,13 +1590,14 @@
           patch({ preview: { kind: "unsupported", name: name, message: "No preview available for this file type." }, previewFullscreen: false });
           return undefined;
         }
-        if (kind === "text" || kind === "markdown") {
+        if (kind === "text" || kind === "markdown" || kind === "json" || kind === "table") {
           const rootId = itemRoot(selected) || state.root;
+          const ext = fileExtension(selected);
           let cancelled = false;
           patch({ preview: { kind: "loading", name: name }, previewFullscreen: false });
           fetchJSON(api("/content?path=" + encodeURIComponent(selected.path) + "&root=" + encodeURIComponent(rootId)))
             .then(function (data) {
-              if (!cancelled) patch({ preview: { kind: kind, name: name, content: data.content || "", modified: data.modified || "" } });
+              if (!cancelled) patch({ preview: { kind: kind, name: name, content: data.content || "", modified: data.modified || "", ext: ext } });
             })
             .catch(function (error) {
               if (!cancelled) patch({ preview: { kind: "unsupported", name: name, message: error.message || "Preview unavailable" } });

@@ -302,6 +302,39 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     print("PASS test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents")
 
 
+def test_public_bot_blocks_scale_checkout_when_fleet_capacity_is_short() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_scale_capacity_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_scale_capacity_test")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_public_bot_scale_capacity_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_scale_capacity_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+    fleet.register_fleet_host(
+        conn,
+        hostname="control-node-1",
+        region="test",
+        capacity_slots=2,
+        metadata={"test": "scale capacity guard"},
+    )
+
+    bots.handle_arclink_public_bot_turn(
+        conn, channel="telegram", channel_identity="tg:scale-full", text="/start", display_name_hint="Scale Buyer",
+    )
+    blocked = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:scale-full",
+        text="/plan scale",
+        stripe_client=stripe,
+        scale_price_id="price_scale_test",
+        base_domain="example.test",
+    )
+    expect(blocked.action == "checkout_capacity_blocked", str(blocked))
+    expect("needs 3 open ArcPod slots" in blocked.reply and "not open checkout" in blocked.reply, blocked.reply)
+    expect(stripe.checkout_sessions == {}, str(stripe.checkout_sessions))
+    print("PASS test_public_bot_blocks_scale_checkout_when_fleet_capacity_is_short")
+
+
 def test_public_bot_founders_checkout_uses_founders_price() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_founders_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_public_bot_founders_test")
@@ -1502,6 +1535,32 @@ def test_public_bot_share_approval_buttons_are_owner_scoped() -> None:
     expect(approved.action == "share_grant_approved", str(approved))
     status = conn.execute("SELECT status FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()["status"]
     expect(status == "approved", str(status))
+    recipient_notification = conn.execute(
+        """
+        SELECT channel_kind, message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-bot-user'
+          AND channel_kind = 'discord'
+          AND target_id = 'discord:share-recipient'
+          AND message LIKE 'Raven share ready.%'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect(recipient_notification is not None, "expected Raven recipient acceptance notification")
+    recipient_extra = json.loads(recipient_notification["extra_json"])
+    accept_button = recipient_extra["discord_components"][0]["components"][0]
+    expect(accept_button["custom_id"] == f"arclink:/share-accept {grant_id}", str(accept_button))
+
+    accepted = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:share-recipient",
+        text=f"/share-accept {grant_id}",
+    )
+    expect(accepted.action == "share_grant_accepted", str(accepted))
+    status = conn.execute("SELECT status FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()["status"]
+    expect(status == "accepted", str(status))
 
     second = api.create_user_share_grant_api(
         conn,
@@ -1528,7 +1587,7 @@ def test_public_bot_share_approval_buttons_are_owner_scoped() -> None:
         row["action"]
         for row in conn.execute("SELECT action FROM arclink_audit_log WHERE target_kind = 'share_grant'").fetchall()
     }
-    expect({"share_grant_requested", "share_grant_approved", "share_grant_denied"} <= audit_actions, str(audit_actions))
+    expect({"share_grant_requested", "share_grant_approved", "share_grant_accepted", "share_grant_denied"} <= audit_actions, str(audit_actions))
     print("PASS test_public_bot_share_approval_buttons_are_owner_scoped")
 
 
@@ -1874,6 +1933,7 @@ def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
     test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents()
+    test_public_bot_blocks_scale_checkout_when_fleet_capacity_is_short()
     test_public_bot_founders_checkout_uses_founders_price()
     test_public_bot_plan_selection_opens_checkout_when_stripe_is_available()
     test_public_bot_action_catalog_has_real_platform_commands()

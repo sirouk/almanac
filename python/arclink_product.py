@@ -129,6 +129,7 @@ _LAUNCH_PHRASES: dict[str, str] = {
     "provisioning_failed": "Launch hit a snag. An operator is on it - I'll come back to you.",
     "cancelled": "Launch closed.",
     "teardown_complete": "Launch closed.",
+    "teardown_failed": "Retirement needs operator attention.",
 }
 
 LAUNCH_PHRASE_FALLBACK = "Tracking your launch."

@@ -54,10 +54,10 @@ def seed_ready_deployment(control, conn):
     return deployment
 
 
-def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True):
+def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True, ingress_mode="domain"):
     return worker_mod.SovereignWorkerConfig(
         enabled=enabled,
-        ingress_mode="domain",
+        ingress_mode=ingress_mode,
         base_domain="example.test",
         edge_target="edge.example.test",
         tailscale_dns_name="",
@@ -407,6 +407,54 @@ def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
     expect({"sovereign_teardown_started", "sovereign_teardown_completed", "dns_teardown"} <= event_types, str(event_types))
     print("PASS test_sovereign_worker_tears_down_active_deployment_idempotently")
+
+
+def test_sovereign_worker_retries_legacy_teardown_without_chutes_client() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_teardown_chutes_skip")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_teardown_chutes_skip")
+    import arclink_executor as executor_mod
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir, ingress_mode="tailscale")
+        applied = worker_mod.process_sovereign_batch(conn, worker=cfg)
+        expect(applied[0]["status"] == "applied", str(applied))
+        job = worker_mod._ensure_teardown_job(conn, deployment_id="dep_1")
+        conn.execute(
+            """
+            UPDATE arclink_provisioning_jobs
+            SET status = 'failed', attempt_count = ?, error = ?, finished_at = ?
+            WHERE job_id = ?
+            """,
+            (cfg.max_attempts, worker_mod.MISSING_CHUTES_CLIENT_ERROR, control.utc_now_iso(), job["job_id"]),
+        )
+        conn.execute(
+            "UPDATE arclink_deployments SET status = 'teardown_failed', updated_at = ? WHERE deployment_id = 'dep_1'",
+            (control.utc_now_iso(),),
+        )
+        conn.commit()
+        runner = executor_mod.FakeDockerRunner()
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+            docker_runner=runner,
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+
+    expect(results[0]["status"] == "torn_down", str(results))
+    expect(results[0]["chutes_status"] == "skipped_no_chutes_client", str(results))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(dep["status"] == "torn_down", str(dict(dep)))
+    teardown_job = conn.execute(
+        "SELECT status, attempt_count, error FROM arclink_provisioning_jobs WHERE job_kind = ?",
+        (worker_mod.TEARDOWN_JOB_KIND,),
+    ).fetchone()
+    expect(teardown_job["status"] == "succeeded", str(dict(teardown_job)))
+    expect(int(teardown_job["attempt_count"]) == cfg.max_attempts + 1, str(dict(teardown_job)))
+    expect(any(tuple(run["args"]) == ("down", "--remove-orphans") for run in runner.runs), str(runner.runs))
+    health_detail = json.loads(conn.execute("SELECT detail_json FROM arclink_service_health WHERE service_name = 'dashboard'").fetchone()["detail_json"])
+    expect(health_detail["chutes_status"] == "skipped_no_chutes_client", str(health_detail))
+    print("PASS test_sovereign_worker_retries_legacy_teardown_without_chutes_client")
 
 
 def test_tailnet_port_allocation_ignores_released_deployments() -> None:
@@ -851,6 +899,7 @@ if __name__ == "__main__":
     test_live_sovereign_worker_reconciles_compose_ps_health()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_sovereign_worker_tears_down_active_deployment_idempotently()
+    test_sovereign_worker_retries_legacy_teardown_without_chutes_client()
     test_tailnet_port_allocation_ignores_released_deployments()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
@@ -865,4 +914,4 @@ if __name__ == "__main__":
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
     test_compose_secret_materialization_aligns_runtime_owner()
     test_dashboard_password_hash_sync_only_when_secret_is_new()
-    print("\nAll 18 Sovereign worker tests passed.")
+    print("\nAll 19 Sovereign worker tests passed.")

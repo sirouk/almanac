@@ -229,6 +229,12 @@ ARCLINK_PUBLIC_BOT_UPGRADE_HERMES_COMMANDS = frozenset(
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_contacted"})
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES = frozenset({"teardown_requested", "teardown_running"})
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES = frozenset({"torn_down", "teardown_complete", "cancelled"})
+ARCLINK_PUBLIC_BOT_ADD_AGENT_ANCHOR_STATUSES = (
+    ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+    | ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES
+    | ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES
+    | frozenset({"teardown_failed"})
+)
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny)\s+(share_[0-9a-f]{32})$")
@@ -2121,6 +2127,12 @@ def _deployment_status_marker(deployment: Mapping[str, Any], *, active_id: str =
     return status.replace("_", " ")
 
 
+def _deployment_can_anchor_add_agent(deployment: Mapping[str, Any] | None) -> bool:
+    if not deployment:
+        return False
+    return str(deployment.get("status") or "").strip() in ARCLINK_PUBLIC_BOT_ADD_AGENT_ANCHOR_STATUSES
+
+
 def _retire_agent_workflow_data(session: Mapping[str, Any]) -> dict[str, Any]:
     payload = _metadata(session).get("retire_agent")
     return dict(payload) if isinstance(payload, Mapping) else {}
@@ -3903,7 +3915,7 @@ def _add_agent_reply(
 ) -> ArcLinkPublicBotTurn:
     if not session or not deployment:
         return _turn(channel=channel, channel_identity=channel_identity, action="add_agent_unavailable", reply=_need_finished_onboarding_reply(), session=session)
-    if str(deployment.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+    if not _deployment_can_anchor_add_agent(deployment):
         return _turn(
             channel=channel,
             channel_identity=channel_identity,

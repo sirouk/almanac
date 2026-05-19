@@ -76,6 +76,7 @@ TEARDOWN_JOB_KIND = "sovereign_pod_teardown"
 TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
 TEARDOWN_REQUEST_STATUSES = {"teardown_requested", "teardown_failed", "cancelled"}
 TEARDOWN_TERMINAL_STATUSES = {"torn_down", "teardown_complete"}
+MISSING_CHUTES_CLIENT_ERROR = "ArcLink live Chutes key execution requires an injectable ChutesKeyClient"
 
 
 @dataclass(frozen=True)
@@ -300,7 +301,7 @@ def process_sovereign_batch(
         LEFT JOIN arclink_provisioning_jobs j
           ON j.deployment_id = d.deployment_id
          AND j.job_kind = ?
-        WHERE d.status IN ('teardown_requested', 'teardown_failed')
+        WHERE d.status = 'teardown_requested'
            OR (
              d.status = 'cancelled'
              AND (
@@ -316,13 +317,17 @@ def process_sovereign_batch(
            )
            OR (
              d.status = 'teardown_failed'
-             AND j.status = 'failed'
-             AND COALESCE(j.attempt_count, 0) < ?
+             AND (
+               j.status IS NULL
+               OR j.status != 'failed'
+               OR COALESCE(j.attempt_count, 0) < ?
+               OR instr(COALESCE(j.error, ''), ?) > 0
+             )
            )
         ORDER BY d.updated_at ASC, d.deployment_id ASC
         LIMIT ?
         """,
-        (TEARDOWN_JOB_KIND, worker.max_attempts, worker.batch_size),
+        (TEARDOWN_JOB_KIND, worker.max_attempts, MISSING_CHUTES_CLIENT_ERROR, worker.batch_size),
     ).fetchall()
     teardown_results = [
         process_sovereign_teardown(conn, deployment=dict(row), worker=worker, executor=executor)
@@ -518,7 +523,7 @@ def process_sovereign_teardown(
     if str(job["status"]) == "running":
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_running"}
     if str(job["status"]) == "failed":
-        if int(job["attempt_count"] or 0) >= worker.max_attempts:
+        if int(job["attempt_count"] or 0) >= worker.max_attempts and not _teardown_failure_retryable_after_upgrade(job):
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
 
@@ -838,7 +843,7 @@ def _teardown_deployment(
 
     chutes_status = "skipped"
     chutes_secret_ref = _chutes_secret_ref_for_teardown(metadata, deployment_id=deployment_id)
-    if chutes_secret_ref and worker.executor_adapter in {"fake", "local", "ssh"}:
+    if chutes_secret_ref and _executor_can_revoke_chutes_key(selected_executor):
         chutes_result = selected_executor.chutes_key_apply(
             ChutesKeyApplyRequest(
                 deployment_id=deployment_id,
@@ -848,6 +853,8 @@ def _teardown_deployment(
             )
         )
         chutes_status = chutes_result.status
+    elif chutes_secret_ref:
+        chutes_status = "skipped_no_chutes_client"
 
     secret_cleanup = _cleanup_deployment_secret_store(worker=worker, deployment_id=deployment_id)
     removed_placement = remove_placement(conn, deployment_id=deployment_id)
@@ -964,6 +971,18 @@ def _chutes_secret_ref_for_teardown(metadata: Mapping[str, Any], *, deployment_i
     if explicit:
         return explicit
     return f"secret://arclink/chutes/{deployment_id}"
+
+
+def _executor_can_revoke_chutes_key(executor: ArcLinkExecutor) -> bool:
+    if executor.config.adapter_name == "fake":
+        return True
+    return getattr(executor, "chutes_client", None) is not None
+
+
+def _teardown_failure_retryable_after_upgrade(job: Mapping[str, Any]) -> bool:
+    if str(job.get("status") or "") != "failed":
+        return False
+    return MISSING_CHUTES_CLIENT_ERROR in str(job.get("error") or "")
 
 
 def _release_tailnet_service_ports(conn: sqlite3.Connection, *, deployment_id: str) -> None:

@@ -946,6 +946,37 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     expect(scale_checkout["price_id"] == "price_scale_expansion", str(scale_checkout))
     expect("$79/month" in scale_add.reply, scale_add.reply)
 
+    retired_seed = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:retired_add",
+        prefix="arc-retired-add",
+    )
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'teardown_failed', updated_at = ? WHERE deployment_id = ?",
+        (control.utc_now_iso(), retired_seed["deployment_id"]),
+    )
+    conn.commit()
+    retired_add = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retired_add",
+        text="/add-agent",
+        stripe_client=stripe,
+        additional_agent_price_id="price_additional_agent",
+        base_domain="example.test",
+    )
+    expect(retired_add.action == "open_add_agent_checkout", str(retired_add))
+    retired_add_session = conn.execute(
+        "SELECT user_id, metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (retired_add.session_id,),
+    ).fetchone()
+    retired_add_metadata = json.loads(retired_add_session["metadata_json"])
+    expect(retired_add_session["user_id"] == retired_seed["user_id"], str(dict(retired_add_session)))
+    expect(retired_add_metadata["parent_deployment_id"] == retired_seed["deployment_id"], str(retired_add_metadata))
+    expect(retired_add.checkout_url.startswith("https://stripe.test/checkout/"), str(retired_add))
+
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="arcdep_bob",

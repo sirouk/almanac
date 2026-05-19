@@ -295,6 +295,8 @@ def test_docker_operator_commands_are_present() -> None:
     expect("run-hermes-dashboard-proxy.sh" in body, body)
     expect("DRIVE_ROOT" in body and "CODE_WORKSPACE_ROOT" in body, body)
     expect("TERMINAL_ALLOW_ROOT" in body and "HERMES_TUI_DIR" in body, body)
+    expect("ARCLINK_DASHBOARD_THEME" in body and "ARCLINK_DASHBOARD_AGENT_LABEL" in body, body)
+    expect("default_arclink_agent_profile" in body and "deployment_identities = load_deployment_identities()" in body, body)
     expect('"VAULT_DIR": "/srv/vault"' in body and '"/srv/vault/Agents_KB/hermes-agent-docs"' in body, body)
     expect('services.pop("code-server", None)' in body, body)
     expect('compose_secrets.pop("code_server_password", None)' in body, body)

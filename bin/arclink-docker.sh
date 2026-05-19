@@ -977,22 +977,75 @@ PY
 }
 
 docker_repair_deployment_dashboard_plugin_mounts() {
+  local db_path="$REPO_DIR/arclink-priv/state/arclink-control.sqlite3"
   local deployments_root=""
 
   deployments_root="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
   [[ -d "$deployments_root" ]] || return 0
 
-  python3 - "$deployments_root" <<'PY'
+  PYTHONPATH="$REPO_DIR/python" python3 - "$deployments_root" "$db_path" <<'PY'
 from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
+from arclink_onboarding import default_arclink_agent_profile
+
 deployments_root = Path(sys.argv[1])
+db_path = Path(sys.argv[2])
 changed = 0
+
+
+def clean_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def load_deployment_identities() -> dict[str, dict[str, str]]:
+    if not db_path.is_file():
+        return {}
+    identities: dict[str, dict[str, str]] = {}
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT deployment_id, prefix, agent_name, agent_title, metadata_json
+            FROM arclink_deployments
+            WHERE status IN ('active', 'first_contacted', 'provisioning', 'provisioning_ready')
+            """
+        ).fetchall()
+    for row in rows:
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except json.JSONDecodeError:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        profile = default_arclink_agent_profile(clean_int(metadata.get("bundle_agent_index") or metadata.get("agent_index"), 1))
+        deployment_id = str(row["deployment_id"] or "").strip()
+        if not deployment_id:
+            continue
+        agent_name = str(row["agent_name"] or metadata.get("agent_name") or metadata.get("display_name") or row["prefix"] or "").strip()
+        agent_title = str(row["agent_title"] or metadata.get("agent_title") or "").strip()
+        identities[deployment_id] = {
+            "ARCLINK_AGENT_NAME": agent_name,
+            "ARCLINK_AGENT_TITLE": agent_title,
+            "ARCLINK_DASHBOARD_AGENT_LABEL": agent_name or str(row["prefix"] or deployment_id),
+            "ARCLINK_DASHBOARD_AGENT_TITLE": agent_title,
+            "ARCLINK_DASHBOARD_THEME": str(metadata.get("dashboard_theme") or profile.get("dashboard_theme") or "arclink").strip(),
+            "ARCLINK_DASHBOARD_THEME_LABEL": str(metadata.get("theme_label") or profile.get("theme_label") or "ArcLink Signal Orange").strip(),
+            "ARCLINK_DASHBOARD_ACCENT_HEX": str(metadata.get("theme_accent_hex") or profile.get("theme_accent_hex") or "#FB5005").strip(),
+        }
+    return identities
+
+
+deployment_identities = load_deployment_identities()
 
 
 def ensure_volume(volumes: list[dict[str, Any]], *, source: str, target: str) -> bool:
@@ -1046,6 +1099,36 @@ def ensure_control_network(service: dict[str, Any], *, prefix: str, service_name
     if networks.get("arclink-control") != desired:
         networks["arclink-control"] = desired
         changed = True
+    return changed
+
+
+def deployment_identity(compose_file: Path, env: dict[str, Any]) -> dict[str, str]:
+    deployment_root_name = compose_file.parents[1].name
+    deployment_id = deployment_root_name.split("-", 1)[0]
+    prefix = str(env.get("ARCLINK_PREFIX") or deployment_root_name.split("-", 1)[-1] or deployment_id)
+    base = deployment_identities.get(deployment_id, {})
+    profile = default_arclink_agent_profile(clean_int(env.get("ARCLINK_BUNDLE_AGENT_INDEX") or env.get("BUNDLE_AGENT_INDEX"), 1))
+    agent_name = str(base.get("ARCLINK_AGENT_NAME") or env.get("ARCLINK_AGENT_NAME") or prefix).strip()
+    agent_title = str(base.get("ARCLINK_AGENT_TITLE") or env.get("ARCLINK_AGENT_TITLE") or "").strip()
+    return {
+        "ARCLINK_AGENT_NAME": agent_name,
+        "ARCLINK_AGENT_TITLE": agent_title,
+        "ARCLINK_DASHBOARD_AGENT_LABEL": str(base.get("ARCLINK_DASHBOARD_AGENT_LABEL") or agent_name or prefix).strip(),
+        "ARCLINK_DASHBOARD_AGENT_TITLE": str(base.get("ARCLINK_DASHBOARD_AGENT_TITLE") or agent_title).strip(),
+        "ARCLINK_DASHBOARD_THEME": str(base.get("ARCLINK_DASHBOARD_THEME") or env.get("ARCLINK_DASHBOARD_THEME") or profile.get("dashboard_theme") or "arclink").strip(),
+        "ARCLINK_DASHBOARD_THEME_LABEL": str(base.get("ARCLINK_DASHBOARD_THEME_LABEL") or env.get("ARCLINK_DASHBOARD_THEME_LABEL") or profile.get("theme_label") or "ArcLink Signal Orange").strip(),
+        "ARCLINK_DASHBOARD_ACCENT_HEX": str(base.get("ARCLINK_DASHBOARD_ACCENT_HEX") or env.get("ARCLINK_DASHBOARD_ACCENT_HEX") or profile.get("theme_accent_hex") or "#FB5005").strip(),
+    }
+
+
+def ensure_env_values(env: Any, values: dict[str, str]) -> bool:
+    if not isinstance(env, dict):
+        return False
+    changed = False
+    for key, value in values.items():
+        if value and env.get(key) != value:
+            env[key] = value
+            changed = True
     return changed
 
 
@@ -1104,6 +1187,7 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         service["command"] = dashboard_command
         service_changed = True
     env = service.setdefault("environment", {})
+    identity_env = deployment_identity(compose_file, env if isinstance(env, dict) else {})
     if isinstance(env, dict):
         for key, value in {
             "VAULT_DIR": "/srv/vault",
@@ -1118,6 +1202,7 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
             "ARCLINK_TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
             "HERMES_TUI_DIR": "/opt/arclink/runtime/hermes-agent-src/ui-tui",
             **({"ARCLINK_CHUTES_API_KEY_FILE": "/run/secrets/chutes_api_key"} if has_chutes_secret else {}),
+            **identity_env,
         }.items():
             if env.get(key) != value:
                 env[key] = value
@@ -1173,6 +1258,13 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
             dashboard_env = service.get("environment") if isinstance(service.get("environment"), dict) else {}
             for key in (
                 "ARCLINK_PREFIX",
+                "ARCLINK_AGENT_NAME",
+                "ARCLINK_AGENT_TITLE",
+                "ARCLINK_DASHBOARD_AGENT_LABEL",
+                "ARCLINK_DASHBOARD_AGENT_TITLE",
+                "ARCLINK_DASHBOARD_THEME",
+                "ARCLINK_DASHBOARD_THEME_LABEL",
+                "ARCLINK_DASHBOARD_ACCENT_HEX",
                 "ARCLINK_PRIMARY_PROVIDER",
                 "ARCLINK_CHUTES_BASE_URL",
                 "ARCLINK_CHUTES_DEFAULT_MODEL",
@@ -1182,6 +1274,7 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
                 if value and installer_env.get(key) != value:
                     installer_env[key] = value
                     installer_changed = True
+            installer_changed = ensure_env_values(installer_env, identity_env) or installer_changed
         if has_chutes_secret:
             installer_changed = ensure_secret(installer, source="chutes_api_key", target="/run/secrets/chutes_api_key") or installer_changed
         installer_volumes = installer.setdefault("volumes", [])

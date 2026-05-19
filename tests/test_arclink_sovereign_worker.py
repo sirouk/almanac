@@ -780,6 +780,35 @@ def test_dashboard_password_secret_is_generated_for_canonical_handoff_store() ->
     print("PASS test_dashboard_password_secret_is_generated_for_canonical_handoff_store")
 
 
+def test_compose_secret_materialization_aligns_runtime_owner() -> None:
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_secret_owner")
+    expect(worker_mod._compose_secret_owner({"ARCLINK_DOCKER_UID": "1001", "ARCLINK_DOCKER_GID": "1001"}) == (1001, 1001), "docker uid/gid should win")
+    expect(worker_mod._compose_secret_owner({"ARCLINK_UID": "1002", "ARCLINK_GID": "1003"}) == (1002, 1003), "runtime uid/gid fallback should work")
+    expect(worker_mod._compose_secret_owner({"ARCLINK_DOCKER_UID": "nope", "ARCLINK_DOCKER_GID": "1001"}) is None, "invalid uid should be ignored")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        calls = []
+        original_chown = worker_mod.os.chown
+
+        def fake_chown(path, uid, gid):
+            calls.append((Path(path).name, uid, gid))
+
+        worker_mod.os.chown = fake_chown
+        try:
+            resolver = worker_mod.SovereignSecretResolver(
+                env={"ARCLINK_DOCKER_UID": "1001", "ARCLINK_DOCKER_GID": "1001"},
+                secret_store_dir=Path(tmpdir) / "store" / "dep_1",
+                materialization_root=Path(tmpdir) / "materialized",
+            )
+            resolved = resolver.materialize("secret://arclink/llm-router/dep_1/api-key", "/run/secrets/llm_router_api_key")
+        finally:
+            worker_mod.os.chown = original_chown
+        materialized_secret = Path(resolved.source_path)
+        expect(calls == [("llm_router_api_key", 1001, 1001)], str(calls))
+        expect(materialized_secret.exists(), f"expected materialized router key: {materialized_secret}")
+        expect(stat.S_IMODE(materialized_secret.stat().st_mode) == 0o600, oct(stat.S_IMODE(materialized_secret.stat().st_mode)))
+    print("PASS test_compose_secret_materialization_aligns_runtime_owner")
+
+
 def test_dashboard_password_hash_sync_only_when_secret_is_new() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_password_sync")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_sovereign_password_sync")
@@ -834,5 +863,6 @@ if __name__ == "__main__":
     test_compose_ps_transport_failure_records_failed_health()
     test_notion_webhook_secret_is_generated_without_notion_token()
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
+    test_compose_secret_materialization_aligns_runtime_owner()
     test_dashboard_password_hash_sync_only_when_secret_is_new()
-    print("\nAll 17 Sovereign worker tests passed.")
+    print("\nAll 18 Sovereign worker tests passed.")

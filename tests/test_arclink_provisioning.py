@@ -250,6 +250,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["hermes-gateway"]["secrets"], str(services["hermes-gateway"]))
     expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))
+    gateway_networks = services["hermes-gateway"]["networks"]
+    expect(set(gateway_networks) == {"default", "arclink-control"}, str(services["hermes-gateway"]))
+    expect(gateway_networks["arclink-control"]["aliases"] == ["arclink-amber-vault-1a2b-hermes-gateway"], str(gateway_networks))
     expect(
         intent["runtime_resolution"]["stock_image_file_env"]["nextcloud"] == [
             "POSTGRES_PASSWORD_FILE",

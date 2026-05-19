@@ -114,6 +114,8 @@ class SovereignSecretResolver(FileMaterializingSecretResolver):
 
     def materialize(self, secret_ref: str, target_path: str) -> ResolvedSecretFile:
         resolved = super().materialize(secret_ref, target_path)
+        if resolved.source_path:
+            _align_materialized_compose_secret(Path(resolved.source_path), self.env)
         return resolved
 
     def _value_for_ref(self, secret_ref: str) -> str:
@@ -172,6 +174,39 @@ class SovereignSecretResolver(FileMaterializingSecretResolver):
         if secret_ref.startswith("secret://arclink/dashboard/users/"):
             return self.secret_store_dir.parent / "users" / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
         return self.secret_store_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+
+
+def _compose_secret_owner(env: Mapping[str, str]) -> tuple[int, int] | None:
+    uid_raw = str(env.get("ARCLINK_DOCKER_UID") or env.get("ARCLINK_UID") or "").strip()
+    gid_raw = str(env.get("ARCLINK_DOCKER_GID") or env.get("ARCLINK_GID") or "").strip()
+    if not uid_raw or not gid_raw:
+        return None
+    try:
+        uid = int(uid_raw)
+        gid = int(gid_raw)
+    except ValueError:
+        return None
+    if uid < 0 or gid < 0:
+        return None
+    return uid, gid
+
+
+def _align_materialized_compose_secret(path: Path, env: Mapping[str, str]) -> None:
+    path.chmod(0o600)
+    owner = _compose_secret_owner(env)
+    if owner is None:
+        return
+    uid, gid = owner
+    try:
+        os.chown(path, uid, gid)
+    except PermissionError as exc:
+        try:
+            current = path.stat()
+        except OSError:
+            current = None
+        if current is not None and current.st_uid == uid and current.st_gid == gid:
+            return
+        raise ArcLinkSecretResolutionError("failed to align ArcLink compose secret file owner") from exc
 
 
 def _provider_env_for_ref(secret_ref: str) -> str:

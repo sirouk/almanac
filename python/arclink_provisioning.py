@@ -697,6 +697,7 @@ def _render_services(
             depends_on=["qmd-mcp", "managed-context-install"],
             secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
             deploy=_limits("hermes-gateway"),
+            networks=_control_network(prefix, "hermes-gateway"),
         ),
         "hermes-dashboard": _service(
             image=app_image,

@@ -31,6 +31,7 @@ from arclink_control import (
 )
 from arclink_crew_recipes import ArcLinkCrewRecipeError, apply_crew_recipe, preview_crew_recipe, whats_changed
 from arclink_onboarding import (
+    ARCLINK_ONBOARDING_ACTIVE_STATUSES,
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
     clean_arclink_agent_name,
@@ -1521,20 +1522,47 @@ def _latest_session_for_contact(
     channel: str,
     channel_identity: str,
 ) -> dict[str, Any] | None:
+    ready_placeholders = ",".join("?" for _ in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES)
+    active_placeholders = ",".join("?" for _ in ARCLINK_ONBOARDING_ACTIVE_STATUSES)
+    inactive_deployment_statuses = (
+        ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES
+        | ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES
+        | frozenset({"teardown_failed"})
+    )
+    inactive_placeholders = ",".join("?" for _ in inactive_deployment_statuses)
     row = conn.execute(
-        """
-        SELECT *
-        FROM arclink_onboarding_sessions
-        WHERE LOWER(channel) = LOWER(?)
-          AND LOWER(channel_identity) = LOWER(?)
+        f"""
+        SELECT s.*
+        FROM arclink_onboarding_sessions s
+        LEFT JOIN arclink_deployments d ON d.deployment_id = s.deployment_id
+        WHERE LOWER(s.channel) = LOWER(?)
+          AND LOWER(s.channel_identity) = LOWER(?)
         ORDER BY
-          CASE WHEN deployment_id != '' THEN 0 ELSE 1 END,
-          updated_at DESC,
-          created_at DESC,
-          session_id DESC
+          CASE
+            WHEN d.status IN ({ready_placeholders}) THEN 0
+            WHEN s.status IN ({active_placeholders})
+             AND (
+               s.deployment_id = ''
+               OR d.status IS NULL
+               OR d.status NOT IN ({inactive_placeholders})
+             ) THEN 1
+            WHEN s.status IN ({active_placeholders}) THEN 2
+            WHEN s.deployment_id != '' THEN 3
+            ELSE 4
+          END,
+          s.updated_at DESC,
+          s.created_at DESC,
+          s.session_id DESC
         LIMIT 1
         """,
-        (channel, channel_identity),
+        (
+            channel,
+            channel_identity,
+            *sorted(ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES),
+            *sorted(ARCLINK_ONBOARDING_ACTIVE_STATUSES),
+            *sorted(inactive_deployment_statuses),
+            *sorted(ARCLINK_ONBOARDING_ACTIVE_STATUSES),
+        ),
     ).fetchone()
     return dict(row) if row is not None else None
 

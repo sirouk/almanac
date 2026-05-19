@@ -1892,7 +1892,8 @@ def main() -> int:
     test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
-    print("PASS all 32 ArcLink public bot tests")
+    test_public_bot_new_onboarding_workflow_wins_over_retired_history()
+    print("PASS all 33 ArcLink public bot tests")
     return 0
 
 
@@ -2318,6 +2319,55 @@ def test_public_bot_greets_by_captured_display_name_and_offers_two_buttons() -> 
     expect("Raven here. ArcLink is in range." in fresh.reply, fresh.reply)
     expect([b.label for b in fresh.buttons] == ["Take Me Aboard", "Update Name"], str(fresh.buttons))
     print("PASS test_public_bot_greets_by_captured_display_name_and_offers_two_buttons")
+
+
+def test_public_bot_new_onboarding_workflow_wins_over_retired_history() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_retired_history_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_retired_history_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:retired_history",
+        prefix="arc-retired-history",
+    )
+    now = control.utc_now_iso()
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'torn_down', updated_at = ? WHERE deployment_id = ?",
+        (now, seeded["deployment_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET status = 'expired', current_step = 'expired', updated_at = ? WHERE session_id = ?",
+        (now, seeded["session_id"]),
+    )
+    conn.commit()
+
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retired_history",
+        text="/packages",
+        display_name_hint="Chris",
+    )
+    expect(opened.action == "prompt_agent_name", str(opened))
+    named = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retired_history",
+        text="Atlas",
+        display_name_hint="Chris",
+    )
+    expect(named.action == "prompt_agent_title", str(named))
+    expect("Give your Agent for Atlas a title" in named.reply, named.reply)
+    row = conn.execute(
+        "SELECT session_id, agent_name, status, current_step FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (named.session_id,),
+    ).fetchone()
+    expect(row["session_id"] != seeded["session_id"], str(dict(row)))
+    expect(row["agent_name"] == "Atlas", str(dict(row)))
+    expect(row["status"] == "collecting" and row["current_step"] == "agent_title", str(dict(row)))
+    print("PASS test_public_bot_new_onboarding_workflow_wins_over_retired_history")
 
 
 if __name__ == "__main__":

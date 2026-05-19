@@ -273,7 +273,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_refresh_deployment_service_health()" in body and "docker compose" in body and "upsert_arclink_service_health" in body, body)
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
     expect("sync-dashboard-user-passwords.py" in body and "control-provisioner" in body, body)
-    expect("managed-context-install" in body and "--force-recreate hermes-dashboard" in body, body)
+    expect("managed-context-install" in body and "--force-recreate hermes-gateway" in body and "--force-recreate hermes-dashboard" in body, body)
     refresh_block = extract(body, "docker_refresh_deployment_managed_plugins()", "\ndocker_reconcile()")
     expect(
         "run --rm --no-deps managed-context-install </dev/null >/dev/null" in refresh_block
@@ -295,6 +295,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect('env.pop("CODE_SERVER_PASSWORD_REF", None)' in body, body)
     expect('label=com.docker.compose.service=code-server' in body and "docker rm -f" in body, body)
     expect("Repaired Hermes dashboard plugin mounts" in body, body)
+    expect("ensure_control_network(gateway, prefix=prefix, service_name=\"hermes-gateway\")" in body, body)
     expect("ARCLINK_TAILNET_SERVICE_PORT_BASE" in body, body)
     expect("wait_for_docker_agent_reconcile()" in body and "arclink-vault-reconciler.json" in body, body)
     expect("docker_record_release_state()" in body and '"deployed_from": "docker-checkout"' in body, body)

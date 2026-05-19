@@ -986,6 +986,7 @@ docker_repair_deployment_dashboard_plugin_mounts() {
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -1025,6 +1026,29 @@ def ensure_secret(service: dict[str, Any], *, source: str, target: str) -> bool:
     return True
 
 
+def control_network_alias(prefix: str, service_name: str) -> str:
+    clean_prefix = re.sub(r"[^a-z0-9-]+", "-", str(prefix or "").strip().lower()).strip("-")
+    clean_service = re.sub(r"[^a-z0-9-]+", "-", str(service_name or "").strip().lower()).strip("-")
+    return f"arclink-{clean_prefix}-{clean_service}"
+
+
+def ensure_control_network(service: dict[str, Any], *, prefix: str, service_name: str) -> bool:
+    changed = False
+    networks = service.setdefault("networks", {})
+    if not isinstance(networks, dict):
+        networks = {}
+        service["networks"] = networks
+        changed = True
+    if networks.get("default") != {}:
+        networks["default"] = {}
+        changed = True
+    desired = {"aliases": [control_network_alias(prefix, service_name)]}
+    if networks.get("arclink-control") != desired:
+        networks["arclink-control"] = desired
+        changed = True
+    return changed
+
+
 for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     try:
         payload = json.loads(compose_file.read_text(encoding="utf-8"))
@@ -1034,6 +1058,10 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     if not isinstance(services, dict):
         continue
     service_changed = False
+    networks = payload.setdefault("networks", {})
+    if isinstance(networks, dict) and "arclink-control" not in networks:
+        networks["arclink-control"] = {"external": True, "name": "arclink_default"}
+        service_changed = True
     if services.pop("code-server", None) is not None:
         service_changed = True
     compose_secrets = payload.get("secrets")
@@ -1059,6 +1087,11 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
                 if env.get(key) != desired_url:
                     env[key] = desired_url
                     service_changed = True
+    gateway = services.get("hermes-gateway")
+    if isinstance(gateway, dict):
+        gateway_env = gateway.get("environment") if isinstance(gateway.get("environment"), dict) else {}
+        prefix = str(gateway_env.get("ARCLINK_PREFIX") or compose_file.parents[1].name.split("-", 1)[-1])
+        service_changed = ensure_control_network(gateway, prefix=prefix, service_name="hermes-gateway") or service_changed
     service = services.get("hermes-dashboard")
     if not isinstance(service, dict):
         if service_changed:
@@ -1257,11 +1290,13 @@ docker_refresh_deployment_managed_plugins() {
 
     # Keep these literal service names visible for regression tests and for
     # operators scanning the refresh surface:
+    # --force-recreate hermes-gateway
     # --force-recreate hermes-dashboard
     # --force-recreate dashboard
     # --force-recreate nextcloud
     # --force-recreate memory-synth
     for service_name in \
+      hermes-gateway \
       hermes-dashboard \
       dashboard \
       nextcloud \

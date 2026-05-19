@@ -1096,6 +1096,60 @@ def test_public_bot_retire_agent_preserves_state_and_stops_routing() -> None:
     print("PASS test_public_bot_retire_agent_preserves_state_and_stops_routing")
 
 
+def test_public_bot_retire_agent_confirmation_label_does_not_switch_helm() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_retire_agent_label_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_retire_agent_label_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-label",
+        prefix="arc-prime-retire-label",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_retire_label_t587",
+        user_id=seeded["user_id"],
+        prefix="steel-berth-t587",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "selected_plan_id": "sovereign",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    conn.commit()
+
+    start = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-label",
+        text="/raven retire_agent Agent #t587",
+    )
+    expect(start.action == "retire_agent_confirm_name", str(start))
+    expect("Type `Agent #t587`" in start.reply, start.reply)
+
+    typed = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire-label",
+        text="Agent #t587",
+    )
+    expect(typed.action == "retire_agent_final_confirm", str(typed))
+    expect(typed.deployment_id == seeded["deployment_id"], str(typed))
+    session = conn.execute(
+        "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (seeded["session_id"],),
+    ).fetchone()
+    session_meta = json.loads(session["metadata_json"])
+    expect(session_meta.get("public_bot_workflow") == "retire_agent_final_confirm", str(session_meta))
+    expect(session_meta.get("active_deployment_id") != "arcdep_retire_label_t587", str(session_meta))
+    print("PASS test_public_bot_retire_agent_confirmation_label_does_not_switch_helm")
+
+
 def test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_agent_selector_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_agent_selector_test")
@@ -1791,6 +1845,7 @@ def main() -> int:
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
     test_public_bot_retire_agent_preserves_state_and_stops_routing()
+    test_public_bot_retire_agent_confirmation_label_does_not_switch_helm()
     test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_pair_channel_refuses_existing_other_account()

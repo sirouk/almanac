@@ -5065,6 +5065,19 @@ def handle_arclink_public_bot_turn(
             base_domain=base_domain,
         )
 
+    # Retirement confirmations can be labels such as "Agent #587". Handle
+    # open workflows before the plain "agent <selector>" helm-switch parser.
+    active_workflow = _handle_active_workflow(
+        conn,
+        channel=clean_channel,
+        channel_identity=clean_identity,
+        message=message,
+        command=command,
+        base_domain=base_domain,
+    )
+    if active_workflow is not None:
+        return active_workflow
+
     switch_requested, switch_is_hard = _agent_switch_request(message, command)
     if switch_requested or switch_is_hard:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)

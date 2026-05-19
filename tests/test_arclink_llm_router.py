@@ -191,6 +191,7 @@ def _seed_router_key(
     db_path: str,
     *,
     status: str = "active",
+    deployment_status: str = "active",
     entitlement_state: str = "paid",
     subscription_status: str = "",
     deployment_metadata: Mapping[str, Any] | None = None,
@@ -219,7 +220,7 @@ def _seed_router_key(
         user_id="user_1",
         prefix="amber-vault-1a2b",
         base_domain="example.test",
-        status="active",
+        status=deployment_status,
         metadata=dict(deployment_metadata or {}),
     )
     raw_key = control.generate_llm_router_raw_key()
@@ -825,6 +826,34 @@ def test_chat_preflight_enforces_budget_and_billing_fail_closed() -> None:
         )
         expect(past_due.status_code == 402, past_due.text)
         expect(past_due.json()["error"]["code"] == "billing_suspended", past_due.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_status="teardown_requested",
+            deployment_metadata={"chutes": {"monthly_budget_cents": 1000, "used_cents": 10}},
+        )
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            },
+            upstream_transport=upstream,
+        )
+        retired = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(retired.status_code == 403, retired.text)
+        expect(retired.json()["error"]["code"] == "suspended", retired.text)
+        expect("suspended" in retired.json()["error"]["message"].lower(), retired.text)
         expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
     finally:
         tmp.cleanup()

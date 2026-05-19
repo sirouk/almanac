@@ -5,6 +5,8 @@ This directory contains standalone Hermes dashboard plugins:
 - `drive` - file manager for Workspace and Vault roots.
 - `code` - code editor, file explorer, previews, and git source control.
 - `terminal` - managed pty terminal sessions.
+- `arclink-theme` - no-tab plugin that installs the ArcLink dashboard theme
+  and makes it the default.
 
 Each plugin follows the Hermes plugin layout:
 
@@ -12,6 +14,7 @@ Each plugin follows the Hermes plugin layout:
 plugin-name/
   plugin.yaml
   __init__.py
+  dashboard-themes/        # optional theme YAMLs copied into HERMES_HOME
   dashboard/
     manifest.json
     plugin_api.py

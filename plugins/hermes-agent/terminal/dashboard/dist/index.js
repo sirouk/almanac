@@ -278,6 +278,7 @@
     const selectionRef = useRef("");
     const freshSessionRef = useRef({});
     const focusSessionRef = useRef("");
+    const requestFailureRef = useRef({ count: 0, message: "" });
 
     useEffect(function () {
       stateRef.current = state;
@@ -289,9 +290,33 @@
       });
     }
 
+    function isTransientRequestError(error) {
+      const message = String((error && error.message) || error || "");
+      return /Failed to fetch|Load failed|NetworkError|request failed/i.test(message);
+    }
+
+    function clearRequestFailure() {
+      requestFailureRef.current = { count: 0, message: "" };
+    }
+
+    function surfaceRequestError(error, options) {
+      const opts = options || {};
+      const message = String((error && error.message) || error || "");
+      if (opts.background && isTransientRequestError(error)) {
+        const current = requestFailureRef.current || { count: 0, message: "" };
+        const nextCount = current.message === message ? current.count + 1 : 1;
+        requestFailureRef.current = { count: nextCount, message: message };
+        if (nextCount < 4) return;
+        merge({ errorMessage: "Connection interrupted; retrying" });
+        return;
+      }
+      requestFailureRef.current = { count: 1, message: message };
+      merge({ errorMessage: message });
+    }
+
     function loadSessions(selectId, options) {
       const opts = options || {};
-      const explicitSelection = arguments.length > 0;
+      const explicitSelection = typeof selectId === "string";
       const callSelectedId = stateRef.current.selectedId || "";
       return fetchJSON(api("/sessions"))
         .then(function (payload) {
@@ -301,15 +326,16 @@
           const hasRequested = requestedId && sessions.some(function (session) { return session.id === requestedId; });
           const nextId = hasRequested ? requestedId : (sessions[0] && sessions[0].id) || "";
           rememberSelectedSessionId(nextId);
+          clearRequestFailure();
           merge({ sessions: sessions, selectedId: nextId, errorMessage: "" });
           if (nextId) {
-            return loadSession(nextId, { force: !!opts.force });
+            return loadSession(nextId, { force: !!opts.force, background: !!opts.background });
           }
           merge({ selected: null });
           return null;
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
+          surfaceRequestError(error, opts);
         });
     }
 
@@ -320,6 +346,7 @@
         .then(function (payload) {
           if (!opts.force && stateRef.current.selectedId !== sessionId) return payload.session || null;
           rememberSelectedSessionId(sessionId);
+          clearRequestFailure();
           merge({ selected: payload.session || null, selectedId: sessionId, errorMessage: "" });
           return payload.session || null;
         })
@@ -328,7 +355,7 @@
             merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
             return loadSessions("", { force: true });
           }
-          merge({ errorMessage: String(error.message || error) });
+          surfaceRequestError(error, opts);
           return null;
         });
     }
@@ -463,7 +490,8 @@
       }
     }
 
-    function syncTerminalOutput(session) {
+    function syncTerminalOutput(session, options) {
+      const opts = options || {};
       const current = terminalRef.current || {};
       if (!current.term || !session || current.sessionId !== session.id) return;
       const raw = String(session.scrollback || "");
@@ -479,10 +507,20 @@
           restoreTerminalViewport(current);
           current.needsViewportRestore = false;
         }
+        if (opts.onSynced) opts.onSynced();
+      }
+      function finishWithoutWrite() {
+        if (terminalRef.current !== current) return;
+        if (current.needsViewportRestore) {
+          restoreTerminalViewport(current);
+          current.needsViewportRestore = false;
+        }
+        if (opts.onSynced) opts.onSynced();
       }
       if (!raw && previous) {
         current.term.reset();
         current.written = "";
+        finishWithoutWrite();
         return;
       }
       if (raw.indexOf(previous) === 0) {
@@ -491,9 +529,12 @@
           writeTerminalOutput(current, delta, current.allowInitialReports || !!previous, finishSync);
         } else if (current.needsViewportRestore) {
           finishSync();
+        } else {
+          finishWithoutWrite();
         }
       } else if (previous && previous.endsWith(raw)) {
         if (current.needsViewportRestore) finishSync();
+        else finishWithoutWrite();
       } else if (previous) {
         const overlap = suffixPrefixOverlapLength(previous, raw);
         const delta = raw.slice(overlap);
@@ -501,6 +542,8 @@
           writeTerminalOutput(current, delta, true, finishSync);
         } else if (current.needsViewportRestore) {
           finishSync();
+        } else {
+          finishWithoutWrite();
         }
       } else {
         current.term.reset();
@@ -508,6 +551,7 @@
         const initialText = initialScrollbackForSession(session, raw, !!current.allowInitialReports);
         if (initialText) writeTerminalOutput(current, initialText, !!current.allowInitialReports && initialText === raw, finishSync);
         else if (current.needsViewportRestore) finishSync();
+        else finishWithoutWrite();
       }
       current.allowInitialReports = false;
       current.written = raw;
@@ -593,20 +637,25 @@
       host.innerHTML = "";
       const cached = terminalCache[session.id];
       if (cached && cached.term) {
-        if (cached.term.element) {
-          host.appendChild(cached.term.element);
-        } else {
-          cached.term.open(host);
-        }
         cached.disposables = attachTerminalHandlers(cached.term, session);
         cached.needsViewportRestore = true;
         terminalRef.current = cached;
-        fitTerminal();
-        syncTerminalOutput(session);
-        if (focusSessionRef.current === session.id) {
-          focusSessionRef.current = "";
-          cached.term.focus();
+        let revealed = false;
+        function revealCachedTerminal() {
+          if (revealed || terminalRef.current !== cached || stateRef.current.selectedId !== session.id) return;
+          revealed = true;
+          if (cached.term.element) {
+            if (cached.term.element.parentNode !== host) host.appendChild(cached.term.element);
+          } else {
+            cached.term.open(host);
+          }
+          fitTerminal();
+          if (focusSessionRef.current === session.id) {
+            focusSessionRef.current = "";
+            cached.term.focus();
+          }
         }
+        syncTerminalOutput(session, { onSynced: revealCachedTerminal });
         return;
       }
       const term = new vendor.Terminal({
@@ -680,19 +729,26 @@
         let timer = null;
         let stream = null;
         let closed = false;
+        let timerReadsSelected = false;
         const streamSessionId = state.selectedId || "";
 
-        function startPolling() {
-          if (timer) return;
+        function startPolling(readSelected) {
+          const includeSelected = !!readSelected;
+          if (timer) {
+            if (!includeSelected || timerReadsSelected) return;
+            clearInterval(timer);
+            timer = null;
+          }
           timer = setInterval(function () {
             const selectedId = stateRef.current.selectedId;
             if (selectedId) {
-              loadSession(selectedId);
-              loadSessions(selectedId);
+              if (includeSelected) loadSession(selectedId, { background: true });
+              loadSessions(selectedId, { background: true });
             } else {
-              loadSessions();
+              loadSessions(undefined, { background: true });
             }
-          }, 1000);
+          }, includeSelected ? 1000 : 5000);
+          timerReadsSelected = includeSelected;
         }
 
         if (
@@ -712,21 +768,22 @@
               const payload = JSON.parse(event.data || "{}");
               const session = payload.session || null;
               if (!session || session.id !== streamSessionId) return;
+              clearRequestFailure();
               merge({ selected: session, selectedId: streamSessionId, streaming: true, errorMessage: "" });
-              loadSessions(streamSessionId);
+              loadSessions(streamSessionId, { background: true });
             } catch (_error) {
-              startPolling();
+              startPolling(true);
             }
           });
           stream.addEventListener("error", function () {
             if (stream) stream.close();
             if (!closed && stateRef.current.selectedId === streamSessionId) merge({ streaming: false });
-            startPolling();
+            startPolling(true);
           });
-          startPolling();
+          startPolling(false);
         } else {
           merge({ streaming: false });
-          startPolling();
+          startPolling(true);
         }
 
         return function () {
@@ -896,6 +953,24 @@
         });
     }
 
+    function reattachSelected(session) {
+      const selected = session || state.selected;
+      if (!selected || !selected.id) return;
+      postJSON("/sessions/" + encodeURIComponent(selected.id) + "/reattach", {})
+        .then(function (payload) {
+          const nextSession = payload.session || selected;
+          delete terminalCache[selected.id];
+          if ((terminalRef.current || {}).sessionId === selected.id) disposeTerminal();
+          focusSessionRef.current = selected.id;
+          merge({ selected: nextSession, selectedId: selected.id, contextMenu: null, errorMessage: "" });
+          return loadSessions(selected.id, { force: true });
+        })
+        .catch(function (error) {
+          merge({ contextMenu: null });
+          surfaceRequestError(error);
+        });
+    }
+
     function openSessionMenu(event, session) {
       event.preventDefault();
       event.stopPropagation();
@@ -922,6 +997,7 @@
           },
         },
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { startRenameSession(session); }); } }, "Rename"),
+        session.can_reattach && session.state === "detached" ? h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reattachSelected(session); }); } }, "Reattach") : null,
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(moveSelectedToFolder); } }, "Folder"),
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reorderSelected(-1); }); } }, "Move Up"),
         h("button", { type: "button", role: "menuitem", onClick: function () { closeThen(function () { reorderSelected(1); }); } }, "Move Down"),
@@ -949,7 +1025,10 @@
       h(
         "div",
         { className: "hermes-terminal-toolbar" },
-        h("div", { className: "hermes-terminal-title" }, h("h1", null, "Terminal"), h("p", null, status.backend || "Loading"))
+        h("div", { className: "hermes-terminal-title" }, h("h1", null, "Terminal"), h("p", null, status.backend || "Loading")),
+        selected && selected.can_reattach && selected.state === "detached"
+          ? h("div", { className: "hermes-terminal-actions" }, h("button", { type: "button", onClick: function () { reattachSelected(selected); } }, "Reattach"))
+          : null
       ),
       state.errorMessage ? h("div", { className: "hermes-terminal-error" }, state.errorMessage) : null,
       state.loading

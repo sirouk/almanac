@@ -20,10 +20,14 @@ Hermes `v2026.4.30` or newer.
   `TERMINAL_SHELL` to override.
 - Root execution is blocked unless `TERMINAL_ALLOW_ROOT=1`.
 - Session state lives under `$HERMES_HOME/state/terminal/sessions.json`.
-- Backend scrollback defaults to `TERMINAL_SCROLLBACK_BYTES=1000000` and is
-  bounded between 4 KB and 10 MB.
-- Browser scrollback defaults to `TERMINAL_SCROLLBACK_LINES=10000` and is
-  bounded between 500 and 100000 lines.
+- When `tmux` is installed, Terminal runs sessions inside an ArcLink-owned tmux
+  socket under `$HERMES_HOME/state/terminal/` and reattaches a browser pty
+  client after dashboard refreshes or worker restarts. Without `tmux`, it falls
+  back to the in-process managed pty backend.
+- Backend scrollback defaults to `TERMINAL_SCROLLBACK_BYTES=8000000` and is
+  bounded between 4 KB and 50 MB.
+- Browser scrollback defaults to `TERMINAL_SCROLLBACK_LINES=50000` and is
+  bounded between 500 and 200000 lines.
 - Hermes TUI sessions use `TERMINAL_TUI_COMMAND` or `HERMES_TUI_COMMAND`, and
   optional `HERMES_TUI_DIR` / `TERMINAL_TUI_DIR` when the TUI bundle requires
   assets.
@@ -34,7 +38,9 @@ Hermes `v2026.4.30` or newer.
   bounded scrollback are built in.
 - Direct key input, backspace/delete, Ctrl shortcuts, bracketed paste, TUI
   cursor reports, SSE streaming, and polling fallback are supported through
-  xterm.js and the managed pty API.
+  xterm.js and the terminal pty API.
+- Cached browser terminals are caught up before they are revealed again, so
+  switching back to a TUI session does not visibly replay already-buffered text.
 - The `+SSH` button opens the machine shell without asking for a remote target;
   `+TUI` opens the configured Hermes TUI command.
 

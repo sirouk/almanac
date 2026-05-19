@@ -913,6 +913,14 @@ def test_invoice_payment_tops_up_subscription_inference_allowance_once() -> None
             status="active",
             metadata={"selected_plan_id": "scale", "chutes": {"monthly_budget_cents": 0}},
         )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_scale_retired",
+        user_id="user_scale",
+        prefix="scale-retired",
+        status="teardown_requested",
+        metadata={"selected_plan_id": "scale", "chutes": {"monthly_budget_cents": 0}},
+    )
     payload = json.dumps({
         "id": "evt_scale_invoice_paid",
         "type": "invoice.payment_succeeded",
@@ -941,6 +949,11 @@ def test_invoice_payment_tops_up_subscription_inference_allowance_once() -> None
         budgets.append(int(metadata["chutes"]["monthly_budget_cents"]))
     expect(sorted(budgets) == [1833, 1833, 1834], str(budgets))
     expect(sum(budgets) == 5500, str(budgets))
+    retired_row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_scale_retired'"
+    ).fetchone()
+    retired_metadata = json.loads(retired_row["metadata_json"])
+    expect(retired_metadata["chutes"]["monthly_budget_cents"] == 0, str(retired_metadata))
     credit_count = conn.execute(
         "SELECT COUNT(*) AS n FROM arclink_refuel_credits WHERE source_kind = 'stripe_subscription_renewal'"
     ).fetchone()["n"]

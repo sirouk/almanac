@@ -15,6 +15,7 @@ if [[ $# -eq 0 ]]; then
     drive \
     code \
     terminal \
+    arclink-theme \
     arclink-managed-context
 fi
 
@@ -164,6 +165,143 @@ config_file.write_text("\n".join(before + new_block + after).rstrip() + "\n", en
 PY
 }
 
+sync_dashboard_theme_config() {
+  local theme_name="$1"
+  local config_file="$HERMES_HOME/config.yaml"
+
+  [[ -n "$theme_name" ]] || return 0
+
+  python3 - "$config_file" "$theme_name" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+config_file = Path(sys.argv[1])
+theme_name = sys.argv[2].strip()
+if not theme_name:
+    raise SystemExit(0)
+
+config_file.parent.mkdir(parents=True, exist_ok=True)
+lines = config_file.read_text(encoding="utf-8").splitlines() if config_file.exists() else []
+
+
+def is_top_level_key(line: str) -> bool:
+    return bool(re.match(r"^[A-Za-z0-9_][A-Za-z0-9_-]*\s*:", line))
+
+
+def child_indent(block: list[str]) -> int:
+    for line in block[1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^(\s+)[A-Za-z0-9_][A-Za-z0-9_-]*\s*:", line)
+        if match:
+            return len(match.group(1).replace("\t", "  "))
+    return 2
+
+
+def direct_child_key(line: str, indent: int) -> str:
+    match = re.match(r"^(\s+)([A-Za-z0-9_][A-Za-z0-9_-]*)\s*:", line)
+    if not match:
+        return ""
+    return match.group(2) if len(match.group(1).replace("\t", "  ")) == indent else ""
+
+
+start = None
+for index, line in enumerate(lines):
+    if re.match(r"^dashboard\s*:", line):
+        start = index
+        break
+
+if start is None:
+    block = ["dashboard:", f"  theme: {theme_name}"]
+    config_file.write_text("\n".join(lines + block).rstrip() + "\n", encoding="utf-8")
+    raise SystemExit(0)
+
+end = len(lines)
+for index in range(start + 1, len(lines)):
+    if lines[index].strip() and is_top_level_key(lines[index]):
+        end = index
+        break
+
+before = lines[:start]
+block = lines[start:end]
+after = lines[end:]
+
+if not re.match(r"^dashboard\s*:\s*(?:#.*)?$", block[0]):
+    block[0] = "dashboard:"
+
+indent = child_indent(block)
+prefix = " " * indent
+theme_line = f"{prefix}theme: {theme_name}"
+updated = False
+new_block: list[str] = []
+for line in block:
+    if direct_child_key(line, indent) == "theme":
+        comment = ""
+        if "#" in line:
+            comment = "  #" + line.split("#", 1)[1]
+        new_block.append(theme_line + comment)
+        updated = True
+    else:
+        new_block.append(line)
+
+if not updated:
+    insert_at = 1
+    while insert_at < len(new_block) and (
+        not new_block[insert_at].strip() or new_block[insert_at].lstrip().startswith("#")
+    ):
+        insert_at += 1
+    new_block[insert_at:insert_at] = [theme_line]
+
+config_file.write_text("\n".join(before + new_block + after).rstrip() + "\n", encoding="utf-8")
+PY
+}
+
+plugin_dashboard_default_theme() {
+  local manifest_file="$1"
+
+  python3 - "$manifest_file" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+manifest_file = Path(sys.argv[1])
+if not manifest_file.exists():
+    raise SystemExit(0)
+
+for line in manifest_file.read_text(encoding="utf-8").splitlines():
+    match = re.match(r"^\s*(?:arclink_dashboard_default_theme|dashboard_default_theme)\s*:\s*(.*?)\s*(?:#.*)?$", line)
+    if not match:
+        continue
+    value = match.group(1).strip().strip('"\'')
+    if value:
+        print(value)
+    break
+PY
+}
+
+install_plugin_dashboard_themes() {
+  local plugin_name="$1"
+  local src_dir="$PLUGINS_ROOT/$plugin_name"
+  local theme_dir="$HERMES_HOME/dashboard-themes"
+  local candidate=""
+  local theme_file=""
+
+  for candidate in "$src_dir/dashboard-themes" "$src_dir/theme"; do
+    [[ -d "$candidate" ]] || continue
+    mkdir -p "$theme_dir"
+    while IFS= read -r -d '' theme_file; do
+      install -m 0644 "$theme_file" "$theme_dir/$(basename "$theme_file")"
+    done < <(find "$candidate" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 | sort -z)
+  done
+
+  plugin_dashboard_default_theme "$src_dir/plugin.yaml"
+}
+
 install_one_plugin() {
   local plugin_name
   plugin_name="$(normalize_plugin_name "$1")"
@@ -230,7 +368,17 @@ done
 for plugin_name in "${normalized_plugins[@]}"; do
   install_one_plugin "$plugin_name"
 done
+
+dashboard_theme=""
+for plugin_name in "${normalized_plugins[@]}"; do
+  plugin_theme="$(install_plugin_dashboard_themes "$plugin_name")"
+  if [[ -n "$plugin_theme" ]]; then
+    dashboard_theme="$plugin_theme"
+  fi
+done
+
 sync_plugin_config "${normalized_plugins[@]}"
+sync_dashboard_theme_config "$dashboard_theme"
 
 if [[ "${INSTALL_ARCLINK_PLUGINS_SKIP_HOOKS:-0}" != "1" ]]; then
   install_default_hooks

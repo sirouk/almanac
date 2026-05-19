@@ -849,6 +849,7 @@ With no explicit plugin list, the installer enables:
 drive
 code
 terminal
+arclink-theme
 arclink-managed-context
 ```
 

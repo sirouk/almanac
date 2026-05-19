@@ -409,8 +409,8 @@ Dashboard and admin contracts:
 
 Native Hermes workspace plugins:
 
-- Refreshed agents install `drive`, `code`,
-  `terminal`, and `arclink-managed-context` by default.
+- Refreshed agents install `drive`, `code`, `terminal`, `arclink-theme`, and
+  `arclink-managed-context` by default.
 - The installer removes legacy dashboard aliases `arclink-code-space` and
   `arclink-knowledge-vault` before enabling the current plugin names.
 - Drive status reports backend availability, mount, username, URL, local root,

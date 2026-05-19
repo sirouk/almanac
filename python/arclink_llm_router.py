@@ -320,7 +320,7 @@ def _load_deployment_context(
 ) -> tuple[dict[str, Any], str]:
     row = conn.execute(
         """
-        SELECT d.metadata_json, u.entitlement_state
+        SELECT d.metadata_json, d.status AS deployment_status, u.entitlement_state
         FROM arclink_deployments d
         LEFT JOIN arclink_users u ON u.user_id = d.user_id
         WHERE d.deployment_id = ? AND d.user_id = ?
@@ -338,6 +338,28 @@ def _load_deployment_context(
             metadata = loaded
     except Exception:
         metadata = {}
+    deployment_status = str(row["deployment_status"] or "").strip().lower()
+    if deployment_status in {
+        "reserved",
+        "entitlement_required",
+        "provisioning_ready",
+        "provisioning",
+        "provisioning_failed",
+        "teardown_requested",
+        "teardown_running",
+        "teardown_complete",
+        "teardown_failed",
+        "torn_down",
+        "cancelled",
+    }:
+        chutes_meta = dict(metadata.get("chutes") if isinstance(metadata.get("chutes"), dict) else {})
+        chutes_meta.update({
+            "status": "suspended",
+            "suspended": True,
+            "suspended_reason": f"deployment_{deployment_status}",
+        })
+        metadata["chutes"] = chutes_meta
+        metadata["deployment_status"] = deployment_status
     subscription = conn.execute(
         """
         SELECT status

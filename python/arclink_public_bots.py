@@ -104,12 +104,68 @@ ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS = frozenset(
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
 ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop"})
 ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents", "agent roster"})
+ARCLINK_PUBLIC_BOT_RETIRE_AGENT_COMMANDS = (
+    "/retire-agent",
+    "/retire_agent",
+    "/remove-agent",
+    "/remove_agent",
+    "/delete-agent",
+    "/delete_agent",
+    "retire-agent",
+    "retire agent",
+    "remove-agent",
+    "remove agent",
+    "delete-agent",
+    "delete agent",
+)
+ARCLINK_PUBLIC_BOT_RETIRE_AGENT_TARGET_PREFIXES = (
+    "/retire-agent-",
+    "/retire_agent_",
+    "/remove-agent-",
+    "/remove_agent_",
+    "/delete-agent-",
+    "/delete_agent_",
+    "retire-agent-",
+    "retire_agent_",
+    "remove-agent-",
+    "remove_agent_",
+    "delete-agent-",
+    "delete_agent_",
+)
+ARCLINK_PUBLIC_BOT_RETIRE_CONFIRM_COMMANDS = frozenset(
+    {
+        "/confirm-retire-agent",
+        "/confirm_retire_agent",
+        "/yes-retire-agent",
+        "/yes_retire_agent",
+        "confirm retire",
+        "confirm-retire",
+        "yes retire",
+        "yes, retire",
+        "yes delete",
+        "retire now",
+    }
+)
+ARCLINK_PUBLIC_BOT_RETIRE_CANCEL_COMMANDS = frozenset(
+    {
+        "/cancel-retire-agent",
+        "/cancel_retire_agent",
+        "/keep-agent",
+        "/keep_agent",
+        "no",
+        "no cancel",
+        "cancel retire",
+        "keep agent",
+        "keep-agent",
+    }
+)
 ARCLINK_PUBLIC_BOT_TRAIN_CREW_COMMANDS = frozenset({"/train-crew", "/train_crew", "train-crew", "train crew"})
 ARCLINK_PUBLIC_BOT_WHATS_CHANGED_COMMANDS = frozenset({"/whats-changed", "/whats_changed", "whats-changed", "what changed", "what's changed"})
 ARCLINK_PUBLIC_BOT_CREW_CONFIRM_COMMANDS = frozenset({"/confirm", "confirm", "apply", "/apply"})
 ARCLINK_PUBLIC_BOT_CREW_REGENERATE_COMMANDS = frozenset({"/regenerate", "regenerate", "try again", "/retry"})
 ARCLINK_PUBLIC_BOT_REFUEL_COMMANDS = ("/top-up", "/top_up", "/refuel", "/credits", "top-up", "top up", "refuel", "credits")
 CREW_TRAINING_WORKFLOW_KEYS = ("public_bot_workflow", "crew_training", "crew_training_updated_at")
+RETIRE_AGENT_WORKFLOW_KEYS = ("public_bot_workflow", "retire_agent", "retire_agent_updated_at")
 CREW_TREATMENT_CHOICES = {
     "captain": "Like a Captain - formal, ready to take orders",
     "peer": "Like a peer - casual, give pushback",
@@ -171,6 +227,8 @@ ARCLINK_PUBLIC_BOT_UPGRADE_HERMES_COMMANDS = frozenset(
     }
 )
 ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES = frozenset({"active", "first_contacted"})
+ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES = frozenset({"teardown_requested", "teardown_running"})
+ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES = frozenset({"torn_down", "teardown_complete", "cancelled"})
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny)\s+(share_[0-9a-f]{32})$")
@@ -597,6 +655,18 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return f"/link_channel {tail}".strip()
     if verb in {"add", "add_agent", "add-agent"}:
         return "/add-agent"
+    if verb.startswith("retire_agent_") and len(verb) > len("retire_agent_"):
+        return f"/retire-agent-{verb[len('retire_agent_'):]}"
+    if verb.startswith("remove_agent_") and len(verb) > len("remove_agent_"):
+        return f"/remove-agent-{verb[len('remove_agent_'):]}"
+    if verb.startswith("delete_agent_") and len(verb) > len("delete_agent_"):
+        return f"/delete-agent-{verb[len('delete_agent_'):]}"
+    if verb in {"retire", "retire_agent", "retire-agent", "remove", "remove_agent", "remove-agent", "delete", "delete_agent", "delete-agent"}:
+        return f"/retire-agent {tail}".strip()
+    if verb in {"confirm_retire", "confirm_retire_agent", "confirm-retire", "confirm-retire-agent", "yes_retire", "yes-retire"}:
+        return "/confirm-retire-agent"
+    if verb in {"cancel_retire", "cancel_retire_agent", "cancel-retire", "cancel-retire-agent", "keep", "keep_agent", "keep-agent"}:
+        return "/cancel-retire-agent"
     if verb in {"approve", "share_approve", "share-approve"}:
         return f"/share-approve {tail}".strip()
     if verb in {"deny", "share_deny", "share-deny"}:
@@ -608,6 +678,17 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
     if verb in {"name", "raven_name", "raven-name"}:
         return f"/raven_name {tail}".strip()
     return "/help"
+
+
+def _retire_agent_command_value(message: str, command: str) -> str | None:
+    value = _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_RETIRE_AGENT_COMMANDS)
+    if value is not None:
+        return value
+    return _target_from_command(
+        command,
+        aliases=frozenset(ARCLINK_PUBLIC_BOT_RETIRE_AGENT_COMMANDS),
+        prefixes=ARCLINK_PUBLIC_BOT_RETIRE_AGENT_TARGET_PREFIXES,
+    )
 
 
 def _raven_name_command_value(message: str, command: str) -> str | None:
@@ -1192,6 +1273,12 @@ def _active_raven_callback_command(command: str) -> str:
         "/link-channel": "/raven link_channel",
         "/add-agent": "/raven add_agent",
         "/add_agent": "/raven add_agent",
+        "/retire-agent": "/raven retire_agent",
+        "/retire_agent": "/raven retire_agent",
+        "/confirm-retire-agent": "/raven confirm_retire_agent",
+        "/confirm_retire_agent": "/raven confirm_retire_agent",
+        "/cancel-retire-agent": "/raven cancel_retire_agent",
+        "/cancel_retire_agent": "/raven cancel_retire_agent",
         "/upgrade_hermes": "/raven upgrade_hermes",
         "/upgrade-hermes": "/raven upgrade_hermes",
         "/cancel": "/raven cancel",
@@ -1202,6 +1289,11 @@ def _active_raven_callback_command(command: str) -> str:
         return f"/raven refuel {value.split(maxsplit=1)[1].strip()}".strip()
     if value.startswith("/credentials-stored ") or value.startswith("/credentials_stored "):
         return f"/raven credentials_stored {value.split(maxsplit=1)[1].strip()}".strip()
+    if value.startswith("/retire-agent ") or value.startswith("/retire_agent "):
+        return f"/raven retire_agent {value.split(maxsplit=1)[1].strip()}".strip()
+    for prefix in ("/retire-agent-", "/retire_agent_", "/remove-agent-", "/remove_agent_", "/delete-agent-", "/delete_agent_"):
+        if value.startswith(prefix):
+            return f"/raven retire_agent {value[len(prefix):].strip()}".strip()
     if value.startswith("/agent-") or value.startswith("/agent_"):
         return f"/raven {value.lstrip('/')}"
     share_match = ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE.match(value.lower())
@@ -1449,12 +1541,16 @@ def _deployment_for_session(conn: sqlite3.Connection, session: Mapping[str, Any]
     if active_deployment_id:
         row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (active_deployment_id,)).fetchone()
         if row is not None and str(row["user_id"] or "") == session_user_id:
-            return dict(row)
+            candidate = dict(row)
+            if str(candidate.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+                return candidate
     deployment_id = str(session.get("deployment_id") or "").strip()
     if deployment_id:
         row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
         if row is not None and str(row["user_id"] or "") == session_user_id:
-            return dict(row)
+            candidate = dict(row)
+            if str(candidate.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+                return candidate
     if not session_user_id:
         return None
     row = conn.execute(
@@ -2008,6 +2104,536 @@ def _deployment_context(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     session = _latest_session_for_contact(conn, channel=channel, channel_identity=channel_identity)
     return session, _deployment_for_session(conn, session)
+
+
+def _deployment_status_marker(deployment: Mapping[str, Any], *, active_id: str = "") -> str:
+    status = str(deployment.get("status") or "unknown")
+    if str(deployment.get("deployment_id") or "") == active_id and status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return "at helm"
+    if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return "ready"
+    if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES:
+        return "retiring"
+    if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES:
+        return "retired"
+    if status == "teardown_failed":
+        return "retirement needs operator attention"
+    return status.replace("_", " ")
+
+
+def _retire_agent_workflow_data(session: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _metadata(session).get("retire_agent")
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
+def _retire_agent_typed_name_matches(data: Mapping[str, Any], value: str) -> bool:
+    clean = str(value or "").strip()
+    if not clean:
+        return False
+    candidates = {
+        str(data.get("agent_label") or "").strip(),
+        str(data.get("agent_slug") or "").strip(),
+        str(data.get("deployment_id") or "").strip(),
+        str(data.get("prefix") or "").strip(),
+    }
+    slugs = {_agent_slug(candidate) for candidate in candidates if candidate}
+    normalized = clean.lower()
+    return normalized in {candidate.lower() for candidate in candidates if candidate} or _agent_slug(clean) in slugs
+
+
+def _next_ready_deployment_for_user(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    exclude_deployment_id: str,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM arclink_deployments
+        WHERE user_id = ?
+          AND deployment_id <> ?
+          AND status = 'active'
+        ORDER BY updated_at DESC, created_at DESC, deployment_id DESC
+        LIMIT 1
+        """,
+        (str(user_id or "").strip(), str(exclude_deployment_id or "").strip()),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _clear_active_deployment_references(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    current_session_id: str = "",
+    next_deployment: Mapping[str, Any] | None = None,
+) -> int:
+    rows = conn.execute(
+        """
+        SELECT session_id, deployment_id, metadata_json
+        FROM arclink_onboarding_sessions
+        WHERE user_id = ?
+        """,
+        (str(user_id or "").strip(),),
+    ).fetchall()
+    touched = 0
+    next_id = str((next_deployment or {}).get("deployment_id") or "").strip()
+    next_label = _agent_label(next_deployment, conn=conn) if next_deployment else ""
+    for row in rows:
+        session_id = str(row["session_id"] or "")
+        payload = _metadata(dict(row))
+        active_id = str(payload.get("active_deployment_id") or "").strip()
+        owns_target = str(row["deployment_id"] or "").strip() == deployment_id
+        current = session_id == current_session_id
+        if active_id != deployment_id and not owns_target and not current:
+            continue
+        if next_id:
+            payload["active_deployment_id"] = next_id
+            payload["active_agent_label"] = next_label
+        else:
+            payload.pop("active_deployment_id", None)
+            payload.pop("active_agent_label", None)
+        retire_data = payload.get("retire_agent")
+        retire_deployment_id = str(retire_data.get("deployment_id") if isinstance(retire_data, Mapping) else "")
+        if current or retire_deployment_id == deployment_id:
+            for key in RETIRE_AGENT_WORKFLOW_KEYS:
+                payload.pop(key, None)
+        conn.execute(
+            """
+            UPDATE arclink_onboarding_sessions
+            SET metadata_json = ?, current_step = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                json_dumps_safe(payload, label="ArcLink public bot retirement workflow", error_cls=ArcLinkPublicBotError),
+                str(payload.get("public_bot_workflow") or ""),
+                utc_now_iso(),
+                session_id,
+            ),
+        )
+        touched += 1
+    return touched
+
+
+def _cancel_pending_public_agent_turns_for_deployment(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    reason: str,
+) -> int:
+    rows = conn.execute(
+        """
+        SELECT id, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+          AND delivered_at IS NULL
+        """
+    ).fetchall()
+    ids: list[int] = []
+    for row in rows:
+        extra = json_loads_safe(str(row["extra_json"] or "{}"))
+        if str(extra.get("deployment_id") or "").strip() == deployment_id:
+            ids.append(int(row["id"]))
+    if not ids:
+        return 0
+    now = utc_now_iso()
+    for row_id in ids:
+        conn.execute(
+            """
+            UPDATE notification_outbox
+            SET delivered_at = ?,
+                delivery_error = ?
+            WHERE id = ?
+            """,
+            (now, reason[:500], row_id),
+        )
+    return len(ids)
+
+
+def _retire_agent_deployment(
+    conn: sqlite3.Connection,
+    *,
+    session: Mapping[str, Any],
+    data: Mapping[str, Any],
+    channel: str,
+    channel_identity: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, int]:
+    deployment_id = str(data.get("deployment_id") or "").strip()
+    user_id = str(data.get("user_id") or session.get("user_id") or "").strip()
+    row = conn.execute(
+        "SELECT * FROM arclink_deployments WHERE deployment_id = ? AND user_id = ?",
+        (deployment_id, user_id),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkPublicBotError("That Agent is no longer on this account.")
+    deployment = dict(row)
+    status = str(deployment.get("status") or "").strip()
+    next_deployment = _next_ready_deployment_for_user(conn, user_id=user_id, exclude_deployment_id=deployment_id)
+    if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES | ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES:
+        _clear_active_deployment_references(
+            conn,
+            user_id=user_id,
+            deployment_id=deployment_id,
+            current_session_id=str(session.get("session_id") or ""),
+            next_deployment=next_deployment,
+        )
+        conn.commit()
+        updated_session = dict(conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (str(session["session_id"]),)).fetchone())
+        return updated_session, deployment, next_deployment, 0
+    if status not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        raise ArcLinkPublicBotError(f"That Agent is currently `{status.replace('_', ' ')}` and cannot be retired from chat yet.")
+
+    now = utc_now_iso()
+    restore_until = utc_after_seconds_iso(30 * 24 * 60 * 60)
+    metadata_json = _metadata(deployment)
+    chutes_meta = dict(metadata_json.get("chutes") if isinstance(metadata_json.get("chutes"), Mapping) else {})
+    chutes_meta.update({
+        "status": "suspended",
+        "suspended": True,
+        "suspended_reason": "agent_retired",
+        "suspended_at": now,
+    })
+    teardown_meta = dict(metadata_json.get("teardown") if isinstance(metadata_json.get("teardown"), Mapping) else {})
+    teardown_meta.update({
+        "reason": "agent_retirement",
+        "requested_at": now,
+        "remove_volumes": False,
+        "preserve_state": True,
+    })
+    metadata_json["chutes"] = chutes_meta
+    metadata_json["teardown"] = teardown_meta
+    metadata_json["retirement"] = {
+        "status": "requested",
+        "requested_at": now,
+        "requested_by_user_id": user_id,
+        "requested_channel": channel,
+        "requested_channel_identity": channel_identity,
+        "agent_label": str(data.get("agent_label") or _agent_label(deployment, conn=conn)),
+        "previous_status": status,
+        "restore_until": restore_until,
+        "state_policy": "preserve_volumes_for_restore",
+        "routing_policy": "stop_chat_routing_immediately",
+        "renewal_policy": "cancel_agent_renewal_at_period_end",
+        "proration_policy": "no_automatic_proration",
+        "usage_policy": "consumed_usage_is_final_and_new_spend_is_blocked",
+        "unused_fuel_policy": "preserve_or_transfer_before_permanent_delete",
+    }
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET status = 'teardown_requested',
+            metadata_json = ?,
+            updated_at = ?
+        WHERE deployment_id = ?
+          AND user_id = ?
+        """,
+        (
+            json_dumps_safe(metadata_json, label="ArcLink deployment retirement metadata", error_cls=ArcLinkPublicBotError),
+            now,
+            deployment_id,
+            user_id,
+        ),
+    )
+    cancelled_pending = _cancel_pending_public_agent_turns_for_deployment(
+        conn,
+        deployment_id=deployment_id,
+        reason="Agent retired before public chat turn delivery",
+    )
+    _clear_active_deployment_references(
+        conn,
+        user_id=user_id,
+        deployment_id=deployment_id,
+        current_session_id=str(session.get("session_id") or ""),
+        next_deployment=next_deployment,
+    )
+    append_arclink_audit(
+        conn,
+        action="agent_retirement_requested",
+        actor_id=user_id,
+        target_kind="deployment",
+        target_id=deployment_id,
+        reason="Captain confirmed Agent retirement through Raven",
+        metadata={
+            "channel": channel,
+            "channel_identity": channel_identity,
+            "state_policy": "preserve_volumes_for_restore",
+            "renewal_policy": "cancel_agent_renewal_at_period_end",
+            "proration_policy": "no_automatic_proration",
+            "cancelled_pending_public_agent_turns": cancelled_pending,
+        },
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="agent_retirement_requested",
+        metadata={
+            "user_id": user_id,
+            "channel": channel,
+            "agent_label": str(data.get("agent_label") or ""),
+            "restore_until": restore_until,
+            "cancelled_pending_public_agent_turns": cancelled_pending,
+        },
+        commit=False,
+    )
+    conn.commit()
+    updated_session = dict(conn.execute("SELECT * FROM arclink_onboarding_sessions WHERE session_id = ?", (str(session["session_id"]),)).fetchone())
+    updated_deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone())
+    return updated_session, updated_deployment, next_deployment, cancelled_pending
+
+
+def _retire_agent_start_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    requested_value: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if not session or not deployment:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_unavailable",
+            reply=_need_finished_onboarding_reply(),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Take Me Aboard", command="/packages"),),
+        )
+    user_id = _raven_identity_user_id(session, deployment)
+    deployments = _deployments_for_user(conn, user_id)
+    requested = str(requested_value or "").strip()
+    if not requested:
+        retire_buttons = [
+            _button(f"Retire: {_agent_label(item, index=index, conn=conn)}", command=f"/retire-agent-{_agent_slug(_agent_label(item, index=index, conn=conn))}", style="secondary")
+            for index, item in enumerate(deployments)
+            if str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+        ]
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_missing",
+            reply="Which Agent should Raven retire? Use the roster button for the exact Agent you want to remove from active chat.",
+            session=session,
+            deployment=deployment,
+            buttons=tuple(retire_buttons[:5]) + (_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    match = _find_agent_deployment(deployments, requested, conn=conn)
+    if match is None:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_not_found",
+            reply="That Agent is not on your roster. Open `/agents` and choose the retire button attached to the right Agent.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    item, label = match
+    status = str(item.get("status") or "")
+    if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRING_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_already_running",
+            reply=f"`{label}` is already retiring. Chat routing is closed for that Agent, and the pod teardown worker will preserve its state for restore.",
+            session=session,
+            deployment=item,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_RETIRED_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_already_retired",
+            reply=f"`{label}` is already retired. Its preserved state remains on the retention rail until an operator or restore flow removes it permanently.",
+            session=session,
+            deployment=item,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    if status not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_not_ready",
+            reply=f"`{label}` is `{status.replace('_', ' ')}` right now. Raven will only retire live Agents from chat; use `/status` or operator rails for provisioning failures.",
+            session=session,
+            deployment=item,
+            buttons=(_button("Check Status", command="/status", style="secondary"),),
+        )
+    data = {
+        "deployment_id": str(item.get("deployment_id") or ""),
+        "user_id": user_id,
+        "agent_label": label,
+        "agent_slug": _agent_slug(label),
+        "prefix": str(item.get("prefix") or ""),
+        "requested_at": utc_now_iso(),
+        "renewal_policy": "cancel_agent_renewal_at_period_end",
+        "proration_policy": "no_automatic_proration",
+        "usage_policy": "consumed_usage_is_final_and_new_spend_is_blocked",
+        "state_policy": "preserve_volumes_for_restore",
+    }
+    updated = _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={
+            "public_bot_workflow": "retire_agent_type_name",
+            "retire_agent": data,
+            "retire_agent_updated_at": utc_now_iso(),
+        },
+    )
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="retire_agent_confirm_name",
+        reply=(
+            f"Retiring `{label}` will stop Raven chat routing and new model spend immediately. "
+            "The pod state is preserved for restore; renewal is recorded to stop at the period end with no automatic proration. "
+            "Consumed token use stays final, and unused purchased fuel stays preserved or transferable before any permanent delete.\n\n"
+            f"Type `{label}` to continue."
+        ),
+        session=updated,
+        deployment=item,
+        buttons=(_button("Cancel", command="/cancel-retire-agent", style="secondary"),),
+    )
+
+
+def _handle_retire_agent_workflow(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    message: str,
+    command: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    workflow: str,
+) -> ArcLinkPublicBotTurn | None:
+    if not workflow.startswith("retire_agent_"):
+        return None
+    data = _retire_agent_workflow_data(session)
+    label = str(data.get("agent_label") or "this Agent")
+    if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS or command in ARCLINK_PUBLIC_BOT_RETIRE_CANCEL_COMMANDS:
+        updated = _update_session_metadata(
+            conn,
+            session_id=str(session["session_id"]),
+            updates={},
+            clear=RETIRE_AGENT_WORKFLOW_KEYS,
+        )
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_cancelled",
+            reply=f"`{label}` stays active. No routing, billing, or pod state changed.",
+            session=updated,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    if workflow == "retire_agent_type_name":
+        if command.startswith("/"):
+            return None
+        if not _retire_agent_typed_name_matches(data, message):
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="retire_agent_name_mismatch",
+                reply=f"Type `{label}` exactly to continue, or send `cancel` to keep the Agent active.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Cancel", command="/cancel-retire-agent", style="secondary"),),
+            )
+        updated_data = dict(data)
+        updated_data["typed_confirmation_at"] = utc_now_iso()
+        updated = _update_session_metadata(
+            conn,
+            session_id=str(session["session_id"]),
+            updates={
+                "public_bot_workflow": "retire_agent_final_confirm",
+                "retire_agent": updated_data,
+                "retire_agent_updated_at": utc_now_iso(),
+            },
+        )
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_final_confirm",
+            reply=(
+                f"Final check: retire `{label}` now?\n\n"
+                "Raven will close chat routing, cancel undelivered queued turns, suspend new model spend, queue state-preserving teardown, and record renewal/no-proration policy for billing rails."
+            ),
+            session=updated,
+            deployment=deployment,
+            buttons=(
+                _button("Yes, Retire Agent", command="/confirm-retire-agent"),
+                _button("No, Cancel", command="/cancel-retire-agent", style="secondary"),
+            ),
+        )
+    if workflow == "retire_agent_final_confirm":
+        if command not in ARCLINK_PUBLIC_BOT_RETIRE_CONFIRM_COMMANDS:
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="retire_agent_waiting_final_confirm",
+                reply=f"Use `Yes, Retire Agent` to retire `{label}`, or `No, Cancel` to keep it active.",
+                session=session,
+                deployment=deployment,
+                buttons=(
+                    _button("Yes, Retire Agent", command="/confirm-retire-agent"),
+                    _button("No, Cancel", command="/cancel-retire-agent", style="secondary"),
+                ),
+            )
+        try:
+            updated_session, retired_deployment, next_deployment, cancelled_pending = _retire_agent_deployment(
+                conn,
+                session=session,
+                data=data,
+                channel=channel,
+                channel_identity=channel_identity,
+            )
+        except ArcLinkPublicBotError as exc:
+            updated = _update_session_metadata(
+                conn,
+                session_id=str(session["session_id"]),
+                updates={},
+                clear=RETIRE_AGENT_WORKFLOW_KEYS,
+            )
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="retire_agent_failed",
+                reply=str(exc),
+                session=updated,
+                deployment=deployment,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+            )
+        next_line = (
+            f"\n\nFocus moved to `{_agent_label(next_deployment, conn=conn)}`."
+            if next_deployment is not None
+            else "\n\nNo other live Agent is at the helm. Add or restore an Agent when you are ready."
+        )
+        pending_line = f" Cancelled queued turns: {cancelled_pending}." if cancelled_pending else ""
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="retire_agent_requested",
+            reply=(
+                f"`{label}` is retired from active chat. New routing and model spend are stopped, and state-preserving teardown is queued."
+                f"{pending_line}\n\n"
+                "Billing policy recorded: stop this Agent's renewal at period end, no automatic proration, consumed tokens final, unused purchased fuel preserved or transferable before permanent delete."
+                f"{next_line}"
+            ),
+            session=updated_session,
+            deployment=next_deployment or retired_deployment,
+            buttons=(
+                _button("Show My Crew", command="/agents", style="secondary"),
+                _button("Add Agent", command="/add-agent", style="secondary"),
+            ),
+        )
+    return None
 
 
 def _raven_name_reply(
@@ -3182,23 +3808,21 @@ def _agents_reply(
     for index, item in enumerate(deployments):
         label = _agent_label(item, index=index, conn=conn)
         status = str(item.get("status") or "unknown")
-        if str(item.get("deployment_id") or "") == active_id:
-            marker = "at helm"
-        elif status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
-            marker = "ready"
-        else:
-            marker = status.replace("_", " ")
+        marker = _deployment_status_marker(item, active_id=active_id)
         lines.append(f"- {label}: {marker}")
         if str(item.get("deployment_id") or "") != active_id and status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
             buttons.append(_button(f"Take Helm: {label}", command=f"/agent-{_agent_slug(label)}"))
+        if status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            buttons.append(_button(f"Retire: {label}", command=f"/retire-agent-{_agent_slug(label)}", style="secondary"))
     if deployments:
         buttons.append(_button("Add Agent", command="/add-agent"))
     if not buttons and deployments:
         buttons.append(_button("Add Agent", command="/add-agent"))
-    if len(buttons) > 2:
+    if len(buttons) > 6:
         add_buttons = [button for button in buttons if button.command == "/add-agent"]
-        helm_buttons = [button for button in buttons if button.command != "/add-agent"]
-        buttons = (helm_buttons[:1] + add_buttons[:1]) or buttons[:2]
+        retire_buttons = [button for button in buttons if button.command.startswith("/retire-agent-")]
+        helm_buttons = [button for button in buttons if button.command != "/add-agent" and not button.command.startswith("/retire-agent-")]
+        buttons = (helm_buttons[:2] + retire_buttons[:3] + add_buttons[:1]) or buttons[:6]
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -3225,6 +3849,17 @@ def _switch_agent_reply(
     match = _find_agent_deployment(deployments, requested_slug, conn=conn)
     if match is not None:
         item, label = match
+        status = str(item.get("status") or "")
+        if status not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="switch_agent_not_ready",
+                reply=f"`{label}` is {_deployment_status_marker(item)} and cannot take the helm. Choose a ready Agent from `/agents`.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+            )
         updated = _update_session_metadata(
             conn,
             session_id=str(session["session_id"]),
@@ -3721,6 +4356,17 @@ def _handle_active_workflow(
     workflow = str(_metadata(session).get("public_bot_workflow") or "").strip()
     if not workflow:
         return None
+    if workflow.startswith("retire_agent_"):
+        return _handle_retire_agent_workflow(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            message=message,
+            command=command,
+            session=session,
+            deployment=deployment,
+            workflow=workflow,
+        )
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
         updated = _clear_crew_training_workflow(conn, session)
         return _turn(
@@ -4072,7 +4718,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, or `/raven cancel`.\n\n"
+            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven retire_agent`, or `/raven cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -4277,6 +4923,18 @@ def handle_arclink_public_bot_turn(
             conn,
             channel=clean_channel,
             channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    retire_value = _retire_agent_command_value(message, command)
+    if retire_value is not None:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _retire_agent_start_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            requested_value=retire_value,
             session=session,
             deployment=deployment,
         )
@@ -4496,6 +5154,17 @@ def handle_arclink_public_bot_turn(
 
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        if session and str(_metadata(session).get("public_bot_workflow") or "").startswith("retire_agent_"):
+            active_workflow = _handle_active_workflow(
+                conn,
+                channel=clean_channel,
+                channel_identity=clean_identity,
+                message=message,
+                command=command,
+                base_domain=base_domain,
+            )
+            if active_workflow is not None:
+                return active_workflow
         if deployment and str(deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
             return _turn(
                 channel=clean_channel,

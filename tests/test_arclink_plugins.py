@@ -21,6 +21,7 @@ DEFAULT_PLUGIN_NAMES = (
     "drive",
     "code",
     "terminal",
+    "arclink-theme",
     "arclink-managed-context",
 )
 LEGACY_PLUGIN_NAMES = (
@@ -119,6 +120,17 @@ def _assert_default_plugins_installed(hermes_home: Path) -> None:
         expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
         expect(f"  - {plugin_name}" in config_body, config_body)
 
+    theme_file = hermes_home / "dashboard-themes" / "arclink.yaml"
+    expect(theme_file.is_file(), f"expected ArcLink dashboard theme at {theme_file}")
+    theme_body = theme_file.read_text(encoding="utf-8")
+    expect("name: arclink" in theme_body, theme_body)
+    expect("customCSS: |" in theme_body, theme_body)
+    expect("dashboard:\n  theme: arclink" in config_body or "\n  theme: arclink" in config_body, config_body)
+    expect(
+        not (hermes_home / "plugins" / "arclink-theme" / "dashboard" / "manifest.json").exists(),
+        "ArcLink theme plugin should not add a dashboard navigation item",
+    )
+
     for plugin_name in ("code", "drive", "terminal"):
         dashboard_dir = hermes_home / "plugins" / plugin_name / "dashboard"
         expect((dashboard_dir / "manifest.json").is_file(), f"expected dashboard manifest at {dashboard_dir / 'manifest.json'}")
@@ -186,6 +198,8 @@ def test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_
             expect((hermes_home / "plugins" / plugin_name / "plugin.yaml").is_file(), f"expected {plugin_name} plugin to install")
             expect(f"  - {plugin_name}" in config_body, config_body)
         expect(not (hermes_home / "plugins" / "arclink-managed-context").exists(), "standalone installer should not install managed context")
+        expect(not (hermes_home / "plugins" / "arclink-theme").exists(), "standalone installer should not install ArcLink theme")
+        expect(not (hermes_home / "dashboard-themes" / "arclink.yaml").exists(), "standalone installer should not install ArcLink theme YAML")
         expect(not (hermes_home / "hooks" / "arclink-telegram-start").exists(), "standalone installer should not install ArcLink hooks")
         print("PASS test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_only")
 
@@ -269,6 +283,47 @@ def test_install_arclink_plugins_preserves_comments_and_future_nested_config() -
         expect("arclink-managed-context" not in disabled_block, config_body)
         _assert_default_plugins_installed(hermes_home)
         print("PASS test_install_arclink_plugins_preserves_comments_and_future_nested_config")
+
+
+def test_install_arclink_theme_plugin_sets_dashboard_theme_without_menu() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        hermes_home.mkdir(parents=True, exist_ok=True)
+        (hermes_home / "config.yaml").write_text(
+            "model: gpt-5.4\n"
+            "dashboard:\n"
+            "  # keep dashboard comments\n"
+            "  hidden_plugins:\n"
+            "  - noisy-dashboard-plugin\n"
+            "  theme: default # ArcLink owns the managed default\n"
+            "plugins:\n"
+            "  enabled:\n"
+            "  - existing-plugin\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [str(INSTALL_SCRIPT), str(REPO), str(hermes_home), "arclink-theme"],
+            env={**os.environ, "INSTALL_ARCLINK_PLUGINS_SKIP_HOOKS": "1"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"expected install-arclink-plugins.sh to succeed, got rc={result.returncode} stderr={result.stderr!r}")
+        config_body = (hermes_home / "config.yaml").read_text(encoding="utf-8")
+        expect("dashboard:\n" in config_body, config_body)
+        expect("# keep dashboard comments" in config_body, config_body)
+        expect("hidden_plugins:\n  - noisy-dashboard-plugin" in config_body, config_body)
+        expect("  theme: arclink" in config_body, config_body)
+        expect("# ArcLink owns the managed default" in config_body, config_body)
+        expect("  - existing-plugin" in config_body, config_body)
+        expect("  - arclink-theme" in config_body, config_body)
+        expect((hermes_home / "dashboard-themes" / "arclink.yaml").is_file(), "expected copied ArcLink theme YAML")
+        expect(
+            not (hermes_home / "plugins" / "arclink-theme" / "dashboard" / "manifest.json").exists(),
+            "theme plugin must stay no-tab",
+        )
+        print("PASS test_install_arclink_theme_plugin_sets_dashboard_theme_without_menu")
 
 
 def test_install_arclink_plugins_excludes_generated_artifacts() -> None:
@@ -485,13 +540,14 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(terminal["status_contract"] == 1, str(terminal))
             expect(terminal["label"] == "Terminal", str(terminal))
             expect(terminal["available"] is True, str(terminal))
-            expect(terminal["backend"] == "managed-pty", str(terminal))
+            expect(terminal["backend"] in {"managed-pty", "tmux-pty"}, str(terminal))
             expect(terminal["workspace_root"] == "[workspace]", str(terminal))
             expect(terminal["hermes_state"] == "[hermes-state]", str(terminal))
             expect(terminal["capabilities"]["confirm_close_or_kill"] is True, str(terminal))
             expect(terminal["capabilities"]["persistent_sessions"] is True, str(terminal))
             expect(terminal["capabilities"]["streaming_output"] is True, str(terminal))
             expect(terminal["capabilities"]["bounded_scrollback"] is True, str(terminal))
+            expect("reattach_sessions" in terminal["capabilities"], str(terminal))
             expect(terminal["transport"]["mode"] == "sse", str(terminal))
             expect(terminal["transport"]["fallback"] == "polling", str(terminal))
             _assert_no_secret_status(terminal, "Terminal")
@@ -1594,7 +1650,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect("STRIPE_SECRET_KEY" not in terminal_env, str(terminal_env))
             status = asyncio.run(terminal_api.status())
             expect(status["available"] is True, str(status))
-            expect(status["backend"] == "managed-pty", str(status))
+            expect(status["backend"] in {"managed-pty", "tmux-pty"}, str(status))
             expect(status["workspace_root"] == "[workspace]", str(status))
             expect(status["hermes_state"] == "[hermes-state]", str(status))
             expect(status["capabilities"]["persistent_sessions"] is True, str(status))
@@ -1603,6 +1659,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["capabilities"]["group_sessions"] is True, str(status))
             expect(status["capabilities"]["machine_terminal_sessions"] is True, str(status))
             expect(status["capabilities"]["ssh_sessions"] is True, str(status))
+            expect("reattach_sessions" in status["capabilities"], str(status))
             expect(status["capabilities"]["resize"] is True, str(status))
             expect(status["capabilities"]["browser_cpr_response"] is True, str(status))
             expect(status["capabilities"]["xtermjs_terminal_emulator"] is True, str(status))
@@ -1618,6 +1675,7 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             session = created["session"]
             session_id = session["id"]
             expect(session["name"] == "Build", str(session))
+            expect(session["backend"] in {"managed-pty", "tmux-pty"}, str(session))
             expect(session["folder"] == "Work", str(session))
             expect(session["cwd"] == "/", str(session))
             expect(session["rows"] == 12 and session["cols"] == 80, str(session))
@@ -1673,6 +1731,15 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             background_payload = terminal_api._load_sessions()
             background_entry = next(item for item in background_payload["sessions"] if item["id"] == session_id)
             expect("background-proof" in background_entry["scrollback"], background_entry["scrollback"])
+            if status["backend"] == "tmux-pty":
+                runtime = terminal_api._runtime(session_id)
+                expect(runtime is not None, str(background_entry))
+                terminal_api._close_runtime(session_id, runtime)
+                reattached = asyncio.run(terminal_api.get_session(session_id=session_id))
+                expect(reattached["session"]["state"] == "running", str(reattached))
+                expect(terminal_api._runtime(session_id) is not None, str(reattached))
+                manual_reattach = asyncio.run(terminal_api.reattach_session(session_id=session_id))
+                expect(manual_reattach["session"]["state"] == "running", str(manual_reattach))
 
             resized = asyncio.run(terminal_api.resize_session(session_id, JsonRequest({"rows": 20, "cols": 100})))
             expect(resized["session"]["rows"] == 20 and resized["session"]["cols"] == 100, str(resized))
@@ -1770,6 +1837,9 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("initialScrollbackForSession" in body and "reattach_scrollback" in body, "Terminal UI should use a clean TUI reattach transcript instead of replaying stale control sequences")
     expect("suffixPrefixOverlapLength" in body and "previous.endsWith(raw)" in body, "Terminal UI should not reset a cached TUI when the backend scrollback tail is bounded")
     expect("terminalCache" in body and "detachTerminal" in body, "Terminal UI should keep xterm buffers warm when the page is revisited")
+    expect("onSynced" in body and "revealCachedTerminal" in body, "Terminal UI should catch cached terminals up before revealing them")
+    expect("surfaceRequestError" in body and "Connection interrupted; retrying" in body, "Terminal UI should suppress transient background fetch flicker")
+    expect('"/reattach"' in body and "reattachSelected" in body, "Terminal UI should expose a reattach action for recoverable detached sessions")
     expect("onScroll" in body and "SESSION_VIEWPORT_STORAGE_PREFIX" in body, "Terminal UI should remember scroll viewport per session")
     expect("attachCustomKeyEventHandler" in body and '\\x03' in body and "controlInputForKey" in body, "Terminal UI should forward Ctrl+C and related control keys to the PTY")
     expect("registerCsiHandler" in body and "acceptReports" in body and "disableStdin" in body, "Terminal UI should answer live cursor reports without replaying stale reports")
@@ -1790,6 +1860,8 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("_DEFAULT_SCROLLBACK_LINES" in api_body and "TERMINAL_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded browser scrollback limit")
     expect("_DEFAULT_SCROLLBACK_BYTES = 8_000_000" in api_body and "_DEFAULT_SCROLLBACK_LINES = 50_000" in api_body, "Terminal API should keep enough durable scrollback for TUI reconnects")
     expect("_DEFAULT_REATTACH_SCROLLBACK_LINES" in api_body and "TERMINAL_REATTACH_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded TUI reattach transcript")
+    expect("_TMUX_BACKEND" in api_body and "_reattach_tmux_runtime" in api_body and "reattach_session" in api_body, "Terminal API should support tmux-backed reattachable sessions")
+    expect("process_survives_dashboard_restart" in api_body, "Terminal API should report restart-persistent terminal capability")
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
@@ -3406,6 +3478,7 @@ def main() -> int:
     test_install_hermes_workspace_plugins_installs_standalone_dashboard_plugins_only()
     test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default()
     test_install_arclink_plugins_preserves_comments_and_future_nested_config()
+    test_install_arclink_theme_plugin_sets_dashboard_theme_without_menu()
     test_install_arclink_plugins_excludes_generated_artifacts()
     test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases()
     test_arclink_dashboard_plugins_expose_sanitized_access_state()
@@ -3434,7 +3507,7 @@ def main() -> int:
     test_arclink_managed_context_budgets_live_notion_queries_per_turn()
     test_arclink_managed_context_emits_telemetry_and_respects_opt_out()
     test_arclink_managed_context_recipe_tools_match_mcp_surface()
-    print("PASS all 33 ArcLink plugin tests")
+    print("PASS all ArcLink plugin tests")
     return 0
 
 

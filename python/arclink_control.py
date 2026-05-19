@@ -3641,7 +3641,15 @@ def apply_subscription_inference_allowance(
         SELECT deployment_id, user_id, metadata_json, status
         FROM arclink_deployments
         WHERE user_id = ?
-          AND status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+          AND status NOT IN (
+            'entitlement_required',
+            'teardown_requested',
+            'teardown_running',
+            'teardown_complete',
+            'teardown_failed',
+            'torn_down',
+            'cancelled'
+          )
         ORDER BY created_at ASC, deployment_id ASC
         """,
         (clean_user,),

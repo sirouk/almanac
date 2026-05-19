@@ -77,6 +77,8 @@ _DEFAULT_TUI_DIR = ""
 _DEFAULT_ROWS = 32
 _DEFAULT_COLS = 132
 _CPR_QUERY = b"\x1b[6n"
+_MANAGED_BACKEND = "managed-pty"
+_TMUX_BACKEND = "tmux-pty"
 _RUNTIMES: dict[str, dict[str, Any]] = {}
 _STATE_LOCK = threading.RLock()
 _TERMINAL_ENV_ALLOWLIST = {
@@ -90,6 +92,12 @@ _TERMINAL_ENV_ALLOWLIST = {
     "SHELL",
     "TERM",
     "USER",
+}
+_TMUX_ENV_KEYS = _TERMINAL_ENV_ALLOWLIST | {
+    "COLUMNS",
+    "LINES",
+    "PS1",
+    "TERM_PROGRAM",
 }
 
 
@@ -249,6 +257,131 @@ def _runtime_user_safe() -> bool:
     return os.geteuid() != 0 or _env_first("TERMINAL_ALLOW_ROOT") == "1"
 
 
+def _tmux_path() -> str:
+    if _env_first("TERMINAL_DISABLE_TMUX") == "1":
+        return ""
+    return shutil.which("tmux") or ""
+
+
+def _tmux_available() -> bool:
+    return bool(_tmux_path())
+
+
+def _preferred_backend() -> str:
+    return _TMUX_BACKEND if _tmux_available() else _MANAGED_BACKEND
+
+
+def _entry_backend(entry: Mapping[str, Any] | None = None) -> str:
+    backend = str((entry or {}).get("backend") or "").strip()
+    if backend in {_MANAGED_BACKEND, _TMUX_BACKEND}:
+        return backend
+    return _preferred_backend()
+
+
+def _tmux_socket_path() -> Path:
+    path = _state_dir() / "tmux.sock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.chmod(0o700)
+    except OSError:
+        pass
+    return path
+
+
+def _tmux_base_command() -> list[str]:
+    path = _tmux_path()
+    if not path:
+        raise HTTPException(status_code=503, detail="tmux is not installed")
+    return [path, "-S", str(_tmux_socket_path())]
+
+
+def _tmux_session_name(session_id: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_]", "_", session_id)
+    return ("arclink_" + clean)[:80]
+
+
+def _tmux_run(args: list[str], *, env: Mapping[str, str] | None = None, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _tmux_base_command() + args,
+        env=dict(env or os.environ),
+        text=True,
+        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+        stderr=subprocess.PIPE if capture else subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def _tmux_session_exists(entry: Mapping[str, Any]) -> bool:
+    session_id = str(entry.get("id") or "")
+    if not session_id or not _tmux_available():
+        return False
+    result = _tmux_run(["has-session", "-t", _tmux_session_name(session_id)])
+    return result.returncode == 0
+
+
+def _suffix_prefix_overlap_length(previous: str, next_text: str, max_chars: int = 65_536) -> int:
+    if not previous or not next_text:
+        return 0
+    size = min(len(previous), len(next_text), max_chars)
+    if size <= 0:
+        return 0
+    pattern = next_text[:size]
+    text = previous[-size:]
+    combined = pattern + "\0" + text
+    table = [0] * len(combined)
+    for index in range(1, len(combined)):
+        cursor = table[index - 1]
+        while cursor > 0 and combined[index] != combined[cursor]:
+            cursor = table[cursor - 1]
+        if combined[index] == combined[cursor]:
+            cursor += 1
+        table[index] = cursor
+    return min(table[-1], size)
+
+
+def _merge_scrollback_snapshot(entry: dict[str, Any], snapshot: str) -> bool:
+    snapshot = _sanitize_scrollback(snapshot)
+    if not snapshot:
+        return False
+    previous = str(entry.get("scrollback") or "")
+    if not previous:
+        entry["scrollback"] = snapshot
+        entry["updated_at"] = _now()
+        return True
+    if previous.endswith(snapshot):
+        return False
+    overlap = _suffix_prefix_overlap_length(previous, snapshot)
+    if overlap >= len(snapshot):
+        return False
+    if overlap:
+        _append_scrollback(entry, snapshot[overlap:])
+    else:
+        _append_scrollback(entry, "\n[terminal reattached]\n" + snapshot)
+    return True
+
+
+def _sync_tmux_capture(entry: dict[str, Any]) -> bool:
+    if _entry_backend(entry) != _TMUX_BACKEND or not _tmux_session_exists(entry):
+        return False
+    history_lines = min(_scrollback_lines(), max(_reattach_scrollback_lines(), 1))
+    result = _tmux_run(
+        [
+            "capture-pane",
+            "-p",
+            "-e",
+            "-J",
+            "-S",
+            f"-{history_lines}",
+            "-t",
+            _tmux_session_name(str(entry.get("id") or "")),
+        ],
+        capture=True,
+    )
+    if result.returncode != 0:
+        return False
+    return _merge_scrollback_snapshot(entry, result.stdout or "")
+
+
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -405,6 +538,7 @@ def _save_sessions(payload: dict[str, Any]) -> None:
 
 def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) -> dict[str, Any]:
     mode = _clean_session_mode(entry.get("mode"))
+    backend = _entry_backend(entry)
     payload = {
         "id": str(entry.get("id") or ""),
         "name": _clean_name(entry.get("name"), "Terminal"),
@@ -412,10 +546,11 @@ def _session_payload(entry: dict[str, Any], *, include_scrollback: bool = True) 
         "order": int(entry.get("order") or 0),
         "cwd": _display_path(str(entry.get("cwd") or "")),
         "shell": _shell_name(),
-        "backend": "managed-pty",
+        "backend": backend,
         "mode": mode,
         "target": _clean_name(entry.get("target"), ""),
         "state": str(entry.get("state") or "closed"),
+        "can_reattach": backend == _TMUX_BACKEND and _tmux_available(),
         "rows": _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200),
         "cols": _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400),
         "created_at": str(entry.get("created_at") or ""),
@@ -461,12 +596,150 @@ def _append_scrollback(entry: dict[str, Any], text: str) -> None:
     entry["updated_at"] = _now()
 
 
+def _close_runtime(session_id: str, runtime: dict[str, Any], *, terminate: bool = True) -> None:
+    process = runtime.get("process")
+    if terminate and process is not None and process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            pass
+    try:
+        os.close(int(runtime.get("fd")))
+    except Exception:
+        pass
+    _RUNTIMES.pop(session_id, None)
+
+
+def _tmux_new_session_args(entry: dict[str, Any], argv: list[str], cwd: Path, env: Mapping[str, str]) -> list[str]:
+    session_id = str(entry.get("id") or "")
+    rows = _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200)
+    cols = _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400)
+    args = [
+        "new-session",
+        "-d",
+        "-s",
+        _tmux_session_name(session_id),
+        "-x",
+        str(cols),
+        "-y",
+        str(rows),
+        "-c",
+        str(cwd),
+    ]
+    for key in sorted(_TMUX_ENV_KEYS):
+        value = str(env.get(key) or "")
+        if key and value and "\0" not in key and "\0" not in value:
+            args.extend(["-e", f"{key}={value}"])
+    args.append("--")
+    args.extend(argv)
+    return args
+
+
+def _ensure_tmux_session(entry: dict[str, Any], argv: list[str], cwd: Path, env: Mapping[str, str]) -> bool:
+    if _tmux_session_exists(entry):
+        return False
+    result = _tmux_run(_tmux_new_session_args(entry, argv, cwd, env), env=env, capture=True)
+    if result.returncode != 0:
+        raise HTTPException(status_code=503, detail="Terminal tmux session failed to start: " + _redact_text(result.stderr or result.stdout))
+    return True
+
+
+def _attach_tmux_runtime(entry: dict[str, Any], *, suppress_initial: bool = False) -> bool:
+    session_id = str(entry.get("id") or "")
+    if not session_id or not _tmux_session_exists(entry):
+        return False
+    rows = _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200)
+    cols = _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400)
+    mode = _clean_session_mode(entry.get("mode"))
+    raw_cwd = entry.get("cwd")
+    if not str(raw_cwd or "").strip():
+        raw_cwd = str(_workspace_root()) if mode == "ssh" else "/"
+    cwd, _cwd_display = _resolve_session_cwd(mode, raw_cwd)
+    master_fd, slave_fd = pty.openpty()
+    _set_pty_size(master_fd, rows, cols)
+    _set_pty_size(slave_fd, rows, cols)
+    env = _terminal_env(os.environ)
+    if str(env.get("TERM") or "").strip().lower() in {"", "dumb", "unknown"}:
+        env["TERM"] = "xterm-256color"
+    env["COLORTERM"] = env.get("COLORTERM") or "truecolor"
+    env["COLUMNS"] = str(cols)
+    env["LINES"] = str(rows)
+    env["HERMES_HOME"] = str(_hermes_home())
+    env["TERM_PROGRAM"] = "HermesTerminal"
+    try:
+        process = subprocess.Popen(
+            _tmux_base_command() + ["attach-session", "-t", _tmux_session_name(session_id)],
+            cwd=str(cwd),
+            env=env,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        try:
+            os.close(master_fd)
+            os.close(slave_fd)
+        except OSError:
+            pass
+        raise HTTPException(status_code=503, detail="Terminal tmux attach failed: " + _redact_text(exc))
+    os.close(slave_fd)
+    flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+    fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    runtime: dict[str, Any] = {
+        "process": process,
+        "fd": master_fd,
+        "rows": rows,
+        "cols": cols,
+        "backend": _TMUX_BACKEND,
+    }
+    if suppress_initial:
+        runtime["suppress_initial_until"] = time.time() + 0.25
+    _RUNTIMES[session_id] = runtime
+    entry["state"] = "running"
+    entry["exit_code"] = None
+    entry["updated_at"] = _now()
+    return True
+
+
+def _reattach_tmux_runtime(entry: dict[str, Any]) -> bool:
+    if _entry_backend(entry) != _TMUX_BACKEND or not _tmux_session_exists(entry):
+        return False
+    _sync_tmux_capture(entry)
+    return _attach_tmux_runtime(entry, suppress_initial=True)
+
+
+def _tmux_resize_session(entry: Mapping[str, Any], rows: int, cols: int) -> None:
+    if _entry_backend(entry) != _TMUX_BACKEND or not _tmux_session_exists(entry):
+        return
+    _tmux_run(
+        [
+            "resize-window",
+            "-t",
+            _tmux_session_name(str(entry.get("id") or "")),
+            "-x",
+            str(cols),
+            "-y",
+            str(rows),
+        ]
+    )
+
+
+def _tmux_kill_session(entry: Mapping[str, Any]) -> None:
+    if _entry_backend(entry) != _TMUX_BACKEND or not _tmux_available():
+        return
+    _tmux_run(["kill-session", "-t", _tmux_session_name(str(entry.get("id") or ""))])
+
+
 def _read_runtime(entry: dict[str, Any]) -> bool:
     session_id = str(entry.get("id") or "")
     runtime = _runtime(session_id)
     if not runtime:
+        if str(entry.get("state") or "") in {"starting", "running", "detached"} and _reattach_tmux_runtime(entry):
+            return True
         if str(entry.get("state") or "") in {"starting", "running"}:
-            entry["state"] = "detached"
+            entry["state"] = "exited" if _entry_backend(entry) == _TMUX_BACKEND else "detached"
             entry["updated_at"] = _now()
             return True
         return False
@@ -486,24 +759,29 @@ def _read_runtime(entry: dict[str, Any]) -> bool:
             break
         if not chunk:
             break
+        suppress_until = float(runtime.get("suppress_initial_until") or 0.0)
+        suppressing_initial = suppress_until > time.time()
+        if suppress_until and not suppressing_initial:
+            runtime.pop("suppress_initial_until", None)
         chunk = _answer_terminal_queries(fd, chunk)
         if not chunk:
             changed = True
             continue
         total += len(chunk)
+        if suppressing_initial:
+            continue
         _append_scrollback(entry, chunk.decode("utf-8", errors="replace"))
         changed = True
     process: subprocess.Popen[bytes] = runtime["process"]
     exit_code = process.poll()
     if exit_code is not None:
-        entry["state"] = "exited"
-        entry["exit_code"] = exit_code
-        entry["updated_at"] = _now()
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        _RUNTIMES.pop(session_id, None)
+        _close_runtime(session_id, runtime, terminate=False)
+        if _entry_backend(entry) == _TMUX_BACKEND and _tmux_session_exists(entry):
+            _reattach_tmux_runtime(entry)
+        else:
+            entry["state"] = "exited"
+            entry["exit_code"] = exit_code
+            entry["updated_at"] = _now()
         changed = True
     elif str(entry.get("state") or "") == "starting":
         entry["state"] = "running"
@@ -597,6 +875,8 @@ def _tui_dist_available() -> bool:
 def _start_runtime(entry: dict[str, Any]) -> None:
     argv, label = _runtime_argv(entry)
     del label
+    backend = _entry_backend(entry)
+    entry["backend"] = backend
     mode = _clean_session_mode(entry.get("mode"))
     raw_cwd = entry.get("cwd")
     if not str(raw_cwd or "").strip():
@@ -624,6 +904,15 @@ def _start_runtime(entry: dict[str, Any]) -> None:
         tui_dir_value = _env_first("HERMES_TUI_DIR", "TERMINAL_TUI_DIR") or _DEFAULT_TUI_DIR
         if tui_dir_value:
             env.setdefault("HERMES_TUI_DIR", tui_dir_value)
+    if backend == _TMUX_BACKEND:
+        created = _ensure_tmux_session(entry, argv, cwd, env)
+        _attach_tmux_runtime(entry, suppress_initial=not created and bool(str(entry.get("scrollback") or "")))
+        time.sleep(0.05)
+        _read_runtime(entry)
+        return
+    master_fd, slave_fd = pty.openpty()
+    _set_pty_size(master_fd, rows, cols)
+    _set_pty_size(slave_fd, rows, cols)
     try:
         process = subprocess.Popen(
             argv,
@@ -645,7 +934,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     os.close(slave_fd)
     flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
     fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    _RUNTIMES[session_id] = {"process": process, "fd": master_fd, "rows": rows, "cols": cols}
+    _RUNTIMES[session_id] = {"process": process, "fd": master_fd, "rows": rows, "cols": cols, "backend": _MANAGED_BACKEND}
     entry["state"] = "starting"
     entry["exit_code"] = None
     time.sleep(0.05)
@@ -654,7 +943,7 @@ def _start_runtime(entry: dict[str, Any]) -> None:
 
 def _status_payload() -> dict[str, Any]:
     workspace_root = _workspace_root()
-    tmux_path = shutil.which("tmux") or ""
+    tmux_path = _tmux_path()
     shell = _shell_path()
     tui_command = (_env_first("TERMINAL_TUI_COMMAND", "HERMES_TUI_COMMAND") or _DEFAULT_TUI_COMMAND).strip()
     tui_argv = shlex.split(tui_command) if tui_command else []
@@ -664,13 +953,14 @@ def _status_payload() -> dict[str, Any]:
     runtime_user_safe = _runtime_user_safe()
     workspace_root_safe = not _is_sensitive_path(workspace_root)
     available = bool(shell and workspace_root.exists() and workspace_root.is_dir() and workspace_root_safe and runtime_user_safe)
+    backend = _preferred_backend() if available else "unavailable"
     return {
         "plugin": "terminal",
         "label": "Terminal",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "status_contract": 1,
         "available": available,
-        "backend": "managed-pty" if available else "unavailable",
+        "backend": backend,
         "workspace_root": "[workspace]",
         "workspace_root_available": bool(workspace_root.exists() and workspace_root.is_dir() and workspace_root_safe),
         "hermes_state": "[hermes-state]",
@@ -685,6 +975,7 @@ def _status_payload() -> dict[str, Any]:
         },
         "backend_candidates": {
             "tmux": bool(tmux_path),
+            "tmux_pty": bool(tmux_path and available),
             "managed_pty": available,
         },
         "transport": {
@@ -695,6 +986,8 @@ def _status_payload() -> dict[str, Any]:
         },
         "capabilities": {
             "persistent_sessions": available,
+            "process_survives_dashboard_restart": bool(available and backend == _TMUX_BACKEND),
+            "reattach_sessions": bool(available and backend == _TMUX_BACKEND),
             "streaming_output": available,
             "bounded_scrollback": True,
             "reload_reconnect": available,
@@ -745,6 +1038,7 @@ async def create_session(request: Request) -> dict[str, Any]:
         if len(_active_sessions(payload)) >= _max_sessions():
             raise HTTPException(status_code=429, detail="Terminal session limit reached")
         mode = _clean_session_mode(body.get("mode"))
+        backend = _preferred_backend()
         raw_cwd = body.get("cwd")
         if not str(raw_cwd or "").strip():
             raw_cwd = str(_workspace_root()) if mode == "ssh" else "/"
@@ -759,7 +1053,7 @@ async def create_session(request: Request) -> dict[str, Any]:
             "order": int(body.get("order") or len(payload["sessions"])),
             "cwd": cwd_relative,
             "shell": _shell_name(),
-            "backend": "managed-pty",
+            "backend": backend,
             "mode": mode,
             "target": "",
             "state": "starting",
@@ -798,6 +1092,7 @@ async def resize_session(session_id: str, request: Request) -> dict[str, Any]:
                 os.killpg(process.pid, signal.SIGWINCH)
             except Exception:
                 pass
+        _tmux_resize_session(entry, rows, cols)
         _poll_sessions(payload)
         _save_sessions(payload)
         return {"session": _session_payload(entry)}
@@ -807,7 +1102,14 @@ async def resize_session(session_id: str, request: Request) -> dict[str, Any]:
 async def clear_closed_sessions() -> dict[str, Any]:
     with _STATE_LOCK:
         payload = _load_sessions()
+        _poll_sessions(payload)
         before = len(payload["sessions"])
+        removed_entries = [
+            entry for entry in payload["sessions"]
+            if str(entry.get("state") or "") in {"closed", "exited", "detached"}
+        ]
+        for entry in removed_entries:
+            _tmux_kill_session(entry)
         payload["sessions"] = [
             entry for entry in payload["sessions"]
             if str(entry.get("state") or "") not in {"closed", "exited", "detached"}
@@ -824,6 +1126,21 @@ async def get_session(session_id: str) -> dict[str, Any]:
     _poll_sessions(payload)
     entry = _find_session(payload, session_id)
     return {"session": _session_payload(entry)}
+
+
+@router.post("/sessions/{session_id}/reattach")
+async def reattach_session(session_id: str) -> dict[str, Any]:
+    clean_id = _clean_session_id(session_id)
+    with _STATE_LOCK:
+        payload = _load_sessions()
+        entry = _find_session(payload, clean_id)
+        if _entry_backend(entry) != _TMUX_BACKEND:
+            raise HTTPException(status_code=409, detail="This terminal session cannot be reattached")
+        if not _reattach_tmux_runtime(entry):
+            raise HTTPException(status_code=409, detail="Terminal session is no longer available")
+        _save_sessions(payload)
+        _start_reader(clean_id)
+        return {"session": _session_payload(entry)}
 
 
 @router.get("/sessions/{session_id}/stream")
@@ -937,6 +1254,9 @@ async def close_session(session_id: str, request: Request) -> dict[str, Any]:
         entry = _find_session(payload, _clean_session_id(session_id))
         if body.get("confirm") is not True:
             raise HTTPException(status_code=400, detail="Closing a terminal session requires confirmation")
+        backend = _entry_backend(entry)
+        if backend == _TMUX_BACKEND:
+            _tmux_kill_session(entry)
         runtime = _runtime(session_id)
         if runtime:
             process: subprocess.Popen[bytes] = runtime["process"]

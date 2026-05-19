@@ -39,6 +39,7 @@ RUN apt-get update \
     python3-venv \
     rsync \
     sqlite3 \
+    tmux \
     tini \
     util-linux \
   && rm -rf /var/lib/apt/lists/*

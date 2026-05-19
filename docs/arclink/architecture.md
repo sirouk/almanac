@@ -35,6 +35,7 @@ arclink_live_runner.py      Live proof runner orchestrating readiness, diagnosti
 arclink_live_journey.py     Ordered live E2E journey steps (credential-gated)
 arclink_evidence.py         Evidence collection and template helpers for live proof
 plugins/hermes-agent/
+  arclink-theme/     No-tab ArcLink dashboard theme plugin
   arclink-managed-context/  Managed agent context and ArcLink MCP bootstrap injection
   drive/            Hermes dashboard file manager for vault/workspace access
   code/             Hermes dashboard native code workspace and git surface

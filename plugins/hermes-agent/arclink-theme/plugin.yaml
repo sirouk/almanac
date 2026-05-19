@@ -1,0 +1,9 @@
+name: arclink-theme
+version: 1.0.0
+description: Installs the ArcLink dashboard theme and makes it the default dashboard theme.
+provides_tools: false
+provides_hooks: []
+provides_commands: []
+requires_env: []
+minimum_hermes_version: v2026.4.30
+arclink_dashboard_default_theme: arclink

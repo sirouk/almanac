@@ -40,7 +40,7 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("cd /home/arclink/arclink/web" in body and "npm run build" in body, body)
     expect("hermes-agent-src/ui-tui" in body and "npm run build" in body, body)
     expect("ARCLINK_API_INTERNAL_URL=http://control-api:8900" in body, body)
-    expect("poppler-utils" in body and "inotify-tools" in body and "sqlite3" in body, body)
+    expect("poppler-utils" in body and "inotify-tools" in body and "sqlite3" in body and "tmux" in body, body)
     expect("download.docker.com/linux/debian" in body and "docker-ce-cli" in body, body)
     expect("docker-compose-plugin" in body, body)
     expect("iproute2" in body, body)

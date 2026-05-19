@@ -1014,6 +1014,88 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     print("PASS test_public_bot_agents_roster_add_agent_and_switch_are_account_aware")
 
 
+def test_public_bot_retire_agent_preserves_state_and_stops_routing() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_retire_agent_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_retire_agent_test")
+    conn = memory_db(control)
+    provider_key = "chu" + "tes"
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:retire",
+        prefix="arc-prime-retire",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_retire_bob",
+        user_id=seeded["user_id"],
+        prefix="arc-bob-retire",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Bob",
+            "selected_plan_id": "sovereign",
+            provider_key: {"monthly_budget_cents": 1200, "used_cents": 450},
+        },
+    )
+    conn.commit()
+
+    roster = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/agents")
+    expect("Bob: ready" in roster.reply, roster.reply)
+    expect(any(button.command == "/retire-agent-bob" for button in roster.buttons), str(roster.buttons))
+
+    switched = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/agent Bob")
+    expect(switched.action == "switch_agent", str(switched))
+    expect(switched.deployment_id == "arcdep_retire_bob", str(switched))
+
+    start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/raven retire_agent Bob")
+    expect(start.action == "retire_agent_confirm_name", str(start))
+    expect("no automatic proration" in start.reply, start.reply)
+
+    mismatch = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="Alice")
+    expect(mismatch.action == "retire_agent_name_mismatch", str(mismatch))
+
+    typed = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="Bob")
+    expect(typed.action == "retire_agent_final_confirm", str(typed))
+
+    control.queue_notification(
+        conn,
+        target_kind="public-agent-turn",
+        target_id="telegram:tg:retire",
+        channel_kind="public-agent-turn",
+        message="queued turn",
+        extra={"deployment_id": "arcdep_retire_bob", "agent_label": "Bob"},
+    )
+    final = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/confirm-retire-agent")
+    expect(final.action == "retire_agent_requested", str(final))
+    expect("New routing and model spend are stopped" in final.reply, final.reply)
+    expect(final.deployment_id == seeded["deployment_id"], str(final))
+
+    row = conn.execute("SELECT status, metadata_json FROM arclink_deployments WHERE deployment_id = 'arcdep_retire_bob'").fetchone()
+    metadata = json.loads(row["metadata_json"])
+    expect(row["status"] == "teardown_requested", str(dict(row)))
+    expect(metadata["teardown"]["remove_volumes"] is False, str(metadata))
+    expect(metadata["teardown"]["preserve_state"] is True, str(metadata))
+    expect(metadata[provider_key]["status"] == "suspended", str(metadata))
+    expect(metadata["retirement"]["renewal_policy"] == "cancel_agent_renewal_at_period_end", str(metadata))
+    expect(metadata["retirement"]["proration_policy"] == "no_automatic_proration", str(metadata))
+    expect(metadata["retirement"]["usage_policy"] == "consumed_usage_is_final_and_new_spend_is_blocked", str(metadata))
+
+    pending = conn.execute("SELECT delivered_at, delivery_error FROM notification_outbox WHERE target_kind = 'public-agent-turn'").fetchone()
+    expect(str(pending["delivered_at"] or ""), str(dict(pending)))
+    expect("retired" in str(pending["delivery_error"] or "").lower(), str(dict(pending)))
+
+    session = conn.execute("SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?", (seeded["session_id"],)).fetchone()
+    session_meta = json.loads(session["metadata_json"])
+    expect(session_meta.get("active_deployment_id") == seeded["deployment_id"], str(session_meta))
+    expect("retire_agent" not in session_meta and "public_bot_workflow" not in session_meta, str(session_meta))
+
+    blocked_switch = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:retire", text="/agent Bob")
+    expect(blocked_switch.action == "switch_agent_not_ready", str(blocked_switch))
+    print("PASS test_public_bot_retire_agent_preserves_state_and_stops_routing")
+
+
 def test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_agent_selector_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_agent_selector_test")
@@ -1708,6 +1790,7 @@ def main() -> int:
     test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions()
     test_public_bot_agents_roster_add_agent_and_switch_are_account_aware()
+    test_public_bot_retire_agent_preserves_state_and_stops_routing()
     test_public_bot_agent_switch_matches_live_roster_labels_and_blocks_passthrough()
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_pair_channel_refuses_existing_other_account()
@@ -1723,7 +1806,7 @@ def main() -> int:
     test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_two_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
-    print("PASS all 31 ArcLink public bot tests")
+    print("PASS all 32 ArcLink public bot tests")
     return 0
 
 

@@ -154,6 +154,7 @@ install_base_linux_packages() {
     python3-jsonschema \
     python3-yaml \
     poppler-utils \
+    tmux \
     uidmap \
     slirp4netns \
     fuse-overlayfs \

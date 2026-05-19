@@ -1254,10 +1254,11 @@ PY
 }
 
 docker_refresh_deployment_managed_plugins() {
-  local deployments_root=""
-  local compose_file="" deploy_root="" root_name="" deployment_id="" clean_id="" project="" refreshed=0
+  local deployments_root="" db_path=""
+  local compose_file="" deploy_root="" root_name="" deployment_id="" clean_id="" project="" deployment_status="" refreshed=0
 
   deployments_root="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
+  db_path="$REPO_DIR/arclink-priv/state/arclink-control.sqlite3"
   [[ -d "$deployments_root" ]] || return 0
 
   while IFS= read -r compose_file; do
@@ -1274,6 +1275,32 @@ docker_refresh_deployment_managed_plugins() {
       continue
     fi
     project="arclink-$clean_id"
+    deployment_status="$(
+      python3 - "$db_path" "$deployment_id" <<'PY' 2>/dev/null || true
+import sqlite3
+import sys
+
+db_path, deployment_id = sys.argv[1], sys.argv[2]
+with sqlite3.connect(db_path) as conn:
+    row = conn.execute(
+        "SELECT status FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchone()
+print(str(row[0] if row else ""))
+PY
+    )"
+    case "$deployment_status" in
+      torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed)
+        env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+          docker compose -p "$project" -f "$compose_file" down --remove-orphans </dev/null >/dev/null 2>&1 || true
+        continue
+        ;;
+      active|first_contacted|provisioning|provisioning_ready)
+        ;;
+      *)
+        continue
+        ;;
+    esac
 
     if compose_service_secrets_available "$compose_file" managed-context-install; then
       env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
@@ -1356,7 +1383,7 @@ wait_for_docker_agent_reconcile() {
   local attempt=0
 
   for attempt in $(seq 1 60); do
-    if compose exec -T agent-supervisor python3 - <<'PY' >/dev/null 2>&1
+    if compose exec -T agent-supervisor env PYTHONPATH=/home/arclink/arclink/python python3 - <<'PY' >/dev/null 2>&1
 from pathlib import Path
 
 from arclink_control import Config, connect_db

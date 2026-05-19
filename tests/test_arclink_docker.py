@@ -281,6 +281,12 @@ def test_docker_operator_commands_are_present() -> None:
         "deployment plugin refresh must not let docker compose consume the find-loop stdin and skip later ArcPods\n"
         + refresh_block,
     )
+    expect(
+        "deployment_status" in refresh_block
+        and "down --remove-orphans </dev/null >/dev/null 2>&1" in refresh_block
+        and "torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed" in refresh_block,
+        "deployment plugin refresh must skip and stop retiring or retired ArcPods\n" + refresh_block,
+    )
     expect("--force-recreate dashboard" in body, body)
     expect("--force-recreate nextcloud" in body, body)
     expect("--force-recreate memory-synth" in body, body)
@@ -297,7 +303,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect("Repaired Hermes dashboard plugin mounts" in body, body)
     expect("ensure_control_network(gateway, prefix=prefix, service_name=\"hermes-gateway\")" in body, body)
     expect("ARCLINK_TAILNET_SERVICE_PORT_BASE" in body, body)
-    expect("wait_for_docker_agent_reconcile()" in body and "arclink-vault-reconciler.json" in body, body)
+    expect(
+        "wait_for_docker_agent_reconcile()" in body
+        and "arclink-vault-reconciler.json" in body
+        and "PYTHONPATH=/home/arclink/arclink/python" in body,
+        body,
+    )
     expect("docker_record_release_state()" in body and '"deployed_from": "docker-checkout"' in body, body)
     expect('"revision_mode": revision_mode' in body, body)
     expect('"checkout_commit": checkout_commit' in body, body)

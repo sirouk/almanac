@@ -1642,6 +1642,8 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
         os.environ["TERMINAL_WORKSPACE_ROOT"] = str(workspace)
         os.environ["TERMINAL_SCROLLBACK_BYTES"] = "4000"
         os.environ["TERMINAL_ALLOW_ROOT"] = "1"
+        os.environ["ARCLINK_DASHBOARD_AGENT_LABEL"] = "Atlas"
+        os.environ["ARCLINK_DASHBOARD_THEME_LABEL"] = "ArcLink Signal Orange"
         try:
             terminal_api = load_module(
                 PLUGINS_ROOT / "terminal" / "dashboard" / "plugin_api.py",
@@ -1726,6 +1728,14 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect("reattach_scrollback" in tui_payload, str(tui_payload))
             expect("\x1b" not in tui_payload["reattach_scrollback"], repr(tui_payload["reattach_scrollback"]))
             expect("Hermes" in tui_payload["reattach_scrollback"] and "ready" in tui_payload["reattach_scrollback"], tui_payload["reattach_scrollback"])
+            splash = terminal_api._tui_splash_text({"name": "Hermes TUI"})
+            expect("HERMES" in splash and "ARCLINK" in splash and "Retro boot rail online" in splash, splash)
+            expect("Agent: Atlas" in splash and "Theme: ArcLink Signal Orange" in splash, splash)
+            plain_splash = terminal_api._plain_reattach_scrollback(splash)
+            expect("\x1b" not in plain_splash and "Warming Hermes TUI" in plain_splash, repr(plain_splash))
+            os.environ["TERMINAL_TUI_SPLASH_DISABLED"] = "1"
+            expect(terminal_api._tui_splash_text({"name": "Hermes TUI"}) == "", "TUI splash should be disableable")
+            os.environ.pop("TERMINAL_TUI_SPLASH_DISABLED", None)
             asyncio.run(
                 terminal_api.send_input(session_id, JsonRequest({"input": "sleep 0.2; printf 'background-proof\\n'\n"}))
             )
@@ -1863,6 +1873,7 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("_DEFAULT_SCROLLBACK_BYTES = 8_000_000" in api_body and "_DEFAULT_SCROLLBACK_LINES = 50_000" in api_body, "Terminal API should keep enough durable scrollback for TUI reconnects")
     expect("_DEFAULT_REATTACH_SCROLLBACK_LINES" in api_body and "TERMINAL_REATTACH_SCROLLBACK_LINES" in api_body, "Terminal API should expose a bounded TUI reattach transcript")
     expect("_TMUX_BACKEND" in api_body and "_reattach_tmux_runtime" in api_body and "reattach_session" in api_body, "Terminal API should support tmux-backed reattachable sessions")
+    expect("_tui_splash_text" in api_body and "Retro boot rail online" in api_body and "TERMINAL_TUI_SPLASH_DISABLED" in api_body, "Terminal API should seed a disableable ArcLink splash for slow Hermes TUI startup")
     expect("process_survives_dashboard_restart" in api_body, "Terminal API should report restart-persistent terminal capability")
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")

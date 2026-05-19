@@ -74,6 +74,7 @@ _SENSITIVE_FILE_NAMES = {
 }
 _DEFAULT_TUI_COMMAND = "hermes"
 _DEFAULT_TUI_DIR = ""
+_TUI_SPLASH_DISABLED_VALUES = {"1", "true", "yes", "on"}
 _DEFAULT_ROWS = 32
 _DEFAULT_COLS = 132
 _CPR_QUERY = b"\x1b[6n"
@@ -507,6 +508,47 @@ def _plain_reattach_scrollback(value: Any) -> str:
     return ("\n".join(lines) + "\n") if lines else ""
 
 
+def _tui_splash_enabled() -> bool:
+    value = _env_first("TERMINAL_TUI_SPLASH_DISABLED", "ARCLINK_TERMINAL_TUI_SPLASH_DISABLED").lower()
+    return value not in _TUI_SPLASH_DISABLED_VALUES
+
+
+def _tui_splash_text(entry: Mapping[str, Any] | None = None) -> str:
+    if not _tui_splash_enabled():
+        return ""
+    agent = _clean_name(
+        _env_first("ARCLINK_DASHBOARD_AGENT_LABEL", "ARCLINK_AGENT_NAME", "HERMES_AGENT_NAME"),
+        "ArcLink Agent",
+    )
+    theme = _clean_name(_env_first("ARCLINK_DASHBOARD_THEME_LABEL", "ARCLINK_THEME_LABEL"), "ArcLink Signal")
+    mode_name = _clean_name((entry or {}).get("name"), "Hermes TUI")
+    art = [
+        " _   _ _____ ____  __  __ _____ ____     __  __     _    ____   ____ _     ___ _   _ _  __",
+        "| | | | ____|  _ \\|  \\/  | ____/ ___|   \\ \\/ /    / \\  |  _ \\ / ___| |   |_ _| \\ | | |/ /",
+        "| |_| |  _| | |_) | |\\/| |  _| \\___ \\    \\  /    / _ \\ | |_) | |   | |    | ||  \\| | ' / ",
+        "|  _  | |___|  _ <| |  | | |___ ___) |   /  \\   / ___ \\|  _ <| |___| |___ | || |\\  | . \\ ",
+        "|_| |_|_____|_| \\_\\_|  |_|_____|____/   /_/\\_\\ /_/   \\_\\_| \\_\\\\____|_____|___|_| \\_|_|\\_\\",
+    ]
+    lines = [
+        "\x1b[2J\x1b[H\x1b[38;5;208m" + art[0],
+        "\x1b[38;5;214m" + art[1],
+        "\x1b[38;5;220m" + art[2],
+        "\x1b[38;5;141m" + art[3],
+        "\x1b[38;5;81m" + art[4] + "\x1b[0m",
+        "",
+        "\x1b[1mHERMES X ARCLINK\x1b[0m",
+        "\x1b[1mRetro boot rail online\x1b[0m",
+        f"Agent: {agent}",
+        f"Theme: {theme}",
+        f"Session: {mode_name}",
+        "",
+        "Warming Hermes TUI. Syncing memory rails, tool lanes, vault index, and live controls...",
+        "The helm will hand over as soon as Hermes is ready.",
+        "",
+    ]
+    return "\r\n".join(lines)
+
+
 def _set_pty_size(fd: int, rows: int = _DEFAULT_ROWS, cols: int = _DEFAULT_COLS) -> None:
     try:
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -878,6 +920,8 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     backend = _entry_backend(entry)
     entry["backend"] = backend
     mode = _clean_session_mode(entry.get("mode"))
+    if mode == "tui" and not str(entry.get("scrollback") or ""):
+        _append_scrollback(entry, _tui_splash_text(entry))
     raw_cwd = entry.get("cwd")
     if not str(raw_cwd or "").strip():
         raw_cwd = str(_workspace_root()) if mode == "ssh" else "/"

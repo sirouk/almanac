@@ -186,7 +186,7 @@ const Hero = () => (
               <span className="text-[#FB5005]/80 text-[10px] font-mono tracking-widest uppercase">Your first autonomous team member</span>
             </div>
 
-            <h1 className="font-heading font-normal text-[#E7E6E6] leading-[1.04] mb-6"
+            <h1 className="font-heading font-normal text-[#E7E6E6] leading-[1.08] mb-6"
               style={{fontSize: 'clamp(2.8rem, 6vw, 5.5rem)'}}>
               Raven runs your<br />operations.
             </h1>

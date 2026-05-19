@@ -69,7 +69,7 @@ export default function LoginPage() {
             <span className="h-1.5 w-1.5 rounded-full bg-[#FB5005] status-blink" />
             <span className="font-mono text-[10px] uppercase tracking-widest text-[#FB5005]/80">Secure Raven console</span>
           </div>
-          <h1 className="font-heading max-w-xl text-5xl font-normal leading-[1.04] text-[#E7E6E6]">
+          <h1 className="font-heading max-w-xl text-5xl font-normal leading-[1.08] text-[#E7E6E6]">
             Return to the agent that runs your operations.
           </h1>
           <p className="font-body mt-6 max-w-lg text-base leading-relaxed text-[#E7E6E6]/50">

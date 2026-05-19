@@ -392,6 +392,25 @@ test.describe("Brand system", () => {
     expect(content!.length).toBeGreaterThan(50);
   });
 
+  test("standalone build serves critical marketing assets", async ({ page }) => {
+    const logo = await page.request.get("/marketing/Arclink_v3--orange_symbol_white_text.svg");
+    expect(logo.status()).toBe(200);
+    expect(logo.headers()["content-type"]).toContain("image/svg+xml");
+    const ravenHero = await page.request.get("/marketing/raven-hero1.png");
+    expect(ravenHero.status()).toBe(200);
+    expect(ravenHero.headers()["content-type"]).toContain("image/png");
+  });
+
+  test("landing page loads brand imagery without broken images", async ({ page }) => {
+    await page.goto("/");
+    const logo = page.getByAltText("ArcLink").first();
+    await expect(logo).toBeVisible();
+    expect(await logo.evaluate((img) => (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0)).toBeTruthy();
+    const ravenHero = page.getByAltText("Raven — ArcLink AI Operator").first();
+    await expect(ravenHero).toBeVisible();
+    expect(await ravenHero.evaluate((img) => (img as HTMLImageElement).complete && (img as HTMLImageElement).naturalWidth > 0)).toBeTruthy();
+  });
+
   test("landing page renders the imported marketing sections", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: /Raven runs your operations/i })).toBeVisible();
@@ -425,7 +444,7 @@ test.describe("Route smoke", () => {
     await mockApi(page);
     await page.goto("/onboarding");
     await expect(page.getByRole("heading", { name: "Choose ArcLink Onboarding" })).toBeVisible();
-    await expect(page.getByText("I can take you from a few answers to agent onboard ArcLink")).toBeVisible();
+    await expect(page.getByText("I can take you from a few answers to an Agent live on ArcLink")).toBeVisible();
     await expect(page.getByRole("button", { name: /Founders - \$149\/month/ })).toBeVisible();
     // Fake adapter notice present
     await expect(page.locator("text=Fake adapters")).toBeVisible();
@@ -718,7 +737,7 @@ test.describe("Onboarding flow", () => {
     await page.fill('input[id="email"]', "new.user@example.test");
     await page.click('button[type="submit"]');
     await expect(page.getByRole("heading", { name: "Stripe Handoff Ready" })).toBeVisible();
-    await expect(page.locator("text=Complete The Hire").last()).toBeVisible();
+    await expect(page.locator("text=Finish Stripe Checkout").last()).toBeVisible();
     await expect(page.locator("text=Stage 1 is ready").last()).toBeVisible();
   });
 });

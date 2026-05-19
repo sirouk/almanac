@@ -157,7 +157,7 @@ function CheckoutSuccessContent() {
           {confirmed ? "Payment confirmed" : "Verifying payment"}
         </p>
         <h1 className="font-display text-3xl font-bold">
-          {confirmed ? "Agent onboard ArcLink" : "Waiting for confirmation"}
+          {confirmed ? (deploymentReady ? "ArcPod online" : "Launch queue engaged") : "Waiting for confirmation"}
         </h1>
 
         {!confirmed && !timedOut && (

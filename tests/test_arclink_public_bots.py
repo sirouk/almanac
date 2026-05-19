@@ -268,10 +268,10 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
     )
     expect([b.label for b in standard.buttons] == ["Sovereign - $199/month", "Scale - $275/month"], str(standard.buttons))
     planned = bots.handle_arclink_public_bot_turn(
-        conn, channel="telegram", channel_identity="tg:scale", text="/plan scale",
+        conn, channel="telegram", channel_identity="tg:scale", text="scale",
     )
     expect("Scale is locked" in planned.reply, planned.reply)
-    expect("Agents onboard ArcLink with Federation" in planned.reply, planned.reply)
+    expect("Three Agents live on ArcLink with Federation" in planned.reply, planned.reply)
 
     checkout = bots.handle_arclink_public_bot_turn(
         conn,

@@ -425,7 +425,7 @@ def _session_page(conn: sqlite3.Connection, session_id: str, *, error: str = "")
 
 def _checkout_result_page(kind: str) -> ArcLinkSurfaceResponse:
     success = kind == "success"
-    title = "Agent onboard ArcLink" if success else "Checkout paused"
+    title = "Launch queue engaged" if success else "Checkout paused"
     body = (
         "Raven is watching for payment confirmation. Once Stripe clears, your ArcLink agent moves into the launch queue."
         if success

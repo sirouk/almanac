@@ -13,7 +13,7 @@ export default defineConfig({
     { name: "mobile", use: { viewport: { width: 375, height: 812 } } },
   ],
   webServer: {
-    command: "npm run build && cp -r .next/static .next/standalone/.next/static && PORT=3099 node .next/standalone/server.js",
+    command: "npm run build && mkdir -p .next/standalone/.next && rm -rf .next/standalone/.next/static .next/standalone/public && cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public && PORT=3099 node .next/standalone/server.js",
     port: 3099,
     reuseExistingServer: true,
     timeout: 60_000,

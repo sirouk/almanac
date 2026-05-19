@@ -81,7 +81,7 @@ describe("Page content smoke checks", () => {
   it("Checkout result pages exist for Stripe redirects", () => {
     const success = readFileSync(resolve(ROOT, "src/app/checkout/success/page.tsx"), "utf-8");
     const cancel = readFileSync(resolve(ROOT, "src/app/checkout/cancel/page.tsx"), "utf-8");
-    assert.ok(success.includes("Agent onboard ArcLink"), "missing success copy");
+    assert.ok(success.includes("Launch queue engaged") || success.includes("ArcPod online"), "missing success copy");
     assert.ok(cancel.includes("Checkout paused"), "missing cancel copy");
     assert.ok(cancel.includes("api.cancelOnboarding"), "Stripe cancel should call the backend cancel path when proof is available");
   });

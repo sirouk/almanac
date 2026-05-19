@@ -1008,9 +1008,9 @@ def _package_prompt_reply(
             action="prompt_package",
             reply=(
                 f"{header}\n\n"
-                "Choose how many agents to onboard ArcLink.\n\n"
-                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: agent onboard ArcLink.\n"
-                f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: agents onboard ArcLink with Federation.\n\n"
+                "Choose how many Agents to bring live on ArcLink.\n\n"
+                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: one Agent live on ArcLink.\n"
+                f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: three Agents live on ArcLink with Federation.\n\n"
                 f"Agentic Expansion after launch: Sovereign agents are ${SOVEREIGN_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each; "
                 f"Scale agents are ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each."
             ),
@@ -1027,7 +1027,7 @@ def _package_prompt_reply(
             f"{header}\n\n"
             f"Choose your ArcLink onboarding lane.\n\n"
             f"Founders is ${FOUNDERS_MONTHLY_DOLLARS}/mo: single-ArcPod access for the first 100 Captains.\n"
-            f"Scale is ${SCALE_MONTHLY_DOLLARS}/mo: three agents onboard ArcLink with Federation.\n\n"
+            f"Scale is ${SCALE_MONTHLY_DOLLARS}/mo: three Agents live on ArcLink with Federation.\n\n"
             "Tap a lane to open secure Stripe checkout. I will report back here once payment clears and provisioning starts.\n\n"
             f"Agentic Expansion after launch starts at ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month on Scale "
             f"and ${SOVEREIGN_AGENT_EXPANSION_MONTHLY_DOLLARS}/month on Sovereign."
@@ -5498,6 +5498,10 @@ def handle_arclink_public_bot_turn(
             bot_display_name=raven,
         )
     plan_answer = _command_value(message, command, ("plan", "/plan"))
+    if plan_answer is None and _session_has_agent_identity(session):
+        bare_plan = _normalize_public_bot_plan(command)
+        if bare_plan:
+            plan_answer = bare_plan
     if plan_answer is not None:
         if not _session_has_agent_identity(session):
             return _identity_or_package_prompt(conn, session, base_domain=base_domain, bot_display_name=raven)
@@ -5515,19 +5519,19 @@ def handle_arclink_public_bot_turn(
         if plan == "scale":
             plan_reply = (
                 "Scale is locked.\n\n"
-                f"Agents onboard ArcLink with Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
+                f"Three Agents live on ArcLink with Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
                 "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
         elif plan == "founders":
             plan_reply = (
                 "Limited 100 Founders is locked.\n\n"
                 f"Single-ArcPod access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
-                "One Agent onboard ArcLink while the Founders cohort is open."
+                "One Agent lives on ArcLink while the Founders cohort is open."
             )
         else:
             plan_reply = (
                 "Sovereign is locked.\n\n"
-                f"Agent onboard ArcLink for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
+                f"One Agent lives on ArcLink for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
                 "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
         if stripe_client is not None:
@@ -5572,10 +5576,11 @@ def handle_arclink_public_bot_turn(
     return _reply(
         session,
         action="prompt_command",
-            reply=(
-                f"I read you. {raven} on the line.\n\n"
-                "No command map needed yet. The early lanes stay few on purpose. From here I can help you pick Founders or Scale, set your name, or read the board. Once your agent is awake on ArcLink, the deeper controls surface as a clean checklist."
-            ),
+        reply=(
+            f"I read you. {raven} on the line.\n\n"
+            "Use Take Me Aboard to name an Agent and choose a package, Update Name to change what I call you, or `/status` to read the board. "
+            "Once an Agent is live, I open the deeper controls: credentials, Crew, Notion, backup, files, code, model lane, and health."
+        ),
         buttons=(
             _button("Take Me Aboard", command="/packages"),
             _button("Update Name", command="/name", style="secondary"),

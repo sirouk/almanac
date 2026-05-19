@@ -931,7 +931,7 @@ function AdminTriageBoard({ data, onTab }: { data: AdminData; onTab: (tab: Tab) 
               <StatusBadge status={item.status} />
             </div>
             <p className="mt-2 font-display text-2xl font-semibold">{item.value}</p>
-            <p className="mt-2 line-clamp-3 text-xs leading-5 text-soft-white/45">{item.detail}</p>
+            <p className="mt-2 text-xs leading-5 text-soft-white/45">{item.detail}</p>
           </button>
         ))}
       </div>

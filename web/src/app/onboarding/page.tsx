@@ -28,19 +28,19 @@ const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; 
   founders: {
     name: "Limited 100 Founders",
     price: "$149/month",
-    summary: "Agent onboard ArcLink for the first 100.",
+    summary: "One Agent live on ArcLink for the first 100.",
     checkout: "Onboard Agent - $149/month",
   },
   sovereign: {
     name: "Sovereign",
     price: "$199/month",
-    summary: "Agent onboard ArcLink.",
+    summary: "One Agent live on ArcLink.",
     checkout: "Onboard Agent - $199/month",
   },
   scale: {
     name: "Scale",
     price: "$275/month",
-    summary: "Agents onboard ArcLink with Federation.",
+    summary: "Three Agents live on ArcLink with Federation.",
     checkout: "Onboard Agents - $275/month",
   },
 };
@@ -248,7 +248,7 @@ export default function OnboardingPage() {
       <main className="relative z-10 mx-auto grid min-h-[calc(100vh-96px)] max-w-6xl items-center gap-10 py-14 lg:grid-cols-[0.9fr_1.1fr]">
         <section className="hidden lg:block">
           <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#FB5005]/70">Raven onboarding</p>
-          <h1 className="font-heading mt-5 max-w-xl text-5xl font-normal leading-[1.04] text-[#E7E6E6]">
+          <h1 className="font-heading mt-5 max-w-xl text-5xl font-normal leading-[1.08] text-[#E7E6E6]">
             Pick the first agent. Raven handles the handoff.
           </h1>
           <p className="font-body mt-6 max-w-lg text-base leading-relaxed text-[#E7E6E6]/50">
@@ -308,7 +308,7 @@ export default function OnboardingPage() {
           {step === "start" && (
             <div className="mt-6 space-y-4">
               <p className="font-body text-sm leading-relaxed text-[#E7E6E6]/55">
-                I can take you from a few answers to agent onboard ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
+                I can take you from a few answers to an Agent live on ArcLink with memory, files, code workspace, model access, and dashboard visibility already wired up.
               </p>
               <div className="grid gap-3">
                 {!showStandardPlans ? (
@@ -320,7 +320,7 @@ export default function OnboardingPage() {
                       className="rounded border border-[#FB5005] bg-[#FB5005] px-4 py-3 text-left font-body font-semibold text-white transition hover:bg-[#e04504] disabled:opacity-50"
                     >
                       Founders - $149/month
-                      <span className="mt-1 block text-xs font-normal text-white/70">Limited to the first 100. Agent onboard ArcLink.</span>
+                      <span className="mt-1 block text-xs font-normal text-white/70">Limited to the first 100. One Agent live on ArcLink.</span>
                     </button>
                     <button
                       type="button"
@@ -341,7 +341,7 @@ export default function OnboardingPage() {
                       className="rounded border border-[#FB5005] bg-[#FB5005] px-4 py-3 text-left font-body font-semibold text-white transition hover:bg-[#e04504] disabled:opacity-50"
                     >
                       Sovereign - $199/month
-                      <span className="mt-1 block text-xs font-normal text-white/70">Agent onboard ArcLink.</span>
+                      <span className="mt-1 block text-xs font-normal text-white/70">One Agent live on ArcLink.</span>
                     </button>
                     <button
                       type="button"
@@ -350,7 +350,7 @@ export default function OnboardingPage() {
                       className="rounded border border-white/10 bg-[#080808] px-4 py-3 text-left font-body font-semibold text-[#E7E6E6] transition hover:border-[#FB5005]/40 disabled:opacity-50"
                     >
                       Scale - $275/month
-                      <span className="mt-1 block text-xs font-normal text-[#E7E6E6]/50">Agents onboard ArcLink with Federation.</span>
+                      <span className="mt-1 block text-xs font-normal text-[#E7E6E6]/50">Three Agents live on ArcLink with Federation.</span>
                     </button>
                   </>
                 )}
@@ -450,7 +450,7 @@ export default function OnboardingPage() {
                     href={checkoutUrl}
                     className="block w-full rounded bg-[#FB5005] px-4 py-3 text-center font-body font-semibold text-white transition hover:bg-[#e04504]"
                   >
-                    Complete The Hire
+                    Finish Stripe Checkout
                   </a>
                 </>
               ) : (

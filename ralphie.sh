@@ -79,6 +79,8 @@ PROJECT_GOALS_FILE="$CONFIG_DIR/project-goals.md"
 SESSION_CHANGED_PATHS_FILE="$CONFIG_DIR/session-changed-paths.txt"
 ARCLINK_JOURNEY_STEERING_FILE="$RESEARCH_DIR/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md"
 ARCLINK_JOURNEY_PROMPT_DIR="$CONFIG_DIR/arclink-user-journey-prompts"
+ARCLINK_BUILDOUT_STEERING_FILE="$RESEARCH_DIR/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md"
+ARCLINK_BUILDOUT_PROMPT_DIR="$CONFIG_DIR/arclink-dream-buildout-prompts"
 
 # Shared logic for interactive questions and formatting.
 err() { echo -e "\033[1;31m$*\033[0m" >&2; }
@@ -1107,6 +1109,7 @@ Core options:
   --require-plan-freshness-for-build bool  Remap to plan when configured backlog sources changed after plan
   --backlog-sources PATHS                 Comma-separated markdown backlog files (default: IMPLEMENTATION_PLAN.md)
   --arclink-user-journey-audit            Seed the full ArcLink USER_JOURNEY.md + GAPS.md audit mission
+  --arclink-dream-buildout                Iteratively build out ArcLink from USER_JOURNEY.md + GAPS.md
   --help, -h                             Show this help and exit
 
 All options may also be set through config.env (eg. SESSION_TOKEN_BUDGET, MAX_SESSION_CYCLES, etc).
@@ -1156,6 +1159,7 @@ Additional runtime env knobs:
   RALPHIE_REQUIRE_PLAN_FRESHNESS_FOR_BUILD  Require plan refresh when configured backlog sources change before build/done routing
   RALPHIE_BACKLOG_SOURCES                   Comma-separated markdown backlog files evaluated for local unchecked tasks
   RALPHIE_ARCLINK_USER_JOURNEY_AUDIT        Enable the ArcLink journey/gaps mission (true|false)
+  RALPHIE_ARCLINK_DREAM_BUILDOUT            Enable the ArcLink implementation buildout mission (true|false)
 EOF
 }
 
@@ -1446,6 +1450,10 @@ parse_args() {
                 ARCLINK_USER_JOURNEY_AUDIT=true
                 shift
                 ;;
+            --arclink-dream-buildout)
+                ARCLINK_DREAM_BUILDOUT=true
+                shift
+                ;;
             --max-iterations)
                 MAX_ITERATIONS="$(parse_arg_value "--max-iterations" "${2:-}")"
                 require_non_negative_int "MAX_ITERATIONS" "$MAX_ITERATIONS"
@@ -1560,6 +1568,7 @@ DEFAULT_NOTIFY_INCIDENT_REMINDER_MINUTES=10        # reminder cadence for ongoin
 DEFAULT_NOTIFICATION_WIZARD_BOOTSTRAPPED="false"  # first-deploy notification setup prompt sentinel
 DEFAULT_PHASE_WALLCLOCK_LIMIT_SECONDS=0            # Default: disabled; enable for CI with presets below
 DEFAULT_ARCLINK_USER_JOURNEY_AUDIT="false"         # special ArcLink USER_JOURNEY.md + GAPS.md audit mission
+DEFAULT_ARCLINK_DREAM_BUILDOUT="false"             # special ArcLink implementation buildout mission
 # Preset hints (not enforced):
 #   CI_SAFE: PHASE_COMPLETION_MAX_ATTEMPTS=2, PHASE_WALLCLOCK_LIMIT_SECONDS=900, COMMAND_TIMEOUT_SECONDS=600, SWARM_CONSENSUS_TIMEOUT=240
 #   IMPATIENT: PHASE_COMPLETION_MAX_ATTEMPTS=1, PHASE_WALLCLOCK_LIMIT_SECONDS=300, COMMAND_TIMEOUT_SECONDS=300, PHASE_COMPLETION_RETRY_DELAY_SECONDS=5
@@ -1646,6 +1655,7 @@ TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
 TG_CHAT_ID="${TG_CHAT_ID:-}"
 CHUTES_API_KEY="${CHUTES_API_KEY:-}"
 ARCLINK_USER_JOURNEY_AUDIT="${ARCLINK_USER_JOURNEY_AUDIT:-$DEFAULT_ARCLINK_USER_JOURNEY_AUDIT}"
+ARCLINK_DREAM_BUILDOUT="${ARCLINK_DREAM_BUILDOUT:-$DEFAULT_ARCLINK_DREAM_BUILDOUT}"
 
 if [ -f "$CONFIG_FILE" ]; then
     load_config_file_safe "$CONFIG_FILE"
@@ -1736,6 +1746,7 @@ TG_BOT_TOKEN="${RALPHIE_TG_BOT_TOKEN:-$TG_BOT_TOKEN}"
 TG_CHAT_ID="${RALPHIE_TG_CHAT_ID:-$TG_CHAT_ID}"
 CHUTES_API_KEY="${RALPHIE_CHUTES_API_KEY:-$CHUTES_API_KEY}"
 ARCLINK_USER_JOURNEY_AUDIT="${RALPHIE_ARCLINK_USER_JOURNEY_AUDIT:-$ARCLINK_USER_JOURNEY_AUDIT}"
+ARCLINK_DREAM_BUILDOUT="${RALPHIE_ARCLINK_DREAM_BUILDOUT:-$ARCLINK_DREAM_BUILDOUT}"
 
 # Treat env-provided phase no-op policies as explicit user intent so profile
 # application does not overwrite them.
@@ -1906,6 +1917,15 @@ ARCLINK_USER_JOURNEY_AUDIT="$(to_lower "$ARCLINK_USER_JOURNEY_AUDIT")"
 if ! is_bool_like "$ARCLINK_USER_JOURNEY_AUDIT"; then
     warn "Invalid ARCLINK_USER_JOURNEY_AUDIT '$ARCLINK_USER_JOURNEY_AUDIT'. Falling back to '$DEFAULT_ARCLINK_USER_JOURNEY_AUDIT'."
     ARCLINK_USER_JOURNEY_AUDIT="$DEFAULT_ARCLINK_USER_JOURNEY_AUDIT"
+fi
+ARCLINK_DREAM_BUILDOUT="$(to_lower "$ARCLINK_DREAM_BUILDOUT")"
+if ! is_bool_like "$ARCLINK_DREAM_BUILDOUT"; then
+    warn "Invalid ARCLINK_DREAM_BUILDOUT '$ARCLINK_DREAM_BUILDOUT'. Falling back to '$DEFAULT_ARCLINK_DREAM_BUILDOUT'."
+    ARCLINK_DREAM_BUILDOUT="$DEFAULT_ARCLINK_DREAM_BUILDOUT"
+fi
+if is_true "$ARCLINK_USER_JOURNEY_AUDIT" && is_true "$ARCLINK_DREAM_BUILDOUT"; then
+    err "Choose only one ArcLink mission mode: --arclink-user-journey-audit or --arclink-dream-buildout."
+    exit 1
 fi
 
 ENGINE_OVERRIDES_BOOTSTRAPPED="$(to_lower "$ENGINE_OVERRIDES_BOOTSTRAPPED")"
@@ -3558,6 +3578,295 @@ enforce_arclink_user_journey_dual_engine_ready() {
         return 0
     fi
     LAST_ENGINE_SELECTION_BLOCK_REASON="ArcLink journey audit requires both Codex and Claude healthy (codex=${CODEX_HEALTHY}:${CODEX_CAP_NOTE:-ok}, claude=${CLAUDE_HEALTHY}:${CLAUDE_CAP_NOTE:-ok})."
+    err "$LAST_ENGINE_SELECTION_BLOCK_REASON"
+    return 1
+}
+
+apply_arclink_dream_buildout_defaults() {
+    ACTIVE_ENGINE="auto"
+    ENGINE_SELECTION_REQUESTED="auto"
+    AUTO_ENGINE_PREFERENCE="codex"
+    RALPHIE_QUALITY_LEVEL="high"
+    CODEX_THINKING_OVERRIDE="xhigh"
+    CLAUDE_THINKING_OVERRIDE="xhigh"
+    AUTO_COMMIT_ON_PHASE_PASS="false"
+    RESUME_REQUESTED="false"
+    REBOOTSTRAP_REQUESTED="false"
+    REQUIRE_LINT_BEFORE_DONE="true"
+    REQUIRE_DOCUMENT_BEFORE_DONE="true"
+    REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE="true"
+    REQUIRE_PLAN_FRESHNESS_FOR_BUILD="true"
+    PHASE_NOOP_PROFILE="custom"
+    PHASE_NOOP_POLICY_PLAN="hard"
+    PHASE_NOOP_POLICY_BUILD="hard"
+    PHASE_NOOP_POLICY_TEST="soft"
+    PHASE_NOOP_POLICY_REFACTOR="soft"
+    PHASE_NOOP_POLICY_LINT="soft"
+    PHASE_NOOP_POLICY_DOCUMENT="hard"
+
+    if [ -z "${CODEX_MODEL:-}" ]; then
+        CODEX_MODEL="gpt-5.5"
+    fi
+    if [ -z "${CLAUDE_MODEL:-}" ]; then
+        CLAUDE_MODEL="opus"
+    fi
+
+    mission_set_min_int "CONSENSUS_SCORE_THRESHOLD" 93
+    mission_set_min_int "PHASE_COMPLETION_MAX_ATTEMPTS" 8
+    mission_set_min_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" 10
+    mission_set_min_int "RUN_AGENT_MAX_ATTEMPTS" 6
+    mission_set_min_int "ENGINE_SMOKE_TEST_TIMEOUT" 60
+    mission_set_min_int "SWARM_CONSENSUS_TIMEOUT" 1200
+    mission_set_min_int "ENGINE_HEALTH_MAX_ATTEMPTS" 2
+    mission_set_min_int "ENGINE_IDLE_OUTPUT_TIMEOUT_SECONDS" 900
+}
+
+write_arclink_dream_buildout_steering_file() {
+    mkdir -p "$RESEARCH_DIR"
+    cat > "$ARCLINK_BUILDOUT_STEERING_FILE" <<'EOF'
+# Ralphie Steering: ArcLink Dream Buildout
+
+## Mission
+
+Turn the ArcLink dream system described in `USER_JOURNEY.md` into working,
+tested repository reality, using `GAPS.md` as the implementation queue.
+
+This is an implementation mission, not another atlas pass. Close gaps with
+source changes, tests, and honest documentation updates. Start with `GAP-025`
+because a broad local suite that is not green undermines every local `real`
+claim. Then work P0/P1 gaps and any lower-priority rows that share the same
+code ownership.
+
+## Operating Contract
+
+- Read `AGENTS.md`, `USER_JOURNEY.md`, `GAPS.md`, `IMPLEMENTATION_PLAN.md`, and
+  `research/COVERAGE_MATRIX.md` first.
+- Do not read `arclink-priv/`, user homes, secret files, deploy keys, `.env`
+  values, OAuth stores, bot tokens, or live credentials.
+- Do not run live deploy/install/upgrade, Docker up/down/reconcile, Stripe,
+  Chutes, Telegram, Discord, Notion, Cloudflare, Tailscale, SSH fleet mutation,
+  or host mutation unless the operator explicitly authorizes a separate proof
+  window later.
+- Use ArcLink wrappers, plugins, hooks, generated config, tests, and service
+  units. Do not modify Hermes core to make ArcLink behavior work.
+- Preserve user/unrelated worktree changes. Do not revert files you did not
+  touch for this mission.
+- Prefer small, source-owned repair slices with focused validation over huge
+  speculative rewrites.
+- If a gap requires credentials, live external services, or a product/security
+  policy decision, make the local code fail closed and record the exact proof or
+  decision needed. Do not fake-close it.
+- Keep public docs free of secrets, local private paths, and raw tool
+  transcripts.
+
+## Priority Order
+
+1. `GAP-025`: make the broad no-secret local validation story true. Triage the
+   full suite into real regressions, stale tests, and environment-coupled tests;
+   repair true regressions and document/quarantine intentionally gated cases.
+2. P0 trust/security/launch blockers: especially `GAP-001` and `GAP-019`.
+3. P1 core journey blockers: `GAP-002` through `GAP-008`, `GAP-011`, and
+   `GAP-018`.
+4. P2/P3 rows that become cheap while touching the same module family.
+5. Live proof gates only after the operator explicitly supplies credentials and
+   authorizes the live window.
+
+## Repair Loop
+
+For each slice:
+
+- Name the gap IDs and journey joints.
+- Identify the smallest source files/tests that own the behavior.
+- Reproduce the failing or missing proof with a focused local command.
+- Patch code/tests/docs with the repo's existing patterns.
+- Run focused tests, then broaden only as much as the touched surface warrants.
+- Update `GAPS.md`, `USER_JOURNEY.md`, `IMPLEMENTATION_PLAN.md`, and
+  `mission_status.md` only when the source truth changed.
+- Leave a concise completion note in `research/BUILD_COMPLETION_NOTES.md`.
+
+## Done Rule
+
+Do not route to `done` while `GAPS.md` or `IMPLEMENTATION_PLAN.md` still has an
+unchecked local code/test/doc repair that can be completed without live
+credentials or a policy decision. It is acceptable to leave explicit live proof
+or operator policy rows open, but they must be clearly labeled and fail closed
+in code.
+EOF
+}
+
+write_arclink_dream_buildout_prompt_files() {
+    mkdir -p "$ARCLINK_BUILDOUT_PROMPT_DIR"
+    PROMPT_PLAN_FILE="$ARCLINK_BUILDOUT_PROMPT_DIR/PROMPT_plan.md"
+    PROMPT_BUILD_FILE="$ARCLINK_BUILDOUT_PROMPT_DIR/PROMPT_build.md"
+    PROMPT_TEST_FILE="$ARCLINK_BUILDOUT_PROMPT_DIR/PROMPT_test.md"
+    PROMPT_REFACTOR_FILE="$ARCLINK_BUILDOUT_PROMPT_DIR/PROMPT_refactor.md"
+    PROMPT_LINT_FILE="$ARCLINK_BUILDOUT_PROMPT_DIR/PROMPT_lint.md"
+    PROMPT_DOCUMENT_FILE="$ARCLINK_BUILDOUT_PROMPT_DIR/PROMPT_document.md"
+
+    cat > "$PROMPT_PLAN_FILE" <<'EOF'
+# Ralphie Plan Phase Prompt: ArcLink Dream Buildout
+
+Plan the next implementation slice that moves ArcLink from atlas/gaps toward
+working reality.
+
+Required behavior:
+
+- Read `AGENTS.md`, `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`,
+  `USER_JOURNEY.md`, `GAPS.md`, `IMPLEMENTATION_PLAN.md`, and
+  `research/COVERAGE_MATRIX.md`.
+- Start with `GAP-025` unless it is already closed by source and test evidence.
+- Replace or update `IMPLEMENTATION_PLAN.md` with an active repair plan:
+  checked-off completed atlas work, unchecked current implementation tasks, the
+  exact focused tests to run, and the local/live/policy boundary for each row.
+- Choose a bounded first slice. Favor failures that touch user-facing journeys:
+  public bot onboarding, Notion onboarding/CLI, plugins/workspace, deploy/health
+  shell paths, vault/repo/backup, or any P0/P1 row with local repairability.
+- Do not plan live external or host-mutating commands for this unattended pass.
+
+PLAN is complete only when the next build step has a concrete owner surface,
+files to inspect/change, focused reproduction command, and success criteria.
+EOF
+
+    cat > "$PROMPT_BUILD_FILE" <<'EOF'
+# Ralphie Build Phase Prompt: Close The Next ArcLink Gap Slice
+
+Implement the current highest-value local repair slice.
+
+Required behavior:
+
+- Follow `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`.
+- Prefer closing `GAP-025` failure clusters first, then P0/P1 gaps that can be
+  fixed without live credentials or operator policy.
+- Reproduce at least one failing/missing behavior with a focused local command
+  before editing when practical.
+- Patch source and tests together. Use existing ArcLink patterns. Do not edit
+  Hermes core for ArcLink behavior.
+- Do not run deploy/install/upgrade, Docker mutation, live provider/payment/bot,
+  Cloudflare/Tailscale/SSH fleet, or host mutation commands.
+- If a row cannot be closed locally, make the code/docs fail closed and record
+  the live proof or policy decision instead of pretending success.
+
+BUILD is complete only when at least one concrete gap/test cluster is improved
+by source changes and the implementation plan reflects what remains.
+EOF
+
+    cat > "$PROMPT_TEST_FILE" <<'EOF'
+# Ralphie Test Phase Prompt: Validate The Buildout Slice
+
+Validate the current buildout slice.
+
+Required checks:
+
+- Run focused tests for every touched source surface.
+- Run `git diff --check`.
+- Run docs/hygiene checks when public docs changed.
+- If the slice targeted `GAP-025`, rerun the affected failing files and, when
+  enough clusters are closed, rerun `python3 -m pytest -q tests`.
+- Record exact commands and outcomes.
+- Do not run live external or host-mutating commands.
+
+TEST is complete only when the touched slice is locally proven or the remaining
+failure is reclassified with evidence in `GAPS.md`.
+EOF
+
+    cat > "$PROMPT_REFACTOR_FILE" <<'EOF'
+# Ralphie Refactor Phase Prompt: Keep The Repair Clean
+
+Tighten the implementation without broad unrelated churn.
+
+Focus:
+
+- Remove duplication introduced by the slice.
+- Keep source ownership boundaries clear.
+- Preserve fail-closed behavior and secret hygiene.
+- Do not refactor unrelated code just because it is nearby.
+
+Return concise notes about changed files and residual risks.
+EOF
+
+    cat > "$PROMPT_LINT_FILE" <<'EOF'
+# Ralphie Lint Phase Prompt: Adversarial Buildout Review
+
+Challenge the slice before it can advance.
+
+Check that:
+
+- No secrets, private paths, or raw tokens were added.
+- No live proof gate was marked closed without authorized evidence.
+- No policy question was silently decided by code unless the decision is
+  explicit in docs/config.
+- No broad validation claim overstates the commands actually run.
+- Any remaining full-suite failures are tracked under `GAP-025` or split into a
+  more precise gap.
+
+Run `git diff --check` and relevant focused lint/hygiene commands.
+EOF
+
+    cat > "$PROMPT_DOCUMENT_FILE" <<'EOF'
+# Ralphie Document Phase Prompt: Update The Truth After Repair
+
+Update handoff artifacts to match the source truth.
+
+Required finish:
+
+- Update `GAPS.md` only for rows whose source/test/proof status changed.
+- Update `USER_JOURNEY.md` only when the user journey changed.
+- Update `IMPLEMENTATION_PLAN.md` and `mission_status.md` with current repair
+  status.
+- Add a succinct note to `research/BUILD_COMPLETION_NOTES.md` naming the gap
+  slice, files changed, commands run, and remaining proof/policy/test gates.
+- Do not include secrets, private paths, raw tool transcripts, or unsupported
+  live claims.
+
+Document phase is complete when a future agent can continue the buildout from
+the remaining unchecked local tasks without guessing what happened.
+EOF
+}
+
+prepare_arclink_dream_buildout() {
+    if ! is_true "$ARCLINK_DREAM_BUILDOUT"; then
+        return 0
+    fi
+
+    info "Preparing ArcLink dream buildout mission."
+    apply_arclink_dream_buildout_defaults
+    write_arclink_dream_buildout_steering_file
+    write_arclink_dream_buildout_prompt_files
+
+    BACKLOG_SOURCES="GAPS.md,IMPLEMENTATION_PLAN.md,mission_status.md,research/COVERAGE_MATRIX.md,research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md,research/BUILD_COMPLETION_NOTES.md"
+
+    write_project_goals_file "ArcLink dream buildout mission.
+
+Build the system described in USER_JOURNEY.md into working repository reality by closing GAPS.md, starting with GAP-025 broad local validation failure and then P0/P1 local repairable blockers. Use Codex and Claude at high rigor. Work in bounded repair slices with source changes, tests, and honest docs.
+
+Do not read private state or secrets. Do not run live external services or host-mutating deploy/Docker/Stripe/bot/provider/Cloudflare/Tailscale/SSH commands unless the operator later authorizes a separate proof window. Fail closed for live/policy gates rather than faking completion."
+
+    write_bootstrap_context_file \
+        "existing" \
+        "Implement ArcLink's dream system end to end by closing GAPS.md with local source repairs and tests, beginning with GAP-025." \
+        "false" \
+        "false" \
+        "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
+        "Local repairable gaps are closed or actively reduced; broad local validation improves; remaining live/policy gates are explicit and fail closed." \
+        "true" \
+        "" \
+        "Code, tests, docs, and runbooks needed to close GAPS.md. Avoid unrelated refactors." \
+        "Bash orchestration, Python control plane, Next.js web, Hermes plugins, systemd/Docker deployment rails."
+
+    CURRENT_PHASE="plan"
+    CURRENT_PHASE_INDEX=0
+    CURRENT_PHASE_ATTEMPT=1
+    PHASE_ATTEMPT_IN_PROGRESS="false"
+}
+
+enforce_arclink_dream_buildout_dual_engine_ready() {
+    if ! is_true "$ARCLINK_DREAM_BUILDOUT"; then
+        return 0
+    fi
+    if [ "$CODEX_HEALTHY" = "true" ] && [ "$CLAUDE_HEALTHY" = "true" ]; then
+        return 0
+    fi
+    LAST_ENGINE_SELECTION_BLOCK_REASON="ArcLink dream buildout requires both Codex and Claude healthy (codex=${CODEX_HEALTHY}:${CODEX_CAP_NOTE:-ok}, claude=${CLAUDE_HEALTHY}:${CLAUDE_CAP_NOTE:-ok})."
     err "$LAST_ENGINE_SELECTION_BLOCK_REASON"
     return 1
 }
@@ -9217,6 +9526,7 @@ print_session_config_banner() {
     info "=== Ralphie Session Budget & Retry Configuration ==="
     info "script_version: ${SCRIPT_VERSION}"
     info "arclink_user_journey_audit: ${ARCLINK_USER_JOURNEY_AUDIT:-false}"
+    info "arclink_dream_buildout: ${ARCLINK_DREAM_BUILDOUT:-false}"
     info "auto_update: ${AUTO_UPDATE:-$DEFAULT_AUTO_UPDATE} (pre-run single-file update)"
     info "auto_update_url: $(redact_endpoint_for_log "$AUTO_UPDATE_URL")"
     info "auto_update_allow_dirty: ${AUTO_UPDATE_ALLOW_DIRTY:-$DEFAULT_AUTO_UPDATE_ALLOW_DIRTY}"
@@ -9290,6 +9600,12 @@ print_session_config_banner() {
         info "journey_steering: $(path_for_display "$ARCLINK_JOURNEY_STEERING_FILE")"
         info "journey_prompt_dir: $(path_for_display "$ARCLINK_JOURNEY_PROMPT_DIR")"
     fi
+    if is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; then
+        info "user_journey_doc: $(path_for_display "$USER_JOURNEY_FILE")"
+        info "gaps_doc: $(path_for_display "$GAPS_FILE")"
+        info "buildout_steering: $(path_for_display "$ARCLINK_BUILDOUT_STEERING_FILE")"
+        info "buildout_prompt_dir: $(path_for_display "$ARCLINK_BUILDOUT_PROMPT_DIR")"
+    fi
 }
 
 emit_phase_transition_banner() {
@@ -9326,7 +9642,7 @@ main() {
     is_bool_like "$REBOOTSTRAP_REQUESTED" || REBOOTSTRAP_REQUESTED="$DEFAULT_REBOOTSTRAP_REQUESTED"
     STARTUP_OPERATIONAL_PROBE="$(to_lower "${STARTUP_OPERATIONAL_PROBE:-$DEFAULT_STARTUP_OPERATIONAL_PROBE}")"
     is_bool_like "$STARTUP_OPERATIONAL_PROBE" || STARTUP_OPERATIONAL_PROBE="$DEFAULT_STARTUP_OPERATIONAL_PROBE"
-    if is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
+    if is_true "$ARCLINK_USER_JOURNEY_AUDIT" || is_true "$ARCLINK_DREAM_BUILDOUT"; then
         RESUME_REQUESTED="false"
     fi
 
@@ -9377,7 +9693,8 @@ main() {
     fi
 
     prepare_arclink_user_journey_audit
-    if is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
+    prepare_arclink_dream_buildout
+    if is_true "$ARCLINK_USER_JOURNEY_AUDIT" || is_true "$ARCLINK_DREAM_BUILDOUT"; then
         resume_reentry_pending="false"
     fi
 
@@ -9471,6 +9788,12 @@ main() {
             notify_event "session_error" "dual_engine_required" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
             break
         fi
+        if ! enforce_arclink_dream_buildout_dual_engine_ready; then
+            should_exit="true"
+            log_reason_code "RB_ARCLINK_BUILDOUT_DUAL_ENGINE_REQUIRED" "$LAST_ENGINE_SELECTION_BLOCK_REASON"
+            notify_event "session_error" "dual_engine_required" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
+            break
+        fi
         if [ "$engine_override_bootstrap_checked" = "false" ]; then
             engine_override_bootstrap_checked="true"
             if run_first_deploy_engine_override_wizard; then
@@ -9484,6 +9807,12 @@ main() {
                 if ! enforce_arclink_user_journey_dual_engine_ready; then
                     should_exit="true"
                     log_reason_code "RB_ARCLINK_JOURNEY_DUAL_ENGINE_REQUIRED" "$LAST_ENGINE_SELECTION_BLOCK_REASON"
+                    notify_event "session_error" "dual_engine_required" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
+                    break
+                fi
+                if ! enforce_arclink_dream_buildout_dual_engine_ready; then
+                    should_exit="true"
+                    log_reason_code "RB_ARCLINK_BUILDOUT_DUAL_ENGINE_REQUIRED" "$LAST_ENGINE_SELECTION_BLOCK_REASON"
                     notify_event "session_error" "dual_engine_required" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
                     break
                 fi

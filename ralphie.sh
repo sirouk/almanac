@@ -72,9 +72,13 @@ PROMPT_REFACTOR_FILE="$PROJECT_DIR/PROMPT_refactor.md"
 PROMPT_LINT_FILE="$PROJECT_DIR/PROMPT_lint.md"
 PROMPT_DOCUMENT_FILE="$PROJECT_DIR/PROMPT_document.md"
 PLAN_FILE="$PROJECT_DIR/IMPLEMENTATION_PLAN.md"
+USER_JOURNEY_FILE="$PROJECT_DIR/USER_JOURNEY.md"
+GAPS_FILE="$PROJECT_DIR/GAPS.md"
 PROJECT_BOOTSTRAP_FILE="$CONFIG_DIR/project-bootstrap.md"
 PROJECT_GOALS_FILE="$CONFIG_DIR/project-goals.md"
 SESSION_CHANGED_PATHS_FILE="$CONFIG_DIR/session-changed-paths.txt"
+ARCLINK_JOURNEY_STEERING_FILE="$RESEARCH_DIR/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md"
+ARCLINK_JOURNEY_PROMPT_DIR="$CONFIG_DIR/arclink-user-journey-prompts"
 
 # Shared logic for interactive questions and formatting.
 err() { echo -e "\033[1;31m$*\033[0m" >&2; }
@@ -185,6 +189,16 @@ sanitize_review_score() {
 
 is_decimal_number() {
     [[ "${1:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+claude_effort_for_thinking_override() {
+    case "$(to_lower "${1:-}")" in
+        xhigh|max) echo "max" ;;
+        high) echo "high" ;;
+        medium) echo "medium" ;;
+        low) echo "low" ;;
+        *) echo "" ;;
+    esac
 }
 
 version_score_from_text() {
@@ -1092,6 +1106,7 @@ Core options:
   --require-plan-backlog-clear-before-done bool  Block terminal done while local unchecked backlog tasks remain
   --require-plan-freshness-for-build bool  Remap to plan when configured backlog sources changed after plan
   --backlog-sources PATHS                 Comma-separated markdown backlog files (default: IMPLEMENTATION_PLAN.md)
+  --arclink-user-journey-audit            Seed the full ArcLink USER_JOURNEY.md + GAPS.md audit mission
   --help, -h                             Show this help and exit
 
 All options may also be set through config.env (eg. SESSION_TOKEN_BUDGET, MAX_SESSION_CYCLES, etc).
@@ -1140,6 +1155,7 @@ Additional runtime env knobs:
   RALPHIE_REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE  Require local configured backlog sources to be clear before terminal done routing
   RALPHIE_REQUIRE_PLAN_FRESHNESS_FOR_BUILD  Require plan refresh when configured backlog sources change before build/done routing
   RALPHIE_BACKLOG_SOURCES                   Comma-separated markdown backlog files evaluated for local unchecked tasks
+  RALPHIE_ARCLINK_USER_JOURNEY_AUDIT        Enable the ArcLink journey/gaps mission (true|false)
 EOF
 }
 
@@ -1426,6 +1442,10 @@ parse_args() {
                 BACKLOG_SOURCES="$(parse_arg_value "--backlog-sources" "${2:-}")"
                 shift 2
                 ;;
+            --arclink-user-journey-audit)
+                ARCLINK_USER_JOURNEY_AUDIT=true
+                shift
+                ;;
             --max-iterations)
                 MAX_ITERATIONS="$(parse_arg_value "--max-iterations" "${2:-}")"
                 require_non_negative_int "MAX_ITERATIONS" "$MAX_ITERATIONS"
@@ -1539,6 +1559,7 @@ DEFAULT_NOTIFY_EVENT_DEDUP_WINDOW_SECONDS=90       # suppress duplicate notifica
 DEFAULT_NOTIFY_INCIDENT_REMINDER_MINUTES=10        # reminder cadence for ongoing incident series
 DEFAULT_NOTIFICATION_WIZARD_BOOTSTRAPPED="false"  # first-deploy notification setup prompt sentinel
 DEFAULT_PHASE_WALLCLOCK_LIMIT_SECONDS=0            # Default: disabled; enable for CI with presets below
+DEFAULT_ARCLINK_USER_JOURNEY_AUDIT="false"         # special ArcLink USER_JOURNEY.md + GAPS.md audit mission
 # Preset hints (not enforced):
 #   CI_SAFE: PHASE_COMPLETION_MAX_ATTEMPTS=2, PHASE_WALLCLOCK_LIMIT_SECONDS=900, COMMAND_TIMEOUT_SECONDS=600, SWARM_CONSENSUS_TIMEOUT=240
 #   IMPATIENT: PHASE_COMPLETION_MAX_ATTEMPTS=1, PHASE_WALLCLOCK_LIMIT_SECONDS=300, COMMAND_TIMEOUT_SECONDS=300, PHASE_COMPLETION_RETRY_DELAY_SECONDS=5
@@ -1624,6 +1645,7 @@ NOTIFICATION_WIZARD_BOOTSTRAPPED="${NOTIFICATION_WIZARD_BOOTSTRAPPED:-$DEFAULT_N
 TG_BOT_TOKEN="${TG_BOT_TOKEN:-}"
 TG_CHAT_ID="${TG_CHAT_ID:-}"
 CHUTES_API_KEY="${CHUTES_API_KEY:-}"
+ARCLINK_USER_JOURNEY_AUDIT="${ARCLINK_USER_JOURNEY_AUDIT:-$DEFAULT_ARCLINK_USER_JOURNEY_AUDIT}"
 
 if [ -f "$CONFIG_FILE" ]; then
     load_config_file_safe "$CONFIG_FILE"
@@ -1713,6 +1735,7 @@ NOTIFICATION_WIZARD_BOOTSTRAPPED="${RALPHIE_NOTIFICATION_WIZARD_BOOTSTRAPPED:-$N
 TG_BOT_TOKEN="${RALPHIE_TG_BOT_TOKEN:-$TG_BOT_TOKEN}"
 TG_CHAT_ID="${RALPHIE_TG_CHAT_ID:-$TG_CHAT_ID}"
 CHUTES_API_KEY="${RALPHIE_CHUTES_API_KEY:-$CHUTES_API_KEY}"
+ARCLINK_USER_JOURNEY_AUDIT="${RALPHIE_ARCLINK_USER_JOURNEY_AUDIT:-$ARCLINK_USER_JOURNEY_AUDIT}"
 
 # Treat env-provided phase no-op policies as explicit user intent so profile
 # application does not overwrite them.
@@ -1877,6 +1900,12 @@ fi
 if ! is_number "$PHASE_WALLCLOCK_LIMIT_SECONDS" || [ "$PHASE_WALLCLOCK_LIMIT_SECONDS" -lt 0 ]; then
     warn "Invalid PHASE_WALLCLOCK_LIMIT_SECONDS '$PHASE_WALLCLOCK_LIMIT_SECONDS'. Falling back to '$DEFAULT_PHASE_WALLCLOCK_LIMIT_SECONDS'."
     PHASE_WALLCLOCK_LIMIT_SECONDS="$DEFAULT_PHASE_WALLCLOCK_LIMIT_SECONDS"
+fi
+
+ARCLINK_USER_JOURNEY_AUDIT="$(to_lower "$ARCLINK_USER_JOURNEY_AUDIT")"
+if ! is_bool_like "$ARCLINK_USER_JOURNEY_AUDIT"; then
+    warn "Invalid ARCLINK_USER_JOURNEY_AUDIT '$ARCLINK_USER_JOURNEY_AUDIT'. Falling back to '$DEFAULT_ARCLINK_USER_JOURNEY_AUDIT'."
+    ARCLINK_USER_JOURNEY_AUDIT="$DEFAULT_ARCLINK_USER_JOURNEY_AUDIT"
 fi
 
 ENGINE_OVERRIDES_BOOTSTRAPPED="$(to_lower "$ENGINE_OVERRIDES_BOOTSTRAPPED")"
@@ -2057,6 +2086,7 @@ NOTIFY_INCIDENT_REPEAT_COUNT=0
 # Capability Probing results (populated by probe_engine_capabilities)
 CLAUDE_CAP_PRINT=0
 CLAUDE_CAP_YOLO_FLAG=""
+CLAUDE_CAP_EFFORT_FLAG=0
 CODEX_CAP_OUTPUT_LAST_MESSAGE=0
 CODEX_CAP_YOLO_FLAG=0
 ENGINE_CAPABILITIES_PROBED=false
@@ -3116,6 +3146,420 @@ write_project_goals_file() {
 
 $goals_text
 EOF
+}
+
+mission_set_min_int() {
+    local var_name="$1"
+    local min_value="$2"
+    local current_value
+
+    current_value="${!var_name:-0}"
+    if ! is_number "$current_value" || [ "$current_value" -lt "$min_value" ]; then
+        printf -v "$var_name" '%s' "$min_value"
+    fi
+}
+
+apply_arclink_user_journey_audit_defaults() {
+    ACTIVE_ENGINE="auto"
+    ENGINE_SELECTION_REQUESTED="auto"
+    AUTO_ENGINE_PREFERENCE="codex"
+    RALPHIE_QUALITY_LEVEL="high"
+    CODEX_THINKING_OVERRIDE="xhigh"
+    CLAUDE_THINKING_OVERRIDE="xhigh"
+    AUTO_COMMIT_ON_PHASE_PASS="false"
+    RESUME_REQUESTED="false"
+    REBOOTSTRAP_REQUESTED="false"
+    REQUIRE_LINT_BEFORE_DONE="true"
+    REQUIRE_DOCUMENT_BEFORE_DONE="true"
+    REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE="true"
+    REQUIRE_PLAN_FRESHNESS_FOR_BUILD="true"
+    PHASE_NOOP_PROFILE="custom"
+    PHASE_NOOP_POLICY_PLAN="hard"
+    PHASE_NOOP_POLICY_BUILD="hard"
+    PHASE_NOOP_POLICY_TEST="soft"
+    PHASE_NOOP_POLICY_REFACTOR="soft"
+    PHASE_NOOP_POLICY_LINT="soft"
+    PHASE_NOOP_POLICY_DOCUMENT="hard"
+
+    if [ -z "${CODEX_MODEL:-}" ]; then
+        CODEX_MODEL="gpt-5.5"
+    fi
+    if [ -z "${CLAUDE_MODEL:-}" ]; then
+        CLAUDE_MODEL="opus"
+    fi
+
+    mission_set_min_int "CONSENSUS_SCORE_THRESHOLD" 92
+    mission_set_min_int "PHASE_COMPLETION_MAX_ATTEMPTS" 5
+    mission_set_min_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" 8
+    mission_set_min_int "RUN_AGENT_MAX_ATTEMPTS" 5
+    mission_set_min_int "ENGINE_SMOKE_TEST_TIMEOUT" 60
+    mission_set_min_int "SWARM_CONSENSUS_TIMEOUT" 900
+    mission_set_min_int "ENGINE_HEALTH_MAX_ATTEMPTS" 2
+}
+
+write_arclink_user_journey_steering_file() {
+    mkdir -p "$RESEARCH_DIR"
+    if [ -f "$ARCLINK_JOURNEY_STEERING_FILE" ]; then
+        info "Using existing ArcLink journey steering: $(path_for_display "$ARCLINK_JOURNEY_STEERING_FILE")"
+        return 0
+    fi
+    cat > "$ARCLINK_JOURNEY_STEERING_FILE" <<'EOF'
+# Ralphie Steering: ArcLink User Journey And Gap Atlas
+
+## Mission
+
+Create the full ArcLink user-journey atlas and the corresponding gap register.
+
+Primary deliverables:
+
+- `USER_JOURNEY.md`: the complete first-sweep story of ArcLink as the product
+  should feel when every intended rail is in place. It may describe the ideal
+  product contract, but it must avoid pretending unproven live behavior is
+  already verified.
+- `GAPS.md`: the rigorous source-grounded register of every actual missing,
+  partial, proof-gated, policy-gated, risky, underspecified, or under-tested
+  joint discovered while comparing that story against code, tests, docs,
+  service units, configuration, and scripts.
+
+Use both engines. Codex should drive the main pass when healthy, while Claude
+must participate through mixed consensus review. If either engine is unhealthy,
+stop rather than silently reducing this mission to a single-engine pass.
+
+## Audit Independence (disprove, do not confirm)
+
+This is an adversarial gap hunt, not a reformat of prior optimism.
+
+- Treat `research/PRODUCT_REALITY_MATRIX.md` counts (eg. "0 gap, 0 partial",
+  "N real") as an UNVERIFIED CLAIM TO DISPROVE, never a starting truth. Do not
+  copy its rows. Independently re-confirm or knock down each claim against
+  source, and actively hunt for net-new gaps the matrix missed.
+- A `real` claim with thin, missing, or absent local evidence is itself a gap.
+  Demote it and record why.
+- The root `USER_JOURNEY.md` and `GAPS.md` start as intentional stubs. Generate
+  them from fresh source evidence; do not merely polish the stub text.
+- The seed drafts `research/seed-user-journey-draft.md` and
+  `research/seed-gaps-draft.md` are INPUT ONLY — prior v0 material, not a
+  baseline to preserve. Improve on, contradict, or discard them as evidence
+  dictates.
+
+## Guardrails
+
+- Read `AGENTS.md` first.
+- Do not read `arclink-priv/`, user homes, secret files, deploy keys, `.env`
+  values, OAuth stores, bot tokens, or live credentials.
+- Do not run live deploy/install/upgrade, Stripe, Chutes, Telegram, Discord,
+  Notion, Cloudflare, Tailscale, SSH fleet mutation, Docker mutation, or host
+  mutation unless the operator explicitly authorizes that later.
+- Prefer `rg` and focused file reads.
+- Keep public docs free of secrets, local absolute paths, and tool transcripts.
+- Do not edit Hermes core to close ArcLink gaps.
+- Do not overclaim. Mark live/external behavior as proof-gated when local code
+  cannot prove it.
+
+## Required User-Journey Coverage
+
+`USER_JOURNEY.md` must cover at least these surfaces, including happy paths,
+choice points, alternate paths, error paths, retry paths, access boundaries,
+and handoffs:
+
+- Public entry: website, Telegram, Discord, returning visitor, linked channel,
+  mobile and desktop.
+- Public Raven: first contact, identity, channel safety, onboarding answers,
+  checkout opening, post-onboarding control commands, agent selection, channel
+  linking, status, upgrade guidance, Notion prep, backup prep, share approvals,
+  selected-agent chat, and command namespace conflicts.
+- Billing: plan selection, Limited 100 Founders, Sovereign, Scale, additional
+  agents, failed renewal, suspension, daily warnings, day-7 removal warning,
+  day-14 audited purge queue, cancellation, refuel credits, and proof-gated
+  live payment rails.
+- Deployment: entitlement gate, provisioning-ready transition, fleet placement,
+  single-machine, remote fleet, domain ingress, Tailscale ingress, DNS/Traefik,
+  worker execution, rollback, teardown, health, notification, and handoff.
+- Credentials: generation, one-time handoff, copy/store instruction,
+  acknowledgement, post-ack hiding, reissue/rotation/recovery, and dashboard
+  entry.
+- User dashboard: account, deployment, service health, billing, provider state,
+  communications, credential handoff, workspace readiness, recovery actions,
+  dashboard-to-Hermes links, and unavailable states.
+- Hermes and agents: user-agent homes, Curator, ArcPod Hermes homes, gateway
+  run mode, private chat channels, Telegram `/start`, Discord handoff retry,
+  dashboard plugins, skills, provider/model choice, and safe refresh.
+- Knowledge: vault, qmd, PDF sidecars, Notion indexed markdown, SSOT broker,
+  webhook/batcher, memory synthesis, recall stubs, daily plate, governed
+  managed context, retrieval tools, and Almanac lineage terminology.
+- Workspace: Drive, Code, Terminal, root guards, linked resources, read-only
+  projections, accepted shares, no reshare, copy/duplicate into owned space,
+  audit, revoke, and disabled browser share-link UI where unimplemented.
+- Admin/operator: exactly one operator, admin dashboard, action worker,
+  shared-host install/upgrade, Docker shared-host mode, Sovereign Control Node,
+  service units, health checks, release state, deploy keys, component pins,
+  component upgrades, live proof, backups, enrollment reset, org profile, and
+  notification delivery.
+- Security and isolation: one user cannot read, infer, mutate, route to, or
+  share another user's private deployment, channels, dashboard, provider state,
+  Notion/SSOT data, files, Stripe state, or Hermes resources.
+
+## Required Gap Register Coverage
+
+`GAPS.md` must include:
+
+- A status taxonomy: `gap`, `partial`, `proof-gated`, `policy-question`,
+  `test-gap`, `doc-gap`, `ux-gap`, `ops-gap`, `security-risk`, and `real`.
+- A severity taxonomy: P0 blocks trust/security/payment/provisioning; P1 blocks
+  a core journey; P2 causes degraded or confusing behavior; P3 is polish or
+  future scale.
+- A row for each gap or non-real item with: id, severity, journey joint,
+  expected behavior, actual evidence, source references, missing proof/tests,
+  user impact, likely owner/surface, and recommended next repair.
+- A separate "Not Gaps / Already Real" section for important surfaces that were
+  checked and found covered, so future readers know the audit looked there.
+- A "Proof Gates" section listing exact live credentials or authorized proof
+  runs required before claims can move to `real`.
+- A "Policy Questions" section listing choices code cannot decide.
+- A "Test Plan" section with focused local checks for every code-owned gap.
+
+## Must-Inspect Sources
+
+At minimum inspect:
+
+- `AGENTS.md`, `README.md`, `deploy.sh`, `bin/deploy.sh`, `compose.yaml`.
+- `docs/arclink/sovereign-control-node.md`,
+  `docs/arclink/control-node-production-runbook.md`,
+  `docs/arclink/fleet-operator-runbook.md`,
+  `docs/arclink/operations-runbook.md`,
+  `docs/arclink/foundation-runbook.md`,
+  `docs/arclink/first-day-user-guide.md`,
+  `docs/arclink/raven-public-bot.md`,
+  `docs/arclink/data-safety.md`,
+  `docs/arclink/llm-router.md`.
+- `research/PRODUCT_REALITY_MATRIX.md`,
+  `research/RALPHIE_ARCLINK_PRODUCT_REALITY_AND_JOURNEY_STEERING.md`,
+  and relevant newer Ralphie steering/completion notes.
+- `python/arclink_hosted_api.py`, `python/arclink_api_auth.py`,
+  `python/arclink_dashboard.py`, `python/arclink_public_bots.py`,
+  `python/arclink_telegram.py`, `python/arclink_discord.py`,
+  `python/arclink_onboarding.py`, `python/arclink_onboarding_flow.py`,
+  `python/arclink_provisioning.py`, `python/arclink_executor.py`,
+  `python/arclink_sovereign_worker.py`, `python/arclink_action_worker.py`,
+  `python/arclink_entitlements.py`, `python/arclink_fleet.py`,
+  `python/arclink_chutes*.py`, `python/arclink_llm_router.py`,
+  `python/arclink_mcp_server.py`, `python/arclink_memory_synthesizer.py`,
+  `python/arclink_notion_*.py`, and `python/arclink_ssot_batcher.py`.
+- `web/src/**`, `web/tests/**`.
+- `plugins/hermes-agent/arclink-managed-context/**`,
+  `plugins/hermes-agent/drive/**`, `plugins/hermes-agent/code/**`,
+  `plugins/hermes-agent/terminal/**`.
+- `tests/test_arclink_*.py`, `tests/test_*notion*.py`, `tests/test_*memory*.py`,
+  `tests/test_deploy_regressions.py`, and browser tests under `web/tests`.
+
+## Output Bar
+
+The final documents should be dense, navigable, and honest. The story should
+feel simple and mind-blowing at the human layer while the gap register is
+unsentimental about every missing proof, missing code path, weak test, unclear
+policy choice, or confusing surface.
+EOF
+}
+
+write_arclink_user_journey_prompt_files() {
+    mkdir -p "$ARCLINK_JOURNEY_PROMPT_DIR"
+    PROMPT_PLAN_FILE="$ARCLINK_JOURNEY_PROMPT_DIR/PROMPT_plan.md"
+    PROMPT_BUILD_FILE="$ARCLINK_JOURNEY_PROMPT_DIR/PROMPT_build.md"
+    PROMPT_TEST_FILE="$ARCLINK_JOURNEY_PROMPT_DIR/PROMPT_test.md"
+    PROMPT_REFACTOR_FILE="$ARCLINK_JOURNEY_PROMPT_DIR/PROMPT_refactor.md"
+    PROMPT_LINT_FILE="$ARCLINK_JOURNEY_PROMPT_DIR/PROMPT_lint.md"
+    PROMPT_DOCUMENT_FILE="$ARCLINK_JOURNEY_PROMPT_DIR/PROMPT_document.md"
+
+    cat > "$PROMPT_PLAN_FILE" <<'EOF'
+# Ralphie Plan Phase Prompt: ArcLink User Journey And Gap Atlas
+
+You are planning the ArcLink full journey/gaps mission.
+
+Required behavior:
+
+- Read `AGENTS.md` and `research/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md` first.
+- Build an evidence-first plan that will produce `USER_JOURNEY.md` and
+  `GAPS.md`.
+- Inspect the existing product matrix, runbooks, web/API/bot/provisioning/
+  knowledge/plugin/test surfaces, and any prior Ralphie steering that affects
+  journey truth.
+- Replace `IMPLEMENTATION_PLAN.md` with a mission-specific plan containing
+  checklist tasks for the root docs, source audit, gap taxonomy, proof gates,
+  policy questions, and validation commands.
+- Write or refresh `research/COVERAGE_MATRIX.md` so it maps journey surfaces to
+  source areas and target doc sections.
+- Do not run live external or host-mutating flows.
+
+PLAN is complete only when the plan is actionable, source-aware, and specific
+about how `USER_JOURNEY.md` and `GAPS.md` will be produced and checked.
+EOF
+
+    cat > "$PROMPT_BUILD_FILE" <<'EOF'
+# Ralphie Build Phase Prompt: Write The Journey And Gap Docs
+
+You are writing the two root deliverables.
+
+Deliverables:
+
+- `USER_JOURNEY.md`: a complete end-to-end ArcLink journey atlas. It should be
+  the aspirational full story, assuming the intended system is in place, while
+  clearly separating ideal product contract from proof status where needed.
+- `GAPS.md`: a rigorous source-grounded register of actual gaps, partials,
+  proof gates, policy questions, test gaps, doc gaps, UX gaps, operational
+  gaps, and security risks discovered in the repository.
+
+Required method:
+
+- Follow `research/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md`.
+- Use `rg` and focused reads. Cite concrete source paths, and line numbers when
+  readily available.
+- Compare the story against code, tests, docs, services, configs, scripts,
+  product matrix rows, and control-node/shared-host boundaries.
+- Treat `research/PRODUCT_REALITY_MATRIX.md` counts ("0 gap", "N real") as an
+  unverified claim to disprove, not a baseline. Do not copy its rows; derive
+  every gap from fresh source evidence and hunt for net-new gaps it missed. A
+  `real` claim with thin/absent local evidence is itself a gap.
+- The root docs and `research/seed-*-draft.md` are input stubs, not a baseline
+  to preserve; regenerate from source, do not merely polish them.
+- Include happy paths, alternate choices, dead ends, recovery paths, and
+  cross-system handoffs.
+- Mark proof-gated live behavior honestly.
+- Do not read private state or secrets and do not run live mutations.
+
+BUILD is complete only when both root docs exist, are dense enough to steer
+future implementation, and `GAPS.md` does not hide uncertain or unproven claims.
+EOF
+
+    cat > "$PROMPT_TEST_FILE" <<'EOF'
+# Ralphie Test Phase Prompt: Validate The Journey And Gap Atlas
+
+You are verifying the new root docs.
+
+Required checks:
+
+- Confirm `USER_JOURNEY.md` and `GAPS.md` exist and contain the required
+  sections from the steering brief.
+- Use `rg` to confirm major ArcLink surfaces are represented: website,
+  Telegram, Discord, Raven, Stripe/billing, provisioning, fleet, ingress,
+  dashboard, Hermes, qmd, vault, Notion, SSOT, memory, Drive, Code, Terminal,
+  shares, Chutes/router/refuel, admin, health, upgrades, backups, Docker,
+  Control Node, Shared Host, services, security/isolation, and proof gates.
+- Run markdown-safe checks such as `git diff --check` and targeted `rg`
+  hygiene scans for local absolute paths, obvious secrets, and transcript
+  leakage.
+- If feasible, run focused no-secret tests for surfaces that `GAPS.md` claims
+  are real or risky.
+- Record exact commands and outcomes in the completion output.
+
+Do not run live external or host-mutating flows.
+EOF
+
+    cat > "$PROMPT_REFACTOR_FILE" <<'EOF'
+# Ralphie Refactor Phase Prompt: Tighten The Atlas
+
+You are tightening structure without changing the intended substance.
+
+Focus:
+
+- Remove duplication between `USER_JOURNEY.md`, `GAPS.md`, and the coverage
+  matrix while preserving all journey joints.
+- Normalize taxonomy, IDs, severity labels, and proof-gate language.
+- Make unclear sections easier to scan.
+- Preserve source references and do not soften gaps.
+
+Return concise notes about what changed and what risks remain.
+EOF
+
+    cat > "$PROMPT_LINT_FILE" <<'EOF'
+# Ralphie Lint Phase Prompt: Challenge Claims
+
+You are the adversarial quality pass.
+
+Check that:
+
+- No root doc contains secrets, local absolute paths, tool transcripts, or
+  unsupported live claims.
+- Every `real` claim in `GAPS.md` has plausible local evidence or is moved out
+  of `real`.
+- Every proof-gated or policy-gated journey is labeled clearly.
+- The docs use ArcLink vocabulary correctly: Raven, ArcPod/Pod, Agent, Captain,
+  Crew, Operator.
+- The docs do not rename Almanac into the top-level product.
+- The gap register includes test/proof/policy routes for non-real items.
+
+Run `git diff --check` and targeted `rg` scans. Do not run live mutations.
+EOF
+
+    cat > "$PROMPT_DOCUMENT_FILE" <<'EOF'
+# Ralphie Document Phase Prompt: Finalize Public Handoff
+
+You are finalizing the public documentation handoff.
+
+Required finish:
+
+- Ensure `USER_JOURNEY.md` is readable as the complete ArcLink experience story.
+- Ensure `GAPS.md` is rigorous enough for implementation planning and operator
+  decision-making.
+- Add a short completion note to `research/BUILD_COMPLETION_NOTES.md` or another
+  existing completion artifact if appropriate, summarizing what was inspected,
+  what was produced, and which proof/policy gates remain.
+- Do not include local paths, secrets, raw tool output, or unsupported live
+  claims.
+
+Document phase is complete when a future agent can pick up the two root docs
+and immediately know both the beautiful intended journey and the hard truth of
+what is missing or unproven.
+EOF
+}
+
+prepare_arclink_user_journey_audit() {
+    if ! is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
+        return 0
+    fi
+
+    info "Preparing ArcLink USER_JOURNEY.md + GAPS.md audit mission."
+    apply_arclink_user_journey_audit_defaults
+    write_arclink_user_journey_steering_file
+    write_arclink_user_journey_prompt_files
+
+    BACKLOG_SOURCES="research/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md,research/PRODUCT_REALITY_MATRIX.md,research/RALPHIE_ARCLINK_PRODUCT_REALITY_AND_JOURNEY_STEERING.md,AGENTS.md,README.md,docs/arclink/sovereign-control-node.md,docs/arclink/control-node-production-runbook.md,docs/arclink/fleet-operator-runbook.md,docs/arclink/operations-runbook.md,docs/arclink/foundation-runbook.md,docs/arclink/first-day-user-guide.md,docs/arclink/raven-public-bot.md,docs/arclink/data-safety.md,docs/arclink/llm-router.md,IMPLEMENTATION_PLAN.md"
+
+    write_project_goals_file "ArcLink full user journey and gap atlas mission.
+
+Create USER_JOURNEY.md as the complete end-to-end ArcLink story across website, Raven, Telegram, Discord, billing, provisioning, Control Node, Shared Host, ArcPods, dashboards, Hermes, qmd/vault/Notion/SSOT/memory, Drive/Code/Terminal, sharing, provider/refuel, admin/operator, upgrades, backups, health, services, and security boundaries.
+
+Create GAPS.md as the hard source-grounded gap register comparing that full story against the actual repository code, tests, docs, service units, config, and scripts. Classify every missing, partial, proof-gated, policy-gated, weakly tested, confusing, or risky joint with severity, evidence, impact, owner surface, and next repair.
+
+Use both Codex and Claude at high rigor. Do not read private state or secrets. Do not run live external or host-mutating flows."
+
+    write_bootstrap_context_file \
+        "existing" \
+        "Create the ArcLink USER_JOURNEY.md and GAPS.md atlas from source-grounded product, system, and operations evidence." \
+        "true" \
+        "false" \
+        "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
+        "Root USER_JOURNEY.md and GAPS.md exist, cover every major ArcLink journey and system boundary, cite source evidence, and pass markdown hygiene checks." \
+        "true" \
+        "" \
+        "Root docs plus research coverage matrix; no code repair unless needed to support documentation generation or validation." \
+        "Bash orchestration, Python control plane, Next.js web, Hermes plugins, systemd/Docker deployment rails."
+
+    CURRENT_PHASE="plan"
+    CURRENT_PHASE_INDEX=0
+    CURRENT_PHASE_ATTEMPT=1
+    PHASE_ATTEMPT_IN_PROGRESS="false"
+}
+
+enforce_arclink_user_journey_dual_engine_ready() {
+    if ! is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
+        return 0
+    fi
+    if [ "$CODEX_HEALTHY" = "true" ] && [ "$CLAUDE_HEALTHY" = "true" ]; then
+        return 0
+    fi
+    LAST_ENGINE_SELECTION_BLOCK_REASON="ArcLink journey audit requires both Codex and Claude healthy (codex=${CODEX_HEALTHY}:${CODEX_CAP_NOTE:-ok}, claude=${CLAUDE_HEALTHY}:${CLAUDE_CAP_NOTE:-ok})."
+    err "$LAST_ENGINE_SELECTION_BLOCK_REASON"
+    return 1
 }
 
 bootstrap_dense_token() {
@@ -4820,6 +5264,11 @@ smoke_test_engine() {
         fi
         smoke_args=("$engine_cmd" "-p")
         [ -n "${CLAUDE_MODEL:-}" ] && smoke_args+=("--model" "$CLAUDE_MODEL")
+        local claude_effort
+        claude_effort="$(claude_effort_for_thinking_override "$CLAUDE_THINKING_OVERRIDE")"
+        if [ "${CLAUDE_CAP_EFFORT_FLAG:-0}" = "1" ] && [ -n "$claude_effort" ]; then
+            smoke_args+=("--effort" "$claude_effort")
+        fi
         case "$CLAUDE_THINKING_OVERRIDE" in
             high|xhigh)
                 smoke_args+=("--settings" '{"alwaysThinkingEnabled":true}')
@@ -4892,6 +5341,7 @@ probe_engine_capabilities() {
     CLAUDE_CAP_NOTE=""
     CLAUDE_CAP_PRINT=0
     CLAUDE_CAP_YOLO_FLAG=""
+    CLAUDE_CAP_EFFORT_FLAG=0
     CODEX_HEALTHY="false"
     CLAUDE_HEALTHY="false"
     CODEX_SMOKE_PASS="false"
@@ -4911,6 +5361,9 @@ probe_engine_capabilities() {
 
         if echo "$claude_help" | grep -qE -- "--dangerously-skip-permissions"; then
             CLAUDE_CAP_YOLO_FLAG="--dangerously-skip-permissions"
+        fi
+        if echo "$claude_help" | grep -qE -- "--effort"; then
+            CLAUDE_CAP_EFFORT_FLAG=1
         fi
 
         if ! echo "$claude_help" | grep -qiE "read|write|tool|file|edit|command"; then
@@ -5571,6 +6024,11 @@ run_agent_with_prompt() {
 
         engine_args=("$ACTIVE_CMD" "-p")
         [ -n "${CLAUDE_MODEL:-}" ] && engine_args+=("--model" "$CLAUDE_MODEL")
+        local claude_effort
+        claude_effort="$(claude_effort_for_thinking_override "$CLAUDE_THINKING_OVERRIDE")"
+        if [ "${CLAUDE_CAP_EFFORT_FLAG:-0}" = "1" ] && [ -n "$claude_effort" ]; then
+            engine_args+=("--effort" "$claude_effort")
+        fi
         case "$CLAUDE_THINKING_OVERRIDE" in
             high|xhigh)
                 engine_args+=("--settings" '{"alwaysThinkingEnabled":true}')
@@ -7741,6 +8199,8 @@ markdown_artifacts_are_clean() {
 
     [ -f "$PLAN_FILE" ] && files+=("$PLAN_FILE")
     [ -f "$PROJECT_DIR/README.md" ] && files+=("$PROJECT_DIR/README.md")
+    [ -f "$USER_JOURNEY_FILE" ] && files+=("$USER_JOURNEY_FILE")
+    [ -f "$GAPS_FILE" ] && files+=("$GAPS_FILE")
 
     local research_files spec_files
     research_files="$(find "$RESEARCH_DIR" -maxdepth 2 -type f -name "*.md" 2>/dev/null || true)"
@@ -7847,7 +8307,7 @@ sanitize_markdown_artifacts() {
     MARKDOWN_ARTIFACTS_PREVIEW_LIST=""
     MARKDOWN_ARTIFACTS_BACKUP_LIST=""
     local file
-    local -a targets=("$PLAN_FILE" "$PROJECT_DIR/README.md")
+    local -a targets=("$PLAN_FILE" "$PROJECT_DIR/README.md" "$USER_JOURNEY_FILE" "$GAPS_FILE")
     local -a scoped_targets=()
 
     if [ -d "$RESEARCH_DIR" ]; then
@@ -8756,6 +9216,7 @@ run_idle_plan_refresh() { return 0; }
 print_session_config_banner() {
     info "=== Ralphie Session Budget & Retry Configuration ==="
     info "script_version: ${SCRIPT_VERSION}"
+    info "arclink_user_journey_audit: ${ARCLINK_USER_JOURNEY_AUDIT:-false}"
     info "auto_update: ${AUTO_UPDATE:-$DEFAULT_AUTO_UPDATE} (pre-run single-file update)"
     info "auto_update_url: $(redact_endpoint_for_log "$AUTO_UPDATE_URL")"
     info "auto_update_allow_dirty: ${AUTO_UPDATE_ALLOW_DIRTY:-$DEFAULT_AUTO_UPDATE_ALLOW_DIRTY}"
@@ -8823,6 +9284,12 @@ print_session_config_banner() {
     info "binary_steering_map: $(path_for_display "$BINARY_STEERING_MAP_FILE")"
     info "self_improvement_log: $(path_for_display "$SELF_IMPROVEMENT_LOG_FILE")"
     info "setup_subrepos_script: $(path_for_display "$SETUP_SUBREPOS_SCRIPT")"
+    if is_true "${ARCLINK_USER_JOURNEY_AUDIT:-false}"; then
+        info "user_journey_doc: $(path_for_display "$USER_JOURNEY_FILE")"
+        info "gaps_doc: $(path_for_display "$GAPS_FILE")"
+        info "journey_steering: $(path_for_display "$ARCLINK_JOURNEY_STEERING_FILE")"
+        info "journey_prompt_dir: $(path_for_display "$ARCLINK_JOURNEY_PROMPT_DIR")"
+    fi
 }
 
 emit_phase_transition_banner() {
@@ -8859,6 +9326,9 @@ main() {
     is_bool_like "$REBOOTSTRAP_REQUESTED" || REBOOTSTRAP_REQUESTED="$DEFAULT_REBOOTSTRAP_REQUESTED"
     STARTUP_OPERATIONAL_PROBE="$(to_lower "${STARTUP_OPERATIONAL_PROBE:-$DEFAULT_STARTUP_OPERATIONAL_PROBE}")"
     is_bool_like "$STARTUP_OPERATIONAL_PROBE" || STARTUP_OPERATIONAL_PROBE="$DEFAULT_STARTUP_OPERATIONAL_PROBE"
+    if is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
+        RESUME_REQUESTED="false"
+    fi
 
     acquire_lock || exit 1
     install_cleanup_traps
@@ -8904,6 +9374,11 @@ main() {
     fi
     if ! is_number "$ENGINE_SMOKE_TEST_TIMEOUT" || [ "$ENGINE_SMOKE_TEST_TIMEOUT" -lt 1 ]; then
         ENGINE_SMOKE_TEST_TIMEOUT="$DEFAULT_ENGINE_SMOKE_TEST_TIMEOUT"
+    fi
+
+    prepare_arclink_user_journey_audit
+    if is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
+        resume_reentry_pending="false"
     fi
 
     local should_exit="false"
@@ -8990,6 +9465,12 @@ main() {
             notify_event "session_error" "engine_selection_failed" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
             break
         fi
+        if ! enforce_arclink_user_journey_dual_engine_ready; then
+            should_exit="true"
+            log_reason_code "RB_ARCLINK_JOURNEY_DUAL_ENGINE_REQUIRED" "$LAST_ENGINE_SELECTION_BLOCK_REASON"
+            notify_event "session_error" "dual_engine_required" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
+            break
+        fi
         if [ "$engine_override_bootstrap_checked" = "false" ]; then
             engine_override_bootstrap_checked="true"
             if run_first_deploy_engine_override_wizard; then
@@ -8998,6 +9479,12 @@ main() {
                     should_exit="true"
                     log_reason_code "RB_ENGINE_SELECTION_FAILED" "$LAST_ENGINE_SELECTION_BLOCK_REASON"
                     notify_event "session_error" "engine_selection_failed" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
+                    break
+                fi
+                if ! enforce_arclink_user_journey_dual_engine_ready; then
+                    should_exit="true"
+                    log_reason_code "RB_ARCLINK_JOURNEY_DUAL_ENGINE_REQUIRED" "$LAST_ENGINE_SELECTION_BLOCK_REASON"
+                    notify_event "session_error" "dual_engine_required" "$LAST_ENGINE_SELECTION_BLOCK_REASON" || true
                     break
                 fi
             fi

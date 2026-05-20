@@ -1,5 +1,70 @@
 # Build Completion Notes
 
+## 2026-05-20 Ralphie Public Documentation Handoff Finalization
+
+Scope: finalized the public documentation handoff around the two root documents.
+Inspected `USER_JOURNEY.md`, `GAPS.md`, `research/COVERAGE_MATRIX.md`,
+`research/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md`, the Ralphie
+document-phase retry feedback, the current documentation truth test, the public
+repo hygiene test, the phase handoff/scoring guard, and the existing completion
+log. No live deploy, install, upgrade, Docker mutation, Stripe, Telegram,
+Discord, Notion, provider, Cloudflare, Tailscale, SSH fleet, or production-host
+mutation was run.
+
+Follow-up audit correction: after Ralphie completed, a broad no-secret Python
+suite run of `python3 -m pytest -q tests` on 2026-05-20 reported 197 failed,
+1012 passed, and 6 skipped. This does not invalidate the root docs as
+source-grounded planning artifacts, but it does invalidate any broad
+"local validation is green" reading of the earlier focused 582-test result.
+`GAPS.md` now records this as `GAP-025`, and future release planning must triage
+the full-suite failures before claiming broad regression cleanliness.
+
+Produced:
+
+- `USER_JOURNEY.md`: kept as the complete ArcLink experience story, added a
+  one-page journey synopsis, added an explicit fast handoff and document-phase
+  closeout rule for future agents, added a reviewer acceptance checklist, and
+  kept launch certification separated from intended experience.
+- `GAPS.md`: kept as the implementation-planning register, added operator
+  decision summary material, added an ordered planning ladder, added a P0/P1
+  launch decision ledger, added a document-phase closeout rule, and preserved
+  closure rules so future work does not close proof, policy, validation, or code
+  gaps with copy alone. A follow-up audit added `GAP-025` for the full-suite
+  failure boundary.
+- `research/BUILD_COMPLETION_NOTES.md`: recorded this handoff note with the
+  validation boundary.
+- `mission_status.md`: recorded the current public documentation handoff status
+  for phase tooling that reads a root mission artifact.
+
+Validation:
+
+- `git diff --check` passed.
+- `python3 tests/test_documentation_truths.py` passed.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- A targeted scan of the latest handoff section, `USER_JOURNEY.md`, `GAPS.md`,
+  and `mission_status.md` found no absolute local path, private-key marker,
+  obvious token prefix, or live-proof-passed overclaim.
+- Ralphie's selected no-secret validation reported 582 tests passed plus shell
+  syntax and web checks, but the later broad Python suite failed as described
+  above. Treat the 582-test result as focused validation only.
+- Attempt 5 retry repair targeted the remaining machine-check weakness from the
+  prior document attempt: reviewers had GO/no-gap outcomes, but handoff and
+  consensus averages were below the configured 92-point threshold. The root docs
+  now make terminal document-phase intent, reviewer acceptance criteria,
+  implementation-planning order, operator decision points, and out-of-scope
+  proof/policy gates explicit.
+
+Remaining gates:
+
+- No credentialed live proof was run in this document pass.
+- Broad Python regression validation is not green; see `GAP-025`.
+- `PG-PROD`, `PG-STRIPE`, `PG-BOTS`, `PG-PROVISION`, `PG-FLEET`, `PG-INGRESS`,
+  `PG-PROVIDER`, `PG-NOTION`, `PG-HERMES`, `PG-BACKUP`, and `PG-UPGRADE` remain
+  governed by `GAPS.md`.
+- Provider self-service, Captain migration, browser share-link broker,
+  backup automation, linked copy/duplicate wording, and destructive teardown
+  authority remain policy decisions until the operator resolves them.
+
 ## 2026-05-16 LLM Router Model Catalog And Promotion
 
 Scope: upgraded the Control Node LLM router so model pricing and lifecycle

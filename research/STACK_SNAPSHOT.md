@@ -1,48 +1,30 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-16
-- project_type: existing public repository
-- primary_stack: Python ASGI + SQLite + Docker Compose
-- deterministic_confidence_score: 94/100
+- generated_at: 2026-05-20T03:06:40Z
+- project_root: .
+- primary_stack: Python control plane + shell orchestration + Docker Compose
+- primary_score: 094/100
+- confidence: high
 
-## Ranked Stack Hypotheses
+## Project Stack Ranking
 
-| Rank | Stack hypothesis | Score | Evidence |
+| rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python backend/control plane with SQLite and shell-managed runtime | 94 | About 191 Python files, 79 shell scripts, `requirements-dev.txt`, large `python/arclink_control.py`, router/provisioning/worker modules, and Python test suite. |
-| 2 | Docker Compose Control Node runtime | 86 | Root `compose.yaml`, `Dockerfile`, Docker-focused tests, Control Node services, and operator docker commands. |
-| 3 | Next.js dashboard adjunct | 58 | `web/package.json`, React/Next/TypeScript files, Playwright tests; relevant for provider-state display but not router core. |
-| 4 | Static docs/OpenAPI surface | 52 | `docs/API_REFERENCE.md`, `docs/openapi/arclink-v1.openapi.json`, router runbook/docs. |
-| 5 | Standalone Node.js primary app | 18 | Some TypeScript/JavaScript exists, but backend/control/router surfaces are Python. |
+| 1 | Python backend/control plane | 094 | `requirements-dev.txt`, about 192 Python files, `python/arclink_control.py`, hosted API, provisioning, executor, fleet, provider, router, MCP, Notion, memory, and broad `tests/test_arclink_*.py` coverage |
+| 2 | Shell-managed host runtime | 088 | `deploy.sh`, `bin/deploy.sh`, many `bin/*.sh` host lifecycle scripts, systemd service templates, and shell validation guidance |
+| 3 | Docker Compose Control Node runtime | 086 | Root `compose.yaml`, `Dockerfile`, Control Node services, Docker health paths, and Docker-focused regression tests |
+| 4 | Next.js dashboard adjunct | 058 | `web/package.json`, `web/src/**`, and browser tests support the product UI but are not the primary backend/runtime |
+| 5 | Static docs/OpenAPI surface | 052 | `docs/**`, `research/**`, root docs, and OpenAPI artifacts describe and validate the public contract |
+| 6 | Standalone Node.js app | 018 | TypeScript/JavaScript exists mainly under `web/`; it does not dominate control-plane runtime behavior |
 
-## Deterministic Scoring Notes
+## Deterministic Alternatives Ranking
+- Candidate evaluation is based on repository-level manifests, source volume,
+  runtime entrypoints, and test ownership.
+- The earlier Node-first result was rejected because it over-weighted frontend
+  file counts and under-weighted Python control-plane entrypoints, shell
+  lifecycle scripts, Compose services, and Python regression coverage.
 
-Scoring used repository-level signals only:
-
-- Backend/control source count and mission files: +40 Python.
-- Existing test surface for target mission: +20 Python.
-- Runtime declarations and Compose service model: +20 Compose/Python.
-- Shell/deploy orchestration weight: +10 Python-adjacent runtime.
-- Web/frontend relevance: capped because it is not the router core.
-
-The earlier Node-first snapshot was rejected because it over-weighted a small
-frontend file count and under-weighted the Python control-plane source and
-tests.
-
-## Selected Stack For BUILD
-
-- FastAPI app in `python/arclink_llm_router.py`.
-- uvicorn `control-llm-router` Compose service.
-- httpx async upstream client and streaming relay.
-- SQLite tables and helpers in `python/arclink_control.py`.
-- Existing Chutes boundary logic in `python/arclink_chutes.py`.
-- Existing provisioning/worker surfaces for ArcPod router URL/key rollout.
-
-## Alternatives
-
-| Alternative | Disposition |
-| --- | --- |
-| Reuse WSGI `control-api` for OpenAI-compatible streaming | Rejected; ASGI is a better fit and avoids hosted API session coupling. |
-| Add Redis/Postgres hot counters in v1 | Deferred; SQLite-first matches current Control Node architecture. |
-| Add tokenizer dependency now | Deferred; provider usage plus deterministic fallback is enough for source-level v1. |
-| Continue direct Chutes keys in ArcPods by default | Rejected; violates the router mission. |
+### Top 3 stack alternatives (ranked)
+- 1) Python backend/control plane: score=094, evidence=`python/**`, `tests/test_arclink_*.py`, `requirements-dev.txt`
+- 2) Shell-managed host runtime: score=088, evidence=`deploy.sh`, `bin/*.sh`, service install/health scripts
+- 3) Docker Compose Control Node runtime: score=086, evidence=`compose.yaml`, `Dockerfile`, Docker/Control Node tests

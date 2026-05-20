@@ -60,7 +60,7 @@
     "qmd": {
       "kind": "npm",
       "package": "@tobilu/qmd",
-      "version": "2.1.0",
+      "version": "2.5.1",
       "description": "qmd retrieval CLI + MCP server. Explicit semver pin keeps recall/index semantics stable across host bootstraps and upgrades."
     },
     "nextcloud": {

@@ -366,6 +366,12 @@ review_gaps_are_blocking() {
             return 1
             ;;
     esac
+    if is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; then
+        if [[ "$normalized" =~ (live|proof|policy|credential|operator|residual|pg-) ]] && \
+            [[ ! "$normalized" =~ (local|source|test|code|implement|repair|failing|regression|unchecked|security|helper|broker|isolation|fail[[:space:]-]*closed|blocker) ]]; then
+            return 1
+        fi
+    fi
     return 0
 }
 
@@ -775,7 +781,7 @@ is_allowed_config_key() {
         RUN_AGENT_MAX_ATTEMPTS|RUN_AGENT_RETRY_DELAY_SECONDS|RUN_AGENT_RETRY_VERBOSE|\
         ENGINE_OUTPUT_TO_STDOUT|ENGINE_IDLE_OUTPUT_TIMEOUT_SECONDS|STRICT_VALIDATION_NOOP|PHASE_COMPLETION_MAX_ATTEMPTS|\
         PHASE_COMPLETION_RETRY_DELAY_SECONDS|PHASE_COMPLETION_RETRY_VERBOSE|\
-        MAX_CONSENSUS_ROUTING_ATTEMPTS|REQUIRE_LINT_BEFORE_DONE|REQUIRE_DOCUMENT_BEFORE_DONE|\
+        MAX_CONSENSUS_ROUTING_ATTEMPTS|PHASE_PAIR_CYCLE_LIMIT|REQUIRE_LINT_BEFORE_DONE|REQUIRE_DOCUMENT_BEFORE_DONE|\
         REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE|REQUIRE_PLAN_FRESHNESS_FOR_BUILD|BACKLOG_SOURCES|\
         PHASE_NOOP_POLICY_PLAN|PHASE_NOOP_POLICY_BUILD|\
         PHASE_NOOP_POLICY_TEST|PHASE_NOOP_POLICY_REFACTOR|PHASE_NOOP_POLICY_LINT|\
@@ -1083,7 +1089,8 @@ Core options:
   --phase-wallclock-limit-seconds N       Wall-clock limit per phase attempt (0 = disabled)
   --phase-completion-retry-delay-seconds N Delay in seconds between completion retries
   --phase-completion-retry-verbose bool   Verbose phase completion retry logging (true|false)
-  --max-consensus-routing-attempts N      Max adaptive consensus reroutes per run (0=unlimited)
+  --max-consensus-routing-attempts N      Max adaptive backtracking reroutes per run (0=unlimited)
+  --phase-pair-cycle-limit N             Stop after N consecutive routes across the same phase pair (0=disabled)
   --consensus-score-threshold N           Minimum consensus/handoff pass score (0-100)
   --run-agent-max-attempts N              Max inference retries per agent run
   --run-agent-retry-delay-seconds N       Delay in seconds between inference retries
@@ -1110,6 +1117,7 @@ Core options:
   --backlog-sources PATHS                 Comma-separated markdown backlog files (default: IMPLEMENTATION_PLAN.md)
   --arclink-user-journey-audit            Seed the full ArcLink USER_JOURNEY.md + GAPS.md audit mission
   --arclink-dream-buildout                Iteratively build out ArcLink from USER_JOURNEY.md + GAPS.md
+  --arclink-gap-closure                   Alias for ArcLink GAPS.md local closure + proof/policy handoff mode
   --help, -h                             Show this help and exit
 
 All options may also be set through config.env (eg. SESSION_TOKEN_BUDGET, MAX_SESSION_CYCLES, etc).
@@ -1153,6 +1161,7 @@ Additional runtime env knobs:
   RALPHIE_NOTIFY_INCIDENT_REMINDER_MINUTES   Reminder cadence (minutes) for sustained incident series
   RALPHIE_NOTIFICATION_WIZARD_BOOTSTRAPPED  First-deploy notification setup prompt sentinel (true|false)
   RALPHIE_PHASE_WALLCLOCK_LIMIT_SECONDS     Wall-clock limit per phase attempt (seconds, 0=disabled)
+  RALPHIE_PHASE_PAIR_CYCLE_LIMIT             Same-pair phase bounce limit (0=disabled)
   RALPHIE_REQUIRE_LINT_BEFORE_DONE          Require at least one passed lint phase before terminal done routing
   RALPHIE_REQUIRE_DOCUMENT_BEFORE_DONE      Require at least one passed document phase before terminal done routing
   RALPHIE_REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE  Require local configured backlog sources to be clear before terminal done routing
@@ -1195,10 +1204,12 @@ parse_args() {
             ;;
             --resume)
                 RESUME_REQUESTED=true
+                RESUME_REQUESTED_EXPLICIT=true
                 shift
                 ;;
         --no-resume)
             RESUME_REQUESTED=false
+            RESUME_REQUESTED_EXPLICIT=true
             shift
             ;;
         --rebootstrap)
@@ -1227,6 +1238,7 @@ parse_args() {
                 ;;
         --max-phase-completion-attempts)
             PHASE_COMPLETION_MAX_ATTEMPTS="$(parse_arg_value "--max-phase-completion-attempts" "${2:-}")"
+            PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT=true
             require_non_negative_int "PHASE_COMPLETION_MAX_ATTEMPTS" "$PHASE_COMPLETION_MAX_ATTEMPTS"
             shift 2
             ;;
@@ -1250,11 +1262,18 @@ parse_args() {
                 ;;
             --max-consensus-routing-attempts)
                 MAX_CONSENSUS_ROUTING_ATTEMPTS="$(parse_arg_value "--max-consensus-routing-attempts" "${2:-}")"
+                MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT=true
                 require_non_negative_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" "$MAX_CONSENSUS_ROUTING_ATTEMPTS"
+                shift 2
+                ;;
+            --phase-pair-cycle-limit)
+                PHASE_PAIR_CYCLE_LIMIT="$(parse_arg_value "--phase-pair-cycle-limit" "${2:-}")"
+                require_non_negative_int "PHASE_PAIR_CYCLE_LIMIT" "$PHASE_PAIR_CYCLE_LIMIT"
                 shift 2
                 ;;
             --consensus-score-threshold)
                 CONSENSUS_SCORE_THRESHOLD="$(parse_arg_value "--consensus-score-threshold" "${2:-}")"
+                CONSENSUS_SCORE_THRESHOLD_EXPLICIT=true
                 require_non_negative_int "CONSENSUS_SCORE_THRESHOLD" "$CONSENSUS_SCORE_THRESHOLD"
                 if [ "$CONSENSUS_SCORE_THRESHOLD" -gt 100 ]; then
                     err "Invalid value for --consensus-score-threshold: $CONSENSUS_SCORE_THRESHOLD (expected 0-100)"
@@ -1454,6 +1473,10 @@ parse_args() {
                 ARCLINK_DREAM_BUILDOUT=true
                 shift
                 ;;
+            --arclink-gap-closure|--arclink-gaps-closure)
+                ARCLINK_DREAM_BUILDOUT=true
+                shift
+                ;;
             --max-iterations)
                 MAX_ITERATIONS="$(parse_arg_value "--max-iterations" "${2:-}")"
                 require_non_negative_int "MAX_ITERATIONS" "$MAX_ITERATIONS"
@@ -1520,6 +1543,10 @@ DEFAULT_MAX_CONSENSUS_ROUTING_ATTEMPTS=4
 DEFAULT_ENGINE_OUTPUT_TO_STDOUT="true"
 ENGINE_OUTPUT_TO_STDOUT_EXPLICIT="false"
 ENGINE_OUTPUT_TO_STDOUT_OVERRIDE=""
+RESUME_REQUESTED_EXPLICIT="${RALPHIE_RESUME_REQUESTED_EXPLICIT:-false}"
+CONSENSUS_SCORE_THRESHOLD_EXPLICIT="${RALPHIE_CONSENSUS_SCORE_THRESHOLD_EXPLICIT:-false}"
+PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT="${RALPHIE_PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT:-false}"
+MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT="${RALPHIE_MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT:-false}"
 DEFAULT_PHASE_NOOP_POLICY_PLAN="none"
 DEFAULT_PHASE_NOOP_POLICY_BUILD="hard"
 DEFAULT_PHASE_NOOP_POLICY_TEST="soft"
@@ -1567,6 +1594,7 @@ DEFAULT_NOTIFY_EVENT_DEDUP_WINDOW_SECONDS=90       # suppress duplicate notifica
 DEFAULT_NOTIFY_INCIDENT_REMINDER_MINUTES=10        # reminder cadence for ongoing incident series
 DEFAULT_NOTIFICATION_WIZARD_BOOTSTRAPPED="false"  # first-deploy notification setup prompt sentinel
 DEFAULT_PHASE_WALLCLOCK_LIMIT_SECONDS=0            # Default: disabled; enable for CI with presets below
+DEFAULT_PHASE_PAIR_CYCLE_LIMIT=10                  # stop repeated A<->B phase bounces after this many consecutive crossings
 DEFAULT_ARCLINK_USER_JOURNEY_AUDIT="false"         # special ArcLink USER_JOURNEY.md + GAPS.md audit mission
 DEFAULT_ARCLINK_DREAM_BUILDOUT="false"             # special ArcLink implementation buildout mission
 # Preset hints (not enforced):
@@ -1610,6 +1638,7 @@ PHASE_COMPLETION_MAX_ATTEMPTS="${PHASE_COMPLETION_MAX_ATTEMPTS:-$DEFAULT_PHASE_C
 PHASE_COMPLETION_RETRY_DELAY_SECONDS="${PHASE_COMPLETION_RETRY_DELAY_SECONDS:-$DEFAULT_PHASE_COMPLETION_RETRY_DELAY_SECONDS}"
 PHASE_COMPLETION_RETRY_VERBOSE="${PHASE_COMPLETION_RETRY_VERBOSE:-$DEFAULT_PHASE_COMPLETION_RETRY_VERBOSE}"
 MAX_CONSENSUS_ROUTING_ATTEMPTS="${MAX_CONSENSUS_ROUTING_ATTEMPTS:-$DEFAULT_MAX_CONSENSUS_ROUTING_ATTEMPTS}"
+PHASE_PAIR_CYCLE_LIMIT="${PHASE_PAIR_CYCLE_LIMIT:-$DEFAULT_PHASE_PAIR_CYCLE_LIMIT}"
 REQUIRE_LINT_BEFORE_DONE="${REQUIRE_LINT_BEFORE_DONE:-$DEFAULT_REQUIRE_LINT_BEFORE_DONE}"
 REQUIRE_DOCUMENT_BEFORE_DONE="${REQUIRE_DOCUMENT_BEFORE_DONE:-$DEFAULT_REQUIRE_DOCUMENT_BEFORE_DONE}"
 REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE="${REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE:-$DEFAULT_REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE}"
@@ -1676,9 +1705,16 @@ RUN_AGENT_RETRY_DELAY_SECONDS="${RALPHIE_RUN_AGENT_RETRY_DELAY_SECONDS:-$RUN_AGE
 RUN_AGENT_RETRY_VERBOSE="${RALPHIE_RUN_AGENT_RETRY_VERBOSE:-$RUN_AGENT_RETRY_VERBOSE}"
 ENGINE_IDLE_OUTPUT_TIMEOUT_SECONDS="${RALPHIE_ENGINE_IDLE_OUTPUT_TIMEOUT_SECONDS:-$ENGINE_IDLE_OUTPUT_TIMEOUT_SECONDS}"
 PHASE_COMPLETION_MAX_ATTEMPTS="${RALPHIE_PHASE_COMPLETION_MAX_ATTEMPTS:-$PHASE_COMPLETION_MAX_ATTEMPTS}"
+if [ -n "${RALPHIE_PHASE_COMPLETION_MAX_ATTEMPTS+x}" ]; then
+    PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT=true
+fi
 PHASE_COMPLETION_RETRY_DELAY_SECONDS="${RALPHIE_PHASE_COMPLETION_RETRY_DELAY_SECONDS:-$PHASE_COMPLETION_RETRY_DELAY_SECONDS}"
 PHASE_COMPLETION_RETRY_VERBOSE="${RALPHIE_PHASE_COMPLETION_RETRY_VERBOSE:-$PHASE_COMPLETION_RETRY_VERBOSE}"
 MAX_CONSENSUS_ROUTING_ATTEMPTS="${RALPHIE_MAX_CONSENSUS_ROUTING_ATTEMPTS:-$MAX_CONSENSUS_ROUTING_ATTEMPTS}"
+if [ -n "${RALPHIE_MAX_CONSENSUS_ROUTING_ATTEMPTS+x}" ]; then
+    MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT=true
+fi
+PHASE_PAIR_CYCLE_LIMIT="${RALPHIE_PHASE_PAIR_CYCLE_LIMIT:-$PHASE_PAIR_CYCLE_LIMIT}"
 REQUIRE_LINT_BEFORE_DONE="${RALPHIE_REQUIRE_LINT_BEFORE_DONE:-$REQUIRE_LINT_BEFORE_DONE}"
 REQUIRE_DOCUMENT_BEFORE_DONE="${RALPHIE_REQUIRE_DOCUMENT_BEFORE_DONE:-$REQUIRE_DOCUMENT_BEFORE_DONE}"
 REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE="${RALPHIE_REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE:-$REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE}"
@@ -1690,6 +1726,9 @@ ENGINE_HEALTH_RETRY_DELAY_SECONDS="${RALPHIE_ENGINE_HEALTH_RETRY_DELAY_SECONDS:-
 ENGINE_HEALTH_RETRY_VERBOSE="${RALPHIE_ENGINE_HEALTH_RETRY_VERBOSE:-$ENGINE_HEALTH_RETRY_VERBOSE}"
 ENGINE_SMOKE_TEST_TIMEOUT="${RALPHIE_ENGINE_SMOKE_TEST_TIMEOUT:-$ENGINE_SMOKE_TEST_TIMEOUT}"
 RESUME_REQUESTED="${RALPHIE_RESUME_REQUESTED:-$DEFAULT_RESUME_REQUESTED}"
+if [ -n "${RALPHIE_RESUME_REQUESTED+x}" ]; then
+    RESUME_REQUESTED_EXPLICIT=true
+fi
 REBOOTSTRAP_REQUESTED="${RALPHIE_REBOOTSTRAP_REQUESTED:-$DEFAULT_REBOOTSTRAP_REQUESTED}"
 ENGINE_OUTPUT_TO_STDOUT="${RALPHIE_ENGINE_OUTPUT_TO_STDOUT:-$ENGINE_OUTPUT_TO_STDOUT}"
 YOLO="${RALPHIE_YOLO:-$YOLO}"
@@ -1728,6 +1767,9 @@ CLAUDE_ENDPOINT="${RALPHIE_CLAUDE_ENDPOINT:-$CLAUDE_ENDPOINT}"
 CLAUDE_MODEL="${RALPHIE_CLAUDE_MODEL:-${CLAUDE_MODEL:-}}"
 CLAUDE_THINKING_OVERRIDE="${RALPHIE_CLAUDE_THINKING_OVERRIDE:-$CLAUDE_THINKING_OVERRIDE}"
 STARTUP_OPERATIONAL_PROBE="${RALPHIE_STARTUP_OPERATIONAL_PROBE:-$STARTUP_OPERATIONAL_PROBE}"
+if [ -n "${RALPHIE_CONSENSUS_SCORE_THRESHOLD+x}" ]; then
+    CONSENSUS_SCORE_THRESHOLD_EXPLICIT=true
+fi
 CONSENSUS_SCORE_THRESHOLD="${RALPHIE_CONSENSUS_SCORE_THRESHOLD:-$CONSENSUS_SCORE_THRESHOLD}"
 ENGINE_OVERRIDES_BOOTSTRAPPED="${RALPHIE_ENGINE_OVERRIDES_BOOTSTRAPPED:-$ENGINE_OVERRIDES_BOOTSTRAPPED}"
 NOTIFICATIONS_ENABLED="${RALPHIE_NOTIFICATIONS_ENABLED:-$NOTIFICATIONS_ENABLED}"
@@ -3187,7 +3229,9 @@ apply_arclink_user_journey_audit_defaults() {
     CODEX_THINKING_OVERRIDE="xhigh"
     CLAUDE_THINKING_OVERRIDE="xhigh"
     AUTO_COMMIT_ON_PHASE_PASS="false"
-    RESUME_REQUESTED="false"
+    if ! is_true "${RESUME_REQUESTED_EXPLICIT:-false}"; then
+        RESUME_REQUESTED="false"
+    fi
     REBOOTSTRAP_REQUESTED="false"
     REQUIRE_LINT_BEFORE_DONE="true"
     REQUIRE_DOCUMENT_BEFORE_DONE="true"
@@ -3208,9 +3252,15 @@ apply_arclink_user_journey_audit_defaults() {
         CLAUDE_MODEL="opus"
     fi
 
-    mission_set_min_int "CONSENSUS_SCORE_THRESHOLD" 92
-    mission_set_min_int "PHASE_COMPLETION_MAX_ATTEMPTS" 5
-    mission_set_min_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" 8
+    if ! is_true "${CONSENSUS_SCORE_THRESHOLD_EXPLICIT:-false}"; then
+        mission_set_min_int "CONSENSUS_SCORE_THRESHOLD" 92
+    fi
+    if ! is_true "${PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT:-false}"; then
+        mission_set_min_int "PHASE_COMPLETION_MAX_ATTEMPTS" 5
+    fi
+    if ! is_true "${MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT:-false}"; then
+        mission_set_min_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" 8
+    fi
     mission_set_min_int "RUN_AGENT_MAX_ATTEMPTS" 5
     mission_set_min_int "ENGINE_SMOKE_TEST_TIMEOUT" 60
     mission_set_min_int "SWARM_CONSENSUS_TIMEOUT" 900
@@ -3533,6 +3583,8 @@ EOF
 }
 
 prepare_arclink_user_journey_audit() {
+    local seed_bootstrap="true"
+
     if ! is_true "$ARCLINK_USER_JOURNEY_AUDIT"; then
         return 0
     fi
@@ -3552,22 +3604,29 @@ Create GAPS.md as the hard source-grounded gap register comparing that full stor
 
 Use both Codex and Claude at high rigor. Do not read private state or secrets. Do not run live external or host-mutating flows."
 
-    write_bootstrap_context_file \
-        "existing" \
-        "Create the ArcLink USER_JOURNEY.md and GAPS.md atlas from source-grounded product, system, and operations evidence." \
-        "true" \
-        "false" \
-        "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
-        "Root USER_JOURNEY.md and GAPS.md exist, cover every major ArcLink journey and system boundary, cite source evidence, and pass markdown hygiene checks." \
-        "true" \
-        "" \
-        "Root docs plus research coverage matrix; no code repair unless needed to support documentation generation or validation." \
-        "Bash orchestration, Python control plane, Next.js web, Hermes plugins, systemd/Docker deployment rails."
+    if is_true "$RESUME_REQUESTED" && [ -f "$PROJECT_BOOTSTRAP_FILE" ] && bootstrap_context_is_valid; then
+        seed_bootstrap="false"
+    fi
+    if is_true "$seed_bootstrap"; then
+        write_bootstrap_context_file \
+            "existing" \
+            "Create the ArcLink USER_JOURNEY.md and GAPS.md atlas from source-grounded product, system, and operations evidence." \
+            "true" \
+            "false" \
+            "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
+            "Root USER_JOURNEY.md and GAPS.md exist, cover every major ArcLink journey and system boundary, cite source evidence, and pass markdown hygiene checks." \
+            "true" \
+            "" \
+            "Root docs plus research coverage matrix; no code repair unless needed to support documentation generation or validation." \
+            "Bash orchestration, Python control plane, Next.js web, Hermes plugins, systemd/Docker deployment rails."
 
-    CURRENT_PHASE="plan"
-    CURRENT_PHASE_INDEX=0
-    CURRENT_PHASE_ATTEMPT=1
-    PHASE_ATTEMPT_IN_PROGRESS="false"
+        if ! is_true "$RESUME_REQUESTED"; then
+            CURRENT_PHASE="plan"
+            CURRENT_PHASE_INDEX=0
+            CURRENT_PHASE_ATTEMPT=1
+            PHASE_ATTEMPT_IN_PROGRESS="false"
+        fi
+    fi
 }
 
 enforce_arclink_user_journey_dual_engine_ready() {
@@ -3590,7 +3649,9 @@ apply_arclink_dream_buildout_defaults() {
     CODEX_THINKING_OVERRIDE="xhigh"
     CLAUDE_THINKING_OVERRIDE="xhigh"
     AUTO_COMMIT_ON_PHASE_PASS="false"
-    RESUME_REQUESTED="false"
+    if ! is_true "${RESUME_REQUESTED_EXPLICIT:-false}"; then
+        RESUME_REQUESTED="false"
+    fi
     REBOOTSTRAP_REQUESTED="false"
     REQUIRE_LINT_BEFORE_DONE="true"
     REQUIRE_DOCUMENT_BEFORE_DONE="true"
@@ -3611,9 +3672,15 @@ apply_arclink_dream_buildout_defaults() {
         CLAUDE_MODEL="opus"
     fi
 
-    mission_set_min_int "CONSENSUS_SCORE_THRESHOLD" 93
-    mission_set_min_int "PHASE_COMPLETION_MAX_ATTEMPTS" 8
-    mission_set_min_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" 10
+    if ! is_true "${CONSENSUS_SCORE_THRESHOLD_EXPLICIT:-false}"; then
+        mission_set_min_int "CONSENSUS_SCORE_THRESHOLD" 88
+    fi
+    if ! is_true "${PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT:-false}"; then
+        mission_set_min_int "PHASE_COMPLETION_MAX_ATTEMPTS" 8
+    fi
+    if ! is_true "${MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT:-false}"; then
+        mission_set_min_int "MAX_CONSENSUS_ROUTING_ATTEMPTS" 10
+    fi
     mission_set_min_int "RUN_AGENT_MAX_ATTEMPTS" 6
     mission_set_min_int "ENGINE_SMOKE_TEST_TIMEOUT" 60
     mission_set_min_int "SWARM_CONSENSUS_TIMEOUT" 1200
@@ -3631,11 +3698,12 @@ write_arclink_dream_buildout_steering_file() {
 Turn the ArcLink dream system described in `USER_JOURNEY.md` into working,
 tested repository reality, using `GAPS.md` as the implementation queue.
 
-This is an implementation mission, not another atlas pass. Close gaps with
-source changes, tests, and honest documentation updates. Start with `GAP-025`
-because a broad local suite that is not green undermines every local `real`
-claim. Then work P0/P1 gaps and any lower-priority rows that share the same
-code ownership.
+This is an implementation mission, not another atlas pass. Close every
+unattended local gap with source changes, tests, and honest documentation
+updates. When a row requires live credentials, an external proof window, an
+operator policy choice, or explicit residual-risk acceptance, do not fake-close
+it and do not quit in confusion; classify it, make local behavior fail closed,
+and leave an exact handoff item for the operator.
 
 ## Operating Contract
 
@@ -3661,15 +3729,17 @@ code ownership.
 
 ## Priority Order
 
-1. `GAP-025`: make the broad no-secret local validation story true. Triage the
-   full suite into real regressions, stale tests, and environment-coupled tests;
-   repair true regressions and document/quarantine intentionally gated cases.
-2. P0 trust/security/launch blockers: especially `GAP-001` and `GAP-019`.
-3. P1 core journey blockers: `GAP-002` through `GAP-008`, `GAP-011`, and
-   `GAP-018`.
-4. P2/P3 rows that become cheap while touching the same module family.
-5. Live proof gates only after the operator explicitly supplies credentials and
-   authorizes the live window.
+1. Refresh the active queue from `GAPS.md` and `IMPLEMENTATION_PLAN.md`. Bucket
+   each non-`real` row as `LOCAL`, `LIVE_PROOF`, `POLICY_DECISION`, or
+   `RESIDUAL_RISK_ACCEPTANCE`.
+2. If `GAP-025` has regressed, repair the broad no-secret local validation
+   story first. A broken broad suite undermines every local `real` claim.
+3. P0/P1 rows with local repairable work, especially `GAP-019` helper/broker
+   isolation and fail-closed security work.
+4. P2/P3 rows that are locally repairable or share code ownership with the
+   active P0/P1 slice.
+5. Live proof and policy rows only after the operator explicitly supplies
+   credentials, authorization, or a decision in a separate proof window.
 
 ## Repair Loop
 
@@ -3688,9 +3758,22 @@ For each slice:
 
 Do not route to `done` while `GAPS.md` or `IMPLEMENTATION_PLAN.md` still has an
 unchecked local code/test/doc repair that can be completed without live
-credentials or a policy decision. It is acceptable to leave explicit live proof
-or operator policy rows open, but they must be clearly labeled and fail closed
-in code.
+credentials or a policy decision.
+
+It is acceptable to leave explicit live-proof, policy, and residual-risk rows
+open only when all of the following are true:
+
+- They are labeled as proof-gated, policy-question, or residual-risk handoff.
+- Local code fails closed or refuses to overclaim.
+- `IMPLEMENTATION_PLAN.md`, `mission_status.md`, and
+  `research/BUILD_COMPLETION_NOTES.md` name the exact remaining operator action.
+- Focused tests and the broad local suite appropriate to the touched surface
+  have passed or the remaining failure is documented as an external gate.
+
+If only live/policy/residual-risk rows remain, route through `document` with a
+clear handoff, then allow `done` once that document handoff has passed. Do not
+keep retrying random local code, and do not stop merely because an authorized
+external proof is unavailable.
 EOF
 }
 
@@ -3707,14 +3790,17 @@ write_arclink_dream_buildout_prompt_files() {
 # Ralphie Plan Phase Prompt: ArcLink Dream Buildout
 
 Plan the next implementation slice that moves ArcLink from atlas/gaps toward
-working reality.
+working reality without confusing local repairs with live/policy gates.
 
 Required behavior:
 
 - Read `AGENTS.md`, `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`,
   `USER_JOURNEY.md`, `GAPS.md`, `IMPLEMENTATION_PLAN.md`, and
   `research/COVERAGE_MATRIX.md`.
-- Start with `GAP-025` unless it is already closed by source and test evidence.
+- Build a current queue from `GAPS.md`: `LOCAL`, `LIVE_PROOF`,
+  `POLICY_DECISION`, and `RESIDUAL_RISK_ACCEPTANCE`.
+- Start with `GAP-025` only if it has regressed; otherwise prioritize the
+  highest-severity local repairable row.
 - Replace or update `IMPLEMENTATION_PLAN.md` with an active repair plan:
   checked-off completed atlas work, unchecked current implementation tasks, the
   exact focused tests to run, and the local/live/policy boundary for each row.
@@ -3722,9 +3808,13 @@ Required behavior:
   public bot onboarding, Notion onboarding/CLI, plugins/workspace, deploy/health
   shell paths, vault/repo/backup, or any P0/P1 row with local repairability.
 - Do not plan live external or host-mutating commands for this unattended pass.
+- If no local queue remains, plan the documentation/handoff pass instead of
+  inventing speculative code work.
 
 PLAN is complete only when the next build step has a concrete owner surface,
-files to inspect/change, focused reproduction command, and success criteria.
+files to inspect/change, focused reproduction command, and success criteria, or
+when the plan proves that only external proof/policy/residual-risk handoffs
+remain and names those handoffs explicitly.
 EOF
 
     cat > "$PROMPT_BUILD_FILE" <<'EOF'
@@ -3735,8 +3825,8 @@ Implement the current highest-value local repair slice.
 Required behavior:
 
 - Follow `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`.
-- Prefer closing `GAP-025` failure clusters first, then P0/P1 gaps that can be
-  fixed without live credentials or operator policy.
+- Prefer `GAP-025` failure clusters only if broad local validation has regressed;
+  otherwise close the highest-severity `LOCAL` queue row.
 - Reproduce at least one failing/missing behavior with a focused local command
   before editing when practical.
 - Patch source and tests together. Use existing ArcLink patterns. Do not edit
@@ -3745,9 +3835,13 @@ Required behavior:
   Cloudflare/Tailscale/SSH fleet, or host mutation commands.
 - If a row cannot be closed locally, make the code/docs fail closed and record
   the live proof or policy decision instead of pretending success.
+- If the runtime queue shows no `LOCAL` work remains, do not edit random source
+  to satisfy the phase. Update the plan/status handoff and route forward.
 
-BUILD is complete only when at least one concrete gap/test cluster is improved
-by source changes and the implementation plan reflects what remains.
+BUILD is complete only when at least one concrete local gap/test cluster is
+improved by source changes, or when the source-grounded queue proves that only
+external proof/policy/residual-risk handoffs remain and the implementation plan
+reflects that.
 EOF
 
     cat > "$PROMPT_TEST_FILE" <<'EOF'
@@ -3764,6 +3858,9 @@ Required checks:
   enough clusters are closed, rerun `python3 -m pytest -q tests`.
 - Record exact commands and outcomes.
 - Do not run live external or host-mutating commands.
+- Do not fail the phase merely because `GAPS.md` still contains rows whose next
+  repair is authorized live proof, operator policy, or residual-risk acceptance.
+  Fail only on unattended local blockers, test failures, or unsupported claims.
 
 TEST is complete only when the touched slice is locally proven or the remaining
 failure is reclassified with evidence in `GAPS.md`.
@@ -3798,6 +3895,9 @@ Check that:
 - No broad validation claim overstates the commands actually run.
 - Any remaining full-suite failures are tracked under `GAP-025` or split into a
   more precise gap.
+- Reviewer `<gaps>` should name unattended local blockers only. Proof-gated,
+  policy-question, or residual-risk rows are acceptable when explicitly recorded
+  and not overclaimed.
 
 Run `git diff --check` and relevant focused lint/hygiene commands.
 EOF
@@ -3817,13 +3917,132 @@ Required finish:
   slice, files changed, commands run, and remaining proof/policy/test gates.
 - Do not include secrets, private paths, raw tool transcripts, or unsupported
   live claims.
+- If only live proof, policy, or residual-risk acceptance remains, say that
+  plainly. The document phase should leave Ralphie resumable for the next
+  authorized proof window instead of looping or silently quitting.
 
 Document phase is complete when a future agent can continue the buildout from
-the remaining unchecked local tasks without guessing what happened.
+the remaining unchecked local tasks or external handoffs without guessing what
+happened.
 EOF
 }
 
+arclink_dream_buildout_gap_snapshot() {
+    if ! is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; then
+        return 0
+    fi
+
+    echo "## ArcLink Gap Closure Runtime Context"
+    echo ""
+    echo "- This is an unattended local repair run. Do not run live proof, deploy/install/upgrade, Docker lifecycle, Stripe, bots, provider, Cloudflare, Tailscale, SSH fleet, or host-mutating commands without explicit operator authorization."
+    echo "- Treat non-real rows as one of: LOCAL, LIVE_PROOF, POLICY_DECISION, or RESIDUAL_RISK_ACCEPTANCE."
+    echo "- Only LOCAL rows are blockers for this unattended buildout. LIVE_PROOF, POLICY_DECISION, and RESIDUAL_RISK_ACCEPTANCE rows must be recorded as handoff items, not fake-closed and not listed in reviewer <gaps>."
+    echo "- If no LOCAL row remains, update handoff artifacts and route forward through document rather than inventing work or quitting."
+    echo ""
+
+    if [ -f "$GAPS_FILE" ]; then
+        echo "Current non-real gap rows from GAPS.md:"
+        awk '
+            function trim(value) {
+                gsub(/^[[:space:]]+/, "", value)
+                gsub(/[[:space:]]+$/, "", value)
+                return value
+            }
+            function emit() {
+                if (gap_id == "") {
+                    return
+                }
+                if (status == "" || status ~ /(^|,[[:space:]]*)real([[:space:]]*,|$)/) {
+                    return
+                }
+                next_repair = trim(next_repair)
+                gsub(/[[:space:]]+/, " ", next_repair)
+                if (length(next_repair) > 260) {
+                    next_repair = substr(next_repair, 1, 257) "..."
+                }
+                if (next_repair == "") {
+                    next_repair = "not captured"
+                }
+                printf "- `%s` status=%s next=%s\n", gap_id, status, next_repair
+            }
+            /^### GAP-/ {
+                emit()
+                gap_id = $2
+                status = ""
+                next_repair = ""
+                capture_next = 0
+                next
+            }
+            /^- Status:/ {
+                status = $0
+                sub(/^- Status:[[:space:]]*/, "", status)
+                capture_next = 0
+                next
+            }
+            /^- Next repair:/ {
+                next_repair = $0
+                sub(/^- Next repair:[[:space:]]*/, "", next_repair)
+                capture_next = 1
+                next
+            }
+            /^- [A-Za-z]/ {
+                capture_next = 0
+                next
+            }
+            capture_next && /^[[:space:]]+/ {
+                line = $0
+                sub(/^[[:space:]]+/, "", line)
+                next_repair = next_repair " " line
+                next
+            }
+            END {
+                emit()
+            }
+        ' "$GAPS_FILE" 2>/dev/null || echo "- Unable to parse GAPS.md; inspect it manually before deciding the next phase."
+    else
+        echo "Current non-real gap rows from GAPS.md:"
+        echo "- GAPS.md is missing; PLAN must recreate or recover it before BUILD."
+    fi
+
+    echo ""
+    if [ -f "$PLAN_FILE" ]; then
+        echo "Unchecked checklist items from IMPLEMENTATION_PLAN.md (triage before treating as unattended local blockers):"
+        if ! awk '
+            /^[[:space:]]*-[[:space:]]\[[[:space:]]\][[:space:]]/ {
+                printf "- %s:%s\n", FNR, $0
+                count++
+                if (count >= 40) {
+                    exit
+                }
+            }
+            END {
+                exit count > 0 ? 0 : 1
+            }
+        ' "$PLAN_FILE" 2>/dev/null; then
+            echo "- none detected"
+        fi
+    else
+        echo "Unchecked checklist items from IMPLEMENTATION_PLAN.md:"
+        echo "- IMPLEMENTATION_PLAN.md is missing; PLAN must recreate it."
+    fi
+}
+
+append_arclink_dream_buildout_runtime_context_to_prompt() {
+    local source_prompt="$1"
+    local target_prompt="$2"
+
+    [ -f "$source_prompt" ] || return 1
+    cp "$source_prompt" "$target_prompt" || return 1
+    {
+        echo ""
+        echo "---"
+        arclink_dream_buildout_gap_snapshot
+    } >> "$target_prompt"
+}
+
 prepare_arclink_dream_buildout() {
+    local seed_bootstrap="true"
+
     if ! is_true "$ARCLINK_DREAM_BUILDOUT"; then
         return 0
     fi
@@ -3835,28 +4054,35 @@ prepare_arclink_dream_buildout() {
 
     BACKLOG_SOURCES="GAPS.md,IMPLEMENTATION_PLAN.md,mission_status.md,research/COVERAGE_MATRIX.md,research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md,research/BUILD_COMPLETION_NOTES.md"
 
-    write_project_goals_file "ArcLink dream buildout mission.
+    write_project_goals_file "ArcLink dream buildout / gap-closure mission.
 
-Build the system described in USER_JOURNEY.md into working repository reality by closing GAPS.md, starting with GAP-025 broad local validation failure and then P0/P1 local repairable blockers. Use Codex and Claude at high rigor. Work in bounded repair slices with source changes, tests, and honest docs.
+Build the system described in USER_JOURNEY.md into working repository reality by closing every locally repairable GAPS.md row. First triage current non-real rows into local repairs, live proof gates, operator policy decisions, and residual-risk acceptance. Repair GAP-025 only if broad local validation has regressed, then prioritize P0/P1 local repairable blockers. Use Codex and Claude at high rigor. Work in bounded repair slices with source changes, tests, and honest docs.
 
-Do not read private state or secrets. Do not run live external services or host-mutating deploy/Docker/Stripe/bot/provider/Cloudflare/Tailscale/SSH commands unless the operator later authorizes a separate proof window. Fail closed for live/policy gates rather than faking completion."
+Do not read private state or secrets. Do not run live external services or host-mutating deploy/Docker/Stripe/bot/provider/Cloudflare/Tailscale/SSH commands unless the operator later authorizes a separate proof window. Fail closed for live/policy/residual-risk gates rather than faking completion, and route to a documented handoff when only those gates remain."
 
-    write_bootstrap_context_file \
-        "existing" \
-        "Implement ArcLink's dream system end to end by closing GAPS.md with local source repairs and tests, beginning with GAP-025." \
-        "false" \
-        "false" \
-        "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
-        "Local repairable gaps are closed or actively reduced; broad local validation improves; remaining live/policy gates are explicit and fail closed." \
-        "true" \
-        "" \
-        "Code, tests, docs, and runbooks needed to close GAPS.md. Avoid unrelated refactors." \
-        "Bash orchestration, Python control plane, Next.js web, Hermes plugins, systemd/Docker deployment rails."
+    if is_true "$RESUME_REQUESTED" && [ -f "$PROJECT_BOOTSTRAP_FILE" ] && bootstrap_context_is_valid; then
+        seed_bootstrap="false"
+    fi
+    if is_true "$seed_bootstrap"; then
+        write_bootstrap_context_file \
+            "existing" \
+            "Implement ArcLink's dream system end to end by closing every locally repairable GAPS.md row and preparing exact handoffs for live proof, policy, and residual-risk gates." \
+            "true" \
+            "false" \
+            "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
+            "Local repairable gaps are closed or actively reduced; broad local validation stays green; remaining live/policy/residual-risk gates are explicit, fail closed, and have operator handoff instructions." \
+            "true" \
+            "" \
+            "Code, tests, docs, and runbooks needed to close GAPS.md. Avoid unrelated refactors." \
+            "Bash orchestration, Python control plane, Next.js web, Hermes plugins, systemd/Docker deployment rails."
 
-    CURRENT_PHASE="plan"
-    CURRENT_PHASE_INDEX=0
-    CURRENT_PHASE_ATTEMPT=1
-    PHASE_ATTEMPT_IN_PROGRESS="false"
+        if ! is_true "$RESUME_REQUESTED"; then
+            CURRENT_PHASE="plan"
+            CURRENT_PHASE_INDEX=0
+            CURRENT_PHASE_ATTEMPT=1
+            PHASE_ATTEMPT_IN_PROGRESS="false"
+        fi
+    fi
 }
 
 enforce_arclink_dream_buildout_dual_engine_ready() {
@@ -4169,7 +4395,8 @@ ensure_project_bootstrap() {
     if [ "$REBOOTSTRAP_REQUESTED" = true ] || [ ! -f "$PROJECT_BOOTSTRAP_FILE" ] || ! bootstrap_context_is_valid; then
         needs_prompt="true"
     fi
-    if is_tty_input_available && [ "$existing_interactive_prompted" = "false" ] && [ -f "$PROJECT_BOOTSTRAP_FILE" ]; then
+    if ! { is_true "${ARCLINK_USER_JOURNEY_AUDIT:-false}" || is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; } && \
+        ! is_true "$RESUME_REQUESTED" && is_tty_input_available && [ "$existing_interactive_prompted" = "false" ] && [ -f "$PROJECT_BOOTSTRAP_FILE" ]; then
         needs_prompt="true"
     fi
 
@@ -4178,7 +4405,8 @@ ensure_project_bootstrap() {
             warn "Existing project bootstrap file is invalid or incomplete. Rebuilding context."
         elif [ "$REBOOTSTRAP_REQUESTED" = true ]; then
             warn "Rebuilding project bootstrap context due to --rebootstrap request."
-        elif is_tty_input_available && [ "$existing_interactive_prompted" = "false" ]; then
+        elif ! { is_true "${ARCLINK_USER_JOURNEY_AUDIT:-false}" || is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; } && \
+            ! is_true "$RESUME_REQUESTED" && is_tty_input_available && [ "$existing_interactive_prompted" = "false" ]; then
             info "Previous bootstrap was collected non-interactively; refreshing bootstrap context now."
         fi
     fi
@@ -6878,6 +7106,7 @@ run_swarm_consensus() {
 
     local total_score=0
     local go_votes=0
+    local blocking_gap_votes=0
     local responded_votes=0
     local required_votes="$count"
     local avg_score=0
@@ -6947,6 +7176,9 @@ run_swarm_consensus() {
         fi
 
         [ "$status" = "success" ] && [ "$verdict" = "GO" ] && go_votes=$((go_votes + 1))
+        if [ "$status" = "success" ] && review_gaps_are_blocking "$verdict_gaps"; then
+            blocking_gap_votes=$((blocking_gap_votes + 1))
+        fi
         summary_lines+=("reviewer_$((idx + 1)):engine=$engine status=$status score=$score verdict=$verdict next=$next_phase reason=$next_phase_reason gaps=$verdict_gaps")
         idx=$((idx + 1))
     done
@@ -7028,7 +7260,7 @@ run_swarm_consensus() {
     else
         LAST_CONSENSUS_SUMMARY=""
     fi
-    if [ "$responded_votes" -ge "$required_votes" ] && [ "$go_votes" -ge "$required_votes" ] && [ "$avg_score" -ge "$CONSENSUS_SCORE_THRESHOLD" ]; then
+    if [ "$responded_votes" -ge "$required_votes" ] && [ "$go_votes" -ge "$required_votes" ] && { [ "$avg_score" -ge "$CONSENSUS_SCORE_THRESHOLD" ] || { [ "$blocking_gap_votes" -eq 0 ] && arclink_dream_buildout_external_handoff_review_pass "$avg_score" "GO" "none"; }; }; then
         LAST_CONSENSUS_PASS=true
         LAST_CONSENSUS_FAILURE_KIND="none"
         LAST_CONSENSUS_FAILURE_REASON=""
@@ -7186,6 +7418,9 @@ run_handoff_validation() {
     fi
 
     if [ "$status" = "success" ] && is_number "$LAST_HANDOFF_SCORE" && [ "$LAST_HANDOFF_SCORE" -ge "$CONSENSUS_SCORE_THRESHOLD" ] && [ "$LAST_HANDOFF_VERDICT" = "GO" ]; then
+        return 0
+    fi
+    if [ "$status" = "success" ] && arclink_dream_buildout_external_handoff_review_pass "$LAST_HANDOFF_SCORE" "$LAST_HANDOFF_VERDICT" "$LAST_HANDOFF_GAPS"; then
         return 0
     fi
 
@@ -7965,6 +8200,12 @@ markdown_has_unchecked_local_tasks() {
                 if (lower ~ /open[[:space:]]*\[[[:space:]]*external[[:space:]]*\]/ || lower ~ /external-only/ || lower ~ /\[[[:space:]]*external[[:space:]]*\]/) {
                     next
                 }
+                if (lower ~ /operator[[:space:]\/-]*(proof|product|decision|security|risk|window)|authorized.*(credentials|live|proof)|live[[:space:]-]+proof|proof[[:space:]-]+window|policy[[:space:]-]+decision|residual[[:space:]-]+risk|external[[:space:]-]+proof|separate[[:space:]-]+proof[[:space:]-]+window/) {
+                    next
+                }
+                if (lower ~ /future/ && lower ~ /(if|when|after|once|later|exposes?|creates?|requires?)/) {
+                    next
+                }
                 print
             }
         ' "$markdown_file" 2>/dev/null || true
@@ -7992,7 +8233,7 @@ collect_backlog_source_files() {
             *) abs_path="$PROJECT_DIR/$normalized" ;;
         esac
         resolved+=("$abs_path")
-    done < <(printf '%s' "$sources_trimmed" | tr ',' '\n')
+    done < <(printf '%s\n' "$sources_trimmed" | tr ',' '\n')
 
     if [ "${#resolved[@]}" -eq 0 ]; then
         resolved+=("$PLAN_FILE")
@@ -8097,6 +8338,21 @@ plan_has_unchecked_local_tasks() {
     markdown_has_unchecked_local_tasks "$plan_file"
 }
 
+plan_has_terminal_or_handoff_intent() {
+    local plan_file="${1:-$PLAN_FILE}"
+    [ -f "$plan_file" ] || return 1
+
+    grep -qiE '(no[[:space:]]+(local|code|implementation|repository|repo)[[:space:]]+(changes?|tasks?|work|actions?)|no[[:space:]]+actionable[[:space:]]+(local[[:space:]]+)?(tasks?|work|changes?)|nothing[[:space:]]+to[[:space:]]+(build|implement|change)|already[[:space:]]+(complete|done|satisfied)|external[-[:space:]]+only|external[[:space:]]+(handoff|queue|dependency|blocker)|handoff[-[:space:]]+ready|ready[[:space:]]+for[[:space:]]+handoff)' "$plan_file" 2>/dev/null
+}
+
+project_terminal_or_handoff_ready() {
+    plan_has_terminal_or_handoff_intent "$PLAN_FILE" || return 1
+    if is_true "$REQUIRE_PLAN_BACKLOG_CLEAR_BEFORE_DONE" && backlog_has_unchecked_local_tasks; then
+        return 1
+    fi
+    return 0
+}
+
 backlog_has_unchecked_local_tasks() {
     local source_file
     while IFS= read -r source_file; do
@@ -8106,6 +8362,49 @@ backlog_has_unchecked_local_tasks() {
         fi
     done < <(collect_backlog_source_files)
     return 1
+}
+
+arclink_dream_buildout_external_handoff_ready() {
+    if ! is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; then
+        return 1
+    fi
+    [ -f "$PLAN_FILE" ] || return 1
+
+    if backlog_has_unchecked_local_tasks; then
+        return 1
+    fi
+    if ! grep -qiE 'no[[:space:]]+current[[:space:]]+bounded[[:space:]]+unattended[[:space:]]+`?local`?[[:space:]]+repair|`?local`?[[:space:]]*(queue|section)?[[:space:]]*(is[[:space:]]*)?(empty|none)|no[[:space:]]+`?local`?[[:space:]]+queue[[:space:]]+remains' "$PLAN_FILE" 2>/dev/null; then
+        return 1
+    fi
+    if ! grep -q 'LIVE_PROOF' "$PLAN_FILE" 2>/dev/null; then
+        return 1
+    fi
+    if ! grep -q 'POLICY_DECISION' "$PLAN_FILE" 2>/dev/null; then
+        return 1
+    fi
+    if ! grep -q 'RESIDUAL_RISK_ACCEPTANCE' "$PLAN_FILE" 2>/dev/null; then
+        return 1
+    fi
+    if ! grep -qiE 'GAP-019.*residual|residual[[:space:]-]+risk.*GAP-019' "$PLAN_FILE" 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+arclink_dream_buildout_external_handoff_review_pass() {
+    local score="${1:-0}"
+    local verdict="${2:-HOLD}"
+    local gaps="${3:-no explicit gaps}"
+    local minimum_score=80
+
+    arclink_dream_buildout_external_handoff_ready || return 1
+    [ "$verdict" = "GO" ] || return 1
+    is_number "$score" || return 1
+    [ "$score" -ge "$minimum_score" ] || return 1
+    if review_gaps_are_blocking "$gaps"; then
+        return 1
+    fi
+    return 0
 }
 
 file_mtime_epoch() {
@@ -8202,6 +8501,22 @@ enforce_phase_route_prerequisites() {
         fi
     fi
 
+    if [ "${#reasons[@]}" -eq 0 ] && arclink_dream_buildout_external_handoff_ready; then
+        case "$current_phase:$candidate_next" in
+            plan:build|plan:test|plan:refactor|plan:lint|plan:document|plan:plan|document:plan|document:build|document:test|document:refactor|document:lint|document:document)
+                if phase_has_passed_in_history "document"; then
+                    remap_target="done"
+                    reasons+=("ArcLink gap closure: no unattended LOCAL queue remains and document handoff already passed")
+                else
+                    remap_target="document"
+                    reasons+=("ArcLink gap closure: no unattended LOCAL queue remains; routing to document handoff")
+                fi
+                ;;
+            *)
+                ;;
+        esac
+    fi
+
     LAST_PHASE_ROUTE_GUARD_NEXT_PHASE="$remap_target"
     if [ "${#reasons[@]}" -gt 0 ]; then
         LAST_PHASE_ROUTE_GUARD_REASON="$(join_with_commas "${reasons[@]+"${reasons[@]}"}")"
@@ -8243,6 +8558,13 @@ enforce_terminal_done_requirements() {
     fi
     if phase_requirement_satisfied "document" "$current_phase" "$current_phase_passed"; then
         document_satisfied=true
+    fi
+
+    if is_true "$current_phase_passed" && project_terminal_or_handoff_ready; then
+        LAST_DONE_GUARD_NEXT_PHASE="done"
+        LAST_DONE_GUARD_REASON="terminal guard allowed done: plan declares no local work or handoff-ready state and local backlog is clear"
+        echo "done"
+        return 0
     fi
 
     if [ "$test_satisfied" != "true" ]; then
@@ -8302,6 +8624,28 @@ phase_index_or_done() {
         done) echo 6; return 0 ;;
         *) echo -1; return 1 ;;
     esac
+}
+
+phase_pair_cycle_key() {
+    local phase_a="${1:-}"
+    local phase_b="${2:-}"
+    local index_a index_b
+
+    [ -n "$phase_a" ] && [ -n "$phase_b" ] || return 1
+    [ "$phase_a" != "$phase_b" ] || return 1
+    [ "$phase_a" != "done" ] && [ "$phase_b" != "done" ] || return 1
+    is_phase_or_done "$phase_a" && is_phase_or_done "$phase_b" || return 1
+
+    index_a="$(phase_index_or_done "$phase_a")"
+    index_b="$(phase_index_or_done "$phase_b")"
+    is_number "$index_a" && is_number "$index_b" || return 1
+    [ "$index_a" -ge 0 ] && [ "$index_b" -ge 0 ] || return 1
+
+    if [ "$index_a" -le "$index_b" ]; then
+        printf '%s<->%s' "$phase_a" "$phase_b"
+    else
+        printf '%s<->%s' "$phase_b" "$phase_a"
+    fi
 }
 
 phase_transition_history_append() {
@@ -9339,6 +9683,13 @@ consensus_prompt_for_stage() {
     fi
     echo "Use this transition history to decide whether to continue, backtrack, or stop."
     echo "Ground your verdict in the supplied artifacts and snippets; only claim missing evidence when those artifacts are unavailable or contradictory."
+    if is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; then
+        echo "ArcLink gap-closure reviewer rule:"
+        echo "- Put only unattended local blockers in <gaps>."
+        echo "- Do not put live-proof, policy-decision, or residual-risk handoff rows in <gaps> when they are explicitly labeled, fail closed, and require operator authorization."
+        echo "- If local work remains, route to plan/build/test as appropriate; if only external handoffs remain, route to document unless a document handoff has already passed, then route to done."
+        echo ""
+    fi
     echo ""
     case "$stage" in
         plan)
@@ -9574,6 +9925,7 @@ print_session_config_banner() {
     info "startup_operational_probe: ${STARTUP_OPERATIONAL_PROBE:-$DEFAULT_STARTUP_OPERATIONAL_PROBE}"
     info "engine_output_to_stdout: ${ENGINE_OUTPUT_TO_STDOUT:-true}"
     info "max_consensus_routing_attempts: ${MAX_CONSENSUS_ROUTING_ATTEMPTS:-0}"
+    info "phase_pair_cycle_limit: ${PHASE_PAIR_CYCLE_LIMIT:-$DEFAULT_PHASE_PAIR_CYCLE_LIMIT} (0=disabled)"
     info "consensus_score_threshold: ${CONSENSUS_SCORE_THRESHOLD:-$DEFAULT_CONSENSUS_SCORE_THRESHOLD}"
     info "require_lint_before_done: ${REQUIRE_LINT_BEFORE_DONE:-$DEFAULT_REQUIRE_LINT_BEFORE_DONE}"
     info "require_document_before_done: ${REQUIRE_DOCUMENT_BEFORE_DONE:-$DEFAULT_REQUIRE_DOCUMENT_BEFORE_DONE}"
@@ -9642,7 +9994,15 @@ main() {
     is_bool_like "$REBOOTSTRAP_REQUESTED" || REBOOTSTRAP_REQUESTED="$DEFAULT_REBOOTSTRAP_REQUESTED"
     STARTUP_OPERATIONAL_PROBE="$(to_lower "${STARTUP_OPERATIONAL_PROBE:-$DEFAULT_STARTUP_OPERATIONAL_PROBE}")"
     is_bool_like "$STARTUP_OPERATIONAL_PROBE" || STARTUP_OPERATIONAL_PROBE="$DEFAULT_STARTUP_OPERATIONAL_PROBE"
-    if is_true "$ARCLINK_USER_JOURNEY_AUDIT" || is_true "$ARCLINK_DREAM_BUILDOUT"; then
+    RESUME_REQUESTED_EXPLICIT="$(to_lower "${RESUME_REQUESTED_EXPLICIT:-false}")"
+    is_bool_like "$RESUME_REQUESTED_EXPLICIT" || RESUME_REQUESTED_EXPLICIT="false"
+    CONSENSUS_SCORE_THRESHOLD_EXPLICIT="$(to_lower "${CONSENSUS_SCORE_THRESHOLD_EXPLICIT:-false}")"
+    is_bool_like "$CONSENSUS_SCORE_THRESHOLD_EXPLICIT" || CONSENSUS_SCORE_THRESHOLD_EXPLICIT="false"
+    PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT="$(to_lower "${PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT:-false}")"
+    is_bool_like "$PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT" || PHASE_COMPLETION_MAX_ATTEMPTS_EXPLICIT="false"
+    MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT="$(to_lower "${MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT:-false}")"
+    is_bool_like "$MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT" || MAX_CONSENSUS_ROUTING_ATTEMPTS_EXPLICIT="false"
+    if { is_true "$ARCLINK_USER_JOURNEY_AUDIT" || is_true "$ARCLINK_DREAM_BUILDOUT"; } && ! is_true "$RESUME_REQUESTED_EXPLICIT"; then
         RESUME_REQUESTED="false"
     fi
 
@@ -9678,6 +10038,9 @@ main() {
     if ! is_number "$MAX_CONSENSUS_ROUTING_ATTEMPTS" || [ "$MAX_CONSENSUS_ROUTING_ATTEMPTS" -lt 0 ]; then
         MAX_CONSENSUS_ROUTING_ATTEMPTS="$DEFAULT_MAX_CONSENSUS_ROUTING_ATTEMPTS"
     fi
+    if ! is_number "$PHASE_PAIR_CYCLE_LIMIT" || [ "$PHASE_PAIR_CYCLE_LIMIT" -lt 0 ]; then
+        PHASE_PAIR_CYCLE_LIMIT="$DEFAULT_PHASE_PAIR_CYCLE_LIMIT"
+    fi
     if ! is_number "$MAX_ITERATIONS" || [ "$MAX_ITERATIONS" -lt 0 ]; then
         MAX_ITERATIONS=0
     fi
@@ -9694,7 +10057,7 @@ main() {
 
     prepare_arclink_user_journey_audit
     prepare_arclink_dream_buildout
-    if is_true "$ARCLINK_USER_JOURNEY_AUDIT" || is_true "$ARCLINK_DREAM_BUILDOUT"; then
+    if { is_true "$ARCLINK_USER_JOURNEY_AUDIT" || is_true "$ARCLINK_DREAM_BUILDOUT"; } && ! is_true "$RESUME_REQUESTED"; then
         resume_reentry_pending="false"
     fi
 
@@ -9771,6 +10134,8 @@ main() {
     local consensus_route_count=0
     local routing_stagnation_signature=""
     local routing_stagnation_count=0
+    local routing_pair_cycle_key=""
+    local routing_pair_cycle_count=0
     local engine_override_bootstrap_checked="false"
     local notification_wizard_bootstrap_checked="false"
     local session_start_notified="false"
@@ -9949,6 +10314,15 @@ main() {
                     fi
                 fi
 
+                if is_true "${ARCLINK_DREAM_BUILDOUT:-false}"; then
+                    local gap_context_prompt_file="$LOG_DIR/${phase}_${SESSION_ID}_${ITERATION_COUNT}_attempt_${phase_attempt}.gap-context.prompt.md"
+                    if append_arclink_dream_buildout_runtime_context_to_prompt "$active_prompt" "$gap_context_prompt_file"; then
+                        active_prompt="$gap_context_prompt_file"
+                    else
+                        phase_failures+=("failed to assemble $phase prompt with ArcLink gap closure runtime context")
+                    fi
+                fi
+
                 if [ "$phase_attempt" -gt 1 ]; then
                     if [ "${#cumulative_phase_failures[@]}" -gt 0 ]; then
                         build_phase_prompt_with_feedback "$phase" "$active_prompt" "$attempt_feedback_file" "$phase_attempt" "${cumulative_phase_failures[@]}"
@@ -10047,6 +10421,7 @@ main() {
                         local -a post_plan_gate_issues=()
                         local -a post_plan_actionable_gate_issues=()
                         local post_plan_issue
+                        local post_plan_freshness_pending="false"
                         mapfile -t post_plan_gate_issues < <(collect_build_prerequisites_issues)
                         local post_plan_repair_summary=""
                         if is_true "$AUTO_REPAIR_MARKDOWN_ARTIFACTS" && ! markdown_artifacts_are_clean; then
@@ -10060,13 +10435,31 @@ main() {
                             for post_plan_issue in "${post_plan_gate_issues[@]}"; do
                                 case "$post_plan_issue" in
                                     "plan refresh required:"*)
-                                        phase_warnings+=("post-plan freshness checkpoint pending for configured backlog sources")
+                                        post_plan_freshness_pending="true"
                                         ;;
                                     *)
                                         post_plan_actionable_gate_issues+=("$post_plan_issue")
                                         ;;
                                 esac
                             done
+                        fi
+                        if is_true "$post_plan_freshness_pending" && [ "${#post_plan_actionable_gate_issues[@]}" -eq 0 ]; then
+                            if record_plan_freshness_checkpoint; then
+                                post_plan_freshness_pending="false"
+                                mapfile -t post_plan_gate_issues < <(collect_build_prerequisites_issues)
+                                for post_plan_issue in "${post_plan_gate_issues[@]}"; do
+                                    case "$post_plan_issue" in
+                                        "plan refresh required:"*)
+                                            post_plan_actionable_gate_issues+=("plan freshness checkpoint remained stale after recording")
+                                            ;;
+                                        *)
+                                            post_plan_actionable_gate_issues+=("$post_plan_issue")
+                                            ;;
+                                    esac
+                                done
+                            else
+                                post_plan_actionable_gate_issues+=("plan freshness checkpoint could not be recorded after plan")
+                            fi
                         fi
                         if [ "${#post_plan_actionable_gate_issues[@]}" -eq 0 ] && [ -n "$post_plan_repair_summary" ]; then
                             info "Build gate passed after post-plan markdown remediation."
@@ -10521,13 +10914,41 @@ main() {
                 if [ "$phase_next_target" = "done" ] || [ "$route_index" -ne "$expected_route_index" ]; then
                     notify_event "phase_decision" "reroute_pass" "phase=$phase rerouted_to=$phase_next_target reason=${phase_route_reason:-none}" || true
                 fi
+                local route_is_plan_freshness
+                route_is_plan_freshness="false"
+                case "${phase_route_reason:-}" in
+                    "plan refresh required:"*) route_is_plan_freshness="true" ;;
+                esac
+                if is_true "$route_is_plan_freshness"; then
+                    routing_pair_cycle_key=""
+                    routing_pair_cycle_count=0
+                else
+                    local current_pair_cycle_key
+                    current_pair_cycle_key="$(phase_pair_cycle_key "$phase" "$phase_next_target" 2>/dev/null || true)"
+                    if [ -n "$current_pair_cycle_key" ]; then
+                        if [ "$current_pair_cycle_key" = "$routing_pair_cycle_key" ]; then
+                            routing_pair_cycle_count=$((routing_pair_cycle_count + 1))
+                        else
+                            routing_pair_cycle_key="$current_pair_cycle_key"
+                            routing_pair_cycle_count=1
+                        fi
+                        if [ "$PHASE_PAIR_CYCLE_LIMIT" -gt 0 ] && [ "$routing_pair_cycle_count" -ge "$PHASE_PAIR_CYCLE_LIMIT" ]; then
+                            warn "PHASE ROUTING LOOP DETECTED: Ralphie crossed ${routing_pair_cycle_key} ${routing_pair_cycle_count} consecutive times."
+                            warn "Stopping instead of spinning. Resolve the blocker causing ${phase} -> ${phase_next_target}, then resume."
+                            log_reason_code "RB_PHASE_PAIR_ROUTING_LOOP" "phase pair ${routing_pair_cycle_key} repeated ${routing_pair_cycle_count}/${PHASE_PAIR_CYCLE_LIMIT} consecutive crossings; last route ${phase}->${phase_next_target}: ${phase_route_reason:-no explicit rationale}"
+                            write_gate_feedback "$phase" "phase-pair routing loop detected: ${routing_pair_cycle_key} repeated ${routing_pair_cycle_count}/${PHASE_PAIR_CYCLE_LIMIT}" "last route: ${phase} -> ${phase_next_target}" "reason: ${phase_route_reason:-no explicit rationale}"
+                            notify_event "session_error" "phase_pair_routing_loop" "pair=${routing_pair_cycle_key} count=${routing_pair_cycle_count}/${PHASE_PAIR_CYCLE_LIMIT} last=${phase}->${phase_next_target}" || true
+                            should_exit="true"
+                            PHASE_ATTEMPT_IN_PROGRESS="false"
+                            save_state_or_exit "phase-pair routing loop checkpoint ($phase->$phase_next_target)"
+                            break
+                        fi
+                    else
+                        routing_pair_cycle_key=""
+                        routing_pair_cycle_count=0
+                    fi
+                fi
                 if [ "$route_index" -lt "$phase_index" ]; then
-                    local route_is_plan_freshness
-                    route_is_plan_freshness="false"
-                    case "${phase_route_reason:-}" in
-                        "plan refresh required:"*) route_is_plan_freshness="true" ;;
-                    esac
-
                     if is_true "$route_is_plan_freshness"; then
                         routing_stagnation_signature=""
                         routing_stagnation_count=0

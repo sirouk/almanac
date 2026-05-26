@@ -2237,7 +2237,7 @@ def test_control_enrollment_submenu_and_secret_are_first_class() -> None:
     print("PASS test_control_enrollment_submenu_and_secret_are_first_class")
 
 
-def test_control_docker_bootstrap_seeds_session_hash_pepper() -> None:
+def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_token() -> None:
     deploy = DEPLOY_SH.read_text(encoding="utf-8")
     docker_helper = (REPO / "bin" / "arclink-docker.sh").read_text(encoding="utf-8")
     entrypoint = (REPO / "bin" / "docker-entrypoint.sh").read_text(encoding="utf-8")
@@ -2263,7 +2263,115 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper() -> None:
         "ARCLINK_SESSION_HASH_PEPPER_REQUIRED: ${ARCLINK_SESSION_HASH_PEPPER_REQUIRED:-1}" in compose,
         "Compose should fail closed when a raw control stack lacks a session hash pepper",
     )
-    print("PASS test_control_docker_bootstrap_seeds_session_hash_pepper")
+    expect(
+        'ARCLINK_GATEWAY_EXEC_BROKER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:-}")'
+        in deploy,
+        "control/docker runtime config should generate a durable gateway exec broker token before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_GATEWAY_EXEC_BROKER_TOKEN "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing gateway exec broker token before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN=$gateway_exec_broker_token" in entrypoint,
+        "fresh Docker config generation should include the gateway exec broker token",
+    )
+    expect(
+        "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        in compose,
+        "Compose should require the gateway exec broker token before starting the broker/client split",
+    )
+    expect(
+        'ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:-}")'
+        in deploy,
+        "control/docker runtime config should generate a durable deployment exec broker token before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing deployment exec broker token before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN=$deployment_exec_broker_token" in entrypoint,
+        "fresh Docker config generation should include the deployment exec broker token",
+    )
+    expect(
+        "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        in compose,
+        "Compose should require the deployment exec broker token before starting the broker/client split",
+    )
+    expect(
+        'ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:-}")'
+        in deploy,
+        "control/docker runtime config should generate a durable agent supervisor broker token before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing agent supervisor broker token before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN=$agent_supervisor_broker_token" in entrypoint,
+        "fresh Docker config generation should include the agent supervisor broker token",
+    )
+    expect(
+        "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        in compose,
+        "Compose should require the agent supervisor broker token before starting the broker/client split",
+    )
+    expect(
+        'ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:-}")'
+        in deploy,
+        "control/docker runtime config should generate a durable operator upgrade broker token before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing operator upgrade broker token before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN=$operator_upgrade_broker_token" in entrypoint,
+        "fresh Docker config generation should include the operator upgrade broker token",
+    )
+    expect(
+        "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        in compose,
+        "Compose should require the operator upgrade broker token before starting the broker/client split",
+    )
+    expect(
+        'ARCLINK_AGENT_USER_HELPER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_AGENT_USER_HELPER_TOKEN:-}")'
+        in deploy,
+        "control/docker runtime config should generate a durable agent user helper token before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_AGENT_USER_HELPER_TOKEN "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing agent user helper token before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_AGENT_USER_HELPER_TOKEN=$agent_user_helper_token" in entrypoint,
+        "fresh Docker config generation should include the agent user helper token",
+    )
+    expect(
+        "ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        in compose,
+        "Compose should require the agent user helper token before starting the helper/client split",
+    )
+    expect(
+        'ARCLINK_AGENT_PROCESS_HELPER_TOKEN="$(preserve_or_randomize_secret "${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:-}")'
+        in deploy,
+        "control/docker runtime config should generate a durable agent process helper token before writing docker.env",
+    )
+    expect(
+        'ensure_env_file_value ARCLINK_AGENT_PROCESS_HELPER_TOKEN "$(random_secret)"' in docker_helper,
+        "docker bootstrap should backfill a missing agent process helper token before Compose reads docker.env",
+    )
+    expect(
+        "ARCLINK_AGENT_PROCESS_HELPER_TOKEN=$agent_process_helper_token" in entrypoint,
+        "fresh Docker config generation should include the agent process helper token",
+    )
+    expect(
+        "ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        in compose,
+        "Compose should require the agent process helper token before starting the helper/client split",
+    )
+    print("PASS test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_token")
 
 
 def test_control_upgrade_syncs_checkout_from_upstream_before_build() -> None:
@@ -2489,8 +2597,8 @@ def test_notion_ssot_setup_prompt_points_operator_at_shared_home_page() -> None:
         "expected deploy notion-ssot guidance to include the create-new-integration step",
     )
     expect(
-        "Name it something like ArcLink Curator" in text,
-        "expected deploy notion-ssot guidance to suggest a concrete internal integration name",
+        "Name it something like Raven" in text,
+        "expected deploy notion-ssot guidance to suggest a concrete integration name using current vocabulary",
     )
     expect(
         "turn on every checkbox capability Notion offers on that screen" in text,
@@ -3709,7 +3817,7 @@ def main() -> int:
         test_control_fleet_worker_registration_is_first_class,
         test_control_inventory_submenu_and_aliases_are_first_class,
         test_control_enrollment_submenu_and_secret_are_first_class,
-        test_control_docker_bootstrap_seeds_session_hash_pepper,
+        test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_token,
         test_control_upgrade_syncs_checkout_from_upstream_before_build,
         test_ensure_prereqs_ready_fake_system_is_noop,
         test_ensure_prereqs_check_only_plans_missing_without_mutation,

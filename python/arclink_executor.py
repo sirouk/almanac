@@ -35,6 +35,9 @@ class ArcLinkSecretResolutionError(ArcLinkExecutorError):
 
 _SECRET_REF_RE = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
 _RUN_SECRET_RE = re.compile(r"^/run/secrets/[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_DEPLOYMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_COMPOSE_PROJECT_RE = re.compile(r"^arclink-[a-z0-9][a-z0-9_-]{0,127}$")
+DEPLOYMENT_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Deployment-Exec-Broker-Token"
 
 
 def _truthy(value: Any) -> bool:
@@ -76,7 +79,13 @@ def executor_for_fleet_host(
     fake_secret_refs: Mapping[str, str] | None = None,
 ) -> ArcLinkExecutor:
     clean_adapter = str(adapter or "").strip().lower()
-    config = ArcLinkExecutorConfig(live_enabled=True, adapter_name=clean_adapter)
+    host_meta = _host_metadata(host)
+    config = ArcLinkExecutorConfig(
+        live_enabled=True,
+        adapter_name=clean_adapter,
+        state_root_base=str(host_meta.get("state_root_base") or env.get("ARCLINK_STATE_ROOT_BASE") or "/arcdata/deployments").strip(),
+        allow_lifecycle_project_override=_truthy(env.get("ARCLINK_ACTION_WORKER_ALLOW_LIFECYCLE_PATH_OVERRIDES")),
+    )
     if clean_adapter == "fake":
         return ArcLinkExecutor(config=config, secret_resolver=FakeSecretResolver(dict(fake_secret_refs or {})))
     if clean_adapter not in {"local", "ssh"}:
@@ -84,9 +93,20 @@ def executor_for_fleet_host(
     if secret_resolver is None:
         raise ArcLinkExecutorError("ArcLink fleet executor requires a secret resolver")
     if clean_adapter == "local":
-        runner = SubprocessDockerComposeRunner(docker_binary=str(env.get("ARCLINK_DOCKER_BINARY") or "docker"))
+        broker_url = str(env.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_URL") or "").strip()
+        broker_token = str(env.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN") or "").strip()
+        if broker_url or broker_token:
+            if not broker_url or not broker_token:
+                raise ArcLinkExecutorError("ArcLink deployment exec broker requires both URL and token")
+            runner = BrokeredDockerComposeRunner(broker_url=broker_url, token=broker_token)
+        elif _truthy(env.get("ARCLINK_DOCKER_MODE")):
+            raise ArcLinkExecutorError(
+                "ArcLink Docker-mode local executor requires "
+                "ARCLINK_DEPLOYMENT_EXEC_BROKER_URL and ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN"
+            )
+        else:
+            runner = SubprocessDockerComposeRunner(docker_binary=str(env.get("ARCLINK_DOCKER_BINARY") or "docker"))
     else:
-        host_meta = _host_metadata(host)
         host_name = str(host_meta.get("ssh_host") or host.get("hostname") or "").strip()
         if not _truthy(env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED") or ""):
             raise ArcLinkExecutorError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1")
@@ -131,6 +151,8 @@ def _require_run_secret_path(target_path: str) -> str:
 class ArcLinkExecutorConfig:
     live_enabled: bool = False
     adapter_name: str = "disabled"
+    state_root_base: str = "/arcdata/deployments"
+    allow_lifecycle_project_override: bool = False
 
 
 @dataclass(frozen=True)
@@ -330,7 +352,15 @@ class DockerComposeLifecycleResult:
 
 class DockerRunner(Protocol):
     """Injectable interface for real Docker command execution."""
-    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        deployment_id: str,
+        project_name: str,
+        env_file: str,
+        compose_file: str,
+    ) -> Mapping[str, Any]:
         ...
 
 
@@ -407,9 +437,18 @@ class FakeDockerRunner:
     """Records commands instead of executing them."""
     runs: list[dict[str, Any]] = field(default_factory=list)
 
-    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        deployment_id: str,
+        project_name: str,
+        env_file: str,
+        compose_file: str,
+    ) -> Mapping[str, Any]:
         record = {
             "args": args,
+            "deployment_id": deployment_id,
             "project_name": project_name,
             "env_file": env_file,
             "compose_file": compose_file,
@@ -424,7 +463,16 @@ class SubprocessDockerComposeRunner:
 
     docker_binary: str = "docker"
 
-    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        deployment_id: str,
+        project_name: str,
+        env_file: str,
+        compose_file: str,
+    ) -> Mapping[str, Any]:
+        del deployment_id
         cmd = (
             self.docker_binary,
             "compose",
@@ -462,7 +510,16 @@ class SshDockerComposeRunner:
         clean_user = str(self.user or "root").strip() or "root"
         return f"{clean_user}@{clean_host}"
 
-    def run(self, args: tuple[str, ...], *, project_name: str, env_file: str, compose_file: str) -> Mapping[str, Any]:
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        deployment_id: str,
+        project_name: str,
+        env_file: str,
+        compose_file: str,
+    ) -> Mapping[str, Any]:
+        del deployment_id
         target = self._target()
         root = str(Path(compose_file).resolve().parents[1])
         cleanup_required = bool(args and args[0] in {"up", "down"})
@@ -540,6 +597,80 @@ def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:
     return stdout[-2000:]
 
 
+def _broker_operation_from_compose_args(args: tuple[str, ...]) -> tuple[str, bool, bool]:
+    clean = tuple(str(arg) for arg in args)
+    if clean == ("up", "-d", "--remove-orphans"):
+        return "compose_up", False, False
+    if clean == ("ps", "--format", "json"):
+        return "compose_ps", False, False
+    if clean == ("ps", "--all", "--format", "json"):
+        return "compose_ps", False, True
+    if clean == ("down", "--remove-orphans"):
+        return "compose_down", False, False
+    if clean == ("down", "--remove-orphans", "--volumes"):
+        return "compose_down", True, False
+    raise ArcLinkExecutorError("ArcLink deployment exec broker rejects unsupported Docker Compose operation")
+
+
+@dataclass(frozen=True)
+class BrokeredDockerComposeRunner:
+    """Send local Docker Compose operations through the deployment exec broker."""
+
+    broker_url: str
+    token: str
+    timeout_seconds: int = 300
+
+    def run(
+        self,
+        args: tuple[str, ...],
+        *,
+        deployment_id: str,
+        project_name: str,
+        env_file: str,
+        compose_file: str,
+    ) -> Mapping[str, Any]:
+        operation, remove_volumes, include_all = _broker_operation_from_compose_args(args)
+        clean_url = str(self.broker_url or "").strip().rstrip("/")
+        clean_token = str(self.token or "").strip()
+        if not clean_url or not clean_token:
+            raise ArcLinkExecutorError("ArcLink deployment exec broker requires URL and token")
+        body = {
+            "deployment_id": deployment_id,
+            "operation": operation,
+            "project_name": project_name,
+            "env_file": env_file,
+            "compose_file": compose_file,
+            "remove_volumes": remove_volumes,
+            "include_all": include_all,
+        }
+        request = urllib.request.Request(
+            f"{clean_url}/v1/docker-compose",
+            data=json.dumps(body, sort_keys=True).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                DEPLOYMENT_EXEC_BROKER_TOKEN_HEADER: clean_token,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=max(5, int(self.timeout_seconds))) as response:
+                payload = json.loads(response.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = json.loads(exc.read().decode("utf-8") or "{}")
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                payload = {}
+            error = str(payload.get("error") or exc.reason or "deployment exec broker rejected request")
+            raise ArcLinkExecutorError(redact_then_truncate(error, limit=240, tail=True)) from exc
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ArcLinkExecutorError(f"deployment exec broker request failed: {redact_then_truncate(str(exc), limit=240, tail=True)}") from exc
+        if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+            error = str(payload.get("error") or "deployment exec broker rejected request") if isinstance(payload, Mapping) else "deployment exec broker rejected request"
+            raise ArcLinkExecutorError(redact_then_truncate(error, limit=240, tail=True))
+        result = payload.get("result") if isinstance(payload, Mapping) else {}
+        return dict(result) if isinstance(result, Mapping) else {"status": "ok"}
+
+
 @dataclass(frozen=True)
 class DryRunStep:
     """A secret-free description of a planned Docker operation."""
@@ -606,6 +737,11 @@ class ArcLinkExecutor:
         plan = _plan_docker_compose_apply(request=request, intent=intent, services=services)
         if self.config.adapter_name == "fake":
             return self._fake_docker_compose_apply(request=request, plan=plan, compose_secrets=compose_secrets)
+        _validate_docker_compose_apply_plan(
+            request=request,
+            plan=plan,
+            state_root_base=self.config.state_root_base,
+        )
         if self.docker_runner is None:
             raise ArcLinkExecutorError("ArcLink live Docker execution requires an injectable DockerRunner")
         resolved = self._materialize_compose_secrets(compose_secrets)
@@ -614,6 +750,7 @@ class ArcLinkExecutor:
                 _materialize_docker_compose_files(intent=intent, plan=plan, resolved_secrets=resolved)
             self.docker_runner.run(
                 ("up", "-d", "--remove-orphans"),
+                deployment_id=request.deployment_id,
                 project_name=str(plan["project_name"]),
                 env_file=str(plan["env_file"]),
                 compose_file=str(plan["compose_file"]),
@@ -690,10 +827,11 @@ class ArcLinkExecutor:
             )
         if self.docker_runner is None:
             raise ArcLinkExecutorError("ArcLink live Docker lifecycle requires an injectable DockerRunner")
-        project_name = request.project_name or _compose_project_name(request.deployment_id)
-        config_root = Path(f"/arcdata/deployments/{request.deployment_id}/config")
-        env_file = request.env_file or str(config_root / "arclink.env")
-        compose_file = request.compose_file or str(config_root / "compose.yaml")
+        project_name, env_file, compose_file = _validated_docker_compose_lifecycle_paths(
+            request=request,
+            state_root_base=self.config.state_root_base,
+            allow_project_override=self.config.allow_lifecycle_project_override,
+        )
         compose_args = {
             "stop": ("stop",),
             "restart": ("restart",),
@@ -702,6 +840,7 @@ class ArcLinkExecutor:
         }[action]
         runner_result = self.docker_runner.run(
             compose_args,
+            deployment_id=request.deployment_id,
             project_name=project_name,
             env_file=env_file,
             compose_file=compose_file,
@@ -1460,10 +1599,133 @@ class ArcLinkExecutor:
 
 
 def _compose_project_name(deployment_id: str) -> str:
-    clean = re.sub(r"[^a-z0-9_-]+", "-", str(deployment_id or "").strip().lower()).strip("-_")
+    clean_id = _require_safe_deployment_id(deployment_id)
+    clean = re.sub(r"[^a-z0-9_-]+", "-", clean_id.lower()).strip("-_")
     if not clean:
         raise ArcLinkExecutorError("ArcLink Docker Compose project name requires a deployment id")
     return f"arclink-{clean}"
+
+
+def _require_safe_deployment_id(deployment_id: str) -> str:
+    clean = str(deployment_id or "").strip()
+    if not _DEPLOYMENT_ID_RE.fullmatch(clean) or "/" in clean or "\\" in clean:
+        raise ArcLinkExecutorError("ArcLink Docker Compose deployment id must be a safe path segment")
+    return clean
+
+
+def _safe_deployment_root_prefix(deployment_id: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", _require_safe_deployment_id(deployment_id)).strip(".-")
+    if not clean:
+        raise ArcLinkExecutorError("ArcLink Docker Compose deployment root requires a deployment id")
+    return clean
+
+
+def _require_compose_project_name(project_name: str, *, deployment_id: str, require_expected: bool = False) -> str:
+    expected = _compose_project_name(deployment_id)
+    clean = str(project_name or expected).strip()
+    if not _COMPOSE_PROJECT_RE.fullmatch(clean):
+        raise ArcLinkExecutorError("ArcLink Docker Compose project name must be a safe arclink-* value")
+    if require_expected and clean != expected:
+        raise ArcLinkExecutorError("ArcLink Docker Compose apply project name must match the deployment id")
+    return clean
+
+
+def _absolute_normalized_path(value: str, *, label: str) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ArcLinkExecutorError(f"ArcLink Docker Compose {label} is required")
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ArcLinkExecutorError(f"ArcLink Docker Compose {label} must be absolute")
+    return path.resolve(strict=False)
+
+
+def _require_path_under(child: Path, parent: Path, *, label: str) -> None:
+    try:
+        child.relative_to(parent)
+    except ValueError as exc:
+        raise ArcLinkExecutorError(f"ArcLink Docker Compose {label} escapes the deployment state root") from exc
+
+
+def _validate_deployment_config_paths(
+    *,
+    deployment_id: str,
+    state_root_base: str,
+    root: str,
+    config_root: str,
+    env_file: str,
+    compose_file: str,
+) -> tuple[str, str, str, str]:
+    clean_id = _require_safe_deployment_id(deployment_id)
+    base_path = _absolute_normalized_path(state_root_base or "/arcdata/deployments", label="state root base")
+    if str(base_path) == "/":
+        raise ArcLinkExecutorError("ArcLink Docker Compose state root base must not be filesystem root")
+    root_path = _absolute_normalized_path(root, label="deployment root")
+    config_path = _absolute_normalized_path(config_root, label="config root")
+    env_path = _absolute_normalized_path(env_file, label="env file")
+    compose_path = _absolute_normalized_path(compose_file, label="compose file")
+
+    _require_path_under(root_path, base_path, label="deployment root")
+    _require_path_under(config_path, root_path, label="config root")
+    prefix = _safe_deployment_root_prefix(clean_id)
+    if root_path.name != prefix and not root_path.name.startswith(f"{prefix}-"):
+        raise ArcLinkExecutorError("ArcLink Docker Compose deployment root must be deployment-scoped")
+    expected_config = root_path / "config"
+    if config_path != expected_config:
+        raise ArcLinkExecutorError("ArcLink Docker Compose config root must be the deployment config directory")
+    if env_path != config_path / "arclink.env":
+        raise ArcLinkExecutorError("ArcLink Docker Compose env file must be the deployment arclink.env")
+    if compose_path != config_path / "compose.yaml":
+        raise ArcLinkExecutorError("ArcLink Docker Compose file must be the deployment compose.yaml")
+    return str(root_path), str(config_path), str(env_path), str(compose_path)
+
+
+def _validate_docker_compose_apply_plan(
+    *,
+    request: DockerComposeApplyRequest,
+    plan: Mapping[str, Any],
+    state_root_base: str,
+) -> None:
+    roots = request.intent.get("state_roots") if isinstance(request.intent.get("state_roots"), Mapping) else {}
+    root = str(roots.get("root") or f"/arcdata/deployments/{request.deployment_id}")
+    config_root = str(roots.get("config") or f"{root.rstrip('/')}/config")
+    _require_compose_project_name(str(plan.get("project_name") or ""), deployment_id=request.deployment_id, require_expected=True)
+    _validate_deployment_config_paths(
+        deployment_id=request.deployment_id,
+        state_root_base=state_root_base,
+        root=root,
+        config_root=config_root,
+        env_file=str(plan.get("env_file") or ""),
+        compose_file=str(plan.get("compose_file") or ""),
+    )
+
+
+def _validated_docker_compose_lifecycle_paths(
+    *,
+    request: DockerComposeLifecycleRequest,
+    state_root_base: str,
+    allow_project_override: bool = False,
+) -> tuple[str, str, str]:
+    project_name = _require_compose_project_name(
+        request.project_name,
+        deployment_id=request.deployment_id,
+        require_expected=bool(request.project_name and not allow_project_override),
+    )
+    default_root = f"{str(state_root_base or '/arcdata/deployments').rstrip('/')}/{_safe_deployment_root_prefix(request.deployment_id)}"
+    config_root = Path(default_root) / "config"
+    env_file = request.env_file or str(config_root / "arclink.env")
+    compose_file = request.compose_file or str(config_root / "compose.yaml")
+    compose_path = _absolute_normalized_path(compose_file, label="compose file")
+    root = compose_path.parent.parent
+    _validate_deployment_config_paths(
+        deployment_id=request.deployment_id,
+        state_root_base=state_root_base,
+        root=str(root),
+        config_root=str(compose_path.parent),
+        env_file=env_file,
+        compose_file=compose_file,
+    )
+    return project_name, str(_absolute_normalized_path(env_file, label="env file")), str(compose_path)
 
 
 def _write_private_file_atomic(path: Path, value: str, *, trailing_newline: bool = False) -> None:

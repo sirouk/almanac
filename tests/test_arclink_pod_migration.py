@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -12,6 +13,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+ROOT_CAPTURE_ENV = {"ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE": "1"}
+os.environ.setdefault("ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED", "accepted")
 
 
 def expect(condition: bool, message: str) -> None:
@@ -148,6 +151,7 @@ def test_migration_captures_materializes_verifies_and_replays() -> None:
             reason="operator moving Pod to new host",
             verifier=lambda _conn, _row, _intent: {"healthy": True, "session_continuity": "checked"},
             retention_days=7,
+            env=ROOT_CAPTURE_ENV,
         )
         expect(result["status"] == "succeeded", str(result))
         target_file = target_base / "dep_1-captain-one" / "vault" / "mission.md"
@@ -190,6 +194,256 @@ def test_migration_captures_materializes_verifies_and_replays() -> None:
     print("PASS test_migration_captures_materializes_verifies_and_replays")
 
 
+def test_migration_capture_requires_explicit_root_opt_in() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_root_opt_in")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_root_opt_in")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_root_opt_in")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        try:
+            migration.migrate_pod(
+                conn,
+                executor=fake_executor(executor_mod),
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id="mig_666666666666666666666666",
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE=1" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected non-dry-run migration capture to require explicit root opt-in")
+        rows = conn.execute("SELECT COUNT(*) AS c FROM arclink_pod_migrations").fetchone()
+        expect(int(rows["c"]) == 0, str(dict(rows)))
+    print("PASS test_migration_capture_requires_explicit_root_opt_in")
+
+
+def test_migration_capture_requires_helper_in_docker_mode() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_helper_required")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_helper_required")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_helper_required")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seed_deployment(control, conn, Path(tmpdir))
+        try:
+            migration.migrate_pod(
+                conn,
+                executor=fake_executor(executor_mod),
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id="mig_888888888888888888888888",
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+                env={**ROOT_CAPTURE_ENV, "ARCLINK_DOCKER_MODE": "1"},
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("ARCLINK_MIGRATION_CAPTURE_HELPER_URL" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected Docker-mode migration capture to require the helper URL/token")
+        rows = conn.execute("SELECT COUNT(*) AS c FROM arclink_pod_migrations").fetchone()
+        expect(int(rows["c"]) == 0, str(dict(rows)))
+    print("PASS test_migration_capture_requires_helper_in_docker_mode")
+
+
+def test_migration_capture_uses_helper_when_configured() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_helper_used")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_helper_used")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_helper_used")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_roots, _, target_base = seed_deployment(control, conn, Path(tmpdir))
+        calls: list[str] = []
+        original_helper = migration._run_migration_capture_helper
+
+        def fake_helper(operation, *, conn, row, env):
+            calls.append(str(operation))
+            if operation == "capture":
+                return migration._copy_capture(Path(str(row["source_state_root"])), Path(str(row["capture_dir"])))
+            if operation == "materialize":
+                migration._materialize_capture(Path(str(row["capture_dir"])), Path(str(row["target_state_root"])))
+                return {"status": "materialized"}
+            raise AssertionError(f"unexpected helper operation {operation}")
+
+        migration._run_migration_capture_helper = fake_helper
+        try:
+            result = migration.migrate_pod(
+                conn,
+                executor=fake_executor(executor_mod),
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id="mig_999999999999999999999999",
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+                env={
+                    **ROOT_CAPTURE_ENV,
+                    "ARCLINK_DOCKER_MODE": "1",
+                    "ARCLINK_MIGRATION_CAPTURE_HELPER_URL": "http://migration-capture-helper:8914",
+                    "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN": "helper-token",
+                },
+            )
+        finally:
+            migration._run_migration_capture_helper = original_helper
+        expect(result["status"] == "succeeded", str(result))
+        expect(calls == ["capture", "materialize"], str(calls))
+        expect((target_base / "dep_1-captain-one" / "vault" / "mission.md").read_text(encoding="utf-8") == "captain state\n", str(target_base))
+        expect((Path(source_roots["root"]) / "vault" / "mission.md").exists(), "source state should be retained after helper capture")
+    print("PASS test_migration_capture_uses_helper_when_configured")
+
+
+def test_migration_capture_helper_rejects_raw_commands_and_unscoped_paths() -> None:
+    helper = load_module("arclink_migration_capture_helper.py", "arclink_migration_capture_helper_contract")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        old_base = os.environ.get("ARCLINK_STATE_ROOT_BASE")
+        os.environ["ARCLINK_STATE_ROOT_BASE"] = str(root)
+        source_root = root / "source" / "dep_1-captain-one"
+        target_root = root / "target" / "dep_1-captain-one"
+        capture_dir = root / "target" / ".migrations" / "mig_aaaaaaaaaaaaaaaaaaaaaaaa"
+        (source_root / "vault").mkdir(parents=True)
+        (source_root / "vault" / "mission.md").write_text("captain state\n", encoding="utf-8")
+        request = {
+            "operation": "capture",
+            "deployment_id": "dep_1",
+            "prefix": "captain-one",
+            "migration_id": "mig_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_state_root": str(source_root),
+            "target_state_root": str(target_root),
+            "capture_dir": str(capture_dir),
+        }
+        try:
+            ok, payload = helper.run_migration_capture_request(dict(request))
+            expect(ok is True and payload["file_count"] == 1, str(payload))
+            ok, payload = helper.run_migration_capture_request({**request, "operation": "materialize"})
+            expect(ok is True and payload["status"] == "materialized", str(payload))
+            expect((target_root / "vault" / "mission.md").read_text(encoding="utf-8") == "captain state\n", str(target_root))
+
+            ok, error = helper.run_migration_capture_request({**request, "cmd": ["cp", "-a"]})
+            expect(ok is False and "does not accept raw commands" in str(error), str(error))
+            ok, error = helper.run_migration_capture_request({**request, "source_state_root": str(root / "source" / "not-this-deployment")})
+            expect(ok is False and "source root must be deployment-scoped" in str(error), str(error))
+            ok, error = helper.run_migration_capture_request({**request, "capture_dir": str(root / "outside" / "mig_aaaaaaaaaaaaaaaaaaaaaaaa")})
+            expect(ok is False and "capture directory must stay under the target state-root base" in str(error), str(error))
+        finally:
+            if old_base is None:
+                os.environ.pop("ARCLINK_STATE_ROOT_BASE", None)
+            else:
+                os.environ["ARCLINK_STATE_ROOT_BASE"] = old_base
+    print("PASS test_migration_capture_helper_rejects_raw_commands_and_unscoped_paths")
+
+
+def test_migration_capture_helper_rejects_paths_outside_configured_state_root_base() -> None:
+    helper = load_module("arclink_migration_capture_helper.py", "arclink_migration_capture_helper_configured_base")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        allowed = root / "allowed"
+        outside = root / "outside"
+        source_root = allowed / "dep_1-captain-one"
+        target_root = allowed / "dep_1-captain-one"
+        capture_dir = allowed / ".migrations" / "mig_aaaaaaaaaaaaaaaaaaaaaaaa"
+        (source_root / "vault").mkdir(parents=True)
+        (source_root / "vault" / "mission.md").write_text("captain state\n", encoding="utf-8")
+        request = {
+            "operation": "capture",
+            "deployment_id": "dep_1",
+            "prefix": "captain-one",
+            "migration_id": "mig_aaaaaaaaaaaaaaaaaaaaaaaa",
+            "source_state_root": str(source_root),
+            "target_state_root": str(target_root),
+            "capture_dir": str(capture_dir),
+        }
+        old_base = os.environ.get("ARCLINK_STATE_ROOT_BASE")
+        original_copy = helper._copy_capture
+        original_materialize = helper._materialize_capture
+        calls: list[str] = []
+
+        def fail_copy(_source_root, _capture_dir):
+            calls.append("copy")
+            raise AssertionError("copy should not start for paths outside ARCLINK_STATE_ROOT_BASE")
+
+        def fail_materialize(_capture_dir, _target_root):
+            calls.append("materialize")
+            raise AssertionError("materialize should not start for paths outside ARCLINK_STATE_ROOT_BASE")
+
+        os.environ["ARCLINK_STATE_ROOT_BASE"] = str(allowed)
+        helper._copy_capture = fail_copy
+        helper._materialize_capture = fail_materialize
+        try:
+            cases = [
+                (
+                    "source_state_root",
+                    str(outside / "dep_1-captain-one"),
+                    "source root must stay under the configured state-root base",
+                    "capture",
+                ),
+                (
+                    "target_state_root",
+                    str(outside / "dep_1-captain-one"),
+                    "target root must stay under the configured state-root base",
+                    "capture",
+                ),
+                (
+                    "capture_dir",
+                    str(outside / ".migrations" / "mig_aaaaaaaaaaaaaaaaaaaaaaaa"),
+                    "capture directory must stay under the configured state-root base",
+                    "capture",
+                ),
+                (
+                    "capture_dir",
+                    str(outside / ".migrations" / "mig_aaaaaaaaaaaaaaaaaaaaaaaa"),
+                    "capture directory must stay under the configured state-root base",
+                    "materialize",
+                ),
+            ]
+            for field, value, expected, operation in cases:
+                ok, error = helper.run_migration_capture_request({**request, "operation": operation, field: value})
+                expect(ok is False and expected in str(error), f"{field} should fail closed: {error}")
+            expect(calls == [], f"helper started file work before configured-base validation: {calls}")
+        finally:
+            helper._copy_capture = original_copy
+            helper._materialize_capture = original_materialize
+            if old_base is None:
+                os.environ.pop("ARCLINK_STATE_ROOT_BASE", None)
+            else:
+                os.environ["ARCLINK_STATE_ROOT_BASE"] = old_base
+    print("PASS test_migration_capture_helper_rejects_paths_outside_configured_state_root_base")
+
+
+def test_migration_capture_rejects_unscoped_source_root() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_migration_root_scope")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_root_scope")
+    migration = load_module("arclink_pod_migration.py", "arclink_pod_migration_root_scope")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_roots, _, _ = seed_deployment(control, conn, Path(tmpdir))
+        bad_roots = dict(source_roots)
+        bad_roots["root"] = str(Path(tmpdir) / "source" / "not-the-deployment-root")
+        deployment = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+        metadata = json.loads(deployment["metadata_json"])
+        metadata["state_roots"] = bad_roots
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = 'dep_1'",
+            (json.dumps(metadata, sort_keys=True),),
+        )
+        conn.commit()
+        try:
+            migration.migrate_pod(
+                conn,
+                executor=fake_executor(executor_mod),
+                deployment_id="dep_1",
+                target_machine_id="host_target",
+                migration_id="mig_777777777777777777777777",
+                verifier=lambda _conn, _row, _intent: {"healthy": True},
+                env=ROOT_CAPTURE_ENV,
+            )
+        except migration.ArcLinkPodMigrationError as exc:
+            expect("source root must be deployment-scoped" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected unscoped source root to fail before capture")
+        row = conn.execute("SELECT status FROM arclink_pod_migrations WHERE migration_id = ?", ("mig_777777777777777777777777",)).fetchone()
+        expect(row is not None and row["status"] == "planned", str(dict(row) if row else None))
+        expect(not (Path(tmpdir) / "target" / ".migrations" / "mig_777777777777777777777777").exists(), "capture should not be created")
+    print("PASS test_migration_capture_rejects_unscoped_source_root")
+
+
 def test_migration_rolls_back_on_verification_failure() -> None:
     control = load_module("arclink_control.py", "arclink_control_pod_migration_rollback")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_pod_migration_rollback")
@@ -205,6 +459,7 @@ def test_migration_rolls_back_on_verification_failure() -> None:
             target_machine_id="host_target",
             migration_id="mig_222222222222222222222222",
             verifier=lambda _conn, _row, _intent: {"healthy": False, "blockers": {"dashboard": "unhealthy"}},
+            env=ROOT_CAPTURE_ENV,
         )
         expect(result["status"] == "rolled_back", str(result))
         source = conn.execute("SELECT status FROM arclink_deployment_placements WHERE placement_id = 'plc_source'").fetchone()
@@ -255,6 +510,7 @@ def test_redeploy_in_place_rollback_restarts_source_without_target_teardown() ->
             target_machine_id="current",
             migration_id="mig_555555555555555555555555",
             verifier=lambda _conn, _row, _intent: {"healthy": False, "blockers": {"gateway": "unhealthy"}},
+            env=ROOT_CAPTURE_ENV,
         )
         expect(result["status"] == "rolled_back", str(result))
         lifecycle = [
@@ -292,6 +548,7 @@ def test_migration_gc_marks_expired_successes_only() -> None:
             migration_id="mig_333333333333333333333333",
             verifier=lambda _conn, _row, _intent: {"healthy": True},
             retention_days=0,
+            env=ROOT_CAPTURE_ENV,
         )
         row = conn.execute("SELECT capture_dir FROM arclink_pod_migrations WHERE migration_id = ?", (result["migration_id"],)).fetchone()
         expect(Path(row["capture_dir"]).exists(), row["capture_dir"])
@@ -341,11 +598,17 @@ def test_migration_dry_run_plans_without_mutating_files_or_placements() -> None:
 
 def main() -> int:
     test_migration_captures_materializes_verifies_and_replays()
+    test_migration_capture_requires_explicit_root_opt_in()
+    test_migration_capture_requires_helper_in_docker_mode()
+    test_migration_capture_uses_helper_when_configured()
+    test_migration_capture_helper_rejects_raw_commands_and_unscoped_paths()
+    test_migration_capture_helper_rejects_paths_outside_configured_state_root_base()
+    test_migration_capture_rejects_unscoped_source_root()
     test_migration_rolls_back_on_verification_failure()
     test_redeploy_in_place_rollback_restarts_source_without_target_teardown()
     test_migration_gc_marks_expired_successes_only()
     test_migration_dry_run_plans_without_mutating_files_or_placements()
-    print("PASS all 5 ArcLink Pod migration tests")
+    print("PASS all 10 ArcLink Pod migration tests")
     return 0
 
 

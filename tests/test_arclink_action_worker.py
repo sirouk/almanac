@@ -137,6 +137,74 @@ def test_action_worker_links_admin_action_to_executor_operation() -> None:
     print("PASS test_action_worker_links_admin_action_to_executor_operation")
 
 
+def test_restart_action_rejects_lifecycle_path_overrides_by_default() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_restart_path_guard")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_restart_path_guard")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_restart_path_guard")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_restart_path_guard")
+    conn = memory_db(control)
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="restart",
+        metadata={
+            "project_name": "arclink-outside",
+            "env_file": "/tmp/outside.env",
+            "compose_file": "/tmp/outside-compose.yaml",
+        },
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result is not None, "expected failed action result")
+    expect(result["status"] == "failed", str(result))
+    expect("metadata override" in result["error"] and "ARCLINK_ACTION_WORKER_ALLOW_LIFECYCLE_PATH_OVERRIDES" in result["error"], str(result))
+    print("PASS test_restart_action_rejects_lifecycle_path_overrides_by_default")
+
+
+def test_restart_action_lifecycle_path_overrides_require_explicit_operator_flag() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_restart_path_override")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_restart_path_override")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_restart_path_override")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_restart_path_override")
+    conn = memory_db(control)
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="restart",
+        metadata={
+            "project_name": "arclink-emergency",
+            "env_file": "/tmp/emergency.env",
+            "compose_file": "/tmp/emergency-compose.yaml",
+        },
+    )
+
+    class RecordingExecutor:
+        def __init__(self):
+            self.config = executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake")
+            self.request = None
+
+        def docker_compose_lifecycle(self, request):
+            self.request = request
+            return executor_mod.DockerComposeLifecycleResult(
+                deployment_id=request.deployment_id,
+                live=False,
+                status="completed",
+                action=request.action,
+            )
+
+    executor = RecordingExecutor()
+    result = worker.process_next_arclink_action(
+        conn,
+        executor=executor,
+        env={"ARCLINK_ACTION_WORKER_ALLOW_LIFECYCLE_PATH_OVERRIDES": "1"},
+    )
+    expect(result is not None and result["status"] == "succeeded", str(result))
+    expect(executor.request is not None, "expected lifecycle request")
+    expect(executor.request.project_name == "arclink-emergency", str(executor.request))
+    expect(executor.request.env_file == "/tmp/emergency.env", str(executor.request))
+    expect(executor.request.compose_file == "/tmp/emergency-compose.yaml", str(executor.request))
+    print("PASS test_restart_action_lifecycle_path_overrides_require_explicit_operator_flag")
+
+
 def test_dns_repair_derives_records_from_control_rows() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_dns_derive")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_dns_derive")
@@ -411,6 +479,61 @@ def test_comp_replay_does_not_duplicate_audit() -> None:
     print("PASS test_comp_replay_does_not_duplicate_audit")
 
 
+def test_backup_write_check_fails_closed_without_authorized_runner() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_backup_verify")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_backup_verify")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_backup_verify")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_backup_verify")
+    conn = memory_db(control)
+    public_key = "ssh-ed25519 " + ("A" * 80) + " arclink-agent-backup-test"
+    control.upsert_arclink_user(conn, user_id="user_backup_verify", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_backup_verify",
+        user_id="user_backup_verify",
+        prefix="backup-verify",
+        base_domain="example.test",
+        status="active",
+        metadata={
+            "backup_owner_repo": "owner/private-agent-backup",
+            "backup_deploy_key_public": public_key,
+            "backup_deploy_key_status": "staged_pending_github_install",
+            "backup_github_write_check": "not_run",
+            "backup_activation": "active",
+        },
+    )
+    action = _queue_action(
+        dashboard,
+        conn,
+        action_type="backup_write_check",
+        target_id="dep_backup_verify",
+        key="backup-write-check-1",
+        metadata={"activate_after_verify": True},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    expect(result["status"] == "failed_closed", str(result))
+    expect(result["result"]["status"] == "failed_closed", str(result))
+    expect(result["result"]["operation_kind"] == "backup_git_write_check", str(result))
+    expect("PG-BACKUP" in result["result"]["note"], str(result))
+
+    intent = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action["action_id"],)).fetchone()
+    expect(intent["status"] == "failed", str(dict(intent)))
+    row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_backup_verify'").fetchone()
+    metadata = json.loads(row["metadata_json"])
+    expect(metadata["backup_github_write_check"] == "failed_closed", str(metadata))
+    expect(metadata["backup_activation"] == "not_active", str(metadata))
+    expect("PG-BACKUP" in metadata["backup_github_write_check_reason"], str(metadata))
+    link = conn.execute(
+        """
+        SELECT * FROM arclink_action_operation_links
+        WHERE action_id = ? AND operation_kind = 'backup_git_write_check'
+        """,
+        (action["action_id"],),
+    ).fetchone()
+    expect(link is not None and link["idempotency_key"] == "backup-write-check-1", str(link))
+    print("PASS test_backup_write_check_fails_closed_without_authorized_runner")
+
+
 def test_reprovision_dispatches_pod_migration() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_reprovision")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision")
@@ -469,6 +592,7 @@ def test_reprovision_dispatches_pod_migration() -> None:
             env={
                 "ARCLINK_SECRET_STORE_DIR": str(Path(tmpdir) / "secrets"),
                 "ARCLINK_LLM_ROUTER_DEFAULT_MODEL": "model-a",
+                "ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE": "1",
             },
         )
         expect(result["status"] == "succeeded", str(result))
@@ -487,6 +611,57 @@ def test_reprovision_dispatches_pod_migration() -> None:
         ).fetchone()
         expect(link is not None, "expected reprovision action to link to pod_migration")
     print("PASS test_reprovision_dispatches_pod_migration")
+
+
+def test_reprovision_non_dry_run_requires_root_capture_opt_in() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_reprovision_root_gate")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision_root_gate")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_reprovision_root_gate")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_reprovision_root_gate")
+    conn = memory_db(control)
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="reprovision",
+        target_id="dep_reprovision_root_gate",
+        key="reprovision-root-gate-1",
+        metadata={"target_machine_id": "current"},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_fake_executor_with_secrets(executor_mod))
+    expect(result["status"] == "failed", str(result))
+    expect("ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE=1" in result["error"], str(result))
+    rows = conn.execute("SELECT COUNT(*) AS c FROM arclink_pod_migrations").fetchone()
+    expect(int(rows["c"]) == 0, str(dict(rows)))
+    print("PASS test_reprovision_non_dry_run_requires_root_capture_opt_in")
+
+
+def test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_reprovision_helper_gate")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision_helper_gate")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_reprovision_helper_gate")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_reprovision_helper_gate")
+    conn = memory_db(control)
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="reprovision",
+        target_id="dep_reprovision_helper_gate",
+        key="reprovision-helper-gate-1",
+        metadata={"target_machine_id": "current"},
+    )
+    result = worker.process_next_arclink_action(
+        conn,
+        executor=_fake_executor_with_secrets(executor_mod),
+        env={
+            "ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE": "1",
+            "ARCLINK_DOCKER_MODE": "1",
+        },
+    )
+    expect(result["status"] == "failed", str(result))
+    expect("ARCLINK_MIGRATION_CAPTURE_HELPER_URL" in result["error"], str(result))
+    rows = conn.execute("SELECT COUNT(*) AS c FROM arclink_pod_migrations").fetchone()
+    expect(int(rows["c"]) == 0, str(dict(rows)))
+    print("PASS test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode")
 
 
 def test_reprovision_dry_run_does_not_require_migration_success() -> None:
@@ -965,6 +1140,36 @@ def test_action_worker_ssh_executor_requires_machine_mode_and_allowlist() -> Non
     print("PASS test_action_worker_ssh_executor_requires_machine_mode_and_allowlist")
 
 
+def test_action_worker_local_docker_mode_requires_deployment_exec_broker() -> None:
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_local_broker_policy")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_local_broker_policy")
+    with tempfile.TemporaryDirectory() as tmp:
+        base_env = {
+            "ARCLINK_EXECUTOR_ADAPTER": "local",
+            "ARCLINK_DOCKER_MODE": "1",
+            "ARCLINK_SECRET_STORE_DIR": str(Path(tmp) / "secrets"),
+        }
+        try:
+            worker._executor_from_env(base_env)
+        except worker.ArcLinkActionWorkerError as exc:
+            expect("DEPLOYMENT_EXEC_BROKER" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected Docker-mode local action worker without deployment exec broker to fail closed")
+
+        executor = worker._executor_from_env(
+            {
+                **base_env,
+                "ARCLINK_DEPLOYMENT_EXEC_BROKER_URL": "http://deployment-exec-broker:8912",
+                "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN": "broker-token",
+            }
+        )
+        expect(executor.config.adapter_name == "local", str(executor.config))
+        expect(executor.docker_runner.__class__.__name__ == "BrokeredDockerComposeRunner", str(executor.docker_runner))
+        expect(executor.docker_runner.broker_url == "http://deployment-exec-broker:8912", str(executor.docker_runner))
+        expect(executor.docker_runner.token == "broker-token", str(executor.docker_runner))
+    print("PASS test_action_worker_local_docker_mode_requires_deployment_exec_broker")
+
+
 def test_action_worker_main_reuses_single_db_connection_for_once_batch() -> None:
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_db_reuse")
     calls: list[str] = []
@@ -1009,6 +1214,8 @@ if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
     test_action_worker_links_admin_action_to_executor_operation()
+    test_restart_action_rejects_lifecycle_path_overrides_by_default()
+    test_restart_action_lifecycle_path_overrides_require_explicit_operator_flag()
     test_dns_repair_derives_records_from_control_rows()
     test_dns_repair_missing_deployment_fails_closed()
     test_dns_repair_validation_error_redacts_secret_material()
@@ -1020,7 +1227,10 @@ if __name__ == "__main__":
     test_cancel_missing_subscription_fails_closed()
     test_comp_applies_entitlement_gate()
     test_comp_replay_does_not_duplicate_audit()
+    test_backup_write_check_fails_closed_without_authorized_runner()
     test_reprovision_dispatches_pod_migration()
+    test_reprovision_non_dry_run_requires_root_capture_opt_in()
+    test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode()
     test_reprovision_dry_run_does_not_require_migration_success()
     test_batch_processing()
     test_empty_queue_returns_none()
@@ -1036,5 +1246,6 @@ if __name__ == "__main__":
     test_deployment_action_routes_to_active_placement_host()
     test_disabled_action_worker_cli_exits_cleanly()
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
+    test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 32 action worker tests passed.")
+    print(f"\nAll 36 action worker tests passed.")

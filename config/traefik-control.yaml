@@ -1,0 +1,43 @@
+http:
+  routers:
+    arclink-control-notion:
+      rule: "PathPrefix(`/notion/webhook`)"
+      entryPoints:
+        - web
+      priority: 200
+      service: arclink-control-notion
+    arclink-control-llm-router:
+      rule: "PathPrefix(`/v1`)"
+      entryPoints:
+        - web
+      priority: 180
+      service: arclink-control-llm-router
+    arclink-control-api:
+      rule: "PathPrefix(`/api`)"
+      entryPoints:
+        - web
+      priority: 150
+      service: arclink-control-api
+    arclink-control-web:
+      rule: "PathPrefix(`/`)"
+      entryPoints:
+        - web
+      priority: 1
+      service: arclink-control-web
+  services:
+    arclink-control-notion:
+      loadBalancer:
+        servers:
+          - url: "http://notion-webhook:8283"
+    arclink-control-llm-router:
+      loadBalancer:
+        servers:
+          - url: "http://control-llm-router:8090"
+    arclink-control-api:
+      loadBalancer:
+        servers:
+          - url: "http://control-api:8900"
+    arclink-control-web:
+      loadBalancer:
+        servers:
+          - url: "http://control-web:3000"

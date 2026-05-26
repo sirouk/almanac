@@ -281,6 +281,7 @@ def test_nextcloud_occ_scrubs_ambient_env() -> None:
         os.environ["ARCLINK_SSOT_NOTION_TOKEN"] = "sentinel-secret"
         os.environ["POSTGRES_PASSWORD"] = "db-secret"
         os.environ["PATH"] = "/tmp/tainted"
+        original_run = nextcloud_access.subprocess.run
         try:
             cfg = control.Config.from_env()
             captured: dict[str, object] = {}
@@ -305,6 +306,7 @@ def test_nextcloud_occ_scrubs_ambient_env() -> None:
             expect("POSTGRES_PASSWORD" not in env, str(env))
             print("PASS test_nextcloud_occ_scrubs_ambient_env")
         finally:
+            nextcloud_access.subprocess.run = original_run
             os.environ.clear()
             os.environ.update(old_env)
 
@@ -321,6 +323,7 @@ def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
         write_config(config_path, config_values(root, enable_nextcloud="1"))
         old_env = os.environ.copy()
         os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        original_run = nextcloud_access.subprocess.run
         try:
             cfg = control.Config.from_env()
             captured: dict[str, object] = {}
@@ -338,6 +341,7 @@ def test_nextcloud_occ_uses_service_user_safe_cwd() -> None:
             expect(captured["cwd"] == str((root / "home-arclink").resolve()), str(captured))
             print("PASS test_nextcloud_occ_uses_service_user_safe_cwd")
         finally:
+            nextcloud_access.subprocess.run = original_run
             os.environ.clear()
             os.environ.update(old_env)
 

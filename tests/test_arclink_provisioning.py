@@ -140,6 +140,15 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["nextcloud_admin_password"]["target"] == "/run/secrets/nextcloud_admin_password", str(compose_secrets))
     expect(compose_secrets["dashboard_password"]["secret_ref"] == "secret://arclink/dashboard/users/user_1/password", str(compose_secrets))
     expect(compose_secrets["dashboard_password"]["target"] == "/run/secrets/dashboard_password", str(compose_secrets))
+    expect(
+        compose_secrets["share_request_broker_token"]["secret_ref"]
+        == "secret://arclink/share-request-broker/dep_1/token",
+        str(compose_secrets),
+    )
+    expect(
+        compose_secrets["share_request_broker_token"]["target"] == "/run/secrets/share_request_broker_token",
+        str(compose_secrets),
+    )
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["environment"]["ARCLINK_AGENT_NAME"] == "Atlas", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_AGENT_TITLE"] == "the right hand", str(intent["environment"]))
@@ -169,6 +178,15 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["ARCLINK_HERMES_URL"] == "https://hermes-amber-vault-1a2b.example.test", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_FILES_URL"] == "https://u-amber-vault-1a2b.example.test/drive", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CODE_URL"] == "https://u-amber-vault-1a2b.example.test/code", str(intent["environment"]))
+    expect(
+        intent["environment"]["ARCLINK_SHARE_REQUEST_BROKER_URL"]
+        == "http://control-api:8900/api/v1/user/share-grants/broker",
+        str(intent["environment"]),
+    )
+    expect(
+        intent["environment"]["ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE"] == "/run/secrets/share_request_broker_token",
+        str(intent["environment"]),
+    )
     expect(intent["environment"]["ARCLINK_NOTION_CALLBACK_URL"] == "https://u-amber-vault-1a2b.example.test/notion/webhook", str(intent["environment"]))
     expect(intent["environment"]["QMD_STATE_DIR"] == "/home/arclink/.qmd", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_CONTAINER_PORT"] == "8181", str(intent["environment"]))
@@ -216,6 +234,11 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["hermes-dashboard"]))
     linked_volume = next(item for item in services["hermes-dashboard"]["volumes"] if item["target"] == "/linked-resources")
     expect(linked_volume["read_only"] is True, str(linked_volume))
+    expect(
+        {"source": "share_request_broker_token", "target": "/run/secrets/share_request_broker_token"}
+        in services["hermes-dashboard"]["secrets"],
+        str(services["hermes-dashboard"]),
+    )
     memory_synth_volumes = {item["target"]: item["source"] for item in services["memory-synth"]["volumes"]}
     expect(memory_synth_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["memory-synth"]))
     expect(memory_synth_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["memory-synth"]))
@@ -244,6 +267,11 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["managed-context-install"]["environment"]["ARCLINK_HERMES_URL"] == intent["environment"]["ARCLINK_HERMES_URL"], str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_FILES_URL"] == intent["environment"]["ARCLINK_FILES_URL"], str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_CODE_URL"] == intent["environment"]["ARCLINK_CODE_URL"], str(services["managed-context-install"]))
+    expect(
+        services["managed-context-install"]["environment"]["ARCLINK_SHARE_REQUEST_BROKER_URL"]
+        == intent["environment"]["ARCLINK_SHARE_REQUEST_BROKER_URL"],
+        str(services["managed-context-install"]),
+    )
     expect(services["managed-context-install"]["environment"]["ARCLINK_NOTION_CALLBACK_URL"] == intent["environment"]["ARCLINK_NOTION_CALLBACK_URL"], str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_PASSWORD_FILE"] == "/run/secrets/dashboard_password", str(services["managed-context-install"]))
     expect(

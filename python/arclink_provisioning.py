@@ -413,6 +413,20 @@ def _llm_router_base_url(env: Mapping[str, str] | None) -> str:
     return value.rstrip("/") or "http://control-llm-router:8090/v1"
 
 
+def _share_request_broker_url(env: Mapping[str, str] | None) -> str:
+    source = env or {}
+    value = str(
+        source.get("ARCLINK_SHARE_REQUEST_BROKER_URL")
+        or source.get("ARCLINK_API_INTERNAL_URL")
+        or "http://control-api:8900"
+    ).strip().rstrip("/")
+    if not value:
+        value = "http://control-api:8900"
+    if value.endswith("/api/v1/user/share-grants/broker"):
+        return value
+    return f"{value}/api/v1/user/share-grants/broker"
+
+
 def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
     explicit = str(metadata.get("dashboard_password_ref") or "").strip()
     if explicit:
@@ -459,6 +473,11 @@ def _render_secret_refs(
             metadata,
             "notion_webhook_secret_ref",
             f"secret://arclink/notion/{deployment_id}/webhook-secret",
+        ),
+        "share_request_broker_token": _secret_ref(
+            metadata,
+            "share_request_broker_token_ref",
+            f"secret://arclink/share-request-broker/{deployment_id}/token",
         ),
         "stripe_customer": str(metadata.get("stripe_customer_ref") or "").strip(),
         "cloudflare_tunnel": str(metadata.get("cloudflare_tunnel_token_ref") or "").strip(),
@@ -731,7 +750,10 @@ def _render_services(
             ports=hermes_host_ports,
             labels=labels["hermes"],
             depends_on=["managed-context-install"],
-            secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
+            secrets=[
+                {"source": provider_secret_name, "target": secret_target[provider_secret_name]},
+                {"source": "share_request_broker_token", "target": secret_target["share_request_broker_token"]},
+            ],
             deploy=_limits("hermes-dashboard"),
             networks=_control_network(prefix, "hermes"),
         ),
@@ -871,6 +893,7 @@ def _render_services(
                 "ARCLINK_HERMES_URL": env["ARCLINK_HERMES_URL"],
                 "ARCLINK_FILES_URL": env["ARCLINK_FILES_URL"],
                 "ARCLINK_CODE_URL": env["ARCLINK_CODE_URL"],
+                "ARCLINK_SHARE_REQUEST_BROKER_URL": env["ARCLINK_SHARE_REQUEST_BROKER_URL"],
                 "ARCLINK_NOTION_CALLBACK_URL": env["ARCLINK_NOTION_CALLBACK_URL"],
                 "ARCLINK_NOTION_ROOT_URL": env["ARCLINK_NOTION_ROOT_URL"],
                 "ARCLINK_PRIMARY_PROVIDER": env["ARCLINK_PRIMARY_PROVIDER"],
@@ -1060,6 +1083,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_FILES_URL": access_urls["files"],
         "ARCLINK_CODE_URL": access_urls["code"],
         "ARCLINK_HERMES_URL": access_urls["hermes"],
+        "ARCLINK_SHARE_REQUEST_BROKER_URL": _share_request_broker_url(source_env),
+        "ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE": compose_secrets["share_request_broker_token"]["target"],
         "ARCLINK_PRIMARY_PROVIDER": primary_provider(env),
         "ARCLINK_CHUTES_BASE_URL": chutes_base_url(env) if direct_chutes else _llm_router_base_url(env),
         "ARCLINK_CHUTES_DEFAULT_MODEL": chutes_default_model(env),

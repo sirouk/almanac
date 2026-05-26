@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+os.environ.setdefault("ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED", "accepted")
 
 
 def expect(condition: bool, message: str) -> None:
@@ -928,12 +929,394 @@ def test_injectable_docker_runner_receives_commands() -> None:
     print("PASS test_injectable_docker_runner_receives_commands")
 
 
+def test_live_docker_compose_apply_rejects_unconfined_values_before_runner() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_apply_preflight_test")
+    intent = sample_intent()
+    secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
+    runner = mod.FakeDockerRunner()
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+        secret_resolver=mod.FakeSecretResolver({secret_ref: "sk_test_secret"}),
+        docker_runner=runner,
+    )
+
+    checks = [
+        (
+            mod.DockerComposeApplyRequest(deployment_id="../dep_1", intent=intent, idempotency_key="bad-dep-id"),
+            "deployment id",
+        ),
+        (
+            mod.DockerComposeApplyRequest(
+                deployment_id="dep_1",
+                intent=intent,
+                project_name="arclink-other",
+                idempotency_key="bad-project",
+            ),
+            "project name",
+        ),
+        (
+            mod.DockerComposeApplyRequest(
+                deployment_id="dep_1",
+                intent={**intent, "state_roots": {"root": "/tmp/dep_1", "config": "/tmp/dep_1/config"}},
+                idempotency_key="bad-root",
+            ),
+            "escapes",
+        ),
+        (
+            mod.DockerComposeApplyRequest(
+                deployment_id="dep_1",
+                intent={
+                    **intent,
+                    "state_roots": {
+                        "root": "/arcdata/deployments/dep_1",
+                        "config": "/arcdata/deployments/dep_1/../dep_other/config",
+                    },
+                },
+                idempotency_key="bad-config",
+            ),
+            "escapes",
+        ),
+    ]
+    for request, expected in checks:
+        try:
+            executor.docker_compose_apply(request)
+        except mod.ArcLinkExecutorError as exc:
+            expect(expected in str(exc), f"expected {expected!r} in {exc!s}")
+        else:
+            raise AssertionError(f"expected preflight failure for {request}")
+    expect(runner.runs == [], f"runner must not be invoked after preflight failure: {runner.runs}")
+    print("PASS test_live_docker_compose_apply_rejects_unconfined_values_before_runner")
+
+
+def test_local_executor_uses_deployment_exec_broker_when_configured() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_broker_runner_test")
+    executor = mod.executor_for_fleet_host(
+        adapter="local",
+        env={
+            "ARCLINK_DEPLOYMENT_EXEC_BROKER_URL": "http://deployment-exec-broker:8912",
+            "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN": "broker-token",
+        },
+        host={},
+        secret_resolver=mod.FakeSecretResolver({}),
+    )
+    expect(isinstance(executor.docker_runner, mod.BrokeredDockerComposeRunner), str(executor.docker_runner))
+
+    seen: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+
+        def read(self) -> bytes:
+            return b'{"ok": true, "result": {"status": "ok", "stdout": "[]"}}'
+
+    def fake_urlopen(request, timeout=0):
+        seen["url"] = request.full_url
+        seen["timeout"] = timeout
+        seen["headers"] = {key.lower(): value for key, value in request.header_items()}
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    original_urlopen = mod.urllib.request.urlopen
+    mod.urllib.request.urlopen = fake_urlopen
+    try:
+        result = executor.docker_runner.run(
+            ("up", "-d", "--remove-orphans"),
+            deployment_id="dep_1",
+            project_name="arclink-dep_1",
+            env_file="/arcdata/deployments/dep_1/config/arclink.env",
+            compose_file="/arcdata/deployments/dep_1/config/compose.yaml",
+        )
+    finally:
+        mod.urllib.request.urlopen = original_urlopen
+
+    expect(result["status"] == "ok", str(result))
+    expect(seen["url"] == "http://deployment-exec-broker:8912/v1/docker-compose", str(seen))
+    headers = seen["headers"]
+    expect(isinstance(headers, dict), str(seen))
+    expect(headers.get(mod.DEPLOYMENT_EXEC_BROKER_TOKEN_HEADER.lower()) == "broker-token", str(headers))
+    body = seen["body"]
+    expect(isinstance(body, dict), str(body))
+    expect(body.get("deployment_id") == "dep_1", str(body))
+    expect(body.get("operation") == "compose_up", str(body))
+    expect("args" not in body and "command" not in body and "cmd" not in body, str(body))
+
+    try:
+        mod.BrokeredDockerComposeRunner(broker_url="http://broker", token="token").run(
+            ("run", "--rm", "shell"),
+            deployment_id="dep_1",
+            project_name="arclink-dep_1",
+            env_file="/arcdata/deployments/dep_1/config/arclink.env",
+            compose_file="/arcdata/deployments/dep_1/config/compose.yaml",
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("unsupported Docker Compose operation" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected brokered runner to reject raw Compose-style args")
+
+    try:
+        mod.executor_for_fleet_host(
+            adapter="local",
+            env={"ARCLINK_DEPLOYMENT_EXEC_BROKER_URL": "http://deployment-exec-broker:8912"},
+            host={},
+            secret_resolver=mod.FakeSecretResolver({}),
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("URL and token" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected partial deployment exec broker config to fail closed")
+
+    try:
+        mod.executor_for_fleet_host(
+            adapter="local",
+            env={"ARCLINK_DOCKER_MODE": "1"},
+            host={},
+            secret_resolver=mod.FakeSecretResolver({}),
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("DEPLOYMENT_EXEC_BROKER" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected Docker-mode local executor without deployment exec broker to fail closed")
+    print("PASS test_local_executor_uses_deployment_exec_broker_when_configured")
+
+
+def test_deployment_exec_broker_validates_operation_and_paths() -> None:
+    broker = load_module("arclink_deployment_exec_broker.py", "arclink_deployment_exec_broker_test")
+    records: list[dict[str, object]] = []
+
+    class RecordingRunner:
+        def __init__(self, docker_binary: str = "docker") -> None:
+            self.docker_binary = docker_binary
+
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            records.append(
+                {
+                    "args": tuple(args),
+                    "deployment_id": deployment_id,
+                    "project_name": project_name,
+                    "env_file": env_file,
+                    "compose_file": compose_file,
+                    "docker_binary": self.docker_binary,
+                }
+            )
+            return {"status": "ok", "stdout": "[]"}
+
+    original_runner = broker.executor.SubprocessDockerComposeRunner
+    old_state_root = os.environ.get("ARCLINK_STATE_ROOT_BASE")
+    old_docker_binary = os.environ.get("ARCLINK_DOCKER_BINARY")
+    old_which = broker.shutil.which
+    old_trusted = broker.TRUSTED_DOCKER_BINARY_PATHS
+    broker.executor.SubprocessDockerComposeRunner = RecordingRunner
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = tmpdir
+            docker_path = Path(tmpdir) / "docker"
+            docker_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            docker_path.chmod(0o755)
+            broker.TRUSTED_DOCKER_BINARY_PATHS = (docker_path,)
+            broker.shutil.which = lambda name: str(docker_path) if name == "docker" else None
+            os.environ["ARCLINK_DOCKER_BINARY"] = "docker"
+            root = Path(tmpdir) / "dep_1"
+            config = root / "config"
+            config.mkdir(parents=True)
+            env_file = config / "arclink.env"
+            compose_file = config / "compose.yaml"
+            env_file.write_text("ARCLINK_TEST=1\n", encoding="utf-8")
+            compose_file.write_text('{"services": {}}\n', encoding="utf-8")
+            request = {
+                "deployment_id": "dep_1",
+                "operation": "compose_ps",
+                "project_name": "arclink-dep_1",
+                "env_file": str(env_file),
+                "compose_file": str(compose_file),
+            }
+            ok, payload = broker.run_deployment_exec_request(request)
+            expect(ok is True, str(payload))
+            expect(records[-1]["args"] == ("ps", "--format", "json"), str(records[-1]))
+            expect(records[-1]["deployment_id"] == "dep_1", str(records[-1]))
+            expect(records[-1]["docker_binary"] == str(docker_path), str(records[-1]))
+
+            ok, error = broker.run_deployment_exec_request({**request, "args": ["up", "-d"]})
+            expect(ok is False and "raw commands" in str(error), str(error))
+            ok, error = broker.run_deployment_exec_request({
+                **request,
+                "env_file": "/tmp/dep_1/config/arclink.env",
+                "compose_file": "/tmp/dep_1/config/compose.yaml",
+            })
+            expect(ok is False and "escapes" in str(error), str(error))
+            ok, error = broker.run_deployment_exec_request({**request, "operation": "run_shell"})
+            expect(ok is False and "allowlisted" in str(error), str(error))
+    finally:
+        broker.executor.SubprocessDockerComposeRunner = original_runner
+        broker.shutil.which = old_which
+        broker.TRUSTED_DOCKER_BINARY_PATHS = old_trusted
+        if old_state_root is None:
+            os.environ.pop("ARCLINK_STATE_ROOT_BASE", None)
+        else:
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = old_state_root
+        if old_docker_binary is None:
+            os.environ.pop("ARCLINK_DOCKER_BINARY", None)
+        else:
+            os.environ["ARCLINK_DOCKER_BINARY"] = old_docker_binary
+    print("PASS test_deployment_exec_broker_validates_operation_and_paths")
+
+
+def test_deployment_exec_broker_rejects_symlinked_compose_config_files_before_docker() -> None:
+    broker = load_module("arclink_deployment_exec_broker.py", "arclink_deployment_exec_broker_symlink_config_test")
+    docker_lookups: list[str] = []
+    runner_calls: list[str] = []
+
+    class RecordingRunner:
+        def __init__(self, docker_binary: str = "docker") -> None:
+            runner_calls.append(docker_binary)
+
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            del args, deployment_id, project_name, env_file, compose_file
+            runner_calls.append("run")
+            return {"status": "ok", "stdout": "[]"}
+
+    def fail_docker_lookup(name: str) -> str | None:
+        docker_lookups.append(name)
+        raise AssertionError("Docker CLI lookup must not run for symlinked deployment config files")
+
+    original_runner = broker.executor.SubprocessDockerComposeRunner
+    old_state_root = os.environ.get("ARCLINK_STATE_ROOT_BASE")
+    old_docker_binary = os.environ.get("ARCLINK_DOCKER_BINARY")
+    old_which = broker.shutil.which
+    broker.executor.SubprocessDockerComposeRunner = RecordingRunner
+    broker.shutil.which = fail_docker_lookup
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_root = Path(tmpdir)
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = str(state_root)
+            os.environ["ARCLINK_DOCKER_BINARY"] = "docker"
+            requested_config = state_root / "dep-one" / "config"
+            requested_config.mkdir(parents=True)
+            steered_config = state_root / "dep-one-steered" / "config"
+            steered_config.mkdir(parents=True)
+            steered_env = steered_config / "arclink.env"
+            steered_compose = steered_config / "compose.yaml"
+            steered_env.write_text("ARCLINK_TEST=1\n", encoding="utf-8")
+            steered_compose.write_text('{"services": {}}\n', encoding="utf-8")
+            env_link = requested_config / "arclink.env"
+            compose_link = requested_config / "compose.yaml"
+            env_link.symlink_to(steered_env)
+            compose_link.symlink_to(steered_compose)
+            request = {
+                "deployment_id": "dep-one",
+                "operation": "compose_ps",
+                "project_name": "arclink-dep-one",
+                "env_file": str(env_link),
+                "compose_file": str(compose_link),
+            }
+
+            ok, error = broker.run_deployment_exec_request(request)
+    finally:
+        broker.executor.SubprocessDockerComposeRunner = original_runner
+        broker.shutil.which = old_which
+        if old_state_root is None:
+            os.environ.pop("ARCLINK_STATE_ROOT_BASE", None)
+        else:
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = old_state_root
+        if old_docker_binary is None:
+            os.environ.pop("ARCLINK_DOCKER_BINARY", None)
+        else:
+            os.environ["ARCLINK_DOCKER_BINARY"] = old_docker_binary
+
+    expect(ok is False and "symlink" in str(error).lower(), str(error))
+    expect(docker_lookups == [], f"Docker CLI lookup must not run before config-file preflight: {docker_lookups}")
+    expect(runner_calls == [], f"Docker runner must not run before config-file preflight: {runner_calls}")
+    print("PASS test_deployment_exec_broker_rejects_symlinked_compose_config_files_before_docker")
+
+
+def test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_lifecycle_preflight_test")
+    runner = mod.FakeDockerRunner()
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+        docker_runner=runner,
+    )
+    checks = [
+        (
+            mod.DockerComposeLifecycleRequest(
+                deployment_id="dep_1",
+                action="restart",
+                project_name="arclink-dep_1;rm",
+            ),
+            "project name",
+        ),
+        (
+            mod.DockerComposeLifecycleRequest(
+                deployment_id="dep_1",
+                action="restart",
+                project_name="arclink-other",
+            ),
+            "project name",
+        ),
+        (
+            mod.DockerComposeLifecycleRequest(
+                deployment_id="dep_1",
+                action="restart",
+                env_file="/tmp/dep_1/config/arclink.env",
+                compose_file="/tmp/dep_1/config/compose.yaml",
+            ),
+            "escapes",
+        ),
+        (
+            mod.DockerComposeLifecycleRequest(
+                deployment_id="dep_1",
+                action="restart",
+                env_file="/arcdata/deployments/dep_1/config/../../dep_other/config/arclink.env",
+                compose_file="/arcdata/deployments/dep_1/config/compose.yaml",
+            ),
+            "env file",
+        ),
+    ]
+    for request, expected in checks:
+        try:
+            executor.docker_compose_lifecycle(request)
+        except mod.ArcLinkExecutorError as exc:
+            expect(expected in str(exc), f"expected {expected!r} in {exc!s}")
+        else:
+            raise AssertionError(f"expected lifecycle preflight failure for {request}")
+    expect(runner.runs == [], f"runner must not be invoked after lifecycle preflight failure: {runner.runs}")
+    print("PASS test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner")
+
+
+def test_live_docker_compose_lifecycle_project_override_requires_config_flag() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_lifecycle_project_override")
+    runner = mod.FakeDockerRunner()
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(
+            live_enabled=True,
+            adapter_name="live",
+            allow_lifecycle_project_override=True,
+        ),
+        docker_runner=runner,
+    )
+    result = executor.docker_compose_lifecycle(
+        mod.DockerComposeLifecycleRequest(
+            deployment_id="dep_1",
+            action="restart",
+            project_name="arclink-emergency",
+        )
+    )
+    expect(result.status == "completed", str(result))
+    expect(runner.runs[0]["project_name"] == "arclink-emergency", str(runner.runs))
+    expect(runner.runs[0]["compose_file"] == "/arcdata/deployments/dep_1/config/compose.yaml", str(runner.runs))
+    print("PASS test_live_docker_compose_lifecycle_project_override_requires_config_flag")
+
+
 def test_live_docker_compose_file_preserves_service_ports() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_compose_ports_test")
     intent = sample_intent()
     secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
     with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir) / "deployment"
+        root = Path(tmpdir) / "dep_1"
+        intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
         intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
         intent["compose"]["services"]["dashboard"]["ports"] = ["127.0.0.1:8443:3210"]
 
@@ -941,10 +1324,11 @@ def test_live_docker_compose_file_preserves_service_ports() -> None:
             def __init__(self) -> None:
                 self.runs: list[dict[str, str | tuple[str, ...]]] = []
 
-            def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+            def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
                 self.runs.append(
                     {
                         "args": tuple(args),
+                        "deployment_id": deployment_id,
                         "project_name": project_name,
                         "env_file": env_file,
                         "compose_file": compose_file,
@@ -953,7 +1337,7 @@ def test_live_docker_compose_file_preserves_service_ports() -> None:
 
         runner = RecordingRunner()
         executor = mod.ArcLinkExecutor(
-            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live", state_root_base=tmpdir),
             secret_resolver=mod.FileMaterializingSecretResolver(
                 value_provider=lambda ref: "sk_test_secret" if ref == secret_ref else "",
                 materialization_root=root / "materialized",
@@ -973,26 +1357,28 @@ def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_resta
     intent = sample_intent()
     secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
     with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir) / "materialized"
+        root = Path(tmpdir) / "dep_1"
+        intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
 
         class RecordingRunner:
-            def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+            def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+                del args, deployment_id, project_name, env_file, compose_file
                 return {"status": "ok"}
 
         runner = RecordingRunner()
         resolver = mod.FileMaterializingSecretResolver(
             value_provider=lambda ref: "sk_test_secret" if ref == secret_ref else "",
-            materialization_root=root,
+            materialization_root=root / "materialized",
         )
         executor = mod.ArcLinkExecutor(
-            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live", state_root_base=tmpdir),
             secret_resolver=resolver,
             docker_runner=runner,
         )
         result = executor.docker_compose_apply(
             mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="cleanup-1")
         )
-        secret_copy = root / "nextcloud_db_password"
+        secret_copy = root / "materialized" / "nextcloud_db_password"
         compose_secret_copy = Path(result.compose_file).parent / "secrets" / "nextcloud_db_password"
         compose_doc = json.loads(Path(result.compose_file).read_text(encoding="utf-8"))
         expect(result.status == "applied", str(result))
@@ -1009,12 +1395,13 @@ def test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_f
     intent = sample_intent()
     secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
     with tempfile.TemporaryDirectory() as tmpdir:
-        root = Path(tmpdir) / "deployment"
+        root = Path(tmpdir) / "dep_1"
         intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
         secrets_root = root / "config" / "secrets"
 
         class FailingRunner:
-            def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+            def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+                del args, deployment_id, project_name, env_file, compose_file
                 expect((secrets_root / "nextcloud_db_password").is_file(), "secret must be materialized before runner")
                 raise mod.ArcLinkExecutorError("compose transport failed")
 
@@ -1023,7 +1410,7 @@ def test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_f
             materialization_root=secrets_root,
         )
         executor = mod.ArcLinkExecutor(
-            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live", state_root_base=tmpdir),
             secret_resolver=resolver,
             docker_runner=FailingRunner(),
         )
@@ -1076,6 +1463,7 @@ def test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure() -> None
             try:
                 runner.run(
                     ("up", "-d", "--remove-orphans"),
+                    deployment_id="dep",
                     project_name="arclink-dep",
                     env_file=str(env_file),
                     compose_file=str(compose_file),
@@ -1098,6 +1486,7 @@ def test_ssh_docker_runner_requires_explicit_host_allowlist() -> None:
     try:
         runner.run(
             ("ps", "--format", "json"),
+            deployment_id="dep",
             project_name="arclink-dep",
             env_file="/tmp/arclink.env",
             compose_file="/tmp/dep/config/compose.yaml",
@@ -1216,7 +1605,8 @@ def test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded() -> 
     mod = load_module("arclink_executor.py", "arclink_executor_live_lifecycle_failure_test")
 
     class FailingRunner:
-        def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            del args, deployment_id, project_name, env_file, compose_file
             raise mod.ArcLinkExecutorError("transport failed")
 
     executor = mod.ArcLinkExecutor(
@@ -1259,6 +1649,12 @@ def main() -> int:
     test_fake_docker_compose_rejects_missing_depends_on_service()
     test_dry_run_output_is_secret_free()
     test_injectable_docker_runner_receives_commands()
+    test_live_docker_compose_apply_rejects_unconfined_values_before_runner()
+    test_local_executor_uses_deployment_exec_broker_when_configured()
+    test_deployment_exec_broker_validates_operation_and_paths()
+    test_deployment_exec_broker_rejects_symlinked_compose_config_files_before_docker()
+    test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner()
+    test_live_docker_compose_lifecycle_project_override_requires_config_flag()
     test_live_docker_compose_file_preserves_service_ports()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
@@ -1269,7 +1665,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 34 ArcLink executor tests")
+    print("PASS all 35 ArcLink executor tests")
     return 0
 
 

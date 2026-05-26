@@ -11,6 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 CONFIGURE_SCRIPT = REPO / "bin" / "configure-agent-backup.sh"
 BACKUP_SCRIPT = REPO / "bin" / "backup-agent-home.sh"
 INSTALL_CRON_SCRIPT = REPO / "bin" / "install-agent-cron-jobs.sh"
+RESTORE_SMOKE_SCRIPT = REPO / "bin" / "arclink-restore-smoke.sh"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -264,7 +265,7 @@ def test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag() -
         print("PASS test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag")
 
 
-def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
+def test_backup_agent_home_restore_smoke_pushes_curated_snapshot_to_private_repo() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         hermes_home = root / "hermes-home"
@@ -341,7 +342,30 @@ def test_backup_agent_home_pushes_curated_snapshot_to_private_repo() -> None:
         expect(not (checkout / "secrets").exists(), "did not expect secrets to be backed up")
         expect(not (checkout / "logs").exists(), "did not expect logs to be backed up")
         expect((checkout / "MANIFEST.json").is_file(), "expected MANIFEST.json in backup")
-        print("PASS test_backup_agent_home_pushes_curated_snapshot_to_private_repo")
+
+        restore_dir = root / "restore-smoke"
+        restore = run(
+            [
+                str(RESTORE_SMOKE_SCRIPT),
+                "--kind",
+                "agent-home",
+                "--source",
+                str(checkout),
+                "--restore-dir",
+                str(restore_dir),
+                "--json",
+            ]
+        )
+        expect(restore.returncode == 0, f"agent restore-smoke failed: stdout={restore.stdout!r} stderr={restore.stderr!r}")
+        payload = json.loads(restore.stdout)
+        expect(payload["ok"] is True, str(payload))
+        expect(payload["kind"] == "agent-home", str(payload))
+        expect("agent_manifest_json" in payload["checks"], str(payload))
+        expect("agent_secret_exclusion" in payload["checks"], str(payload))
+        expect((restore_dir / "SOUL.md").read_text(encoding="utf-8") == "soul\n", "expected restored SOUL.md")
+        expect(not (restore_dir / "secrets").exists(), "restore-smoke must not restore secrets")
+        expect(not (restore_dir / "logs").exists(), "restore-smoke must not restore logs")
+        print("PASS test_backup_agent_home_restore_smoke_pushes_curated_snapshot_to_private_repo")
 
 
 def main() -> int:
@@ -351,7 +375,7 @@ def main() -> int:
     test_install_agent_cron_jobs_schedules_backup_and_records_status()
     test_configure_agent_backup_refuses_when_visibility_check_errors()
     test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag()
-    test_backup_agent_home_pushes_curated_snapshot_to_private_repo()
+    test_backup_agent_home_restore_smoke_pushes_curated_snapshot_to_private_repo()
     print("PASS all 7 agent backup regression tests")
     return 0
 

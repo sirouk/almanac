@@ -333,6 +333,14 @@ write_default_docker_config() {
   local nextcloud_admin_password="${NEXTCLOUD_ADMIN_PASSWORD:-}"
   local session_hash_pepper="${ARCLINK_SESSION_HASH_PEPPER:-}"
   local fleet_enrollment_secret="${ARCLINK_FLEET_ENROLLMENT_SECRET:-}"
+  local gateway_exec_broker_token="${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:-}"
+  local deployment_exec_broker_token="${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:-}"
+  local agent_supervisor_broker_token="${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:-}"
+  local operator_upgrade_broker_token="${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:-}"
+  local agent_user_helper_token="${ARCLINK_AGENT_USER_HELPER_TOKEN:-}"
+  local agent_process_helper_token="${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:-}"
+  local migration_capture_helper_token="${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:-}"
+  local trusted_host_risk_accepted="${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}"
 
   if [[ -z "$postgres_password" || "$postgres_password" == "change-me" ]]; then
     postgres_password="$(generate_secret)"
@@ -345,6 +353,27 @@ write_default_docker_config() {
   fi
   if [[ -z "$fleet_enrollment_secret" || "$fleet_enrollment_secret" == "change-me" ]]; then
     fleet_enrollment_secret="$(generate_secret)"
+  fi
+  if [[ -z "$gateway_exec_broker_token" || "$gateway_exec_broker_token" == "change-me" ]]; then
+    gateway_exec_broker_token="$(generate_secret)"
+  fi
+  if [[ -z "$deployment_exec_broker_token" || "$deployment_exec_broker_token" == "change-me" ]]; then
+    deployment_exec_broker_token="$(generate_secret)"
+  fi
+  if [[ -z "$agent_supervisor_broker_token" || "$agent_supervisor_broker_token" == "change-me" ]]; then
+    agent_supervisor_broker_token="$(generate_secret)"
+  fi
+  if [[ -z "$operator_upgrade_broker_token" || "$operator_upgrade_broker_token" == "change-me" ]]; then
+    operator_upgrade_broker_token="$(generate_secret)"
+  fi
+  if [[ -z "$agent_user_helper_token" || "$agent_user_helper_token" == "change-me" ]]; then
+    agent_user_helper_token="$(generate_secret)"
+  fi
+  if [[ -z "$agent_process_helper_token" || "$agent_process_helper_token" == "change-me" ]]; then
+    agent_process_helper_token="$(generate_secret)"
+  fi
+  if [[ -z "$migration_capture_helper_token" || "$migration_capture_helper_token" == "change-me" ]]; then
+    migration_capture_helper_token="$(generate_secret)"
   fi
 
   cat >"$CONFIG_FILE" <<EOF
@@ -396,6 +425,14 @@ ARCLINK_COOKIE_DOMAIN=
 ARCLINK_SESSION_HASH_PEPPER=$session_hash_pepper
 ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1
 ARCLINK_FLEET_ENROLLMENT_SECRET=$fleet_enrollment_secret
+ARCLINK_GATEWAY_EXEC_BROKER_TOKEN=$gateway_exec_broker_token
+ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN=$deployment_exec_broker_token
+ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN=$agent_supervisor_broker_token
+ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN=$operator_upgrade_broker_token
+ARCLINK_AGENT_USER_HELPER_TOKEN=$agent_user_helper_token
+ARCLINK_AGENT_PROCESS_HELPER_TOKEN=$agent_process_helper_token
+ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN=$migration_capture_helper_token
+ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=$trusted_host_risk_accepted
 ARCLINK_DEFAULT_PRICE_ID=price_arclink_founders
 ARCLINK_FOUNDERS_PRICE_ID=price_arclink_founders
 ARCLINK_SOVEREIGN_PRICE_ID=price_arclink_sovereign
@@ -592,6 +629,27 @@ if config_file_can_repair; then
   fi
   if [[ -z "$(config_value ARCLINK_FLEET_ENROLLMENT_SECRET 2>/dev/null || true)" || "$(config_value ARCLINK_FLEET_ENROLLMENT_SECRET 2>/dev/null || true)" == "change-me" ]]; then
     set_config_value ARCLINK_FLEET_ENROLLMENT_SECRET "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_GATEWAY_EXEC_BROKER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_GATEWAY_EXEC_BROKER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_GATEWAY_EXEC_BROKER_TOKEN "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_AGENT_USER_HELPER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_AGENT_USER_HELPER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_AGENT_USER_HELPER_TOKEN "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_AGENT_PROCESS_HELPER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_AGENT_PROCESS_HELPER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_AGENT_PROCESS_HELPER_TOKEN "$(generate_secret)"
+  fi
+  if [[ -z "$(config_value ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN 2>/dev/null || true)" || "$(config_value ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN 2>/dev/null || true)" == "change-me" ]]; then
+    set_config_value ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN "$(generate_secret)"
   fi
 else
   echo "Warning: unable to repair Docker config secrets at $CONFIG_FILE; continuing because split private mounts may provide sealed runtime values." >&2

@@ -96,6 +96,7 @@ payload = {
     "dashboard_url": dashboard_url,
     "drive_url": drive_url,
     "code_url": code_url,
+    "share_request_broker_url": str(os.environ.get("ARCLINK_SHARE_REQUEST_BROKER_URL") or "").strip(),
     "notion_callback_url": str(os.environ.get("ARCLINK_NOTION_CALLBACK_URL") or "").strip(),
     "notion_root_url": str(
         os.environ.get("ARCLINK_NOTION_ROOT_URL")

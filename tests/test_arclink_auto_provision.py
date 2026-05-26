@@ -214,6 +214,8 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
         os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        original_run = provisioner.subprocess.run
+        original_getpwuid = provisioner.pwd.getpwuid
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
@@ -259,6 +261,8 @@ def test_run_one_uses_devnull_stdin_for_headless_init() -> None:
             expect(memory_refresh_calls[0]["agent_id"] == "agent-autoprovbot", memory_refresh_calls)
             print("PASS test_run_one_uses_devnull_stdin_for_headless_init")
         finally:
+            provisioner.subprocess.run = original_run
+            provisioner.pwd.getpwuid = original_getpwuid
             os.environ.clear()
             os.environ.update(old_env)
 
@@ -274,6 +278,7 @@ def test_run_as_user_scrubs_ambient_env() -> None:
         return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
 
     old_env = os.environ.copy()
+    original_run = provisioner.subprocess.run
     os.environ["ARCLINK_SSOT_NOTION_TOKEN"] = "secret-should-not-leak"
     os.environ["POSTGRES_PASSWORD"] = "postgres-should-not-leak"
     os.environ["PATH"] = "/tmp/not-the-real-path"
@@ -300,6 +305,7 @@ def test_run_as_user_scrubs_ambient_env() -> None:
         expect("POSTGRES_PASSWORD" not in env, env)
         print("PASS test_run_as_user_scrubs_ambient_env")
     finally:
+        provisioner.subprocess.run = original_run
         os.environ.clear()
         os.environ.update(old_env)
 

@@ -135,7 +135,7 @@ def test_hetzner_cloud_create_is_idempotent_and_persists_metadata() -> None:
     expect(result["machine"]["provider_billing_ref"] == "bill-redacted-test", str(result))
     metadata = json.loads(result["machine"]["metadata_json"])
     expect(metadata["provider_bootstrap"]["prereq_library"] == "bin/lib/ensure-prereqs.sh", str(metadata))
-    expect(replay["replay"] is True, str(replay))
+    expect(replay["replay"] is True and replay["status"] == result["status"], str(replay))
     rows = conn.execute("SELECT COUNT(*) AS count FROM arclink_inventory_machines WHERE provider = 'hetzner'").fetchone()
     expect(rows["count"] == 1, str(rows["count"]))
     print("PASS test_hetzner_cloud_create_is_idempotent_and_persists_metadata")

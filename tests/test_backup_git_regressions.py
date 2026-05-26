@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import shlex
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -9,6 +11,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 COMMON_SH = REPO / "bin" / "common.sh"
 BACKUP_SH = REPO / "bin" / "backup-to-github.sh"
+RESTORE_SMOKE_SH = REPO / "bin" / "arclink-restore-smoke.sh"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -347,6 +350,81 @@ printf 'needs_push=%s\\n' "$BACKUP_RECONCILE_PUSH_REQUIRED"
     print("PASS test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push")
 
 
+def test_shared_restore_smoke_restores_local_git_snapshot_without_live_fetch() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        repo_path = tmp_path / "arclink-priv"
+        restore_dir = tmp_path / "restore"
+        (repo_path / "vault").mkdir(parents=True)
+        (repo_path / "config").mkdir(parents=True)
+        (repo_path / "state").mkdir(parents=True)
+        (repo_path / "vault" / "note.md").write_text("recoverable note\n", encoding="utf-8")
+        (repo_path / "config" / "profile.yaml").write_text("name: fixture\n", encoding="utf-8")
+        db_path = repo_path / "state" / "arclink-control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("CREATE TABLE deployments (id TEXT PRIMARY KEY)")
+            conn.execute("INSERT INTO deployments (id) VALUES ('dep_fixture')")
+            conn.commit()
+        finally:
+            conn.close()
+        run(["git", "init", "-b", "main", str(repo_path)])
+        run(["git", "-C", str(repo_path), "add", "."])
+        run(
+            [
+                "git",
+                "-C",
+                str(repo_path),
+                "-c",
+                "user.name=Backup Bot",
+                "-c",
+                "user.email=backup@example.com",
+                "commit",
+                "-m",
+                "backup fixture",
+            ]
+        )
+
+        result = run(
+            [
+                str(RESTORE_SMOKE_SH),
+                "--kind",
+                "shared",
+                "--source",
+                str(repo_path),
+                "--restore-dir",
+                str(restore_dir),
+                "--json",
+            ]
+        )
+        expect(result.returncode == 0, f"restore-smoke failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        payload = json.loads(result.stdout)
+        expect(payload["ok"] is True, str(payload))
+        expect(payload["kind"] == "shared", str(payload))
+        expect("git_archive_head" in payload["checks"], str(payload))
+        expect("sqlite_quick_check" in payload["checks"], str(payload))
+        expect("shared_layout" in payload["checks"], str(payload))
+        expect((restore_dir / "vault" / "note.md").read_text(encoding="utf-8") == "recoverable note\n", "expected vault note restore")
+        expect((restore_dir / "state" / "arclink-control.sqlite3").is_file(), "expected SQLite backup restore")
+        expect(not (restore_dir / ".git").exists(), "restore-smoke must not restore git metadata")
+    print("PASS test_shared_restore_smoke_restores_local_git_snapshot_without_live_fetch")
+
+
+def test_restore_smoke_rejects_remote_sources_without_fetching() -> None:
+    result = run(
+        [
+            str(RESTORE_SMOKE_SH),
+            "--kind",
+            "shared",
+            "--source",
+            "git@github.com:example/arclink-priv.git",
+        ]
+    )
+    expect(result.returncode != 0, "restore-smoke must reject remote sources")
+    expect("local backup artifact" in result.stderr, result.stderr)
+    print("PASS test_restore_smoke_rejects_remote_sources_without_fetching")
+
+
 def main() -> int:
     test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts()
     test_shared_backup_refuses_public_github_remote()
@@ -355,7 +433,9 @@ def main() -> int:
     test_backup_to_github_skips_ignored_state_tree_with_nested_git_checkout()
     test_reconcile_backup_remote_archives_unrelated_history_and_force_aligns_main()
     test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push()
-    print("PASS all 7 backup git regression tests")
+    test_shared_restore_smoke_restores_local_git_snapshot_without_live_fetch()
+    test_restore_smoke_rejects_remote_sources_without_fetching()
+    print("PASS all 9 backup git regression tests")
     return 0
 
 

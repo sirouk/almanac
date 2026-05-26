@@ -40,6 +40,7 @@ from arclink_executor import (
 )
 from arclink_provisioning import render_arclink_state_roots
 from arclink_pod_migration import garbage_collect_pod_migrations, migrate_pod
+from arclink_dashboard import ARCLINK_BACKUP_FAILED_CLOSED_REASON, record_arclink_backup_write_check_failed_closed
 
 
 class ArcLinkActionWorkerError(ValueError):
@@ -48,12 +49,13 @@ class ArcLinkActionWorkerError(ValueError):
 
 # Action types that map to implemented executor or local control-plane calls.
 _EXECUTOR_ACTIONS = frozenset({
-    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp",
+    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check",
 })
 
 _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
 _ActionExecutorCache = dict[tuple[str, str, str], ArcLinkExecutor]
 _ACTION_EXECUTOR_CACHE: _ActionExecutorCache = {}
+_LIFECYCLE_PATH_OVERRIDE_KEYS = ("project_name", "env_file", "compose_file")
 
 
 def _worker_id(prefix: str) -> str:
@@ -88,6 +90,25 @@ def _safe_mapping_json(raw: Any) -> dict[str, Any]:
 
 def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _lifecycle_path_overrides(metadata: Mapping[str, Any], *, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    overrides = {
+        key: str(metadata.get(key) or "").strip()
+        for key in _LIFECYCLE_PATH_OVERRIDE_KEYS
+        if str(metadata.get(key) or "").strip()
+    }
+    if not overrides:
+        return {}
+    source = env or os.environ
+    if _truthy(source.get("ARCLINK_ACTION_WORKER_ALLOW_LIFECYCLE_PATH_OVERRIDES")):
+        return overrides
+    fields = ", ".join(sorted(overrides))
+    raise ArcLinkActionWorkerError(
+        "ArcLink lifecycle actions derive Docker Compose project/env/compose paths "
+        "from deployment state; metadata override(s) "
+        f"{fields} require ARCLINK_ACTION_WORKER_ALLOW_LIFECYCLE_PATH_OVERRIDES=1"
+    )
 
 
 def _dns_role_from_record_id(record_id: str, deployment_id: str, hostname: str) -> str:
@@ -674,6 +695,12 @@ def _execute_action(
             event_type = f"action_pending_not_implemented:{action_type}"
             outcome_status = "pending_not_implemented"
             error = str(result.get("note", "action type not yet wired to executor"))
+        elif dispatch_status == "failed_closed":
+            intent_status = "failed"
+            attempt_status = "failed"
+            event_type = f"action_failed_closed:{action_type}"
+            outcome_status = "failed_closed"
+            error = str(result.get("note", "action failed closed"))
         else:
             intent_status = "succeeded"
             attempt_status = "succeeded"
@@ -748,6 +775,7 @@ def _dispatch_action(
     """Route action type to executor call. Returns redacted result metadata."""
     if action_type == "restart":
         lifecycle_meta = _deployment_lifecycle_metadata(conn, deployment_id=target_id)
+        lifecycle_overrides = _lifecycle_path_overrides(metadata, env=env)
         operation_key = str(metadata.get("idempotency_key") or idempotency_key)
         _link_action_operation(
             conn,
@@ -760,9 +788,9 @@ def _dispatch_action(
         result = executor.docker_compose_lifecycle(DockerComposeLifecycleRequest(
             deployment_id=target_id,
             action="restart",
-            project_name=str(metadata.get("project_name") or lifecycle_meta.get("project_name") or ""),
-            env_file=str(metadata.get("env_file") or lifecycle_meta.get("env_file") or ""),
-            compose_file=str(metadata.get("compose_file") or lifecycle_meta.get("compose_file") or ""),
+            project_name=str(lifecycle_overrides.get("project_name") or lifecycle_meta.get("project_name") or ""),
+            env_file=str(lifecycle_overrides.get("env_file") or lifecycle_meta.get("env_file") or ""),
+            compose_file=str(lifecycle_overrides.get("compose_file") or lifecycle_meta.get("compose_file") or ""),
             idempotency_key=operation_key,
         ))
         return {"live": result.live, "status": result.status, "action": result.action, "operation_kind": "docker_compose_lifecycle", "operation_idempotency_key": operation_key}
@@ -862,6 +890,41 @@ def _dispatch_action(
             reason=str(metadata.get("reason") or "operator queued comp action"),
         )
         return {"status": "applied", "action": "comp", "user_id": user_id, "operation_kind": "control_db_comp", "operation_idempotency_key": operation_key}
+
+    if action_type == "backup_write_check":
+        if target_kind != "deployment":
+            raise ArcLinkActionWorkerError("backup_write_check action requires a deployment target")
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="backup_git_write_check",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        requested_activation = _truthy(metadata.get("activate_after_verify") or metadata.get("activate"))
+        reason = ARCLINK_BACKUP_FAILED_CLOSED_REASON
+        if requested_activation:
+            reason = (
+                "Backup activation requires verified private-repo write access from an authorized PG-BACKUP runner; "
+                "no live git command was run."
+            )
+        backup_setup = record_arclink_backup_write_check_failed_closed(
+            conn,
+            deployment_id=target_id,
+            actor_id="system:action_worker",
+            reason=reason,
+        )
+        return {
+            "status": "failed_closed",
+            "action": "backup_write_check",
+            "deployment_id": target_id,
+            "backup_setup": backup_setup,
+            "note": str(backup_setup.get("verification", {}).get("github_write_check_reason") or reason),
+            "operation_kind": "backup_git_write_check",
+            "operation_idempotency_key": operation_key,
+        }
 
     if action_type == "reprovision":
         if target_kind != "deployment":

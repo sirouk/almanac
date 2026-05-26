@@ -74,6 +74,7 @@ def test_linode_provider_lists_instances_and_redacts_errors() -> None:
 class FakeLinodeClient:
     def __init__(self) -> None:
         self.created = 0
+        self.removed: list[tuple[str, bool]] = []
 
     def provision_server(self, *, label, linode_type, image, region, authorized_keys):
         self.created += 1
@@ -86,6 +87,10 @@ class FakeLinodeClient:
             "status": "provisioning",
             "hardware_summary": {"vcpu_cores": 4, "ram_gib": 8, "disk_gib": 160},
         }
+
+    def remove_server(self, server_id, *, destroy=False):
+        self.removed.append((server_id, bool(destroy)))
+        return {"id": server_id, "deleted": bool(destroy)}
 
 
 def test_linode_cloud_create_records_bootstrap_failure_without_secret_leak() -> None:
@@ -121,8 +126,126 @@ def test_linode_cloud_create_records_bootstrap_failure_without_secret_leak() -> 
     print("PASS test_linode_cloud_create_records_bootstrap_failure_without_secret_leak")
 
 
+def test_linode_cloud_lifecycle_replays_probe_drains_and_destroys_without_secret_leak() -> None:
+    control = load_module("arclink_control.py", "arclink_control_linode_lifecycle")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_linode_lifecycle")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_linode_lifecycle")
+    conn = __import__("sqlite3").connect(":memory:")
+    conn.row_factory = __import__("sqlite3").Row
+    control.ensure_schema(conn)
+    client = FakeLinodeClient()
+
+    result = inventory.create_cloud_inventory_machine(
+        conn,
+        provider="linode",
+        client=client,
+        hostname="worker-us-east",
+        server_type="g6-standard-2",
+        image="linode/ubuntu24.04",
+        region="us-east",
+        ssh_keys=["fleet-key"],
+        capacity_slots=5,
+        tags={"lane": "local-lifecycle"},
+        idempotency_key="linode-lifecycle-create",
+    )
+    replay = inventory.create_cloud_inventory_machine(
+        conn,
+        provider="linode",
+        client=client,
+        hostname="worker-us-east",
+        server_type="g6-standard-2",
+        image="linode/ubuntu24.04",
+        region="us-east",
+        ssh_keys=["fleet-key"],
+        capacity_slots=5,
+        tags={"lane": "local-lifecycle"},
+        idempotency_key="linode-lifecycle-create",
+    )
+    duplicate = inventory.create_cloud_inventory_machine(
+        conn,
+        provider="linode",
+        client=client,
+        hostname="worker-us-east",
+        server_type="g6-standard-4",
+        image="linode/ubuntu24.04",
+        region="us-east",
+        idempotency_key="linode-lifecycle-duplicate",
+    )
+
+    expect(client.created == 1, f"provider create should not replay or duplicate: {client.created}")
+    expect(result["status"] == "pending", str(result))
+    expect(replay["replay"] is True and replay["status"] == result["status"], str(replay))
+    expect(duplicate["status"] == "existing", str(duplicate))
+    machine = result["machine"]
+    host_id = machine["machine_host_link"]
+    expect(host_id, str(machine))
+
+    def probe_runner(host_row, kind):
+        payload = {"ok": True, "kind": kind, "observed_load": 0}
+        if kind in {"capacity", "inventory"}:
+            payload["hardware_summary"] = {"vcpu_cores": 8, "ram_gib": 16, "disk_gib": 120}
+        if kind == "inventory":
+            payload["machine_fingerprint"] = "sha256:linode-local-lifecycle-fingerprint"
+        return worker.ProbeResult(ok=True, payload=payload, latency_ms=7)
+
+    probed = worker.process_due_hosts(
+        conn,
+        runner=probe_runner,
+        force=True,
+        now_iso="2026-05-22T12:00:00+00:00",
+        notify=False,
+    )
+    expect(probed["probe_count"] == 3, str(probed))
+    ready = inventory.get_inventory_machine(conn, machine["machine_id"])
+    host = conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (host_id,)).fetchone()
+    expect(ready["status"] == "ready", str(ready))
+    expect(dict(host)["status"] == "active", str(dict(host)))
+    expect(json.loads(ready["hardware_summary_json"])["vcpu_cores"] == 8, ready["hardware_summary_json"])
+
+    try:
+        inventory.remove_cloud_inventory_machine(conn, key=machine["machine_id"], client=client, destroy=False)
+    except inventory.ArcLinkInventoryError as exc:
+        expect("--destroy" in str(exc), str(exc))
+    else:
+        raise AssertionError("Linode cloud removal must require explicit destroy")
+    try:
+        inventory.remove_cloud_inventory_machine(conn, key=machine["machine_id"], client=client, destroy=True)
+    except inventory.ArcLinkInventoryError as exc:
+        expect("drain" in str(exc), str(exc))
+    else:
+        raise AssertionError("Linode cloud removal must require drain or force")
+
+    inventory.drain_inventory_machine(conn, machine["machine_id"])
+    removed = inventory.remove_cloud_inventory_machine(
+        conn,
+        key=machine["machine_id"],
+        client=client,
+        destroy=True,
+        idempotency_key="linode-lifecycle-remove",
+    )
+    remove_replay = inventory.remove_cloud_inventory_machine(
+        conn,
+        key=machine["machine_id"],
+        client=client,
+        destroy=True,
+        idempotency_key="linode-lifecycle-remove",
+    )
+    expect(client.removed == [("l-456", True)], str(client.removed))
+    expect(removed["machine"]["status"] == "removed", str(removed))
+    expect(remove_replay["replay"] is True, str(remove_replay))
+
+    artifact_rows = conn.execute(
+        "SELECT provider_refs_json, result_json, error FROM arclink_operation_idempotency ORDER BY operation_kind, idempotency_key"
+    ).fetchall()
+    artifact_text = json.dumps([dict(row) for row in artifact_rows], sort_keys=True)
+    artifact_text += json.dumps(json.loads(removed["machine"]["metadata_json"]), sort_keys=True)
+    expect("linode-secret-token-value" not in artifact_text, artifact_text)
+    print("PASS test_linode_cloud_lifecycle_replays_probe_drains_and_destroys_without_secret_leak")
+
+
 if __name__ == "__main__":
     test_linode_provider_fails_closed_without_token()
     test_linode_provider_lists_instances_and_redacts_errors()
     test_linode_cloud_create_records_bootstrap_failure_without_secret_leak()
+    test_linode_cloud_lifecycle_replays_probe_drains_and_destroys_without_secret_leak()
     print("\nAll Linode inventory tests passed.")

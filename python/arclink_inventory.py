@@ -21,6 +21,7 @@ from arclink_control import (
     connect_db,
     ensure_schema,
     fail_arclink_operation_idempotency,
+    replay_arclink_operation_idempotency,
     reserve_arclink_operation_idempotency,
     utc_now_iso,
 )
@@ -618,10 +619,6 @@ def create_cloud_inventory_machine(
     clean_billing_ref = str(provider_billing_ref or "").strip()
     clean_tags = dict(tags or {})
 
-    existing = _existing_cloud_machine(conn, provider=clean_provider, hostname=clean_hostname)
-    if existing is not None:
-        return {"status": "existing", "replay": True, "machine": existing}
-
     intent = _cloud_operation_intent(
         provider=clean_provider,
         hostname=clean_hostname,
@@ -633,6 +630,19 @@ def create_cloud_inventory_machine(
         tags=clean_tags,
         provider_billing_ref=clean_billing_ref,
     )
+    replay = replay_arclink_operation_idempotency(
+        conn,
+        operation_kind=operation_kind,
+        idempotency_key=clean_key,
+        intent=intent,
+    )
+    if replay is not None:
+        return _idempotent_replay_result(replay)
+
+    existing = _existing_cloud_machine(conn, provider=clean_provider, hostname=clean_hostname)
+    if existing is not None:
+        return {"status": "existing", "replay": True, "machine": existing}
+
     reserved = reserve_arclink_operation_idempotency(
         conn,
         operation_kind=operation_kind,

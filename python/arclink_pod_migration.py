@@ -16,6 +16,8 @@ import secrets
 import shutil
 import sqlite3
 import tempfile
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -38,10 +40,15 @@ from arclink_executor import (
     DockerComposeLifecycleRequest,
 )
 from arclink_provisioning import render_arclink_provisioning_intent, render_arclink_state_roots
+from arclink_secrets_regex import redact_then_truncate
 
 
 OPERATION_KIND = "pod_migration"
 DEFAULT_GC_DAYS = 7
+ROOT_CAPTURE_OPT_IN_ENV = "ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE"
+MIGRATION_CAPTURE_HELPER_URL_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_URL"
+MIGRATION_CAPTURE_HELPER_TOKEN_ENV = "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN"
+MIGRATION_CAPTURE_HELPER_TOKEN_HEADER = "X-ArcLink-Migration-Capture-Helper-Token"
 
 
 class ArcLinkPodMigrationError(ValueError):
@@ -87,6 +94,95 @@ def _parse_iso(value: str) -> datetime | None:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _require_root_capture_opt_in(env: Mapping[str, str] | None) -> None:
+    source = env or os.environ
+    if _truthy(source.get(ROOT_CAPTURE_OPT_IN_ENV)):
+        return
+    raise ArcLinkPodMigrationError(
+        "ArcLink Pod migration non-dry-run capture is disabled unless "
+        f"{ROOT_CAPTURE_OPT_IN_ENV}=1 is set for an operator-controlled "
+        "migration window; run a dry run first or split capture behind a "
+        "dedicated helper"
+    )
+
+
+def _migration_capture_helper_config(
+    env: Mapping[str, str] | None,
+    *,
+    require_for_docker: bool = False,
+) -> tuple[str, str] | None:
+    source = env or os.environ
+    url = str(source.get(MIGRATION_CAPTURE_HELPER_URL_ENV) or "").strip().rstrip("/")
+    token = str(source.get(MIGRATION_CAPTURE_HELPER_TOKEN_ENV) or "").strip()
+    if url or token:
+        if not url or not token:
+            raise ArcLinkPodMigrationError(
+                "ArcLink Pod migration capture helper requires both "
+                f"{MIGRATION_CAPTURE_HELPER_URL_ENV} and {MIGRATION_CAPTURE_HELPER_TOKEN_ENV}"
+            )
+        return url, token
+    if require_for_docker and _truthy(source.get("ARCLINK_DOCKER_MODE")):
+        raise ArcLinkPodMigrationError(
+            "ArcLink Docker-mode Pod migration capture requires "
+            f"{MIGRATION_CAPTURE_HELPER_URL_ENV} and {MIGRATION_CAPTURE_HELPER_TOKEN_ENV}"
+        )
+    return None
+
+
+def _absolute_path(value: str, *, label: str) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ArcLinkPodMigrationError(f"ArcLink Pod migration {label} is required")
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ArcLinkPodMigrationError(f"ArcLink Pod migration {label} must be absolute")
+    resolved = path.resolve(strict=False)
+    if str(resolved) == "/":
+        raise ArcLinkPodMigrationError(f"ArcLink Pod migration {label} must not be filesystem root")
+    return resolved
+
+
+def _expected_deployment_root_name(deployment: Mapping[str, Any]) -> str:
+    roots = render_arclink_state_roots(
+        deployment_id=str(deployment.get("deployment_id") or ""),
+        prefix=str(deployment.get("prefix") or ""),
+        state_root_base="/arcdata/deployments",
+    )
+    return Path(str(roots["root"])).name
+
+
+def _validate_capture_paths(conn: sqlite3.Connection, row: Mapping[str, Any]) -> None:
+    deployment = _load_deployment(conn, str(row["deployment_id"]))
+    expected_root_name = _expected_deployment_root_name(deployment)
+    source_root = _absolute_path(str(row.get("source_state_root") or ""), label="source state root")
+    target_root = _absolute_path(str(row.get("target_state_root") or ""), label="target state root")
+    capture_dir = _absolute_path(str(row.get("capture_dir") or ""), label="capture directory")
+    if source_root.name != expected_root_name:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration source root must be deployment-scoped")
+    if target_root.name != expected_root_name:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration target root must be deployment-scoped")
+    if capture_dir.name != str(row.get("migration_id") or ""):
+        raise ArcLinkPodMigrationError("ArcLink Pod migration capture directory must end with the migration id")
+    if capture_dir.parent.name != ".migrations" or capture_dir.parent.parent != target_root.parent:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration capture directory must stay under the target state-root base")
+    try:
+        capture_dir.relative_to(source_root)
+    except ValueError:
+        pass
+    else:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration capture directory must not be inside the source root")
+    try:
+        capture_dir.relative_to(target_root)
+    except ValueError:
+        pass
+    else:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration capture directory must not be inside the target root")
 
 
 def _load_deployment(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any]:
@@ -368,6 +464,95 @@ def _materialize_capture(capture_dir: Path, target_root: Path) -> None:
     target_root.mkdir(parents=True, exist_ok=True)
     if staged_root.exists():
         shutil.copytree(staged_root, target_root, dirs_exist_ok=True, symlinks=True)
+
+
+def _migration_capture_helper_payload(conn: sqlite3.Connection, row: Mapping[str, Any]) -> dict[str, Any]:
+    deployment = _load_deployment(conn, str(row["deployment_id"]))
+    return {
+        "deployment_id": str(row["deployment_id"]),
+        "prefix": str(deployment.get("prefix") or ""),
+        "migration_id": str(row["migration_id"]),
+        "source_state_root": str(row["source_state_root"]),
+        "target_state_root": str(row["target_state_root"]),
+        "capture_dir": str(row["capture_dir"]),
+    }
+
+
+def _run_migration_capture_helper(
+    operation: str,
+    *,
+    conn: sqlite3.Connection,
+    row: Mapping[str, Any],
+    env: Mapping[str, str] | None,
+) -> dict[str, Any]:
+    config = _migration_capture_helper_config(env, require_for_docker=True)
+    if config is None:
+        raise ArcLinkPodMigrationError("ArcLink Pod migration capture helper is not configured")
+    url, token = config
+    source = env or os.environ
+    try:
+        timeout = int(str(source.get("ARCLINK_MIGRATION_CAPTURE_HELPER_TIMEOUT_SECONDS") or "300").strip())
+    except ValueError:
+        timeout = 300
+    body = _migration_capture_helper_payload(conn, row)
+    body["operation"] = str(operation or "").strip()
+    request = urllib.request.Request(
+        f"{url}/v1/migration-capture",
+        data=json.dumps(body, sort_keys=True).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            MIGRATION_CAPTURE_HELPER_TOKEN_HEADER: token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(5, timeout)) as response:  # noqa: S310 - internal helper URL
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            payload = {}
+        error = str(payload.get("error") or exc.reason or "migration capture helper rejected request")
+        raise ArcLinkPodMigrationError(redact_then_truncate(error, limit=240, tail=True)) from exc
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ArcLinkPodMigrationError(
+            "migration capture helper request failed: "
+            f"{redact_then_truncate(str(exc), limit=240, tail=True)}"
+        ) from exc
+    if not isinstance(payload, Mapping) or payload.get("ok") is not True:
+        error = (
+            str(payload.get("error") or "migration capture helper rejected request")
+            if isinstance(payload, Mapping)
+            else "migration capture helper rejected request"
+        )
+        raise ArcLinkPodMigrationError(redact_then_truncate(error, limit=240, tail=True))
+    result = payload.get("result") if isinstance(payload, Mapping) else {}
+    return dict(result) if isinstance(result, Mapping) else {}
+
+
+def _capture_files(
+    conn: sqlite3.Connection,
+    *,
+    row: Mapping[str, Any],
+    env: Mapping[str, str] | None,
+) -> dict[str, Any]:
+    if _migration_capture_helper_config(env, require_for_docker=True):
+        return _run_migration_capture_helper("capture", conn=conn, row=row, env=env)
+    return _copy_capture(Path(str(row["source_state_root"])), Path(str(row["capture_dir"])))
+
+
+def _materialize_files(
+    conn: sqlite3.Connection,
+    *,
+    row: Mapping[str, Any],
+    target_root: str,
+    env: Mapping[str, str] | None,
+) -> None:
+    if _migration_capture_helper_config(env, require_for_docker=True):
+        _run_migration_capture_helper("materialize", conn=conn, row=row, env=env)
+        return
+    _materialize_capture(Path(str(row["capture_dir"])), Path(target_root))
 
 
 def _default_verifier(
@@ -801,6 +986,13 @@ def migrate_pod(
     verifier: Verifier | None = None,
     retention_days: int | None = None,
 ) -> dict[str, Any]:
+    existing = _migration_row(conn, str(migration_id or "").strip()) if str(migration_id or "").strip() else None
+    if not dry_run and (
+        existing is None
+        or str(existing.get("status") or "") not in {"succeeded", "failed", "rolled_back", "cancelled"}
+    ):
+        _require_root_capture_opt_in(env)
+        _migration_capture_helper_config(env, require_for_docker=True)
     row = plan_pod_migration(
         conn,
         deployment_id=deployment_id,
@@ -823,6 +1015,8 @@ def migrate_pod(
         return _result_from_row(refreshed, idempotent_replay=True, dry_run=dry_run)
     if str(row["status"]) in {"succeeded", "failed", "rolled_back", "cancelled"}:
         return _result_from_row(row, idempotent_replay=True, dry_run=dry_run)
+    if not dry_run:
+        _validate_capture_paths(conn, row)
 
     if dry_run:
         target_host = _host(conn, str(row["target_host_id"]))
@@ -932,7 +1126,7 @@ def migrate_pod(
         )
         source_stopped = True
 
-        capture_manifest = _copy_capture(Path(str(row["source_state_root"])), Path(str(row["capture_dir"])))
+        capture_manifest = _capture_files(conn, row=row, env=env)
         conn.execute(
             "UPDATE arclink_pod_migrations SET capture_manifest_json = ?, updated_at = ? WHERE migration_id = ?",
             (_json_dumps(capture_manifest), utc_now_iso(), str(row["migration_id"])),
@@ -949,7 +1143,7 @@ def migrate_pod(
             env=env,
         )
         _ensure_llm_router_key_for_intent(conn, deployment=deployment, intent=target_intent, env=env)
-        _materialize_capture(Path(str(row["capture_dir"])), Path(str(target_intent["state_roots"]["root"])))
+        _materialize_files(conn, row=row, target_root=str(target_intent["state_roots"]["root"]), env=env)
         docker_result = executor.docker_compose_apply(
             DockerComposeApplyRequest(
                 deployment_id=str(row["deployment_id"]),

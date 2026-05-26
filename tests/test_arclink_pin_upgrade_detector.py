@@ -630,13 +630,17 @@ def test_run_check_marks_partial_nonzero_output_transient() -> None:
             stderr="",
         )
 
-    detector.subprocess.run = fake_run
-    output = detector._run_check("hermes-agent")
-    expect("status: upstream-resolution-failed (check runner exited 128)" in output, output)
-    parsed = detector._parse_check_output("hermes-agent", "git-commit", output)
-    expect(parsed.transient_failure, f"partial nonzero helper output should parse as transient: {parsed}")
-    expect(not parsed.upgrade_available, str(parsed))
-    print("PASS test_run_check_marks_partial_nonzero_output_transient")
+    original_run = detector.subprocess.run
+    try:
+        detector.subprocess.run = fake_run
+        output = detector._run_check("hermes-agent")
+        expect("status: upstream-resolution-failed (check runner exited 128)" in output, output)
+        parsed = detector._parse_check_output("hermes-agent", "git-commit", output)
+        expect(parsed.transient_failure, f"partial nonzero helper output should parse as transient: {parsed}")
+        expect(not parsed.upgrade_available, str(parsed))
+        print("PASS test_run_check_marks_partial_nonzero_output_transient")
+    finally:
+        detector.subprocess.run = original_run
 
 
 def main() -> int:

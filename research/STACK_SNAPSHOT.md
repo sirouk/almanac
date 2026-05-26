@@ -1,30 +1,29 @@
 # Stack Snapshot
 
-- generated_at: 2026-05-20T03:06:40Z
+- generated_at: 2026-05-26T21:33:04Z
 - project_root: .
-- primary_stack: Python control plane + shell orchestration + Docker Compose
-- primary_score: 094/100
-- confidence: high
+- primary_stack: Node.js
+- primary_score: 018/100
+- confidence: very_low
 
 ## Project Stack Ranking
 
 | rank | stack | score | evidence |
 | --- | --- | --- | --- |
-| 1 | Python backend/control plane | 094 | `requirements-dev.txt`, about 192 Python files, `python/arclink_control.py`, hosted API, provisioning, executor, fleet, provider, router, MCP, Notion, memory, and broad `tests/test_arclink_*.py` coverage |
-| 2 | Shell-managed host runtime | 088 | `deploy.sh`, `bin/deploy.sh`, many `bin/*.sh` host lifecycle scripts, systemd service templates, and shell validation guidance |
-| 3 | Docker Compose Control Node runtime | 086 | Root `compose.yaml`, `Dockerfile`, Control Node services, Docker health paths, and Docker-focused regression tests |
-| 4 | Next.js dashboard adjunct | 058 | `web/package.json`, `web/src/**`, and browser tests support the product UI but are not the primary backend/runtime |
-| 5 | Static docs/OpenAPI surface | 052 | `docs/**`, `research/**`, root docs, and OpenAPI artifacts describe and validate the public contract |
-| 6 | Standalone Node.js app | 018 | TypeScript/JavaScript exists mainly under `web/`; it does not dominate control-plane runtime behavior |
+| 1 | Node.js | 018 | 5 TS files,4 JS files |
+| 2 | Python | 018 | requirements-dev.txt,200 python manifest/files |
+| 3 | Go | 000 | - |
+| 4 | Java | 000 | - |
+| 5 | .NET | 000 | - |
+| 6 | Ruby | 000 | - |
+| 7 | Rust | 000 | - |
+| 8 | Unknown | 000 | - |
 
 ## Deterministic Alternatives Ranking
-- Candidate evaluation is based on repository-level manifests, source volume,
-  runtime entrypoints, and test ownership.
-- The earlier Node-first result was rejected because it over-weighted frontend
-  file counts and under-weighted Python control-plane entrypoints, shell
-  lifecycle scripts, Compose services, and Python regression coverage.
+- Candidate evaluation is based on repository-level manifest and source signals only.
+- Primary decision rule: highest score, then explicit manifest precedence.
 
 ### Top 3 stack alternatives (ranked)
-- 1) Python backend/control plane: score=094, evidence=`python/**`, `tests/test_arclink_*.py`, `requirements-dev.txt`
-- 2) Shell-managed host runtime: score=088, evidence=`deploy.sh`, `bin/*.sh`, service install/health scripts
-- 3) Docker Compose Control Node runtime: score=086, evidence=`compose.yaml`, `Dockerfile`, Docker/Control Node tests
+- 1) Node.js: score=018, evidence=[5 TS files,4 JS files]
+- 2) Python: score=018, evidence=[requirements-dev.txt,200 python manifest/files]
+- 3) Go: score=000, evidence=[-]

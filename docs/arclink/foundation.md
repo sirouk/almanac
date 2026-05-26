@@ -169,12 +169,16 @@ may use list-style or object-style `depends_on`, but every dependency must refer
 to a service in the rendered intent. This keeps dry-run executor behavior close
 to the dependency validation real Docker Compose would perform.
 
-This is not a production live execution implementation yet. The shipped
-boundary verifies the fail-closed behavior, idempotency metadata, secret
-materialization rules, Compose dependency validation, DNS record type allowlist,
-Cloudflare Access TCP guard, Tailscale SSH guard, supported Chutes actions,
-supported Stripe actions, and rollback state-root preservation requirement. Real
-Docker, selected ingress, Chutes, Stripe, and rollback adapters remain E2E work.
+This is not production-proven live execution yet. The current Control Node
+source does include guarded local/SSH Docker Compose execution, Cloudflare DNS
+upserts, Tailscale-safe DNS skipping, selected ingress intent, Chutes and Stripe
+action boundaries, and rollback handling. Those paths remain fail-closed unless
+an explicit live executor adapter, credential resolver, and operator proof
+window are supplied. Local tests verify fail-closed behavior, idempotency
+metadata, secret materialization rules, Compose dependency validation, DNS record
+type allowlists, Cloudflare Access TCP guards, Tailscale SSH guards, supported
+Chutes/Stripe actions, and rollback state-root preservation; live proof remains
+owned by the E2E gates.
 
 ## Public Onboarding Contract
 
@@ -209,10 +213,9 @@ deployment blocked at `entitlement_required` and record funnel events.
 
 ## Product Surface, Dashboard, And Admin Contracts
 
-`python/arclink_product_surface.py` serves the current local no-secret ArcLink
-product surface. It is a small stdlib WSGI app for development and contract
-testing, not the production web stack. A developer can run it without provider
-secrets:
+`python/arclink_product_surface.py` serves the local no-secret ArcLink product
+surface. It is a small stdlib WSGI app for development and contract testing,
+not the Control Node web UI. A developer can run it without provider secrets:
 
 ```bash
 python3 python/arclink_product_surface.py
@@ -225,10 +228,11 @@ also exposes JSON read routes for local API tests.
 
 The local UI follows the ArcLink brand boundary from
 `docs/arclink/brand-system.md`: jet/carbon surfaces, signal-orange primary
-actions, restrained status colors, and dense operational layouts. The
-rationale for this Python-rendered prototype is to keep the API/read-model
-boundary clean while avoiding a premature frontend framework before auth, RBAC,
-and production routing are designed.
+actions, restrained status colors, and dense operational layouts. This
+Python-rendered prototype remains useful for API/read-model contract checks,
+while the current Control Node production-facing surface is the Dockerized
+Next.js `control-web` plus hosted `/api/v1` `control-api` described in
+`docs/arclink/sovereign-control-node.md`.
 
 `python/arclink_dashboard.py` defines the API-first dashboard contract consumed
 by the local surface. `python/arclink_api_auth.py` wraps those read models with
@@ -246,8 +250,8 @@ silently accepting or skipping an unverifiable event.
 `ARCLINK_CORS_ORIGIN`, `ARCLINK_COOKIE_DOMAIN`, `ARCLINK_COOKIE_SECURE`,
 `STRIPE_WEBHOOK_SECRET`, `ARCLINK_LOG_LEVEL`, `ARCLINK_DEFAULT_PRICE_ID`,
 `ARCLINK_FIRST_AGENT_PRICE_ID`, and `ARCLINK_ADDITIONAL_AGENT_PRICE_ID`.
-The hosted API is the intended production boundary; the local product surface
-remains a no-secret prototype.
+The hosted API is the intended production API boundary; the local product
+surface remains a no-secret prototype.
 
 User dashboard reads summarize ArcLink-owned rows for a customer: profile,
 entitlement, deployments, access URLs, subscription mirror state, onboarding bot
@@ -272,11 +276,14 @@ and stores safe metadata only. Plaintext-looking secret material is rejected
 before the action intent is persisted, and live side effects still require a
 deliberately live-enabled executor plus live adapters.
 
-`python/arclink_public_bots.py` defines Telegram and Discord public onboarding
-bot adapter skeletons. They share the same onboarding session rows and fake
-checkout semantics as the website surface. They intentionally store public
-channel identity only and reject private bot-token-shaped or provider-token
-material in metadata. They do not run live Telegram or Discord clients yet.
+`python/arclink_public_bots.py` defines the shared Telegram and Discord public
+onboarding conversation contract. It shares the same onboarding session rows and
+fake checkout semantics as the website surface, stores public channel identity
+only, and rejects private bot-token-shaped or provider-token material in
+metadata. Live client/webhook entrypoints are owned by
+`python/arclink_telegram.py`, `python/arclink_discord.py`, and the hosted API
+webhook routes; those integrations remain live-proof gated until real bot
+credentials and registered webhooks are exercised.
 
 ## Native Hermes Workspace Plugins
 

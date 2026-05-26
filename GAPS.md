@@ -1,10 +1,11 @@
 # ArcLink Gap Register
 
 This register was regenerated from source evidence, not from the prior root
-stub or the product matrix. `research/PRODUCT_REALITY_MATRIX.md` claims
-101 `real`, 0 `partial`, and 0 `gap` rows (`research/PRODUCT_REALITY_MATRIX.md:19-20`).
-This audit treats that as disproven where local source evidence is thin,
-contradicted, partial, policy-question, or proof-gated.
+stub or older optimistic product-matrix reads. `research/PRODUCT_REALITY_MATRIX.md`
+currently parses to 101 `real`, 0 `partial`, 0 `gap`, 15 `proof-gated`, and
+5 `policy-question` rows, and `tests/test_documentation_truths.py` now guards
+those totals and row evidence. This register remains the implementation
+planner for proof-gated, policy-question, security, UX, ops, and doc risks.
 
 Use this register as the implementation planner. A gap is not closed by better
 copy alone unless its `Next repair` says the problem is documentation-only; it
@@ -51,22 +52,197 @@ it as the decision map for what can ship locally, what needs implementation,
 what needs policy, and what needs an authorized proof window.
 
 - Immediate launch blockers: `GAP-001` keeps the full production journey
-  proof-gated, `GAP-019` marks Docker socket/root access as a P0 trusted-host
-  boundary requiring security hardening and monitoring decisions, and
-  `GAP-025` blocks any claim that the current checkout has a green broad local
-  release suite.
-- Core journey blockers: `GAP-002` through `GAP-008`, `GAP-011`, and `GAP-018`
-  affect payment, bots, provisioning, Hermes workspace proof, provider policy,
-  Notion setup truth, public API contract, current-status docs, and admin live
-  side effects.
-- Planning backlog: P2/P3 rows cover browser token storage, web channel copy,
-  backup setup, share UI and no-channel waits, linked copy policy, migration,
-  restore proof, cloud fleet proof, Crew Training generation, selected-agent
-  streaming, and provider self-service clarity.
+  proof-gated, and `GAP-019` marks Docker socket/root access as a P0
+  trusted-host boundary. Local hardening now includes capability drops, a
+  source-owned authority inventory, a `GAP-019-B2` broker/no-go review, and an
+  action-worker lifecycle path-override guard, plus a `GAP-019-C` public-Agent
+  bridge command guard, `GAP-019-D` removal of the `curator-refresh` Docker
+  socket, `GAP-019-E` control-provisioner executor preflight, and `GAP-019-F`
+  notification-delivery gateway exec broker split. `GAP-019-G` now removes the
+  Docker socket from `control-provisioner` and adds a deployment exec broker.
+  `GAP-019-H` now removes the Docker socket from the root
+  `control-action-worker` by requiring the deployment exec broker for
+  Docker-mode local lifecycle/apply calls. `GAP-019-I` now removes the Docker
+  socket from the root `agent-supervisor` by adding an
+  `agent-supervisor-broker` for dashboard network/proxy sidecar operations, but
+  remaining broker/root residual risk still needs more helper work or operator
+  acceptance. `GAP-019-J` now routes queued Docker-mode operator upgrades and
+  pinned-component upgrade apply/final-upgrade calls through a broker with
+  raw-command rejection and private operator-action log confinement.
+  `GAP-019-K` now makes non-dry-run Pod migration capture fail closed unless
+  the operator opens an explicit root-capture window and capture paths are
+  deployment-scoped. `GAP-019-L` now validates active-agent metadata,
+  canonical Docker agent homes, Hermes homes, workspace/log/process keys, and
+  agent-process env/command arguments before helper, broker, or process-helper
+  requests.
+  `GAP-019-M` now records source-owned incident controls for the remaining
+  writeable socket brokers and explicit root helpers, including monitored
+  signals, status/log/audit locations, triage steps, fail-closed action, and
+  escalation boundary. `GAP-019-N` now removes the root boundary from
+  `control-action-worker` by adding a tokened root `migration-capture-helper`
+  for Docker-mode Pod migration capture/materialization, with raw-command
+  rejection and deployment-scoped path validation. `GAP-019-O` now removes
+  direct user/home setup from the root `agent-supervisor` by adding a tokened
+  root `agent-user-helper` for Docker-mode user/home setup, with raw-command
+  rejection and canonical agent-home, Hermes-home, and workspace validation.
+  `GAP-019-P` now removes explicit root and setpriv process launching from
+  `agent-supervisor` by adding a tokened root `agent-process-helper` for
+  Docker-mode install, refresh, cron, gateway, and dashboard process execution,
+  with raw-command rejection and typed agent-context validation. `GAP-019-Q`
+  now removes Docker's default Linux capability set from `agent-user-helper`
+  and adds back only `CHOWN`, `DAC_OVERRIDE`, and `FOWNER` for validated
+  Docker agent-home writes and ownership repair. `GAP-019-R` now keeps
+  validated agent-process env values out of setpriv argv and process-helper
+  startup logs, and strips supervisor broker/helper tokens from per-agent
+  process specs before dispatch. `GAP-019-S` now rejects configured Docker
+  agent-home, repo, private-state, state, and runtime root mismatches inside
+  the root helpers before root filesystem work, helper logs, or subprocess
+  execution. `GAP-019-T` now mounts the live host repo read-only for
+  `agent-process-helper`, `agent-supervisor`, and `curator-refresh`, while
+  `GAP-019-U` moves the writable host repo bind and upgrade operations out of
+  `agent-supervisor-broker` into `operator-upgrade-broker` as the explicit
+  queued Docker-mode operator-upgrade exception. `GAP-019-V` removes the
+  remaining read-only Docker socket discovery boundary from `control-ingress`
+  by switching Control Node ingress to static Traefik file-provider routes.
+  `GAP-019-W` now rejects ArcLink broker/helper/control token env keys at the
+  `agent-process-helper` boundary before logs or subprocess execution.
+  `GAP-019-X` now removes broad `*arclink-env` inheritance and the global
+  `arclink-priv/secrets/container` mount from the root
+  `agent-process-helper`, leaving only explicit non-secret path validation env,
+  token/listener keys, and the mounts needed for allowlisted agent commands.
+  `GAP-019-Y` now removes broad `*arclink-env` inheritance and broad private
+  config/state/secrets mounts from `gateway-exec-broker`, leaving only broker
+  token/listener env, `ARCLINK_STATE_ROOT_BASE`, the deployment state-root bind,
+  and the writeable Docker socket needed for public-Agent gateway exec.
+  `GAP-019-Z` now applies the same service-boundary narrowing to
+  `agent-supervisor-broker`, leaving only Docker binary/image, repo path,
+  host/container private path metadata, broker token/listener env, and the
+  writeable Docker socket needed for dashboard network/proxy sidecars.
+  `GAP-019-AA` now narrows `deployment-exec-broker` to minimal service env:
+  broker token/listener settings, `ARCLINK_STATE_ROOT_BASE`, optional Docker
+  binary, the deployment state-root bind, and the writeable Docker socket
+  needed for allowlisted deployment Compose operations.
+  `GAP-019-AB` now narrows `operator-upgrade-broker` to minimal service env,
+  removes broad canonical private config/state/secrets mounts, and replaces
+  upgrade subprocess full-env inheritance with a child-process env allowlist.
+  `GAP-019-AC` now narrows `migration-capture-helper` to minimal service env
+  and configured state-root confinement: it keeps only `ARCLINK_STATE_ROOT_BASE`
+  plus helper token/listener env, and source, target, and staging paths must
+  resolve under that base before root copy/materialize work starts.
+  `GAP-019-AD` now hardens `agent-process-helper` pre-drop executable lookup:
+  request `PATH` must match `SAFE_PATH`, the helper invokes
+  `/usr/bin/setpriv` by absolute path, and identity setup fails closed without
+  the pinned runtime venv Python instead of falling back to bare `python3`.
+  `GAP-019-AE` now hardens `agent-user-helper` root account/ownership
+  executable lookup: the helper invokes `/usr/sbin/groupadd`,
+  `/usr/sbin/useradd`, and `/usr/bin/chown` by absolute trusted path and fails
+  closed if any required executable is unavailable before user/home mutation.
+  `GAP-019-AF` now hardens `agent-supervisor-broker` Docker CLI lookup:
+  `ARCLINK_DOCKER_BINARY` must resolve to a trusted Docker executable path, and
+  unsafe, missing, non-executable, or non-Docker values fail closed before
+  dashboard network/proxy subprocesses run. `GAP-019-AZ` now makes the same
+  broker reject unsafe `ARCLINK_DOCKER_HOST_PRIV_DIR` and
+  `ARCLINK_DOCKER_CONTAINER_PRIV_DIR` private bind-root values before proxy
+  config hashing, Docker CLI lookup, container inspect, `docker run -v`, or a
+  successful dashboard proxy response. `GAP-019-AG` now applies the same
+  Docker CLI lookup hardening to `deployment-exec-broker` before deployment
+  Compose subprocesses run, and `GAP-019-AH` applies it to
+  `gateway-exec-broker` before public Agent gateway discovery or exec.
+  `GAP-019-AI` now applies the same hardening to `operator-upgrade-broker`
+  before queued Docker-mode operator upgrade or pin-upgrade child subprocesses
+  run. `GAP-019-AJ` now makes `agent-process-helper` compare desired
+  gateway/dashboard command, cwd, and env signatures and perform bounded
+  process-group shutdown before replacement when those validated specs change.
+  `GAP-019-AK` now removes default Compose network reachability from the
+  tokened Docker/root brokers and helpers by placing their request lanes on
+  internal networks shared only with legitimate callers, while preserving
+  single-service egress networks for `agent-process-helper` and
+  `operator-upgrade-broker` outbound runtime/upgrade work.
+  `GAP-019-AL` now adds an explicit fail-closed trusted-host acknowledgement
+  gate: the seven high-authority brokers/helpers require
+  `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` in private Docker config
+  before binding request listeners or processing direct helper/broker work.
+  `GAP-019-AM` now makes `agent-process-helper` and `agent-supervisor` reject
+  dynamic-loader, Python path/startup, shell startup, Git/SSH command-steering,
+  and secret-looking process env keys before helper logs, subprocess execution,
+  or helper payload construction.
+  `GAP-019-AN` now makes `agent-user-helper` and `agent-process-helper` reject
+  symlink-escaped agent home, Hermes home, and workspace paths before root
+  filesystem work, helper logs, or subprocess execution.
+  `GAP-019-AO` now makes `agent-process-helper` reject symlink-escaped helper
+  log directories before opening log files, `subprocess.run`, or
+  `subprocess.Popen`.
+  `GAP-019-AP` now makes direct/local execution of the seven high-authority
+  broker/helper modules bind `127.0.0.1` by default, while Compose remains the
+  explicit `0.0.0.0` opt-in for internal request-network reachability.
+  `GAP-019-AQ` now replaces `agent-supervisor` enrollment-provisioner
+  `os.environ.copy()` child inheritance with an explicit env allowlist for
+  Docker mode/path config, runtime roots, service URLs, and helper/broker
+  values while excluding unrelated payment, provider, bot, ingress,
+  memory-synthesis, session, fleet, Python path, and Git/SSH steering env keys.
+  `GAP-019-AR` now makes `agent-process-helper` and
+  `agent-supervisor-broker` reject unsafe dashboard backend host values before
+  dashboard process or proxy subprocess construction; accepted values are
+  loopback or Docker-internal/private/link-local IPs, while wildcard, global,
+  multicast, malformed, and non-IP values fail closed. `GAP-019-AS` now makes
+  `agent-user-helper` and `agent-process-helper` reject symlinked configured or
+  requested Docker agent-home roots before uid/gid assignment writes, ownership
+  repair, helper logs, or subprocess execution. `GAP-019-AT` now makes
+  `agent-process-helper` reject symlinked configured or requested repo,
+  private-state, state, and runtime roots before helper logs,
+  cwd/command/runtime lookup, or subprocess execution. `GAP-019-AU` now makes
+  `agent-process-helper` reject missing, symlinked, directory, unreadable, or
+  non-executable fixed repo command targets before helper logs or subprocess
+  execution. `GAP-019-AV` now makes `operator-upgrade-broker` reject missing,
+  symlinked, directory, unreadable, or non-executable fixed `deploy.sh` and
+  `bin/component-upgrade.sh` targets before private operator logs or upgrade
+  subprocess execution. `GAP-019-AW` now makes the same broker reject relative,
+  out-of-private-state, or symlink-steered upstream deploy-key and known-hosts
+  paths before child env construction, private operator logs, or upgrade
+  subprocess execution. `GAP-019-AX` now makes `deployment-exec-broker`
+  reject symlinked deployment config roots and symlinked, missing,
+  non-regular, or unreadable rendered `config/arclink.env` and
+  `config/compose.yaml` files before Docker CLI lookup or Compose subprocess
+  dispatch. `GAP-019-AY` now makes `gateway-exec-broker` reject symlinked,
+  missing, non-regular, unreadable, or directory Compose fallback
+  `config/arclink.env` and `config/compose.yaml` targets before fallback
+  dispatch or a successful public Agent gateway broker response. `GAP-019-AZ`
+  now makes `agent-supervisor-broker` reject relative, root, colon-bearing,
+  newline/carriage-return/NUL-bearing, dot/dotdot, or non-canonical
+  host/container private bind roots before dashboard sidecar Docker lookup or
+  dispatch. `GAP-019-BA` now makes `agent-user-helper` reject symlinked,
+  directory, or non-regular `.arclink-user-ids.json` and
+  `.arclink-user-ids.json.tmp` paths before uid/gid assignment writes, account
+  commands, agent-home directory creation, or recursive ownership repair.
+  `GAP-019-BB` now makes `agent-process-helper` append redacted
+  rejected-request incidents to
+  `state/docker/agent-process-helper/rejections.jsonl` under the configured
+  private root, without raw request bodies, env values, args, tokens, private
+  paths, or stack traces. `GAP-019-BC` now adds the same redacted
+  rejected-request evidence for `gateway-exec-broker` under the configured
+  deployment state root, and `GAP-019-BD` extends it to
+  `deployment-exec-broker`, `migration-capture-helper`, `agent-user-helper`,
+  `agent-supervisor-broker`, and `operator-upgrade-broker` using only scoped
+  state roots or a narrow dashboard-broker incident mount.
+- Core journey blockers: `GAP-002` through `GAP-006` and `GAP-018` affect
+  payment, bots, provisioning, Hermes workspace proof, provider policy, and
+  admin live side effects. `GAP-018` now has a local source-owned readiness
+  matrix, but live side effects remain proof-gated. `GAP-007` now fails closed
+  locally and remains live-proof-gated by `PG-NOTION`; `GAP-011`, `GAP-012`,
+  and `GAP-025` are locally closed as of the 2026-05-22 product-matrix truth
+  guard pass.
+- Planning backlog: remaining P2/P3 rows cover live backup restore proof,
+  browser share broker/adapter proof, live share notification delivery,
+  migration, cloud fleet proof, Crew Training generation, selected-agent
+  streaming, and provider self-service clarity. Browser token storage, web
+  channel copy, backup pending-status handoff, share no-channel dashboard
+  recovery, share notification retry queueing, the fail-closed Drive/Code
+  authenticated `Request Share` contract, and linked copy policy are now
+  locally repaired.
 - Policy gates: provider self-service, provider account lifecycle, threshold
-  behavior, Captain migration, browser share-link broker, linked copy behavior,
-  backup automation, and destructive teardown authority need operator decisions
-  before code should pretend the behavior is settled.
+  behavior, Captain migration, browser share broker/adapter, backup automation,
+  and destructive teardown authority need operator decisions before code should
+  pretend the behavior is settled.
 - Proof gates: no live gate in the Proof Gates table is closed by this document
   handoff. Move a row to `real` only after the named proof runs and redacted
   evidence exists outside tracked public docs.
@@ -76,12 +252,11 @@ what needs policy, and what needs an authorized proof window.
 Use the register as an ordered work queue, not as a loose list of concerns.
 
 1. Start with P0 trust and launch gates: production E2E proof (`GAP-001`) and
-   Docker/root trusted-host hardening (`GAP-019`), while treating the broad
-   local suite failure (`GAP-025`) as a release-readiness blocker.
+   Docker/root trusted-host hardening (`GAP-019`). Broad local suite validation
+   is currently green, but must be rerun after each source/test slice.
 2. Then schedule P1 user-journey blockers: live billing, bot delivery,
    provisioning/ingress, Hermes workspace proof, provider policy/proof, Notion
-   verification truth, OpenAPI token contracts, stale status docs, admin live
-   action proof, and full-suite regression triage.
+   verification truth, and admin live action proof.
 3. Pull P2/P3 rows when they share code ownership with an active P0/P1 slice, or
    when the operator explicitly accepts the higher-priority residual risk.
 4. For every row, choose the closure type before editing: code repair, local
@@ -110,17 +285,16 @@ closure is required before a launch or core journey claim can move forward.
 | Gap | Launch meaning | Closure type | First concrete action |
 | --- | --- | --- | --- |
 | `GAP-001` | Whole paid Control Node journey is not production-proven | Authorized live proof | Run `PG-PROD` only after real Stripe, bots, ingress, provider, host, and workspace proof inputs are ready. |
-| `GAP-019` | Docker/root authority is a trusted-host P0 boundary | Security hardening and operator risk decision | Reduce socket/root exposure where practical, add monitoring/runbook controls, and record accepted residual risk. |
+| `GAP-019` | Docker/root authority is a trusted-host P0 boundary | Security hardening and operator risk decision | Capability drops, authority inventory, B2 review, action-worker path guard, public-Agent bridge command guard, curator-refresh socket removal, control-provisioner executor preflight, notification-delivery gateway exec broker split, deployment exec broker split, action-worker socket removal, agent-supervisor dashboard broker split, operator-upgrade broker routing, root-capture opt-in, agent-supervisor metadata/path guards, migration-capture helper split, agent-user helper split, agent-process helper split, agent-user-helper capability narrowing, process-helper argv/log env hardening, helper configured-root confinement, read-only non-broker host-repo binds, static `control-ingress` routes, process-helper control-token env rejection, process-helper service env/secret-mount narrowing, gateway-exec broker service env/private-mount narrowing, agent-supervisor broker service env/private-mount narrowing, deployment-exec broker service env narrowing, operator-upgrade broker service/private-mount/child-env narrowing, migration-capture-helper service-env/state-root confinement, process-helper pre-drop executable lookup hardening, agent-user-helper root executable lookup hardening, agent-supervisor-broker Docker CLI lookup hardening, deployment-exec-broker Docker CLI lookup hardening, gateway-exec-broker Docker CLI lookup hardening, operator-upgrade-broker Docker CLI lookup hardening, process-helper desired-signature restart/bounded shutdown, broker/helper internal Compose network scoping, the explicit `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` fail-closed acknowledgement gate, process-helper unapproved env key rejection, root agent-helper symlink path rejection, process-helper log-directory symlink rejection, loopback direct-run listener defaults, agent-supervisor provisioner child-env allowlisting, dashboard backend host confinement, configured agent-home root symlink rejection, process-helper configured-root symlink rejection, process-helper fixed command target preflight, operator-upgrade broker fixed script target preflight, operator-upgrade broker upstream deploy-key path confinement, deployment-exec broker rendered config-file preflight, gateway-exec broker fallback config-file preflight, agent-supervisor broker private-bind-root preflight, agent-user-helper assignment-file preflight, agent-process-helper rejected-request incident evidence, gateway-exec-broker rejected-request incident evidence, and remaining high-authority broker/helper rejected-request incident evidence are local repairs; next closure requires more helper/process-runner isolation or explicit accepted residual risk. |
 | `GAP-002` | Payment and entitlement cannot be called live-ready | Authorized live proof | Run Stripe checkout, webhook, portal, failure, cancellation, and refuel proof rows with redacted evidence. |
 | `GAP-003` | Chat-first Raven and selected-agent delivery may strand users | Authorized live proof | Prove Telegram and Discord independently, including commands, buttons, callbacks, and handoff delivery. |
 | `GAP-004` | Paid ArcPod provisioning may not create a reachable deployment | Authorized live proof | Prove one domain-mode and one Tailscale-mode deployment, health check, rollback, and teardown. |
 | `GAP-005` | Dashboard-to-Hermes workspace promise is not browser-proven | Authorized workspace proof | Run desktop/mobile workspace proof against a real TLS Hermes dashboard and plugin surface. |
 | `GAP-006` | Agents may deploy without settled provider/inference behavior | Policy decision plus authorized provider proof | Decide provider self-service/account policy, then prove router inference, key lifecycle, usage, and budget behavior. |
-| `GAP-007` | Notion setup can be mistaken for verified integration | Code repair plus live Notion proof | Add explicit verification state and prove shared-root read/write/webhook behavior before saying setup is complete. |
-| `GAP-008` | Public API docs omit checkout proof-token requirements | Documentation/schema repair plus test | Update dynamic/static OpenAPI and assert required token fields in tests. |
-| `GAP-011` | Operator docs can send future agents to stale Control Node assumptions | Documentation repair plus truth test | Mark foundation wording historical or align it with current Control Node boundaries. |
-| `GAP-018` | Admin buttons may be confused with live side effects | Live proof plus support matrix | Publish action readiness by adapter and prove the smallest safe live action subset. |
-| `GAP-025` | Broad local Python suite is not green | Regression triage and repair | Triage the 2026-05-20 full-suite failures into environment, stale-test, and true-regression buckets, then repair or quarantine intentionally skipped live/env-dependent cases. |
+| `GAP-007` | Notion setup can no longer be mistaken locally for live-verified integration | Authorized live Notion proof remains | Run shared-root read/write/webhook proof before saying setup is complete. |
+| `GAP-018` | Admin buttons may be confused with live side effects | Authorized live proof after local matrix repair | Source-owned readiness matrix is local; next closure requires proving the smallest safe live action subset. |
+| `GAP-011` | Closed locally: foundation docs now align with Control Node boundaries | Documentation repair plus truth test | Keep `tests/test_documentation_truths.py` guarding stale prototype wording. |
+| `GAP-025` | Closed locally: broad Python suite is green | Regression triage and repair | Keep `python3 -m pytest -q tests` as the broad no-secret local validation gate. |
 
 Operator decision rule: if the closure type is live proof or policy, a local
 fake test can reduce implementation risk but cannot close the row. If the
@@ -128,6 +302,10 @@ closure type is documentation/schema repair, it can close only after the
 corresponding truth or contract test passes.
 
 ## Gap Register
+
+Closed local rows are retained below for stable `GAP-###` handoff continuity
+when they were active blockers during this buildout pass. Treat rows marked
+`real` as closed local evidence, not as open implementation backlog.
 
 ### GAP-001 - Production live E2E is unproven
 
@@ -277,7 +455,7 @@ corresponding truth or contract test passes.
 ### GAP-007 - Notion setup is a preparation lane, not completed setup
 
 - Severity: P1
-- Status: partial, proof-gated
+- Status: proof-gated
 - Journey joints: `J-22`
 - Proof gates: `PG-NOTION`
 - Joint: Raven `/connect_notion`, SSOT verification, shared Notion workspace
@@ -287,134 +465,129 @@ corresponding truth or contract test passes.
   (`python/arclink_public_bots.py:3291-3358`) and then records setup intent and a
   callback. The command explicitly does not verify the integration, install
   secrets, support user-owned OAuth, or bypass verification
-  (`python/arclink_public_bots.py:3759-3835`). The dashboard labels live proof as
-  gated (`web/src/app/dashboard/page.tsx:1541-1580`). Notion proof code marks
-  live mutation and user-owned OAuth as proof-gated
+  (`python/arclink_public_bots.py:3759-3835`). The dashboard now reports the best
+  no-secret state as `local_metadata_verified` and keeps shared-root read,
+  brokered write preflight, user-owned OAuth, and live workspace proof gated
+  (`python/arclink_dashboard.py:503-586`,
+  `web/src/app/dashboard/page.tsx:1541-1589`). Notion proof code marks live
+  mutation and user-owned OAuth as proof-gated
   (`python/arclink_notion_ssot.py:1120-1205`).
-- Missing proof/tests: live shared root readability, brokered write preflight,
-  webhook verification, and user-facing completion copy.
-- Impact: users may think `/connect_notion` completes Notion setup when it only
-  records intent.
+- Missing proof/tests: authorized live shared-root readability, brokered write
+  preflight, webhook verification, and redacted evidence for `PG-NOTION`.
+- Impact: local dashboard/API state no longer says bare `verified` while live
+  proof is gated, but production Notion setup still cannot be called complete
+  until the live proof passes.
 - Owner/surface: Notion SSOT, public bot, dashboard.
-- Next repair: add a dashboard/operator verification state machine and change
-  copy where needed so "ready" never means "verified" until proof passes.
+- Next repair: run `PG-NOTION` with authorized Notion credentials and record
+  shared-root read, brokered write preflight, webhook, and dashboard evidence
+  without storing secrets.
 
-### GAP-008 - OpenAPI omits required onboarding proof tokens
-
-- Severity: P1
-- Status: doc-gap, test-gap
-- Journey joints: `J-02`
-- Joint: public API contract for checkout success/cancel
-- Expected: OpenAPI says `claim_token` is required for
-  `/onboarding/claim-session` and `cancel_token` is required for
-  `/onboarding/cancel`.
-- Actual evidence: actual API requires `claim_token` and `cancel_token`
-  (`python/arclink_api_auth.py:3485-3608`), and the web client sends them
-  (`web/src/lib/api.ts:56-60`). Dynamic OpenAPI only documents `session_id`
-  (`python/arclink_hosted_api.py:2602-2620`), and the static copy has the same
-  omission (`docs/openapi/arclink-v1.openapi.json:985-1017`,
-  `docs/openapi/arclink-v1.openapi.json:1061-1097`). Tests only check route
-  coverage/static equality, not semantic required fields
-  (`tests/test_arclink_hosted_api.py:3821-3858`).
-- Missing proof/tests: schema assertions for required request bodies and example
-  contract tests that a generated client can call success/cancel.
-- Impact: generated clients fail, docs understate the anti-enumeration proof,
-  and external implementers may build insecure or broken checkout flows.
-- Owner/surface: hosted API OpenAPI, docs, tests.
-- Next repair: update dynamic and static OpenAPI, then add focused tests for
-  required token fields.
-
-### GAP-009 - Browser proof tokens persist in localStorage
+### GAP-009 - Browser proof tokens use session-only storage
 
 - Severity: P2
-- Status: security-risk, ux-gap
+- Status: real
 - Journey joints: `J-02`, `J-28`
 - Joint: web onboarding resume and checkout success/cancel proof
 - Expected: claim/cancel proof tokens should be recoverable enough for checkout
   resume without creating unnecessary persistent browser exposure.
-- Actual evidence: web onboarding restores and persists `claimToken` and
-  `cancelToken` in `localStorage` (`web/src/app/onboarding/page.tsx:85-122`);
-  success/cancel pages read those tokens from the same storage
-  (`web/src/app/checkout/success/page.tsx:72-99`,
-  `web/src/app/checkout/cancel/page.tsx:35-58`).
-- Missing proof/tests: browser tests for token lifetime, replay, cleanup,
-  multi-tab behavior, and XSS-resistant storage choice.
-- Impact: the tokens are random and hashed server-side, but persistence extends
-  exposure to scripts/extensions and can confuse recovery on shared browsers.
+- Actual evidence: web onboarding now keeps the durable
+  `arclink_onboarding_resume` snapshot to non-proof form/session context and
+  stores `claimToken`/`cancelToken` only in `sessionStorage`
+  (`web/src/app/onboarding/page.tsx:12-30`,
+  `web/src/app/onboarding/page.tsx:90-148`). Checkout success reads claim proof
+  from `sessionStorage` and clears both proof and resume state after a
+  successful browser claim (`web/src/app/checkout/success/page.tsx:73-99`).
+  Checkout cancel reads cancel proof from `sessionStorage`, clears proof
+  material after the cancel attempt, and rewrites the local resume snapshot
+  without stale proof/session/checkout material after a successful cancellation
+  (`web/src/app/checkout/cancel/page.tsx:51-80`,
+  `web/src/app/checkout/cancel/page.tsx:125-145`).
+- Missing proof/tests: no remaining local proof-token persistence test gap.
+  HttpOnly/server-bound proof handoff or stronger cross-tab recovery remains a
+  possible future hardening design, not the local `localStorage` bug.
+- Impact: locally closed; proof tokens no longer persist in long-lived
+  `localStorage`, and fake browser tests cover token placement plus success and
+  cancel cleanup.
 - Owner/surface: web onboarding, hosted auth.
-- Next repair: move proof material to shorter-lived `sessionStorage`,
-  HttpOnly-bound server state, or an explicit short TTL design; add browser
-  tests for cleanup after claim/cancel.
+- Next repair: keep the web smoke and browser storage tests in the regression
+  path. Reopen only if product/security requires HttpOnly server-bound proof
+  storage or a different multi-tab recovery policy.
 
-### GAP-010 - Web "preferred channel" copy does not create a Telegram/Discord identity
+### GAP-010 - Web preferred-channel copy is aligned with web-only identity
 
 - Severity: P2
-- Status: ux-gap
+- Status: real
 - Journey joints: `J-01`, `J-02`, `J-03`
 - Joint: website entry from `?channel=telegram` or `?channel=discord`
 - Expected: if the page says Raven will continue in Telegram/Discord, the
   session should be linked to that real channel identity or the copy should say
   web-only.
-- Actual evidence: onboarding reads a query channel and displays "Raven will
-  continue there after checkout" (`web/src/app/onboarding/page.tsx:72-82`,
-  `web/src/app/onboarding/page.tsx:294-297`), but `handleStart` always sends
-  `channel: "web"` with a generated web contact id
-  (`web/src/app/onboarding/page.tsx:124-144`).
-- Missing proof/tests: UI test for channel query behavior and a product decision
-  on whether web can start a public channel handoff without platform identity.
-- Impact: users may expect a Telegram/Discord handoff that cannot happen from
-  that web-only session.
+- Actual evidence: onboarding still reads `?channel=telegram|discord` as a
+  preference (`web/src/app/onboarding/page.tsx:83-94`) and still starts web
+  onboarding with `channel: "web"` plus a generated web contact id
+  (`web/src/app/onboarding/page.tsx:163-177`). The copy now says the web flow
+  shows the next setup handoff after checkout and, for Telegram/Discord query
+  params, explicitly says the browser session is not linked to that platform
+  yet (`web/src/app/onboarding/page.tsx:293-335`).
+- Missing proof/tests: no local web-copy mismatch remains. Live public bot
+  delivery and channel-link proof remain separate `PG-BOTS` work.
+- Impact: locally closed; website entry no longer implies Telegram/Discord
+  continuation without a real platform identity.
 - Owner/surface: web onboarding, public bot linking.
-- Next repair: remove the promise, require a real channel-link action, or route
-  the user into the platform before checkout.
+- Next repair: keep the web smoke and browser onboarding checks in the
+  regression path; if product later requires a pre-checkout platform handoff,
+  implement it as a new linked-channel feature instead of changing copy alone.
 
-### GAP-011 - Foundation docs contradict current Control Node status
+### GAP-011 - Foundation docs align with current Control Node status
 
 - Severity: P1
-- Status: doc-gap
+- Status: real
 - Journey joints: `J-15`, `J-17`
 - Joint: operator understanding of live adapters and product surface
 - Expected: root and operations docs agree on what Control Node currently ships
   and what remains proof-gated.
-- Actual evidence: the current Control Node docs say hosted API, web, provisioner
-  loop, action worker, LLM router, and live executor boundaries exist with live
-  mutation gated by config (`docs/arclink/sovereign-control-node.md:21-36`,
-  `docs/arclink/sovereign-control-node.md:121-155`). The older foundation
-  runbook still says ArcLink does not ship production adapters that execute
-  customer containers, create live DNS, mint provider keys, run live public bots,
-  authenticate dashboards, or run live admin-action worker
-  (`docs/arclink/foundation-runbook.md:14-25`). `foundation.md` also says public
-  bot adapters do not run live clients yet (`docs/arclink/foundation.md:172-177`,
-  `docs/arclink/foundation.md:275-279`).
-- Missing proof/tests: documentation truth check that stale prototype wording
-  cannot coexist with current Control Node runbooks.
+- Actual evidence: `docs/arclink/foundation.md` and
+  `docs/arclink/foundation-runbook.md` now say the local WSGI surface is a
+  contract smoke tool, while the current Control Node boundary is Dockerized
+  `control-web`, `control-api`, `control-provisioner`,
+  `control-action-worker`, and `control-llm-router` with live mutation gated by
+  explicit adapters, credentials, and proof windows. The docs also identify
+  live Telegram/Discord client/webhook entrypoints without claiming live bot
+  proof. `tests/test_documentation_truths.py` rejects the stale prototype
+  phrases that caused this gap.
+- Missing proof/tests: none for the local documentation truth repair. Live
+  proof gates such as `PG-PROD`, `PG-BOTS`, `PG-PROVISION`, `PG-PROVIDER`, and
+  `PG-UPGRADE` remain open.
 - Impact: an operator or future agent may call the wrong deploy path or
-  understate/overstate current capability.
+  understate/overstate current capability if the truth guard regresses.
 - Owner/surface: docs, operations.
-- Next repair: mark foundation docs historical or rewrite the status section to
-  match current Control Node boundaries.
+- Next repair: keep the documentation truth guard in place; no local repair is
+  currently open for this row.
 
-### GAP-012 - Product matrix "0 gap / 0 partial" is not a reliable control
+### GAP-012 - Product matrix rows are locally guarded
 
 - Severity: P2
-- Status: doc-gap, test-gap
+- Status: real
 - Journey joints: `J-27`
 - Joint: source-of-truth claims for product readiness
 - Expected: a matrix row marked `real` should have enough local source and test
   evidence, and proof-gated rows should not be hidden by aggregate optimism.
-- Actual evidence: matrix totals claim 101 `real`, 0 `partial`, and 0 `gap`
-  (`research/PRODUCT_REALITY_MATRIX.md:19-20`), while current docs explicitly
-  state no live E2E proof (`README.md:26-31`,
-  `docs/arclink/live-e2e-secrets-needed.md:3-22`) and this register identifies
-  multiple partial/proof/doc/test gaps from fresh evidence.
-- Missing proof/tests: automated doc/status consistency check or evidence
-  requirement for each `real` row.
-- Impact: future work may use the matrix as a launch checklist and miss
-  unresolved proof gates.
+- Actual evidence: `tests/test_documentation_truths.py` now parses
+  `research/PRODUCT_REALITY_MATRIX.md`, verifies declared status totals against
+  the 121 parsed rows, rejects unknown status labels, requires rows marked
+  `real` to carry source-owned evidence plus local test/proof/policy anchors,
+  and requires `proof-gated` or `policy-question` rows to preserve live proof
+  or operator/product decision language. The currently parsed matrix totals are
+  101 `real`, 0 `partial`, 0 `gap`, 15 `proof-gated`, and 5
+  `policy-question`.
+- Missing proof/tests: no local doc-truth gap remains for the matrix guard.
+  Live proof rows in the matrix remain governed by their `PG-*` gates.
+- Impact: future work can no longer silently drift the matrix totals or mark a
+  bare narrative row as `real`; the matrix is still not production launch
+  certification.
 - Owner/surface: research docs, release process.
-- Next repair: rebuild the matrix from this register with row-level evidence and
-  require matrix rows marked `real` to cite code plus test/proof before this
-  atlas treats them as `real`.
+- Next repair: keep the product-matrix truth tests in the documentation
+  regression path and update matrix totals/statuses whenever rows change.
 
 ### GAP-013 - Raven backup prep stops before key setup and verification
 
@@ -426,20 +599,47 @@ corresponding truth or contract test passes.
 - Expected: user chooses a private repo, ArcLink creates/verifies a per-pod
   deploy key, activates backup, and reports status.
 - Actual evidence: public bot backup prep records the intended private repo and
-  explicitly says it does not mint, install, or verify the deploy key; dashboard
-  or operator backup rail completes that step
-  (`python/arclink_public_bots.py:3838-3912`). First-day docs say private
-  Hermes-home backup may be offered, public repos are refused, and deploy keys
-  must not be pasted in chat (`docs/arclink/first-day-user-guide.md:72-79`).
-- Missing proof/tests: Control Node dashboard backup rail, public status
-  handoff, deploy-key verification proof, and restore proof.
-- Impact: a user can start backup setup in chat and then hit an operator-only
-  cliff.
+  explicitly says it does not mint, install, or verify the deploy key
+  (`python/arclink_public_bots.py:3838-3912`). The user dashboard now projects
+  that same `repo_recorded_pending_key_setup` metadata as `pending_key_setup`,
+  exposes the GitHub deploy-key settings URL, and can stage a per-deployment
+  backup deploy key through an authenticated CSRF-gated API route while
+  returning only the public key/status. The web dashboard now exposes those
+  staged key/write-check routes through `web/src/lib/api.ts`, shows the staged
+  public key and GitHub deploy-key settings URL, and labels write check,
+  activation, and restore proof states without asking for private key material
+  in chat. The dashboard, hosted API, and action worker now also expose a
+  fail-closed GitHub write-check boundary: unattended local checks record
+  `github_write_check: failed_closed`, preserve `backup_activation:
+  not_active`, and require authorized `PG-BACKUP` proof before any activation
+  claim (`python/arclink_dashboard.py`, `python/arclink_api_auth.py`,
+  `python/arclink_hosted_api.py`, `python/arclink_action_worker.py`,
+  `web/src/app/dashboard/page.tsx`, `web/src/lib/api.ts`).
+  Focused tests tie the Raven workflow, hosted user dashboard route, hosted
+  backup deploy-key request route, backup write-check route, action-worker
+  fail-closed boundary, dashboard read model, and dashboard UI smoke together
+  (`tests/test_arclink_public_bots.py`,
+  `tests/test_arclink_dashboard.py`,
+  `tests/test_arclink_action_worker.py`,
+  `tests/test_arclink_hosted_api.py`, `web/tests/test_page_smoke.mjs`,
+  `web/tests/test_api_client.mjs`).
+  First-day docs say private Hermes-home backup may be offered, public repos
+  are refused, and deploy keys must not be pasted in chat
+  (`docs/arclink/first-day-user-guide.md:72-79`).
+- Missing proof/tests: live GitHub write verification proof, backup activation
+  proof, restore proof, and the operator/product decision for fully
+  self-service deploy-key installation versus operator-assisted setup.
+- Impact: a user can start backup setup in chat and now see the same pending
+  key-verification state in the dashboard/API, including the staged public key
+  when requested, but backup still cannot be called active or recoverable until
+  the proof-gated steps pass.
 - Owner/surface: backup, public bot, dashboard.
-- Next repair: add backup status and key-verification UI, or change Raven copy
-  to explicitly hand off to an operator.
+- Next repair: run authorized `PG-BACKUP` GitHub write, activation, and restore
+  proof before claiming backup active or recoverable. `GAP-020` now provides
+  local restore-smoke artifact coverage, but it does not close live disaster
+  recovery proof.
 
-### GAP-014 - Browser share-link UI is disabled pending a broker/adapter
+### GAP-014 - Browser share requests need a live broker/adapter proof
 
 - Severity: P2
 - Status: partial, policy-question
@@ -448,57 +648,106 @@ corresponding truth or contract test passes.
 - Expected: users can create a share link or share request from the browser
   where they find the file.
 - Actual evidence: backend share grants, Raven approvals, and Linked roots are
-  present, but the operations runbook says right-click browser share-link UI
-  remains disabled until a live ArcLink browser broker or approved
-  Nextcloud-backed adapter exists (`docs/arclink/operations-runbook.md:131-148`).
-- Missing proof/tests: browser UI flow, broker auth, recipient notification,
-  audit, revoke, and no-reshare tests.
+  present. Drive and Code now expose a local brokered `Request Share` contract:
+  status advertises `share_request` disabled by default, writable
+  Vault/Workspace roots can enable it only through an explicit broker URL,
+  broker-token file, and owner deployment identity, the `/share/request` route
+  rejects missing recipients, `linked` roots, sensitive paths, and URL-only
+  broker configuration before broker dispatch, authenticated dispatch uses the
+  `X-ArcLink-Share-Request-Broker-Token` header without returning token
+  material in status or responses, and the browser bundles still omit direct
+  "Generate share link" / "Create share link" wording. The hosted
+  `/api/v1/user/share-grants/broker` route now accepts Drive/Code broker
+  payloads without a browser session only when the token matches the supplied
+  owner deployment's stored hash, derives the owner user from that deployment,
+  resolves recipients by user id/email/deployment, records
+  `requested_via=share_request_broker` plus `source_plugin`, and leaves the
+  CSRF browser route unchanged. Control-node provisioning mounts the broker
+  token as an ArcPod runtime secret and the sovereign worker stores only its
+  hash in deployment metadata
+  (`plugins/hermes-agent/drive/dashboard/plugin_api.py`,
+  `plugins/hermes-agent/code/dashboard/plugin_api.py`,
+  `python/arclink_api_auth.py`, `python/arclink_hosted_api.py`,
+  `python/arclink_provisioning.py`, `python/arclink_sovereign_worker.py`,
+  `tests/test_arclink_plugins.py`, `tests/test_arclink_hosted_api.py`,
+  `tests/test_arclink_provisioning.py`,
+  `tests/test_arclink_sovereign_worker.py`).
+- Missing proof/tests: production workspace/browser proof, live recipient
+  notification and bot callback delivery, audit/revoke proof from the live
+  browser path, and the operator decision between the native ArcLink broker and
+  an approved Nextcloud-backed adapter.
 - Impact: sharing exists through API/MCP/Raven but not through the expected file
-  browser affordance.
+  browser affordance unless the local broker contract is explicitly configured;
+  no direct public share-link generation is claimed.
 - Owner/surface: Drive/Code UI, share broker, Nextcloud adapter policy.
-- Next repair: decide broker vs Nextcloud-backed adapter and implement a single
-  browser share path with tests.
+- Next repair: run authorized production workspace and `PG-BOTS` proof for
+  `Request Share`, including owner approval, recipient acceptance, no-reshare,
+  audit, revoke, dashboard recovery, and Telegram/Discord delivery before
+  claiming the browser share journey complete. Record any operator decision if
+  a Nextcloud-backed adapter replaces or supplements the native broker.
 
 ### GAP-015 - Share approval can silently wait if the owner has no linked public channel
 
 - Severity: P2
-- Status: ux-gap, ops-gap
+- Status: proof-gated
 - Journey joints: `J-13`, `J-20`, `J-24`
+- Proof gates: `PG-BOTS`
 - Joint: cross-user share request notification
 - Expected: if a share requires owner approval, the owner reliably sees the
   approval request or the requester gets a clear next step.
 - Actual evidence: operations docs say share creation persists the grant as
-  `pending_owner_approval`, but no Raven notification is queued if the owner has
-  no linked Telegram/Discord channel. The response reports
-  `owner_notification.queued=false` with a reason
-  (`docs/arclink/operations-runbook.md:150-158`).
-- Missing proof/tests: requester UI that surfaces this waiting state, dashboard
-  approval inbox, and retry notification path.
-- Impact: the requester can think sharing failed or the owner can miss the
-  approval entirely.
+  `pending_owner_approval`, and local code now exposes `GET /user/share-grants`
+  plus a Captain dashboard share inbox for owner approval, recipient waiting,
+  and recipient acceptance states. The inbox includes no-channel recovery hints
+  instead of depending only on a one-time create response
+  (`python/arclink_api_auth.py`, `python/arclink_hosted_api.py`,
+  `web/src/app/dashboard/page.tsx`, `docs/arclink/operations-runbook.md`). The
+  local `POST /user/share-grants/retry-notification` path now lets an
+  authenticated grant participant retry the currently waiting Raven prompt,
+  rejects cross-user and caller-supplied channel targets, returns
+  `queued=false` plus dashboard/link-channel recovery when no public channel is
+  linked, and queues exactly one local `notification_outbox` row after the
+  waiting target links Telegram or Discord
+  (`tests/test_arclink_hosted_api.py`,
+  `web/tests/test_api_client.mjs`, `web/tests/test_page_smoke.mjs`).
+- Missing proof/tests: authorized live Telegram/Discord delivery and button
+  callback proof after local queueing.
+- Impact: local dashboard/API users can see, act on, and retry queueing stalled
+  share prompts, but production chat delivery remains proof-gated.
 - Owner/surface: sharing UX, dashboard, public bot.
-- Next repair: expose pending approvals in both user dashboards and provide a
-  "send/link channel" recovery action.
+- Next repair: run authorized `PG-BOTS` proof for Telegram and Discord share
+  prompt delivery, callbacks, and retry-after-channel-link behavior.
 
-### GAP-016 - Copy/duplicate policy is inconsistent across MCP, docs, and tests
+### GAP-016 - Linked copy/duplicate policy is aligned across MCP, docs, and tests
 
 - Severity: P2
-- Status: policy-question, doc-gap
+- Status: real
 - Journey joints: `J-20`
 - Joint: recipient copying an accepted Linked resource into owned space
 - Expected: the policy is one clear product rule.
 - Actual evidence: docs say Drive/Code allow copy/duplicate from Linked into the
-  recipient's own Vault/Workspace (`docs/arclink/operations-runbook.md:131-148`);
+  recipient's own Vault/Workspace (`docs/arclink/operations-runbook.md:150-165`);
   tests prove copy/duplicate works (`tests/test_arclink_plugins.py:640-686`).
-  But `shares.request` returns `"copy_duplicate_policy": "policy_question"`
-  (`python/arclink_mcp_server.py:1022-1031`).
-- Missing proof/tests: assertion that MCP response policy matches the accepted
-  product decision.
-- Impact: agents may describe the policy as undecided even though UI/plugin
-  behavior allows recipient copies.
-- Owner/surface: MCP share tool, docs, plugin policy.
-- Next repair: change the MCP response to the decided policy or deliberately
-  revert the copy/duplicate behavior and docs.
+  `shares.request` now returns
+  `copy_duplicate_policy: accepted_linked_resources_copy_to_owned_vault_or_workspace_only`
+  and destination roots `vault`/`workspace`
+  (`python/arclink_mcp_server.py:1031-1042`), and managed-context guidance says
+  the same rule instead of calling it a policy question
+  (`plugins/hermes-agent/arclink-managed-context/__init__.py:326-330`).
+  Regression tests assert the MCP description, response, and recipe wording
+  (`tests/test_arclink_mcp_schemas.py:223-228`,
+  `tests/test_arclink_mcp_schemas.py:356-366`,
+  `tests/test_arclink_plugins.py:3048-3063`).
+- Missing proof/tests: no remaining local policy proof gap for this row; live
+  bot delivery and browser broker/adapter proof remain separate `PG-BOTS`,
+  `GAP-014`, and `GAP-015` work.
+- Impact: closed locally; agents now describe the same product rule that
+  Drive/Code and the operations runbook already enforce.
+- Owner/surface: MCP share tool, managed-context guidance, Drive/Code plugin
+  policy.
+- Next repair: keep the MCP/plugin focused tests in the regression path and
+  reopen this row only if the policy string, guidance, docs, or plugin behavior
+  diverge again.
 
 ### GAP-017 - Captain-initiated Pod migration is disabled by policy
 
@@ -527,23 +776,32 @@ corresponding truth or contract test passes.
 - Severity: P1
 - Status: proof-gated, ops-gap
 - Journey joints: `J-09`, `J-11`, `J-14`, `J-17`
-- Proof gates: `PG-PROVISION`, `PG-INGRESS`
+- Proof gates: `PG-PROVISION`, `PG-INGRESS`, `PG-STRIPE`, `PG-PROVIDER`
 - Joint: restart, DNS repair, key rotation, refund/cancel/comp, rollout,
   reprovision, rollback
 - Expected: admin actions mutate real services/providers only when the worker and
   executor are live and record evidence.
 - Actual evidence: readiness probes fail closed when executor/worker are not
-  ready (`python/arclink_dashboard.py:57-92`), and queuing rejects unsupported or
-  pending action types (`python/arclink_dashboard.py:1428-1512`). Production docs
-  say an action only proves live mutation when the recorded executor result is
-  live and succeeded (`docs/arclink/control-node-production-runbook.md:72-86`).
+  ready, queuing rejects unsupported or pending action types, and the admin read
+  model publishes a source-owned support matrix for restart, reprovision, DNS
+  repair, Chutes key rotation, refund, cancel, and comp with operation kind,
+  local contract, required adapter, proof gate, and fail-closed reason
+  (`python/arclink_dashboard.py`, `tests/test_arclink_admin_actions.py`).
+  The Next.js admin page and lightweight product surface render that matrix, and
+  runbooks keep fake/local readiness separate from live mutation proof
+  (`web/src/app/admin/page.tsx`, `python/arclink_product_surface.py`,
+  `docs/arclink/control-node-production-runbook.md`,
+  `docs/arclink/operations-runbook.md`). Production docs say an action only
+  proves live mutation when the recorded executor result is live and succeeded.
 - Missing proof/tests: live action-worker run for each supported action class,
   plus negative tests for wrong idempotency reuse against live adapters.
 - Impact: operators may see an action in UI and assume it has production effect
-  when only local queueing is proven.
+  when only local queueing is proven; the local matrix now reduces this risk but
+  does not close the live proof gates.
 - Owner/surface: admin dashboard, action worker, executor.
-- Next repair: publish action support matrix from worker readiness and add live
-  proof rows for the smallest safe subset.
+- Next repair: run authorized live proof rows for the smallest safe subset of
+  action classes and keep adding fake/local regression tests when new actions
+  move from pending to worker-backed.
 
 ### GAP-019 - Docker socket/root services are a P0 trusted-host boundary
 
@@ -553,41 +811,651 @@ corresponding truth or contract test passes.
 - Joint: Control Node and Docker shared-host authority boundary
 - Expected: services with Docker socket/root access are explicitly hardened and
   monitored because compromise means host/container control.
-- Actual evidence: Compose mounts the host Docker socket into control ingress,
-  control provisioner, control action worker, agent supervisor, notification
-  delivery, and curator refresh; action-worker and agent-supervisor run as root
-  (`compose.yaml:323-340`, `compose.yaml:349-408`,
-  `compose.yaml:420-473`, `compose.yaml:499-518`). Data safety documents these
-  as trusted-host services (`docs/arclink/data-safety.md:67-80`).
-- Missing proof/tests: hardening checklist, least-privilege review, socket proxy
-  evaluation, container escape monitoring, and incident runbook.
-- Impact: a bug in public bot delivery or admin/action worker could become host
-  compromise in local-adapter deployments.
+- Actual evidence: Compose mounts the host Docker socket into
+  `deployment-exec-broker`, `agent-supervisor-broker`,
+  `operator-upgrade-broker`, and `gateway-exec-broker`;
+  `migration-capture-helper`, `agent-user-helper`, and
+  `agent-process-helper` run as root
+  (`compose.yaml`, `config/docker-authority-inventory.json`). Non-root socket services now
+  drop all Linux capabilities in Compose, and Docker regression tests assert the
+  socket mount allowlist, supplemental socket group, capability drop, explicit
+  root boundary, source-owned authority inventory drift guard, `GAP-019-B2`
+  broker/proxy review schema, and Docker docs coverage
+  (`tests/test_arclink_docker.py`,
+  `config/docker-authority-inventory.json`). Action-worker restart lifecycle
+  metadata path overrides now fail closed unless
+  `ARCLINK_ACTION_WORKER_ALLOW_LIFECYCLE_PATH_OVERRIDES=1` is set for an
+  operator emergency window (`python/arclink_action_worker.py`,
+  `tests/test_arclink_action_worker.py`). The `GAP-019-C`
+  notification-delivery guard now validates detached public-Agent bridge
+  commands against the generated `hermes-gateway` exec allowlist, confines
+  Compose fallback files under `ARCLINK_STATE_ROOT_BASE`, rejects tampered job
+  commands before subprocess execution, and records rejected-command incidents
+  (`python/arclink_notification_delivery.py`,
+  `tests/test_arclink_notification_delivery.py`). The `GAP-019-D` repair removes
+  the writeable Docker socket mount and socket group from `curator-refresh`;
+  source evidence routes queued Docker-mode operator upgrade execution through
+  the enrollment provisioner path instead (`compose.yaml`,
+  `python/arclink_enrollment_provisioner.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-E` repair adds executor preflight on the
+  `control-provisioner` local/SSH Docker path: malformed deployment IDs,
+  non-matching apply project names, and env/compose paths outside the
+  configured `ARCLINK_STATE_ROOT_BASE` deployment config root fail before
+  `DockerRunner.run` (`python/arclink_executor.py`,
+  `tests/test_arclink_executor.py`). The authority inventory records this
+  local guard for `control-provisioner` while keeping the direct socket risk
+  open (`config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-F` repair removes the Docker socket mount and socket group from
+  `notification-delivery` and adds a dedicated `gateway-exec-broker` service.
+  Notification delivery now sends a bounded deployment id, prefix, generated
+  project name, bridge payload, and timeout request to the broker; the broker
+  rejects raw commands, reconstructs the `hermes-gateway` Docker exec command
+  locally, and validates it before subprocess execution
+  (`python/arclink_notification_delivery.py`,
+  `python/arclink_gateway_exec_broker.py`,
+  `tests/test_arclink_notification_delivery.py`).
+  The `GAP-019-G` repair removes the Docker socket mount and socket group from
+  `control-provisioner` and adds a dedicated `deployment-exec-broker` service.
+  The local executor now sends deployment id, generated project name, operation
+  kind, env file, and compose file requests to the broker; the broker rejects
+  raw commands, validates paths under `ARCLINK_STATE_ROOT_BASE`, and
+  reconstructs allowlisted Compose `up`, `ps`, and `down` operations itself
+  (`python/arclink_executor.py`, `python/arclink_deployment_exec_broker.py`,
+  `tests/test_arclink_executor.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AA` repair narrows the `deployment-exec-broker` Compose service
+  environment so it no longer inherits broad `*arclink-env` app, billing, bot,
+  provider, ingress, fleet, session, or memory-synthesis values; the broker
+  keeps only token/listener settings, `ARCLINK_STATE_ROOT_BASE`, optional
+  Docker binary, the deployment state-root bind, and the writeable Docker
+  socket needed for allowlisted deployment Compose operations
+  (`compose.yaml`, `config/docker-authority-inventory.json`,
+  `tests/test_arclink_docker.py`).
+  The `GAP-019-AB` repair narrows the `operator-upgrade-broker` Compose and
+  subprocess boundary: the broker no longer inherits broad `*arclink-env`, no
+  longer mounts broad canonical private config/state or
+  `arclink-priv/secrets/container`, maps canonical operator log paths to the
+  host private bind, and builds allowlisted upgrade subprocess env from basic
+  runtime keys, Docker-mode path metadata, optional Docker binary metadata, and
+  request-supplied `ARCLINK_UPSTREAM_*` values instead of `os.environ.copy()`
+  (`compose.yaml`, `python/arclink_operator_upgrade_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-H` repair removes the Docker socket mount and socket group from
+  the root `control-action-worker`. Docker-mode local action executors now fail
+  closed without `ARCLINK_DEPLOYMENT_EXEC_BROKER_URL` and token, so queued
+  restart and reprovision Docker lifecycle/apply calls route through
+  `deployment-exec-broker` (`compose.yaml`, `python/arclink_executor.py`,
+  `tests/test_arclink_action_worker.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-I` repair removes the Docker
+  socket mount and socket group from the root `agent-supervisor` and adds a
+  dedicated `agent-supervisor-broker`. The supervisor now sends bounded
+  dashboard network/proxy sidecar requests to the broker; the broker rejects
+  raw commands, validates safe agent ids, deterministic network/container
+  names, backend IPs, ports, and access-file confinement under
+  `ARCLINK_DOCKER_CONTAINER_PRIV_DIR`, then reconstructs the allowed Docker
+  network/proxy operations itself (`python/arclink_docker_agent_supervisor.py`,
+  `python/arclink_agent_supervisor_broker.py`, `compose.yaml`,
+  `tests/test_arclink_docker.py`).
+  The `GAP-019-J` repair routes queued Docker-mode operator upgrades and
+  pinned-component upgrade apply/final-upgrade calls through
+  `operator-upgrade-broker` instead of raw subprocess execution in the root
+  supervisor path. The enrollment provisioner now fails closed without broker
+  URL/token, sends bounded `run_operator_upgrade` or `run_pin_upgrade`
+  requests, and the broker rejects raw commands, validates the host repo/private
+  paths from Docker config, confines logs under private `state/operator-actions`,
+  and reconstructs only `deploy.sh docker upgrade` or allowlisted
+  `component-upgrade.sh ... --skip-upgrade` commands
+  (`python/arclink_enrollment_provisioner.py`,
+  `python/arclink_operator_upgrade_broker.py`, `compose.yaml`,
+  `tests/test_arclink_enrollment_provisioner_regressions.py`,
+  `tests/test_arclink_docker.py`).
+  The `GAP-019-K` repair keeps the root Pod migration capture path fail-closed
+  by default: non-dry-run capture requires
+  `ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE=1`, capture paths must
+  stay deployment-scoped before root file copying starts, and dry-run planning
+  remains available without the root-capture window
+  (`python/arclink_pod_migration.py`, `python/arclink_action_worker.py`,
+  `compose.yaml`, `tests/test_arclink_pod_migration.py`,
+  `tests/test_arclink_action_worker.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-L` repair guards the `agent-supervisor`
+  delegation path: active-agent metadata now fails closed if `agent_id`,
+  `unix_user`, `hermes_home`, the Docker agent home, workspace path,
+  supervisor log/process key, or agent process env key is unsafe or outside
+  the canonical Docker agent-home namespace before helper, broker, or
+  process-helper request
+  (`python/arclink_docker_agent_supervisor.py`,
+  `tests/test_arclink_docker.py`).
+  The `GAP-019-M` repair adds incident controls to the authority inventory for
+  `deployment-exec-broker`, `gateway-exec-broker`,
+  `agent-supervisor-broker`, `operator-upgrade-broker`, `migration-capture-helper`,
+  `agent-user-helper`, and `agent-process-helper`.
+  Each residual row now names monitored signals, status/log/audit locations,
+  triage steps, fail-closed actions, and the `GAP-019` escalation boundary; the
+  Docker/security runbooks render the same response path, and Docker tests fail
+  if a writeable socket or explicit root row lacks those controls
+  (`config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`,
+  `docs/docker.md`, `docs/arclink/operations-runbook.md`,
+  `docs/arclink/data-safety.md`).
+  The `GAP-019-N` repair removes root from `control-action-worker` and adds
+  `migration-capture-helper`. Docker-mode non-dry-run Pod migration capture
+  still requires `ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE=1`, and it
+  now also fails closed without `ARCLINK_MIGRATION_CAPTURE_HELPER_URL` and
+  token. The helper rejects raw command fields, reconstructs only `capture` and
+  `materialize`, validates deployment id, prefix, migration id, source state
+  root, target state root, and `.migrations/<migration_id>` staging path, and
+  then performs the root file copy (`python/arclink_pod_migration.py`,
+  `python/arclink_migration_capture_helper.py`, `compose.yaml`,
+  `tests/test_arclink_pod_migration.py`,
+  `tests/test_arclink_action_worker.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AC` repair narrows the same helper's ambient boundary: the
+  Compose service no longer inherits broad `*arclink-env`, keeps only
+  `ARCLINK_STATE_ROOT_BASE` plus helper token/listener env, and helper
+  validation rejects source, target, or capture paths outside the configured
+  state-root base before `_copy_capture` or `_materialize_capture` can run
+  (`compose.yaml`, `python/arclink_migration_capture_helper.py`,
+  `config/docker-authority-inventory.json`,
+  `tests/test_arclink_pod_migration.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-O` repair removes direct Docker-mode user/home setup from
+  `agent-supervisor` and adds `agent-user-helper`. Docker-mode user/home setup
+  now fails closed without `ARCLINK_AGENT_USER_HELPER_URL` and token. The
+  helper rejects raw command fields, reconstructs only `ensure_user_home`,
+  validates agent id, Unix user, Docker agent-home root, agent home, Hermes
+  home, and workspace path, and then performs container-local user creation,
+  persistent numeric uid/gid assignment, and agent-home ownership repair
+  (`python/arclink_docker_agent_supervisor.py`,
+  `python/arclink_agent_user_helper.py`, `compose.yaml`,
+  `tests/test_arclink_docker.py`). The `GAP-019-P` repair removes explicit
+  root and setpriv process launching from `agent-supervisor` and adds
+  `agent-process-helper`. Docker-mode install, identity refresh, user-agent
+  refresh, cron, gateway, and dashboard process execution now fails closed
+  without `ARCLINK_AGENT_PROCESS_HELPER_URL` and token. The helper rejects raw
+  command fields, reconstructs only allowlisted typed operations, validates
+  agent id, Unix user, Docker agent-home root, agent home, Hermes home,
+  workspace path, uid/gid, env keys/canonical env values, and dashboard
+  backend fields, and owns the gateway/dashboard process handles
+  (`python/arclink_docker_agent_supervisor.py`,
+  `python/arclink_agent_process_helper.py`, `compose.yaml`,
+  `tests/test_arclink_docker.py`). The `GAP-019-Q` repair removes Docker's
+  default Linux capability set from `agent-user-helper` and gives it only
+  `CHOWN`, `DAC_OVERRIDE`, and `FOWNER` on top of `cap_drop: ALL`; tests now
+  distinguish default capabilities, full drops, and explicit add-backs so the
+  inventory cannot overclaim `all_dropped` when a helper has `cap_add`
+  (`compose.yaml`, `config/docker-authority-inventory.json`,
+  `tests/test_arclink_docker.py`). The `GAP-019-AE` repair removes ambient
+  `PATH` lookup from the root account/ownership command path in
+  `agent-user-helper`: it preflights `/usr/sbin/groupadd`,
+  `/usr/sbin/useradd`, and `/usr/bin/chown` before uid/gid assignment writes,
+  directory creation, account commands, or recursive ownership repair
+  (`python/arclink_agent_user_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-R` repair keeps validated
+  agent process env values out of setpriv argv and
+  `state/docker/agent-process-helper/*.log` startup command lines by passing
+  env through subprocess `env=`, and strips supervisor broker/helper tokens
+  from per-agent process specs before dispatch
+  (`python/arclink_agent_process_helper.py`,
+  `python/arclink_docker_agent_supervisor.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-S` repair confines request-scoped root paths inside the root
+  helpers. `agent-user-helper` rejects configured
+  `ARCLINK_DOCKER_AGENT_HOME_ROOT` mismatches before uid/gid assignment writes,
+  directory creation, account commands, or recursive ownership repair.
+  `agent-process-helper` rejects configured Docker agent-home, repo,
+  private-state, state, and runtime root mismatches before helper log creation,
+  `subprocess.run`, or `subprocess.Popen`
+  (`python/arclink_agent_user_helper.py`,
+  `python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AN` repair rejects root agent-helper symlink escapes: both
+  helpers now keep the agent home, Hermes home, and workspace lexically
+  canonical and compare their resolved targets with the expected canonical
+  child target before uid/gid assignment writes, account commands, recursive
+  chown, helper log creation, `subprocess.run`, or `subprocess.Popen`
+  (`python/arclink_agent_user_helper.py`,
+  `python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AO` repair closes the next process-helper log path escape:
+  `agent-process-helper` now verifies that
+  `state/docker/agent-process-helper` is the canonical non-symlink helper log
+  directory, and that each helper log file resolves to its exact canonical
+  child path, before opening logs, `subprocess.run`, or `subprocess.Popen`
+  (`python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-T` repair removes unnecessary write access to the live host repo
+  from Docker non-broker services. `agent-process-helper`, `agent-supervisor`,
+  and `curator-refresh` now mount the host repo read-only for script reads,
+  refresh, detection, and typed process execution. The `GAP-019-U` repair moves
+  the writable host repo exception and the `run_operator_upgrade`/
+  `run_pin_upgrade` operations out of `agent-supervisor-broker` and into a
+  dedicated `operator-upgrade-broker`
+  (`compose.yaml`, `config/docker-authority-inventory.json`,
+  `python/arclink_agent_supervisor_broker.py`,
+  `python/arclink_operator_upgrade_broker.py`, `tests/test_arclink_docker.py`).
+  The `GAP-019-V` repair removes the remaining read-only Docker socket
+  discovery boundary from `control-ingress`. Traefik now uses the source-owned
+  static file provider config at `config/traefik-control.yaml` for
+  `/notion/webhook`, `/v1`, `/api`, and `/`, and no longer enables the Docker
+  provider or mounts `/var/run/docker.sock`
+  (`compose.yaml`, `config/traefik-control.yaml`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-W` repair makes the `agent-process-helper` reject ArcLink
+  broker/helper/control token env keys, including future `ARCLINK_*_TOKEN`
+  names, before log creation, `subprocess.run`, or `subprocess.Popen`; the
+  supervisor denylist is aligned so normal dispatch strips the same token
+  family before helper calls
+  (`python/arclink_agent_process_helper.py`,
+  `python/arclink_docker_agent_supervisor.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AM` repair closes the next process-helper env injection slice:
+  `agent-process-helper` now rejects dynamic-loader `LD_*`, Python
+  path/startup, shell startup, Git/SSH command-steering, and secret-looking
+  `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, or `*_KEY` process env keys before log
+  creation, `subprocess.run`, or `subprocess.Popen`; `agent-supervisor` strips
+  known ArcLink helper tokens and fails closed on the same unapproved non-token
+  key family before helper payload construction
+  (`python/arclink_agent_process_helper.py`,
+  `python/arclink_docker_agent_supervisor.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AD` repair hardens the same root helper's pre-drop executable
+  lookup boundary: request env `PATH` must match `SAFE_PATH`, `setpriv` is
+  invoked as `/usr/bin/setpriv` for both `run_once` and `ensure_processes`, and
+  identity setup fails closed before `subprocess.run` unless the pinned runtime
+  venv Python exists under `RUNTIME_DIR`
+  (`python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-X` repair narrows the `agent-process-helper` Compose boundary:
+  the root helper no longer inherits broad `*arclink-env`, no longer receives
+  app/billing/bot/provider/memory-synthesis env keys at service startup, and no
+  longer mounts the global `arclink-priv/secrets/container` directory. It keeps
+  only explicit non-secret Docker mode/path validation env, token/listener keys,
+  config/state/vault mounts, and the read-only host repo bind needed for
+  allowlisted agent commands (`compose.yaml`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-Y` repair narrows the `gateway-exec-broker` Compose boundary:
+  the public-Agent gateway exec broker no longer inherits broad
+  `*arclink-env`, no longer receives unrelated app/billing/bot/provider/ingress
+  env keys at service startup, and no longer mounts broad
+  `arclink-priv/config`, `arclink-priv/state`, or
+  `arclink-priv/secrets/container`. It keeps only
+  `ARCLINK_STATE_ROOT_BASE`, broker token/listener env, the deployment
+  state-root bind needed for rendered Compose fallback files, and the writeable
+  Docker socket for allowlisted `hermes-gateway` exec (`compose.yaml`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-Z` repair narrows the `agent-supervisor-broker` Compose boundary:
+  the dashboard sidecar broker no longer inherits broad `*arclink-env`, no longer
+  receives unrelated app/billing/bot/provider/ingress env keys at service
+  startup, and no longer mounts broad `arclink-priv/config`,
+  `arclink-priv/state`, or `arclink-priv/secrets/container`. It keeps only
+  Docker binary/image, repo path, host/container private path metadata, broker
+  token/listener env, and the writeable Docker socket for allowlisted dashboard
+  network/proxy sidecar operations (`compose.yaml`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AF` repair hardens the same broker's Docker CLI executable
+  lookup: `ARCLINK_DOCKER_BINARY` must be `docker` or a trusted absolute Docker
+  CLI path, and unsafe, missing, non-executable, or non-Docker values fail
+  closed before dashboard network/proxy subprocesses run
+  (`python/arclink_agent_supervisor_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AZ` repair hardens that broker's dashboard sidecar private bind
+  roots: unsafe `ARCLINK_DOCKER_HOST_PRIV_DIR` and
+  `ARCLINK_DOCKER_CONTAINER_PRIV_DIR` values, including relative paths, `/`,
+  colon-bearing Docker volume specs, newline/carriage-return/NUL-bearing
+  strings, dot/dotdot path components, and non-canonical ArcLink private roots,
+  fail closed before proxy config hashing, Docker CLI lookup, Docker container
+  inspect, `docker run -v`, or a successful broker response
+  (`python/arclink_agent_supervisor_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AG` repair hardens the same executable-lookup class for
+  `deployment-exec-broker`: `ARCLINK_DOCKER_BINARY` must resolve to the trusted
+  Docker CLI before deployment Compose subprocesses run
+  (`python/arclink_deployment_exec_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AH` repair hardens the same executable-lookup class for
+  `gateway-exec-broker`: `ARCLINK_DOCKER_BINARY` must resolve to a trusted
+  Docker CLI before running-container discovery or public Agent gateway exec
+  subprocesses run, and a PATH-injected fake `docker` fails closed without
+  being invoked (`python/arclink_gateway_exec_broker.py`,
+  `python/arclink_notification_delivery.py`,
+  `config/docker-authority-inventory.json`,
+  `tests/test_arclink_docker.py`,
+  `tests/test_arclink_notification_delivery.py`).
+  The `GAP-019-AY` repair hardens the same broker's Compose fallback file
+  boundary: if a running `hermes-gateway` container is not found, fallback
+  `config/arclink.env` and `config/compose.yaml` must be exact non-symlink
+  regular readable files under the deployment state-root config directory
+  before `docker compose exec` dispatch or a successful broker response
+  (`python/arclink_gateway_exec_broker.py`,
+  `python/arclink_notification_delivery.py`,
+  `config/docker-authority-inventory.json`,
+  `tests/test_arclink_notification_delivery.py`,
+  `tests/test_arclink_docker.py`).
+  The `GAP-019-AI` repair hardens the same executable-lookup class for
+  `operator-upgrade-broker`: any preserved `ARCLINK_DOCKER_BINARY` must resolve
+  to a trusted Docker CLI before queued Docker-mode operator upgrade or
+  pin-upgrade child subprocesses run, and unsafe, missing, non-executable,
+  relative, non-Docker, or PATH-injected fake `docker` values fail closed
+  without being invoked (`python/arclink_operator_upgrade_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AJ` repair hardens `agent-process-helper` desired-process
+  reconciliation: gateway/dashboard processes now store a hash of the validated
+  setpriv command, Hermes-home cwd, and process env contract; a changed
+  dashboard backend port or env signature stops the stale process group before
+  replacement, identical specs do not churn, and shutdown escalates from
+  SIGTERM to SIGKILL before failing closed
+  (`python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AK` repair scopes the high-authority broker/helper request
+  surface in Compose: `deployment-exec-broker`, `migration-capture-helper`,
+  `agent-user-helper`, `agent-process-helper`, `agent-supervisor-broker`,
+  `operator-upgrade-broker`, and `gateway-exec-broker` no longer join the
+  default network. Each request lane uses an `internal: true` network with only
+  the legitimate caller services, and the process helper/operator-upgrade
+  broker keep separate single-service egress networks for outbound runtime or
+  upgrade work (`compose.yaml`, `config/docker-authority-inventory.json`,
+  `tests/test_arclink_docker.py`).
+  The `GAP-019-AL` repair adds a fail-closed acknowledgement gate to the same
+  seven services. `deployment-exec-broker`, `migration-capture-helper`,
+  `agent-user-helper`, `agent-process-helper`, `agent-supervisor-broker`,
+  `operator-upgrade-broker`, and `gateway-exec-broker` now receive
+  `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED` through Compose, and their
+  entrypoints plus direct request helpers reject missing, blank, false, or
+  non-`accepted` values before HTTP listener bind, request validation, Docker
+  subprocesses, root filesystem work, ownership changes, or agent process
+  spawning. Docker config generation writes the variable blank by default so
+  the operator must set the non-secret `accepted` value in private config after
+  reviewing the residual-risk boundary
+  (`python/arclink_boundary.py`, `compose.yaml`,
+  `bin/docker-entrypoint.sh`, `bin/arclink-docker.sh`, `bin/deploy.sh`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  This gate does not close `GAP-001`, `PG-UPGRADE`, `PG-PROVISION`,
+  `PG-BOTS`, `PG-HERMES`, or any credentialed live proof gate.
+  The `GAP-019-AP` repair makes direct/local execution of those same seven
+  broker/helper modules bind `127.0.0.1` by default. Compose still explicitly
+  sets each service-specific `ARCLINK_*_HOST` value to `0.0.0.0` for internal
+  request-network reachability, and healthchecks remain loopback-local
+  (`python/arclink_deployment_exec_broker.py`,
+  `python/arclink_migration_capture_helper.py`,
+  `python/arclink_agent_user_helper.py`,
+  `python/arclink_agent_process_helper.py`,
+  `python/arclink_agent_supervisor_broker.py`,
+  `python/arclink_operator_upgrade_broker.py`,
+  `python/arclink_gateway_exec_broker.py`, `compose.yaml`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AQ` repair narrows the `agent-supervisor` provisioner child
+  environment: `run_provisioner` now builds an explicit allowlist instead of
+  inheriting `os.environ.copy()`. The enrollment provisioner child keeps Docker
+  mode/path config, runtime roots, service URLs, and helper/broker values
+  needed for Docker enrollment and queued operator actions while excluding
+  unrelated payment, provider, bot, ingress, memory-synthesis, session, fleet,
+  Python path, and Git/SSH steering env keys
+  (`python/arclink_docker_agent_supervisor.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AR` repair confines Docker-mode dashboard backend host values
+  before both root dashboard process launches and dashboard auth-proxy sidecar
+  construction. `agent-process-helper` parses the dashboard backend host as an
+  IP literal and rejects wildcard, globally routable, multicast, malformed, or
+  non-IP values before helper log creation, desired-process signature work, or
+  `subprocess.Popen`; `agent-supervisor-broker` enforces the same
+  loopback-or-Docker-internal/private/link-local policy before Docker CLI
+  lookup or sidecar subprocess construction
+  (`python/arclink_agent_process_helper.py`,
+  `python/arclink_agent_supervisor_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AS` repair closes the next root helper path escape by rejecting
+  symlinked configured or requested Docker agent-home roots, including
+  `ARCLINK_DOCKER_AGENT_HOME_ROOT`, before root helper filesystem work,
+  helper log creation, `subprocess.run`, or `subprocess.Popen`
+  (`python/arclink_agent_user_helper.py`,
+  `python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-BA` repair closes the next `agent-user-helper` assignment-file
+  steering path by rejecting symlinked, directory, or non-regular
+  `.arclink-user-ids.json` and `.arclink-user-ids.json.tmp` paths before
+  uid/gid assignment reads or writes, account commands, agent-home directory
+  creation, or recursive chown. Assignment writes now use a canonical
+  preflighted temp file under the Docker agent-home root with exclusive
+  no-follow creation before `os.replace`
+  (`python/arclink_agent_user_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-BB` repair adds redacted rejected-request incident evidence to
+  `agent-process-helper`: rejected helper requests append one JSONL row under
+  `state/docker/agent-process-helper/rejections.jsonl` only when the configured
+  private root is safe. The row includes operation, safe agent id when present,
+  trusted-host acknowledgement state, error class, and a sanitized reason, and
+  excludes raw request bodies, env values, process args, private paths, tokens,
+  and stack traces. Accepted `run_once`, `ensure_processes`, and
+  `terminate_all` requests do not append rejection incidents
+  (`python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-BC` repair adds redacted rejected-request incident evidence to
+  `gateway-exec-broker`: rejected public Agent broker requests append one
+  JSONL row under
+  `ARCLINK_STATE_ROOT_BASE/_broker-incidents/gateway-exec-broker/rejections.jsonl`
+  only when the configured deployment state root is absolute, non-root,
+  existing, and non-symlinked. The row includes safe deployment id and
+  generated project name when available, trusted-host acknowledgement state,
+  error class, and a sanitized reason, and excludes raw request bodies, bridge
+  payload values, bot tokens, chat ids, user ids, message text, process args,
+  rendered config paths, private paths, and stack traces. Accepted broker
+  requests do not append rejection incidents
+  (`python/arclink_gateway_exec_broker.py`,
+  `config/docker-authority-inventory.json`,
+  `tests/test_arclink_notification_delivery.py`).
+  The `GAP-019-BD` repair extends redacted rejected-request incident evidence to
+  `deployment-exec-broker`, `migration-capture-helper`, `agent-user-helper`,
+  `agent-supervisor-broker`, and `operator-upgrade-broker`. Rejected raw-command
+  or validation failures append one JSONL row only when the configured incident
+  root is absolute, existing, non-root, and non-symlinked. The rows contain
+  service/event, trusted-host acknowledgement state, error class, sanitized
+  reason/message, and safe operation/deployment/migration/agent/item-count
+  metadata when available; they exclude raw request bodies, `cmd`/`command`/
+  `args` values, process args, payload values, private paths, tokens, chat ids,
+  user ids, message text, secret-looking values, and stack traces. The dashboard
+  broker receives only a narrow private-state incident mount for this purpose
+  (`python/arclink_rejection_incidents.py`,
+  `python/arclink_deployment_exec_broker.py`,
+  `python/arclink_migration_capture_helper.py`,
+  `python/arclink_agent_user_helper.py`,
+  `python/arclink_agent_supervisor_broker.py`,
+  `python/arclink_operator_upgrade_broker.py`, `compose.yaml`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AT` repair closes the matching process-helper configured-root
+  symlink escape by rejecting symlinked configured or requested repo,
+  private-state, state, and runtime roots, including `ARCLINK_REPO_DIR`,
+  `ARCLINK_PRIV_DIR`, `ARCLINK_DOCKER_CONTAINER_PRIV_DIR`, request
+  `state_dir`, and `RUNTIME_DIR`, before helper log creation,
+  `subprocess.run`, or `subprocess.Popen`
+  (`python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AU` repair adds fixed repo command target preflight to the same
+  helper: `bin/install-agent-user-services.sh`, `bin/hermes-shell.sh`,
+  `bin/user-agent-refresh.sh`, and
+  `python/arclink_headless_hermes_setup.py` must be canonical repo-child
+  targets, regular readable files, and shell command targets must be
+  executable before helper log creation, `subprocess.run`, or
+  `subprocess.Popen`
+  (`python/arclink_agent_process_helper.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AV` repair adds matching fixed script target preflight to the
+  operator-upgrade broker: `deploy.sh` and `bin/component-upgrade.sh` must be
+  exact non-symlink repo-child targets, regular readable files, and executable
+  before private operator log creation, `_run_logged_command`, or
+  `subprocess.run`
+  (`python/arclink_operator_upgrade_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  The `GAP-019-AW` repair adds upstream deploy-key path confinement to the same
+  broker: non-empty `ARCLINK_UPSTREAM_DEPLOY_KEY_PATH` and
+  `ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE` values must be absolute non-symlink paths
+  under `ARCLINK_DOCKER_HOST_PRIV_DIR` before child env construction, private
+  operator log creation, `_run_logged_command`, or `subprocess.run`
+  (`python/arclink_operator_upgrade_broker.py`,
+  `config/docker-authority-inventory.json`, `tests/test_arclink_docker.py`).
+  Data safety documents these as trusted-host services.
+- Missing proof/tests: deeper least-privilege implementation for the root
+  `agent-process-helper` process-runner boundary after service env/secret-mount
+  narrowing, pre-drop executable lookup hardening, desired-process
+  signature restart/bounded shutdown, dashboard backend host confinement,
+  configured agent-home root symlink rejection, configured-root symlink
+  rejection, fixed command target preflight, operator-upgrade fixed script
+  target preflight, operator-upgrade upstream deploy-key path confinement, and
+  rejected-request incident evidence, and the fail-closed trusted-host
+  acknowledgement gate,
+  stronger isolation or an
+  accepted bounded opt-in policy for the root `migration-capture-helper`,
+  stronger isolation or accepted residual risk for the root `agent-user-helper`,
+  residual-risk decisions for the deployment, gateway, agent-supervisor, and
+  operator-upgrade brokers including the gateway broker's writeable Docker
+  socket and the operator-upgrade writable host repo exception, live/runtime
+  alert integration beyond the
+  source-owned status/audit/log controls, and an operator risk decision for the
+  residual host-equivalent Docker socket/root boundary.
+- Impact: a bug in public bot delivery or a remaining socket-bearing helper
+  could become host compromise in local-adapter deployments; a bug in the root
+  migration-capture helper can still compromise deployment/private state during
+  an approved migration window, a bug in the root agent-user helper can still
+  affect Docker agent homes, and a bug in the root agent-process helper can
+  still affect allowlisted Docker agent command execution even though env
+  values are no longer exposed through helper argv/startup logs and ArcLink
+  control-token env keys fail closed at the helper boundary, rejected helper
+  requests now leave a redacted local incident trail, the helper no
+  longer receives broad Compose app env or the global container-secrets mount,
+  request `PATH` can no longer steer root lookup for `setpriv`, and identity
+  setup no longer falls back to bare `python3`; changed gateway/dashboard
+  command, cwd, dashboard backend port, or validated env contracts no longer
+  leave stale long-running process handles silently active,
+  the agent-user helper no longer uses ambient `PATH` to find `groupadd`,
+  `useradd`, or `chown`,
+  the gateway broker no longer receives broad Compose app env or broad private
+  config/state/secrets mounts and can no longer use a PATH-injected fake
+  `docker`, `bash`, or another non-Docker executable for running-container
+  discovery or public Agent gateway exec, and rejected raw-command,
+  project-name mismatch, unsupported-platform, or trusted-host acknowledgement
+  gateway broker requests now leave a redacted local incident trail under the
+  configured deployment state root when that root is safe;
+  remaining high-authority broker/helper raw-command rejections now leave
+  equivalent redacted local incident trails under scoped state roots or the
+  dashboard broker's narrow incident mount when those roots are safe;
+  the dashboard sidecar broker no longer
+  receives broad Compose app env or broad private config/state/secrets mounts
+  and can no longer use `ARCLINK_DOCKER_BINARY` to dispatch dashboard Docker
+  operations through `bash` or another non-Docker executable, and unsafe
+  `ARCLINK_DOCKER_HOST_PRIV_DIR` or `ARCLINK_DOCKER_CONTAINER_PRIV_DIR` values
+  can no longer steer the dashboard auth-proxy sidecar private-state `-v`
+  mount before Docker lookup or dispatch,
+  the deployment exec broker no longer receives broad Compose app env and can
+  no longer use `ARCLINK_DOCKER_BINARY` to dispatch deployment Compose
+  operations through `bash` or another non-Docker executable, and the
+  operator upgrade broker no longer receives broad Compose app env, broad
+  canonical private mounts, or full process env inheritance in its upgrade
+  subprocesses and can no longer use `ARCLINK_DOCKER_BINARY` to dispatch
+  queued upgrade children through `bash`, a relative path, a PATH-injected fake
+  `docker`, or another non-Docker executable. Missing or false
+  `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED` now stops all seven
+  high-authority services before they bind or process direct requests, but an
+  accepted value is an acknowledgement of trusted-host residual risk rather
+  than tenant-safe isolation.
+  The process helper also rejects dynamic-loader, Python path/startup, shell
+  startup, Git/SSH command-steering, and secret-looking process env keys before
+  helper logs or subprocesses, while the supervisor fails closed before helper
+  payload construction on the same unapproved non-token key family. The root
+  agent helpers now reject symlink-escaped agent home, Hermes home, and
+  workspace paths before root filesystem work, helper logs, or subprocess
+  execution, and `agent-process-helper` now rejects symlink-escaped helper log
+  directories before log file creation or process execution. Direct/local
+  broker/helper execution now binds loopback by default rather than inheriting
+  an implicit `0.0.0.0` listener; Compose remains the explicit broad-bind
+  source for internal Docker request networks. The `agent-supervisor`
+  enrollment-provisioner child no longer inherits unrelated live secret-bearing
+  environment keys from the supervisor process. Dashboard backend hosts now
+  fail closed if they are wildcard, global, multicast, malformed, or non-IP
+  values before either the root process helper or dashboard broker constructs
+  a dashboard subprocess. Symlinked configured or requested Docker agent-home
+  roots now fail closed before the root agent helpers can write uid/gid
+  assignments, repair ownership, create helper logs, or start subprocesses.
+  Symlinked, directory, or non-regular `agent-user-helper` uid/gid assignment
+  files and temp files now fail closed before assignment writes, account
+  commands, agent-home directory creation, or recursive chown.
+  Missing, symlinked, directory, unreadable, or non-executable fixed repo
+  command targets now fail closed before `agent-process-helper` creates helper
+  logs or starts one-shot/gateway/dashboard subprocesses.
 - Owner/surface: platform security, Docker deployment.
-- Next repair: make the P0-grade mitigation code-level where practical:
-  minimize socket exposure, consider a Docker socket proxy, drop capabilities,
-  and narrow writer containers. Treat threat-model docs and health/audit alerts
-  as interim controls, not the whole fix.
+- Next repair: no current bounded unattended local helper split is identified
+  by `config/docker-authority-inventory.json`. Route closure through an
+  operator residual-risk decision, an explicitly authorized stronger isolation
+  design, or authorized live alert integration for the now-source-owned
+  incident signals. If the operator chooses stronger isolation, first split
+  that decision into a concrete new source/test repair row before editing.
+  Treat the current capability-drop, static allowlist, B2 review,
+  action-worker path guard, notification-delivery bridge command guard,
+  curator-refresh socket removal, control-provisioner executor preflight,
+  notification-delivery gateway exec broker, deployment exec broker,
+  action-worker socket removal, agent-supervisor dashboard broker split, and
+  queued operator-upgrade broker routing, root-capture opt-in guard, and
+  agent-supervisor metadata/path guard, plus the `GAP-019-M` incident-control
+  ledger, `GAP-019-N` migration-capture helper split, and `GAP-019-O`
+  agent-user helper split, `GAP-019-P` agent-process helper split, and
+  `GAP-019-Q` agent-user-helper capability narrowing, and `GAP-019-R`
+  process-helper argv/log env hardening, and `GAP-019-S` helper configured-root
+  confinement, `GAP-019-T` read-only non-broker host-repo binds,
+  `GAP-019-U` operator-upgrade broker split, and `GAP-019-V` static
+  `control-ingress` routes, and `GAP-019-W` process-helper control-token env
+  rejection, plus `GAP-019-AD` process-helper pre-drop executable lookup
+  hardening, plus `GAP-019-X`, `GAP-019-Y`, and `GAP-019-Z`
+  service-env/private-mount narrowing, plus `GAP-019-AA`
+  deployment-exec-broker service-env narrowing and `GAP-019-AB`
+  operator-upgrade-broker service-env/private-mount/child-env narrowing, plus
+  `GAP-019-AC` migration-capture-helper service-env/state-root confinement,
+  plus `GAP-019-AE` agent-user-helper root executable lookup hardening and
+  `GAP-019-AF` agent-supervisor-broker Docker CLI lookup hardening and
+  `GAP-019-AG` deployment-exec-broker Docker CLI lookup hardening and
+  `GAP-019-AH` gateway-exec-broker Docker CLI lookup hardening and
+  `GAP-019-AI` operator-upgrade-broker Docker CLI lookup hardening and
+  `GAP-019-AJ` process-helper desired-signature restart/bounded shutdown and
+  `GAP-019-AK` broker/helper internal Compose network scoping, `GAP-019-AL`
+  trusted-host acknowledgement gate, and `GAP-019-AM` process-helper
+  unapproved env key rejection, and `GAP-019-AN` root agent-helper symlink path
+  rejection, `GAP-019-AO` process-helper log-directory symlink rejection, and
+  `GAP-019-AP` direct-run loopback listener defaults, and `GAP-019-AQ`
+  agent-supervisor provisioner child-env allowlisting, `GAP-019-AR`
+  dashboard backend host confinement, and `GAP-019-AS` configured agent-home
+  root symlink rejection, and `GAP-019-AT` process-helper configured-root
+  symlink rejection, and `GAP-019-AU` process-helper fixed command target
+  preflight, and `GAP-019-AV` operator-upgrade broker fixed script target
+  preflight, and `GAP-019-AW` operator-upgrade broker upstream deploy-key path
+  confinement, and `GAP-019-AX` deployment-exec broker rendered config-file
+  preflight, and `GAP-019-AY` gateway-exec broker fallback config-file
+  preflight, and `GAP-019-AZ` agent-supervisor broker private-bind-root
+  preflight, and `GAP-019-BD` remaining high-authority broker/helper
+  rejected-request incident evidence
+  as interim hardening, not closure of the P0
+  trusted-host risk.
 
 ### GAP-020 - Backup and disaster recovery are documented but not proofed
 
 - Severity: P2
-- Status: proof-gated, ops-gap
+- Status: partial, proof-gated, ops-gap
 - Journey joints: `J-26`, `J-27`
 - Proof gates: `PG-BACKUP`
 - Joint: restore confidence after data loss or migration
 - Expected: backup docs map to automated or periodically executed restore
   evidence.
 - Actual evidence: backup docs list backup targets, restore steps, retention,
-  and a periodic staging restore expectation (`docs/arclink/backup-restore.md:3-77`).
-  The audit found docs and scripts, but no source-level evidence of an executed
-  restore drill for Control Node plus one ArcPod.
+  a local no-secret restore-smoke command, and a periodic staging restore
+  expectation (`docs/arclink/backup-restore.md`). `bin/arclink-restore-smoke.sh`
+  restores a local shared or agent-home backup artifact into a temp/provided
+  directory, rejects remote GitHub/SSH sources, avoids Docker/systemd/deploy
+  mutation, validates shared layout and SQLite quick-checks when present, and
+  rejects agent-home artifacts that contain `secrets/` or `logs/`. Focused
+  regression tests cover shared local git snapshots, remote-source rejection,
+  and agent-home backup artifacts produced by `bin/backup-agent-home.sh`
+  (`tests/test_backup_git_regressions.py`,
+  `tests/test_agent_backup_regressions.py`).
 - Missing proof/tests: staging restore ledger, restored health output, restored
-  dashboard load, restored deployment stack health.
+  dashboard load, restored deployment stack health, and live restore of at
+  least one ArcPod state stack.
 - Impact: backup existence does not prove recoverability.
 - Owner/surface: operations, backup/restore.
-- Next repair: add a no-secret restore-smoke harness and require a dated staging
-  restore evidence artifact before production launch.
+- Next repair: run authorized `PG-BACKUP` staging restore proof and preserve a
+  dated evidence artifact before production launch.
 
 ### GAP-021 - Cloud provider fleet creation remains proof-gated
 
@@ -602,14 +1470,22 @@ corresponding truth or contract test passes.
   exist, but live provider creation, SSH wait, and join proof require explicit
   Operator authorization (`docs/arclink/fleet-operator-runbook.md:94-119`).
   Production runbook says missing provider tokens fail closed
-  (`docs/arclink/control-node-production-runbook.md:133-158`).
-- Missing proof/tests: authorized provider create/join/probe/drain/remove proof
-  for each supported provider.
+  (`docs/arclink/control-node-production-runbook.md:133-158`). Local no-secret
+  lifecycle tests now cover Hetzner and Linode create idempotency, duplicate
+  hostname refusal, probe handoff, drain-before-destroy, provider delete, and
+  destroy replay with fake clients
+  (`tests/test_arclink_inventory.py`,
+  `tests/test_arclink_inventory_hetzner.py`,
+  `tests/test_arclink_inventory_linode.py`,
+  `tests/test_arclink_fleet_inventory_worker.py`).
+- Missing proof/tests: authorized live provider create/join/probe/drain/remove
+  proof for each supported provider.
 - Impact: Scale/Federation claims that depend on remote capacity remain
   source-level only.
 - Owner/surface: fleet inventory, provider adapters.
-- Next repair: run one scratch-worker lifecycle per provider and preserve
-  redacted evidence.
+- Next repair: run one authorized scratch-worker lifecycle per provider with
+  real provider APIs, SSH wait, worker join, health probe, drain/remove, and
+  destroy evidence preserved in redacted proof artifacts.
 
 ### GAP-022 - Crew Training live LLM generation is proof-gated
 
@@ -671,10 +1547,10 @@ corresponding truth or contract test passes.
 - Next repair: choose self-service or operator-only, then make dashboard and
   Raven copy unambiguous.
 
-### GAP-025 - Broad local Python suite is not green
+### GAP-025 - Broad local Python suite is green
 
 - Severity: P1
-- Status: test-gap, ops-gap
+- Status: real
 - Journey joints: `J-03`, `J-15`, `J-18`, `J-19`, `J-21`, `J-22`, `J-26`, `J-27`, `J-28`
 - Joint: local release confidence for the source-grounded journey and gap atlas
 - Expected: the documentation handoff should not imply broad local validation is
@@ -687,28 +1563,153 @@ corresponding truth or contract test passes.
   Notion onboarding/CLI, plugin install and linked-root behavior, repo sync,
   backup regressions, Curator bootstrap, deploy/health shell regressions,
   vault layout/symlink/watch, provider pins, user-agent refresh, and runtime
-  access tests.
-- Missing proof/tests: a triage ledger that separates environment-coupled
-  failures from stale tests and true regressions, followed by a green broad
-  no-secret suite or an explicit release-approved quarantine list.
-- Impact: the journey and gap docs can still be useful as source-grounded
-  planning artifacts, but the checkout must not be described as broadly
-  regression-clean. Some failing clusters touch surfaces the atlas documents as
-  locally `real`, so they must be rechecked before those claims are used for
-  release readiness.
+  access tests. First triage update: the Discord/Telegram public-bot adapter
+  contract cluster was stale test expectation against the current Raven
+  direct-package onboarding flow; `tests/test_arclink_telegram.py` and
+  `tests/test_arclink_discord.py` now match the already-passing core
+  `tests/test_arclink_public_bots.py` contract. Second triage update: the
+  focused Notion onboarding/CLI cluster, plugins/workspace cluster, and
+  vault/repo/backup cluster pass locally; the deploy/health shell cluster now
+  passes after repairing a stale Notion SSOT prompt vocabulary expectation; and
+  the hosted OpenAPI proof-token contract from `GAP-008` is locally closed.
+  Final triage update: stale test isolation leaks in auto-provision,
+  Nextcloud, notification delivery, pin-upgrade, and enrollment-provisioner
+  tests were repaired; stale sovereign handoff copy assertions were aligned
+  with the current Raven/Helm phrasing; and the uncapped broad no-secret suite
+  stayed green after the `GAP-019-G` local repair on 2026-05-21 with
+  `1225 passed, 6 skipped`, and stayed green after the `GAP-019-H` local
+  repair on 2026-05-21 with `1226 passed, 6 skipped`, and stayed green after
+  the `GAP-019-I` local repair on 2026-05-21 with `1227 passed, 6 skipped`,
+  and stayed green after the `GAP-019-J` local repair on 2026-05-21 with
+  `1231 passed, 6 skipped`, and stayed green after the `GAP-019-K` local
+  repair on 2026-05-21 with `1234 passed, 6 skipped`, and stayed green after
+  the `GAP-019-L` local repair on 2026-05-21 with
+  `1235 passed, 6 skipped`, and stayed green after the `GAP-019-M` local repair
+  on 2026-05-21 with `1235 passed, 6 skipped`, and stayed green after the
+  `GAP-010` local web repair and evidence-doc update on 2026-05-21 with
+  1235 passed, 6 skipped, and 81 warnings in 62.56s, and stayed green after
+  the `GAP-013-B` local backup write-check boundary repair on 2026-05-21 with
+  1241 passed, 6 skipped, and 81 warnings in 62.78s, and stayed green after
+  the `GAP-013-C` dashboard backup UX repair on 2026-05-21 with 1241 passed,
+  6 skipped, and 81 warnings in 62.82s, and stayed green after the `GAP-020`
+  local restore-smoke repair on 2026-05-21 with 1243 passed, 6 skipped, and
+  81 warnings in 62.56s, and stayed green after the `GAP-015-B` local share
+  retry repair on 2026-05-21 with 1247 passed, 6 skipped, and 81 warnings in
+  63.12s, and stayed green after the `GAP-019-N` migration-capture helper split
+  on 2026-05-21 with 1251 passed, 6 skipped, and 81 warnings in 63.42s, and
+  stayed green after the `GAP-019-O` agent-user helper split on 2026-05-21 with
+  1253 passed, 6 skipped, and 81 warnings in 63.09s, and stayed green after
+  the `GAP-019-P` agent-process helper split on 2026-05-22 with 1255 passed,
+  6 skipped, and 81 warnings in 62.87s, and stayed green after the
+  `GAP-019-Q` agent-user-helper capability narrowing on 2026-05-22 with
+  1256 passed, 6 skipped, and 81 warnings in 63.05s, and stayed green after
+  the `GAP-019-R` agent-process-helper env exposure hardening on 2026-05-22
+  with 1258 passed, 6 skipped, and 81 warnings in 62.66s, and stayed green
+  after the `GAP-019-S` helper configured-root confinement on 2026-05-22 with
+  1260 passed, 6 skipped, and 81 warnings in 63.01s, and stayed green after
+  the `GAP-019-T` read-only agent host-repo bind repair on 2026-05-22 with
+  1260 passed, 6 skipped, and 81 warnings in 63.26s, and stayed green after
+  the `GAP-019-U` operator-upgrade broker split on 2026-05-22 with 1260
+  passed, 6 skipped, and 81 warnings in 63.74s, and stayed green after the
+  `GAP-019-V` static control-ingress route repair on 2026-05-22 with 1262
+  passed, 6 skipped, and 81 warnings in 63.09s, and stayed green after the
+  `GAP-019-W` process-helper control-token env rejection repair on 2026-05-22
+  with 1262 passed, 6 skipped, and 81 warnings in 63.36s, and stayed green
+  after the `GAP-019-X` process-helper service env/secret-mount repair on
+  2026-05-22 with 1263 passed, 6 skipped, and 81 warnings in 63.01s, and
+  stayed green after the `GAP-019-Y` gateway-exec-broker service
+  env/private-mount repair on 2026-05-22 with 1264 passed, 6 skipped, and
+  81 warnings in 62.92s, and stayed green after the `GAP-019-Z`
+  agent-supervisor-broker service env/private-mount repair on 2026-05-22 with
+  1265 passed, 6 skipped, and 81 warnings in 62.94s, and stayed green after
+  the `GAP-019-AB` operator-upgrade-broker service/private-mount/child-env
+  repair on 2026-05-22 with 1267 passed, 6 skipped, and 81 warnings in 63.35s,
+  and stayed green after the `GAP-019-AC` migration-capture-helper service-env
+  and configured state-root confinement repair on 2026-05-22 with 1269 passed,
+  6 skipped, and 81 warnings in 63.45s, and stayed green after the
+  `GAP-019-AD` agent-process-helper pre-drop executable lookup repair on
+  2026-05-22 with 1269 passed, 6 skipped, and 81 warnings in 62.86s, and
+  stayed green after the `GAP-019-AE` agent-user-helper root executable lookup
+  repair on 2026-05-22 with 1270 passed, 6 skipped, and 81 warnings in 63.07s,
+  and stayed green after the `GAP-019-AF` agent-supervisor-broker Docker CLI
+  lookup repair on 2026-05-22 with 1271 passed, 6 skipped, and 81 warnings in
+  63.26s, and stayed green after the `GAP-019-AG`
+  deployment-exec-broker Docker CLI lookup repair on 2026-05-22 with 1272
+  passed, 6 skipped, and 81 warnings in 63.92s, and stayed green after the
+  `GAP-019-AH` gateway-exec-broker Docker CLI lookup repair on 2026-05-22 with
+  1273 passed, 6 skipped, and 81 warnings in 63.24s, and stayed green after
+  the `GAP-019-AI` operator-upgrade-broker Docker CLI lookup repair on
+  2026-05-22 with 1274 passed, 6 skipped, and 81 warnings in 63.24s, and
+  stayed green after the `GAP-019-AJ` process-helper desired-signature restart
+  and bounded shutdown repair on 2026-05-22 with 1275 passed, 6 skipped, and
+  81 warnings in 63.38s, and stayed green after the `GAP-021-A` no-secret
+  cloud-provider lifecycle harness on 2026-05-22 with 1280 passed, 6 skipped,
+  and 81 warnings in 63.38s, and stayed green after the `GAP-019-AM`
+  process-helper unapproved env key rejection repair on 2026-05-22 with
+  1285 passed, 6 skipped, and 81 warnings in 63.57s, and stayed green after
+  the `GAP-019-AN` root agent-helper symlink path rejection repair on
+  2026-05-22 with 1286 passed, 6 skipped, and 81 warnings in 63.69s, and
+  stayed green after the `GAP-019-AO` process-helper log-directory symlink
+  rejection repair on 2026-05-22 with 1287 passed, 6 skipped, and 81 warnings
+  in 63.35s, and stayed green after the `GAP-019-AP` direct-run loopback
+  listener default repair on 2026-05-23 with 1288 passed, 6 skipped, and
+  81 warnings in 63.51s, and stayed green after the `GAP-019-AQ`
+  agent-supervisor provisioner child-env allowlist repair on 2026-05-23 with
+  1289 passed, 6 skipped, and 81 warnings in 63.99s, and stayed green after
+  the `GAP-019-AR` dashboard backend host confinement repair on 2026-05-23
+  with 1291 passed, 6 skipped, and 81 warnings in 63.48s, and stayed green
+  after the `GAP-019-AS` configured agent-home root symlink rejection repair on
+  2026-05-23 with 1292 passed, 6 skipped, and 81 warnings in 63.10s, and
+  stayed green after the `GAP-019-AT` process-helper configured-root symlink
+  rejection repair on 2026-05-23 with 1293 passed, 6 skipped, and 81 warnings
+  in 63.81s, and stayed green after the `GAP-014-B` authenticated Drive/Code
+  share-request broker handoff on 2026-05-23 with 1294 passed, 6 skipped, and
+  81 warnings in 63.55s, and stayed green after the `GAP-014-C` hosted
+  Request Share broker repair on 2026-05-23 with 1295 passed, 6 skipped, and
+  81 warnings in 63.99s, and stayed green after the `GAP-019-AU`
+  process-helper fixed command target preflight repair on 2026-05-23 with
+  1296 passed, 6 skipped, and 81 warnings in 63.38s, and stayed green after
+  the `GAP-019-AV` operator-upgrade broker fixed script target preflight repair
+  on 2026-05-23 with 1297 passed, 6 skipped, and 81 warnings in 63.76s, and
+  stayed green after the `GAP-019-AW` operator-upgrade broker upstream
+  deploy-key path confinement repair on 2026-05-23 with 1298 passed, 6 skipped,
+  and 81 warnings in 64.39s, and stayed green after the `GAP-019-AX`
+  deployment-exec broker rendered config-file preflight repair on 2026-05-23
+  with 1299 passed, 6 skipped, and 81 warnings in 63.66s, and stayed green
+  after the `GAP-019-AY` gateway-exec broker fallback config-file preflight
+  repair on 2026-05-23 with 1300 passed, 6 skipped, and 81 warnings in
+  63.86s, and stayed green after the `GAP-019-AZ` agent-supervisor broker
+  private-bind-root preflight repair on 2026-05-23 with 1301 passed, 6 skipped,
+  and 81 warnings in 63.88s, and stayed green after the `GAP-019-BA`
+  agent-user-helper assignment-file preflight repair on 2026-05-23 with 1302
+  passed, 6 skipped, and 81 warnings in 64.00s, and stayed green after the
+  `GAP-019-BB` agent-process-helper rejected-request incident repair on
+  2026-05-23 with 1303 passed, 6 skipped, and 81 warnings in 63.59s, and
+  stayed green after the `GAP-019-BC` gateway-exec-broker rejected-request
+  incident repair on 2026-05-23 with 1304 passed, 6 skipped, and 81 warnings
+  in 63.51s, and stayed green after the `GAP-019-BD` remaining
+  broker/helper rejected-request incident repair on 2026-05-23 with 1305
+  passed, 6 skipped, and 81 warnings in 64.22s. A 2026-05-26 lint-phase
+  adversarial recheck initially caught one local regression in the
+  `agent-process-helper` rejection-incident path when only `ARCLINK_PRIV_DIR`
+  was configured; `python/arclink_rejection_incidents.py` was repaired, the
+  focused Docker incident tests passed, and the broad suite rerun passed with
+  1305 passed, 6 skipped, and 81 warnings in 64.08s.
+- Missing proof/tests: none for the broad no-secret local Python suite. This
+  does not close live proof gates or web/Node validation.
+- Impact: the checkout may now be described as broad Python regression-clean for
+  the current public repository state, while live/external claims remain gated.
 - Owner/surface: release validation, CI/preflight, affected owners from each
   failure cluster.
-- Next repair: run a dedicated full-suite triage pass, start with the failures
-  in public bot onboarding, deploy/health shell paths, plugins, repo sync,
-  backup, vault, and Notion onboarding, then update this row with closed,
-  quarantined, or newly split gap IDs.
+- Next repair: rerun `python3 -m pytest -q tests` after each future source/test
+  slice; reopen this row or split a new gap if broad validation regresses.
 
 ## Not Gaps / Already Real
 
 These surfaces were checked and found covered at the source/local level. They
-still may have separate live proof gates above. After `GAP-025`, do not treat
-this section as a broad release-green claim; it records source/local evidence
-that must be reconciled with the current full-suite failures before launch.
+still may have separate live proof gates above. `GAP-025` is locally closed by
+the 2026-05-23 broad no-secret Python suite, but this section is not live launch
+certification.
 
 - Admin login ignores client-asserted MFA. Hosted login passes
   `mfa_verified=False` regardless of request body
@@ -782,7 +1783,15 @@ that must be reconciled with the current full-suite failures before launch.
   (`python/arclink_hosted_api.py:2950-2957`,
   `python/arclink_hosted_api.py:3089-3106`), and focused tests cover admin login
   and onboarding 429 behavior without leaking the subject
-  (`tests/test_arclink_hosted_api.py:3861-3908`).
+  (`tests/test_arclink_hosted_api.py:3883-3944`).
+- `GAP-008` is closed at the local contract level. Dynamic and static OpenAPI
+  now require `claim_token` for `/api/v1/onboarding/claim-session` and
+  `cancel_token` for `/api/v1/onboarding/cancel`
+  (`python/arclink_hosted_api.py:2602-2622`,
+  `docs/openapi/arclink-v1.openapi.json:985-1017`,
+  `docs/openapi/arclink-v1.openapi.json:1061-1099`), and hosted API tests
+  assert both specs plus static/dynamic equality
+  (`tests/test_arclink_hosted_api.py:3845-3872`).
 
 ## Proof Gates
 
@@ -814,10 +1823,8 @@ proof and store redacted evidence outside tracked public docs.
   fallback?
 - Captain migration: operator-only forever, request-and-approve, or
   self-service with guardrails?
-- Browser share-link broker: native ArcLink broker or approved Nextcloud-backed
+- Browser share broker/adapter: native ArcLink broker or approved Nextcloud-backed
   adapter?
-- Linked copy/duplicate policy: align MCP response with the currently allowed
-  copy/duplicate into owned roots, or change behavior.
 - Backup automation: how much of per-pod backup key setup should be user-facing
   versus operator-only?
 - Destructive teardown: define who may request volume deletion and what
@@ -827,32 +1834,47 @@ proof and store redacted evidence outside tracked public docs.
 
 Focused local checks for code-owned gaps:
 
-- GAP-008: update dynamic and static OpenAPI, then extend
-  `tests/test_arclink_hosted_api.py` to assert `claim_token` and `cancel_token`
-  are required in schema and behavior.
-- GAP-009: add browser/unit coverage for onboarding token storage, cleanup after
-  claim/cancel, replay window, refresh, and multi-tab behavior.
-- GAP-010: add a web test for `?channel=telegram|discord` copy and request body,
-  then either remove the continuation promise or implement a real platform link.
-- GAP-011/GAP-012: add a documentation truth check that rejects stale prototype
-  phrases and requires matrix rows marked `real` to cite current code plus
-  test/proof before they are treated as `real` in this atlas.
-- GAP-013: add a dashboard/public-bot test that backup prep exposes pending
-  status and does not imply deploy-key verification.
-- GAP-014/GAP-015: add share UI/API tests for pending-owner-no-channel,
-  dashboard approval inbox, recipient accept, revoke, and no-reshare.
-- GAP-016: update MCP `copy_duplicate_policy` and add an assertion that docs,
-  MCP response, and plugin behavior agree.
-- GAP-018: add fake/local action-worker integration tests per supported action
-  type, including idempotency mismatch rejection and disabled worker readiness.
-- GAP-019: add a security review checklist and a CI/static assertion that any new
-  Docker socket mount has a trusted-boundary comment and runbook entry.
-- GAP-020/GAP-021: add no-secret dry-run/fixture restore and fleet provider
-  lifecycle harnesses; live variants stay skipped unless proof env gates are set.
-- GAP-025: rerun the broad no-secret Python suite, preserve the failure log,
-  classify each failing file as environment-coupled, stale expectation, or true
-  regression, and require a green rerun or an explicit quarantine file before a
-  future handoff says broad local validation passed.
+- GAP-008 is already closed locally; keep
+  `tests/test_arclink_hosted_api.py` assertions for dynamic and static
+  OpenAPI proof-token requirements in place.
+- GAP-009 is locally closed for the long-lived browser persistence bug; keep
+  the web static and Playwright storage/cleanup tests in place, and treat
+  HttpOnly server-bound proof handoff or cross-tab recovery as a future
+  product/security design if needed.
+- GAP-010 is locally closed: keep the static web smoke and mocked Playwright
+  tests proving `?channel=telegram|discord` remains web-scoped until a real
+  platform identity is linked.
+- GAP-011 is locally closed; keep the documentation truth check that rejects
+  stale prototype phrases. GAP-012 is locally closed; keep the
+  product-matrix truth checks that verify row totals, status labels,
+  source/proof anchors for `real` rows, and live/policy boundary language for
+  gated rows.
+- GAP-013: pending backup status and staged public-key request now have
+  Raven/dashboard/API/web tests; next local work is the GitHub
+  write-verification/activation rail, while restore proof remains `PG-BACKUP`.
+- GAP-014/GAP-015: dashboard/API share inbox coverage now exists for
+  pending-owner-no-channel, recipient waits, scoped owner/recipient actions,
+  retry-notification queueing after public channel repair, and a fail-closed
+  authenticated Drive/Code `Request Share` browser contract backed by the local
+  hosted broker route and deployment-scoped token hash. Next work is production
+  workspace/browser proof and live bot delivery proof under `PG-BOTS`.
+- GAP-016 is locally closed; keep the MCP response, managed-context recipe, and
+  Drive/Code Linked-root plugin assertions in the focused plugin/MCP cluster.
+- GAP-018: keep the source-owned admin action readiness matrix in sync when
+  actions move from pending to worker-backed, and add authorized live proof for
+  each smallest safe side-effect class before claiming production mutation.
+- GAP-019: keep the Docker authority inventory/static assertion in place so any
+  new Docker socket mount, explicit root service, changed writer boundary, or
+  Linux capability boundary, or broker/no-go decision must update the
+  trusted-boundary inventory and runbook entry; next work is stronger
+  broker/root-helper isolation or an explicit operator residual-risk decision
+  plus incident response integration.
+- GAP-020: local restore-smoke coverage now exists for shared and agent-home
+  backup artifacts; live staging restore proof remains `PG-BACKUP`.
+- GAP-021: add no-secret fleet provider lifecycle harnesses; live variants stay
+  skipped unless proof env gates are set.
+- GAP-025 is locally closed; rerun the broad no-secret Python suite after future
+  source/test slices and reopen or split a new gap on regression.
 
 Live proof checks must not run by default in CI and must skip cleanly without
 credentials.

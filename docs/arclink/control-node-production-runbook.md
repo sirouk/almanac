@@ -79,6 +79,23 @@ an action only proves live Docker, Stripe, Cloudflare, Tailscale, model-provider
 Discord, Telegram, or Notion mutation when the recorded executor result is
 live and succeeded.
 
+The admin dashboard/API publishes its action support matrix from
+`python/arclink_dashboard.py` so the UI, tests, and runbook share one readiness
+contract. Current local worker-backed actions are:
+
+| Action | Operation kind | Local contract | Live proof gate |
+| --- | --- | --- | --- |
+| `restart` | `docker_compose_lifecycle` | Queue audited lifecycle restart intent; fake adapter is non-live evidence only. | `PG-PROVISION` |
+| `reprovision` | `pod_migration` | Queue operator-only Pod migration/redeploy intent. | `PG-PROVISION` |
+| `dns_repair` | `cloudflare_dns_apply` | Queue DNS repair from deployment metadata or stored DNS rows. | `PG-INGRESS` |
+| `rotate_chutes_key` | `chutes_key_apply` | Queue provider-key rotation using secret references. | `PG-PROVIDER` |
+| `refund` / `cancel` | `stripe_action_apply` | Queue Stripe action after resolving target through the control DB. | `PG-STRIPE` |
+| `comp` | `control_db_comp` | Apply audited local entitlement comp; no external provider mutation is implied. | `LOCAL-CONTROL-DB` |
+
+Pending actions such as rollout, suspend, unsuspend, force resynth, and bot-key
+rotation stay visible as disabled entries with fail-closed reasons until worker
+dispatch and policy are implemented.
+
 Provisioning, provider actions, DNS changes, rollbacks, and admin actions use
 idempotency keys. Reusing a key with the same inputs should replay the recorded
 result; reusing a key with different inputs is an operator error and is rejected.

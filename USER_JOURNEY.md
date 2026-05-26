@@ -153,8 +153,8 @@ one coherent guide and one owned workspace, while the system joins many hard
 surfaces without asking the user to understand them. The equally important
 truth is that magic cannot be marketing fiction. Every place where the current
 repository still needs live proof, policy, or regression repair stays labeled
-in `GAPS.md`, including the broad local validation failure captured as
-`GAP-025`.
+in `GAPS.md`. The former broad local validation blocker, `GAP-025`, is locally
+closed only while the uncapped no-secret Python suite remains green.
 
 ## 1. Public Entry
 
@@ -180,9 +180,17 @@ and moves onboarding into the launch queue (`docs/arclink/raven-public-bot.md:7-
 
 ### Choice Points
 
-- Website: best for desktop and card/payment flow. The web onboarding state
-  persists locally so refresh and checkout cancel can resume
-  (`web/src/app/onboarding/page.tsx:85-122`).
+- Website: best for desktop and card/payment flow. The web onboarding page
+  keeps non-proof resume context locally, while browser claim/cancel proof
+  tokens are scoped to `sessionStorage` and cleared on success/cancel
+  (`web/src/app/onboarding/page.tsx:96-155`,
+  `web/src/app/checkout/success/page.tsx:73-99`,
+  `web/src/app/checkout/cancel/page.tsx:51-80`). If the page is opened with
+  `?channel=telegram` or `?channel=discord`, the channel is treated as an
+  unlinked preference while onboarding remains web-scoped until a real platform
+  identity is linked (`web/src/app/onboarding/page.tsx:83-94`,
+  `web/src/app/onboarding/page.tsx:163-177`,
+  `web/src/app/onboarding/page.tsx:293-335`).
 - Telegram: good for fast public command/button flow. Production Telegram must
   register `callback_query` updates and use the secret-token header
   (`docs/arclink/raven-public-bot.md:132-136`,
@@ -197,8 +205,10 @@ and moves onboarding into the launch queue (`docs/arclink/raven-public-bot.md:7-
 ### Dead Ends And Recovery
 
 If a web checkout is paused, the cancel page tries to mark the onboarding
-session cancelled using the stored cancel proof token, then returns the user to
-resume (`web/src/app/checkout/cancel/page.tsx:35-64`). If payment confirmation
+session cancelled using the session-scoped cancel proof token, clears proof
+material, and returns the user to resume without stale checkout state
+(`web/src/app/checkout/cancel/page.tsx:51-80`,
+`web/src/app/checkout/cancel/page.tsx:125-145`). If payment confirmation
 or provisioning takes too long, the success page says the page can be closed and
 Raven/dashboard status can continue (`web/src/app/checkout/success/page.tsx:203-210`).
 
@@ -207,8 +217,9 @@ pairing code. Pairing refuses to overwrite a channel already linked to a
 different account (`docs/arclink/raven-public-bot.md:103-108`,
 `python/arclink_public_bots.py:3518-3759`).
 
-Status: web and bot local flows are `real`; live Telegram/Discord
-delivery is `proof-gated`.
+Status: web and bot local flows are `real`, including the local
+preferred-channel copy boundary; live Telegram/Discord delivery is
+`proof-gated`.
 
 ## 2. Raven Onboarding And Control
 
@@ -346,8 +357,9 @@ placement/ports, and preserve volumes unless teardown metadata explicitly asks
 to remove them (`python/arclink_sovereign_worker.py:781-885`,
 `docs/arclink/control-node-production-runbook.md:240-252`).
 
-Status: render, idempotency, fake/local contracts, placement, and guarded
-failure paths are `real`; live Docker/SSH fleet apply, Cloudflare DNS,
+Status: render, idempotency, fake/local contracts, placement, guarded failure
+paths, and the no-secret Hetzner/Linode lifecycle harness are `real`; live
+Docker/SSH fleet apply, provider worker creation/join/destroy, Cloudflare DNS,
 Tailscale publication, and production health checks are `proof-gated`.
 
 ## 5. Credential Handoff
@@ -394,9 +406,11 @@ Core tabs:
 - Model: provider, model, credential state, budget, and provider settings marked
   `policy-question` (`web/src/app/dashboard/page.tsx:1120-1131`,
   `web/src/app/dashboard/page.tsx:1594-1685`).
-- Memory: qmd, memory synthesis, and Notion SSOT status, including live proof
-  badges (`web/src/app/dashboard/page.tsx:1140-1164`,
-  `web/src/app/dashboard/page.tsx:1541-1580`).
+- Memory: qmd, memory synthesis, and Notion SSOT status. Notion can reach
+  `local_metadata_verified` only as a local dashboard state; live shared-root
+  proof remains a separate `proof_gated` badge
+  (`web/src/app/dashboard/page.tsx:1140-1164`,
+  `web/src/app/dashboard/page.tsx:1541-1589`).
 - Security: session/CSRF facts and credential handoff
   (`web/src/app/dashboard/page.tsx:1173-1185`).
 - Comms, Wrapped, Bots, Crew, Support: account-specific communications,
@@ -478,9 +492,11 @@ underlying knowledge lineage (`docs/arclink/data-safety.md:101-103`).
 Raven's `/connect_notion` records setup intent and callback after credential
 handoff, but it does not verify Notion, install secrets, or claim user-owned
 OAuth (`python/arclink_public_bots.py:3759-3835`; see `GAP-007`). The Notion
-proof harness can prove shared-root readability and optionally brokered write
-preflight, but live mutation stays explicitly gated
-(`python/arclink_notion_ssot.py:1120-1205`).
+dashboard read model distinguishes setup intent, webhook state, local metadata,
+and live proof so a local setup cannot appear as bare `verified` before
+`PG-NOTION` (`python/arclink_dashboard.py:503-586`). The Notion proof harness can
+prove shared-root readability and optionally brokered write preflight, but live
+mutation stays explicitly gated (`python/arclink_notion_ssot.py:1120-1205`).
 
 Status: local MCP schemas, qmd/Notion rails, SSOT broker shape, and memory stubs
 are `real`; live Notion workspace permissions and user-owned OAuth are
@@ -490,8 +506,10 @@ are `real`; live Notion workspace permissions and user-owned OAuth are
 
 Drive, Code, and Terminal are native Hermes dashboard plugins. Local plugin
 tests verify sanitized status, Vault/Workspace/Linked roots, read-only Linked
-roots, no sharing capability from Linked, blocked writes to Linked, and
-Terminal sanitized workspace state (`tests/test_arclink_plugins.py:470-555`).
+roots, no sharing capability from Linked, blocked writes to Linked, a
+fail-closed authenticated Drive/Code `Request Share` browser contract with
+deployment-scoped broker payloads, and Terminal sanitized workspace state
+(`tests/test_arclink_plugins.py`).
 
 Accepted shares appear as a read-only `Linked` root in Drive and Code, cannot be
 reshared from that account, and may be copied/duplicated into the recipient's
@@ -503,18 +521,29 @@ resources, projection status, access mode, and no-reshare state
 Agents can request shares through `shares.request`, and Pod Comms can attach a
 share-grant reference through `pod_comms.share-file`. Raw files are not embedded
 in message bodies (`python/arclink_mcp_server.py:333-386`,
-`python/arclink_mcp_server.py:995-1032`,
-`python/arclink_mcp_server.py:1069-1088`).
+`python/arclink_mcp_server.py:1004-1042`,
+`python/arclink_mcp_server.py:1080-1105`). The share tool and managed-context
+recipe now state the same copy/duplicate rule as Drive and Code: accepted
+Linked resources are read-only, cannot be reshared, and may be copied only into
+owned Vault or Workspace roots (`python/arclink_mcp_server.py:1031-1042`,
+`plugins/hermes-agent/arclink-managed-context/__init__.py:326-330`).
 
 Share approval and acceptance can happen through Raven, with owner scoping,
 recipient scoping, audit rows, and notifications where a linked public channel
 exists (`python/arclink_public_bots.py:4116-4295`). If the owner has no linked
-Telegram/Discord channel, the API persists the grant but reports no public
-notification (`docs/arclink/operations-runbook.md:150-158`).
+Telegram/Discord channel, the API persists the grant and the dashboard share
+inbox exposes the durable owner-approval or recipient-acceptance wait with
+local approve/deny/accept actions instead of relying only on public-bot
+delivery. The dashboard can also retry queueing the current Raven share prompt
+after a public channel is linked, while clearly treating that as local queueing
+rather than live delivery proof (`docs/arclink/operations-runbook.md:150-183`).
 
-Status: backend sharing, dashboard listing, plugin read-only enforcement, and
-Raven actions are `real`; right-click browser share-link UI and live bot
-delivery are `partial`/`proof-gated`.
+Status: backend sharing, dashboard listing, plugin read-only enforcement,
+Raven actions, and the local Drive/Code `Request Share` handoff through the
+hosted deployment-scoped broker route are `real`; production workspace/browser
+proof, live bot delivery, and any Nextcloud-backed adapter choice are
+`partial`/`proof-gated` or policy-gated. Direct browser share-link generation
+is not claimed.
 
 ## 10. Pod Comms, Wrapped, Crew Training
 
@@ -559,8 +588,11 @@ reconciliation, events, actions, payments, bots, security, scale operations,
 provider state, and Wrapped aggregate views (`python/arclink_hosted_api.py:2994-3055`).
 Admin actions require an admin id, supported action, target, reason,
 idempotency key, CSRF, and mutation role; only modeled executable actions are
-queued (`python/arclink_dashboard.py:57-92`,
-`python/arclink_dashboard.py:1428-1512`).
+queued. The admin read model now publishes a source-owned action readiness
+matrix for restart, reprovision, DNS repair, Chutes key rotation, refund,
+cancel, and comp, with operation kind, required adapter, proof boundary, and
+fail-closed reason visible to the UI and runbooks (`python/arclink_dashboard.py`,
+`web/src/app/admin/page.tsx`, `docs/arclink/control-node-production-runbook.md`).
 
 Shared Host operators still use the canonical bare deploy commands for install,
 upgrade, health, enrollment trace/reset, org profile, Notion migration/transfer,
@@ -571,10 +603,30 @@ uses the `./deploy.sh docker ...` family. Live ArcPod product operations use the
 Backups are documented for control database, per-deployment state roots,
 Nextcloud/Postgres volumes, vault git history, and configuration, with a
 periodic staging restore expectation (`docs/arclink/backup-restore.md:3-77`).
+The local no-secret restore-smoke helper can restore shared and agent-home
+backup artifacts into a temporary directory, reject remote GitHub/SSH sources,
+validate shared layout/SQLite artifacts, and reject agent-home backups that
+contain `secrets/` or `logs/` without starting Docker, systemd, deploy, or live
+services (`bin/arclink-restore-smoke.sh`,
+`tests/test_backup_git_regressions.py`,
+`tests/test_agent_backup_regressions.py`).
+Raven's `/config_backup` preparation lane and the user dashboard now share the
+same local pending state: a private repo can be recorded as pending key setup,
+and an authenticated CSRF-gated dashboard API route can stage the dedicated
+backup deploy key while returning only the public key/status. A second
+CSRF-gated dashboard API route and the queued action-worker boundary can record
+GitHub write-check attempts as `failed_closed` without running live git or
+activating backup. GitHub installation/write verification, activation, and
+restore proof stay inactive or `proof-gated` until the authorized backup rail runs
+(`python/arclink_public_bots.py`, `python/arclink_dashboard.py`,
+`python/arclink_hosted_api.py`, `python/arclink_action_worker.py`,
+`web/src/app/dashboard/page.tsx`).
 
-Status: local admin read/action models and command surfaces are `real`; live
-admin mutation, restore drills, and provider-side changes are
-`proof-gated`.
+Status: local admin read/action models, readiness matrix, and command surfaces
+are `real`; local backup pending-status and staged-public-key API handoff are
+`real`; the local backup write-check boundary is fail-closed; local backup
+artifact restore-smoke coverage is `real`; live admin mutation, backup
+activation/restore drills, and provider-side changes are `proof-gated`.
 
 ## 12. Security And Isolation Contract
 
@@ -605,17 +657,296 @@ Concrete source-grounded controls:
 - Rollback and teardown preserve state by default and require explicit
   destructive metadata for volume removal (`docs/arclink/data-safety.md:113-144`).
 
-Trusted-host exceptions are explicit, not hidden. Control provisioner,
-action-worker, agent-supervisor, notification-delivery, and some shared-host
-Docker jobs mount the Docker socket or run as root because they manage sibling
-containers, migrations, or public-agent turn execution (`compose.yaml:349-408`,
-`compose.yaml:420-473`). That is an operator trust boundary, not a
-tenant-safe sandbox.
+Trusted-host exceptions are explicit, not hidden. `deployment-exec-broker`,
+`agent-supervisor-broker`, `operator-upgrade-broker`, and
+`gateway-exec-broker` mount the Docker socket,
+while `migration-capture-helper`, `agent-user-helper`, and `agent-process-helper`
+run as root because they manage Pod migration file copy, container-local agent
+user/home setup, and setpriv-based agent process execution.
+`notification-delivery` now calls the gateway broker instead of mounting the
+socket directly, and `control-provisioner` now calls the deployment broker
+instead of mounting the socket directly. `control-action-worker` now calls the
+deployment broker for Docker-mode local lifecycle/apply calls instead of
+mounting the socket directly, and it no longer runs as root. Non-dry-run Pod
+migration capture still fails closed unless the operator explicitly sets the
+root-capture opt-in for a bounded migration window and Docker mode also has the
+tokened `migration-capture-helper` URL/token configured. That helper rejects
+raw commands, reconstructs only `capture` and `materialize`, and validates
+deployment-scoped source, target, and staging paths before copying files.
+`GAP-019-AC` further narrows the helper by removing broad `*arclink-env`
+inheritance and requiring source, target, and staging paths to stay under
+`ARCLINK_STATE_ROOT_BASE` before copy or materialize work starts.
+`agent-supervisor` now calls
+`agent-supervisor-broker` for dashboard network/proxy sidecar work instead of
+mounting the socket directly, and calls `agent-user-helper` for user/home setup
+instead of performing that root operation directly. It also calls
+`agent-process-helper` for Docker-mode install, identity refresh, user-agent
+refresh, cron, gateway, and dashboard process execution instead of running as
+root itself. The process helper passes validated env through subprocess
+`env=`, not setpriv argv or startup command logs, and the supervisor strips
+broker/helper tokens from per-agent process specs before dispatch. The helper
+also rejects ArcLink broker/helper/control token env keys before one-shot or
+long-running subprocess execution if a caller bypasses that supervisor filter.
+It also rejects dynamic-loader `LD_*`, Python path/startup, shell startup,
+Git/SSH command-steering, and secret-looking process env keys before helper
+logs or subprocesses; `agent-supervisor` fails closed on the same unapproved
+non-token key family before helper payload construction. It also rejects
+caller-provided `PATH` values that differ from `SAFE_PATH`, uses
+`/usr/bin/setpriv` by absolute path, and fails identity setup closed if the
+pinned runtime venv Python is absent.
+`control-ingress` now loads static Traefik routes from
+`config/traefik-control.yaml` instead of enabling Docker provider discovery or
+mounting the read-only Docker socket. The
+reviewed inventory in
+`config/docker-authority-inventory.json` records the socket mode, root boundary,
+Linux capability boundary, `GAP-019-B2` broker/no-go review, monitoring anchor,
+`GAP-019-M` incident controls, and residual policy state for each such service.
+Non-root socket services drop Linux capabilities, and `agent-user-helper` drops
+Docker's default capability set with only `CHOWN`, `DAC_OVERRIDE`, and `FOWNER`
+added back for validated agent-home writes and ownership repair. The same
+helper pins account and ownership commands to `/usr/sbin/groupadd`,
+`/usr/sbin/useradd`, and `/usr/bin/chown`, and fails closed before helper
+mutation if a required binary is unavailable. The
+action-worker lifecycle path overrides fail closed unless an operator enables
+the emergency override flag. The public-Agent bridge path also validates
+detached `notification-delivery` bridge commands against the generated
+`hermes-gateway` exec forms and confines Compose fallback files under the
+deployment state root. `gateway-exec-broker` accepts only a bounded deployment
+request, rejects raw commands, and reconstructs the `hermes-gateway` Docker exec
+command itself. `GAP-019-Y` narrows that broker's service boundary: it no
+longer inherits broad `*arclink-env` values and no longer mounts broad
+`arclink-priv/config`, `arclink-priv/state`, or
+`arclink-priv/secrets/container`, while preserving only broker token/listener
+env, `ARCLINK_STATE_ROOT_BASE`, optional `ARCLINK_DOCKER_BINARY`, the
+deployment state-root bind, and the writeable Docker socket needed for
+public-Agent gateway exec. `GAP-019-AH` also makes that broker reject unsafe,
+missing, non-executable, non-Docker, or PATH-injected Docker CLI values before
+running-container discovery or gateway exec subprocesses run. `GAP-019-AY`
+also makes its Compose fallback reject symlinked, missing, non-regular,
+unreadable, or directory `config/arclink.env` and `config/compose.yaml`
+targets before fallback dispatch or a successful public Agent broker response.
+`GAP-019-BC` adds source-owned rejected-request incident evidence for the same
+broker: rejected raw-command, project-name mismatch, unsupported-platform, and
+trusted-host acknowledgement failures append redacted JSONL rows under
+`ARCLINK_STATE_ROOT_BASE/_broker-incidents/gateway-exec-broker/rejections.jsonl`
+when the deployment state root is safe. Those rows carry only safe
+deployment/project metadata and sanitized reason codes, not raw request bodies,
+bridge payload values, bot tokens, chat ids, user ids, message text, process
+args, rendered config paths, private paths, or stack traces. Accepted broker
+requests do not append rejection incidents.
+`GAP-019-BD` extends the same redacted incident trail to the deployment exec,
+migration capture, agent user, dashboard sidecar, and operator upgrade
+broker/helper lanes using only scoped state roots or a narrow dashboard broker
+incident mount. Those rows carry safe service/event, acknowledgement, error,
+reason, operation, and identifier metadata, not raw command arrays, payload
+values, private paths, tokens, chat/user ids, message text, secret-looking
+values, or stack traces.
+`GAP-019-Z`
+narrows `agent-supervisor-broker` the same way for dashboard sidecar work: it no
+longer inherits broad app env and no longer mounts broad private
+config/state/secrets, while preserving only Docker binary/image, repo path,
+host/container private path metadata, broker token/listener env, and the
+writeable Docker socket. `GAP-019-AF` also makes that broker reject unsafe,
+missing, non-executable, or non-Docker `ARCLINK_DOCKER_BINARY` values before
+dashboard network/proxy subprocesses run. `GAP-019-AZ` makes malformed
+`ARCLINK_DOCKER_HOST_PRIV_DIR` or `ARCLINK_DOCKER_CONTAINER_PRIV_DIR` values
+fail before Docker lookup or dashboard auth-proxy `docker run -v`
+construction. `curator-refresh` no longer mounts the Docker socket; queued
+Docker-mode upgrade execution is routed through the enrollment provisioner path
+instead. The local executor also preflights live Docker requests before runner
+dispatch: deployment IDs must be safe path segments, apply project names must
+match the deployment, and env/compose files must stay under the configured
+deployment state root. `deployment-exec-broker` accepts only generated project
+names and allowlisted Compose `up`, `ps`, or `down` operation kinds, rejects raw
+commands, and reconstructs the Docker Compose command itself. `GAP-019-AA`
+keeps that broker on minimal service env instead of broad `*arclink-env`:
+broker token/listener settings, `ARCLINK_STATE_ROOT_BASE`, optional Docker
+binary, the deployment state-root bind, and the writeable Docker socket.
+`GAP-019-AG` also makes that broker reject unsafe, missing, non-executable, or
+non-Docker `ARCLINK_DOCKER_BINARY` values before deployment Compose
+subprocesses run. `GAP-019-AX` makes symlinked deployment config roots and
+symlinked, missing, non-regular, or unreadable rendered `config/arclink.env`
+and `config/compose.yaml` files fail before Docker CLI lookup or Compose
+subprocess dispatch.
+`agent-supervisor-broker` accepts only safe agent ids, deterministic
+network/container names, backend IPs, ports, and private-state access-file
+paths for dashboard proxy work. `operator-upgrade-broker` owns the queued
+Docker-mode operator upgrade path: enrollment provisioner requests fail closed
+without operator-upgrade broker URL/token, raw commands are rejected, only
+allowlisted upgrade commands are reconstructed, and logs stay under private
+`state/operator-actions`. `GAP-019-AB` narrows that broker further: it no
+longer inherits broad app env, no longer mounts broad canonical private
+config/state/secrets paths, and its upgrade subprocesses receive a
+child-process env allowlist instead of the broker's full process environment.
+`GAP-019-AI` makes any preserved `ARCLINK_DOCKER_BINARY` resolve to a trusted
+absolute Docker CLI path before those upgrade children run; unsafe, missing,
+non-executable, non-Docker, relative, or PATH-injected values fail closed.
+`GAP-019-AV` also makes the same broker reject missing, symlinked, directory,
+unreadable, or non-executable fixed `deploy.sh` and
+`bin/component-upgrade.sh` targets before private operator logs or upgrade
+subprocesses are created.
+`GAP-019-AW` confines the same broker's request-supplied upstream deploy-key
+metadata: non-empty `ARCLINK_UPSTREAM_DEPLOY_KEY_PATH` and
+`ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE` values must be absolute non-symlink paths
+under `ARCLINK_DOCKER_HOST_PRIV_DIR` before child env construction, private
+operator logs, or upgrade subprocesses are created.
+These are local hardening controls, not tenant isolation. The source-owned incident
+controls now name monitored signals, status/log/audit locations, triage steps,
+fail-closed actions, and operator escalation boundaries for the remaining
+socket/root services. `agent-supervisor` validates active-agent metadata,
+canonical Docker agent homes, Hermes homes, workspace/log/process keys, and
+agent process inputs before helper, broker, or process-helper requests.
+The root helpers also recheck configured roots themselves: `agent-user-helper`
+rejects configured Docker agent-home root mismatches before root filesystem or
+account mutation, and `agent-process-helper` rejects configured Docker
+agent-home, repo, private-state, state, and runtime root mismatches before
+helper logs or subprocess execution. They also reject symlink-escaped agent
+home, Hermes home, and workspace paths before uid/gid assignment, account
+commands, recursive chown, helper logs, or subprocess execution, and
+`GAP-019-AS` rejects symlinked configured or requested Docker agent-home roots
+before either root helper writes uid/gid assignments, repairs ownership, opens
+helper logs, or starts subprocesses. This is configured-root path hardening
+only; both helpers remain trusted-host residual risk.
+`GAP-019-BA` narrows the `agent-user-helper` assignment persistence boundary:
+symlinked, directory, or non-regular `.arclink-user-ids.json` and
+`.arclink-user-ids.json.tmp` paths under the Docker agent-home root fail before
+uid/gid assignment reads or writes, account commands, agent-home directory
+creation, or recursive chown. This is assignment-file hardening only; the
+helper remains trusted-host residual risk.
+`GAP-019-BB` adds source-owned rejected-request incident evidence for
+`agent-process-helper`: rejected process-helper requests append redacted JSONL
+rows under `state/docker/agent-process-helper/rejections.jsonl` when the
+configured private root is safe. The incident row carries only safe metadata
+and sanitized reason codes, not raw request bodies, env values, args, private
+paths, tokens, or stack traces. This is local incident evidence only; the root
+process-helper boundary remains trusted-host residual risk.
+`GAP-019-AT` applies the same fail-closed rule to the process helper's
+configured repo, private-state, state, and runtime roots: symlinked
+configured/requested `ARCLINK_REPO_DIR`, `ARCLINK_PRIV_DIR`,
+`ARCLINK_DOCKER_CONTAINER_PRIV_DIR`, request `state_dir`, or `RUNTIME_DIR`
+values fail before helper logs, cwd/command/runtime lookup, or subprocess
+execution. This is process-helper path hardening only; the helper remains
+trusted-host residual risk.
+`GAP-019-AU` also makes fixed repo command targets fail closed: missing,
+symlinked, directory, unreadable, or non-executable ArcLink script targets such
+as `bin/hermes-shell.sh` are rejected before helper logs or subprocesses. This
+is command target hardening only; the helper remains trusted-host residual
+risk.
+`GAP-019-AO` makes `agent-process-helper` reject symlink-escaped helper log
+directories before opening logs or starting subprocesses. `GAP-019-X` further narrows
+`agent-process-helper` at service startup: it no longer inherits broad
+`*arclink-env` values and no longer mounts `arclink-priv/secrets/container`,
+while preserving explicit non-secret path-validation env and the config, state,
+vault, and read-only repo mounts needed for allowlisted agent commands.
+`GAP-019-Y` similarly removes broad app env and broad private config/state/secrets
+mounts from `gateway-exec-broker`; the broker still has writeable Docker socket
+authority and remains a trusted-host boundary. `GAP-019-AH` removes Docker CLI
+executable steering from the same broker; it is executable-lookup hardening,
+not tenant-safe isolation. `GAP-019-BC` adds a redacted local rejection incident
+trail for the same broker; it is incident evidence, not tenant-safe isolation
+or live alerting. `GAP-019-BD` adds equivalent local incident trails for the
+remaining high-authority broker/helper lanes; it is also incident evidence,
+not live alerting or accepted residual risk. `GAP-019-Z` removes the same
+broad app env and broad private config/state/secrets mounts from
+`agent-supervisor-broker`; that broker still has writeable Docker socket
+authority for dashboard sidecar work and remains a trusted-host boundary.
+`GAP-019-AF` removes `ARCLINK_DOCKER_BINARY` steering to non-Docker
+executables from the same broker; it is executable-lookup hardening, not
+tenant-safe isolation.
+`GAP-019-AZ` removes private-bind-root steering from the same broker: unsafe
+host/container private root values fail before dashboard auth-proxy sidecar
+mount construction, but the broker remains a trusted-host Docker socket
+boundary.
+`GAP-019-AA` removes broad app env inheritance from `deployment-exec-broker`;
+that broker still has writeable Docker socket authority for deployment Compose
+work and remains a trusted-host boundary. `GAP-019-AG` removes
+`ARCLINK_DOCKER_BINARY` steering to non-Docker executables from the same
+broker; it is executable-lookup hardening, not tenant-safe isolation.
+`GAP-019-AX` removes symlink-steered rendered config-file dispatch from that
+broker; it is path hardening, not tenant-safe isolation.
+`GAP-019-AY` removes symlink-steered public Agent Compose fallback config-file
+dispatch from `gateway-exec-broker`; it is path hardening, not tenant-safe
+isolation.
+`GAP-019-AB` removes broad app env, broad canonical private mounts, and full
+child-process env inheritance from `operator-upgrade-broker`; that broker still
+has writeable Docker socket authority and a writable host repo bind that can
+reach nested private state for real upgrades.
+`GAP-019-AI` removes `ARCLINK_DOCKER_BINARY` steering to non-Docker executables
+from the same broker's queued upgrade children; it is executable-lookup
+hardening, not tenant-safe isolation.
+`GAP-019-AV` removes fixed script-target steering in the same broker:
+`deploy.sh` and `bin/component-upgrade.sh` must be exact non-symlink regular
+readable files with executable bits before any private operator log or upgrade
+subprocess exists. This is checkout-integrity hardening, not tenant-safe
+isolation.
+`GAP-019-AW` removes upstream deploy-key path steering in the same broker:
+`ARCLINK_UPSTREAM_DEPLOY_KEY_PATH` and
+`ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE` must stay under private state and must not
+be relative or symlink-steered before any child env, private operator log, or
+upgrade subprocess exists. This is deploy-key path hardening, not tenant-safe
+isolation.
+`GAP-019-AC` removes broad app env inheritance from
+`migration-capture-helper` and adds configured `ARCLINK_STATE_ROOT_BASE`
+confinement for its source, target, and staging paths; that helper still runs
+as root over deployment bind mounts during an approved migration window.
+`GAP-019-AD` removes caller-controlled executable lookup from
+`agent-process-helper` before privilege drop and removes the bare `python3`
+identity fallback; that helper still runs as root for allowlisted Docker agent
+process execution.
+`GAP-019-AM` removes dynamic-loader, Python path/startup, shell startup,
+Git/SSH command-steering, and secret-looking process env injection from the
+same helper boundary before logs or subprocesses; it is env-boundary hardening,
+not tenant-safe isolation.
+`GAP-019-AJ` adds desired-process signature tracking and bounded shutdown to
+that helper, so changed gateway/dashboard command, cwd, dashboard backend port,
+or validated env contracts restart stale long-running processes instead of
+silently keeping the old handle.
+`GAP-019-AK` removes default Compose network reachability from the tokened
+Docker/root broker and helper APIs. Their request lanes now use internal
+networks shared only with legitimate callers; `agent-process-helper` and
+`operator-upgrade-broker` retain separate single-service egress networks for
+outbound gateway/provider runtime work and upgrade fetches.
+`GAP-019-AL` adds an explicit trusted-host acknowledgement gate to those seven
+services. `deployment-exec-broker`, `migration-capture-helper`,
+`agent-user-helper`, `agent-process-helper`, `agent-supervisor-broker`,
+`operator-upgrade-broker`, and `gateway-exec-broker` fail closed before binding
+their request listeners or processing direct helper/broker work unless private
+Docker config sets `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted`.
+This is only an operator acknowledgement boundary; it does not make the
+writeable Docker socket brokers or root helpers tenant-safe.
+`GAP-019-AP` makes direct/local execution of those same broker/helper modules
+bind `127.0.0.1` by default. Compose is still the explicit `0.0.0.0` opt-in
+for internal request-network reachability, so broad binds are intentional and
+reviewable rather than inherited from direct-run defaults.
+`GAP-019-AQ` narrows the `agent-supervisor` enrollment provisioner child env:
+the child no longer starts from `os.environ.copy()` and instead receives only
+Docker mode/path config, runtime roots, service URLs, and helper/broker values
+needed for Docker enrollment and queued operator actions. Payment, provider,
+bot, ingress, memory-synthesis, session, fleet, Python path, and Git/SSH
+steering env keys are not forwarded to that child. The supervisor still keeps
+private config/state/vault mounts for Docker agent reconciliation, so this is
+local env-exposure hardening, not tenant-safe isolation.
+`GAP-019-AR` narrows the dashboard backend host boundary shared by the root
+`agent-process-helper` and the dashboard `agent-supervisor-broker`: dashboard
+backend host values must be loopback or Docker-internal/private/link-local IPs,
+and wildcard, globally routable, multicast, malformed, or non-IP values fail
+closed before dashboard process or proxy subprocess construction. This keeps
+the local dashboard path behind the internal network/proxy design; it does not
+make the root helper or socket broker tenant-safe.
+`GAP-019-T` also makes the live host repo
+bind read-only for `agent-supervisor`, `agent-process-helper`, and
+`curator-refresh`; they keep script read access without checkout write access.
+`GAP-019-U` moves the explicit writable host repo exception for allowlisted
+queued Docker-mode operator upgrades to `operator-upgrade-broker`, while
+`agent-supervisor-broker` no longer mounts the host repo.
+Together, these controls leave writeable Docker socket access and the remaining
+root helpers as operator trust boundaries, not tenant-safe sandboxes.
 
 ## 13. Recovery Atlas
 
 - Web checkout paused: cancel page marks the onboarding session cancelled when
-  it still has the cancel proof token; otherwise it returns to resume.
+  it still has the session-scoped cancel proof token, clears token material, and
+  otherwise returns to resume without claiming cancellation proof.
 - Payment not yet confirmed: success page polls, then tells the Captain to wait
   for Raven or dashboard status.
 - Payment failed or cancelled: entitlement stays non-current and provisioning
@@ -629,11 +960,18 @@ tenant-safe sandbox.
   guessing host paths (`docs/arclink/first-day-user-guide.md:81-92`).
 - Credential handoff pending: user stores the credential, acknowledges removal,
   then Notion setup and other secure lanes can proceed.
-- Notion setup stuck: Raven records setup intent only; dashboard/operator proof
-  verifies integration access.
+- Notion setup stuck: Raven records setup intent only; dashboard state can show
+  local metadata readiness, but authorized `PG-NOTION` proof is required before
+  calling integration access complete.
+- Private backup setup pending: Raven records the private repository intent,
+  and the dashboard can stage a public deploy key, link to GitHub deploy-key
+  settings, and record the local fail-closed write-check state. The local
+  restore-smoke helper can inspect/restore backup artifacts into a temp
+  location, but backup remains inactive and not live-recoverable until
+  authorized `PG-BACKUP` write, activation, and restore proof passes.
 - Share pending with no public owner channel: grant remains pending; owner must
-  link a channel or approve through authenticated API
-  (`docs/arclink/operations-runbook.md:150-158`).
+  link a channel, approve through authenticated API, or retry the Raven prompt
+  after a public channel is linked (`docs/arclink/operations-runbook.md:150-183`).
 - Provider threshold/exhaustion: dashboard shows state; refuel and fallback
   paths are partly `policy-question`
   (`web/src/app/dashboard/page.tsx:1350-1356`).
@@ -649,8 +987,11 @@ canonical proof-gate IDs such as `PG-PROD`, `PG-STRIPE`, `PG-BOTS`,
 `PG-HERMES`, `PG-BACKUP`, and `PG-UPGRADE`.
 
 Until those gates pass, ArcLink should be described as a locally `real` and
-tested control plane with credential-gated production proof outstanding, but
-not as a broadly regression-clean checkout until `GAP-025` is closed.
+tested control plane with credential-gated production proof outstanding.
+`GAP-010`, `GAP-013-C`, and `GAP-025` are now locally closed by the web
+preferred-channel tests, dashboard backup UX/API-client tests, and broad Python
+suite respectively. `GAP-015-B` is locally repaired for share notification
+retry queueing, but live Telegram/Discord delivery still requires `PG-BOTS`.
 
 The public documentation handoff is therefore terminal for the document phase:
 `USER_JOURNEY.md` owns the intended experience, `GAPS.md` owns the hard missing

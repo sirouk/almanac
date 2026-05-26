@@ -569,7 +569,7 @@ Press Skip for now if you want to talk with your Hermes Agent immediately. Share
 Ready confirmed:
 
 ```text
-Good. I recorded Notion as ready for this ArcPod. If the webhook still says verification is not configured, open the dashboard Notion panel so ArcLink can arm the verification-token install window.
+Good. I recorded Notion as ready for dashboard verification on this ArcPod. This is not live Notion proof yet. If the webhook still says verification is not configured, open the dashboard Notion panel so ArcLink can arm the verification-token install window.
 ```
 
 Waiting:

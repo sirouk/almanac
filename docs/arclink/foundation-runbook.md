@@ -6,23 +6,23 @@ operations.
 
 ## Current Boundary
 
-ArcLink is currently an additive foundation on top of the shared-host substrate. New product
+ArcLink remains additive on top of the shared-host substrate. New product
 surfaces use `ARCLINK_*` configuration, `arclink_*` database tables, and
-`python/arclink_*.py` helpers while existing deploy, onboarding,
-Hermes, qmd, vault, memory, Notion, and health paths keep their current names.
+`python/arclink_*.py` helpers while existing deploy, onboarding, Hermes, qmd,
+vault, memory, Notion, and health paths keep their current names.
 
 The current provisioning layer records and validates intent. Public onboarding
-has no-secret durable session and checkout contracts. A guarded executor
-boundary exists for Docker Compose, domain/Tailscale ingress, model-provider, Stripe, and
-rollback operations, but it fails closed unless live/E2E execution is explicitly
-enabled. ArcLink now ships a local no-secret Python product surface over the
-onboarding, user-dashboard, admin-dashboard, and queued-action contracts. It is
-for development and contract testing, not production hosting. ArcLink still
-does not ship production adapters that execute customer deployment containers,
-create live DNS records, mint live model provider keys, run live public bots,
-authenticate dashboard sessions, or run a live automated admin-action worker.
-The checked-in action worker can consume queued intents through the guarded
-executor boundary for local/fake validation and explicit operator-driven runs.
+has no-secret durable session and checkout contracts. The Sovereign Control
+Node now ships Dockerized `control-web`, `control-api`, `control-provisioner`,
+`control-action-worker`, and `control-llm-router` services, plus guarded
+executor paths for local/SSH Docker Compose, domain/Tailscale ingress,
+model-provider, Stripe, teardown, and rollback operations. Those paths fail
+closed unless live execution is explicitly enabled and the required credentials,
+adapters, fleet reachability, and proof window are supplied. The local
+`arclink_product_surface.py` WSGI app remains a no-secret contract smoke tool,
+not the Control Node web UI. Passing local tests or dry runs must not be
+reported as live customer provisioning, live bot delivery, live provider
+inference, live Notion verification, or production-host proof.
 
 ## Assumptions
 
@@ -288,9 +288,10 @@ Local product surface:
   to user/admin read models.
 - The local surface also exposes JSON routes for onboarding sessions, user
   dashboard reads, admin dashboard reads, and queued admin actions.
-- The surface follows the ArcLink brand system and remains a replaceable
-  prototype; production frontend stack, auth, RBAC, CSRF, rate limits, and live
-  action execution are later gates.
+- The surface follows the ArcLink brand system and remains a replaceable local
+  prototype; the Control Node web/API boundary lives in Next.js `control-web`
+  and hosted `control-api`. Browser hardening, external identity policy, RBAC
+  policy, and live action proof remain separate gates.
 
 API/auth boundary:
 
@@ -584,10 +585,11 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
   desired intent and fake drift checks only.
 - Live model provider key lifecycle is not implemented; the current key manager
   is a fake no-secret adapter.
-- The local product surface is not the production hosted UI. Production
-  routing, identity-provider integration, browser-session hardening, RBAC
-  policy, action execution, and frontend framework work still need explicit
-  implementation.
+- The local product surface is not the Control Node hosted UI. Production
+  routing exists through `control-web` and `control-api`, but
+  identity-provider integration, browser-session hardening, RBAC policy, and
+  live action proof still need explicit operator decisions or proof runs before
+  launch claims.
 - Drive and Code are first-generation native plugin surfaces. They have
   bounded no-secret API contracts, but broader Google Drive and VS Code parity
   remains future work.

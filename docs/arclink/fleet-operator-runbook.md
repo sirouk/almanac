@@ -118,6 +118,11 @@ resource, billing, region, tag, and bootstrap metadata. Worker admission still
 depends on the enrollment callback and probe cycle; live provider creation,
 SSH wait, and join proof require explicit Operator authorization.
 
+The no-secret local lifecycle harness uses fake Hetzner and Linode clients to
+prove create idempotency, duplicate-host handling, probe handoff, drain guards,
+destroy calls, and destroy replay. It does not prove real provider APIs, SSH
+wait, worker join, or live destroy behavior.
+
 ## Drain And Remove
 
 ```bash

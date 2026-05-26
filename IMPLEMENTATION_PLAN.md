@@ -1,352 +1,248 @@
-# Implementation Plan: ArcLink User Journey And Gap Atlas
+# ArcLink Dream Buildout Implementation Plan
 
-## Current Status
+Updated: 2026-05-26, current unattended plan refresh after required-read
+recheck.
 
-Ralphie completed this documentation mission on 2026-05-20. The checklist below
-is the audit plan it used, not a fresh list of unstarted work. The generated
-handoff artifacts are:
+This is the active plan after re-reading `AGENTS.md`,
+`research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`, `USER_JOURNEY.md`,
+`GAPS.md`, the prior `IMPLEMENTATION_PLAN.md`, and
+`research/COVERAGE_MATRIX.md`.
 
-- `USER_JOURNEY.md`: the source-grounded full ArcLink journey and vision atlas.
-- `GAPS.md`: the implementation-planning gap register.
-- `research/COVERAGE_MATRIX.md`: the journey-joint to source/test map.
-- `research/BUILD_COMPLETION_NOTES.md`: the handoff and validation boundary.
+No live external or host-mutating commands are planned for this unattended
+pass. Do not run deploy/install/upgrade, Docker up/down/reconcile, systemd,
+Stripe, public bot, provider, Notion, Cloudflare, Tailscale, SSH, live proof,
+or live host mutation commands without a separate explicit operator proof
+window.
 
-Follow-up review found that the focused Ralphie validation was too narrow: the
-selected 582-test pass cannot be treated as broad release validation because a
-full `python3 -m pytest -q tests` run on 2026-05-20 reported 197 failed,
-1012 passed, and 6 skipped. That release-confidence hole is now tracked as
-`GAP-025`; close it before calling this checkout broadly regression-clean.
+This plan preserves the earlier lint-phase repair record and adds the current
+required-read recheck. `python/arclink_rejection_incidents.py` remains repaired
+so `agent-process-helper` writes the expected redacted rejection incident when
+the safe private root is provided as `ARCLINK_PRIV_DIR`, and the broad
+no-secret Python suite is still green in this checkout.
 
 ## Goal
 
-Produce two source-grounded root documents:
+Keep the Ralphie dream buildout moving without confusing local repair work with
+external gates. For this unattended pass, the goal is to re-triage current
+`GAPS.md`, confirm whether `GAP-025` has regressed, select the highest-severity
+bounded `LOCAL` repair if one exists, and otherwise route the remaining
+live-proof, policy, and residual-risk work to explicit operator handoffs. This
+plan intentionally does not claim live proof, run host-mutating commands, or
+invent speculative local code work.
 
-- `USER_JOURNEY.md`: the complete ArcLink journey story across public entry,
-  Raven, billing, provisioning, Control Node, Shared Host, ArcPods, dashboards,
-  Hermes, knowledge, workspace plugins, sharing, providers/refuel, admin,
-  operations, recovery, and isolation boundaries.
-- `GAPS.md`: the hard gap atlas comparing that story against repository code,
-  tests, docs, service units, config, and scripts.
+## Queue Decision
 
-The journey may describe the intended product contract, but every unproven
-live/external behavior must be marked proof-gated and carried into `GAPS.md`.
-The gap register must be adversarial: disprove claims before accepting them.
-
-## Hard Constraints
-
-- [ ] Do not read `arclink-priv/`, user homes, secret files, deploy keys,
-  OAuth stores, bot tokens, `.env` values, or live credentials.
-- [ ] Do not run live external or host-mutating flows: no deploy/install/
-  upgrade, Docker up/down/reconcile, Stripe, Chutes, Telegram, Discord,
-  Notion, Cloudflare, Tailscale, SSH fleet mutation, or host mutation.
-- [ ] Treat `research/PRODUCT_REALITY_MATRIX.md` as a claim set to disprove,
-  not as truth. Current local counts are 101 `real`, 15 `proof-gated`, and
-  5 `policy-question`; none are accepted until source and tests are rechecked.
-- [ ] Use fresh evidence with file references, preferably `path:line`.
-- [ ] Do not quote secrets or local private paths into public docs.
-- [ ] Keep this mission documentation-first. Only make code/test fixes later
-  if validation reveals a scoped documentation blocker or hygiene failure.
-- [ ] Use mixed Codex and Claude review in the Build phase. Codex drives the
-  main pass; Claude must independently review the claim ledger, the finished
-  `USER_JOURNEY.md`, and the finished `GAPS.md`. If either engine is
-  unavailable or unhealthy, stop instead of silently shipping a single-engine
-  atlas.
-
-## Planning Inputs Already Located
-
-- Required steering: `AGENTS.md` and
-  `research/RALPHIE_ARCLINK_USER_JOURNEY_AND_GAPS_STEERING.md`.
-- Existing stubs: `USER_JOURNEY.md` and `GAPS.md`.
-- Matrix and prior claims: `research/PRODUCT_REALITY_MATRIX.md`,
-  `research/seed-user-journey-draft.md`, `research/seed-gaps-draft.md`,
-  `research/RALPHIE_ARCLINK_PRODUCT_REALITY_AND_JOURNEY_STEERING.md`,
-  `research/RALPHIE_FINAL_FORM_GAPS_STEERING.md`,
-  `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md`,
-  `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md`,
-  `research/RALPHIE_ARCLINK_PLUGIN_WORKSPACES_STEERING.md`, and live-proof /
-  billing / scale steering under `research/RALPHIE_*`.
-- Operator docs and runbooks: `README.md`, `docs/arclink/*runbook.md`,
-  `docs/arclink/sovereign-control-node.md`,
-  `docs/arclink/raven-public-bot.md`, `docs/arclink/data-safety.md`,
-  `docs/arclink/llm-router.md`, `docs/arclink/backup-restore.md`,
-  `docs/arclink/ingress-plan.md`, and live evidence docs.
-- Control surfaces: `deploy.sh`, `bin/deploy.sh`, `compose.yaml`,
-  `systemd/`, `bin/health.sh`, `bin/docker-health.sh`,
-  `bin/arclink-live-proof`, `bin/component-upgrade.sh`, and `config/pins.json`.
-- Product code surfaces: `python/arclink_hosted_api.py`,
-  `python/arclink_api_auth.py`, `python/arclink_dashboard.py`,
-  `python/arclink_public_bots.py`, Telegram/Discord adapters, onboarding,
-  entitlement, provisioning, executor, fleet, worker, provider, LLM router,
-  MCP, memory, Notion, SSOT, action worker, notification, access, and evidence
-  modules.
-- Web and plugin surfaces: `web/src/**`, `web/tests/**`,
-  `plugins/hermes-agent/arclink-managed-context/**`,
-  `plugins/hermes-agent/drive/**`, `plugins/hermes-agent/code/**`, and
-  `plugins/hermes-agent/terminal/**`.
-- Regression proof surfaces: `tests/test_arclink_*.py`,
-  `tests/test_*notion*.py`, `tests/test_*memory*.py`,
-  `tests/test_deploy_regressions.py`, and browser tests under `web/tests`.
-
-## Target Document Shape
-
-### `USER_JOURNEY.md`
-
-- [ ] Open with scope, vocabulary, evidence rules, and proof-gated language.
-- [ ] Define actors: Raven, Captain, Agent, Crew, ArcPod/Pod, Operator.
-- [ ] Cover public website entry, returning visitor, mobile/desktop,
-  Telegram, Discord, linked channels, and Raven first contact.
-- [ ] Cover onboarding answers, plan choice, checkout opening, entitlement
-  gate, post-checkout polling, failed/cancelled checkout, and post-payment
-  handoff.
-- [ ] Cover provisioning: readiness transition, placement, single-machine,
-  remote fleet, domain/Tailscale ingress, DNS/Traefik, worker apply, rollback,
-  teardown, health, and notification.
-- [ ] Cover credential handoff: generation, one-time reveal boundary,
-  copy/store guidance, acknowledgement, post-ack hiding, rotation/reissue, and
-  dashboard entry.
-- [ ] Cover user dashboard: account, deployments, service health, billing,
-  provider state, communications, credentials, workspace readiness, recovery,
-  unavailable states, and links into Hermes/Drive/Code/Terminal.
-- [ ] Cover Hermes and agents: Curator, user-agent homes, ArcPod Hermes homes,
-  gateway run mode, private channels, Telegram `/start`, Discord retry,
-  dashboard plugins, skills, provider/model choice, and safe refresh.
-- [ ] Cover knowledge: vault, qmd, PDF sidecars, Notion indexed markdown,
-  SSOT broker, webhook/batcher, memory synthesis, recall stubs, daily plate,
-  governed managed context, retrieval tools, and Almanac lineage terminology.
-- [ ] Cover workspace: Drive, Code, Terminal, roots, root guards, linked
-  resources, read-only projections, accepted shares, no reshare,
-  copy/duplicate into owned space, audit, revoke, and disabled browser
-  share-link UI where unimplemented.
-- [ ] Cover provider/refuel: Chutes, LLM router, OAuth/connect posture,
-  budgets, usage, warning/exhaustion, refuel credits, and proof gates.
-- [ ] Cover admin/operator: one operator, admin dashboard, action worker,
-  Shared Host, Docker Shared Host, Sovereign Control Node, systemd/Compose
-  services, health checks, release state, deploy keys, pins, component
-  upgrades, live proof, backups, enrollment reset, org profile, and
-  notification delivery.
-- [ ] Cover security and isolation as a first-class journey, not an appendix:
-  users must not read, infer, mutate, route to, or share another user's private
-  deployment, channels, dashboard, provider state, Notion/SSOT data, files,
-  Stripe state, or Hermes resources.
-
-### `GAPS.md`
-
-- [ ] Define status taxonomy exactly: `gap`, `partial`, `proof-gated`,
-  `policy-question`, `test-gap`, `doc-gap`, `ux-gap`, `ops-gap`,
-  `security-risk`, and `real`.
-- [ ] Define severity taxonomy exactly: P0 trust/security/payment/
-  provisioning, P1 core journey, P2 degraded/confusing behavior, P3 polish or
-  future scale.
-- [ ] Add one row per non-real finding with id, severity, status, journey
-  joint, expected behavior, actual evidence, source references, missing
-  proof/tests, user impact, owner/surface, and recommended next repair.
-- [ ] Add `Not Gaps / Already Real` for important checked surfaces that have
-  source plus local test evidence.
-- [ ] Add `Proof Gates` with exact authorized proof runs or credentials needed
-  before proof-gated claims move to `real`.
-- [ ] Add `Policy Questions` for product, security, pricing, sharing, provider,
-  retention, and ops choices code cannot decide.
-- [ ] Add `Test Plan` mapping every code-owned gap to focused local checks.
-
-## Phase Checklist
-
-### Phase 1 - Evidence Method And Claim Ledger
-
-- [ ] Confirm the mixed-engine review path before drafting root docs: Codex
-  owner, Claude reviewer, shared claim ledger, and explicit disagreement notes.
-- [ ] Give every matrix, seed, and new audit claim a stable id:
-  `J-*` for journey joints, `G-*` for gaps, `R-*` for already-real checks, and
-  `P-*` for proof gates.
-- [ ] Build a source ledger while auditing. Each claim needs at least one code,
-  doc, config, unit, or test reference; `real` claims need implementation plus
-  local test evidence unless the source itself is the product contract.
-- [ ] Record contradictions between docs, steering, product matrix, code, and
-  tests as gaps instead of smoothing them over.
-- [ ] Treat seed drafts as input only. Reuse no row unless source evidence
-  independently supports it.
-
-### Phase 2 - Product Matrix Disproof
-
-- [ ] Re-audit every row in `research/PRODUCT_REALITY_MATRIX.md`.
-- [ ] For each `real` row, verify the cited source still exists and proves the
-  full end-to-end claim. Demote to `partial`, `test-gap`, `doc-gap`,
-  `proof-gated`, or `gap` when evidence is thin or local-only.
-- [ ] For each `proof-gated` row, decide whether local code is otherwise real,
-  then add the exact live proof gate to `GAPS.md`.
-- [ ] For each `policy-question` row, decide whether the question blocks
-  journey copy, UI controls, operations, pricing, security, or tests.
-- [ ] Actively search for net-new gaps the matrix missed, especially at
-  handoffs between surfaces.
-
-### Phase 3 - Source Audit By Surface
-
-- [ ] Public web and onboarding: `web/src/app/page.tsx`,
-  `web/src/app/onboarding/page.tsx`, checkout pages, `web/src/lib/api.ts`,
-  `python/arclink_hosted_api.py`, `python/arclink_onboarding.py`,
-  `python/arclink_onboarding_flow.py`, and web smoke/browser tests.
-- [ ] Raven and public bots: `python/arclink_public_bots.py`,
-  `python/arclink_telegram.py`, `python/arclink_discord.py`,
-  `python/arclink_notification_delivery.py`, bot docs, and bot tests.
-- [ ] Billing, entitlements, renewals, refuel, and providers:
-  `python/arclink_entitlements.py`, `python/arclink_chutes*.py`,
-  `python/arclink_llm_router.py`, `python/arclink_api_auth.py`,
-  `python/arclink_hosted_api.py`, Stripe docs, and provider tests.
-- [ ] Provisioning and deployment: `python/arclink_provisioning.py`,
-  `python/arclink_sovereign_worker.py`, `python/arclink_executor.py`,
-  `python/arclink_fleet*.py`, `python/arclink_ingress.py`, `compose.yaml`,
-  `deploy.sh`, `bin/deploy.sh`, runbooks, and provisioning/fleet tests.
-- [ ] Shared Host and agent install: bootstrap/install/refresh scripts,
-  `systemd/`, `python/arclink_enrollment_provisioner.py`, dashboard auth
-  proxy, Hermes hook/plugin installers, and agent service tests.
-- [ ] Knowledge and memory: `python/arclink_mcp_server.py`,
-  `python/arclink_control.py`, `python/arclink_memory_synthesizer.py`,
-  `python/arclink_notion_*.py`, `python/arclink_ssot_batcher.py`,
-  qmd/PDF/vault scripts, and notion/memory/MCP tests.
-- [ ] Workspace and sharing: Drive/Code/Terminal plugins, managed-context
-  plugin, share-grant APIs, linked-resource projection code, plugin tests, and
-  browser checks.
-- [ ] Admin and operations: `python/arclink_dashboard.py`,
-  `python/arclink_action_worker.py`, `python/arclink_api_auth.py`,
-  `bin/health.sh`, `bin/docker-health.sh`, `bin/arclink-live-proof`,
-  component pin scripts, operations runbooks, and admin/ops tests.
-- [ ] Security boundaries: access/auth/session/CSRF code, dashboard auth
-  proxy, secret regex/redaction, plaintext-secret validators, path confinement,
-  root guards, user/admin scoping, and public hygiene tests.
-
-### Phase 4 - Journey Assembly
-
-- [ ] Write each `USER_JOURNEY.md` section as a path through real surfaces:
-  trigger, actor, system state, happy path, choice points, alternate path,
-  error/retry path, access boundary, and handoff.
-- [ ] Keep Captain-facing vocabulary distinct from Operator-facing vocabulary.
-- [ ] Mark proof-gated live behavior inline without derailing the human story.
-- [ ] For each journey section, link to the relevant gap ids and proof gates.
-- [ ] Ensure every required surface in
-  `research/COVERAGE_MATRIX.md` appears in the journey.
-
-### Phase 5 - Gap Atlas Assembly
-
-- [ ] Convert every missing, partial, weakly tested, confusing, risky, or
-  externally unproven joint into a gap row.
-- [ ] Capture Codex/Claude disagreement as a gap, policy question, or proof
-  gate when the source does not resolve it.
-- [ ] Separate `proof-gated` from `policy-question`: proof gates require
-  credentials or authorized live runs; policy questions require an operator or
-  product decision.
-- [ ] Add `test-gap` rows when code appears present but no focused local
-  regression proves the behavior.
-- [ ] Add `doc-gap` rows when docs overclaim, underclaim, or contradict code.
-- [ ] Add `security-risk` rows for any possible cross-user, secret, payment,
-  route, or authority-boundary weakness.
-- [ ] Add `Not Gaps / Already Real` only when implementation and proof are both
-  strong enough.
-
-### Phase 6 - Proof Gates To Name Explicitly
-
-- [ ] Live Stripe checkout, webhook delivery, subscription renewal/failure,
-  billing portal, refuel checkout, and refund/cancel actions.
-- [ ] Live Telegram and Discord webhook registration, command sync, button
-  delivery, channel linking, selected-agent chat, and handoff retry.
-- [ ] Live Control Node provisioning of an ArcPod, including worker execution,
-  health, rollback, teardown, and dashboard reachability.
-- [ ] Live Cloudflare DNS/Access/Traefik and live Tailscale Serve/Funnel/cert
-  ingress.
-- [ ] Live Chutes OAuth, inference, usage sync, key lifecycle, per-key
-  utilization, account creation, balance/credit application, and LLM router
-  relay.
-- [ ] Live Notion shared-root permission proof, webhook callback, page/database
-  reads, SSOT writes, and user-owned integration/OAuth if that lane is kept.
-- [ ] Live Hermes dashboard landing, Drive/Code/Terminal TLS browser proof,
-  qmd retrieval, memory refresh, and agent gateway response.
-- [ ] Backup/restore proof for control DB, per-deployment state, user-agent
-  homes, GitHub backup repos, and disaster recovery.
-
-### Phase 7 - Policy Questions To Extract
-
-- [ ] Is per-user Chutes OAuth canonical, operator-metered router canonical, or
-  both with explicit plan boundaries?
-- [ ] What should Raven/dashboard do when provider usage hits warning or
-  exhaustion: notify, refuel, fallback, suspend, or operator handoff?
-- [ ] Should users self-service provider changes, or should provider mutation
-  stay behind secure handoff/operator config?
-- [ ] Should browser Drive/Code share-link creation stay disabled until an
-  ArcLink share broker or Nextcloud-backed adapter is live-proven?
-- [ ] Which Notion lane is canonical for paid users: brokered shared root,
-  user-owned OAuth, email-share-assisted integration, or multiple lanes?
-- [ ] What cross-agent or peer-awareness memory is allowed without leaking
-  private context?
-- [ ] Which migration/reprovision actions may Captains initiate themselves
-  versus Operator-only audited actions?
-- [ ] What exact retention, purge, refund, reissue, and recovery policies are
-  externally promised beyond local metadata?
-
-### Phase 8 - Validation Commands
-
-Run only local, no-secret checks unless the operator later authorizes more:
+`GAP-025` was checked first and has not regressed. The broad no-secret Python
+suite passed in this pass:
 
 ```bash
-git diff --check
-python3 tests/test_public_repo_hygiene.py
+python3 -m pytest -q tests
+```
+
+Result: `1305 passed, 6 skipped, 81 warnings in 64.03s`.
+
+There is no current bounded unattended `LOCAL` repair row in `GAPS.md`.
+`GAP-019` remains the highest-severity non-real row, but its current `Next
+repair` explicitly says no bounded unattended helper split is identified by
+`config/docker-authority-inventory.json`. The remaining closure path is an
+operator residual-risk decision, an explicitly authorized stronger isolation
+design, or authorized live alert integration for the source-owned incident
+signals.
+
+Because the `LOCAL` queue is empty, the first slice is a documentation/handoff
+slice, not a code repair. Do not invent speculative source work or claim live
+proof locally.
+
+## Completed Atlas Work
+
+- [x] Read the required planning inputs.
+- [x] Built the current queue from `GAPS.md`.
+- [x] Checked `GAP-025` before selecting any other row.
+- [x] Confirmed broad local no-secret Python validation is green.
+- [x] Added explicit `Goal` and `Acceptance Criteria/Validation` sections for
+  the build gate.
+- [x] Preserved the unattended no-live/no-host-mutation boundary.
+- [x] Kept live proof, policy, and residual-risk rows open instead of
+  fake-closing them with local tests.
+- [x] Kept `GAP-019` open as trusted-host residual risk.
+- [x] Recorded the lint-phase source/test repair without changing live-proof,
+  policy, or residual-risk gate status.
+- [x] Refreshed the active plan after the current required-read pass without
+  opening speculative local code work.
+- [x] Confirmed `GAPS.md` and `USER_JOURNEY.md` need no document-phase content
+  changes because no gap row status or user journey changed.
+
+## Current Queue
+
+### LOCAL
+
+No current bounded unattended local repair row remains.
+
+Conditional local triggers:
+
+- `GAP-025`: reopen only if `python3 -m pytest -q tests` regresses.
+- Any proof/policy/residual row: demote to a new `LOCAL` repair only after an
+  authorized proof window, operator policy decision, or accepted isolation
+  design exposes a concrete source/test/doc defect.
+
+### LIVE_PROOF
+
+| Row | Boundary | Handoff |
+| --- | --- | --- |
+| `GAP-001` | Full paid production journey. Local validation cannot close it. | Run `PG-PROD` with authorized scratch/prod credentials and a redacted evidence ledger. |
+| `GAP-002` | Stripe checkout, portal, webhook, cancellation, and refuel are external proof. | Run `PG-STRIPE`; record event ids, entitlement rows, and replay behavior without secrets. |
+| `GAP-003` | Telegram and Discord Raven delivery require live platform proof. | Run Telegram and Discord proof rows separately so one platform failure can be classified independently. |
+| `GAP-004` | Domain/Tailscale ingress and fleet apply are live deployment proof. | Run one domain-mode and one Tailscale-mode scratch deployment with teardown evidence. |
+| `GAP-005` | Hermes/Drive/Code/Terminal workspace is browser/live proof. | Run `bin/arclink-live-proof --journey workspace --live --json` in an authorized window. |
+| `GAP-007` | Notion setup is fail-closed locally; live integration remains unproven. | Run `PG-NOTION` with authorized Notion credentials and preserve shared-root read/write/webhook/dashboard evidence. |
+| `GAP-013` | Local backup prep exists; GitHub write, activation, and restore need proof. | Run authorized `PG-BACKUP` for backup activation and restore. |
+| `GAP-015` | Share prompt delivery/retry requires live public bots. | Run authorized `PG-BOTS` for Telegram and Discord share approval callbacks and retry-after-link behavior. |
+| `GAP-018` | Admin action readiness matrix is local; real side effects are live proof. | Run authorized live proof rows for the smallest safe action subset. |
+| `GAP-020` | Local restore smoke exists; disaster recovery is not production-proven. | Run authorized `PG-BACKUP` staging restore proof and preserve dated evidence. |
+| `GAP-021` | Fake provider lifecycle tests exist; cloud worker creation is external proof. | Run one scratch-worker lifecycle per provider with API, SSH wait, join, probe, drain/remove, and destroy evidence. |
+| `GAP-022` | Deterministic fallback is local; live Crew Training generation is provider proof. | Run bounded live generation proof and keep fallback labels visible. |
+| `GAP-023` | Public selected-agent final-message delivery remains the contract. Streaming is unvalidated. | Keep final-message copy until live streaming proof passes. |
+
+### POLICY_DECISION
+
+| Row | Boundary | Handoff |
+| --- | --- | --- |
+| `GAP-006` | Provider self-service/account lifecycle is product policy first, then provider proof. | Decide provider self-service/account policy before bounded provider live proof. |
+| `GAP-014` | Browser `Request Share` has local fail-closed work, but production share completion and backend policy remain unsettled. | Decide native broker versus approved Nextcloud-backed adapter, then run production workspace plus `PG-BOTS` proof. |
+| `GAP-017` | Captain-initiated Pod migration is disabled by policy. | Keep operator-only with explicit dashboard copy, or define a Captain request/approval path. |
+| `GAP-024` | Provider changes are visible but not self-service. | Choose self-service or operator-only, then make dashboard and Raven copy unambiguous. |
+
+### RESIDUAL_RISK_ACCEPTANCE
+
+| Row | Boundary | Handoff |
+| --- | --- | --- |
+| `GAP-019` | Docker socket/root services remain a P0 trusted-host boundary after local hardening through `GAP-019-BD`. The current inventory names residual host-equivalent authority, not a concrete unattended repair. | Operator must accept the residual risk, authorize a stronger isolation design, or wire the source-owned incident signals into an authorized live alerting stack. If stronger isolation is chosen, split it into a new concrete source/test repair row before editing. |
+
+## Bounded First Slice
+
+Working name: external-gate and residual-risk handoff refresh.
+
+Owner surface:
+
+- Primary file to change: `IMPLEMENTATION_PLAN.md`.
+- Source-of-truth inputs: `GAPS.md`, `USER_JOURNEY.md`,
+  `research/COVERAGE_MATRIX.md`, and
+  `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`.
+- Handoff artifacts to inspect only if stale: `mission_status.md` and
+  `research/BUILD_COMPLETION_NOTES.md`.
+- Code owner surface: none for this unattended slice unless `GAP-025`
+  regresses or an authorized proof/policy/risk decision creates a concrete
+  local repair row.
+
+Focused reproduction command:
+
+```bash
+python3 -m pytest -q tests
+```
+
+Success criteria:
+
+- `GAP-025` remains backed by a current green broad local Python suite result.
+- Every current non-real `GAPS.md` row is classified as `LIVE_PROOF`,
+  `POLICY_DECISION`, or `RESIDUAL_RISK_ACCEPTANCE`.
+- No live external or host-mutating command is planned or run.
+- `GAP-019` remains open and routed to residual-risk acceptance, authorized
+  stronger isolation design, or authorized live alert integration.
+- The next operator/agent can move directly to an authorized proof, policy, or
+  risk window without guessing which local repair to start.
+
+## Current Tasks
+
+- [x] Re-read the required planning inputs.
+- [x] Rebuild the queue from current `GAPS.md`.
+- [x] Recheck `GAP-025` with the broad no-secret Python suite.
+- [x] Update this active implementation plan with the current queue, boundaries,
+  tests, owner surface, and success criteria.
+- [x] Refresh the document-phase handoff after the current broad-suite recheck.
+- [ ] Operator proof window: run the `LIVE_PROOF` handoffs above with
+  authorized credentials and redacted evidence.
+- [ ] Operator/product decision window: resolve `GAP-006`, `GAP-014`,
+  `GAP-017`, and `GAP-024`.
+- [ ] Operator/security risk window: choose `GAP-019` residual-risk acceptance,
+  stronger isolation design, or authorized live alert integration.
+- [ ] Future local repair window: if any proof, policy, risk decision, or broad
+  test run exposes a concrete source defect, add or demote it to a new
+  `LOCAL` row and run the focused tests for that owner surface.
+
+## Acceptance Criteria/Validation
+
+Acceptance criteria for this unattended phase:
+
+- [x] `GAP-025` is checked before selecting any other row.
+- [x] Current `GAPS.md` non-real rows are classified into `LOCAL`,
+  `LIVE_PROOF`, `POLICY_DECISION`, and `RESIDUAL_RISK_ACCEPTANCE`.
+- [x] If the `LOCAL` queue is empty, the plan routes to documentation/handoff
+  instead of speculative code work.
+- [x] The bounded next step names an owner surface, files to inspect/change, a
+  focused reproduction command, and success criteria.
+- [x] No live external, deploy/install/upgrade, Docker lifecycle, systemd,
+  credentialed service, private-state read, or host-mutating command is planned
+  or run.
+- [ ] Operator proof window completes the `LIVE_PROOF` rows with authorized
+  credentials and redacted evidence.
+- [ ] Operator/product window resolves `GAP-006`, `GAP-014`, `GAP-017`, and
+  `GAP-024`.
+- [ ] Operator/security window accepts `GAP-019` residual risk, authorizes a
+  stronger isolation design, or authorizes live alert integration.
+
+Run after this plan update:
+
+```bash
 python3 tests/test_documentation_truths.py
-python3 tests/test_arclink_product_config.py
-python3 tests/test_arclink_hosted_api.py
-python3 tests/test_arclink_api_auth.py
-python3 tests/test_arclink_entitlements.py
-python3 tests/test_arclink_public_bots.py
-python3 tests/test_arclink_telegram.py
-python3 tests/test_arclink_discord.py
-python3 tests/test_arclink_provisioning.py
-python3 tests/test_arclink_sovereign_worker.py
-python3 tests/test_arclink_executor.py
-python3 tests/test_arclink_docker.py
-python3 tests/test_arclink_ingress.py
-python3 tests/test_arclink_mcp_schemas.py
-python3 tests/test_arclink_plugins.py
-python3 tests/test_arclink_notion_knowledge.py
-python3 tests/test_notion_ssot.py
-python3 tests/test_arclink_ssot_batcher.py
-python3 tests/test_memory_synthesizer.py
-python3 tests/test_arclink_memory_sync.py
-python3 tests/test_arclink_action_worker.py
-python3 tests/test_arclink_notification_delivery.py
-python3 tests/test_arclink_live_runner.py
-python3 tests/test_arclink_e2e_fake.py
+python3 tests/test_public_repo_hygiene.py
+python3 -m pytest -q tests/test_arclink_docker.py -k 'docker_authority_inventory_matches_compose_boundary or docker_docs_cover_socket' --maxfail=5
+git diff --check
+```
+
+Current results:
+
+- `python3 tests/test_documentation_truths.py` passed: 10 tests.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `python3 -m pytest -q tests/test_arclink_docker.py -k 'docker_authority_inventory_matches_compose_boundary or docker_docs_cover_socket' --maxfail=5`
+  passed: 2 passed, 62 deselected.
+- `python3 -m pytest -q tests/test_arclink_docker.py::test_agent_helpers_reject_symlinked_home_root_before_root_work --maxfail=1`
+  passed: 1 passed.
+- `python3 -m pytest -q tests/test_arclink_docker.py -k 'agent_helpers_reject_symlinked_home_root_before_root_work or agent_process_helper_records_redacted_rejection_incident_before_subprocess or agent_process_helper_rejects_configured_root_mismatch' --maxfail=5`
+  passed: 3 passed, 61 deselected.
+- `python3 -m py_compile python/arclink_rejection_incidents.py python/arclink_agent_process_helper.py` passed.
+- `bash -n deploy.sh bin/*.sh test.sh` passed.
+- `python3 -m compileall -q python plugins/hermes-agent/arclink-managed-context plugins/hermes-agent/code/dashboard plugins/hermes-agent/drive/dashboard` passed.
+- `npm test`, `npm run lint`, and `npm run build` passed in `web/`.
+- `git diff --check` passed.
+
+Broad validation already completed for this pass:
+
+```bash
+python3 -m pytest -q tests
+```
+
+Result: `1305 passed, 6 skipped, 81 warnings in 64.03s`.
+
+Broaden again only after a source/test change:
+
+```bash
+python3 -m pytest -q tests
+```
+
+If shell scripts are changed unexpectedly, also run:
+
+```bash
 bash -n deploy.sh bin/*.sh test.sh
-cd web && npm test && npm run lint && npm run build
 ```
 
-Browser proof is local-mocked unless credentials and a running safe local web
-server are explicitly prepared:
+## Remaining External Handoffs
 
-```bash
-cd web && npm run test:browser
-```
+Only external gates remain: authorized live proof for `GAP-001`, `GAP-002`,
+`GAP-003`, `GAP-004`, `GAP-005`, `GAP-007`, `GAP-013`, `GAP-015`, `GAP-018`,
+`GAP-020`, `GAP-021`, `GAP-022`, and `GAP-023`; operator/product policy for
+`GAP-006`, `GAP-014`, `GAP-017`, and `GAP-024`; and `GAP-019`
+residual-risk acceptance, stronger isolation design, or authorized live alert
+integration.
 
-Do not run these without later explicit authorization:
-
-```bash
-./deploy.sh install
-./deploy.sh upgrade
-./deploy.sh docker install
-./deploy.sh docker upgrade
-./deploy.sh control install
-./deploy.sh control upgrade
-bin/arclink-live-proof --live --json
-bin/arclink-live-proof --journey workspace --live --json
-```
-
-## Done Means
-
-- [ ] `IMPLEMENTATION_PLAN.md` and `research/COVERAGE_MATRIX.md` point the
-  Build phase at every required journey surface and source family.
-- [ ] `USER_JOURNEY.md` is rewritten from fresh source evidence and covers all
-  required surfaces, handoffs, retry/error paths, and isolation boundaries.
-- [ ] `GAPS.md` contains the status/severity taxonomy, gap register, not-gaps
-  section, proof gates, policy questions, and test plan.
-- [ ] Every `real` claim in `GAPS.md` has source plus test evidence, or is
-  clearly a documented product contract rather than an implementation claim.
-- [ ] Every `proof-gated` claim names the exact live credential or authorized
-  proof run needed.
-- [ ] Every `policy-question` is phrased as a decision the operator/product
-  owner can answer.
-- [ ] Validation commands are run or explicitly marked not run with reason.
+`GAP-025` remains locally closed while the broad no-secret Python suite stays
+green.

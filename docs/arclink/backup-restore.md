@@ -69,6 +69,33 @@ docker run --rm -v arclink_deployment_postgres:/data -v /backup:/backup \
 - Keep weekly backups for 90 days.
 - Vault git history provides indefinite file-level recovery.
 
+## Local Restore Smoke
+
+Before claiming a backup artifact is usable, run the no-secret local restore
+smoke against a local clone, snapshot directory, tar archive, or SQLite backup
+file. The smoke restores into a temporary or provided directory, checks the
+restored shape without printing file contents, refuses remote GitHub/SSH
+sources, and does not start Docker, systemd, deploy, or live services.
+
+```bash
+bin/arclink-restore-smoke.sh \
+  --kind shared \
+  --source /path/to/local/arclink-priv-backup \
+  --restore-dir /tmp/arclink-shared-restore-smoke \
+  --json
+
+bin/arclink-restore-smoke.sh \
+  --kind agent-home \
+  --source /path/to/local/agent-home-backup \
+  --restore-dir /tmp/arclink-agent-restore-smoke \
+  --json
+```
+
+This is only a local artifact contract. `PG-BACKUP` still requires an
+authorized staging restore of the control database, at least one ArcPod state
+stack, dashboard/API health, and deployment service health before production
+backup recoverability can be claimed.
+
 ## Testing Backups
 
 Periodically restore a backup to a staging environment and verify:

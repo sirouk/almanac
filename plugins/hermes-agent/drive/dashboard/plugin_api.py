@@ -12,6 +12,7 @@ import tempfile
 import time
 from typing import Any
 import urllib.parse
+import urllib.request
 import xml.etree.ElementTree as ET
 
 try:
@@ -131,6 +132,7 @@ _SENSITIVE_FILE_NAMES = {
 }
 _MAX_TEXT_BYTES = 1_000_000
 _SEARCH_LIMIT = 300
+_SHARE_REQUEST_BROKER_TOKEN_HEADER = "X-ArcLink-Share-Request-Broker-Token"
 
 
 def _hermes_home() -> Path:
@@ -319,6 +321,71 @@ def _assert_not_sensitive(path: Path) -> None:
         raise HTTPException(status_code=403, detail="Secret or private runtime paths are not available in Drive")
 
 
+def _share_request_broker_url() -> str:
+    return _clean_url(_env_first("DRIVE_SHARE_REQUEST_BROKER_URL", "ARCLINK_SHARE_REQUEST_BROKER_URL"))
+
+
+def _share_request_broker_token_file() -> Path | None:
+    value = _env_first("DRIVE_SHARE_REQUEST_BROKER_TOKEN_FILE", "ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE")
+    return Path(value).expanduser() if value else None
+
+
+def _clean_broker_token(value: str) -> str:
+    token = str(value or "").strip()
+    if not token or len(token) > 4096:
+        return ""
+    if any(ord(char) < 33 or ord(char) > 126 for char in token):
+        return ""
+    return token
+
+
+def _share_request_broker_token() -> str:
+    token_file = _share_request_broker_token_file()
+    if token_file is None:
+        return ""
+    try:
+        return _clean_broker_token(token_file.read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+
+
+def _owner_deployment_id() -> str:
+    value = _env_first("DRIVE_OWNER_DEPLOYMENT_ID", "ARCLINK_OWNER_DEPLOYMENT_ID", "ARCLINK_DEPLOYMENT_ID")
+    if value:
+        return _clean_text(value, 120)
+    access, _managed = _access_state()
+    return _clean_text(access.get("owner_deployment_id") or access.get("deployment_id"), 120)
+
+
+def _share_request_auth_headers() -> dict[str, str]:
+    token = _share_request_broker_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="ArcLink share-request broker authentication is not configured")
+    return {_SHARE_REQUEST_BROKER_TOKEN_HEADER: token}
+
+
+def _share_request_state() -> dict[str, Any]:
+    broker_url = _share_request_broker_url()
+    auth_configured = bool(_share_request_broker_token())
+    owner_deployment_configured = bool(_owner_deployment_id())
+    enabled = bool(broker_url and auth_configured and owner_deployment_configured)
+    reason = ""
+    if not broker_url:
+        reason = "ArcLink share-request broker is not configured"
+    elif not auth_configured:
+        reason = "ArcLink share-request broker authentication is not configured"
+    elif not owner_deployment_configured:
+        reason = "ArcLink share-request broker deployment identity is not configured"
+    return {
+        "enabled": enabled,
+        "available": enabled,
+        "broker": "arclink-share-grants",
+        "status": "enabled" if enabled else "disabled",
+        "reason": reason,
+        "direct_links": False,
+    }
+
+
 def _first_existing_dir(candidates: list[Path]) -> Path | None:
     for candidate in candidates:
         try:
@@ -339,6 +406,7 @@ def _root_capabilities(
     backend: str,
     webdav_available: bool = False,
     read_only: bool = False,
+    share_request_enabled: bool = False,
 ) -> dict[str, bool]:
     local = bool(available and backend == "local")
     if read_only:
@@ -358,6 +426,7 @@ def _root_capabilities(
             "rename": False,
             "restore": False,
             "search": local,
+            "share_request": False,
             "sharing": False,
             "trash": False,
             "upload": False,
@@ -379,6 +448,7 @@ def _root_capabilities(
         "rename": local or backend == "nextcloud-webdav",
         "restore": local,
         "search": local,
+        "share_request": bool(local and share_request_enabled),
         "sharing": False,
         "trash": local,
         "upload": local or backend == "nextcloud-webdav",
@@ -393,6 +463,7 @@ def _root_descriptor(
     *,
     webdav_available: bool = False,
     read_only: bool = False,
+    share_request_enabled: bool = False,
 ) -> dict[str, Any]:
     available = root is not None
     return {
@@ -407,18 +478,26 @@ def _root_descriptor(
             backend="local" if available else "unavailable",
             webdav_available=webdav_available,
             read_only=read_only,
+            share_request_enabled=share_request_enabled,
         ),
     }
 
 
-def _local_root_descriptors(webdav_available: bool = False) -> list[dict[str, Any]]:
+def _local_root_descriptors(webdav_available: bool = False, share_request_enabled: bool = False) -> list[dict[str, Any]]:
     return [
-        _root_descriptor("vault", "Vault", _first_existing_dir(_candidate_vault_roots()), webdav_available=webdav_available),
+        _root_descriptor(
+            "vault",
+            "Vault",
+            _first_existing_dir(_candidate_vault_roots()),
+            webdav_available=webdav_available,
+            share_request_enabled=share_request_enabled,
+        ),
         _root_descriptor(
             "workspace",
             "Workspace",
             _first_existing_dir(_candidate_workspace_roots()),
             webdav_available=webdav_available,
+            share_request_enabled=share_request_enabled,
         ),
         _root_descriptor(
             "linked",
@@ -455,6 +534,70 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
 def _assert_writable_root(root_id: str) -> None:
     if str(root_id or "").strip().lower() == "linked":
         raise HTTPException(status_code=403, detail="Linked resources are read-only")
+
+
+def _share_request_recipient(payload: dict[str, Any]) -> str:
+    for key in ("recipient", "recipient_user_id", "recipient_email", "recipient_handle"):
+        value = _clean_text(payload.get(key), 160)
+        if value:
+            return value
+    raise HTTPException(status_code=400, detail="Recipient identity is required")
+
+
+def _share_item_kind(path: Path) -> str:
+    if path.is_dir():
+        return "directory"
+    if path.is_file():
+        return "file"
+    raise HTTPException(status_code=404, detail="Drive item does not exist")
+
+
+def _share_request_payload(payload: dict[str, Any], ctx: dict[str, Any], target: Path, relative: str) -> dict[str, Any]:
+    recipient = _share_request_recipient(payload)
+    owner_deployment = _owner_deployment_id()
+    if not owner_deployment:
+        raise HTTPException(status_code=503, detail="ArcLink share-request broker deployment identity is not configured")
+    display_name = _clean_text(payload.get("display_name") or target.name or _display_path(relative), 120)
+    return {
+        "contract": "arclink-share-grants",
+        "source_plugin": "drive",
+        "owner_deployment_id": owner_deployment,
+        "resource_root": str(ctx.get("id") or "vault"),
+        "resource_path": _display_path(relative),
+        "resource_kind": "drive",
+        "item_kind": _share_item_kind(target),
+        "display_name": display_name,
+        "recipient": recipient,
+        "requested_access": "read",
+        "share_mode": "owner_approval",
+        "reshare_allowed": False,
+    }
+
+
+def _submit_share_request_to_broker(url: str, payload: dict[str, Any], auth_headers: dict[str, str]) -> dict[str, Any]:
+    body = json.dumps(payload, sort_keys=True).encode("utf-8")
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    headers.update(auth_headers)
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response_body = response.read(1_000_000)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="ArcLink share-request broker rejected the request") from exc
+    try:
+        decoded = json.loads(response_body.decode("utf-8") or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="ArcLink share-request broker returned invalid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise HTTPException(status_code=502, detail="ArcLink share-request broker returned invalid JSON")
+    if decoded.get("ok") is False:
+        raise HTTPException(status_code=502, detail=_clean_text(decoded.get("detail"), 200) or "ArcLink share-request broker failed")
+    return decoded
 
 
 def _meta_path() -> Path:
@@ -1122,7 +1265,11 @@ async def status() -> dict[str, Any]:
     nextcloud = dict(backend.get("nextcloud") or {})
     nextcloud.pop("password", None)
     webdav_available = bool((backend.get("profile") or {}).get("available"))
-    roots = _local_root_descriptors(webdav_available=webdav_available)
+    share_request_state = _share_request_state()
+    roots = _local_root_descriptors(
+        webdav_available=webdav_available,
+        share_request_enabled=bool(share_request_state.get("enabled")),
+    )
     default_root = _default_root_id(roots)
     root = next((item for item in roots if item.get("id") == default_root), None)
     available = bool(default_root)
@@ -1135,6 +1282,7 @@ async def status() -> dict[str, Any]:
         "backend": "local-roots" if available else backend["name"],
         "roots": roots,
         "default_root": default_root,
+        "share_request": share_request_state,
         "mount": nextcloud.get("mount") or "/Vault",
         "username": nextcloud.get("username") or "",
         "url": nextcloud.get("url") or "",
@@ -1144,7 +1292,38 @@ async def status() -> dict[str, Any]:
             available=backend["name"] == "nextcloud-webdav",
             backend=backend["name"],
             webdav_available=webdav_available,
+            share_request_enabled=bool(share_request_state.get("enabled")),
         ),
+    }
+
+
+@router.post("/share/request")
+async def share_request(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    payload = payload if isinstance(payload, dict) else {}
+    ctx = _root_context(payload.get("root") or payload.get("root_id"))
+    if str(ctx.get("id") or "").strip().lower() == "linked":
+        raise HTTPException(status_code=403, detail="Linked resources cannot be reshared from Drive")
+    target, relative = _resolve_local(Path(ctx["path"]), payload.get("path"), root_id=ctx["id"])
+    request_payload = _share_request_payload(payload, ctx, target, relative)
+    broker_url = _share_request_broker_url()
+    if not broker_url:
+        raise HTTPException(status_code=503, detail="ArcLink share-request broker is not configured")
+    auth_headers = _share_request_auth_headers()
+    broker_result = _submit_share_request_to_broker(broker_url, request_payload, auth_headers)
+    grant = broker_result.get("grant")
+    if not isinstance(grant, dict):
+        grant = {key: value for key, value in broker_result.items() if key not in {"ok"}}
+    status_text = _clean_text(
+        broker_result.get("status") or grant.get("status") or "pending_owner_approval",
+        80,
+    )
+    return {
+        "ok": True,
+        "broker": "arclink-share-grants",
+        "status": status_text,
+        "request": request_payload,
+        "grant": grant,
     }
 
 

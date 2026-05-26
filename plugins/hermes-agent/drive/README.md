@@ -28,11 +28,17 @@ Hermes `v2026.4.30` or newer.
 - Drag/drop upload targets the current folder.
 - Rename, move, delete, restore, and write-style batch operations are confined
   to writable roots.
-- Right-click share-link creation is not exposed from Drive until a live
-  ArcLink browser broker or approved Nextcloud-backed adapter is enabled.
-  Agents can use the governed ArcLink MCP `shares.request` rail for named
-  Vault/Workspace paths and brokered Notion/SSOT subtrees when that path is
-  appropriate.
+- Direct share-link creation is not exposed from Drive. When
+  `DRIVE_SHARE_REQUEST_BROKER_URL` or `ARCLINK_SHARE_REQUEST_BROKER_URL` is
+  configured together with `DRIVE_SHARE_REQUEST_BROKER_TOKEN_FILE` or
+  `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE`, writable Vault/Workspace items
+  expose a brokered `Request Share` action that posts to `/share/request` using
+  ArcLink share-grant semantics. The payload includes the owner deployment id
+  from `ARCLINK_DEPLOYMENT_ID` or `state/arclink-web-access.json`, and the route
+  sends the token only as the `X-ArcLink-Share-Request-Broker-Token` broker
+  header. Without a configured broker URL, token file, and owner deployment
+  identity, share requests fail closed before any external call. Linked roots
+  never expose the action.
 - Linked is read-only: browse, search, preview, and download are allowed;
   upload, rename, move, delete, restore, and sharing are disabled. Copy and
   duplicate from Linked create a new owned copy in Vault or Workspace and do not

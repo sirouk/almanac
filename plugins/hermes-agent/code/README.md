@@ -25,10 +25,17 @@ Hermes `v2026.4.30` or newer.
 - File clicks open a rotating preview tab; double-click pins a tab.
 - Saves are explicit and protected by disk-hash conflict checks.
 - Source control is allowlisted to repo-confined `git` operations.
-- Right-click share-link creation is not exposed from Code until a live
-  ArcLink browser broker or approved Nextcloud-backed adapter is enabled.
-  Agents can use the governed ArcLink MCP `shares.request` rail for named
-  Vault/Workspace paths when that path is appropriate.
+- Direct share-link creation is not exposed from Code. When
+  `CODE_SHARE_REQUEST_BROKER_URL` or `ARCLINK_SHARE_REQUEST_BROKER_URL` is
+  configured together with `CODE_SHARE_REQUEST_BROKER_TOKEN_FILE` or
+  `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE`, writable Workspace/Vault items
+  expose a brokered `Request Share` action that posts to `/share/request` using
+  ArcLink share-grant semantics. The payload includes the owner deployment id
+  from `ARCLINK_DEPLOYMENT_ID` or `state/arclink-web-access.json`, and the route
+  sends the token only as the `X-ArcLink-Share-Request-Broker-Token` broker
+  header. Without a configured broker URL, token file, and owner deployment
+  identity, share requests fail closed before any external call. Linked roots
+  never expose the action.
 - Linked is read-only: file reads, previews, repository discovery, git status,
   and git diff are allowed; saves, sharing, and git mutations are rejected.
   Duplicate from Linked writes a new owned copy into Workspace or Vault and does

@@ -749,6 +749,279 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
             os.environ.update(old_env)
 
 
+def test_arclink_drive_code_share_request_broker_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        vault = root / "vault"
+        workspace = root / "workspace"
+        linked = root / "linked"
+        vault.mkdir(parents=True, exist_ok=True)
+        workspace.mkdir(parents=True, exist_ok=True)
+        linked.mkdir(parents=True, exist_ok=True)
+        (vault / "brief.md").write_text("# Brief\n\nShare this through ArcLink.\n", encoding="utf-8")
+        (workspace / "app.py").write_text("print('share me')\n", encoding="utf-8")
+        (linked / "incoming.md").write_text("# Incoming\n\nRead-only accepted share.\n", encoding="utf-8")
+        (vault / ".ssh").mkdir()
+        (vault / ".ssh" / "id_rsa").write_text("PRIVATE\n", encoding="utf-8")
+        (workspace / ".ssh").mkdir()
+        (workspace / ".ssh" / "id_rsa").write_text("PRIVATE\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        for key in (
+            "ARCLINK_SHARE_REQUEST_BROKER_URL",
+            "DRIVE_SHARE_REQUEST_BROKER_URL",
+            "CODE_SHARE_REQUEST_BROKER_URL",
+            "ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE",
+            "DRIVE_SHARE_REQUEST_BROKER_TOKEN_FILE",
+            "CODE_SHARE_REQUEST_BROKER_TOKEN_FILE",
+        ):
+            os.environ.pop(key, None)
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["DRIVE_ROOT"] = str(vault)
+        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["CODE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["ARCLINK_LINKED_RESOURCES_ROOT"] = str(linked)
+        os.environ["ARCLINK_DEPLOYMENT_ID"] = "arcdep_share_request_owner"
+        try:
+            drive_api = load_module(
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_share_request_contract_test",
+            )
+            code_api = load_module(
+                PLUGINS_ROOT / "code" / "dashboard" / "plugin_api.py",
+                "arclink_code_share_request_contract_test",
+            )
+
+            drive_status = asyncio.run(drive_api.status())
+            code_status = asyncio.run(code_api.status())
+            expect(drive_status["share_request"]["enabled"] is False, str(drive_status["share_request"]))
+            expect(code_status["share_request"]["enabled"] is False, str(code_status["share_request"]))
+            drive_roots = {item["id"]: item for item in drive_status["roots"]}
+            code_roots = {item["id"]: item for item in code_status["roots"]}
+            for root_id in ("vault", "workspace", "linked"):
+                expect(drive_roots[root_id]["capabilities"]["share_request"] is False, str(drive_roots[root_id]))
+                expect(code_roots[root_id]["capabilities"]["share_request"] is False, str(code_roots[root_id]))
+                expect(drive_roots[root_id]["capabilities"]["sharing"] is False, str(drive_roots[root_id]))
+                expect(code_roots[root_id]["capabilities"]["sharing"] is False, str(code_roots[root_id]))
+
+            drive_body = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+            code_body = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+            expect("Request Share" in drive_body, "Drive UI should expose brokered request-share copy")
+            expect("Request Share" in code_body, "Code UI should expose brokered request-share copy")
+            for body, label in ((drive_body, "Drive"), (code_body, "Code")):
+                expect("Generate share link" not in body, f"{label} UI must not imply direct share-link generation")
+                expect("Create share link" not in body, f"{label} UI must not imply direct share-link generation")
+                expect('"/share/request"' in body, f"{label} UI should call the brokered request-share route")
+
+            validation_cases = [
+                (
+                    "drive missing recipient",
+                    drive_api.share_request,
+                    {"root": "vault", "path": "/brief.md"},
+                    400,
+                ),
+                (
+                    "drive linked root",
+                    drive_api.share_request,
+                    {"root": "linked", "path": "/incoming.md", "recipient": "crew@example.test"},
+                    403,
+                ),
+                (
+                    "drive sensitive path",
+                    drive_api.share_request,
+                    {"root": "vault", "path": "/.ssh/id_rsa", "recipient": "crew@example.test"},
+                    403,
+                ),
+                (
+                    "drive unconfigured broker",
+                    drive_api.share_request,
+                    {"root": "vault", "path": "/brief.md", "recipient": "crew@example.test"},
+                    503,
+                ),
+                (
+                    "code missing recipient",
+                    code_api.share_request,
+                    {"root": "workspace", "path": "/app.py"},
+                    400,
+                ),
+                (
+                    "code linked root",
+                    code_api.share_request,
+                    {"root": "linked", "path": "/incoming.md", "recipient": "crew@example.test"},
+                    403,
+                ),
+                (
+                    "code sensitive path",
+                    code_api.share_request,
+                    {"root": "workspace", "path": "/.ssh/id_rsa", "recipient": "crew@example.test"},
+                    403,
+                ),
+                (
+                    "code unconfigured broker",
+                    code_api.share_request,
+                    {"root": "workspace", "path": "/app.py", "recipient": "crew@example.test"},
+                    503,
+                ),
+            ]
+            for label, handler, payload, expected_status in validation_cases:
+                try:
+                    asyncio.run(handler(JsonRequest(payload)))
+                except Exception as exc:
+                    expect(
+                        getattr(exc, "status_code", None) == expected_status,
+                        f"expected {label} status {expected_status}, got {exc!r}",
+                    )
+                else:
+                    raise AssertionError(f"expected {label} to fail closed")
+
+            submitted: list[dict] = []
+
+            def fake_submit(_url: str, body: dict, auth_headers: dict) -> dict:
+                submitted.append({"url": _url, "payload": dict(body), "headers": dict(auth_headers)})
+                return {
+                    "ok": True,
+                    "grant": {
+                        "grant_id": "share_test",
+                        "status": "pending_owner_approval",
+                        "reshare_allowed": False,
+                    },
+                }
+
+            drive_api._submit_share_request_to_broker = fake_submit
+            code_api._submit_share_request_to_broker = fake_submit
+            os.environ["ARCLINK_SHARE_REQUEST_BROKER_URL"] = "http://127.0.0.1:8282/api/v1/user/share-grants/broker"
+
+            url_only_drive = asyncio.run(drive_api.status())
+            url_only_code = asyncio.run(code_api.status())
+            expect(url_only_drive["share_request"]["enabled"] is False, str(url_only_drive["share_request"]))
+            expect(url_only_code["share_request"]["enabled"] is False, str(url_only_code["share_request"]))
+            expect("auth" in url_only_drive["share_request"]["reason"].lower(), str(url_only_drive["share_request"]))
+            expect("auth" in url_only_code["share_request"]["reason"].lower(), str(url_only_code["share_request"]))
+            url_only_drive_roots = {item["id"]: item for item in url_only_drive["roots"]}
+            url_only_code_roots = {item["id"]: item for item in url_only_code["roots"]}
+            expect(url_only_drive_roots["vault"]["capabilities"]["share_request"] is False, str(url_only_drive_roots["vault"]))
+            expect(url_only_code_roots["workspace"]["capabilities"]["share_request"] is False, str(url_only_code_roots["workspace"]))
+            try:
+                asyncio.run(
+                    drive_api.share_request(
+                        JsonRequest({"root": "vault", "path": "/brief.md", "recipient": "crew@example.test"})
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 503, f"expected drive URL-only broker auth guard, got {exc!r}")
+            else:
+                raise AssertionError("expected drive URL-only broker auth guard to fail closed")
+            try:
+                asyncio.run(
+                    code_api.share_request(
+                        JsonRequest({"root": "workspace", "path": "/app.py", "recipient": "crew@example.test"})
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 503, f"expected code URL-only broker auth guard, got {exc!r}")
+            else:
+                raise AssertionError("expected code URL-only broker auth guard to fail closed")
+            expect(submitted == [], f"URL-only broker config must not dispatch, got {len(submitted)} call(s)")
+
+            auth_value = "shareauth-local-test-value"
+            auth_file = root / "share-request-broker.token"
+            auth_file.write_text(auth_value + "\n", encoding="utf-8")
+            os.environ["ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE"] = str(auth_file)
+
+            enabled_drive = asyncio.run(drive_api.status())
+            enabled_code = asyncio.run(code_api.status())
+            expect(enabled_drive["share_request"]["enabled"] is True, str(enabled_drive["share_request"]))
+            expect(enabled_code["share_request"]["enabled"] is True, str(enabled_code["share_request"]))
+            for status_payload, label in (
+                (enabled_drive["share_request"], "Drive"),
+                (enabled_code["share_request"], "Code"),
+            ):
+                serialized_status = json.dumps(status_payload, sort_keys=True)
+                lowered_status = serialized_status.lower()
+                expect("token" not in lowered_status, f"{label} status exposed broker auth field names")
+                expect("secret" not in lowered_status, f"{label} status exposed broker auth field names")
+                expect(auth_value not in serialized_status, f"{label} status leaked broker auth material")
+            expect(auth_value not in json.dumps(enabled_drive, sort_keys=True), "Drive status leaked broker auth material")
+            expect(auth_value not in json.dumps(enabled_code, sort_keys=True), "Code status leaked broker auth material")
+            enabled_drive_roots = {item["id"]: item for item in enabled_drive["roots"]}
+            enabled_code_roots = {item["id"]: item for item in enabled_code["roots"]}
+            expect(enabled_drive_roots["vault"]["capabilities"]["share_request"] is True, str(enabled_drive_roots["vault"]))
+            expect(enabled_code_roots["workspace"]["capabilities"]["share_request"] is True, str(enabled_code_roots["workspace"]))
+            expect(enabled_drive_roots["linked"]["capabilities"]["share_request"] is False, str(enabled_drive_roots["linked"]))
+            expect(enabled_code_roots["linked"]["capabilities"]["share_request"] is False, str(enabled_code_roots["linked"]))
+
+            drive_result = asyncio.run(
+                drive_api.share_request(
+                    JsonRequest(
+                        {
+                            "root": "vault",
+                            "path": "/brief.md",
+                            "recipient": "crew@example.test",
+                            "display_name": "Launch Brief",
+                        }
+                    )
+                )
+            )
+            code_result = asyncio.run(
+                code_api.share_request(
+                    JsonRequest(
+                        {
+                            "root": "workspace",
+                            "path": "/app.py",
+                            "recipient": "crew@example.test",
+                        }
+                    )
+                )
+            )
+            expect(drive_result["status"] == "pending_owner_approval", str(drive_result))
+            expect(code_result["status"] == "pending_owner_approval", str(code_result))
+            expect(auth_value not in json.dumps(drive_result, sort_keys=True), "Drive response leaked broker auth material")
+            expect(auth_value not in json.dumps(code_result, sort_keys=True), "Code response leaked broker auth material")
+            source_plugins = [record["payload"]["source_plugin"] for record in submitted]
+            expect(source_plugins == ["drive", "code"], f"expected drive/code broker dispatches, got {source_plugins!r}")
+            for record in submitted:
+                payload = record["payload"]
+                headers = record["headers"]
+                expect(record["url"].endswith("/api/v1/user/share-grants/broker"), "expected configured share-request broker URL")
+                expect(
+                    headers.get("X-ArcLink-Share-Request-Broker-Token") == auth_value,
+                    "expected share-request broker auth header",
+                )
+                expect(auth_value not in json.dumps(payload, sort_keys=True), "broker payload leaked auth material")
+                expect(payload["contract"] == "arclink-share-grants", str(payload))
+                expect(payload["owner_deployment_id"] == "arcdep_share_request_owner", str(payload))
+                expect(payload["recipient"] == "crew@example.test", str(payload))
+                expect(payload["requested_access"] == "read", str(payload))
+                expect(payload["reshare_allowed"] is False, str(payload))
+                expect(payload["share_mode"] == "owner_approval", str(payload))
+                expect("share_link" not in json.dumps(payload, sort_keys=True), str(payload))
+            expect(
+                submitted[0]["payload"]["resource_root"] == "vault"
+                and submitted[0]["payload"]["resource_path"] == "/brief.md",
+                str(submitted[0]["payload"]),
+            )
+            expect(
+                submitted[0]["payload"]["resource_kind"] == "drive"
+                and submitted[0]["payload"]["item_kind"] == "file",
+                str(submitted[0]["payload"]),
+            )
+            expect(
+                submitted[1]["payload"]["resource_root"] == "workspace"
+                and submitted[1]["payload"]["resource_path"] == "/app.py",
+                str(submitted[1]["payload"]),
+            )
+            expect(
+                submitted[1]["payload"]["resource_kind"] == "code"
+                and submitted[1]["payload"]["item_kind"] == "file",
+                str(submitted[1]["payload"]),
+            )
+            print("PASS test_arclink_drive_code_share_request_broker_contract")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -3044,6 +3317,23 @@ def test_arclink_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             )
             expect("Bounded: search_limit ≤ 5" in vault_lookup_turn["context"], vault_lookup_turn["context"])
             expect("metadata" in vault_lookup_turn["context"], vault_lookup_turn["context"])
+
+            share_turn = hook(
+                session_id="session-recipes-share",
+                user_message="please share this file with recipient@example.test",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(share_turn, dict) and "- shares.request:" in share_turn.get("context", ""), f"expected shares.request recipe, got {share_turn!r}")
+            expect(
+                "copy/duplicate accepted Linked resources only into the recipient's owned Vault or Workspace roots"
+                in share_turn["context"],
+                share_turn["context"],
+            )
+            expect("policy question" not in share_turn["context"].lower(), share_turn["context"])
 
             knowledge_memory_turn = hook(
                 session_id="session-recipes-knowledge-memory",

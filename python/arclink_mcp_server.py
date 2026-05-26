@@ -82,7 +82,7 @@ TOOLS = {
     "vault.search-and-fetch": "Fast bounded search of shared/private vault knowledge and fetched text for top hits. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default and does not rerank. A leading Markdown YAML metadata block stays inline in text when fetched from the top and is also duplicated into metadata when present.",
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload used by the managed-context plugin, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
-    "shares.request": "Request a read-only Drive/Code share or Notion subtree share. The request stays pending for owner approval, then recipient acceptance, and never shares Linked resources onward.",
+    "shares.request": "Request a read-only Drive/Code share or Notion subtree share. The request stays pending for owner approval, then recipient acceptance, never shares Linked resources onward, and lets accepted Drive/Code Linked resources be copied only into owned Vault or Workspace roots.",
     "pod_comms.list": "List the caller's Pod Comms inbox/outbox for one authenticated deployment. Results are scoped to the caller's own deployment.",
     "pod_comms.send": "Send a Pod Comms message from the caller's deployment. Same-Captain Crew messages are allowed; cross-Captain messages require an active pod_comms share grant.",
     "pod_comms.share-file": "Create a Drive/Code share-grant reference that can be attached to Pod Comms after the recipient accepts it. Raw files are never embedded in message bodies.",
@@ -102,6 +102,15 @@ TOOLS = {
     "knowledge.search": "Search ArcLink knowledge across both vault/PDF and shared Notion rails when the source is unclear. Bounded source-agnostic discovery; prefer precise vault.*, notion.*, or ssot.* tools when the user clearly names the lane.",
     "knowledge.search-and-fetch": "Search and fetch ArcLink knowledge across vault/PDF and shared Notion rails in one bounded call. Best first move for broad user questions that could live in files, PDFs, cloned docs, or shared Notion pages.",
 }
+
+
+_LINKED_COPY_DUPLICATE_POLICY = "accepted_linked_resources_copy_to_owned_vault_or_workspace_only"
+_LINKED_COPY_DUPLICATE_DESTINATION_ROOTS = ["vault", "workspace"]
+_LINKED_COPY_DUPLICATE_POLICY_DETAIL = (
+    "Accepted Drive/Code Linked resources are read-only and cannot be reshared "
+    "or written in place; recipients may copy or duplicate them only into their "
+    "owned Vault or Workspace roots."
+)
 
 
 MCP_SESSION_RECOVERY_METHODS = {"notifications/initialized", "tools/list", "tools/call"}
@@ -1027,7 +1036,9 @@ def _create_agent_share_request(conn: sqlite3.Connection, arguments: dict[str, A
         "recipient_acceptance_required": str(result.payload.get("grant", {}).get("status") or "") != "accepted",
         "linked_root": "Linked",
         "reshare_allowed": False,
-        "copy_duplicate_policy": "policy_question",
+        "copy_duplicate_policy": _LINKED_COPY_DUPLICATE_POLICY,
+        "copy_duplicate_destination_roots": list(_LINKED_COPY_DUPLICATE_DESTINATION_ROOTS),
+        "copy_duplicate_policy_detail": _LINKED_COPY_DUPLICATE_POLICY_DETAIL,
         **result.payload,
     }
 

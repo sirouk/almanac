@@ -396,6 +396,24 @@
       return itemRoot(item) + "|" + (item && item.path ? item.path : "");
     }
 
+    function itemCanRequestShare(item) {
+      if (!item || item.trashed) return false;
+      const root = rootById(itemRoot(item));
+      const capabilities = (root && root.capabilities) || {};
+      return !!(root && root.available && !root.read_only && capabilities.share_request);
+    }
+
+    function requestShare(item) {
+      const recipient = (window.prompt("Recipient email, handle, or user id") || "").trim();
+      if (!recipient) return;
+      requestJSON("/share/request", {
+        root: itemRoot(item),
+        path: item.path,
+        recipient: recipient,
+        display_name: item.name || basename(item.path),
+      });
+    }
+
     function itemKey(item) {
       return itemRoot(item) + ":" + (item && item.path ? item.path : "");
     }
@@ -2015,6 +2033,7 @@
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { duplicateItem(contextItem); } }, "Duplicate"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { copyItemWithPrompt(contextItem); } }, "Copy"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { moveItemWithPrompt(contextItem); } }, "Move"),
+                    itemCanRequestShare(contextItem) ? h("button", { type: "button", role: "menuitem", onClick: function () { requestShare(contextItem); } }, "Request Share") : null,
                     !contextItem.trashed && contextItem.kind === "file"
                       ? h("a", { role: "menuitem", href: api("/download?path=" + encodeURIComponent(contextItem.path) + "&root=" + encodeURIComponent(itemRoot(contextItem) || "")), target: "_blank", rel: "noreferrer" }, "Download")
                       : null,

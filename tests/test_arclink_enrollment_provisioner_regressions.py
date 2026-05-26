@@ -619,6 +619,7 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
         write_config(config_path, config_values(root))
         old_env = os.environ.copy()
         os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        original_getpwnam = provisioner.pwd.getpwnam
         try:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
@@ -773,6 +774,7 @@ def test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle(
             expect("SLO targets" in str(refresh_job["last_note"] or ""), str(dict(refresh_job)))
             print("PASS test_webhook_verified_claim_finishes_onboarding_and_sends_completion_bundle")
         finally:
+            provisioner.pwd.getpwnam = original_getpwnam
             os.environ.clear()
             os.environ.update(old_env)
 
@@ -1252,7 +1254,7 @@ def test_run_host_upgrade_seeds_home_when_missing() -> None:
             os.environ.update(old_env)
 
 
-def test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode() -> None:
+def test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
     control = load_module(CONTROL_PY, "arclink_control_run_host_upgrade_docker_test")
@@ -1270,43 +1272,123 @@ def test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode() -> None:
         os.environ["ARCLINK_DOCKER_MODE"] = "1"
         os.environ["ARCLINK_DOCKER_HOST_REPO_DIR"] = str(host_repo)
         os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(host_priv)
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_URL"] = "http://operator-upgrade-broker.test"
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "test-token"
         try:
             cfg = control.Config.from_env()
             captured: dict[str, object] = {}
-            resolved_host_repo = host_repo.resolve(strict=False)
-            resolved_host_priv = host_priv.resolve(strict=False)
 
-            def fake_subprocess_run(*args, **kwargs):
-                captured["args"] = list(args[0])
-                captured["cwd"] = str(kwargs.get("cwd") or "")
-                captured["env"] = dict(kwargs.get("env") or {})
-                return subprocess.CompletedProcess(args=args[0], returncode=0)
+            def fake_broker_request(operation, payload, *, timeout_seconds=7200):
+                captured["operation"] = operation
+                captured["payload"] = dict(payload)
+                captured["timeout_seconds"] = timeout_seconds
+                return {"returncode": 0}
+
+            original_broker = provisioner._operator_upgrade_broker_request
+            provisioner._operator_upgrade_broker_request = fake_broker_request
+            try:
+                result = provisioner._run_host_upgrade(cfg, log_path=root / "priv" / "state" / "operator-actions" / "upgrade.log")
+            finally:
+                provisioner._operator_upgrade_broker_request = original_broker
+
+            expect(result.returncode == 0, str(result))
+            expect(captured.get("operation") == "run_operator_upgrade", str(captured))
+            payload = captured.get("payload") or {}
+            expect(isinstance(payload, dict), str(captured))
+            expect(str(payload.get("log_path") or "").endswith("operator-actions/upgrade.log"), str(payload))
+            upstream = payload.get("upstream") or {}
+            expect(isinstance(upstream, dict), str(payload))
+            expect("ARCLINK_UPSTREAM_REPO_URL" in upstream, str(upstream))
+            print("PASS test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_run_host_upgrade_docker_fail_closed_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_run_host_upgrade_docker_fail_closed_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_DOCKER_MODE"] = "1"
+        os.environ.pop("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN", None)
+        try:
+            cfg = control.Config.from_env()
+
+            def fail_if_subprocess_runs(*_args, **_kwargs):
+                raise AssertionError("Docker-mode host upgrades must fail closed before raw subprocess execution")
 
             original_run = provisioner.subprocess.run
-            provisioner.subprocess.run = fake_subprocess_run
+            provisioner.subprocess.run = fail_if_subprocess_runs
             try:
-                provisioner._run_host_upgrade(cfg, log_path=root / "upgrade.log")
+                log_path = root / "priv" / "state" / "operator-actions" / "upgrade.log"
+                result = provisioner._run_host_upgrade(cfg, log_path=log_path)
             finally:
                 provisioner.subprocess.run = original_run
 
-            expect(
-                captured.get("args") == [str(resolved_host_repo / "deploy.sh"), "docker", "upgrade"],
-                str(captured),
-            )
-            expect(captured.get("cwd") == str(resolved_host_repo), str(captured))
-            env = captured.get("env") or {}
-            expect(isinstance(env, dict), str(captured))
-            expect(env.get("ARCLINK_COMPONENT_UPGRADE_MODE") == "docker", str(env))
-            expect(env.get("ARCLINK_REPO_DIR") == str(resolved_host_repo), str(env))
-            expect(env.get("ARCLINK_PRIV_DIR") == str(resolved_host_priv), str(env))
-            expect(env.get("ARCLINK_CONFIG_FILE") == str(resolved_host_priv / "config" / "docker.env"), str(env))
-            log_text = (root / "upgrade.log").read_text(encoding="utf-8")
-            expected_log_line = "$ " + " ".join(
-                provisioner.shell_quote(arg)
-                for arg in [str(resolved_host_repo / "deploy.sh"), "docker", "upgrade"]
-            )
-            expect(expected_log_line in log_text, log_text)
-            print("PASS test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode")
+            expect(result.returncode == 2, str(result))
+            log_text = log_path.read_text(encoding="utf-8")
+            expect("refused before running a host-mutating command" in log_text, log_text)
+            expect("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN" in log_text, log_text)
+            print("PASS test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_pin_upgrade_docker_broker_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_pin_upgrade_docker_broker_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(config_path, config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_DOCKER_MODE"] = "1"
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_URL"] = "http://operator-upgrade-broker.test"
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "test-token"
+        try:
+            cfg = control.Config.from_env()
+            captured: dict[str, object] = {}
+            payload = {
+                "install_items": [
+                    {"component": "hermes-agent", "kind": "git-commit", "target": "abc123"},
+                ],
+            }
+
+            def fake_broker_request(operation, request_payload, *, timeout_seconds=7200):
+                captured["operation"] = operation
+                captured["payload"] = dict(request_payload)
+                captured["timeout_seconds"] = timeout_seconds
+                return {"returncode": 0}
+
+            original_broker = provisioner._operator_upgrade_broker_request
+            provisioner._operator_upgrade_broker_request = fake_broker_request
+            try:
+                result = provisioner._run_pin_upgrade_action(
+                    cfg,
+                    payload,
+                    log_path=root / "priv" / "state" / "operator-actions" / "pin-upgrade.log",
+                )
+            finally:
+                provisioner._operator_upgrade_broker_request = original_broker
+
+            expect(result.returncode == 0, str(result))
+            expect(captured.get("operation") == "run_pin_upgrade", str(captured))
+            request_payload = captured.get("payload") or {}
+            expect(isinstance(request_payload, dict), str(captured))
+            expect(request_payload.get("install_items") == payload["install_items"], str(request_payload))
+            expect(str(request_payload.get("log_path") or "").endswith("operator-actions/pin-upgrade.log"), str(request_payload))
+            print("PASS test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -1388,11 +1470,13 @@ def main() -> int:
     test_operator_upgrade_stale_running_action_fails_closed()
     test_operator_action_finish_retries_transient_sqlite_lock()
     test_run_host_upgrade_seeds_home_when_missing()
-    test_run_host_upgrade_routes_to_docker_upgrade_in_docker_mode()
+    test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode()
+    test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode()
+    test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
     test_auto_provision_dashboard_probe_allows_cold_start_window()
-    print("PASS all 24 enrollment provisioner regression tests")
+    print("PASS all 26 enrollment provisioner regression tests")
     return 0
 
 

@@ -831,6 +831,38 @@
       fileOperation("/ops/trash", { path: item.path, root: itemRoot(item), confirm: true }, "Move " + item.path + " to trash?");
     }
 
+    function itemCanRequestShare(item) {
+      if (!item || item.path === "/") return false;
+      const roots = (state.status && state.status.roots) || [];
+      const root = roots.filter(function (candidate) {
+        return candidate.id === itemRoot(item);
+      })[0] || {};
+      const capabilities = root.capabilities || {};
+      return !!(root.available && !root.read_only && capabilities.share_request);
+    }
+
+    function requestShare(item) {
+      const recipient = (window.prompt("Recipient email, handle, or user id") || "").trim();
+      if (!recipient) return;
+      patch({ busy: true, errorMessage: "" });
+      fetchJSON(api("/share/request"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          root: itemRoot(item),
+          path: item.path,
+          recipient: recipient,
+          display_name: item.name || basename(item.path),
+        }),
+      })
+        .then(function () {
+          patch({ busy: false, contextMenu: null });
+        })
+        .catch(function (error) {
+          patch({ busy: false, contextMenu: null, errorMessage: error.message || "Share request failed" });
+        });
+    }
+
     function openContextMenu(event, item) {
       event.preventDefault();
       patch({
@@ -861,6 +893,7 @@
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { renameItem(item); }); } }, "Rename"),
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { moveItem(item); }); } }, "Move"),
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { duplicateItem(item); }); } }, "Duplicate"),
+        itemCanRequestShare(item) ? h("button", { type: "button", onClick: function () { closeThen(function () { requestShare(item); }); } }, "Request Share") : null,
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { trashItem(item); }); } }, "Trash")
       );
     }

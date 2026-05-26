@@ -41,7 +41,9 @@ def test_discord_slash_command_through_bot_contract() -> None:
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
     expect("Raven" in result["data"]["content"], result["data"]["content"])
-    expect(result["action"] == "prompt_name", result["action"])
+    expect(result["action"] == "prompt_package", result["action"])
+    expect("Founders Offer" in result["data"]["content"], result["data"]["content"])
+    expect("3X Scale Plan" in result["data"]["content"], result["data"]["content"])
     expect(result["data"].get("components"), str(result["data"]))
     print("PASS test_discord_slash_command_through_bot_contract")
 
@@ -141,12 +143,14 @@ def test_discord_message_event_through_bot_contract() -> None:
     result = dc.handle_discord_interaction(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
-    expect("Name your Agent" in result["data"]["content"], result["data"]["content"])
+    expect("Captain Test Buyer" in result["data"]["content"], result["data"]["content"])
+    expect("Founders Offer" in result["data"]["content"], result["data"]["content"])
     identity = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="/agent-identity Atlas, the right hand")
     result = dc.handle_discord_interaction(conn, identity)
-    expect("Welcome aboard, Test Buyer" in result["data"]["content"], result["data"]["content"])
-    expect("Founders $149/mo" in str(result["data"].get("components", [])), str(result["data"]))
-    expect("Scale $275/mo" in str(result["data"].get("components", [])), str(result["data"]))
+    expect(result["action"] == "prompt_package", str(result))
+    expect("Captain Test Buyer" in result["data"]["content"], result["data"]["content"])
+    expect("Founders Offer $149/mo" in str(result["data"].get("components", [])), str(result["data"]))
+    expect("3X Scale Plan $275/mo" in str(result["data"].get("components", [])), str(result["data"]))
     expect("/api/v1/onboarding/public-bot-checkout" in str(result["data"].get("components", [])), str(result["data"]))
     print("PASS test_discord_message_event_through_bot_contract")
 
@@ -243,8 +247,8 @@ def test_discord_full_onboarding_flow() -> None:
     transport = dc.FakeDiscordTransport()
 
     steps = [
-        ("/start", "prompt_name"),
-        ("name Discord Bot", "prompt_agent_name"),
+        ("/start", "prompt_package"),
+        ("name Discord Bot", "prompt_package"),
         ("/agent-identity Atlas, the right hand", "prompt_package"),
         ("plan sovereign", "open_checkout"),
     ]

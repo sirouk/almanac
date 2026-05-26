@@ -11,6 +11,8 @@ import shlex
 import sqlite3
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +92,8 @@ from arclink_onboarding_provider_auth import (
     resolve_provider_setup,
     start_codex_device_authorization,
 )
+
+OPERATOR_UPGRADE_BROKER_TOKEN_HEADER = "X-ArcLink-Operator-Upgrade-Broker-Token"
 
 
 _DEFAULT_USER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -267,7 +271,112 @@ def _operator_child_env(cfg: Config) -> dict[str, str]:
     return env
 
 
+def _operator_upstream_env(cfg: Config) -> dict[str, str]:
+    values = {
+        "ARCLINK_UPSTREAM_REPO_URL": str(cfg.upstream_repo_url or ""),
+        "ARCLINK_UPSTREAM_BRANCH": str(cfg.upstream_branch or ""),
+        "ARCLINK_UPSTREAM_DEPLOY_KEY_ENABLED": "1" if cfg.upstream_deploy_key_enabled else "",
+        "ARCLINK_UPSTREAM_DEPLOY_KEY_PATH": str(cfg.upstream_deploy_key_path or ""),
+        "ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE": str(cfg.upstream_known_hosts_file or ""),
+    }
+    key_user = str(os.environ.get("ARCLINK_UPSTREAM_DEPLOY_KEY_USER") or "").strip()
+    if key_user:
+        values["ARCLINK_UPSTREAM_DEPLOY_KEY_USER"] = key_user
+    return values
+
+
+def _operator_upgrade_broker_url() -> str:
+    return str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_BROKER_URL") or "http://operator-upgrade-broker:8917").strip().rstrip("/")
+
+
+def _operator_upgrade_broker_token() -> str:
+    return str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN") or "").strip()
+
+
+def _operator_upgrade_broker_request(
+    operation: str,
+    payload: dict[str, Any],
+    *,
+    timeout_seconds: int = 7200,
+) -> dict[str, Any]:
+    broker_url = _operator_upgrade_broker_url()
+    broker_token = _operator_upgrade_broker_token()
+    if not broker_url or not broker_token:
+        raise RuntimeError(
+            "Docker-mode operator upgrades require ARCLINK_OPERATOR_UPGRADE_BROKER_URL "
+            "and ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"
+        )
+    body = dict(payload)
+    body["operation"] = operation
+    request = urllib.request.Request(
+        broker_url + "/v1/operator-upgrade",
+        data=json.dumps(body, sort_keys=True).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            OPERATOR_UPGRADE_BROKER_TOKEN_HEADER: broker_token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(30, int(timeout_seconds))) as response:  # noqa: S310 - internal broker URL
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            data = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            data = {"error": str(exc)}
+        raise RuntimeError(str(data.get("error") or data)) from None
+    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"operator upgrade broker request failed: {str(exc)[:220]}") from None
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        raise RuntimeError(str(data.get("error") if isinstance(data, dict) else data))
+    result = data.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("operator upgrade broker returned an invalid result")
+    return result
+
+
+def _brokered_operator_payload(cfg: Config, *, log_path: Path) -> dict[str, Any]:
+    return {
+        "log_path": str(log_path),
+        "upstream": _operator_upstream_env(cfg),
+    }
+
+
+def _brokered_operator_failure(
+    *,
+    args: list[str],
+    log_path: Path,
+    message: str,
+) -> subprocess.CompletedProcess[str]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    _append_operator_log(
+        log_path,
+        "Docker-mode operator action refused before running a host-mutating command.\n"
+        f"{message}\n",
+    )
+    return subprocess.CompletedProcess(args=args, returncode=2, stdout="", stderr=message)
+
+
+def _run_brokered_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedProcess[str]:
+    args = ["operator-upgrade-broker", "run_operator_upgrade"]
+    try:
+        result = _operator_upgrade_broker_request(
+            "run_operator_upgrade",
+            _brokered_operator_payload(cfg, log_path=log_path),
+        )
+    except RuntimeError as exc:
+        return _brokered_operator_failure(args=args, log_path=log_path, message=str(exc))
+    try:
+        returncode = int(result.get("returncode"))
+    except (TypeError, ValueError):
+        returncode = 2
+    return subprocess.CompletedProcess(args=args, returncode=returncode, stdout="", stderr="")
+
+
 def _run_host_upgrade(cfg: Config, *, log_path: Path) -> subprocess.CompletedProcess[str]:
+    if _docker_mode():
+        return _run_brokered_host_upgrade(cfg, log_path=log_path)
     env = _operator_child_env(cfg)
     args, cwd = _operator_action_deploy_args(cfg)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -332,6 +441,23 @@ def _run_pin_upgrade_action(
     *,
     log_path: Path,
 ) -> subprocess.CompletedProcess[str]:
+    if _docker_mode():
+        install_items = list(payload.get("install_items") or [])
+        if not install_items:
+            return subprocess.CompletedProcess(args=["pin-upgrade"], returncode=2, stdout="", stderr="no install items")
+        args = ["operator-upgrade-broker", "run_pin_upgrade"]
+        request_payload = _brokered_operator_payload(cfg, log_path=log_path)
+        request_payload["install_items"] = install_items
+        try:
+            result = _operator_upgrade_broker_request("run_pin_upgrade", request_payload)
+        except RuntimeError as exc:
+            return _brokered_operator_failure(args=args, log_path=log_path, message=str(exc))
+        try:
+            returncode = int(result.get("returncode"))
+        except (TypeError, ValueError):
+            returncode = 2
+        return subprocess.CompletedProcess(args=args, returncode=returncode, stdout="", stderr="")
+
     env = _operator_child_env(cfg)
     repo_dir = _operator_action_repo_dir(cfg)
     install_items = list(payload.get("install_items") or [])

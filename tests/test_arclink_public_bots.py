@@ -785,6 +785,7 @@ def test_public_bot_credentials_can_target_newly_ready_agent() -> None:
 
 def test_public_bot_config_backup_collects_private_repo_without_secret_leakage() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_backup_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_public_bot_backup_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_backup_test")
     conn = memory_db(control)
     seeded = seed_active_public_bot_deployment(
@@ -823,6 +824,18 @@ def test_public_bot_config_backup_collects_private_repo_without_secret_leakage()
     expect("public_bot_workflow" not in metadata, str(metadata))
     dumped = json.dumps([dict(row) for row in conn.execute("SELECT * FROM arclink_events").fetchall()])
     expect("secret" not in dumped.lower() and "token" not in dumped.lower(), dumped)
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=seeded["user_id"])
+    deployment = view["deployments"][0]
+    backup = deployment["backup_setup"]
+    section_index = {section["section"]: section for section in deployment["sections"]}
+    expect(backup["status"] == "pending_key_setup", str(backup))
+    expect(backup["public_status"] == "repo_recorded_pending_key_setup", str(backup))
+    expect(backup["owner_repo"] == "sirouk/arclink-agent-backup", str(backup))
+    expect(backup["settings_url"] == "https://github.com/sirouk/arclink-agent-backup/settings/keys", str(backup))
+    expect(backup["verification"]["deploy_key"] == "pending_operator_setup", str(backup))
+    expect(backup["verification"]["backup_activation"] == "not_active", str(backup))
+    expect(backup["verification"]["restore_proof"] == "proof_gated", str(backup))
+    expect(section_index["backup"]["status"] == "pending_key_setup", str(section_index["backup"]))
     print("PASS test_public_bot_config_backup_collects_private_repo_without_secret_leakage")
 
 

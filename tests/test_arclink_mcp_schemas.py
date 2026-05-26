@@ -220,7 +220,12 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "vault.search-and-fetch": ("One-shot replacement for qmd.query followed by qmd.get", "vault-pdf-ingest", "does not rerank", "metadata block", "stays inline in text"),
         "knowledge.search": ("both vault/PDF and shared Notion", "source is unclear"),
         "knowledge.search-and-fetch": ("vault/PDF and shared Notion", "files, PDFs, cloned docs, or shared Notion pages"),
-        "shares.request": ("read-only Drive/Code share", "pending for owner approval", "never shares Linked resources"),
+        "shares.request": (
+            "read-only Drive/Code share",
+            "pending for owner approval",
+            "never shares Linked resources",
+            "copied only into owned Vault or Workspace roots",
+        ),
     }
     for tool, needles in expectations.items():
         description = mod.TOOLS[tool]
@@ -352,6 +357,13 @@ def test_agent_share_request_tool_creates_scoped_pending_grant() -> None:
     expect(result["agent_id"] == "agent-share", str(result))
     expect(result["deployment_id"] == "arcdep_share_owner", str(result))
     expect(result["approval_required"] is True and result["recipient_acceptance_required"] is True, str(result))
+    expect(result["linked_root"] == "Linked", str(result))
+    expect(result["reshare_allowed"] is False, str(result))
+    expect(
+        result["copy_duplicate_policy"] == "accepted_linked_resources_copy_to_owned_vault_or_workspace_only",
+        str(result),
+    )
+    expect(result["copy_duplicate_destination_roots"] == ["vault", "workspace"], str(result))
     expect(grant["owner_user_id"] == "arcusr_share_owner", str(grant))
     expect(grant["recipient_user_id"] == "arcusr_share_recipient", str(grant))
     expect(grant["resource_root"] == "vault" and grant["resource_path"] == "/Projects/brief.md", str(grant))

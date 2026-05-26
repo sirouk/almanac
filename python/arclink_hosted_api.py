@@ -53,6 +53,7 @@ from arclink_api_auth import (
     create_arclink_admin_login_session_api,
     create_arclink_login_session_api,
     create_arclink_user_login_session_api,
+    create_user_share_grant_from_broker_api,
     create_user_share_grant_api,
     create_user_portal_link_api,
     create_user_refuel_checkout_api,
@@ -80,9 +81,13 @@ from arclink_api_auth import (
     authenticate_arclink_user_session,
     read_user_billing_api,
     read_user_dashboard_api,
+    read_user_share_grants_api,
     read_user_linked_resources_api,
     read_user_provisioning_status_api,
     require_arclink_csrf,
+    request_user_backup_deploy_key_api,
+    request_user_backup_write_check_api,
+    retry_user_share_grant_notification_api,
     revoke_arclink_session,
     revoke_user_share_grant_api,
     preview_user_crew_recipe_api,
@@ -104,6 +109,8 @@ from arclink_notification_delivery import run_public_agent_turns_once
 from arclink_pod_comms import list_all_pod_messages, list_pod_messages
 from arclink_product import base_domain as default_base_domain, chutes_default_model
 from arclink_secrets_regex import redact_then_truncate
+
+_SHARE_REQUEST_BROKER_TOKEN_HEADER = "x-arclink-share-request-broker-token"
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
 logger = logging.getLogger("arclink.hosted_api")
@@ -1119,6 +1126,45 @@ def _handle_user_agent_identity(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_backup_deploy_key(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = request_user_backup_deploy_key_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        deployment_id=str(body.get("deployment_id") or ""),
+        key_staging_dir=str(config.env.get("ARCLINK_BACKUP_KEY_STAGING_DIR") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_backup_write_check(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = request_user_backup_write_check_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        deployment_id=str(body.get("deployment_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_user_wrapped(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1287,6 +1333,36 @@ def _handle_user_share_grant_create(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_share_grant_broker_create(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    result = create_user_share_grant_from_broker_api(
+        conn,
+        broker_token=_api_header(headers, _SHARE_REQUEST_BROKER_TOKEN_HEADER),
+        contract=str(body.get("contract") or ""),
+        owner_deployment_id=str(body.get("owner_deployment_id") or body.get("deployment_id") or ""),
+        recipient_user_id=str(body.get("recipient_user_id") or ""),
+        recipient=str(body.get("recipient") or body.get("recipient_email") or body.get("recipient_handle") or ""),
+        recipient_deployment_id=str(body.get("recipient_deployment_id") or ""),
+        resource_kind=str(body.get("resource_kind") or ""),
+        resource_root=str(body.get("resource_root") or "vault"),
+        resource_path=str(body.get("resource_path") or ""),
+        display_name=str(body.get("display_name") or ""),
+        access_mode=str(body.get("access_mode") or ""),
+        requested_access=str(body.get("requested_access") or ""),
+        source_plugin=str(body.get("source_plugin") or ""),
+        item_kind=str(body.get("item_kind") or body.get("resource_type") or ""),
+        share_mode=str(body.get("share_mode") or ""),
+        reshare_allowed=body.get("reshare_allowed"),
+        metadata=body.get("metadata") if isinstance(body.get("metadata"), Mapping) else None,
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_user_share_grant_approve(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1359,6 +1435,43 @@ def _handle_user_share_grant_revoke(
         session_token=creds["session_token"],
         csrf_token=csrf,
         grant_id=str(body.get("grant_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grant_retry_notification(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = retry_user_share_grant_notification_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        grant_id=str(body.get("grant_id") or ""),
+        target=str(body.get("target") or "auto"),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_grants_read(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: dict[str, str],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_share_grants_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        user_id=query.get("user_id", ""),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -2397,6 +2510,30 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         }, required=["deployment_id"]),
         "responses": {"200": {"description": "Agent identity updated"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_backup_deploy_key": {
+        "summary": "Stage a private-backup deploy key for a user's deployment",
+        "tags": ["user", "backup"],
+        "requestBody": _openapi_json_body({
+            "deployment_id": {"type": "string"},
+        }, required=["deployment_id"]),
+        "responses": {
+            "200": {"description": "Backup deploy-key public key and fail-closed verification state returned"},
+            "400": {"description": "Backup key staging is not configured or repo setup is incomplete"},
+            "401": {"description": "Unauthorized or missing CSRF"},
+        },
+    },
+    "user_backup_write_check": {
+        "summary": "Record the private-backup GitHub write-check boundary",
+        "tags": ["user", "backup"],
+        "requestBody": _openapi_json_body({
+            "deployment_id": {"type": "string"},
+        }, required=["deployment_id"]),
+        "responses": {
+            "200": {"description": "Backup verification state returned; unattended local checks fail closed without activation"},
+            "400": {"description": "Backup deploy-key setup is incomplete"},
+            "401": {"description": "Unauthorized or missing CSRF"},
+        },
+    },
     "user_wrapped": {
         "summary": "Read Captain ArcLink Wrapped history",
         "tags": ["user", "wrapped"],
@@ -2453,6 +2590,12 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         }, required=["user_id", "role", "mission", "treatment", "preset", "capacity"]),
         "responses": {"200": {"description": "Crew Recipe applied on behalf"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_share_grants": {
+        "summary": "Read share approvals and recipient acceptance waits for the authenticated user",
+        "tags": ["user"],
+        "parameters": [_qparam("user_id")],
+        "responses": {"200": {"description": "Share grant inbox"}, "401": {"description": "Unauthorized"}},
+    },
     "user_share_grant_create": {
         "summary": "Request a read-only Drive/Code share grant",
         "tags": ["user"],
@@ -2467,6 +2610,27 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "access_mode": {"type": "string", "enum": ["read"]},
         }, required=["resource_kind", "resource_root", "resource_path"]),
         "responses": {"201": {"description": "Share grant requested"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_broker_create": {
+        "summary": "Request a read-only Drive/Code share grant from a deployment-scoped broker",
+        "tags": ["user", "workspace"],
+        "requestBody": _openapi_json_body({
+            "contract": {"type": "string", "enum": ["arclink-share-grants"]},
+            "source_plugin": {"type": "string", "enum": ["drive", "code"]},
+            "owner_deployment_id": {"type": "string"},
+            "recipient": {"type": "string"},
+            "recipient_user_id": {"type": "string"},
+            "recipient_deployment_id": {"type": "string"},
+            "resource_kind": {"type": "string", "enum": ["drive", "code"]},
+            "item_kind": {"type": "string", "enum": ["file", "directory"]},
+            "resource_root": {"type": "string", "enum": ["vault", "workspace"]},
+            "resource_path": {"type": "string"},
+            "display_name": {"type": "string"},
+            "requested_access": {"type": "string", "enum": ["read"]},
+            "share_mode": {"type": "string", "enum": ["owner_approval"]},
+            "reshare_allowed": {"type": "boolean"},
+        }, required=["contract", "source_plugin", "owner_deployment_id", "resource_kind", "resource_root", "resource_path"]),
+        "responses": {"201": {"description": "Share grant requested"}, "401": {"description": "Missing or invalid broker token"}},
     },
     "user_share_grant_approve": {
         "summary": "Owner-approve a pending share grant",
@@ -2491,6 +2655,15 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["user"],
         "requestBody": _openapi_json_body({"grant_id": {"type": "string"}}, required=["grant_id"]),
         "responses": {"200": {"description": "Share revoked"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_retry_notification": {
+        "summary": "Retry queueing the current Raven share notification",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({
+            "grant_id": {"type": "string"},
+            "target": {"type": "string", "enum": ["auto", "owner", "recipient"]},
+        }, required=["grant_id"]),
+        "responses": {"200": {"description": "Share notification retry evaluated"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "user_linked_resources": {
         "summary": "Read accepted linked resources for the authenticated user",
@@ -2604,7 +2777,8 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["onboarding"],
         "requestBody": _openapi_json_body({
             "session_id": {"type": "string"},
-        }, required=["session_id"]),
+            "claim_token": {"type": "string"},
+        }, required=["session_id", "claim_token"]),
         "responses": {
             "201": {"description": "User session created with Set-Cookie"},
             "402": {"description": "Entitlement not yet paid"},
@@ -2616,7 +2790,8 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["onboarding"],
         "requestBody": _openapi_json_body({
             "session_id": {"type": "string"},
-        }, required=["session_id"]),
+            "cancel_token": {"type": "string"},
+        }, required=["session_id", "cancel_token"]),
         "responses": {"200": {"description": "Session cancelled or already final"}, "404": {"description": "Session not found"}},
     },
     "health": {
@@ -2702,7 +2877,9 @@ def build_arclink_openapi_spec() -> dict[str, Any]:
             operation["requestBody"] = op["requestBody"]
         if "parameters" in op:
             operation["parameters"] = op["parameters"]
-        if route_key not in _PUBLIC_ROUTES:
+        if route_key in _BROKER_AUTH_ROUTES:
+            operation["security"] = [{"shareRequestBrokerAuth": []}]
+        elif route_key not in _PUBLIC_ROUTES:
             operation["security"] = [{"sessionAuth": []}]
 
         paths.setdefault(full_path, {})[method.lower()] = operation
@@ -2730,6 +2907,12 @@ def build_arclink_openapi_spec() -> dict[str, Any]:
                     "type": "http",
                     "scheme": "bearer",
                     "description": "Per-deployment ArcLink LLM router key. Raw keys are materialized only into ArcPods and are never returned by provider-state APIs.",
+                },
+                "shareRequestBrokerAuth": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-ArcLink-Share-Request-Broker-Token",
+                    "description": "Deployment-scoped Drive/Code share-request broker token. Token material is stored only in ArcPod runtime secrets; the hosted API stores and verifies only a hash.",
                 },
             },
         },
@@ -2762,16 +2945,21 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/credentials"): "user_credentials",
     ("POST", "/user/credentials/acknowledge"): "user_credential_ack",
     ("POST", "/user/agent-identity"): "user_agent_identity",
+    ("POST", "/user/backup-deploy-key"): "user_backup_deploy_key",
+    ("POST", "/user/backup-write-check"): "user_backup_write_check",
     ("GET", "/user/wrapped"): "user_wrapped",
     ("POST", "/user/wrapped-frequency"): "user_wrapped_frequency",
     ("GET", "/user/crew-recipe"): "user_crew_recipe",
     ("POST", "/user/crew-recipe/preview"): "user_crew_recipe_preview",
     ("POST", "/user/crew-recipe/apply"): "user_crew_recipe_apply",
+    ("GET", "/user/share-grants"): "user_share_grants",
     ("POST", "/user/share-grants"): "user_share_grant_create",
+    ("POST", "/user/share-grants/broker"): "user_share_grant_broker_create",
     ("POST", "/user/share-grants/approve"): "user_share_grant_approve",
     ("POST", "/user/share-grants/deny"): "user_share_grant_deny",
     ("POST", "/user/share-grants/accept"): "user_share_grant_accept",
     ("POST", "/user/share-grants/revoke"): "user_share_grant_revoke",
+    ("POST", "/user/share-grants/retry-notification"): "user_share_grant_retry_notification",
     ("GET", "/user/linked-resources"): "user_linked_resources",
     ("GET", "/admin/dashboard"): "admin_dashboard",
     ("GET", "/admin/comms"): "admin_comms",
@@ -2840,6 +3028,10 @@ _CIDR_PROTECTED_ROUTES = frozenset({
     "admin_wrapped",
 })
 
+_BROKER_AUTH_ROUTES = frozenset({
+    "user_share_grant_broker_create",
+})
+
 _JSON_OBJECT_ROUTES = frozenset({
     "public_onboarding_start",
     "public_onboarding_answer",
@@ -2855,14 +3047,18 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_refuel_checkout",
     "user_credential_ack",
     "user_agent_identity",
+    "user_backup_deploy_key",
+    "user_backup_write_check",
     "user_wrapped_frequency",
     "user_crew_recipe_preview",
     "user_crew_recipe_apply",
     "user_share_grant_create",
+    "user_share_grant_broker_create",
     "user_share_grant_approve",
     "user_share_grant_deny",
     "user_share_grant_accept",
     "user_share_grant_revoke",
+    "user_share_grant_retry_notification",
     "admin_action",
     "admin_crew_recipe_apply",
     "session_revoke",
@@ -3009,6 +3205,10 @@ def route_arclink_hosted_api(
             result = _handle_user_credential_ack(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_agent_identity":
             result = _handle_user_agent_identity(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_backup_deploy_key":
+            result = _handle_user_backup_deploy_key(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_backup_write_check":
+            result = _handle_user_backup_write_check(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_wrapped":
             result = _handle_user_wrapped(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_wrapped_frequency":
@@ -3019,8 +3219,12 @@ def route_arclink_hosted_api(
             result = _handle_user_crew_recipe_preview(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_crew_recipe_apply":
             result = _handle_user_crew_recipe_apply(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grants":
+            result = _handle_user_share_grants_read(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_share_grant_create":
             result = _handle_user_share_grant_create(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_broker_create":
+            result = _handle_user_share_grant_broker_create(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_approve":
             result = _handle_user_share_grant_approve(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_deny":
@@ -3029,6 +3233,8 @@ def route_arclink_hosted_api(
             result = _handle_user_share_grant_accept(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_revoke":
             result = _handle_user_share_grant_revoke(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_retry_notification":
+            result = _handle_user_share_grant_retry_notification(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_linked_resources":
             result = _handle_user_linked_resources(conn, headers, clean_query, request_id, cfg)
         elif route_key == "admin_dashboard":

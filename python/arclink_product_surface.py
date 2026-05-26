@@ -532,6 +532,24 @@ def _admin_action_options(readiness: Mapping[str, Any]) -> str:
     return enabled_options + disabled_options
 
 
+def _admin_action_readiness_rows(readiness: Mapping[str, Any]) -> str:
+    matrix = readiness.get("action_matrix", [])
+    if not isinstance(matrix, list):
+        matrix = []
+    rows = []
+    for entry in matrix:
+        if not isinstance(entry, Mapping):
+            continue
+        label = str(entry.get("label") or _ADMIN_ACTION_LABELS.get(str(entry.get("action_type") or ""), str(entry.get("action_type") or "action")))
+        status = str(entry.get("readiness") or ("queueable" if entry.get("queueable") else "disabled"))
+        proof = str(entry.get("live_proof_gate") or "unlisted")
+        reason = str(entry.get("fail_closed_reason") or entry.get("operation_kind") or "")
+        rows.append(
+            f"<tr><td>{escape(label)}</td><td>{escape(status)}</td><td>{escape(proof)}</td><td>{escape(reason)}</td></tr>"
+        )
+    return "".join(rows) or "<tr><td colspan=\"4\">No action readiness matrix.</td></tr>"
+
+
 def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | None = None, error: str = "") -> ArcLinkSurfaceResponse:
     params = params or {}
     view = read_arclink_admin_dashboard(
@@ -564,6 +582,7 @@ def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | No
     target_id = _param(params, "deployment_id") or (view["deployments"][0]["deployment_id"] if view["deployments"] else "")
     readiness = view.get("action_execution_readiness", {})
     action_options = _admin_action_options(readiness if isinstance(readiness, Mapping) else {})
+    readiness_rows = _admin_action_readiness_rows(readiness if isinstance(readiness, Mapping) else {})
     readiness_note = escape(str((readiness if isinstance(readiness, Mapping) else {}).get("queue_policy") or "Unsupported admin actions stay disabled until they are wired to the worker."))
     error_html = f"<p class=\"warn\">{escape(error)}</p>" if error else ""
     html = f"""
@@ -579,6 +598,7 @@ def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | No
     <div class="panel"><h2>Deployments</h2><table><thead><tr><th>Prefix</th><th>Status</th><th>ID</th></tr></thead><tbody>{deployments}</tbody></table></div>
     <div class="panel"><h2>Recent Failures</h2><table><thead><tr><th>Kind</th><th>Status</th><th>Deployment</th></tr></thead><tbody>{failures}</tbody></table></div>
     <div class="panel"><h2>Queued Actions</h2><table><thead><tr><th>Action</th><th>Status</th><th>Reason</th></tr></thead><tbody>{actions}</tbody></table></div>
+    <div class="panel"><h2>Action Readiness Matrix</h2><table><thead><tr><th>Action</th><th>Status</th><th>Proof</th><th>Reason</th></tr></thead><tbody>{readiness_rows}</tbody></table></div>
   </div>
     <form class="panel stack" method="post" action="/admin/actions">
     <h2>Queue Admin Action</h2>

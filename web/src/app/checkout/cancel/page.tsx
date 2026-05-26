@@ -6,6 +6,18 @@ import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 
 const RESUME_KEY = "arclink_onboarding_resume";
+const PROOF_STORAGE_KEY = "arclink_onboarding_proof";
+
+type ResumeState = {
+  step?: "start" | "questions" | "checkout" | "done";
+  sessionId?: string;
+  name?: string;
+  agentName?: string;
+  agentTitle?: string;
+  email?: string;
+  planId?: "founders" | "sovereign" | "scale";
+  checkoutUrl?: string;
+};
 
 export default function CheckoutCancelPage() {
   return (
@@ -41,7 +53,7 @@ function CheckoutCancelContent() {
     let cancelToken = params.get("cancel_token") || "";
     if (!cancelToken) {
       try {
-        const raw = window.localStorage.getItem(RESUME_KEY);
+        const raw = window.sessionStorage.getItem(PROOF_STORAGE_KEY);
         const parsed = raw ? JSON.parse(raw) as { sessionId?: string; cancelToken?: string } : {};
         if (parsed.sessionId === sessionId) cancelToken = parsed.cancelToken || "";
       } catch {
@@ -53,12 +65,23 @@ function CheckoutCancelContent() {
       return;
     }
     api.cancelOnboarding(sessionId, cancelToken)
-      .then((res) => setCancelState(res.status === 200 ? "done" : "unavailable"))
-      .catch(() => setCancelState("unavailable"));
+      .then((res) => {
+        const cancelled = res.status === 200;
+        setCancelState(cancelled ? "done" : "unavailable");
+        if (cancelled) resetResumeAfterCancel(sessionId);
+      })
+      .catch(() => setCancelState("unavailable"))
+      .finally(() => {
+        try {
+          window.sessionStorage.removeItem(PROOF_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+      });
   }, [params, sessionId]);
 
-  // Resume link carries the session ID so the onboarding page can restore
-  // the flow from localStorage (which persists) or start fresh.
+  // Resume link carries the session ID for recovery, but proof material is
+  // session-only and is cleared after the cancel request is attempted.
   const resumeHref = sessionId
     ? `/onboarding?resume=1&session=${encodeURIComponent(sessionId)}`
     : "/onboarding?resume=1";
@@ -97,4 +120,29 @@ function CheckoutCancelContent() {
       </section>
     </main>
   );
+}
+
+function resetResumeAfterCancel(sessionId: string) {
+  try {
+    const raw = window.localStorage.getItem(RESUME_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as ResumeState;
+    if (parsed.sessionId !== sessionId) return;
+    const planId = parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale"
+      ? parsed.planId
+      : undefined;
+    const next: ResumeState = {
+      step: "start",
+      sessionId: "",
+      name: parsed.name || "",
+      agentName: parsed.agentName || "",
+      agentTitle: parsed.agentTitle || "",
+      email: parsed.email || "",
+      planId,
+      checkoutUrl: "",
+    };
+    window.localStorage.setItem(RESUME_KEY, JSON.stringify(next));
+  } catch {
+    // Resume storage is best-effort; cancellation itself has already run.
+  }
 }

@@ -6,6 +6,12 @@
         "scheme": "bearer",
         "type": "http"
       },
+      "shareRequestBrokerAuth": {
+        "description": "Deployment-scoped Drive/Code share-request broker token. Token material is stored only in ArcPod runtime secrets; the hosted API stores and verifies only a hash.",
+        "in": "header",
+        "name": "X-ArcLink-Share-Request-Broker-Token",
+        "type": "apiKey"
+      },
       "sessionAuth": {
         "description": "Session-based auth via cookies or headers.",
         "in": "header",
@@ -990,12 +996,16 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "cancel_token": {
+                    "type": "string"
+                  },
                   "session_id": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "session_id"
+                  "session_id",
+                  "cancel_token"
                 ],
                 "type": "object"
               }
@@ -1066,12 +1076,16 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "claim_token": {
+                    "type": "string"
+                  },
                   "session_id": {
                     "type": "string"
                   }
                 },
                 "required": [
-                  "session_id"
+                  "session_id",
+                  "claim_token"
                 ],
                 "type": "object"
               }
@@ -1267,6 +1281,92 @@
         "summary": "Rename or retitle a user's Agent",
         "tags": [
           "user"
+        ]
+      }
+    },
+    "/api/v1/user/backup-deploy-key": {
+      "post": {
+        "operationId": "user_backup_deploy_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "deployment_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deployment_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backup deploy-key public key and fail-closed verification state returned"
+          },
+          "400": {
+            "description": "Backup key staging is not configured or repo setup is incomplete"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Stage a private-backup deploy key for a user's deployment",
+        "tags": [
+          "user",
+          "backup"
+        ]
+      }
+    },
+    "/api/v1/user/backup-write-check": {
+      "post": {
+        "operationId": "user_backup_write_check",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "deployment_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deployment_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backup verification state returned; unattended local checks fail closed without activation"
+          },
+          "400": {
+            "description": "Backup deploy-key setup is incomplete"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Record the private-backup GitHub write-check boundary",
+        "tags": [
+          "user",
+          "backup"
         ]
       }
     },
@@ -1772,6 +1872,35 @@
       }
     },
     "/api/v1/user/share-grants": {
+      "get": {
+        "operationId": "user_share_grants",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "user_id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Share grant inbox"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Read share approvals and recipient acceptance waits for the authenticated user",
+        "tags": [
+          "user"
+        ]
+      },
       "post": {
         "operationId": "user_share_grant_create",
         "requestBody": {
@@ -1922,6 +2051,115 @@
         ]
       }
     },
+    "/api/v1/user/share-grants/broker": {
+      "post": {
+        "operationId": "user_share_grant_broker_create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "contract": {
+                    "enum": [
+                      "arclink-share-grants"
+                    ],
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  },
+                  "item_kind": {
+                    "enum": [
+                      "file",
+                      "directory"
+                    ],
+                    "type": "string"
+                  },
+                  "owner_deployment_id": {
+                    "type": "string"
+                  },
+                  "recipient": {
+                    "type": "string"
+                  },
+                  "recipient_deployment_id": {
+                    "type": "string"
+                  },
+                  "recipient_user_id": {
+                    "type": "string"
+                  },
+                  "requested_access": {
+                    "enum": [
+                      "read"
+                    ],
+                    "type": "string"
+                  },
+                  "reshare_allowed": {
+                    "type": "boolean"
+                  },
+                  "resource_kind": {
+                    "enum": [
+                      "drive",
+                      "code"
+                    ],
+                    "type": "string"
+                  },
+                  "resource_path": {
+                    "type": "string"
+                  },
+                  "resource_root": {
+                    "enum": [
+                      "vault",
+                      "workspace"
+                    ],
+                    "type": "string"
+                  },
+                  "share_mode": {
+                    "enum": [
+                      "owner_approval"
+                    ],
+                    "type": "string"
+                  },
+                  "source_plugin": {
+                    "enum": [
+                      "drive",
+                      "code"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "contract",
+                  "source_plugin",
+                  "owner_deployment_id",
+                  "resource_kind",
+                  "resource_root",
+                  "resource_path"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Share grant requested"
+          },
+          "401": {
+            "description": "Missing or invalid broker token"
+          }
+        },
+        "security": [
+          {
+            "shareRequestBrokerAuth": []
+          }
+        ],
+        "summary": "Request a read-only Drive/Code share grant from a deployment-scoped broker",
+        "tags": [
+          "user",
+          "workspace"
+        ]
+      }
+    },
     "/api/v1/user/share-grants/deny": {
       "post": {
         "operationId": "user_share_grant_deny",
@@ -1956,6 +2194,53 @@
           }
         ],
         "summary": "Owner-deny a pending share grant",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/retry-notification": {
+      "post": {
+        "operationId": "user_share_grant_retry_notification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "grant_id": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "enum": [
+                      "auto",
+                      "owner",
+                      "recipient"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Share notification retry evaluated"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Retry queueing the current Raven share notification",
         "tags": [
           "user"
         ]

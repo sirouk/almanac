@@ -10,18 +10,23 @@ type Step = "start" | "questions" | "checkout" | "done";
 type PlanId = "founders" | "sovereign" | "scale";
 
 const RESUME_KEY = "arclink_onboarding_resume";
+const PROOF_STORAGE_KEY = "arclink_onboarding_proof";
 
 type ResumeState = {
   step: Step;
   sessionId: string;
-  claimToken: string;
-  cancelToken: string;
   name: string;
   agentName: string;
   agentTitle: string;
   email: string;
   planId: PlanId;
   checkoutUrl: string;
+};
+
+type ProofState = {
+  sessionId: string;
+  claimToken: string;
+  cancelToken: string;
 };
 
 const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; checkout: string }> = {
@@ -44,6 +49,12 @@ const PLAN_COPY: Record<PlanId, { name: string; price: string; summary: string; 
     checkout: "Onboard Agents - $275/month",
   },
 };
+
+function channelLabel(channel: string) {
+  if (channel === "telegram") return "Telegram";
+  if (channel === "discord") return "Discord";
+  return "web";
+}
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<Step>("start");
@@ -84,42 +95,70 @@ export default function OnboardingPage() {
 
   // Restore mid-flow state on refresh / Stripe cancel return.
   useEffect(() => {
+    let restoredSessionId = "";
     try {
       const raw = window.localStorage.getItem(RESUME_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<ResumeState>;
-      if (parsed.sessionId) setSessionId(parsed.sessionId);
-      if (parsed.claimToken) setClaimToken(parsed.claimToken);
-      if (parsed.cancelToken) setCancelToken(parsed.cancelToken);
-      if (parsed.name) setName(parsed.name);
-      if (parsed.agentName) setAgentName(parsed.agentName);
-      if (parsed.agentTitle) setAgentTitle(parsed.agentTitle);
-      if (parsed.email) setEmail(parsed.email);
-      if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
-      if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
-      if (parsed.step && parsed.step !== "start") {
-        const isCheckoutResume = new URLSearchParams(window.location.search).get("resume") === "1";
-        setStep(isCheckoutResume && parsed.step === "done" ? "checkout" : parsed.step);
-        if (isCheckoutResume && parsed.step === "done") setCheckoutUrl("");
-        setResumed(true);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<ResumeState>;
+        if (parsed.sessionId) {
+          restoredSessionId = String(parsed.sessionId);
+          setSessionId(restoredSessionId);
+        }
+        if (parsed.name) setName(parsed.name);
+        if (parsed.agentName) setAgentName(parsed.agentName);
+        if (parsed.agentTitle) setAgentTitle(parsed.agentTitle);
+        if (parsed.email) setEmail(parsed.email);
+        if (parsed.planId === "founders" || parsed.planId === "sovereign" || parsed.planId === "scale") setPlanId(parsed.planId);
+        if (parsed.checkoutUrl) setCheckoutUrl(parsed.checkoutUrl);
+        if (parsed.step && parsed.step !== "start") {
+          const isCheckoutResume = new URLSearchParams(window.location.search).get("resume") === "1";
+          setStep(isCheckoutResume && parsed.step === "done" ? "checkout" : parsed.step);
+          if (isCheckoutResume && parsed.step === "done") setCheckoutUrl("");
+          setResumed(true);
+        }
       }
     } catch {
       // Stale or corrupt - ignore and start fresh.
     }
+
+    try {
+      const raw = window.sessionStorage.getItem(PROOF_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<ProofState>;
+      if (!parsed.sessionId) return;
+      const proofSessionId = String(parsed.sessionId);
+      if (restoredSessionId && proofSessionId !== restoredSessionId) return;
+      setSessionId((current) => current || proofSessionId);
+      if (parsed.claimToken) setClaimToken(parsed.claimToken);
+      if (parsed.cancelToken) setCancelToken(parsed.cancelToken);
+    } catch {
+      // Session storage may be disabled; proof actions fail closed later.
+    }
   }, []);
 
-  // Persist mid-flow state so a refresh, tab close, or Stripe cancel does not
-  // wipe the runner. We never persist the start step (no progress yet).
+  // Persist only non-proof mid-flow state so a refresh or Stripe cancel return
+  // does not wipe harmless form context. Browser proof tokens are session-only.
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (step === "start") return;
-    const snapshot: ResumeState = { step, sessionId, claimToken, cancelToken, name, agentName, agentTitle, email, planId, checkoutUrl };
+    const snapshot: ResumeState = { step, sessionId, name, agentName, agentTitle, email, planId, checkoutUrl };
     try {
       window.localStorage.setItem(RESUME_KEY, JSON.stringify(snapshot));
     } catch {
       // localStorage quota or disabled - drop silently.
     }
-  }, [step, sessionId, claimToken, cancelToken, name, agentName, agentTitle, email, planId, checkoutUrl]);
+  }, [step, sessionId, name, agentName, agentTitle, email, planId, checkoutUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!sessionId || (!claimToken && !cancelToken)) return;
+    const proof: ProofState = { sessionId, claimToken, cancelToken };
+    try {
+      window.sessionStorage.setItem(PROOF_STORAGE_KEY, JSON.stringify(proof));
+    } catch {
+      // sessionStorage disabled - claim/cancel proof will be unavailable.
+    }
+  }, [sessionId, claimToken, cancelToken]);
 
   function webContactId() {
     const key = "arclink_web_contact_id";
@@ -252,7 +291,7 @@ export default function OnboardingPage() {
             Pick the first agent. Raven handles the handoff.
           </h1>
           <p className="font-body mt-6 max-w-lg text-base leading-relaxed text-[#E7E6E6]/50">
-            The web flow keeps the Stripe and dashboard pieces in one place, then Raven continues the setup in your preferred channel.
+            The web flow keeps the Stripe and dashboard pieces in one place, then Raven shows the next setup handoff after checkout.
           </p>
           <div className="mt-8 grid max-w-lg grid-cols-3 gap-px overflow-hidden rounded-lg bg-white/5">
             {[
@@ -293,7 +332,7 @@ export default function OnboardingPage() {
 
           {selectedChannel !== "web" && step === "start" && (
             <p className="mt-3 rounded border border-[#FB5005]/20 bg-[#FB5005]/5 px-3 py-2 font-body text-xs text-[#E7E6E6]/55">
-              Preferred channel: <span className="capitalize text-[#FB5005]">{selectedChannel}</span>. Raven will continue there after checkout.
+              Preferred channel: <span className="text-[#FB5005]">{channelLabel(selectedChannel)}</span>. This browser session is not linked to {channelLabel(selectedChannel)} yet; after checkout, return to Raven there to connect it to the same account.
             </p>
           )}
 

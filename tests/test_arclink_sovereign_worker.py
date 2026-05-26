@@ -89,6 +89,7 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True, ingr
 def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_apply")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_sovereign_apply")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_sovereign_share_broker")
     provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_sovereign_apply")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_apply")
     conn = memory_db(control)
@@ -125,6 +126,11 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
         secret_store_dir=cfg.secret_store_dir / "dep_1",
         materialization_root=Path(tmpdir) / "materialized",
     )._value_for_ref("secret://arclink/llm-router/dep_1/api-key")
+    raw_share_broker_token = worker_mod.SovereignSecretResolver(
+        env=cfg.env,
+        secret_store_dir=cfg.secret_store_dir / "dep_1",
+        materialization_root=Path(tmpdir) / "materialized-share-broker",
+    )._value_for_ref("secret://arclink/share-request-broker/dep_1/token")
 
     expect(len(results) == 1, str(results))
     result = results[0]
@@ -133,6 +139,12 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     expect("dashboard" in result["services"], str(result))
     dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
     expect(dep["status"] == "active", str(dict(dep)))
+    dep_meta = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"])
+    share_broker = dep_meta.get("share_request_broker") or {}
+    expect(share_broker.get("enabled") is True, str(share_broker))
+    expect(share_broker.get("token_ref") == "secret://arclink/share-request-broker/dep_1/token", str(share_broker))
+    expect(api._verify_proof_token_hash(raw_share_broker_token, share_broker.get("token_hash", "")), str(share_broker))
+    expect(raw_share_broker_token not in json.dumps(dep_meta, sort_keys=True), "share-request broker token leaked into metadata")
     job = conn.execute("SELECT job_kind, status, attempt_count FROM arclink_provisioning_jobs").fetchone()
     expect(job["job_kind"] == "sovereign_pod_apply" and job["status"] == "succeeded", str(dict(job)))
     expect(int(job["attempt_count"]) == 1, str(dict(job)))
@@ -174,10 +186,10 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     targets = {(item["channel_kind"], item["target_id"]) for item in notifications}
     expect(targets == {("discord", "200"), ("telegram", "100")}, str(notifications))
     notification = next(item for item in notifications if item["channel_kind"] == "telegram")
-    expect("Agent online" in notification["message"], str(notification["message"]))
-    expect("Stage 4 complete: your ArcLink agent is ready" in notification["message"], str(notification["message"]))
-    expect("Dashboard: https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
-    expect("Hermes:" in notification["message"], str(notification["message"]))
+    expect("Agent #1234 online" in notification["message"], str(notification["message"]))
+    expect("Stage 4 complete: Agent #1234 - ArcLink Agent is ready" in notification["message"], str(notification["message"]))
+    expect("Helm: https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
+    expect("Drive, Code, and Terminal are inside that Helm" in notification["message"], str(notification["message"]))
     expect("Use /credentials or tap Credentials" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
     expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
@@ -239,10 +251,11 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
             super().__init__()
             self.stdout = stdout
 
-        def run(self, args, *, project_name: str, env_file: str, compose_file: str):
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
             self.runs.append(
                 {
                     "args": args,
+                    "deployment_id": deployment_id,
                     "project_name": project_name,
                     "env_file": env_file,
                     "compose_file": compose_file,
@@ -267,13 +280,17 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
             row["ExitCode"] = 0
             row["Status"] = "Exited (0)"
     runner = ComposePsRunner("\n".join(json.dumps(row) for row in rows))
-    executor = executor_mod.ArcLinkExecutor(
-        config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
-        secret_resolver=AnySecretResolver(executor_mod),
-        docker_runner=runner,
-    )
     with tempfile.TemporaryDirectory() as tmpdir:
         cfg = worker_config(worker_mod, tmpdir)
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(
+                live_enabled=True,
+                adapter_name="local",
+                state_root_base=cfg.state_root_base,
+            ),
+            secret_resolver=AnySecretResolver(executor_mod),
+            docker_runner=runner,
+        )
         cfg = worker_mod.SovereignWorkerConfig(
             **{
                 **cfg.__dict__,
@@ -436,7 +453,11 @@ def test_sovereign_worker_retries_legacy_teardown_without_chutes_client() -> Non
         conn.commit()
         runner = executor_mod.FakeDockerRunner()
         executor = executor_mod.ArcLinkExecutor(
-            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+            config=executor_mod.ArcLinkExecutorConfig(
+                live_enabled=True,
+                adapter_name="local",
+                state_root_base=cfg.state_root_base,
+            ),
             docker_runner=runner,
         )
         results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
@@ -733,7 +754,7 @@ def test_sovereign_worker_recovers_succeeded_job_without_handoff() -> None:
     queued = conn.execute("SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()["c"]
     expect(int(queued) == 1, f"expected recovered handoff notification, got {queued}")
     note = conn.execute("SELECT message FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()
-    expect("Dashboard: https://cached.example.test" in note["message"], note["message"])
+    expect("Helm: https://cached.example.test" in note["message"], note["message"])
     refreshed = fleet.get_fleet_host(conn, host_id=host["host_id"])
     expect(int(refreshed["observed_load"]) == 1, str(refreshed))
     print("PASS test_sovereign_worker_recovers_succeeded_job_without_handoff")
@@ -745,8 +766,8 @@ def test_compose_ps_transport_failure_records_failed_health() -> None:
     import arclink_executor as executor_mod
 
     class FailingPsRunner(executor_mod.FakeDockerRunner):
-        def run(self, args, *, project_name: str, env_file: str, compose_file: str):
-            self.runs.append({"args": args, "project_name": project_name, "env_file": env_file, "compose_file": compose_file})
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            self.runs.append({"args": args, "deployment_id": deployment_id, "project_name": project_name, "env_file": env_file, "compose_file": compose_file})
             if tuple(args) == ("ps", "--all", "--format", "json"):
                 raise executor_mod.ArcLinkExecutorError("transport unavailable")
             return {"status": "ok", "stdout": ""}
@@ -754,13 +775,17 @@ def test_compose_ps_transport_failure_records_failed_health() -> None:
     conn = memory_db(control)
     seed_ready_deployment(control, conn)
     runner = FailingPsRunner()
-    executor = executor_mod.ArcLinkExecutor(
-        config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
-        secret_resolver=AnySecretResolver(executor_mod),
-        docker_runner=runner,
-    )
     with tempfile.TemporaryDirectory() as tmpdir:
         cfg = worker_config(worker_mod, tmpdir)
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(
+                live_enabled=True,
+                adapter_name="local",
+                state_root_base=cfg.state_root_base,
+            ),
+            secret_resolver=AnySecretResolver(executor_mod),
+            docker_runner=runner,
+        )
         cfg = worker_mod.SovereignWorkerConfig(**{**cfg.__dict__, "ingress_mode": "tailscale"})
         results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
     expect(results[0]["status"] == "failed", str(results))

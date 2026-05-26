@@ -35,20 +35,27 @@ const MOCK_USER_DASHBOARD = {
         memory: { status: "stale", checked_at: "2026-04-30T08:00:00Z" },
       },
       notion_setup: {
-        status: "verified",
+        status: "local_metadata_verified",
         model: "brokered_shared_root",
         callback_url: "https://test.arclink.online/notion/webhook",
         public_status: "ready_for_dashboard_verification",
         webhook: {
           configured: true,
           verified: true,
+          status: "webhook_verified",
           installed_at: "2026-05-01T12:00:00Z",
           verified_at: "2026-05-01T12:05:00Z",
         },
         index: { status: "available" },
         verification: {
-          dashboard: "verified",
+          state: "local_metadata_verified",
+          dashboard: "local_metadata_verified",
+          setup_intent: "ready_for_dashboard_verification",
+          local_metadata: "local_metadata_verified",
           email_share: "not_proof",
+          user_owned_oauth: "policy_question",
+          shared_root_live_read: "proof_gated",
+          brokered_write_preflight: "proof_gated",
           live_workspace: "proof_gated",
         },
       },
@@ -205,6 +212,45 @@ const MOCK_USER_PROVIDER_STATE = {
   ],
 };
 
+const MOCK_ADMIN_ACTION_MATRIX = [
+  {
+    action_type: "restart",
+    label: "Restart",
+    readiness: "queueable",
+    queueable: true,
+    worker_support: "wired",
+    operation_kind: "docker_compose_lifecycle",
+    required_adapter: "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh",
+    live_proof_gate: "PG-PROVISION",
+    local_contract: "queues an audited Docker Compose lifecycle restart intent",
+    fail_closed_reason: "",
+  },
+  {
+    action_type: "dns_repair",
+    label: "DNS repair",
+    readiness: "queueable",
+    queueable: true,
+    worker_support: "wired",
+    operation_kind: "cloudflare_dns_apply",
+    required_adapter: "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh plus configured DNS provider credentials for live mutation",
+    live_proof_gate: "PG-INGRESS",
+    local_contract: "queues an audited DNS repair intent",
+    fail_closed_reason: "",
+  },
+  {
+    action_type: "rollout",
+    label: "Rollout",
+    readiness: "pending_not_implemented",
+    queueable: false,
+    worker_support: "pending_not_implemented",
+    operation_kind: "",
+    required_adapter: "not queueable until worker dispatch lands",
+    live_proof_gate: "PG-PROVISION",
+    local_contract: "visible as a planned operation only",
+    fail_closed_reason: "worker support is not implemented; action remains visible but not queueable",
+  },
+];
+
 const MOCK_ADMIN_DASHBOARD = {
   users: [
     { user_id: "u_test1", email: "test@arclink.dev", display_name: "Test User", entitlement_state: "paid", stripe_customer_id: "cus_test1" },
@@ -226,13 +272,25 @@ const MOCK_ADMIN_DASHBOARD = {
     executable: ["restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"],
     pending_not_implemented: ["force_resynth", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
     disabled: ["force_resynth", "rollout", "rotate_bot_key", "suspend", "unsuspend"],
+    action_matrix: MOCK_ADMIN_ACTION_MATRIX,
+    action_support: Object.fromEntries(MOCK_ADMIN_ACTION_MATRIX.map((entry) => [entry.action_type, entry])),
     executor_adapter: "fake",
     queue_policy: "admin UI queues only modeled worker actions; pending actions stay disabled until worker wiring lands",
   },
 };
 
-const MOCK_ONBOARDING_START = { session: { session_id: "sess_mock_1" } };
+const MOCK_ONBOARDING_START = {
+  session: { session_id: "sess_mock_1" },
+  browser_claim_token: "claim_mock_1",
+  browser_cancel_token: "cancel_mock_1",
+};
 const MOCK_ONBOARDING_ANSWER = { ok: true };
+const MOCK_ONBOARDING_STATUS_PAID = {
+  entitlement_state: "paid",
+  display_name: "New User",
+  channel: "web",
+  deployment: { ready: false, status: "queued", access: { urls: {} } },
+};
 const MOCK_LOGIN_OK = { session: { session_id: "sess_login_1" } };
 const MOCK_ADAPTER_MODE = { fake_mode: true };
 
@@ -242,7 +300,11 @@ const MOCK_ADAPTER_MODE = { fake_mode: true };
 
 async function mockApi(
   page: Page,
-  options: { credentialsStatus?: number; linkedResourcesStatus?: number } = {},
+  options: {
+    credentialsStatus?: number;
+    linkedResourcesStatus?: number;
+    onboardingStarts?: Array<Record<string, unknown>>;
+  } = {},
 ) {
   await page.route("**/api/v1/**", async (route: Route) => {
     const url = route.request().url();
@@ -330,6 +392,11 @@ async function mockApi(
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
     }
     if (url.includes("/onboarding/start") && method === "POST") {
+      try {
+        options.onboardingStarts?.push(JSON.parse(route.request().postData() || "{}") as Record<string, unknown>);
+      } catch {
+        options.onboardingStarts?.push({});
+      }
       return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(MOCK_ONBOARDING_START) });
     }
     if (url.includes("/onboarding/answer") && method === "POST") {
@@ -337,6 +404,15 @@ async function mockApi(
     }
     if (url.includes("/onboarding/checkout") && method === "POST") {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session: { checkout_url: "https://checkout.stripe.com/test" } }) });
+    }
+    if (url.includes("/onboarding/status") && method === "GET") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_ONBOARDING_STATUS_PAID) });
+    }
+    if (url.includes("/onboarding/claim-session") && method === "POST") {
+      return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ email: "new.user@example.test" }) });
+    }
+    if (url.includes("/onboarding/cancel") && method === "POST") {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "payment_cancelled", changed: true }) });
     }
     if (url.includes("/auth/") && url.includes("/login") && method === "POST") {
       return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(MOCK_LOGIN_OK) });
@@ -712,6 +788,8 @@ test.describe("Dashboard tabs", () => {
     await page.locator('button:has-text("actions"):visible').first().click();
     await expect(page.getByText("Queue Modeled Action")).toBeVisible();
     await expect(page.getByText("Disabled or proof-gated actions", { exact: true })).toBeVisible();
+    await expect(page.getByText("Action readiness matrix")).toBeVisible();
+    await expect(page.getByText("PG-PROVISION").first()).toBeVisible();
     await expect(page.getByText("Force resynth")).toBeVisible();
     await expect(page.getByLabel("Action type")).toHaveValue("restart");
   });
@@ -739,5 +817,104 @@ test.describe("Onboarding flow", () => {
     await expect(page.getByRole("heading", { name: "Stripe Handoff Ready" })).toBeVisible();
     await expect(page.locator("text=Finish Stripe Checkout").last()).toBeVisible();
     await expect(page.locator("text=Stage 1 is ready").last()).toBeVisible();
+
+    const storageState = await page.evaluate(() => ({
+      resume: JSON.parse(window.localStorage.getItem("arclink_onboarding_resume") || "{}") as Record<string, string>,
+      proof: JSON.parse(window.sessionStorage.getItem("arclink_onboarding_proof") || "{}") as Record<string, string>,
+    }));
+    expect(storageState.resume.claimToken).toBeUndefined();
+    expect(storageState.resume.cancelToken).toBeUndefined();
+    expect(storageState.proof.claimToken).toBe("claim_mock_1");
+    expect(storageState.proof.cancelToken).toBe("cancel_mock_1");
+  });
+
+  test("preferred Telegram and Discord query params stay web-scoped until platform link", async ({ page }) => {
+    const starts: Array<Record<string, unknown>> = [];
+    await mockApi(page, { onboardingStarts: starts });
+
+    for (const channel of ["telegram", "discord"] as const) {
+      const label = channel === "telegram" ? "Telegram" : "Discord";
+      await page.goto(`/onboarding?channel=${channel}`);
+      await expect(page.getByText(`Preferred channel: ${label}.`)).toBeVisible();
+      await expect(page.getByText(`This browser session is not linked to ${label} yet`)).toBeVisible();
+      await expect(page.getByText("Raven will continue there after checkout")).toHaveCount(0);
+
+      await page.click("text=Founders - $149/month");
+      await expect(page.getByRole("heading", { name: "Name The Agent" })).toBeVisible();
+
+      const start = starts.at(-1);
+      expect(start?.channel).toBe("web");
+      expect(String(start?.channel_identity)).toMatch(/^web:/);
+      await page.evaluate(() => {
+        window.localStorage.clear();
+        window.sessionStorage.clear();
+      });
+    }
+  });
+
+  test("checkout success claims from session proof and clears browser proof", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/onboarding");
+    await page.evaluate(() => {
+      window.localStorage.setItem("arclink_onboarding_resume", JSON.stringify({
+        step: "done",
+        sessionId: "sess_mock_1",
+        name: "New User",
+        agentName: "Atlas",
+        agentTitle: "the right hand",
+        email: "new.user@example.test",
+        planId: "founders",
+        checkoutUrl: "https://checkout.stripe.com/test",
+      }));
+      window.sessionStorage.setItem("arclink_onboarding_proof", JSON.stringify({
+        sessionId: "sess_mock_1",
+        claimToken: "claim_mock_1",
+        cancelToken: "cancel_mock_1",
+      }));
+    });
+
+    await page.goto("/checkout/success?session=sess_mock_1");
+    await expect(page.getByText("You are signed in as new.user@example.test")).toBeVisible();
+    const storageState = await page.evaluate(() => ({
+      resume: window.localStorage.getItem("arclink_onboarding_resume"),
+      proof: window.sessionStorage.getItem("arclink_onboarding_proof"),
+    }));
+    expect(storageState.resume).toBeNull();
+    expect(storageState.proof).toBeNull();
+  });
+
+  test("checkout cancel uses session proof and clears token material", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/onboarding");
+    await page.evaluate(() => {
+      window.localStorage.setItem("arclink_onboarding_resume", JSON.stringify({
+        step: "done",
+        sessionId: "sess_mock_1",
+        name: "New User",
+        agentName: "Atlas",
+        agentTitle: "the right hand",
+        email: "new.user@example.test",
+        planId: "founders",
+        checkoutUrl: "https://checkout.stripe.com/test",
+      }));
+      window.sessionStorage.setItem("arclink_onboarding_proof", JSON.stringify({
+        sessionId: "sess_mock_1",
+        claimToken: "claim_mock_1",
+        cancelToken: "cancel_mock_1",
+      }));
+    });
+
+    await page.goto("/checkout/cancel?session=sess_mock_1");
+    await expect(page.getByText("payment-cancelled")).toBeVisible();
+    const storageState = await page.evaluate(() => ({
+      resume: JSON.parse(window.localStorage.getItem("arclink_onboarding_resume") || "{}") as Record<string, string>,
+      proof: window.sessionStorage.getItem("arclink_onboarding_proof"),
+    }));
+    expect(storageState.proof).toBeNull();
+    expect(storageState.resume.claimToken).toBeUndefined();
+    expect(storageState.resume.cancelToken).toBeUndefined();
+    expect(storageState.resume.step).toBe("start");
+    expect(storageState.resume.sessionId).toBe("");
+    expect(storageState.resume.checkoutUrl).toBe("");
   });
 });

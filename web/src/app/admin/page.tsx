@@ -59,9 +59,25 @@ interface AdminActionReadiness {
   executable?: string[];
   pending_not_implemented?: string[];
   disabled?: string[];
+  action_support?: Record<string, AdminActionSupport>;
+  action_matrix?: AdminActionSupport[];
   executor_adapter?: string;
   queue_policy?: string;
   note?: string;
+}
+
+interface AdminActionSupport {
+  action_type: string;
+  label?: string;
+  readiness?: string;
+  queueable?: boolean;
+  worker_support?: string;
+  operation_kind?: string;
+  target_kinds?: string[];
+  required_adapter?: string;
+  live_proof_gate?: string;
+  local_contract?: string;
+  fail_closed_reason?: string;
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -89,6 +105,11 @@ function statusCounts(rows: Record<string, string>[] = []) {
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, {});
+}
+
+function readinessMatrix(readiness?: AdminActionReadiness): AdminActionSupport[] {
+  if (readiness?.action_matrix?.length) return readiness.action_matrix;
+  return Object.values(readiness?.action_support || {});
 }
 
 function formatLabel(value: string) {
@@ -1244,6 +1265,7 @@ function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadi
     () => readiness?.executable ?? [],
     [readiness?.executable],
   );
+  const actionMatrix = useMemo(() => readinessMatrix(readiness), [readiness]);
   const disabledActions = [
     ...(readiness?.pending_not_implemented || []),
     ...(readiness?.disabled || []),
@@ -1358,6 +1380,34 @@ function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadi
               <span key={action} className="rounded border border-border/70 px-2 py-1 text-xs text-soft-white/45">
                 {ACTION_LABELS[action] || formatLabel(action)}
               </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {actionMatrix.length > 0 && (
+        <div className="border border-border/70 bg-carbon/70 px-3 py-3">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Action readiness matrix</p>
+          <div className="mt-3 grid gap-2 lg:grid-cols-2">
+            {actionMatrix.map((entry) => (
+              <div key={entry.action_type} className="border border-border/60 bg-jet/35 px-3 py-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-soft-white/75">
+                      {entry.label || ACTION_LABELS[entry.action_type] || formatLabel(entry.action_type)}
+                    </p>
+                    <p className="mt-1 truncate text-[11px] text-soft-white/35">
+                      {entry.operation_kind || entry.worker_support || "planned"}
+                    </p>
+                  </div>
+                  <StatusBadge status={entry.readiness || (entry.queueable ? "queueable" : "disabled")} />
+                </div>
+                <p className="mt-2 text-xs leading-5 text-soft-white/45">
+                  Proof: {entry.live_proof_gate || "unlisted"}; adapter: {entry.required_adapter || "unlisted"}.
+                </p>
+                {entry.fail_closed_reason && (
+                  <p className="mt-1 text-xs leading-5 text-soft-white/35">{entry.fail_closed_reason}</p>
+                )}
+              </div>
             ))}
           </div>
         </div>

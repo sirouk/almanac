@@ -23,7 +23,10 @@ set `ARCLINK_SESSION_HASH_PEPPER` and
 dev pepper when the required flag is not set.
 
 Browser routes use cookie credentials. Header credentials remain available for
-API clients but are not preferred for browser CSRF routes.
+API clients but are not preferred for browser CSRF routes. The internal
+Drive/Code share-request broker route is separate: it uses a deployment-scoped
+`X-ArcLink-Share-Request-Broker-Token` header and derives the owner from the
+token-bound deployment instead of accepting browser session cookies.
 
 ### Headers
 
@@ -32,6 +35,7 @@ API clients but are not preferred for browser CSRF routes.
 | `X-ArcLink-Session-Id` | Session identifier (fallback if cookies unavailable) |
 | `X-ArcLink-Session-Token` | Session secret |
 | `X-ArcLink-CSRF-Token` | CSRF token for POST mutations |
+| `X-ArcLink-Share-Request-Broker-Token` | Deployment-scoped internal Drive/Code Request Share broker token |
 | `X-ArcLink-Request-Id` | Client-supplied request ID (echoed in response; auto-generated if absent) |
 
 ## Rate Limiting
@@ -114,16 +118,21 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/credentials` | Pending credential handoff metadata; masked refs only |
 | POST | `/user/credentials/acknowledge` | Confirm credential storage and remove future handoff visibility (CSRF) |
 | POST | `/user/agent-identity` | Rename or retitle a user's Agent (CSRF) |
+| POST | `/user/backup-deploy-key` | Stage the private-backup deploy key and return only the public key/status (CSRF) |
+| POST | `/user/backup-write-check` | Record the private-backup GitHub write-check boundary; unattended local checks fail closed without activation (CSRF) |
 | GET | `/user/wrapped` | Captain ArcLink Wrapped history with redacted plain-text and Markdown renders |
 | POST | `/user/wrapped-frequency` | Set ArcLink Wrapped cadence to daily, weekly, or monthly (CSRF) |
 | GET | `/user/crew-recipe` | Read the active Crew Recipe, prior archived recipe, and "what changed" summary |
 | POST | `/user/crew-recipe/preview` | Preview or regenerate a Crew Recipe without applying it (CSRF) |
 | POST | `/user/crew-recipe/apply` | Confirm Crew Training and apply the additive SOUL overlay (CSRF) |
+| GET | `/user/share-grants` | Share approval inbox for the authenticated owner or recipient, including pending owner approval, recipient acceptance waits, and no-channel recovery state |
 | POST | `/user/share-grants` | Request a read-only Drive/Code share grant (CSRF). Same-account agent-to-agent shares require `owner_deployment_id` plus a different `recipient_deployment_id` and auto-accept into the target agent's Linked root. |
+| POST | `/user/share-grants/broker` | Internal Drive/Code Request Share broker route. Requires `X-ArcLink-Share-Request-Broker-Token`; derives the owner from the token-bound `owner_deployment_id` and does not accept browser session cookies as a substitute. |
 | POST | `/user/share-grants/approve` | Owner-approve a pending share grant (CSRF) |
 | POST | `/user/share-grants/deny` | Owner-deny a pending share grant (CSRF) |
 | POST | `/user/share-grants/accept` | Recipient accepts an approved share grant (CSRF) |
 | POST | `/user/share-grants/revoke` | Owner revokes a share grant and removes accepted linked-resource visibility (CSRF) |
+| POST | `/user/share-grants/retry-notification` | Retry queueing the current owner-approval or recipient-acceptance Raven prompt to the local notification outbox; returns `queued=false` with recovery guidance when no linked public channel exists (CSRF) |
 | GET | `/user/linked-resources` | Accepted linked resources for the authenticated user |
 | GET | `/user/provider-state` | Provider adapter state, including sanitized Chutes budget, credential, billing-suspension boundary, and LLM router usage/quota |
 
@@ -173,6 +182,7 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_COOKIE_DOMAIN` | (none) | Cookie Domain attribute |
 | `ARCLINK_COOKIE_SECURE` | auto | Set Secure flag on cookies; defaults off only for plain HTTP localhost origins |
 | `ARCLINK_COOKIE_SAMESITE` | `Strict` | Session and CSRF cookie SameSite value |
+| `ARCLINK_BACKUP_KEY_STAGING_DIR` | (none) | Server-side private directory for per-deployment backup deploy-key staging; required before `/user/backup-deploy-key` can mint a key |
 | `ARCLINK_SESSION_HASH_PEPPER` | dev fallback | HMAC pepper for session and CSRF token hashes |
 | `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `1` | Require a configured pepper before issuing sessions |
 | `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |

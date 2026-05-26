@@ -30,7 +30,13 @@ from arclink_control import (
     utc_now_iso,
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
-from arclink_dashboard import queue_arclink_admin_action, read_arclink_admin_dashboard, read_arclink_user_dashboard
+from arclink_dashboard import (
+    queue_arclink_admin_action,
+    read_arclink_admin_dashboard,
+    read_arclink_user_dashboard,
+    request_arclink_backup_deploy_key,
+    request_arclink_backup_write_check,
+)
 from arclink_onboarding import (
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
@@ -71,6 +77,7 @@ ARCLINK_LINKED_RESOURCE_MANIFEST = ".arclink-linked-resources.json"
 ARCLINK_SESSION_ID_HEADER = "x-arclink-session-id"
 ARCLINK_SESSION_TOKEN_HEADER = "x-arclink-session-token"
 ARCLINK_CSRF_HEADER = "x-arclink-csrf-token"
+ARCLINK_SHARE_REQUEST_BROKER_TOKEN_HEADER = "x-arclink-share-request-broker-token"
 GENERIC_ARCLINK_API_ERROR = "Request blocked. Check input and try again."
 GENERIC_ARCLINK_AUTH_ERROR = "unauthorized"
 ARCLINK_PASSWORD_ALGORITHM = "pbkdf2_sha256"
@@ -226,6 +233,13 @@ def _verify_proof_token_hash(token: str, stored_hash: str) -> bool:
         return hmac.compare_digest(stored, current)
     legacy = _hash_token(token)
     return hmac.compare_digest(stored, legacy)
+
+
+def hash_share_request_broker_token(token: str) -> str:
+    clean = str(token or "").strip()
+    if not clean:
+        raise ArcLinkApiAuthError("ArcLink share-request broker token is required")
+    return _hash_proof_token(clean)
 
 
 def _truthy_env(name: str) -> bool:
@@ -1129,6 +1143,64 @@ def user_update_agent_identity_api(
     )
 
 
+def request_user_backup_deploy_key_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    deployment_id: str,
+    key_staging_dir: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    target_user = str(session["user_id"] or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        raise ArcLinkApiAuthError("ArcLink backup deploy-key staging requires a deployment")
+    row = conn.execute(
+        "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+        (clean_deployment,),
+    ).fetchone()
+    if row is None or str(row["user_id"] or "") != target_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot stage another user's backup deploy key")
+    backup_setup = request_arclink_backup_deploy_key(
+        conn,
+        user_id=target_user,
+        deployment_id=clean_deployment,
+        key_staging_dir=key_staging_dir,
+    )
+    return ArcLinkApiResponse(status=200, payload={"backup_setup": backup_setup})
+
+
+def request_user_backup_write_check_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    deployment_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    target_user = str(session["user_id"] or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        raise ArcLinkApiAuthError("ArcLink backup write check requires a deployment")
+    row = conn.execute(
+        "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+        (clean_deployment,),
+    ).fetchone()
+    if row is None or str(row["user_id"] or "") != target_user:
+        raise ArcLinkApiAuthError("ArcLink user session cannot verify another user's backup")
+    backup_setup = request_arclink_backup_write_check(
+        conn,
+        user_id=target_user,
+        deployment_id=clean_deployment,
+    )
+    return ArcLinkApiResponse(status=200, payload={"backup_setup": backup_setup})
+
+
 def _authenticated_user_id(
     conn: sqlite3.Connection,
     *,
@@ -1907,6 +1979,126 @@ def _share_deployment_user(
     return actual_user
 
 
+def set_deployment_share_request_broker_token_hash(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    token: str,
+    token_ref: str = "",
+) -> dict[str, Any]:
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        raise ArcLinkApiAuthError("ArcLink share-request broker deployment is required")
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (clean_deployment,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(clean_deployment)
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+    broker = metadata.get("share_request_broker")
+    if not isinstance(broker, Mapping):
+        broker = {}
+    metadata["share_request_broker"] = {
+        **dict(broker),
+        "enabled": True,
+        "token_hash": hash_share_request_broker_token(token),
+        "token_ref": str(token_ref or "").strip(),
+        "updated_at": utc_now_iso(),
+    }
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), utc_now_iso(), clean_deployment),
+    )
+    conn.commit()
+    return metadata["share_request_broker"]
+
+
+def _share_request_broker_config(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    broker = metadata.get("share_request_broker")
+    if isinstance(broker, Mapping):
+        return dict(broker)
+    legacy_hash = str(metadata.get("share_request_broker_token_hash") or "").strip()
+    if legacy_hash:
+        return {"enabled": True, "token_hash": legacy_hash}
+    return {}
+
+
+def _authenticate_share_request_broker(
+    conn: sqlite3.Connection,
+    *,
+    owner_deployment_id: str,
+    broker_token: str,
+) -> dict[str, Any]:
+    clean_deployment = str(owner_deployment_id or "").strip()
+    clean_token = str(broker_token or "").strip()
+    if not clean_deployment or not clean_token:
+        raise ArcLinkApiAuthError("ArcLink share-request broker credentials are required")
+    row = conn.execute(
+        """
+        SELECT deployment_id, user_id, status, metadata_json
+        FROM arclink_deployments
+        WHERE deployment_id = ?
+        """,
+        (clean_deployment,),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkApiAuthError("ArcLink share-request broker deployment was not found")
+    deployment = rowdict(row)
+    metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    broker = _share_request_broker_config(metadata)
+    if broker.get("enabled") is False:
+        raise ArcLinkApiAuthError("ArcLink share-request broker is disabled")
+    token_hash = str(broker.get("token_hash") or "").strip()
+    if not token_hash or not _verify_proof_token_hash(clean_token, token_hash):
+        raise ArcLinkApiAuthError("ArcLink share-request broker token is invalid")
+    return {
+        "deployment_id": str(deployment.get("deployment_id") or ""),
+        "user_id": str(deployment.get("user_id") or ""),
+        "status": str(deployment.get("status") or ""),
+        "metadata": metadata,
+    }
+
+
+def _resolve_share_recipient_user_id(
+    conn: sqlite3.Connection,
+    *,
+    recipient_user_id: str = "",
+    recipient_identity: str = "",
+    recipient_deployment_id: str = "",
+) -> str:
+    clean_deployment = str(recipient_deployment_id or "").strip()
+    clean_user = str(recipient_user_id or "").strip()
+    if clean_deployment:
+        resolved = _share_deployment_user(
+            conn,
+            clean_deployment,
+            expected_user_id=clean_user,
+            label="recipient",
+        )
+        if resolved:
+            return resolved
+    if clean_user:
+        if conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ?", (clean_user,)).fetchone() is None:
+            raise KeyError(clean_user)
+        return clean_user
+    identity = str(recipient_identity or "").strip()
+    if not identity:
+        raise ArcLinkApiAuthError("ArcLink share requires a recipient user, email, or deployment")
+    row = conn.execute(
+        "SELECT user_id FROM arclink_users WHERE user_id = ?",
+        (identity,),
+    ).fetchone()
+    if row is None:
+        row = conn.execute(
+            "SELECT user_id FROM arclink_users WHERE LOWER(email) = LOWER(?) AND email != ''",
+            (identity,),
+        ).fetchone()
+    if row is None:
+        raise KeyError(identity)
+    return str(row["user_id"] or "")
+
+
 def _path_within(root: Path, path: Path) -> bool:
     try:
         path.relative_to(root)
@@ -2211,15 +2403,10 @@ def _share_accept_button_extra(*, channel: str, grant_id: str) -> dict[str, Any]
     return {}
 
 
-def _queue_share_grant_owner_notification(
-    conn: sqlite3.Connection,
-    *,
-    grant: Mapping[str, Any],
-) -> dict[str, Any]:
-    owner_user = str(grant.get("owner_user_id") or "").strip()
-    grant_id = str(grant.get("grant_id") or "").strip()
-    if not owner_user or not grant_id:
-        return {"queued": False, "reason": "missing_owner_or_grant"}
+def _share_public_channel_for_user(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        return {"available": False, "channel": "", "target_id": "", "reason": "missing_user"}
     row = conn.execute(
         """
         SELECT channel, channel_identity
@@ -2234,15 +2421,42 @@ def _queue_share_grant_owner_notification(
           session_id DESC
         LIMIT 1
         """,
-        (owner_user,),
+        (clean_user,),
     ).fetchone()
     if row is None:
-        return {"queued": False, "reason": "no_public_channel"}
-
+        return {"available": False, "channel": "", "target_id": "", "reason": "no_public_channel"}
     channel = str(row["channel"] or "").strip().lower()
     target = str(row["channel_identity"] or "").strip()
     if channel not in {"telegram", "discord"} or not target:
-        return {"queued": False, "reason": "unsupported_public_channel"}
+        return {"available": False, "channel": channel, "target_id": "", "reason": "unsupported_public_channel"}
+    return {"available": True, "channel": channel, "target_id": target, "reason": ""}
+
+
+def _share_public_channel_hint(status: Mapping[str, Any]) -> dict[str, Any]:
+    available = bool(status.get("available"))
+    reason = str(status.get("reason") or ("public_channel_available" if available else "no_public_channel"))
+    return {
+        "queued_possible": available,
+        "channel": str(status.get("channel") or "") if available else "",
+        "reason": reason,
+        "recovery_action": "" if available else "use_dashboard_or_link_public_channel",
+    }
+
+
+def _queue_share_grant_owner_notification(
+    conn: sqlite3.Connection,
+    *,
+    grant: Mapping[str, Any],
+) -> dict[str, Any]:
+    owner_user = str(grant.get("owner_user_id") or "").strip()
+    grant_id = str(grant.get("grant_id") or "").strip()
+    if not owner_user or not grant_id:
+        return {"queued": False, "reason": "missing_owner_or_grant"}
+    channel_status = _share_public_channel_for_user(conn, owner_user)
+    if not channel_status["available"]:
+        return {"queued": False, "reason": str(channel_status.get("reason") or "no_public_channel")}
+    channel = str(channel_status["channel"])
+    target = str(channel_status["target_id"])
 
     resource_label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource").strip()
     resource_root = str(grant.get("resource_root") or "").strip()
@@ -2289,29 +2503,11 @@ def queue_share_grant_recipient_notification(
     grant_id = str(grant.get("grant_id") or "").strip()
     if not recipient_user or not grant_id:
         return {"queued": False, "reason": "missing_recipient_or_grant"}
-    row = conn.execute(
-        """
-        SELECT channel, channel_identity
-        FROM arclink_onboarding_sessions
-        WHERE user_id = ?
-          AND LOWER(channel) IN ('telegram', 'discord')
-          AND channel_identity != ''
-        ORDER BY
-          CASE WHEN deployment_id != '' THEN 0 ELSE 1 END,
-          updated_at DESC,
-          created_at DESC,
-          session_id DESC
-        LIMIT 1
-        """,
-        (recipient_user,),
-    ).fetchone()
-    if row is None:
-        return {"queued": False, "reason": "no_public_channel"}
-
-    channel = str(row["channel"] or "").strip().lower()
-    target = str(row["channel_identity"] or "").strip()
-    if channel not in {"telegram", "discord"} or not target:
-        return {"queued": False, "reason": "unsupported_public_channel"}
+    channel_status = _share_public_channel_for_user(conn, recipient_user)
+    if not channel_status["available"]:
+        return {"queued": False, "reason": str(channel_status.get("reason") or "no_public_channel")}
+    channel = str(channel_status["channel"])
+    target = str(channel_status["target_id"])
 
     resource_label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource").strip()
     resource_kind = str(grant.get("resource_kind") or "").strip().lower()
@@ -2843,6 +3039,84 @@ def create_user_share_grant_api(
     )
 
 
+def create_user_share_grant_from_broker_api(
+    conn: sqlite3.Connection,
+    *,
+    broker_token: str,
+    owner_deployment_id: str,
+    recipient_user_id: str = "",
+    recipient: str = "",
+    recipient_deployment_id: str = "",
+    resource_kind: str = "",
+    resource_root: str = "",
+    resource_path: str = "",
+    display_name: str = "",
+    access_mode: str = "",
+    requested_access: str = "",
+    source_plugin: str = "",
+    item_kind: str = "",
+    contract: str = "",
+    share_mode: str = "",
+    reshare_allowed: Any = False,
+    metadata: Mapping[str, Any] | None = None,
+) -> ArcLinkApiResponse:
+    if str(contract or "").strip() != "arclink-share-grants":
+        raise ArcLinkApiAuthError("ArcLink share-request broker contract is invalid")
+    if str(share_mode or "owner_approval").strip() not in {"", "owner_approval"}:
+        raise ArcLinkApiAuthError("ArcLink share-request broker only supports owner approval")
+    if bool(reshare_allowed):
+        raise ArcLinkApiAuthError("ArcLink share grants cannot be reshared")
+    source = str(source_plugin or "").strip().lower()
+    if source not in {"drive", "code"}:
+        raise ArcLinkApiAuthError("ArcLink share-request broker requires a supported source plugin")
+    owner = _authenticate_share_request_broker(
+        conn,
+        owner_deployment_id=owner_deployment_id,
+        broker_token=broker_token,
+    )
+    clean_owner_deployment = str(owner["deployment_id"] or "")
+    recipient_user = _resolve_share_recipient_user_id(
+        conn,
+        recipient_user_id=recipient_user_id,
+        recipient_identity=recipient,
+        recipient_deployment_id=recipient_deployment_id,
+    )
+    raw_kind = str(resource_kind or "").strip().lower()
+    clean_item_kind = str(item_kind or "").strip().lower()
+    if raw_kind in {"file", "directory"} and not clean_item_kind:
+        clean_item_kind = raw_kind
+    clean_resource_kind = raw_kind if raw_kind in ARCLINK_SHARE_RESOURCE_KINDS else source
+    if clean_resource_kind != source:
+        raise ArcLinkApiAuthError("ArcLink share-request broker source and resource kind do not match")
+    if clean_item_kind and clean_item_kind not in {"file", "directory"}:
+        raise ArcLinkApiAuthError("ArcLink share-request broker item kind is unsupported")
+    clean_access = str(access_mode or requested_access or "read").strip().lower()
+    broker_metadata = dict(metadata or {})
+    broker_metadata.update(
+        {
+            "requested_via": "share_request_broker",
+            "source_plugin": source,
+            "share_mode": "owner_approval",
+            "reshare_allowed": False,
+        }
+    )
+    if clean_item_kind:
+        broker_metadata["item_kind"] = clean_item_kind
+    return create_user_share_grant_for_owner(
+        conn,
+        owner_user_id=str(owner["user_id"] or ""),
+        recipient_user_id=recipient_user,
+        resource_kind=clean_resource_kind,
+        resource_root=resource_root,
+        resource_path=resource_path,
+        owner_deployment_id=clean_owner_deployment,
+        recipient_deployment_id=recipient_deployment_id,
+        display_name=display_name,
+        access_mode=clean_access,
+        metadata=broker_metadata,
+    )
+
+
 def approve_user_share_grant_api(
     conn: sqlite3.Connection,
     *,
@@ -3043,6 +3317,250 @@ def revoke_user_share_grant_api(
     conn.commit()
     grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone())
     return ArcLinkApiResponse(status=200, payload={"grant": _public_share_grant(grant)})
+
+
+def _share_grant_retry_target(grant: Mapping[str, Any], target: str) -> tuple[str, str]:
+    clean_target = str(target or "auto").strip().lower() or "auto"
+    if clean_target not in {"auto", "owner", "recipient"}:
+        raise ArcLinkApiAuthError("ArcLink share notification retry target must be auto, owner, or recipient")
+    status = str(grant.get("status") or "")
+    expected = ""
+    if status == "pending_owner_approval":
+        expected = "owner"
+    elif status == "approved":
+        expected = "recipient"
+    if not expected:
+        return "", f"share_status_{status or 'unknown'}_not_retryable"
+    if clean_target != "auto" and clean_target != expected:
+        return "", f"{clean_target}_notification_not_waiting"
+    return expected, ""
+
+
+def retry_user_share_grant_notification_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    grant_id: str,
+    target: str = "auto",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
+    actor_user = str(session["user_id"] or "").strip()
+    clean_grant = str(grant_id or "").strip()
+    row = conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (clean_grant,)).fetchone()
+    if row is None:
+        raise ArcLinkApiAuthError("ArcLink share notification retry is not available")
+    grant = rowdict(row)
+    owner_user = str(grant.get("owner_user_id") or "").strip()
+    recipient_user = str(grant.get("recipient_user_id") or "").strip()
+    if actor_user not in {owner_user, recipient_user}:
+        raise ArcLinkApiAuthError("ArcLink user session cannot retry another user's share notification")
+
+    retry_target, blocked_reason = _share_grant_retry_target(grant, target)
+    public_grant = _public_share_grant_for_viewer(conn, grant, viewer_user_id=actor_user)
+    if blocked_reason:
+        return ArcLinkApiResponse(
+            status=200,
+            payload={
+                "grant": public_grant,
+                "notification": {
+                    "queued": False,
+                    "target": retry_target,
+                    "reason": blocked_reason,
+                    "recovery_action": "",
+                },
+            },
+        )
+
+    target_user = owner_user if retry_target == "owner" else recipient_user
+    channel_hint = _share_public_channel_hint(_share_public_channel_for_user(conn, target_user))
+    if not channel_hint["queued_possible"]:
+        return ArcLinkApiResponse(
+            status=200,
+            payload={
+                "grant": public_grant,
+                "notification": {
+                    "queued": False,
+                    "target": retry_target,
+                    "reason": str(channel_hint.get("reason") or "no_public_channel"),
+                    "channel": "",
+                    "recovery_action": str(channel_hint.get("recovery_action") or "use_dashboard_or_link_public_channel"),
+                },
+            },
+        )
+
+    if retry_target == "owner":
+        notification = _queue_share_grant_owner_notification(conn, grant=grant)
+    else:
+        notification = queue_share_grant_recipient_notification(conn, grant=grant)
+    notification = dict(notification)
+    notification["target"] = retry_target
+    if notification.get("queued"):
+        append_arclink_audit(
+            conn,
+            action="share_grant_notification_retried",
+            actor_id=actor_user,
+            target_kind="share_grant",
+            target_id=clean_grant,
+            reason=f"{retry_target} notification retry queued",
+            metadata={
+                "target": retry_target,
+                "target_user_id": target_user,
+                "channel": str(notification.get("channel") or ""),
+                "notification_id": notification.get("notification_id"),
+                "share_status": str(grant.get("status") or ""),
+            },
+            commit=False,
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="share_grant",
+            subject_id=clean_grant,
+            event_type="share_grant_notification_retry_queued",
+            metadata={
+                "actor_user_id": actor_user,
+                "target": retry_target,
+                "target_user_id": target_user,
+                "channel": str(notification.get("channel") or ""),
+                "notification_id": notification.get("notification_id"),
+            },
+        )
+    else:
+        notification.setdefault("recovery_action", "use_dashboard_or_link_public_channel")
+    return ArcLinkApiResponse(status=200, payload={"grant": public_grant, "notification": notification})
+
+
+def _share_grant_viewer_actions(grant: Mapping[str, Any], *, viewer_user_id: str) -> tuple[str, list[str], str]:
+    owner = str(grant.get("owner_user_id") or "")
+    recipient = str(grant.get("recipient_user_id") or "")
+    status = str(grant.get("status") or "")
+    roles: list[str] = []
+    actions: list[str] = []
+    waiting_on = ""
+    if viewer_user_id == owner:
+        roles.append("owner")
+        if status == "pending_owner_approval":
+            actions.extend(["approve", "deny", "retry_notification"])
+        elif status in {"approved", "accepted"}:
+            actions.append("revoke")
+    if viewer_user_id == recipient:
+        roles.append("recipient")
+        if status == "pending_owner_approval":
+            waiting_on = "owner_approval"
+        elif status == "approved":
+            actions.extend(["accept", "retry_notification"])
+        elif status == "accepted":
+            waiting_on = "accepted"
+    if not roles:
+        roles.append("unrelated")
+    return "_and_".join(roles), actions, waiting_on
+
+
+def _share_grant_dashboard_guidance(grant: Mapping[str, Any], *, viewer_user_id: str) -> str:
+    owner = str(grant.get("owner_user_id") or "")
+    recipient = str(grant.get("recipient_user_id") or "")
+    status = str(grant.get("status") or "")
+    if viewer_user_id == owner and status == "pending_owner_approval":
+        return "Owner approval is pending; use this dashboard to approve or deny if Raven cannot deliver a public-channel prompt."
+    if viewer_user_id == recipient and status == "pending_owner_approval":
+        return "Waiting on owner approval; this dashboard remains the durable status view if Raven cannot deliver a public-channel prompt."
+    if viewer_user_id == recipient and status == "approved":
+        return "Owner approval is complete; accept from this dashboard if Raven cannot deliver the recipient prompt."
+    return ""
+
+
+def _public_share_grant_for_viewer(
+    conn: sqlite3.Connection,
+    row: Mapping[str, Any],
+    *,
+    viewer_user_id: str,
+) -> dict[str, Any]:
+    grant = _public_share_grant(row)
+    owner_channel = _share_public_channel_hint(_share_public_channel_for_user(conn, grant["owner_user_id"]))
+    recipient_channel = _share_public_channel_hint(_share_public_channel_for_user(conn, grant["recipient_user_id"]))
+    viewer_role, actions, waiting_on = _share_grant_viewer_actions(grant, viewer_user_id=viewer_user_id)
+    grant.update(
+        {
+            "viewer_role": viewer_role,
+            "available_actions": actions,
+            "waiting_on": waiting_on,
+            "dashboard_guidance": _share_grant_dashboard_guidance(grant, viewer_user_id=viewer_user_id),
+            "notification_status": {
+                "owner": owner_channel,
+                "recipient": recipient_channel,
+            },
+        }
+    )
+    return grant
+
+
+def _share_inbox_summary(grants: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "pending_owner_approvals": sum(1 for grant in grants if grant["viewer_role"].startswith("owner") and grant["status"] == "pending_owner_approval"),
+        "waiting_on_owner_approval": sum(1 for grant in grants if "recipient" in grant["viewer_role"] and grant["status"] == "pending_owner_approval"),
+        "pending_recipient_acceptance": sum(1 for grant in grants if "recipient" in grant["viewer_role"] and grant["status"] == "approved"),
+        "accepted": sum(1 for grant in grants if grant["status"] == "accepted"),
+        "denied": sum(1 for grant in grants if grant["status"] == "denied"),
+        "revoked": sum(1 for grant in grants if grant["status"] == "revoked"),
+        "expired": sum(1 for grant in grants if grant["status"] == "expired"),
+    }
+
+
+def read_user_share_grants_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    user_id: str = "",
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    target_user = str(user_id or session["user_id"] or "").strip()
+    if target_user != str(session["user_id"] or ""):
+        raise ArcLinkApiAuthError("ArcLink user session cannot read another user's share grants")
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM arclink_share_grants
+        WHERE owner_user_id = ? OR recipient_user_id = ?
+        ORDER BY
+          CASE status
+            WHEN 'pending_owner_approval' THEN 0
+            WHEN 'approved' THEN 1
+            WHEN 'accepted' THEN 2
+            WHEN 'denied' THEN 3
+            WHEN 'revoked' THEN 4
+            WHEN 'expired' THEN 5
+            ELSE 6
+          END,
+          updated_at DESC,
+          created_at DESC
+        LIMIT 100
+        """,
+        (target_user, target_user),
+    ).fetchall()
+    grants = [_public_share_grant_for_viewer(conn, rowdict(row), viewer_user_id=target_user) for row in rows]
+    return ArcLinkApiResponse(
+        status=200,
+        payload={
+            "share_grants": grants,
+            "pending_owner_approvals": [
+                grant for grant in grants
+                if grant["viewer_role"].startswith("owner") and grant["status"] == "pending_owner_approval"
+            ],
+            "waiting_on_owner_approval": [
+                grant for grant in grants
+                if "recipient" in grant["viewer_role"] and grant["status"] == "pending_owner_approval"
+            ],
+            "pending_recipient_acceptance": [
+                grant for grant in grants
+                if "recipient" in grant["viewer_role"] and grant["status"] == "approved"
+            ],
+            "summary": _share_inbox_summary(grants),
+        },
+    )
 
 
 def read_user_linked_resources_api(

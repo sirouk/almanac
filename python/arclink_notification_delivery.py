@@ -16,8 +16,11 @@ import secrets
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -214,6 +217,11 @@ def _strip_public_channel_prefix(target_id: str, prefix: str) -> str:
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 PUBLIC_AGENT_BRIDGE_DEFERRED = "DEFERRED_TO_PUBLIC_AGENT_BRIDGE"
+PUBLIC_AGENT_BRIDGE_PYTHON = "/opt/arclink/runtime/hermes-venv/bin/python3"
+PUBLIC_AGENT_BRIDGE_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge.py"
+PUBLIC_AGENT_BRIDGE_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+PUBLIC_AGENT_BRIDGE_PROJECT_RE = re.compile(r"^arclink-[a-z0-9][a-z0-9_-]{0,80}$")
+GATEWAY_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Gateway-Exec-Token"
 
 
 def _int_env(name: str, default: int, *, minimum: int = 1, maximum: int = 1800) -> int:
@@ -238,6 +246,76 @@ def _compose_project_name(deployment_id: str) -> str:
     return f"arclink-{clean}" if clean else ""
 
 
+def _gateway_exec_broker_url() -> str:
+    return config_env_value("ARCLINK_GATEWAY_EXEC_BROKER_URL", "").strip().rstrip("/")
+
+
+def _gateway_exec_broker_token() -> str:
+    return config_env_value("ARCLINK_GATEWAY_EXEC_BROKER_TOKEN", "").strip()
+
+
+def _gateway_exec_broker_request(
+    *,
+    deployment_id: str,
+    prefix: str,
+    project_name: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    return {
+        "deployment_id": str(deployment_id or "").strip(),
+        "prefix": str(prefix or "").strip(),
+        "project_name": str(project_name or "").strip(),
+        "payload": payload,
+        "timeout_seconds": int(timeout_seconds),
+    }
+
+
+def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool, str]:
+    broker_url = _gateway_exec_broker_url()
+    if not broker_url:
+        return False, "gateway exec broker URL is not configured"
+    token = _gateway_exec_broker_token()
+    if not token:
+        return False, "gateway exec broker token is not configured"
+    timeout_seconds = _int_env("ARCLINK_GATEWAY_EXEC_BROKER_TIMEOUT_SECONDS", 240, minimum=15, maximum=900)
+    raw_timeout = request_body.get("timeout_seconds")
+    try:
+        timeout_seconds = max(timeout_seconds, min(86400, int(raw_timeout) + 30))
+    except (TypeError, ValueError):
+        pass
+    payload_bytes = json.dumps(request_body, sort_keys=True).encode("utf-8")
+    request = urllib.request.Request(
+        f"{broker_url}/v1/public-agent-bridge",
+        data=payload_bytes,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            GATEWAY_EXEC_BROKER_TOKEN_HEADER: token,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - internal broker URL
+            body = response.read(65536).decode("utf-8", errors="replace")
+            status = int(getattr(response, "status", 200) or 200)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(65536).decode("utf-8", errors="replace")
+        status = int(exc.code or 500)
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        return False, f"gateway exec broker request failed: {str(exc)[:180]}"
+    try:
+        parsed = json.loads(body or "{}")
+    except json.JSONDecodeError:
+        parsed = {}
+    if 200 <= status < 300 and isinstance(parsed, dict) and parsed.get("ok") is True:
+        return True, ""
+    if isinstance(parsed, dict):
+        error = str(parsed.get("error") or "").strip()
+        if error:
+            return False, error[:500]
+    return False, f"gateway exec broker returned HTTP {status}"
+
+
 def _deployment_root(*, deployment_id: str, prefix: str) -> Path | None:
     base = Path(config_env_value("ARCLINK_STATE_ROOT_BASE", "/arcdata/deployments") or "/arcdata/deployments")
     if deployment_id and prefix:
@@ -251,11 +329,118 @@ def _deployment_root(*, deployment_id: str, prefix: str) -> Path | None:
     return None
 
 
-def _deployment_service_container(*, project_name: str, service: str) -> str:
+def _path_within(path: Path, base: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(base.resolve(strict=False))
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _deployment_state_root_base() -> Path:
+    return Path(config_env_value("ARCLINK_STATE_ROOT_BASE", "/arcdata/deployments") or "/arcdata/deployments")
+
+
+def _validate_deployment_config_directory(path: Path, *, label: str, context: str) -> None:
+    try:
+        stat_result = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"{context} {label} is missing") from exc
+    if stat.S_ISLNK(stat_result.st_mode):
+        raise ValueError(f"{context} {label} must not be a symlink")
+    if not stat.S_ISDIR(stat_result.st_mode):
+        raise ValueError(f"{context} {label} must be a directory")
+
+
+def _validate_deployment_config_file(path: Path, *, label: str, context: str) -> None:
+    try:
+        stat_result = path.lstat()
+    except OSError as exc:
+        raise ValueError(f"{context} {label} is missing") from exc
+    if stat.S_ISLNK(stat_result.st_mode):
+        raise ValueError(f"{context} {label} must not be a symlink")
+    if not stat.S_ISREG(stat_result.st_mode):
+        raise ValueError(f"{context} {label} must be a regular file")
+    if stat_result.st_mode & 0o444 == 0:
+        raise ValueError(f"{context} {label} must be readable")
+
+
+def _preflight_deployment_compose_config_files(
+    *,
+    env_file: Path,
+    compose_file: Path,
+    context: str,
+) -> None:
+    if env_file.name != "arclink.env" or compose_file.name != "compose.yaml":
+        raise ValueError(f"{context} Compose files are not deployment config files")
+    if env_file.parent != compose_file.parent or env_file.parent.name != "config":
+        raise ValueError(f"{context} Compose files must share a deployment config directory")
+    state_root = _deployment_state_root_base()
+    if not _path_within(env_file, state_root) or not _path_within(compose_file, state_root):
+        raise ValueError(f"{context} Compose files must stay under ARCLINK_STATE_ROOT_BASE")
+    deployment_root = env_file.parent.parent
+    _validate_deployment_config_directory(deployment_root, label="deployment root", context=context)
+    _validate_deployment_config_directory(env_file.parent, label="config directory", context=context)
+    _validate_deployment_config_file(env_file, label="config/arclink.env", context=context)
+    _validate_deployment_config_file(compose_file, label="config/compose.yaml", context=context)
+
+
+def _validate_public_agent_bridge_cmd(cmd: list[str], *, project_name: str = "") -> tuple[bool, str, str]:
+    """Constrain detached public-Agent bridge jobs to one Docker operation.
+
+    Detached jobs are stored on disk so the notification worker can release its
+    lease while Hermes finishes. Treat that job file as data, not authority:
+    only the two command shapes generated by this module are allowed.
+    """
+    parts = [str(part) for part in cmd]
+    bridge_tail = [PUBLIC_AGENT_BRIDGE_PYTHON, PUBLIC_AGENT_BRIDGE_SCRIPT]
+    expected_project = str(project_name or "").strip()
+
+    if len(parts) == 6 and parts[:3] == ["docker", "exec", "-i"] and parts[4:] == bridge_tail:
+        container_name = parts[3].strip()
+        if not PUBLIC_AGENT_BRIDGE_CONTAINER_RE.fullmatch(container_name):
+            return False, "", "public Agent bridge container name is not allowlisted"
+        if "hermes-gateway" not in container_name:
+            return False, "", "public Agent bridge may only exec the hermes-gateway service"
+        if expected_project and not (
+            container_name.startswith(f"{expected_project}-") or container_name.startswith(f"{expected_project}_")
+        ):
+            return False, "", "public Agent bridge container does not match the deployment project"
+        return True, "docker-exec-hermes-gateway", ""
+
+    if (
+        len(parts) == 13
+        and parts[:3] == ["docker", "compose", "-p"]
+        and parts[4] == "--env-file"
+        and parts[6] == "-f"
+        and parts[8:11] == ["exec", "-T", "hermes-gateway"]
+        and parts[11:] == bridge_tail
+    ):
+        project = parts[3].strip()
+        if not PUBLIC_AGENT_BRIDGE_PROJECT_RE.fullmatch(project):
+            return False, "", "public Agent bridge Compose project is not allowlisted"
+        if expected_project and project != expected_project:
+            return False, "", "public Agent bridge Compose project does not match the job project"
+        env_file = Path(parts[5])
+        compose_file = Path(parts[7])
+        try:
+            _preflight_deployment_compose_config_files(
+                env_file=env_file,
+                compose_file=compose_file,
+                context="public Agent bridge",
+            )
+        except ValueError as exc:
+            return False, "", str(exc)
+        return True, "docker-compose-exec-hermes-gateway", ""
+
+    return False, "", "public Agent bridge command is not allowlisted"
+
+
+def _deployment_service_container(*, project_name: str, service: str, docker_binary: str = "docker") -> str:
     if not project_name or not service:
         return ""
     cmd = [
-        "docker",
+        str(docker_binary or "docker"),
         "ps",
         "--filter",
         f"label=com.docker.compose.project={project_name}",
@@ -315,8 +500,14 @@ def _run_public_agent_turn(*, deployment_id: str, prefix: str, prompt: str) -> t
             return "", "I could not find the running deployment container or deployment root on this control node."
         compose_file = root / "config" / "compose.yaml"
         env_file = root / "config" / "arclink.env"
-        if not compose_file.exists() or not env_file.exists():
-            return "", "The deployment compose files are missing, so Raven cannot reach the agent runtime yet."
+        try:
+            _preflight_deployment_compose_config_files(
+                env_file=env_file,
+                compose_file=compose_file,
+                context="public Agent turn",
+            )
+        except ValueError as exc:
+            return "", f"The deployment compose files failed preflight, so Raven cannot reach the agent runtime yet: {str(exc)[:180]}"
         cmd = [
             "docker",
             "compose",
@@ -404,35 +595,6 @@ def _run_public_agent_gateway_turn(
     if not project_name:
         return False, "deployment id is missing"
     timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
-    bridge_cmd = [
-        "/opt/arclink/runtime/hermes-venv/bin/python3",
-        "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
-    ]
-    container = _deployment_service_container(project_name=project_name, service="hermes-gateway")
-    if container:
-        cmd = ["docker", "exec", "-i", container, *bridge_cmd]
-    else:
-        root = _deployment_root(deployment_id=deployment_id, prefix=prefix)
-        if root is None:
-            return False, "deployment container/root not found for gateway bridge"
-        compose_file = root / "config" / "compose.yaml"
-        env_file = root / "config" / "arclink.env"
-        if not compose_file.exists() or not env_file.exists():
-            return False, "deployment compose files are missing for gateway bridge"
-        cmd = [
-            "docker",
-            "compose",
-            "-p",
-            project_name,
-            "--env-file",
-            str(env_file),
-            "-f",
-            str(compose_file),
-            "exec",
-            "-T",
-            "hermes-gateway",
-            *bridge_cmd,
-        ]
     payload = {
         "platform": clean_channel,
         "bot_token": bot_token,
@@ -450,11 +612,67 @@ def _run_public_agent_gateway_turn(
             value = extra.get(key)
             if value not in (None, ""):
                 payload[key] = value
+    broker_request = _gateway_exec_broker_request(
+        deployment_id=deployment_id,
+        prefix=prefix,
+        project_name=project_name,
+        payload=payload,
+        timeout_seconds=timeout_seconds + 30,
+    )
+    if _gateway_exec_broker_url():
+        if _public_agent_bridge_detached_enabled() and notification_id is not None:
+            started, error = _spawn_public_agent_gateway_bridge(
+                gateway_exec_request=broker_request,
+                notification_id=notification_id,
+            )
+            if started:
+                return True, PUBLIC_AGENT_BRIDGE_DEFERRED
+            return False, error
+        return _run_gateway_exec_broker_request(broker_request)
+    bridge_cmd = [
+        PUBLIC_AGENT_BRIDGE_PYTHON,
+        PUBLIC_AGENT_BRIDGE_SCRIPT,
+    ]
+    container = _deployment_service_container(project_name=project_name, service="hermes-gateway")
+    if container:
+        cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+    else:
+        root = _deployment_root(deployment_id=deployment_id, prefix=prefix)
+        if root is None:
+            return False, "deployment container/root not found for gateway bridge"
+        compose_file = root / "config" / "compose.yaml"
+        env_file = root / "config" / "arclink.env"
+        try:
+            _preflight_deployment_compose_config_files(
+                env_file=env_file,
+                compose_file=compose_file,
+                context="public Agent gateway bridge",
+            )
+        except ValueError as exc:
+            return False, f"Hermes public gateway bridge config rejected: {str(exc)[:220]}"
+        cmd = [
+            "docker",
+            "compose",
+            "-p",
+            project_name,
+            "--env-file",
+            str(env_file),
+            "-f",
+            str(compose_file),
+            "exec",
+            "-T",
+            "hermes-gateway",
+            *bridge_cmd,
+        ]
+    valid, _command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
+    if not valid:
+        return False, f"Hermes public gateway bridge command rejected: {reason}"
     if _public_agent_bridge_detached_enabled():
         started, error = _spawn_public_agent_gateway_bridge(
             cmd=cmd,
             payload=payload,
             notification_id=notification_id,
+            project_name=project_name,
         )
         if started and notification_id is not None:
             return True, PUBLIC_AGENT_BRIDGE_DEFERRED
@@ -542,17 +760,37 @@ def _public_agent_bridge_job_dir() -> Path:
 def _write_public_agent_bridge_job(
     *,
     notification_id: int,
-    cmd: list[str],
-    payload: dict[str, Any],
+    cmd: list[str] | None = None,
+    payload: dict[str, Any] | None = None,
+    project_name: str = "",
+    gateway_exec_request: dict[str, Any] | None = None,
 ) -> Path:
+    body: dict[str, Any]
+    if gateway_exec_request is not None:
+        if not isinstance(gateway_exec_request, dict):
+            raise ValueError("gateway exec broker request must be a JSON object")
+        command_kind = "gateway-exec-broker-request"
+        body = {
+            "notification_id": int(notification_id),
+            "command_kind": command_kind,
+            "gateway_exec_request": gateway_exec_request,
+            "timeout_seconds": _public_agent_bridge_max_seconds(),
+        }
+    else:
+        clean_cmd = [str(part) for part in cmd or []]
+        valid, command_kind, reason = _validate_public_agent_bridge_cmd(clean_cmd, project_name=project_name)
+        if not valid:
+            raise ValueError(reason)
+        body = {
+            "notification_id": int(notification_id),
+            "cmd": clean_cmd,
+            "command_kind": command_kind,
+            "project_name": str(project_name or "").strip(),
+            "payload": payload or {},
+            "timeout_seconds": _public_agent_bridge_max_seconds(),
+        }
     job_dir = _public_agent_bridge_job_dir()
     job_dir.mkdir(parents=True, exist_ok=True)
-    body = {
-        "notification_id": int(notification_id),
-        "cmd": [str(part) for part in cmd],
-        "payload": payload,
-        "timeout_seconds": _public_agent_bridge_max_seconds(),
-    }
     nonce = secrets.token_hex(4)
     tmp_path = job_dir / f"bridge-{int(notification_id)}-{os.getpid()}-{nonce}.json.tmp"
     job_path = job_dir / f"bridge-{int(notification_id)}-{os.getpid()}-{nonce}.json"
@@ -593,17 +831,70 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         job = _load_public_agent_bridge_job(job_path)
         notification_id = int(job.get("notification_id") or 0)
         cmd = [str(part) for part in job.get("cmd") or []]
+        project_name = str(job.get("project_name") or "").strip()
         payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        gateway_exec_request = job.get("gateway_exec_request") if isinstance(job.get("gateway_exec_request"), dict) else None
         timeout_seconds = int(job.get("timeout_seconds") or _public_agent_bridge_max_seconds())
         if notification_id <= 0:
             raise RuntimeError("public Agent bridge job is missing notification_id")
+        cfg = Config.from_env()
+        if gateway_exec_request is not None:
+            _append_public_agent_bridge_log(
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_broker_started",
+                        "notification_id": notification_id,
+                        "timeout_seconds": timeout_seconds,
+                    },
+                    sort_keys=True,
+                )
+            )
+            ok, error = _run_gateway_exec_broker_request(gateway_exec_request)
+            if ok:
+                with connect_db(cfg) as conn:
+                    mark_notification_delivered(conn, notification_id)
+                _append_public_agent_bridge_log(
+                    json.dumps(
+                        {"event": "public_agent_bridge_broker_delivered", "notification_id": notification_id},
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            with connect_db(cfg) as conn:
+                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {error}")
+            _append_public_agent_bridge_log(
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_broker_failed",
+                        "notification_id": notification_id,
+                        "error": str(error)[:500],
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
         if not cmd:
             raise RuntimeError("public Agent bridge job is missing cmd")
-        cfg = Config.from_env()
+        valid, command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
+        if not valid:
+            with connect_db(cfg) as conn:
+                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge rejected command: {reason}")
+            _append_public_agent_bridge_log(
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_rejected_command",
+                        "notification_id": notification_id,
+                        "reason": reason,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
         _append_public_agent_bridge_log(
             json.dumps(
                 {
                     "event": "public_agent_bridge_started",
+                    "command_kind": command_kind,
                     "notification_id": notification_id,
                     "timeout_seconds": timeout_seconds,
                 },
@@ -676,14 +967,29 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
 
 def _spawn_public_agent_gateway_bridge(
     *,
-    cmd: list[str],
-    payload: dict[str, Any],
+    cmd: list[str] | None = None,
+    payload: dict[str, Any] | None = None,
     notification_id: int | None = None,
+    project_name: str = "",
+    gateway_exec_request: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
+    if gateway_exec_request is None:
+        clean_cmd = [str(part) for part in cmd or []]
+        valid, _command_kind, reason = _validate_public_agent_bridge_cmd(clean_cmd, project_name=project_name)
+        if not valid:
+            return False, f"Hermes public gateway bridge command rejected: {reason}"
+    else:
+        clean_cmd = []
     if notification_id is not None:
         try:
-            job_path = _write_public_agent_bridge_job(notification_id=notification_id, cmd=cmd, payload=payload)
-        except OSError as exc:
+            job_path = _write_public_agent_bridge_job(
+                notification_id=notification_id,
+                cmd=clean_cmd,
+                payload=payload or {},
+                project_name=project_name,
+                gateway_exec_request=gateway_exec_request,
+            )
+        except (OSError, ValueError) as exc:
             return False, f"could not write public gateway bridge job: {str(exc)[:180]}"
         log_path = _public_agent_bridge_log_path()
         try:
@@ -708,6 +1014,8 @@ def _spawn_public_agent_gateway_bridge(
             return False, f"could not start Hermes public gateway bridge worker: {str(exc)[:180]}"
 
     log_path = _public_agent_bridge_log_path()
+    if gateway_exec_request is not None:
+        return _run_gateway_exec_broker_request(gateway_exec_request)
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = log_path.open("a", encoding="utf-8")
@@ -715,7 +1023,7 @@ def _spawn_public_agent_gateway_bridge(
         return False, f"could not open public gateway bridge log: {str(exc)[:180]}"
     try:
         proc = subprocess.Popen(
-            cmd,
+            clean_cmd,
             stdin=subprocess.PIPE,
             stdout=log_file,
             stderr=log_file,
@@ -724,7 +1032,7 @@ def _spawn_public_agent_gateway_bridge(
         )
         if proc.stdin is None:
             return False, "could not open public gateway bridge stdin"
-        proc.stdin.write(json.dumps(payload, sort_keys=True))
+        proc.stdin.write(json.dumps(payload or {}, sort_keys=True))
         proc.stdin.close()
         try:
             returncode = proc.wait(timeout=0.25)

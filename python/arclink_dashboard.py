@@ -4,12 +4,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-from arclink_control import ARCLINK_ACTION_INTENT_STATUSES, append_arclink_audit, get_setting, utc_now_iso
+from arclink_control import ARCLINK_ACTION_INTENT_STATUSES, append_arclink_audit, append_arclink_event, get_setting, utc_now_iso
 from arclink_adapters import arclink_access_urls
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_chutes import evaluate_chutes_deployment_boundary, renewal_lifecycle_for_billing_state
@@ -30,17 +32,138 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
         "refund",
         "comp",
         "cancel",
+        "backup_write_check",
         "rollout",
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check"})
 ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
+ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
+    "restart": {
+        "label": "Restart",
+        "worker_support": "wired",
+        "operation_kind": "docker_compose_lifecycle",
+        "target_kinds": ("deployment",),
+        "required_adapter": "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh",
+        "live_proof_gate": "PG-PROVISION",
+        "local_contract": "queues an audited Docker Compose lifecycle restart intent; fake adapter results are non-live evidence only",
+    },
+    "reprovision": {
+        "label": "Reprovision",
+        "worker_support": "wired",
+        "operation_kind": "pod_migration",
+        "target_kinds": ("deployment",),
+        "required_adapter": "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh",
+        "live_proof_gate": "PG-PROVISION",
+        "local_contract": "queues an audited operator-only Pod migration or redeploy intent through the action worker",
+    },
+    "dns_repair": {
+        "label": "DNS repair",
+        "worker_support": "wired",
+        "operation_kind": "cloudflare_dns_apply",
+        "target_kinds": ("deployment", "dns_record"),
+        "required_adapter": "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh plus configured DNS provider credentials for live mutation",
+        "live_proof_gate": "PG-INGRESS",
+        "local_contract": "queues an audited DNS repair intent and derives desired records from deployment metadata or stored DNS rows",
+    },
+    "rotate_chutes_key": {
+        "label": "Rotate Chutes key",
+        "worker_support": "wired",
+        "operation_kind": "chutes_key_apply",
+        "target_kinds": ("deployment",),
+        "required_adapter": "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh plus Chutes key client for live mutation",
+        "live_proof_gate": "PG-PROVIDER",
+        "local_contract": "queues an audited provider-key rotation intent using secret references, never plaintext keys",
+    },
+    "refund": {
+        "label": "Refund",
+        "worker_support": "wired",
+        "operation_kind": "stripe_action_apply",
+        "target_kinds": ("deployment", "user", "subscription"),
+        "required_adapter": "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh plus Stripe action client for live mutation",
+        "live_proof_gate": "PG-STRIPE",
+        "local_contract": "queues an audited Stripe refund intent after resolving the target through the control DB",
+    },
+    "cancel": {
+        "label": "Cancel",
+        "worker_support": "wired",
+        "operation_kind": "stripe_action_apply",
+        "target_kinds": ("deployment", "user", "subscription"),
+        "required_adapter": "ARCLINK_EXECUTOR_ADAPTER=fake|local|ssh plus Stripe action client for live mutation",
+        "live_proof_gate": "PG-STRIPE",
+        "local_contract": "queues an audited Stripe cancellation intent after resolving the target through the control DB",
+    },
+    "comp": {
+        "label": "Comp",
+        "worker_support": "wired",
+        "operation_kind": "control_db_comp",
+        "target_kinds": ("deployment", "user"),
+        "required_adapter": "action worker with control DB access; no external provider adapter",
+        "live_proof_gate": "LOCAL-CONTROL-DB",
+        "local_contract": "applies an audited local entitlement comp through the control DB, not an external provider mutation",
+    },
+    "backup_write_check": {
+        "label": "Backup write check",
+        "worker_support": "wired",
+        "operation_kind": "backup_git_write_check",
+        "target_kinds": ("deployment",),
+        "required_adapter": "authorized PG-BACKUP runner; unattended local runs record failed_closed without invoking git",
+        "live_proof_gate": "PG-BACKUP",
+        "local_contract": "records the GitHub write-check boundary and keeps backup activation inactive unless verified write evidence exists",
+    },
+    "suspend": {
+        "label": "Suspend",
+        "worker_support": "pending_not_implemented",
+        "operation_kind": "",
+        "target_kinds": ("deployment", "user"),
+        "required_adapter": "not queueable until worker dispatch lands",
+        "live_proof_gate": "policy-gated",
+        "local_contract": "visible as a planned operation only; no queueing or live side effect is exposed",
+    },
+    "unsuspend": {
+        "label": "Unsuspend",
+        "worker_support": "pending_not_implemented",
+        "operation_kind": "",
+        "target_kinds": ("deployment", "user"),
+        "required_adapter": "not queueable until worker dispatch lands",
+        "live_proof_gate": "policy-gated",
+        "local_contract": "visible as a planned operation only; no queueing or live side effect is exposed",
+    },
+    "force_resynth": {
+        "label": "Force resynth",
+        "worker_support": "pending_not_implemented",
+        "operation_kind": "",
+        "target_kinds": ("deployment", "user"),
+        "required_adapter": "not queueable until worker dispatch lands",
+        "live_proof_gate": "PG-HERMES",
+        "local_contract": "visible as a planned operation only; no queueing or live side effect is exposed",
+    },
+    "rotate_bot_key": {
+        "label": "Rotate bot key",
+        "worker_support": "pending_not_implemented",
+        "operation_kind": "",
+        "target_kinds": ("deployment", "user"),
+        "required_adapter": "not queueable until worker dispatch lands",
+        "live_proof_gate": "PG-BOTS",
+        "local_contract": "visible as a planned operation only; no queueing or live side effect is exposed",
+    },
+    "rollout": {
+        "label": "Rollout",
+        "worker_support": "pending_not_implemented",
+        "operation_kind": "",
+        "target_kinds": ("deployment", "system"),
+        "required_adapter": "not queueable until worker dispatch lands",
+        "live_proof_gate": "PG-PROVISION",
+        "local_contract": "visible as a planned operation only; no queueing or live side effect is exposed",
+    },
+}
 ARCLINK_USER_DASHBOARD_SECTIONS = (
     "deployment_health",
     "access_links",
     "wrapped",
     "bot_setup",
+    "backup",
     "files",
     "code",
     "terminal",
@@ -52,6 +175,63 @@ ARCLINK_USER_DASHBOARD_SECTIONS = (
     "security",
     "support",
 )
+ARCLINK_BACKUP_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+ARCLINK_BACKUP_PUBLIC_KEY_RE = re.compile(r"^ssh-ed25519 [A-Za-z0-9+/=]{40,220}(?: [\x20-\x7e]{0,120})?$")
+ARCLINK_BACKUP_PUBLIC_STATUSES = frozenset(
+    {
+        "awaiting_private_repo",
+        "repo_recorded_pending_key_setup",
+    }
+)
+ARCLINK_BACKUP_WRITE_CHECK_STATUSES = frozenset({"not_run", "pending_operator_setup", "failed_closed", "verified"})
+ARCLINK_BACKUP_ACTIVATION_STATUSES = frozenset({"not_active", "pending_operator_setup", "failed_closed", "active"})
+ARCLINK_BACKUP_FAILED_CLOSED_REASON = (
+    "GitHub write verification requires an authorized PG-BACKUP runner; no live git command was run."
+)
+
+
+def _admin_action_worker_support(action_type: str) -> str:
+    return str(ARCLINK_ADMIN_ACTION_SUPPORT.get(action_type, {}).get("worker_support") or "pending_not_implemented")
+
+
+def _admin_action_support_entries(
+    *,
+    executor_adapter: str,
+    probes_ready: bool,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    support: dict[str, dict[str, Any]] = {}
+    matrix: list[dict[str, Any]] = []
+    for action_type in sorted(ARCLINK_ADMIN_ACTION_TYPES):
+        base = dict(ARCLINK_ADMIN_ACTION_SUPPORT.get(action_type) or {})
+        worker_support = str(base.get("worker_support") or "pending_not_implemented")
+        is_wired = worker_support == "wired"
+        queueable = is_wired and probes_ready
+        if not is_wired:
+            readiness = "pending_not_implemented"
+            fail_closed_reason = "worker support is not implemented; action remains visible but not queueable"
+        elif not probes_ready:
+            readiness = "disabled"
+            fail_closed_reason = "executor probes are not ready; action fails closed before queueing"
+        else:
+            readiness = "queueable"
+            fail_closed_reason = ""
+        entry = {
+            "action_type": action_type,
+            "label": str(base.get("label") or action_type.replace("_", " ").title()),
+            "readiness": readiness,
+            "queueable": queueable,
+            "worker_support": worker_support,
+            "operation_kind": str(base.get("operation_kind") or ""),
+            "target_kinds": list(base.get("target_kinds") or ()),
+            "required_adapter": str(base.get("required_adapter") or ""),
+            "live_proof_gate": str(base.get("live_proof_gate") or ""),
+            "local_contract": str(base.get("local_contract") or ""),
+            "executor_adapter": executor_adapter,
+            "fail_closed_reason": fail_closed_reason,
+        }
+        support[action_type] = entry
+        matrix.append(entry)
+    return support, matrix
 
 
 def admin_action_execution_readiness(env: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -77,12 +257,19 @@ def admin_action_execution_readiness(env: Mapping[str, str] | None = None) -> di
         probes.append({"name": "ssh_machine_mode", "ok": machine_enabled, "detail": "enabled" if machine_enabled else "disabled"})
         probes.append({"name": "ssh_host", "ok": bool(host) and host in allowed_hosts, "detail": "allowlisted" if host and host in allowed_hosts else "missing_or_not_allowlisted"})
         probes.append({"name": "ssh_key", "ok": bool(key_path), "detail": "configured" if key_path else "missing"})
-    executable = sorted(ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES) if all(bool(probe["ok"]) for probe in probes) else []
+    probes_ready = all(bool(probe["ok"]) for probe in probes)
+    executable = sorted(ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES) if probes_ready else []
     disabled = sorted(ARCLINK_ADMIN_ACTION_TYPES - set(executable))
+    action_support, action_matrix = _admin_action_support_entries(
+        executor_adapter=executor_adapter,
+        probes_ready=probes_ready,
+    )
     return {
         "executable": executable,
         "pending_not_implemented": sorted(ARCLINK_PENDING_ADMIN_ACTION_TYPES),
         "disabled": disabled,
+        "action_support": action_support,
+        "action_matrix": action_matrix,
         "executor_adapter": executor_adapter,
         "probes": probes,
         "queue_policy": "admin UI queues only modeled worker actions; pending actions stay disabled until worker wiring lands",
@@ -500,12 +687,7 @@ def _notion_index_available(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
-def _deployment_notion_setup(
-    conn: sqlite3.Connection,
-    *,
-    deployment_id: str,
-    urls: Mapping[str, str],
-) -> dict[str, Any]:
+def _deployment_session_metadata(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any]:
     row = conn.execute(
         """
         SELECT metadata_json
@@ -516,7 +698,16 @@ def _deployment_notion_setup(
         """,
         (deployment_id,),
     ).fetchone()
-    session_metadata = _json_loads(str(row["metadata_json"] or "{}")) if row is not None else {}
+    return _json_loads(str(row["metadata_json"] or "{}")) if row is not None else {}
+
+
+def _deployment_notion_setup(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    urls: Mapping[str, str],
+) -> dict[str, Any]:
+    session_metadata = _deployment_session_metadata(conn, deployment_id)
     public_status = str(session_metadata.get("connect_notion_public_status") or "").strip()
     configured = bool(str(get_setting(conn, "notion_webhook_verification_token", "") or "").strip())
     installed_at = str(get_setting(conn, "notion_webhook_verification_token_installed_at", "") or "").strip()
@@ -526,10 +717,19 @@ def _deployment_notion_setup(
     dashboard_url = str(urls.get("dashboard") or "").rstrip("/")
     callback_url = str(urls.get("notion") or (f"{dashboard_url}/notion/webhook" if dashboard_url else "")).strip()
     ready_for_dashboard = public_status == "ready_for_dashboard_verification"
+    if configured and verified_at:
+        webhook_state = "webhook_verified"
+    elif configured:
+        webhook_state = "webhook_token_installed"
+    elif armed_until:
+        webhook_state = "webhook_install_armed"
+    else:
+        webhook_state = "not_configured"
+    index_state = "available" if index_available else "not_seen"
     if ready_for_dashboard and verified_at and configured and index_available:
-        status = "verified"
+        status = "local_metadata_verified"
     elif ready_for_dashboard and verified_at and configured:
-        status = "verified_waiting_for_index"
+        status = "webhook_verified_waiting_for_index"
     elif ready_for_dashboard:
         status = "pending_dashboard_verification"
     elif public_status == "awaiting_user_setup":
@@ -552,20 +752,377 @@ def _deployment_notion_setup(
         "webhook": {
             "configured": configured,
             "verified": bool(verified_at),
+            "status": webhook_state,
             "installed_at": installed_at,
             "verified_at": verified_at,
             "armed": bool(armed_until),
             "armed_until": armed_until,
         },
         "index": {
-            "status": "available" if index_available else "not_seen",
+            "status": index_state,
         },
         "verification": {
+            "state": status,
             "dashboard": status,
+            "setup_intent": public_status or "not_requested",
+            "local_metadata": "local_metadata_verified"
+            if ready_for_dashboard and verified_at and configured and index_available
+            else "local_metadata_pending",
             "email_share": "not_proof",
+            "user_owned_oauth": "policy_question",
+            "shared_root_live_read": "proof_gated",
+            "brokered_write_preflight": "proof_gated",
             "live_workspace": "proof_gated",
         },
     }
+
+
+def _safe_backup_owner_repo(value: str) -> str:
+    clean = str(value or "").strip()
+    if len(clean) > 160 or not ARCLINK_BACKUP_OWNER_REPO_RE.fullmatch(clean):
+        return ""
+    try:
+        _reject_secret_material(clean, path="$.backup_setup.owner_repo")
+    except ArcLinkDashboardError:
+        return ""
+    return clean
+
+
+def _safe_backup_public_key(value: str) -> str:
+    clean = str(value or "").strip()
+    if len(clean) > 420 or not ARCLINK_BACKUP_PUBLIC_KEY_RE.fullmatch(clean):
+        return ""
+    try:
+        _reject_secret_material(clean, path="$.backup_setup.deploy_key.public_key")
+    except ArcLinkDashboardError:
+        return ""
+    return clean
+
+
+def _safe_backup_status(value: str, allowed: frozenset[str], fallback: str) -> str:
+    clean = str(value or "").strip().lower()
+    return clean if clean in allowed else fallback
+
+
+def _safe_backup_reason(value: str) -> str:
+    clean = str(value or "").strip() or ARCLINK_BACKUP_FAILED_CLOSED_REASON
+    clean = clean[:500]
+    try:
+        _reject_secret_material(clean, path="$.backup_setup.verification.reason")
+    except ArcLinkDashboardError:
+        return ARCLINK_BACKUP_FAILED_CLOSED_REASON
+    return clean
+
+
+def _backup_key_private_ref(deployment_id: str) -> str:
+    digest = hashlib.sha256(str(deployment_id or "").encode("utf-8")).hexdigest()[:24]
+    return f"server_state:agent-backup-deploy-key:{digest}"
+
+
+def _backup_key_paths(key_staging_dir: str, deployment_id: str) -> tuple[Path, Path]:
+    clean_dir = str(key_staging_dir or "").strip()
+    if not clean_dir:
+        raise ArcLinkDashboardError("ArcLink backup deploy-key staging is not configured")
+    digest = hashlib.sha256(str(deployment_id or "").encode("utf-8")).hexdigest()[:24]
+    key_dir = Path(clean_dir).expanduser() / digest
+    return key_dir / "arclink-agent-backup-ed25519", key_dir / "arclink-agent-backup-ed25519.pub"
+
+
+def _stage_backup_deploy_key_file(*, key_staging_dir: str, deployment_id: str) -> str:
+    private_key, public_key_path = _backup_key_paths(key_staging_dir, deployment_id)
+    private_key.parent.mkdir(parents=True, exist_ok=True)
+    if not public_key_path.is_file():
+        comment = f"arclink-agent-backup-{hashlib.sha256(deployment_id.encode('utf-8')).hexdigest()[:12]}"
+        result = subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(private_key)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise ArcLinkDashboardError("ArcLink backup deploy-key staging failed closed")
+    try:
+        os.chmod(private_key, 0o600)
+        os.chmod(public_key_path, 0o644)
+        public_key = public_key_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ArcLinkDashboardError("ArcLink backup deploy-key staging failed closed") from exc
+    safe_public_key = _safe_backup_public_key(public_key)
+    if not safe_public_key:
+        raise ArcLinkDashboardError("ArcLink backup deploy-key staging produced an invalid public key")
+    return safe_public_key
+
+
+def _deployment_backup_setup(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    deployment_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    session_metadata = _deployment_session_metadata(conn, deployment_id)
+    deployment_meta = dict(deployment_metadata or {})
+    raw_public_status = str(session_metadata.get("config_backup_public_status") or "").strip()
+    public_status = raw_public_status if raw_public_status in ARCLINK_BACKUP_PUBLIC_STATUSES else "not_requested"
+    owner_repo = _safe_backup_owner_repo(
+        str(session_metadata.get("config_backup_owner_repo") or deployment_meta.get("backup_owner_repo") or "")
+    )
+    requested_at = str(session_metadata.get("config_backup_requested_at") or "")
+    staged_public_key = _safe_backup_public_key(str(deployment_meta.get("backup_deploy_key_public") or ""))
+    staged_at = str(deployment_meta.get("backup_deploy_key_staged_at") or "")
+    github_write_check = _safe_backup_status(
+        str(deployment_meta.get("backup_github_write_check") or "not_run"),
+        ARCLINK_BACKUP_WRITE_CHECK_STATUSES,
+        "not_run",
+    )
+    backup_activation = _safe_backup_status(
+        str(deployment_meta.get("backup_activation") or "not_active"),
+        ARCLINK_BACKUP_ACTIVATION_STATUSES,
+        "not_active",
+    )
+    if backup_activation == "active" and github_write_check != "verified":
+        backup_activation = "not_active"
+    write_check_reason = _safe_backup_reason(str(deployment_meta.get("backup_github_write_check_reason") or ""))
+    write_check_checked_at = str(deployment_meta.get("backup_github_write_check_checked_at") or "").strip()
+
+    if public_status == "awaiting_private_repo":
+        status = "awaiting_private_repo"
+    elif public_status == "repo_recorded_pending_key_setup" or owner_repo:
+        status = "pending_key_setup"
+    else:
+        status = "not_requested"
+
+    if staged_public_key:
+        deploy_key_state = str(deployment_meta.get("backup_deploy_key_status") or "staged_pending_github_install")
+        if deploy_key_state not in {"staged_pending_github_install", "pending_operator_setup"}:
+            deploy_key_state = "staged_pending_github_install"
+    else:
+        deploy_key_state = "pending_operator_setup" if status == "pending_key_setup" else "not_requested"
+    repo_state = "recorded" if owner_repo else ("awaiting_user" if status == "awaiting_private_repo" else "not_recorded")
+    settings_url = f"https://github.com/{owner_repo}/settings/keys" if owner_repo else ""
+    return {
+        "status": status,
+        "model": "public_preparation_then_operator_verification",
+        "public_status": public_status,
+        "owner_repo": owner_repo,
+        "settings_url": settings_url,
+        "requested_at": requested_at,
+        "private_repo_required": True,
+        "deploy_key": {
+            "status": deploy_key_state,
+            "public_key": staged_public_key,
+            "staged_at": staged_at,
+            "settings_url": settings_url,
+            "write_access_required": True,
+            "private_key_storage": "server_side_only" if staged_public_key else "",
+        },
+        "guidance": (
+            "Raven can record the intended private GitHub repository. Backup remains inactive until a dedicated "
+            "pod deploy key is minted, installed with write access, and verified by the dashboard/operator rail."
+        ),
+        "verification": {
+            "state": status,
+            "setup_intent": public_status,
+            "repo": repo_state,
+            "deploy_key": deploy_key_state,
+            "github_write_check": github_write_check,
+            "github_write_check_reason": write_check_reason if github_write_check == "failed_closed" else "",
+            "github_write_check_checked_at": write_check_checked_at,
+            "backup_activation": backup_activation,
+            "restore_proof": "proof_gated",
+            "live_restore": "proof_gated",
+        },
+    }
+
+
+def request_arclink_backup_deploy_key(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    key_staging_dir: str,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_user or not clean_deployment:
+        raise ArcLinkDashboardError("ArcLink backup deploy-key staging requires a user and deployment")
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT user_id, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(clean_deployment)
+        if str(row["user_id"] or "") != clean_user:
+            raise ArcLinkDashboardError("ArcLink backup deploy-key target does not belong to user")
+        session_metadata = _deployment_session_metadata(conn, clean_deployment)
+        owner_repo = _safe_backup_owner_repo(str(session_metadata.get("config_backup_owner_repo") or ""))
+        if not owner_repo:
+            raise ArcLinkDashboardError("ArcLink backup deploy-key staging requires a recorded private GitHub repository")
+        metadata = _json_loads(str(row["metadata_json"] or "{}"))
+        public_key = _safe_backup_public_key(str(metadata.get("backup_deploy_key_public") or ""))
+        now = utc_now_iso()
+        if not public_key:
+            public_key = _stage_backup_deploy_key_file(
+                key_staging_dir=key_staging_dir,
+                deployment_id=clean_deployment,
+            )
+        metadata.update(
+            {
+                "backup_owner_repo": owner_repo,
+                "backup_deploy_key_public": public_key,
+                "backup_deploy_key_status": "staged_pending_github_install",
+                "backup_deploy_key_staged_at": str(metadata.get("backup_deploy_key_staged_at") or now),
+                "backup_deploy_key_private_ref": _backup_key_private_ref(clean_deployment),
+                "backup_github_write_check": str(metadata.get("backup_github_write_check") or "not_run"),
+                "backup_activation": "not_active",
+                "backup_restore_proof": "proof_gated",
+            }
+        )
+        conn.execute(
+            """
+            UPDATE arclink_deployments
+            SET metadata_json = ?, updated_at = ?
+            WHERE deployment_id = ?
+            """,
+            (_safe_json(metadata), now, clean_deployment),
+        )
+        append_arclink_audit(
+            conn,
+            action="backup_deploy_key_staged",
+            actor_id=clean_user,
+            target_kind="deployment",
+            target_id=clean_deployment,
+            reason="Captain requested backup deploy-key setup from dashboard",
+            metadata={
+                "owner_repo": owner_repo,
+                "deploy_key_status": "staged_pending_github_install",
+                "github_write_check": "not_run",
+                "backup_activation": "not_active",
+            },
+            commit=False,
+        )
+        if own_txn:
+            conn.commit()
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
+    return _deployment_backup_setup(conn, deployment_id=clean_deployment, deployment_metadata=metadata)
+
+
+def record_arclink_backup_write_check_failed_closed(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    actor_id: str,
+    reason: str = "",
+) -> dict[str, Any]:
+    clean_deployment = str(deployment_id or "").strip()
+    clean_actor = str(actor_id or "").strip() or "system:backup_verification"
+    if not clean_deployment:
+        raise ArcLinkDashboardError("ArcLink backup write check requires a deployment")
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT user_id, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(clean_deployment)
+        metadata = _json_loads(str(row["metadata_json"] or "{}"))
+        session_metadata = _deployment_session_metadata(conn, clean_deployment)
+        owner_repo = _safe_backup_owner_repo(str(session_metadata.get("config_backup_owner_repo") or metadata.get("backup_owner_repo") or ""))
+        if not owner_repo:
+            raise ArcLinkDashboardError("ArcLink backup write check requires a recorded private GitHub repository")
+        staged_public_key = _safe_backup_public_key(str(metadata.get("backup_deploy_key_public") or ""))
+        if not staged_public_key:
+            raise ArcLinkDashboardError("ArcLink backup write check requires a staged deploy-key public key")
+        now = utc_now_iso()
+        safe_reason = _safe_backup_reason(reason)
+        metadata.update(
+            {
+                "backup_owner_repo": owner_repo,
+                "backup_deploy_key_status": str(metadata.get("backup_deploy_key_status") or "staged_pending_github_install"),
+                "backup_github_write_check": "failed_closed",
+                "backup_github_write_check_checked_at": now,
+                "backup_github_write_check_reason": safe_reason,
+                "backup_activation": "not_active",
+                "backup_restore_proof": "proof_gated",
+            }
+        )
+        conn.execute(
+            """
+            UPDATE arclink_deployments
+            SET metadata_json = ?, updated_at = ?
+            WHERE deployment_id = ?
+            """,
+            (_safe_json(metadata), now, clean_deployment),
+        )
+        append_arclink_audit(
+            conn,
+            action="backup_write_check_failed_closed",
+            actor_id=clean_actor,
+            target_kind="deployment",
+            target_id=clean_deployment,
+            reason="GitHub backup write verification failed closed before live git access",
+            metadata={
+                "owner_repo": owner_repo,
+                "github_write_check": "failed_closed",
+                "backup_activation": "not_active",
+                "reason": safe_reason,
+            },
+            commit=False,
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=clean_deployment,
+            event_type="backup_write_check_failed_closed",
+            metadata={
+                "owner_repo": owner_repo,
+                "github_write_check": "failed_closed",
+                "backup_activation": "not_active",
+            },
+            commit=False,
+        )
+        if own_txn:
+            conn.commit()
+    except Exception:
+        if own_txn:
+            conn.rollback()
+        raise
+    return _deployment_backup_setup(conn, deployment_id=clean_deployment, deployment_metadata=metadata)
+
+
+def request_arclink_backup_write_check(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_user or not clean_deployment:
+        raise ArcLinkDashboardError("ArcLink backup write check requires a user and deployment")
+    row = conn.execute(
+        "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+        (clean_deployment,),
+    ).fetchone()
+    if row is None:
+        raise KeyError(clean_deployment)
+    if str(row["user_id"] or "") != clean_user:
+        raise ArcLinkDashboardError("ArcLink backup write check target does not belong to user")
+    return record_arclink_backup_write_check_failed_closed(
+        conn,
+        deployment_id=clean_deployment,
+        actor_id=clean_user,
+        reason=ARCLINK_BACKUP_FAILED_CLOSED_REASON,
+    )
 
 
 def _user_dashboard_sections(
@@ -576,6 +1133,7 @@ def _user_dashboard_sections(
     model: Mapping[str, Any],
     billing: Mapping[str, Any],
     notion_setup: Mapping[str, Any],
+    backup_setup: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     qmd = next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""})
     memory = next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""})
@@ -615,6 +1173,12 @@ def _user_dashboard_sections(
             "status": "contacted" if onboarding.get("first_contacted") else "pending",
             "channel": str(onboarding.get("channel") or ""),
             "handoff_recorded": bool(onboarding.get("handoff_recorded")),
+        },
+        {
+            "section": "backup",
+            "label": "Private Backup",
+            "status": str(backup_setup.get("status") or "not_requested"),
+            "backup": backup_setup,
         },
         {
             "section": "files",
@@ -796,6 +1360,46 @@ def _deployment_agent_label(
     return "Private agent"
 
 
+def _user_share_inbox_summary(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT owner_user_id, recipient_user_id, status
+        FROM arclink_share_grants
+        WHERE owner_user_id = ? OR recipient_user_id = ?
+        """,
+        (user_id, user_id),
+    ).fetchall()
+    summary = {
+        "pending_owner_approvals": 0,
+        "waiting_on_owner_approval": 0,
+        "pending_recipient_acceptance": 0,
+        "accepted": 0,
+        "denied": 0,
+        "revoked": 0,
+        "expired": 0,
+        "total": len(rows),
+        "recovery_action": "open_dashboard_share_inbox",
+    }
+    for row in rows:
+        status = str(row["status"] or "")
+        is_owner = str(row["owner_user_id"] or "") == user_id
+        is_recipient = str(row["recipient_user_id"] or "") == user_id
+        if is_owner and status == "pending_owner_approval":
+            summary["pending_owner_approvals"] += 1
+        if is_recipient and status == "pending_owner_approval":
+            summary["waiting_on_owner_approval"] += 1
+        if is_recipient and status == "approved":
+            summary["pending_recipient_acceptance"] += 1
+        if status in {"accepted", "denied", "revoked", "expired"}:
+            summary[status] += 1
+    summary["attention_count"] = (
+        summary["pending_owner_approvals"]
+        + summary["waiting_on_owner_approval"]
+        + summary["pending_recipient_acceptance"]
+    )
+    return summary
+
+
 def read_arclink_user_dashboard(
     conn: sqlite3.Connection,
     *,
@@ -842,6 +1446,11 @@ def read_arclink_user_dashboard(
         model_id = onboarding.get("selected_model_id") or metadata.get("selected_model_id") or ""
         urls = _deployment_urls(str(dep["prefix"] or ""), str(dep["base_domain"] or ""), metadata)
         notion_setup = _deployment_notion_setup(conn, deployment_id=str(dep["deployment_id"] or ""), urls=urls)
+        backup_setup = _deployment_backup_setup(
+            conn,
+            deployment_id=str(dep["deployment_id"] or ""),
+            deployment_metadata=metadata,
+        )
         billing = {
             "entitlement_state": str(user["entitlement_state"] or "none"),
             "entitlement_updated_at": str(user["entitlement_updated_at"] or ""),
@@ -888,6 +1497,7 @@ def read_arclink_user_dashboard(
                 "bot_contact": onboarding,
                 "model": model,
                 "notion_setup": notion_setup,
+                "backup_setup": backup_setup,
                 "freshness": {
                     "qmd": next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""}),
                     "memory": next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""}),
@@ -899,6 +1509,7 @@ def read_arclink_user_dashboard(
                     model=model,
                     billing=billing,
                     notion_setup=notion_setup,
+                    backup_setup=backup_setup,
                 ),
                 "service_health": health,
                 "recent_events": _deployment_events(conn, str(dep["deployment_id"]), limit=recent_limit),
@@ -918,6 +1529,7 @@ def read_arclink_user_dashboard(
             "renewal_lifecycle": renewal_lifecycle_for_billing_state(str(user["entitlement_state"] or "")),
         },
         "wrapped": wrapped,
+        "share_inbox": _user_share_inbox_summary(conn, user_id),
         "deployments": deployment_cards,
     }
 
@@ -1447,7 +2059,7 @@ def queue_arclink_admin_action(
         raise ArcLinkDashboardError("ArcLink admin actions require an admin id")
     if clean_action not in ARCLINK_ADMIN_ACTION_TYPES:
         raise ArcLinkDashboardError(f"unsupported ArcLink admin action type: {clean_action or 'blank'}")
-    if clean_action not in ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES:
+    if _admin_action_worker_support(clean_action) != "wired":
         raise ArcLinkDashboardError(f"ArcLink admin action type is not queueable until worker support lands: {clean_action}")
     if clean_target_kind not in ARCLINK_ADMIN_TARGET_KINDS or not clean_target_id:
         raise ArcLinkDashboardError("ArcLink admin actions require a supported target")

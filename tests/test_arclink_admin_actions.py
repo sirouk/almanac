@@ -280,6 +280,52 @@ def test_admin_dashboard_exposes_action_execution_readiness() -> None:
     print("PASS test_admin_dashboard_exposes_action_execution_readiness")
 
 
+def test_admin_action_readiness_publishes_source_owned_support_matrix() -> None:
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_matrix_test")
+    ready = dashboard.admin_action_execution_readiness(env={"ARCLINK_EXECUTOR_ADAPTER": "fake"})
+    support = ready["action_support"]
+    expect(set(support) == set(dashboard.ARCLINK_ADMIN_ACTION_TYPES), str(support))
+    expect(len(ready["action_matrix"]) == len(dashboard.ARCLINK_ADMIN_ACTION_TYPES), str(ready["action_matrix"]))
+
+    restart = support["restart"]
+    expect(restart["queueable"] is True, str(restart))
+    expect(restart["readiness"] == "queueable", str(restart))
+    expect(restart["operation_kind"] == "docker_compose_lifecycle", str(restart))
+    expect(restart["live_proof_gate"] == "PG-PROVISION", str(restart))
+    expect("fake|local|ssh" in restart["required_adapter"], str(restart))
+    expect("queues" in restart["local_contract"], str(restart))
+    expect(restart["fail_closed_reason"] == "", str(restart))
+
+    expected_gates = {
+        "reprovision": "PG-PROVISION",
+        "dns_repair": "PG-INGRESS",
+        "rotate_chutes_key": "PG-PROVIDER",
+        "refund": "PG-STRIPE",
+        "cancel": "PG-STRIPE",
+        "comp": "LOCAL-CONTROL-DB",
+    }
+    for action_type, proof_gate in expected_gates.items():
+        entry = support[action_type]
+        expect(entry["queueable"] is True, str(entry))
+        expect(entry["live_proof_gate"] == proof_gate, str(entry))
+        expect(entry["worker_support"] == "wired", str(entry))
+        expect(entry["local_contract"], str(entry))
+        expect(entry["required_adapter"], str(entry))
+
+    pending = support["rollout"]
+    expect(pending["queueable"] is False, str(pending))
+    expect(pending["readiness"] == "pending_not_implemented", str(pending))
+    expect("worker support" in pending["fail_closed_reason"], str(pending))
+    expect("rollout" in ready["pending_not_implemented"], str(ready))
+
+    blocked = dashboard.admin_action_execution_readiness(env={})
+    blocked_restart = blocked["action_support"]["restart"]
+    expect(blocked_restart["queueable"] is False, str(blocked_restart))
+    expect(blocked_restart["readiness"] == "disabled", str(blocked_restart))
+    expect("executor probes" in blocked_restart["fail_closed_reason"], str(blocked_restart))
+    print("PASS test_admin_action_readiness_publishes_source_owned_support_matrix")
+
+
 def main() -> int:
     test_admin_action_requires_reason_and_queues_audited_intent()
     test_admin_action_idempotency_reuses_intent_without_duplicate_audit()
@@ -288,7 +334,8 @@ def main() -> int:
     test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects()
     test_admin_refund_and_cancel_actions_record_audited_notes()
     test_admin_dashboard_exposes_action_execution_readiness()
-    print("PASS all 7 ArcLink admin action tests")
+    test_admin_action_readiness_publishes_source_owned_support_matrix()
+    print("PASS all 8 ArcLink admin action tests")
     return 0
 
 

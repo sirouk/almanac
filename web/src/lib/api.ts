@@ -80,6 +80,12 @@ export const api = {
   updateAgentIdentity: (body: Record<string, string>) =>
     request("/user/agent-identity", { method: "POST", body: JSON.stringify(body) }, "user"),
 
+  requestBackupDeployKey: (body: Record<string, string>) =>
+    request("/user/backup-deploy-key", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  requestBackupWriteCheck: (body: Record<string, string>) =>
+    request("/user/backup-write-check", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   userCrewRecipe: () => request("/user/crew-recipe", {}, "user"),
 
   previewCrewRecipe: (body: Record<string, string>) =>
@@ -89,6 +95,8 @@ export const api = {
     request("/user/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "user"),
 
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
+
+  userShareGrants: () => request("/user/share-grants", {}, "user"),
 
   createShareGrant: (body: Record<string, string>) =>
     request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -104,6 +112,9 @@ export const api = {
 
   revokeShareGrant: (body: Record<string, string>) =>
     request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  retryShareGrantNotification: (body: Record<string, string>) =>
+    request("/user/share-grants/retry-notification", { method: "POST", body: JSON.stringify(body) }, "user"),
 
   adminDashboard: (params?: Record<string, string>) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";

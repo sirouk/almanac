@@ -33,6 +33,7 @@ interface NotionSetup {
   webhook?: {
     configured?: boolean;
     verified?: boolean;
+    status?: string;
     installed_at?: string;
     verified_at?: string;
     armed?: boolean;
@@ -40,10 +41,50 @@ interface NotionSetup {
   };
   index?: { status?: string };
   verification?: {
+    state?: string;
     dashboard?: string;
+    setup_intent?: string;
+    local_metadata?: string;
     email_share?: string;
+    user_owned_oauth?: string;
+    shared_root_live_read?: string;
+    brokered_write_preflight?: string;
     live_workspace?: string;
   };
+}
+
+interface BackupSetup {
+  status?: string;
+  model?: string;
+  public_status?: string;
+  owner_repo?: string;
+  settings_url?: string;
+  requested_at?: string;
+  guidance?: string;
+  deploy_key?: {
+    status?: string;
+    public_key?: string;
+    staged_at?: string;
+    settings_url?: string;
+    write_access_required?: boolean;
+    private_key_storage?: string;
+  };
+  verification?: {
+    state?: string;
+    setup_intent?: string;
+    repo?: string;
+    deploy_key?: string;
+    github_write_check?: string;
+    github_write_check_reason?: string;
+    github_write_check_checked_at?: string;
+    backup_activation?: string;
+    restore_proof?: string;
+    live_restore?: string;
+  };
+}
+
+interface BackupSetupResponse {
+  backup_setup?: BackupSetup;
 }
 
 interface BillingLifecycle {
@@ -69,6 +110,7 @@ interface Deployment {
   model?: { provider: string; model_id: string; credential_state: string; billing_lifecycle?: BillingLifecycle };
   freshness?: { qmd: { status: string; checked_at: string }; memory: { status: string; checked_at: string } };
   notion_setup?: NotionSetup;
+  backup_setup?: BackupSetup;
   bot_contact?: BotContact;
   access?: AccessUrls;
   sections?: DeploymentSection[];
@@ -148,6 +190,7 @@ interface CredentialsData {
 interface LinkedResource {
   grant_id: string;
   owner_user_id: string;
+  recipient_user_id?: string;
   resource_kind: string;
   owner_deployment_id?: string;
   recipient_deployment_id?: string;
@@ -174,6 +217,34 @@ interface LinkedResource {
 interface LinkedResourcesData {
   linked_resources?: LinkedResource[];
 }
+
+interface ShareNotificationHint {
+  queued_possible?: boolean;
+  channel?: string;
+  reason?: string;
+  recovery_action?: string;
+}
+
+interface ShareGrant extends LinkedResource {
+  viewer_role?: string;
+  available_actions?: string[];
+  waiting_on?: string;
+  dashboard_guidance?: string;
+  notification_status?: {
+    owner?: ShareNotificationHint;
+    recipient?: ShareNotificationHint;
+  };
+}
+
+interface ShareGrantsData {
+  share_grants?: ShareGrant[];
+  pending_owner_approvals?: ShareGrant[];
+  waiting_on_owner_approval?: ShareGrant[];
+  pending_recipient_acceptance?: ShareGrant[];
+  summary?: Record<string, number>;
+}
+
+type ShareAction = "approve" | "deny" | "accept" | "revoke" | "retry_notification";
 
 interface CommsMessage {
   message_id: string;
@@ -396,6 +467,7 @@ export default function DashboardPage() {
   const [provisioning, setProvisioning] = useState<{ deployments?: ProvisioningDeployment[] } | null>(null);
   const [credentials, setCredentials] = useState<CredentialsData | null>(null);
   const [linkedResources, setLinkedResources] = useState<LinkedResourcesData | null>(null);
+  const [shareGrants, setShareGrants] = useState<ShareGrantsData | null>(null);
   const [comms, setComms] = useState<CommsData | null>(null);
   const [providerState, setProviderState] = useState<ProviderStateData | null>(null);
   const [crewRecipe, setCrewRecipe] = useState<CrewRecipeState | null>(null);
@@ -403,12 +475,15 @@ export default function DashboardPage() {
   const [crewForm, setCrewForm] = useState<CrewRecipeForm>(DEFAULT_CREW_FORM);
   const [credentialsError, setCredentialsError] = useState("");
   const [linkedResourcesError, setLinkedResourcesError] = useState("");
+  const [shareGrantsError, setShareGrantsError] = useState("");
   const [providerStateError, setProviderStateError] = useState("");
   const [wrappedError, setWrappedError] = useState("");
   const [wrappedUpdating, setWrappedUpdating] = useState(false);
   const [crewError, setCrewError] = useState("");
   const [crewLoading, setCrewLoading] = useState(false);
   const [credentialAckLoading, setCredentialAckLoading] = useState("");
+  const [backupActionLoading, setBackupActionLoading] = useState("");
+  const [shareActionLoading, setShareActionLoading] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -476,6 +551,113 @@ export default function DashboardPage() {
         )),
       };
     });
+  }
+
+  function updateDeploymentBackupSetup(deploymentId: string, backupSetup?: BackupSetup) {
+    if (!backupSetup) return;
+    setData((current) => {
+      if (!current?.deployments) return current;
+      return {
+        ...current,
+        deployments: current.deployments.map((deployment) => (
+          deployment.deployment_id === deploymentId
+            ? { ...deployment, backup_setup: backupSetup }
+            : deployment
+        )),
+      };
+    });
+  }
+
+  async function handleBackupDeployKey(deploymentId: string) {
+    setBackupActionLoading(`${deploymentId}:deploy-key`);
+    setError("");
+    try {
+      const result = await api.requestBackupDeployKey({ deployment_id: deploymentId });
+      if (result.status !== 200) {
+        setError("Could not stage backup deploy key.");
+        return;
+      }
+      const backupSetup = (result.data as BackupSetupResponse).backup_setup;
+      if (!backupSetup) {
+        setError("Backup deploy-key response was incomplete.");
+        return;
+      }
+      updateDeploymentBackupSetup(deploymentId, backupSetup);
+    } catch {
+      setError("Could not stage backup deploy key.");
+    } finally {
+      setBackupActionLoading("");
+    }
+  }
+
+  async function handleBackupWriteCheck(deploymentId: string) {
+    setBackupActionLoading(`${deploymentId}:write-check`);
+    setError("");
+    try {
+      const result = await api.requestBackupWriteCheck({ deployment_id: deploymentId });
+      if (result.status !== 200) {
+        setError("Could not record backup write-check state.");
+        return;
+      }
+      const backupSetup = (result.data as BackupSetupResponse).backup_setup;
+      if (!backupSetup) {
+        setError("Backup write-check response was incomplete.");
+        return;
+      }
+      updateDeploymentBackupSetup(deploymentId, backupSetup);
+    } catch {
+      setError("Could not record backup write-check state.");
+    } finally {
+      setBackupActionLoading("");
+    }
+  }
+
+  async function refreshShareGrants() {
+    const result = await api.userShareGrants();
+    if (result.status === 200) {
+      setShareGrants(result.data as ShareGrantsData);
+      setShareGrantsError("");
+    } else {
+      setShareGrantsError("Share approvals could not be loaded. Existing Raven share prompts remain pending when the API is unavailable.");
+    }
+  }
+
+  async function handleShareAction(action: ShareAction, grantId: string) {
+    setShareActionLoading(`${grantId}:${action}`);
+    setShareGrantsError("");
+    try {
+      const calls = {
+        approve: api.approveShareGrant,
+        deny: api.denyShareGrant,
+        accept: api.acceptShareGrant,
+        revoke: api.revokeShareGrant,
+        retry_notification: api.retryShareGrantNotification,
+      };
+      const result = await calls[action]({ grant_id: grantId, target: "auto" });
+      if (result.status !== 200) {
+        setShareGrantsError("Share action could not be completed.");
+        return;
+      }
+      let retryNotice = "";
+      if (action === "retry_notification") {
+        const notification = (result.data as { notification?: { queued?: boolean; reason?: string } }).notification;
+        if (notification?.queued === false) {
+          retryNotice = "Raven notification was not queued; link Telegram or Discord, or use this dashboard action.";
+        } else {
+          retryNotice = "Raven notification was queued locally; live bot delivery remains proof-gated.";
+        }
+      }
+      await refreshShareGrants();
+      if (retryNotice) setShareGrantsError(retryNotice);
+      if (action === "accept" || action === "revoke") {
+        const linked = await api.userLinkedResources();
+        if (linked.status === 200) setLinkedResources(linked.data as LinkedResourcesData);
+      }
+    } catch {
+      setShareGrantsError("Share action could not be completed.");
+    } finally {
+      setShareActionLoading("");
+    }
   }
 
   async function refreshCrewRecipe() {
@@ -585,6 +767,17 @@ export default function DashboardPage() {
         }
       }).catch(() => {
         if (mounted) setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shares read-only when the API is available.");
+      }),
+      api.userShareGrants().then((r) => {
+        if (!mounted) return;
+        if (r.status === 200) {
+          setShareGrants(r.data as ShareGrantsData);
+          setShareGrantsError("");
+        } else {
+          setShareGrantsError("Share approvals could not be loaded. Use Raven or refresh the dashboard before approving, denying, or accepting a share.");
+        }
+      }).catch(() => {
+        if (mounted) setShareGrantsError("Share approvals could not be loaded. Use Raven or refresh the dashboard before approving, denying, or accepting a share.");
       }),
       api.userComms().then((r) => {
         if (mounted && r.status === 200) setComms(r.data as CommsData);
@@ -1042,6 +1235,12 @@ export default function DashboardPage() {
               {(!data.deployments || data.deployments.length === 0) && (
                 <NoDeployments message="No deployments. Vault access available after provisioning." />
               )}
+              <ShareApprovalsPanel
+                grants={shareGrants}
+                loadError={shareGrantsError}
+                actionLoading={shareActionLoading}
+                onAction={handleShareAction}
+              />
               <LinkedResourcesPanel resources={linkedResources} loadError={linkedResourcesError} />
             </div>
           )}
@@ -1184,6 +1383,20 @@ export default function DashboardPage() {
                 acknowledging={credentialAckLoading}
                 onAcknowledge={handleAcknowledgeCredential}
               />
+              {data?.deployments?.map((dep) => (
+                <DeploymentCard key={`backup-${dep.deployment_id}`} dep={dep}>
+                  <BackupStatusPanel
+                    setup={dep.backup_setup}
+                    deploymentId={dep.deployment_id}
+                    loadingAction={backupActionLoading}
+                    onRequestDeployKey={handleBackupDeployKey}
+                    onRequestWriteCheck={handleBackupWriteCheck}
+                  />
+                </DeploymentCard>
+              ))}
+              {(!data?.deployments || data.deployments.length === 0) && (
+                <NoDeployments message="No deployments. Backup setup status appears after launch." />
+              )}
               <div className="rounded-lg border border-border bg-surface p-4">
                 <h3 className="font-display font-semibold mb-3">Session Controls</h3>
                 <p className="text-sm text-soft-white/60 mb-3">
@@ -1338,6 +1551,15 @@ function recoveryActionsForDashboard({
     });
   }
 
+  if (["awaiting_private_repo", "pending_key_setup"].includes(deployment.backup_setup?.status || "")) {
+    actions.push({
+      title: "Backup setup pending",
+      detail: deployment.backup_setup?.guidance || "Private backup is not active until deploy-key setup and verification finish.",
+      status: deployment.backup_setup?.status || "pending",
+      tab: "security",
+    });
+  }
+
   if (deployment.notion_setup?.verification?.live_workspace === "proof_gated") {
     actions.push({
       title: "SSOT live proof gated",
@@ -1443,6 +1665,14 @@ function WorkspaceReadinessGrid({
       tab: "bots" as Tab,
     },
     {
+      label: "Backup",
+      value: deployment?.backup_setup?.status || "not_requested",
+      detail: deployment?.backup_setup?.owner_repo
+        ? `${deployment.backup_setup.owner_repo} - deploy key ${humanizeValue(deployment.backup_setup.verification?.deploy_key || "not_requested")}.`
+        : "Private backup prep starts from Raven and stays inactive until key verification.",
+      tab: "security" as Tab,
+    },
+    {
       label: "Knowledge",
       value: sectionStatus(deployment, "qmd_memory", "unknown"),
       detail: `qmd ${deployment?.freshness?.qmd?.status || "unknown"} · memory ${deployment?.freshness?.memory?.status || "unknown"}`,
@@ -1541,7 +1771,15 @@ function DeploymentCard({ dep, children }: { dep: { deployment_id: string; hostn
 function NotionSetupPanel({ setup }: { setup?: NotionSetup }) {
   const status = setup?.status || "unavailable";
   const callbackUrl = setup?.callback_url || "";
-  const webhookStatus = setup?.webhook?.verified ? "verified" : setup?.webhook?.configured ? "configured" : setup?.webhook?.armed ? "webhook_install_armed" : "not_configured";
+  const webhookStatus =
+    setup?.webhook?.status ||
+    (setup?.webhook?.verified
+      ? "webhook_verified"
+      : setup?.webhook?.configured
+        ? "webhook_token_installed"
+        : setup?.webhook?.armed
+          ? "webhook_install_armed"
+          : "not_configured");
   return (
     <div className="mt-3 rounded bg-carbon px-3 py-3 text-sm">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1576,7 +1814,130 @@ function NotionSetupPanel({ setup }: { setup?: NotionSetup }) {
         <p className="mt-3 text-xs text-soft-white/40">Callback URL appears after provisioning publishes the deployment route.</p>
       )}
       <p className="mt-2 text-xs text-soft-white/35">
-        Email sharing alone is not proof of API access; live workspace/page permission proof stays gated until an operator runs it.
+        Local metadata can be ready before Notion is live-proofed. Email sharing alone is not proof of API access; live workspace/page permission proof stays gated until an operator runs it.
+      </p>
+    </div>
+  );
+}
+
+function BackupStatusPanel({
+  setup,
+  deploymentId,
+  loadingAction,
+  onRequestDeployKey,
+  onRequestWriteCheck,
+}: {
+  setup?: BackupSetup;
+  deploymentId: string;
+  loadingAction: string;
+  onRequestDeployKey: (deploymentId: string) => void;
+  onRequestWriteCheck: (deploymentId: string) => void;
+}) {
+  const status = setup?.status || "not_requested";
+  const verification = setup?.verification || {};
+  const deployKey = setup?.deploy_key || {};
+  const publicKey = deployKey.public_key || "";
+  const canStageKey = Boolean(setup?.owner_repo);
+  const canRecordWriteCheck = Boolean(publicKey);
+  const stagingKey = loadingAction === `${deploymentId}:deploy-key`;
+  const checkingWrite = loadingAction === `${deploymentId}:write-check`;
+  return (
+    <div className="rounded bg-carbon px-3 py-3 text-sm">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-xs text-soft-white/60">Private Backup</p>
+          <p className="mt-1 text-soft-white/55">
+            {setup?.guidance || "Raven can record a private repository; activation waits for deploy-key verification."}
+          </p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Repository</p>
+          <div className="mt-1"><StatusBadge status={verification.repo || "not_recorded"} /></div>
+          {setup?.owner_repo && (
+            <p className="mt-1 break-all font-mono text-[10px] text-soft-white/35">{setup.owner_repo}</p>
+          )}
+        </div>
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Deploy Key</p>
+          <div className="mt-1"><StatusBadge status={verification.deploy_key || "not_requested"} /></div>
+          {deployKey.private_key_storage && (
+            <p className="mt-1 text-[10px] text-soft-white/30">{humanizeValue(deployKey.private_key_storage)}</p>
+          )}
+        </div>
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Write Check</p>
+          <div className="mt-1"><StatusBadge status={verification.github_write_check || "not_run"} /></div>
+          {verification.github_write_check_checked_at && (
+            <p className="mt-1 truncate text-[10px] text-soft-white/30">{formatDate(verification.github_write_check_checked_at)}</p>
+          )}
+        </div>
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Activation</p>
+          <div className="mt-1"><StatusBadge status={verification.backup_activation || "not_active"} /></div>
+        </div>
+        <div className="rounded border border-border/70 bg-jet/40 px-2 py-2">
+          <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Restore Proof</p>
+          <div className="mt-1"><StatusBadge status={verification.restore_proof || "proof_gated"} /></div>
+        </div>
+      </div>
+      {publicKey && (
+        <div className="mt-3 rounded border border-border/70 bg-jet/40 px-3 py-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[10px] uppercase tracking-wide text-soft-white/35">Staged Public Key</p>
+            <StatusBadge status={deployKey.status || verification.deploy_key || "staged_pending_github_install"} />
+          </div>
+          <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-black/25 px-2 py-2 font-mono text-[11px] leading-5 text-soft-white/70">{publicKey}</pre>
+          <p className="mt-2 text-xs text-soft-white/35">
+            Install this public key in the private GitHub repository with write access. ArcLink keeps the private key server-side.
+          </p>
+        </div>
+      )}
+      {verification.github_write_check_reason && (
+        <p className="mt-3 rounded border border-yellow-400/25 bg-yellow-400/10 px-3 py-2 text-xs leading-5 text-yellow-100">
+          {verification.github_write_check_reason}
+        </p>
+      )}
+      {setup?.settings_url && (
+        <a href={setup.settings_url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-block break-all font-mono text-xs text-signal-orange hover:underline">
+          Open GitHub deploy key settings: {setup.settings_url} →
+        </a>
+      )}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+        <button
+          type="button"
+          onClick={() => onRequestDeployKey(deploymentId)}
+          disabled={!canStageKey || stagingKey}
+          className="rounded border border-signal-orange/40 bg-signal-orange/10 px-3 py-2 text-sm text-signal-orange transition hover:bg-signal-orange/15 disabled:cursor-not-allowed disabled:border-border disabled:bg-soft-white/5 disabled:text-soft-white/35"
+        >
+          {stagingKey ? "Staging deploy key..." : publicKey ? "Refresh staged deploy key" : "Stage deploy key"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onRequestWriteCheck(deploymentId)}
+          disabled={!canRecordWriteCheck || checkingWrite}
+          className="rounded border border-border bg-jet/45 px-3 py-2 text-sm text-soft-white/70 transition hover:border-signal-orange/50 hover:text-signal-orange disabled:cursor-not-allowed disabled:text-soft-white/30"
+        >
+          {checkingWrite ? "Recording write check..." : "Record write check"}
+        </button>
+      </div>
+      {!canStageKey && (
+        <p className="mt-2 text-xs text-soft-white/35">
+          Raven must record a private GitHub repository before deploy-key setup can begin.
+        </p>
+      )}
+      {canStageKey && !canRecordWriteCheck && (
+        <p className="mt-2 text-xs text-soft-white/35">
+          Stage the public key first, add it to GitHub with write access, then record the local write-check boundary.
+        </p>
+      )}
+      {setup?.requested_at && (
+        <p className="mt-2 text-xs text-soft-white/35">Requested {formatDate(setup.requested_at)}</p>
+      )}
+      <p className="mt-2 text-xs text-soft-white/35">
+        Backup status is pending until the deploy key has write access and a verification run succeeds; restore proof remains live-gated.
       </p>
     </div>
   );
@@ -1705,6 +2066,113 @@ function ProviderSettingsPanel({ state, loadError = "" }: { state: ProviderState
 
 function NoDeployments({ message }: { message?: string }) {
   return <p className="text-soft-white/40">{message || "No deployments."}</p>;
+}
+
+function ShareApprovalsPanel({
+  grants,
+  loadError = "",
+  actionLoading = "",
+  onAction,
+}: {
+  grants: ShareGrantsData | null;
+  loadError?: string;
+  actionLoading?: string;
+  onAction: (action: ShareAction, grantId: string) => void;
+}) {
+  const pending = [
+    ...(grants?.pending_owner_approvals || []),
+    ...(grants?.waiting_on_owner_approval || []),
+    ...(grants?.pending_recipient_acceptance || []),
+  ];
+  const history = (grants?.share_grants || []).filter((grant) => (
+    !pending.some((item) => item.grant_id === grant.grant_id) && ["accepted", "denied", "revoked", "expired"].includes(grant.status)
+  )).slice(0, 4);
+  const rows = [...pending, ...history];
+  const actionLabels: Record<string, string> = {
+    approve: "Approve",
+    deny: "Deny",
+    accept: "Accept",
+    revoke: "Revoke",
+    retry_notification: "Retry Raven prompt",
+  };
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h3 className="font-display font-semibold">Pending Share Approvals</h3>
+          <p className="mt-1 text-sm text-soft-white/60">
+            Dashboard actions stay available when Raven cannot deliver a Telegram or Discord prompt.
+          </p>
+        </div>
+        {grants?.summary && (
+          <div className="flex flex-wrap gap-2 text-xs">
+            <StatusBadge status={`${grants.summary.pending_owner_approvals || 0} owner`} />
+            <StatusBadge status={`${grants.summary.pending_recipient_acceptance || 0} accept`} />
+            <StatusBadge status={`${grants.summary.waiting_on_owner_approval || 0} waiting`} />
+          </div>
+        )}
+      </div>
+      {loadError && (
+        <div className="mb-3 border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-sm text-yellow-100">
+          {loadError}
+        </div>
+      )}
+      {rows.length ? (
+        <div className="grid gap-3">
+          {rows.map((grant) => {
+            const ownerNotice = grant.notification_status?.owner;
+            const recipientNotice = grant.notification_status?.recipient;
+            const actions = grant.available_actions || [];
+            return (
+              <div key={grant.grant_id} className="border border-border/70 bg-carbon px-3 py-2 text-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <p className="font-medium text-soft-white">{grant.display_name || grant.resource_path}</p>
+                    <p className="break-all font-mono text-xs text-soft-white/40">{grant.resource_root}:{grant.resource_path}</p>
+                    <p className="mt-1 text-xs text-soft-white/45">
+                      {grant.viewer_role === "owner" ? "Owner approval" : grant.viewer_role === "recipient" ? "Recipient view" : humanizeValue(grant.viewer_role || "share")}
+                    </p>
+                    {grant.dashboard_guidance && (
+                      <p className="mt-1 text-xs text-soft-white/45">{grant.dashboard_guidance}</p>
+                    )}
+                    {(ownerNotice?.recovery_action || recipientNotice?.recovery_action) && (
+                      <p className="mt-1 text-xs text-yellow-100">
+                        Recovery: {humanizeValue(ownerNotice?.reason || recipientNotice?.reason || "dashboard_available")}.
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-col items-start gap-2 lg:items-end">
+                    <div className="flex flex-wrap gap-2">
+                      <StatusBadge status={grant.status || "pending"} />
+                      <StatusBadge status={grant.waiting_on || grant.access_mode || "read"} />
+                      <StatusBadge status={grant.reshare_allowed ? "reshare" : "no reshare"} />
+                    </div>
+                    {actions.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {actions.map((action) => (
+                          <button
+                            key={action}
+                            type="button"
+                            onClick={() => onAction(action as ShareAction, grant.grant_id)}
+                            disabled={actionLoading === `${grant.grant_id}:${action}`}
+                            className="rounded border border-border px-2 py-1 text-xs text-soft-white hover:border-signal-orange disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {actionLoading === `${grant.grant_id}:${action}` ? "Working" : actionLabels[action] || humanizeValue(action)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-soft-white/40">No pending share approvals or acceptance waits.</p>
+      )}
+    </div>
+  );
 }
 
 function LinkedResourcesPanel({ resources, loadError = "" }: { resources: LinkedResourcesData | null; loadError?: string }) {

@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { StatusBadge, LoadingSpinner } from "@/components/ui";
 
 const RESUME_KEY = "arclink_onboarding_resume";
+const PROOF_STORAGE_KEY = "arclink_onboarding_proof";
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLLS = 160; // ~8 minutes
 
@@ -71,14 +72,14 @@ function CheckoutSuccessContent() {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(RESUME_KEY);
+      const raw = window.sessionStorage.getItem(PROOF_STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw) as { sessionId?: string; claimToken?: string };
       if (!parsed.sessionId || parsed.sessionId === sessionId) {
         setClaimToken(parsed.claimToken || "");
       }
     } catch {
-      // localStorage can be disabled; the success page should still render.
+      // sessionStorage can be disabled; the success page should still render.
     }
   }, [sessionId]);
 
@@ -91,6 +92,7 @@ function CheckoutSuccessContent() {
         const data = res.data as { email?: string };
         if (data.email) setEmail(data.email);
         try {
+          window.sessionStorage.removeItem(PROOF_STORAGE_KEY);
           window.localStorage.removeItem(RESUME_KEY);
         } catch {
           // ignore

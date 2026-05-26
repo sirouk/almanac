@@ -78,12 +78,51 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("/checkout/cancel"), "missing checkout cancel redirect");
   });
 
+  it("Onboarding preferred-channel copy stays honest about web identity", () => {
+    const content = readFileSync(resolve(ROOT, "src/app/onboarding/page.tsx"), "utf-8");
+    assert.ok(
+      content.includes('api.startOnboarding({ channel: "web"'),
+      "web onboarding must remain web-scoped until a real platform identity is linked",
+    );
+    assert.ok(
+      content.includes("This browser session is not linked to"),
+      "preferred-channel query copy must disclose that Telegram/Discord is not linked yet",
+    );
+    assert.ok(
+      !content.includes("Raven will continue there after checkout"),
+      "preferred-channel query copy must not promise platform continuation without identity",
+    );
+    assert.ok(
+      !content.includes("continues the setup in your preferred channel"),
+      "hero copy must not promise preferred-channel continuation from a web-only session",
+    );
+  });
+
   it("Checkout result pages exist for Stripe redirects", () => {
     const success = readFileSync(resolve(ROOT, "src/app/checkout/success/page.tsx"), "utf-8");
     const cancel = readFileSync(resolve(ROOT, "src/app/checkout/cancel/page.tsx"), "utf-8");
     assert.ok(success.includes("Launch queue engaged") || success.includes("ArcPod online"), "missing success copy");
     assert.ok(cancel.includes("Checkout paused"), "missing cancel copy");
     assert.ok(cancel.includes("api.cancelOnboarding"), "Stripe cancel should call the backend cancel path when proof is available");
+  });
+
+  it("Onboarding proof tokens use session-only storage", () => {
+    const onboarding = readFileSync(resolve(ROOT, "src/app/onboarding/page.tsx"), "utf-8");
+    const success = readFileSync(resolve(ROOT, "src/app/checkout/success/page.tsx"), "utf-8");
+    const cancel = readFileSync(resolve(ROOT, "src/app/checkout/cancel/page.tsx"), "utf-8");
+    const resumeType = onboarding.match(/type ResumeState = \{[\s\S]*?\n\};/);
+    const resumeSnapshot = onboarding.match(/const snapshot: ResumeState = \{[\s\S]*?\};/);
+
+    assert.ok(onboarding.includes("PROOF_STORAGE_KEY"), "onboarding missing dedicated proof storage key");
+    assert.ok(onboarding.includes("window.sessionStorage.setItem(PROOF_STORAGE_KEY"), "onboarding proof tokens must be session-only");
+    assert.ok(success.includes("window.sessionStorage.getItem(PROOF_STORAGE_KEY"), "success page must read claim proof from session storage");
+    assert.ok(success.includes("window.sessionStorage.removeItem(PROOF_STORAGE_KEY"), "success page must clear proof storage after claim");
+    assert.ok(cancel.includes("window.sessionStorage.getItem(PROOF_STORAGE_KEY"), "cancel page must read cancel proof from session storage");
+    assert.ok(cancel.includes("window.sessionStorage.removeItem(PROOF_STORAGE_KEY"), "cancel page must clear proof storage after cancel");
+    assert.ok(resumeType, "missing onboarding ResumeState type");
+    assert.ok(resumeSnapshot, "missing onboarding resume snapshot");
+    assert.ok(!/claimToken|cancelToken/.test(resumeType[0]), "ResumeState must not contain browser proof tokens");
+    assert.ok(!/claimToken|cancelToken/.test(resumeSnapshot[0]), "localStorage resume snapshot must not persist proof tokens");
   });
 
   it("Dashboard page has all required tabs", () => {
@@ -102,6 +141,22 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("Code"), "dashboard should link to Code");
     assert.ok(content.includes("Recovery Actions"), "dashboard should expose recovery actions");
     assert.ok(content.includes("Workspace Readiness"), "dashboard should group readiness signals");
+    assert.ok(content.includes("backup_setup"), "dashboard should consume backup setup status");
+    assert.ok(content.includes("BackupStatusPanel"), "dashboard should render backup setup status");
+    assert.ok(content.includes("pending_key_setup"), "dashboard should show pending backup key setup");
+    assert.ok(content.includes("api.requestBackupDeployKey"), "dashboard should stage backup deploy keys through the user API");
+    assert.ok(content.includes("api.requestBackupWriteCheck"), "dashboard should record backup write-check state through the user API");
+    assert.ok(content.includes("Staged Public Key"), "dashboard should show the staged public key");
+    assert.ok(content.includes("Open GitHub deploy key settings"), "dashboard should link to GitHub deploy-key settings");
+    assert.ok(content.includes("Record write check"), "dashboard should expose the fail-closed write-check action");
+    assert.ok(content.includes("restore proof remains live-gated"), "dashboard should not claim live restore proof");
+    assert.ok(content.includes("api.userShareGrants"), "dashboard should load the share approval inbox");
+    assert.ok(content.includes("ShareApprovalsPanel"), "dashboard should render the share approval inbox");
+    assert.ok(content.includes("Pending Share Approvals"), "dashboard should label pending share approvals");
+    assert.ok(content.includes("Dashboard actions stay available"), "dashboard should surface no-channel share recovery");
+    assert.ok(content.includes("api.retryShareGrantNotification"), "dashboard should retry share notifications through the user API");
+    assert.ok(content.includes("Retry Raven prompt"), "dashboard should label retry as Raven prompt queueing");
+    assert.ok(content.includes("live bot delivery remains proof-gated"), "dashboard should not claim retry proves live bot delivery");
     assert.ok(!content.includes("Files (Nextcloud)"), "dashboard should not advertise legacy Nextcloud access");
     assert.ok(!content.includes("Code (code-server)"), "dashboard should not advertise legacy code-server access");
   });
@@ -121,6 +176,7 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("Operations Triage"), "admin page should expose operations triage");
     assert.ok(content.includes("Disabled and proof-gated actions"), "admin page should label disabled operations");
     assert.ok(content.includes("Disabled or proof-gated actions"), "admin action form should not imply every disabled action only lacks worker wiring");
+    assert.ok(content.includes("Action readiness matrix"), "admin action form should render the source-owned readiness matrix");
   });
 
   it("No page claims live provisioning with fake adapters", () => {
@@ -158,6 +214,8 @@ describe("API client route parity with hosted API", () => {
       "/user/credentials",
       "/user/credentials/acknowledge",
       "/user/agent-identity",
+      "/user/backup-deploy-key",
+      "/user/backup-write-check",
       "/user/crew-recipe",
       "/user/crew-recipe/preview",
       "/user/crew-recipe/apply",
@@ -167,6 +225,7 @@ describe("API client route parity with hosted API", () => {
       "/user/share-grants/deny",
       "/user/share-grants/accept",
       "/user/share-grants/revoke",
+      "/user/share-grants/retry-notification",
       "/user/portal",
       "/user/provider-state",
       "/admin/dashboard",

@@ -3,9 +3,9 @@ export function StatusBadge({ status }: { status: string }) {
   const tone =
     ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "verified", "available", "fresh", "allowed"].includes(normalized)
       ? "border-neon-green/30 bg-neon-green/10 text-neon-green"
-      : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned", "pending run", "pending credentialed run", "pending_dashboard_verification", "awaiting_user_setup", "webhook_install_armed", "verified_waiting_for_index"].includes(normalized)
+      : ["degraded", "pending", "queued", "provisioning", "retrying", "not provisioned", "pending run", "pending credentialed run", "pending_dashboard_verification", "awaiting_user_setup", "awaiting_private_repo", "pending_key_setup", "pending_operator_setup", "staged_pending_github_install", "failed_closed", "webhook_install_armed", "webhook_token_installed", "webhook_verified", "webhook_verified_waiting_for_index", "local_metadata_verified"].includes(normalized)
         ? "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
-        : ["unknown", "not_configured", "not configured", "not_seen", "proof_gated", "policy_question", "disabled", "missing", "unavailable", "not_applicable", "clear", "no reshare"].includes(normalized)
+        : ["unknown", "not_requested", "not_recorded", "not_active", "not_run", "not_configured", "not configured", "not_seen", "proof_gated", "policy_question", "disabled", "missing", "unavailable", "not_applicable", "clear", "no reshare"].includes(normalized)
           ? "border-soft-white/15 bg-soft-white/5 text-soft-white/50"
         : "border-red-400/30 bg-red-500/10 text-red-300";
   return (

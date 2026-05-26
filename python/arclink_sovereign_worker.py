@@ -64,7 +64,7 @@ from arclink_provisioning import (
 )
 from arclink_adapters import DnsRecord
 from arclink_onboarding import record_arclink_onboarding_first_agent_contact
-from arclink_api_auth import set_arclink_user_password
+from arclink_api_auth import set_arclink_user_password, set_deployment_share_request_broker_token_hash
 
 
 class ArcLinkSovereignWorkerError(RuntimeError):
@@ -690,6 +690,13 @@ def _apply_deployment(
         state_root_base=state_root_base,
     )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
+    _ensure_share_request_broker_token_hash(
+        conn,
+        deployment=deployment,
+        worker=worker,
+        intent=intent,
+    )
+    _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
     _ensure_llm_router_key_registered(conn, deployment=deployment, worker=worker, intent=intent)
     selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
@@ -1207,6 +1214,32 @@ def _ensure_llm_router_key_registered(
     )
 
 
+def _ensure_share_request_broker_token_hash(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    intent: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    secret_refs = intent.get("secret_refs") if isinstance(intent.get("secret_refs"), Mapping) else {}
+    secret_ref = str(secret_refs.get("share_request_broker_token") or "").strip()
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    if not secret_ref or not deployment_id:
+        return None
+    resolver = SovereignSecretResolver(
+        env=worker.env,
+        secret_store_dir=worker.secret_store_dir / deployment_id,
+        materialization_root=Path("/tmp/arclink-share-request-broker-token-sync"),
+    )
+    token = resolver._value_for_ref(secret_ref)
+    return set_deployment_share_request_broker_token_hash(
+        conn,
+        deployment_id=deployment_id,
+        token=token,
+        token_ref=secret_ref,
+    )
+
+
 def _sync_dashboard_password_hash_from_secret(
     conn: sqlite3.Connection,
     *,
@@ -1372,6 +1405,7 @@ def _record_service_status_after_compose(
     try:
         ps_result = executor.docker_runner.run(
             ("ps", "--all", "--format", "json"),
+            deployment_id=deployment_id,
             project_name=docker_result.project_name,
             env_file=docker_result.env_file,
             compose_file=docker_result.compose_file,

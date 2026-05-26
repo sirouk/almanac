@@ -64,15 +64,19 @@ const api = {
   userCredentials: () => request("/user/credentials", {}, "user"),
   acknowledgeCredential: (body) => request("/user/credentials/acknowledge", { method: "POST", body: JSON.stringify(body) }, "user"),
   updateAgentIdentity: (body) => request("/user/agent-identity", { method: "POST", body: JSON.stringify(body) }, "user"),
+  requestBackupDeployKey: (body) => request("/user/backup-deploy-key", { method: "POST", body: JSON.stringify(body) }, "user"),
+  requestBackupWriteCheck: (body) => request("/user/backup-write-check", { method: "POST", body: JSON.stringify(body) }, "user"),
   userCrewRecipe: () => request("/user/crew-recipe", {}, "user"),
   previewCrewRecipe: (body) => request("/user/crew-recipe/preview", { method: "POST", body: JSON.stringify(body) }, "user"),
   applyCrewRecipe: (body) => request("/user/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "user"),
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
+  userShareGrants: () => request("/user/share-grants", {}, "user"),
   createShareGrant: (body) => request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
   approveShareGrant: (body) => request("/user/share-grants/approve", { method: "POST", body: JSON.stringify(body) }, "user"),
   denyShareGrant: (body) => request("/user/share-grants/deny", { method: "POST", body: JSON.stringify(body) }, "user"),
   acceptShareGrant: (body) => request("/user/share-grants/accept", { method: "POST", body: JSON.stringify(body) }, "user"),
   revokeShareGrant: (body) => request("/user/share-grants/revoke", { method: "POST", body: JSON.stringify(body) }, "user"),
+  retryShareGrantNotification: (body) => request("/user/share-grants/retry-notification", { method: "POST", body: JSON.stringify(body) }, "user"),
   adminDashboard: (params) => {
     const qs = params ? "?" + new URLSearchParams(params).toString() : "";
     return request(`/admin/dashboard${qs}`, {}, "admin");
@@ -175,6 +179,22 @@ describe("API client route construction", () => {
     assert.equal(body.agent_title, "the right hand");
   });
 
+  it("requestBackupDeployKey POSTs to /user/backup-deploy-key with user CSRF", async () => {
+    await api.requestBackupDeployKey({ deployment_id: "dep_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/backup-deploy-key"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
+    assert.equal(JSON.parse(lastFetchOpts.body).deployment_id, "dep_1");
+  });
+
+  it("requestBackupWriteCheck POSTs to /user/backup-write-check with user CSRF", async () => {
+    await api.requestBackupWriteCheck({ deployment_id: "dep_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/backup-write-check"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
+    assert.equal(JSON.parse(lastFetchOpts.body).deployment_id, "dep_1");
+  });
+
   it("Crew Training routes use user session and CSRF", async () => {
     await api.userCrewRecipe();
     assert.ok(lastFetchUrl.endsWith("/user/crew-recipe"));
@@ -189,6 +209,12 @@ describe("API client route construction", () => {
   it("userLinkedResources GETs /user/linked-resources", async () => {
     await api.userLinkedResources();
     assert.ok(lastFetchUrl.endsWith("/user/linked-resources"));
+  });
+
+  it("userShareGrants GETs /user/share-grants", async () => {
+    await api.userShareGrants();
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants"));
+    assert.equal(lastFetchOpts.method, undefined);
   });
 
   it("createShareGrant POSTs to /user/share-grants", async () => {
@@ -224,6 +250,15 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/user/share-grants/revoke"));
     assert.equal(lastFetchOpts.method, "POST");
     assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
+  });
+
+  it("retryShareGrantNotification POSTs to /user/share-grants/retry-notification", async () => {
+    await api.retryShareGrantNotification({ grant_id: "share_1", target: "auto" });
+    assert.ok(lastFetchUrl.endsWith("/user/share-grants/retry-notification"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
+    assert.equal(JSON.parse(lastFetchOpts.body).grant_id, "share_1");
+    assert.equal(JSON.parse(lastFetchOpts.body).target, "auto");
   });
 
   it("adminDashboard GETs with query params", async () => {
@@ -385,4 +420,4 @@ describe("API client response parsing", () => {
   });
 });
 
-console.log("PASS all 42 ArcLink web API client tests");
+console.log("PASS ArcLink web API client tests");

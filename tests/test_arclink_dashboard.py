@@ -133,6 +133,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
             "access_links",
             "wrapped",
             "bot_setup",
+            "backup",
             "files",
             "code",
             "terminal",
@@ -169,6 +170,8 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     expect(deployment["billing"]["subscriptions"][0]["status"] == "active", str(deployment["billing"]))
     expect(deployment["billing"]["renewal_lifecycle"]["provider_access"] == "allowed", str(deployment["billing"]))
     expect(deployment["bot_contact"]["first_contacted"], str(deployment["bot_contact"]))
+    expect(deployment["backup_setup"]["status"] == "not_requested", str(deployment["backup_setup"]))
+    expect(section_index["backup"]["status"] == "not_requested", str(section_index["backup"]))
     expect(deployment["model"]["model_id"] == "model-default", str(deployment["model"]))
     expect(deployment["notion_setup"]["status"] == "available", str(deployment["notion_setup"]))
     expect(
@@ -185,6 +188,79 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
         expect(forbidden not in text, text)
     expect("metadata_json" not in text, text)
     print("PASS test_user_dashboard_read_model_projects_safe_operational_summary")
+
+
+def test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_share_inbox_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_share_inbox_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_share_inbox_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_dashboard_share_inbox_test")
+    conn = memory_db(control)
+    owner = seed_dashboard(control, onboarding, conn)
+    recipient_session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="dashboard-recipient@example.test",
+        session_id="onb_dashboard_share_recipient",
+        email_hint="dashboard-recipient@example.test",
+        display_name_hint="Dashboard Recipient",
+        selected_model_id="model-default",
+    )
+    recipient = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=recipient_session["session_id"],
+        base_domain="example.test",
+        prefix="dashboard-recipient-1a2b",
+    )
+    control.set_arclink_user_entitlement(conn, user_id=recipient["user_id"], entitlement_state="paid")
+
+    pending = api.create_user_share_grant_for_owner(
+        conn,
+        owner_user_id=owner["user_id"],
+        recipient_user_id=recipient["user_id"],
+        resource_kind="drive",
+        resource_root="vault",
+        resource_path="/Projects/pending",
+        owner_deployment_id=owner["deployment_id"],
+        display_name="Pending Share",
+    ).payload["grant"]
+    approved = api.create_user_share_grant_for_owner(
+        conn,
+        owner_user_id=owner["user_id"],
+        recipient_user_id=recipient["user_id"],
+        resource_kind="code",
+        resource_root="workspace",
+        resource_path="/repo",
+        owner_deployment_id=owner["deployment_id"],
+        display_name="Approved Share",
+    ).payload["grant"]
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_share_grants
+        SET status = 'approved', approved_at = ?, updated_at = ?
+        WHERE grant_id = ?
+        """,
+        (now, now, approved["grant_id"]),
+    )
+    conn.commit()
+
+    owner_view = dashboard.read_arclink_user_dashboard(conn, user_id=owner["user_id"])
+    owner_inbox = owner_view["share_inbox"]
+    expect(owner_inbox["pending_owner_approvals"] == 1, str(owner_inbox))
+    expect(owner_inbox["waiting_on_owner_approval"] == 0, str(owner_inbox))
+    expect(owner_inbox["pending_recipient_acceptance"] == 0, str(owner_inbox))
+    expect(owner_inbox["attention_count"] == 1, str(owner_inbox))
+    expect(owner_inbox["recovery_action"] == "open_dashboard_share_inbox", str(owner_inbox))
+
+    recipient_view = dashboard.read_arclink_user_dashboard(conn, user_id=recipient["user_id"])
+    recipient_inbox = recipient_view["share_inbox"]
+    expect(recipient_inbox["pending_owner_approvals"] == 0, str(recipient_inbox))
+    expect(recipient_inbox["waiting_on_owner_approval"] == 1, str(recipient_inbox))
+    expect(recipient_inbox["pending_recipient_acceptance"] == 1, str(recipient_inbox))
+    expect(recipient_inbox["attention_count"] == 2, str(recipient_inbox))
+    expect(pending["grant_id"] != approved["grant_id"], str((pending, approved)))
+    print("PASS test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants")
 
 
 def test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token() -> None:
@@ -236,18 +312,204 @@ def test_user_dashboard_projects_local_notion_ssot_verification_without_secret_t
 
     view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
     setup = view["deployments"][0]["notion_setup"]
-    expect(setup["status"] == "verified", str(setup))
+    expect(setup["status"] == "local_metadata_verified", str(setup))
     expect(setup["public_status"] == "ready_for_dashboard_verification", str(setup))
     expect(setup["webhook"]["configured"] is True, str(setup))
     expect(setup["webhook"]["verified"] is True, str(setup))
+    expect(setup["webhook"]["status"] == "webhook_verified", str(setup))
     expect(setup["webhook"]["verified_at"] == now, str(setup))
     expect(setup["index"]["status"] == "available", str(setup))
+    expect(setup["verification"]["state"] == "local_metadata_verified", str(setup))
+    expect(setup["verification"]["dashboard"] == "local_metadata_verified", str(setup))
+    expect(setup["verification"]["setup_intent"] == "ready_for_dashboard_verification", str(setup))
+    expect(setup["verification"]["local_metadata"] == "local_metadata_verified", str(setup))
     expect(setup["verification"]["email_share"] == "not_proof", str(setup))
+    expect(setup["verification"]["user_owned_oauth"] == "policy_question", str(setup))
+    expect(setup["verification"]["shared_root_live_read"] == "proof_gated", str(setup))
+    expect(setup["verification"]["brokered_write_preflight"] == "proof_gated", str(setup))
     expect(setup["verification"]["live_workspace"] == "proof_gated", str(setup))
+    expect(setup["status"] != "verified", str(setup))
+    expect(setup["verification"]["dashboard"] != "verified", str(setup))
     text = json.dumps(view, sort_keys=True)
     expect("token_configured_placeholder" not in text, text)
     expect("notion_webhook_verification_token" not in text, text)
     print("PASS test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token")
+
+
+def test_user_dashboard_projects_raven_backup_pending_key_setup() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_backup_setup_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_backup_setup_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_backup_setup_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    now = control.utc_now_iso()
+
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "config_backup_owner_repo": "sirouk/arclink-agent-backup",
+                    "config_backup_public_status": "repo_recorded_pending_key_setup",
+                    "config_backup_requested_at": now,
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    deployment = view["deployments"][0]
+    backup = deployment["backup_setup"]
+    section_index = {section["section"]: section for section in deployment["sections"]}
+    expect(backup["status"] == "pending_key_setup", str(backup))
+    expect(backup["model"] == "public_preparation_then_operator_verification", str(backup))
+    expect(backup["public_status"] == "repo_recorded_pending_key_setup", str(backup))
+    expect(backup["owner_repo"] == "sirouk/arclink-agent-backup", str(backup))
+    expect(backup["settings_url"] == "https://github.com/sirouk/arclink-agent-backup/settings/keys", str(backup))
+    expect(backup["requested_at"] == now, str(backup))
+    expect(backup["verification"]["repo"] == "recorded", str(backup))
+    expect(backup["verification"]["deploy_key"] == "pending_operator_setup", str(backup))
+    expect(backup["verification"]["github_write_check"] == "not_run", str(backup))
+    expect(backup["verification"]["backup_activation"] == "not_active", str(backup))
+    expect(backup["verification"]["restore_proof"] == "proof_gated", str(backup))
+    expect(section_index["backup"]["status"] == "pending_key_setup", str(section_index["backup"]))
+    text = json.dumps(view, sort_keys=True)
+    for forbidden in ("sk_", "ghp_", "deploy_key_private", "-----BEGIN"):
+        expect(forbidden not in text, text)
+    print("PASS test_user_dashboard_projects_raven_backup_pending_key_setup")
+
+
+def test_user_dashboard_backup_deploy_key_request_exposes_public_key_without_activation() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_backup_key_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_backup_key_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_backup_key_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "config_backup_owner_repo": "sirouk/arclink-agent-backup",
+                    "config_backup_public_status": "repo_recorded_pending_key_setup",
+                    "config_backup_requested_at": now,
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    conn.commit()
+
+    with tempfile.TemporaryDirectory() as staging_dir:
+        backup = dashboard.request_arclink_backup_deploy_key(
+            conn,
+            user_id=prepared["user_id"],
+            deployment_id=prepared["deployment_id"],
+            key_staging_dir=staging_dir,
+        )
+        public_key = backup["deploy_key"]["public_key"]
+        expect(public_key.startswith("ssh-ed25519 "), str(backup))
+        expect(backup["status"] == "pending_key_setup", str(backup))
+        expect(backup["deploy_key"]["status"] == "staged_pending_github_install", str(backup))
+        expect(backup["deploy_key"]["private_key_storage"] == "server_side_only", str(backup))
+        expect(backup["verification"]["github_write_check"] == "not_run", str(backup))
+        expect(backup["verification"]["backup_activation"] == "not_active", str(backup))
+        expect(backup["verification"]["restore_proof"] == "proof_gated", str(backup))
+        expect(backup["settings_url"] == "https://github.com/sirouk/arclink-agent-backup/settings/keys", str(backup))
+
+        key_files = list(Path(staging_dir).glob("*/arclink-agent-backup-ed25519"))
+        expect(len(key_files) == 1 and key_files[0].is_file(), f"expected one server-side private key under {staging_dir}")
+        text = json.dumps(backup, sort_keys=True)
+        private_key_text = key_files[0].read_text(encoding="utf-8")
+        expect("BEGIN OPENSSH PRIVATE KEY" in private_key_text, "expected real private key to stay server-side")
+        expect("BEGIN OPENSSH PRIVATE KEY" not in text, text)
+        expect(str(key_files[0]) not in text and staging_dir not in text, text)
+
+        view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+        viewed_backup = view["deployments"][0]["backup_setup"]
+        expect(viewed_backup["deploy_key"]["public_key"] == public_key, str(viewed_backup))
+        expect(viewed_backup["verification"]["deploy_key"] == "staged_pending_github_install", str(viewed_backup))
+        expect(viewed_backup["verification"]["backup_activation"] == "not_active", str(viewed_backup))
+
+    print("PASS test_user_dashboard_backup_deploy_key_request_exposes_public_key_without_activation")
+
+
+def test_backup_verification_state_records_failed_closed_without_activation() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_backup_verify_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_backup_verify_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_backup_verify_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "config_backup_owner_repo": "sirouk/arclink-agent-backup",
+                    "config_backup_public_status": "repo_recorded_pending_key_setup",
+                    "config_backup_requested_at": now,
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    conn.commit()
+
+    with tempfile.TemporaryDirectory() as staging_dir:
+        staged = dashboard.request_arclink_backup_deploy_key(
+            conn,
+            user_id=prepared["user_id"],
+            deployment_id=prepared["deployment_id"],
+            key_staging_dir=staging_dir,
+        )
+        public_key = staged["deploy_key"]["public_key"]
+        verified = dashboard.request_arclink_backup_write_check(
+            conn,
+            user_id=prepared["user_id"],
+            deployment_id=prepared["deployment_id"],
+        )
+        expect(verified["deploy_key"]["public_key"] == public_key, str(verified))
+        expect(verified["verification"]["github_write_check"] == "failed_closed", str(verified))
+        expect("PG-BACKUP" in verified["verification"]["github_write_check_reason"], str(verified))
+        expect(verified["verification"]["backup_activation"] == "not_active", str(verified))
+        expect(verified["verification"]["restore_proof"] == "proof_gated", str(verified))
+
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (prepared["deployment_id"],),
+        ).fetchone()
+        metadata = json.loads(row["metadata_json"])
+        expect(metadata["backup_github_write_check"] == "failed_closed", str(metadata))
+        expect(metadata["backup_activation"] == "not_active", str(metadata))
+
+        view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+        viewed_backup = view["deployments"][0]["backup_setup"]
+        expect(viewed_backup["verification"]["github_write_check"] == "failed_closed", str(viewed_backup))
+        expect(viewed_backup["verification"]["backup_activation"] == "not_active", str(viewed_backup))
+
+    print("PASS test_backup_verification_state_records_failed_closed_without_activation")
 
 
 def test_operator_evidence_template_state_is_computed_from_template_file() -> None:
@@ -506,13 +768,17 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
+    test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants()
     test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token()
+    test_user_dashboard_projects_raven_backup_pending_key_setup()
+    test_user_dashboard_backup_deploy_key_request_exposes_public_key_without_activation()
+    test_backup_verification_state_records_failed_closed_without_activation()
     test_operator_evidence_template_state_is_computed_from_template_file()
     test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 7 ArcLink dashboard tests")
+    print("PASS all 11 ArcLink dashboard tests")
     return 0
 
 

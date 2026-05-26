@@ -102,6 +102,27 @@ def test_user_dashboard_requires_session_auth() -> None:
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
     prepared = seed_paid_deployment(control, onboarding, conn)
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "config_backup_owner_repo": "hosted-user/arclink-agent-backup",
+                    "config_backup_public_status": "repo_recorded_pending_key_setup",
+                    "config_backup_requested_at": now,
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    conn.commit()
 
     # No auth -> 401
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -124,8 +145,222 @@ def test_user_dashboard_requires_session_auth() -> None:
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload["user"]["user_id"] == prepared["user_id"], str(payload))
+    backup = payload["deployments"][0]["backup_setup"]
+    expect(backup["status"] == "pending_key_setup", str(backup))
+    expect(backup["owner_repo"] == "hosted-user/arclink-agent-backup", str(backup))
+    expect(backup["verification"]["deploy_key"] == "pending_operator_setup", str(backup))
+    expect(backup["verification"]["backup_activation"] == "not_active", str(backup))
+    expect(backup["verification"]["restore_proof"] == "proof_gated", str(backup))
 
     print("PASS test_user_dashboard_requires_session_auth")
+
+
+def test_user_backup_deploy_key_request_requires_session_and_csrf() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_backup_key_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_backup_key_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_backup_key_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_backup_key_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_backup_key",
+        email="backup-key@example.test",
+        prefix="backup-key-1a2b",
+    )
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "config_backup_owner_repo": "hosted-user/arclink-agent-backup",
+                    "config_backup_public_status": "repo_recorded_pending_key_setup",
+                    "config_backup_requested_at": now,
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    conn.commit()
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_backup_key_hosted")
+    body = json.dumps({"deployment_id": prepared["deployment_id"]})
+
+    with tempfile.TemporaryDirectory() as staging_dir:
+        config = hosted.HostedApiConfig(
+            env={
+                "ARCLINK_BASE_DOMAIN": "example.test",
+                "ARCLINK_BACKUP_KEY_STAGING_DIR": staging_dir,
+            }
+        )
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-deploy-key",
+            headers={},
+            body=body,
+            config=config,
+        )
+        expect(status == 401, f"backup key without session expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-deploy-key",
+            headers=browser_auth_headers(session),
+            body=body,
+            config=config,
+        )
+        expect(status == 401, f"backup key without csrf expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-deploy-key",
+            headers=browser_auth_headers(session, csrf=True),
+            body=body,
+            config=config,
+        )
+        expect(status == 200, f"backup key request expected 200 got {status}: {payload}")
+        backup = payload["backup_setup"]
+        public_key = backup["deploy_key"]["public_key"]
+        expect(public_key.startswith("ssh-ed25519 "), str(backup))
+        expect(backup["deploy_key"]["status"] == "staged_pending_github_install", str(backup))
+        expect(backup["verification"]["github_write_check"] == "not_run", str(backup))
+        expect(backup["verification"]["backup_activation"] == "not_active", str(backup))
+        text = json.dumps(payload, sort_keys=True)
+        expect("BEGIN OPENSSH PRIVATE KEY" not in text, text)
+        expect(staging_dir not in text, text)
+
+        status, dashboard_payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="GET",
+            path="/api/v1/user/dashboard",
+            headers=auth_headers(session),
+            config=config,
+        )
+        expect(status == 200, f"dashboard expected 200 got {status}: {dashboard_payload}")
+        viewed_backup = dashboard_payload["deployments"][0]["backup_setup"]
+        expect(viewed_backup["deploy_key"]["public_key"] == public_key, str(viewed_backup))
+        expect(viewed_backup["verification"]["deploy_key"] == "staged_pending_github_install", str(viewed_backup))
+
+    print("PASS test_user_backup_deploy_key_request_requires_session_and_csrf")
+
+
+def test_user_backup_write_check_route_requires_session_csrf_and_never_activates() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_backup_verify_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_backup_verify_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_backup_verify_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_backup_verify_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_backup_verify",
+        email="backup-verify@example.test",
+        prefix="backup-verify-1a2b",
+    )
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "config_backup_owner_repo": "hosted-user/arclink-agent-backup",
+                    "config_backup_public_status": "repo_recorded_pending_key_setup",
+                    "config_backup_requested_at": now,
+                },
+                sort_keys=True,
+            ),
+            now,
+            prepared["session_id"],
+        ),
+    )
+    conn.commit()
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_backup_verify_hosted")
+    body = json.dumps({"deployment_id": prepared["deployment_id"]})
+
+    with tempfile.TemporaryDirectory() as staging_dir:
+        config = hosted.HostedApiConfig(
+            env={
+                "ARCLINK_BASE_DOMAIN": "example.test",
+                "ARCLINK_BACKUP_KEY_STAGING_DIR": staging_dir,
+            }
+        )
+        status, staged_payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-deploy-key",
+            headers=browser_auth_headers(session, csrf=True),
+            body=body,
+            config=config,
+        )
+        expect(status == 200, f"backup key request expected 200 got {status}: {staged_payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-write-check",
+            headers={},
+            body=body,
+            config=config,
+        )
+        expect(status == 401, f"backup write check without session expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-write-check",
+            headers=browser_auth_headers(session),
+            body=body,
+            config=config,
+        )
+        expect(status == 401, f"backup write check without csrf expected 401 got {status}: {payload}")
+
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/backup-write-check",
+            headers=browser_auth_headers(session, csrf=True),
+            body=body,
+            config=config,
+        )
+        expect(status == 200, f"backup write check expected 200 got {status}: {payload}")
+        backup = payload["backup_setup"]
+        expect(backup["verification"]["github_write_check"] == "failed_closed", str(backup))
+        expect("PG-BACKUP" in backup["verification"]["github_write_check_reason"], str(backup))
+        expect(backup["verification"]["backup_activation"] == "not_active", str(backup))
+        expect(backup["verification"]["restore_proof"] == "proof_gated", str(backup))
+
+        text = json.dumps(payload, sort_keys=True)
+        expect("BEGIN OPENSSH PRIVATE KEY" not in text, text)
+        expect(staging_dir not in text, text)
+
+        status, dashboard_payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="GET",
+            path="/api/v1/user/dashboard",
+            headers=auth_headers(session),
+            config=config,
+        )
+        expect(status == 200, f"dashboard expected 200 got {status}: {dashboard_payload}")
+        viewed_backup = dashboard_payload["deployments"][0]["backup_setup"]
+        expect(viewed_backup["verification"]["github_write_check"] == "failed_closed", str(viewed_backup))
+        expect(viewed_backup["verification"]["backup_activation"] == "not_active", str(viewed_backup))
+
+    print("PASS test_user_backup_write_check_route_requires_session_csrf_and_never_activates")
 
 
 def test_user_agent_identity_route_requires_csrf_and_updates_deployment() -> None:
@@ -1526,6 +1761,551 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
         expect(not same_projected_dir.exists(), "same-account revoked linked projection should be removed")
 
     print("PASS test_user_share_grants_create_approved_accepted_linked_resources")
+
+
+def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_share_broker")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_share_broker")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_share_broker")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_share_broker")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    owner = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_broker_owner",
+        email="share-broker-owner@example.test",
+        display_name="Share Broker Owner",
+        prefix="share-broker-owner",
+    )
+    recipient = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_broker_recipient",
+        email="share-broker-recipient@example.test",
+        display_name="Share Broker Recipient",
+        prefix="share-broker-recipient",
+    )
+    other = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_broker_other",
+        email="share-broker-other@example.test",
+        display_name="Share Broker Other",
+        prefix="share-broker-other",
+    )
+    owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_broker_owner")
+    broker_token = "share-broker-local-token"
+    other_broker_token = "share-broker-other-token"
+
+    def update_deployment_metadata(deployment: dict, token: str) -> None:
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (deployment["deployment_id"],),
+        ).fetchone()
+        metadata = json.loads(str(row["metadata_json"] or "{}")) if row else {}
+        metadata["share_request_broker"] = {
+            "enabled": True,
+            "token_hash": api.hash_share_request_broker_token(token),
+            "token_ref": f"secret://arclink/share-request-broker/{deployment['deployment_id']}/token",
+        }
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+            (json.dumps(metadata, sort_keys=True), deployment["deployment_id"]),
+        )
+        conn.commit()
+
+    update_deployment_metadata(owner, broker_token)
+    update_deployment_metadata(other, other_broker_token)
+
+    body = {
+        "contract": "arclink-share-grants",
+        "source_plugin": "drive",
+        "owner_deployment_id": owner["deployment_id"],
+        "recipient": "share-broker-recipient@example.test",
+        "resource_kind": "drive",
+        "item_kind": "file",
+        "resource_root": "vault",
+        "resource_path": "/Projects/brief.md",
+        "display_name": "Brokered Brief",
+        "requested_access": "read",
+        "share_mode": "owner_approval",
+        "reshare_allowed": False,
+    }
+    broker_headers = {"X-ArcLink-Share-Request-Broker-Token": broker_token}
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants",
+        headers=broker_headers,
+        body=json.dumps(body),
+        config=config,
+    )
+    expect(status == 401, f"browser share route must still require session and CSRF, got {status}: {payload}")
+
+    def grant_count() -> int:
+        return int(conn.execute("SELECT COUNT(*) AS count FROM arclink_share_grants").fetchone()["count"])
+
+    for label, headers, candidate in (
+        ("missing token", {}, dict(body)),
+        ("invalid token", {"X-ArcLink-Share-Request-Broker-Token": "wrong-token"}, dict(body)),
+        (
+            "cross deployment token",
+            {"X-ArcLink-Share-Request-Broker-Token": other_broker_token},
+            dict(body),
+        ),
+        (
+            "missing owner deployment",
+            broker_headers,
+            {key: value for key, value in body.items() if key != "owner_deployment_id"},
+        ),
+        (
+            "linked root",
+            broker_headers,
+            {**body, "resource_root": "linked", "resource_path": "/incoming.md"},
+        ),
+    ):
+        before = grant_count()
+        status, payload, _ = hosted.route_arclink_hosted_api(
+            conn,
+            method="POST",
+            path="/api/v1/user/share-grants/broker",
+            headers=headers,
+            body=json.dumps(candidate),
+            config=config,
+        )
+        expect(status == 401, f"{label} should fail closed with 401 got {status}: {payload}")
+        expect(grant_count() == before, f"{label} created a share grant")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/broker",
+        headers=broker_headers,
+        body=json.dumps(body),
+        config=config,
+    )
+    expect(status == 201, f"broker share create expected 201 got {status}: {payload}")
+    expect(broker_token not in json.dumps(payload, sort_keys=True), "broker token leaked in API response")
+    grant = payload["grant"]
+    expect(grant["owner_user_id"] == owner["user_id"], str(grant))
+    expect(grant["recipient_user_id"] == recipient["user_id"], str(grant))
+    expect(grant["owner_deployment_id"] == owner["deployment_id"], str(grant))
+    expect(grant["resource_kind"] == "drive", str(grant))
+    expect(grant["resource_root"] == "vault", str(grant))
+    expect(grant["status"] == "pending_owner_approval", str(grant))
+    expect(payload["owner_notification"]["queued"] is False, str(payload["owner_notification"]))
+
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_share_grants WHERE grant_id = ?",
+        (grant["grant_id"],),
+    ).fetchone()
+    metadata = json.loads(str(row["metadata_json"] or "{}"))
+    expect(metadata["requested_via"] == "share_request_broker", str(metadata))
+    expect(metadata["source_plugin"] == "drive", str(metadata))
+    expect(metadata["item_kind"] == "file", str(metadata))
+    expect("token" not in json.dumps(metadata, sort_keys=True).lower(), str(metadata))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/share-grants",
+        headers=auth_headers(owner_session),
+        config=config,
+    )
+    expect(status == 200, f"owner inbox expected 200 got {status}: {payload}")
+    expect(any(item["grant_id"] == grant["grant_id"] for item in payload["share_grants"]), str(payload))
+
+    print("PASS test_user_share_grant_broker_requires_deployment_scoped_token")
+
+
+def test_user_share_grants_inbox_requires_session_and_scopes_owner_recipient() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_share_inbox_control")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_share_inbox")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_share_inbox")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_share_inbox")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    owner = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_inbox_owner",
+        email="share-inbox-owner@example.test",
+        display_name="Share Inbox Owner",
+        prefix="share-inbox-owner",
+    )
+    recipient = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_inbox_recipient",
+        email="share-inbox-recipient@example.test",
+        display_name="Share Inbox Recipient",
+        prefix="share-inbox-recipient",
+    )
+    owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_inbox_owner")
+    recipient_session = api.create_arclink_user_session(conn, user_id=recipient["user_id"], session_id="usess_share_inbox_recipient")
+
+    body = {
+        "recipient_user_id": recipient["user_id"],
+        "owner_deployment_id": owner["deployment_id"],
+        "resource_kind": "drive",
+        "resource_root": "vault",
+        "resource_path": "/Projects/waiting",
+        "display_name": "Waiting Share",
+    }
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps(body),
+        config=config,
+    )
+    expect(status == 201, f"share create expected 201 got {status}: {payload}")
+    grant_id = payload["grant"]["grant_id"]
+    expect(payload["owner_notification"]["queued"] is False, str(payload["owner_notification"]))
+    expect(payload["owner_notification"]["reason"] == "no_public_channel", str(payload["owner_notification"]))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/share-grants",
+        headers={},
+        config=config,
+    )
+    expect(status == 401, f"share inbox without session expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/share-grants",
+        headers=auth_headers(owner_session),
+        config=config,
+    )
+    expect(status == 200, f"owner share inbox expected 200 got {status}: {payload}")
+    expect(payload["summary"]["pending_owner_approvals"] == 1, str(payload))
+    expect(payload["summary"]["waiting_on_owner_approval"] == 0, str(payload))
+    owner_grant = payload["pending_owner_approvals"][0]
+    expect(owner_grant["grant_id"] == grant_id, str(owner_grant))
+    expect(owner_grant["available_actions"] == ["approve", "deny", "retry_notification"], str(owner_grant))
+    expect(owner_grant["notification_status"]["owner"]["reason"] == "no_public_channel", str(owner_grant))
+    expect(owner_grant["notification_status"]["owner"]["recovery_action"] == "use_dashboard_or_link_public_channel", str(owner_grant))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/share-grants",
+        headers=auth_headers(owner_session),
+        query={"user_id": recipient["user_id"]},
+        config=config,
+    )
+    expect(status == 401, f"cross-user share inbox expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/share-grants",
+        headers=auth_headers(recipient_session),
+        config=config,
+    )
+    expect(status == 200, f"recipient waiting inbox expected 200 got {status}: {payload}")
+    expect(payload["summary"]["waiting_on_owner_approval"] == 1, str(payload))
+    waiting = payload["waiting_on_owner_approval"][0]
+    expect(waiting["grant_id"] == grant_id, str(waiting))
+    expect(waiting["available_actions"] == [], str(waiting))
+    expect(waiting["waiting_on"] == "owner_approval", str(waiting))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/approve",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 200, f"owner approval expected 200 got {status}: {payload}")
+    expect(payload["recipient_notification"]["queued"] is False, str(payload["recipient_notification"]))
+    expect(payload["recipient_notification"]["reason"] == "no_public_channel", str(payload["recipient_notification"]))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/user/share-grants",
+        headers=auth_headers(recipient_session),
+        config=config,
+    )
+    expect(status == 200, f"recipient approved inbox expected 200 got {status}: {payload}")
+    expect(payload["summary"]["pending_recipient_acceptance"] == 1, str(payload))
+    approved = payload["pending_recipient_acceptance"][0]
+    expect(approved["grant_id"] == grant_id, str(approved))
+    expect(approved["available_actions"] == ["accept", "retry_notification"], str(approved))
+    expect(approved["notification_status"]["recipient"]["reason"] == "no_public_channel", str(approved))
+
+    print("PASS test_user_share_grants_inbox_requires_session_and_scopes_owner_recipient")
+
+
+def test_user_share_grant_retry_notification_requires_session_csrf_and_scopes_participants() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_share_retry_auth_control")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_share_retry_auth")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_share_retry_auth")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_share_retry_auth")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    owner = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_retry_owner",
+        email="share-retry-owner@example.test",
+        display_name="Share Retry Owner",
+        prefix="share-retry-owner",
+    )
+    recipient = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_retry_recipient",
+        email="share-retry-recipient@example.test",
+        display_name="Share Retry Recipient",
+        prefix="share-retry-recipient",
+    )
+    outsider = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_retry_outsider",
+        email="share-retry-outsider@example.test",
+        display_name="Share Retry Outsider",
+        prefix="share-retry-outsider",
+    )
+    owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_retry_owner")
+    recipient_session = api.create_arclink_user_session(conn, user_id=recipient["user_id"], session_id="usess_share_retry_recipient")
+    outsider_session = api.create_arclink_user_session(conn, user_id=outsider["user_id"], session_id="usess_share_retry_outsider")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({
+            "recipient_user_id": recipient["user_id"],
+            "owner_deployment_id": owner["deployment_id"],
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/retry",
+            "display_name": "Retry Share",
+        }),
+        config=config,
+    )
+    expect(status == 201, f"share create expected 201 got {status}: {payload}")
+    grant_id = payload["grant"]["grant_id"]
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers={},
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 401, f"retry without session expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(owner_session),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 401, f"retry without CSRF expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(outsider_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 401, f"outsider retry expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(recipient_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id, "target": "telegram"}),
+        config=config,
+    )
+    expect(status == 401, f"caller-supplied channel target expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(recipient_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 200, f"participant retry expected 200 got {status}: {payload}")
+    notification = payload["notification"]
+    expect(notification["queued"] is False, str(notification))
+    expect(notification["target"] == "owner", str(notification))
+    expect(notification["reason"] == "no_public_channel", str(notification))
+    expect(notification["recovery_action"] == "use_dashboard_or_link_public_channel", str(notification))
+    count = conn.execute("SELECT COUNT(*) AS c FROM notification_outbox").fetchone()["c"]
+    expect(count == 0, f"no-channel retry must not enqueue notification rows: {count}")
+
+    conn.execute(
+        "UPDATE arclink_share_grants SET status = 'accepted', updated_at = ? WHERE grant_id = ?",
+        (control.utc_now_iso(), grant_id),
+    )
+    conn.commit()
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 200, f"terminal retry expected 200 got {status}: {payload}")
+    expect(payload["notification"]["queued"] is False, str(payload["notification"]))
+    expect(payload["notification"]["reason"] == "share_status_accepted_not_retryable", str(payload["notification"]))
+
+    print("PASS test_user_share_grant_retry_notification_requires_session_csrf_and_scopes_participants")
+
+
+def test_user_share_grant_retry_notification_queues_after_public_channel_link() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_share_retry_queue_control")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_share_retry_queue")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_share_retry_queue")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_share_retry_queue")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    owner = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_retry_queue_owner",
+        email="share-retry-queue-owner@example.test",
+        display_name="Share Retry Queue Owner",
+        prefix="share-retry-queue-owner",
+    )
+    recipient = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_share_retry_queue_recipient",
+        email="share-retry-queue-recipient@example.test",
+        display_name="Share Retry Queue Recipient",
+        prefix="share-retry-queue-recipient",
+    )
+    owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_retry_queue_owner")
+    recipient_session = api.create_arclink_user_session(conn, user_id=recipient["user_id"], session_id="usess_share_retry_queue_recipient")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({
+            "recipient_user_id": recipient["user_id"],
+            "owner_deployment_id": owner["deployment_id"],
+            "resource_kind": "drive",
+            "resource_root": "vault",
+            "resource_path": "/Projects/retry-queue",
+            "display_name": "Retry Queue Share",
+        }),
+        config=config,
+    )
+    expect(status == 201, f"share create expected 201 got {status}: {payload}")
+    grant_id = payload["grant"]["grant_id"]
+    expect(payload["owner_notification"]["queued"] is False, str(payload["owner_notification"]))
+    count = conn.execute("SELECT COUNT(*) AS c FROM notification_outbox").fetchone()["c"]
+    expect(count == 0, f"pre-link create should not enqueue: {count}")
+
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET channel = 'telegram', channel_identity = '987654321', updated_at = ?
+        WHERE session_id = ?
+        """,
+        (now, owner["session_id"]),
+    )
+    conn.commit()
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 200, f"owner notification retry expected 200 got {status}: {payload}")
+    expect(payload["notification"]["queued"] is True, str(payload["notification"]))
+    expect(payload["notification"]["target"] == "owner", str(payload["notification"]))
+    expect(payload["notification"]["channel"] == "telegram", str(payload["notification"]))
+    rows = conn.execute("SELECT * FROM notification_outbox ORDER BY id").fetchall()
+    expect(len(rows) == 1, f"owner retry should enqueue exactly one row: {len(rows)}")
+    first_extra = json.loads(rows[0]["extra_json"])
+    expect(first_extra["share_grant_id"] == grant_id, str(first_extra))
+    expect("telegram_reply_markup" in first_extra, str(first_extra))
+    audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
+    expect("share_grant_notification_retried" in audit_actions, str(audit_actions))
+    event_types = [row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events ORDER BY created_at").fetchall()]
+    expect("share_grant_notification_retry_queued" in event_types, str(event_types))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/approve",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id}),
+        config=config,
+    )
+    expect(status == 200, f"owner approval expected 200 got {status}: {payload}")
+    expect(payload["recipient_notification"]["queued"] is False, str(payload["recipient_notification"]))
+
+    now = control.utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET channel = 'discord', channel_identity = '456789123', updated_at = ?
+        WHERE session_id = ?
+        """,
+        (now, recipient["session_id"]),
+    )
+    conn.commit()
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/retry-notification",
+        headers=browser_auth_headers(recipient_session, csrf=True),
+        body=json.dumps({"grant_id": grant_id, "target": "recipient"}),
+        config=config,
+    )
+    expect(status == 200, f"recipient notification retry expected 200 got {status}: {payload}")
+    expect(payload["grant"]["status"] == "approved", str(payload["grant"]))
+    expect(payload["notification"]["queued"] is True, str(payload["notification"]))
+    expect(payload["notification"]["target"] == "recipient", str(payload["notification"]))
+    expect(payload["notification"]["channel"] == "discord", str(payload["notification"]))
+    rows = conn.execute("SELECT * FROM notification_outbox ORDER BY id").fetchall()
+    expect(len(rows) == 2, f"recipient retry should add one row: {len(rows)}")
+    second_extra = json.loads(rows[-1]["extra_json"])
+    expect(second_extra["share_grant_id"] == grant_id, str(second_extra))
+    expect("discord_components" in second_extra, str(second_extra))
+    expect(rows[-1]["target_id"] == "456789123", str(dict(rows[-1])))
+
+    print("PASS test_user_share_grant_retry_notification_queues_after_public_channel_link")
 
 
 def test_admin_service_health_route() -> None:
@@ -3842,6 +4622,28 @@ def test_openapi_spec_route_serves_valid_contract() -> None:
     print("PASS test_openapi_spec_route_serves_valid_contract")
 
 
+def test_openapi_onboarding_proof_tokens_are_required() -> None:
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_tokens_test")
+    dynamic_spec = hosted.build_arclink_openapi_spec()
+    static_path = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "arclink-v1.openapi.json"
+    static_spec = json.loads(static_path.read_text(encoding="utf-8"))
+
+    for spec_name, spec in (("dynamic", dynamic_spec), ("static", static_spec)):
+        claim_schema = spec["paths"]["/api/v1/onboarding/claim-session"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        claim_required = set(claim_schema.get("required", []))
+        claim_properties = set(claim_schema.get("properties", {}))
+        expect({"session_id", "claim_token"} <= claim_properties, f"{spec_name} claim schema missing proof fields: {claim_schema}")
+        expect({"session_id", "claim_token"} <= claim_required, f"{spec_name} claim schema must require claim_token: {claim_schema}")
+
+        cancel_schema = spec["paths"]["/api/v1/onboarding/cancel"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        cancel_required = set(cancel_schema.get("required", []))
+        cancel_properties = set(cancel_schema.get("properties", {}))
+        expect({"session_id", "cancel_token"} <= cancel_properties, f"{spec_name} cancel schema missing proof fields: {cancel_schema}")
+        expect({"session_id", "cancel_token"} <= cancel_required, f"{spec_name} cancel schema must require cancel_token: {cancel_schema}")
+
+    print("PASS test_openapi_onboarding_proof_tokens_are_required")
+
+
 def test_openapi_spec_matches_static_copy() -> None:
     import os
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_static_test")
@@ -4455,6 +5257,8 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_user_dashboard_requires_session_auth()
+    test_user_backup_deploy_key_request_requires_session_and_csrf()
+    test_user_backup_write_check_route_requires_session_csrf_and_never_activates()
     test_user_agent_identity_route_requires_csrf_and_updates_deployment()
     test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only()
     test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
@@ -4474,6 +5278,9 @@ def main() -> int:
     test_user_routes_are_isolated_across_accounts()
     test_user_credentials_are_acknowledged_and_removed_after_storage()
     test_user_share_grants_create_approved_accepted_linked_resources()
+    test_user_share_grants_inbox_requires_session_and_scopes_owner_recipient()
+    test_user_share_grant_retry_notification_requires_session_csrf_and_scopes_participants()
+    test_user_share_grant_retry_notification_queues_after_public_channel_link()
     test_admin_service_health_route()
     test_admin_provisioning_jobs_route()
     test_admin_audit_route()
@@ -4518,6 +5325,7 @@ def main() -> int:
     test_read_only_admin_blocked_from_mutations()
     test_login_rejects_unknown_email()
     test_openapi_spec_route_serves_valid_contract()
+    test_openapi_onboarding_proof_tokens_are_required()
     test_openapi_spec_matches_static_copy()
     test_rate_limit_returns_429_with_headers()
     test_rate_limit_onboarding_returns_429()
@@ -4533,7 +5341,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 76 ArcLink hosted API tests")
+    print("PASS all 81 ArcLink hosted API tests")
     return 0
 
 

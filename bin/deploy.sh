@@ -10537,11 +10537,11 @@ Double confirmation is required.
 First type RESET PRODUCTION.
 Then type this control host name exactly: $control_host
 EOF
-      read -r -p "Confirm production reset [RESET PRODUCTION]: " answer
+      read -r -p "Confirm production reset (type RESET PRODUCTION; blank cancels): " answer
       if [[ "$answer" != "RESET PRODUCTION" ]]; then
         return 1
       fi
-      read -r -p "Confirm host [$control_host]: " host_answer
+      read -r -p "Confirm host (type $control_host; blank cancels): " host_answer
       [[ "$host_answer" == "$control_host" ]]
       ;;
     sandbox|runtime)
@@ -10570,7 +10570,7 @@ It preserves:
 
 Type RESET SANDBOX to continue.
 EOF
-      read -r -p "Confirm sandbox reset [RESET SANDBOX]: " answer
+      read -r -p "Confirm sandbox reset (type RESET SANDBOX; blank cancels): " answer
       [[ "$answer" == "RESET SANDBOX" ]]
       ;;
     *)

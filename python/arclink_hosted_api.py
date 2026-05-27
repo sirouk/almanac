@@ -19,7 +19,9 @@ import threading
 import time
 import hmac
 import hashlib
+import shlex
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 from wsgiref.simple_server import make_server
@@ -29,6 +31,7 @@ from arclink_boundary import json_loads_safe
 from arclink_chutes import renewal_lifecycle_for_billing_state
 from arclink_control import (
     Config,
+    _load_config_env as _load_control_config_env,
     append_arclink_event,
     connect_db,
     is_ip_in_cidrs,
@@ -151,7 +154,7 @@ class HostedApiConfig:
     """Runtime configuration resolved from environment."""
 
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
-        e = dict(env or os.environ)
+        e = _load_hosted_api_env(env)
         self.env: dict[str, str] = e
         self.base_domain: str = default_base_domain(e)
         self.cors_origin: str = str(e.get("ARCLINK_CORS_ORIGIN", "")).strip()
@@ -237,6 +240,43 @@ class HostedApiConfig:
             or "price_arclink_scale_agent_expansion"
         ).strip()
         self.additional_agent_price_id: str = self.sovereign_agent_expansion_price_id
+
+
+def _load_hosted_api_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Merge hosted API process env with the generated control config file."""
+    if env is None:
+        return _load_control_config_env()
+
+    merged = dict(env)
+    config_path_raw = str(merged.get("ARCLINK_CONFIG_FILE") or "").strip()
+    if not config_path_raw:
+        return merged
+
+    config_path = Path(config_path_raw).expanduser()
+    if not config_path.is_file():
+        return merged
+
+    try:
+        config_text = config_path.read_text(encoding="utf-8")
+    except OSError:
+        return merged
+
+    for raw_line in config_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if not key:
+            continue
+        try:
+            parsed = shlex.split(raw_value, posix=True)
+            value = "" if not parsed else parsed[0]
+        except ValueError:
+            value = raw_value
+        merged.setdefault(key, value)
+    return merged
 
 
 # --- Request / Response helpers -----------------------------------------------

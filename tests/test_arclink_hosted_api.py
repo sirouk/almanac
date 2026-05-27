@@ -3399,6 +3399,53 @@ def test_telegram_webhook_route() -> None:
     print("PASS test_telegram_webhook_route")
 
 
+def test_telegram_operator_route_reads_generated_config_file() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_operator_env_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_operator_env_test")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "docker.env"
+        config_path.write_text(
+            "\n".join(
+                [
+                    "ARCLINK_BASE_DOMAIN=example.test",
+                    "TELEGRAM_WEBHOOK_SECRET=tg_secret",
+                    "OPERATOR_NOTIFY_CHANNEL_PLATFORM=telegram",
+                    "OPERATOR_NOTIFY_CHANNEL_ID=42",
+                    "ARCLINK_OPERATOR_TELEGRAM_USER_IDS=99",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        config = hosted.HostedApiConfig(env={"ARCLINK_CONFIG_FILE": str(config_path)})
+
+    expect(config.telegram_webhook_secret == "tg_secret", "webhook secret should load from generated config")
+    expect(config.env.get("OPERATOR_NOTIFY_CHANNEL_ID") == "42", "operator chat id should load from generated config")
+    update = json.dumps(
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 1,
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 99},
+                "text": "/start",
+            },
+        }
+    )
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/webhooks/telegram",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
+        body=update,
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload.get("action") == "operator_raven_intro", str(payload))
+    expect(payload.get("sent") is False, str(payload))
+    print("PASS test_telegram_operator_route_reads_generated_config_file")
+
+
 def test_telegram_webhook_secret_boundary() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_tg_secret_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_secret_test")
@@ -5301,6 +5348,7 @@ def main() -> int:
     test_stripe_webhook_queues_paid_ping_for_telegram_user()
     test_stripe_webhook_queues_paid_ping_for_discord_user()
     test_telegram_webhook_route()
+    test_telegram_operator_route_reads_generated_config_file()
     test_telegram_webhook_secret_boundary()
     test_telegram_webhook_sends_reply_when_transport_is_available()
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
@@ -5341,7 +5389,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 81 ArcLink hosted API tests")
+    print("PASS all 82 ArcLink hosted API tests")
     return 0
 
 

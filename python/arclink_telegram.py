@@ -28,6 +28,10 @@ from arclink_public_bots import (
     arclink_public_bot_turn_telegram_reply_markup,
     handle_arclink_public_bot_turn,
 )
+from arclink_operator_raven import (
+    dispatch_operator_raven_command,
+    operator_raven_command_requested,
+)
 from arclink_http import http_request, parse_json_object
 
 logger = logging.getLogger("arclink.telegram")
@@ -836,6 +840,7 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
             return {
                 "chat_id": chat_id,
                 "user_id": user_id,
+                "chat_type": str(chat.get("type") or ""),
                 "text": data,
                 "callback_query_id": str(callback.get("id") or ""),
                 "callback_message_id": str(msg.get("message_id") or ""),
@@ -859,11 +864,152 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
     return {
         "chat_id": chat_id,
         "user_id": user_id,
+        "chat_type": str(chat.get("type") or ""),
         "text": text,
         "message_id": str(msg.get("message_id") or ""),
         "display_name": _telegram_display_name(user),
         "telegram_update_kind": kind,
         "telegram_update_json": _telegram_update_json(update),
+    }
+
+
+def _telegram_command_token(raw: str) -> str:
+    token = str(raw or "").strip().split("@", 1)[0].replace("-", "_").lower()
+    if not token.startswith("/"):
+        token = f"/{token}"
+    return token
+
+
+def _operator_telegram_user_ids(env: Mapping[str, str]) -> set[str]:
+    return {
+        value.strip()
+        for value in str(env.get("ARCLINK_OPERATOR_TELEGRAM_USER_IDS") or "").split(",")
+        if value.strip()
+    }
+
+
+def _operator_telegram_sender_allowed(parsed: Mapping[str, Any], env: Mapping[str, str]) -> bool:
+    if str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or "").strip().lower() != "telegram":
+        return False
+    configured_chat = str(env.get("OPERATOR_NOTIFY_CHANNEL_ID") or "").strip()
+    if not configured_chat:
+        return False
+    chat_id = str(parsed.get("chat_id") or "").strip()
+    sender_id = str(parsed.get("user_id") or "").strip()
+    chat_type = str(parsed.get("chat_type") or "").strip().lower()
+    operator_ids = _operator_telegram_user_ids(env)
+    if operator_ids and sender_id not in operator_ids:
+        return False
+    if chat_id == configured_chat:
+        return True
+    if operator_ids and chat_type == "private" and chat_id == sender_id:
+        return True
+    return False
+
+
+def _operator_raven_intro_reply() -> str:
+    return (
+        "Operator Raven is on the control bridge.\n\n"
+        "This chat is configured as an ArcLink operator surface, so I will not "
+        "start the Captain checkout/onboarding lane here.\n\n"
+        "Available safe commands now:\n"
+        "- /operator_status - read the control node, fleet, proof gates, and rollout state\n"
+        "- /operator_fleet - list worker capacity and placement readiness\n"
+        "- /worker_probe <host-id> --dry-run - preview a worker probe without mutating state\n"
+        "- /user_lookup <query> - inspect Captain/account state without secrets\n"
+        "- /pod_repair <deployment-id> --dry-run - preview repair candidates\n"
+        "- /upgrade_check or /upgrade_hermes - read upgrade state without running an upgrade\n"
+        "- /rollout_plan <target> --dry-run - preview ArcPod rollout batches\n"
+        "- /academy_status <query> - read Academy training state\n\n"
+        "Full mutation from Operator Raven is still intentionally brokered and "
+        "audit-gated; use the deploy/control rails for live changes until those "
+        "commands are widened."
+    )
+
+
+def _local_operator_upgrade_check_runner(
+    conn: sqlite3.Connection,
+    env: Mapping[str, str],
+) -> dict[str, Any]:
+    release_path_raw = str(env.get("ARCLINK_RELEASE_STATE_FILE") or "").strip()
+    release_state: dict[str, Any] = {}
+    if release_path_raw:
+        release_path = pathlib.Path(release_path_raw).expanduser()
+        try:
+            if release_path.exists():
+                loaded = json.loads(release_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    release_state = loaded
+        except Exception as exc:  # noqa: BLE001 - surface state, do not fail the webhook
+            release_state = {"release_state_error": str(exc)}
+    job = conn.execute(
+        "SELECT last_run_at, last_status, last_note FROM refresh_jobs WHERE job_name = 'arclink-upgrade-check'"
+    ).fetchone()
+    status = str(job["last_status"] or "") if job else ""
+    note = str(job["last_note"] or "") if job else "ArcLink upgrade-check has not recorded a refresh job yet."
+    return {
+        "status": status or ("known" if release_state else "unknown"),
+        "current": str(
+            release_state.get("deployed_commit")
+            or release_state.get("source_commit")
+            or release_state.get("commit")
+            or ""
+        ),
+        "available": str(release_state.get("available_commit") or release_state.get("upstream_commit") or ""),
+        "last_run_at": str(job["last_run_at"] or "") if job else "",
+        "note": note,
+    }
+
+
+def _handle_operator_telegram_update(
+    conn: sqlite3.Connection,
+    parsed: Mapping[str, Any],
+    *,
+    env: Mapping[str, str],
+) -> dict[str, Any] | None:
+    if not _operator_telegram_sender_allowed(parsed, env):
+        return None
+    text = str(parsed.get("text") or "").strip()
+    first = text.split(maxsplit=1)[0] if text else ""
+    command = _telegram_command_token(first)
+    dispatch_text = text
+    if command in {"/upgrade_hermes", "/hermes_upgrade", "/update"}:
+        dispatch_text = "/upgrade_check"
+    if operator_raven_command_requested(dispatch_text):
+        dispatch_command = _telegram_command_token(dispatch_text.split(maxsplit=1)[0])
+        upgrade_commands = {"/upgrade_check", "/upgrade_hermes", "/hermes_upgrade", "/update"}
+        upgrade_runner = None
+        if dispatch_command in upgrade_commands:
+            def upgrade_runner() -> dict[str, Any]:
+                return _local_operator_upgrade_check_runner(conn, env)
+        try:
+            result = dispatch_operator_raven_command(
+                conn,
+                dispatch_text,
+                env=env,
+                upgrade_check_runner=upgrade_runner,
+            )
+            reply = str(result.get("message") or "Operator Raven command returned no output.")
+            action = f"operator_raven_{result.get('command') or 'command'}"
+        except Exception as exc:  # noqa: BLE001 - never let public webhook mutate/fail open
+            reply = f"Operator Raven command failed closed: {exc}"
+            action = "operator_raven_failed_closed"
+    elif command in {"/start", "/help", "/raven", "/operator", "/raven_name", "/commands"} or text:
+        reply = _operator_raven_intro_reply()
+        action = "operator_raven_intro"
+    else:
+        return None
+    return {
+        "chat_id": str(parsed.get("chat_id") or ""),
+        "text": reply,
+        "reply_markup": None,
+        "session_id": "",
+        "action": action,
+        "channel_identity": f"operator:telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}",
+        "telegram_message_id": str(parsed.get("message_id") or parsed.get("telegram_message_id") or ""),
+        "callback_query_id": str(parsed.get("callback_query_id") or ""),
+        "callback_message_id": str(parsed.get("callback_message_id") or ""),
+        "command_scope": None,
     }
 
 
@@ -880,6 +1026,7 @@ def handle_telegram_update(
     scale_agent_expansion_price_id: str = "",
     base_domain: str = "",
     telegram_bot_token: str = "",
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Process a single Telegram update through the shared bot contract.
 
@@ -889,6 +1036,10 @@ def handle_telegram_update(
     parsed = parse_telegram_update(update)
     if parsed is None:
         return None
+    runtime_env = env or os.environ
+    operator_result = _handle_operator_telegram_update(conn, parsed, env=runtime_env)
+    if operator_result is not None:
+        return operator_result
     channel_identity = f"tg:{parsed['user_id']}" if parsed["user_id"] else f"tg:{parsed['chat_id']}"
     turn_metadata: dict[str, Any] = {
         "telegram_message_id": parsed.get("message_id", "") or parsed.get("telegram_message_id", ""),

@@ -99,6 +99,79 @@ def test_telegram_handle_update_through_bot_contract() -> None:
     print("PASS test_telegram_handle_update_through_bot_contract")
 
 
+def test_telegram_operator_identity_uses_operator_raven_before_public_onboarding() -> None:
+    control = load_module("arclink_control.py", "arclink_control_tg_operator_route_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_operator_route_test")
+    conn = memory_db(control)
+    env = {
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+        "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+        "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+    }
+
+    operator_start = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 40,
+            "message": {
+                "message_id": 1,
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 99},
+                "text": "/start",
+            },
+        },
+        env=env,
+    )
+    expect(operator_start is not None, "operator /start should reply")
+    expect(operator_start["action"] == "operator_raven_intro", str(operator_start))
+    expect("Operator Raven is on the control bridge" in operator_start["text"], operator_start["text"])
+    expect("Founders Offer" not in operator_start["text"], operator_start["text"])
+
+    conn.execute(
+        """
+        INSERT INTO refresh_jobs (job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note)
+        VALUES ('arclink-upgrade-check', 'upgrade-check', 'arclink', 'every 1h', ?, 'ok', 'checkout current')
+        """,
+        (control.utc_now_iso(),),
+    )
+    operator_upgrade = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 41,
+            "message": {
+                "message_id": 2,
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 99},
+                "text": "/upgrade_hermes",
+            },
+        },
+        env=env,
+    )
+    expect(operator_upgrade is not None, "operator upgrade check should reply")
+    expect(operator_upgrade["action"] == "operator_raven_upgrade_check", str(operator_upgrade))
+    expect("Operator Raven upgrade check" in operator_upgrade["text"], operator_upgrade["text"])
+    expect("No upgrade was queued or run." in operator_upgrade["text"], operator_upgrade["text"])
+    expect("unmanaged `hermes update`" not in operator_upgrade["text"], operator_upgrade["text"])
+
+    captain_start = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 42,
+            "message": {
+                "message_id": 3,
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 98},
+                "text": "/start",
+            },
+        },
+        env=env,
+    )
+    expect(captain_start is not None, "non-operator /start should still reply")
+    expect(captain_start["action"] == "prompt_package", str(captain_start))
+    expect("Founders Offer" in captain_start["text"], captain_start["text"])
+    print("PASS test_telegram_operator_identity_uses_operator_raven_before_public_onboarding")
+
+
 def test_telegram_fake_transport_polling() -> None:
     control = load_module("arclink_control.py", "arclink_control_tg_poll_test")
     tg = load_module("arclink_telegram.py", "arclink_telegram_poll_test")
@@ -389,6 +462,7 @@ def main() -> int:
     test_telegram_config_from_env()
     test_telegram_parse_update()
     test_telegram_handle_update_through_bot_contract()
+    test_telegram_operator_identity_uses_operator_raven_before_public_onboarding()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
     test_telegram_active_chat_scope_adds_agent_commands()
@@ -398,7 +472,7 @@ def main() -> int:
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 12 ArcLink Telegram adapter tests")
+    print("PASS all 13 ArcLink Telegram adapter tests")
     return 0
 
 

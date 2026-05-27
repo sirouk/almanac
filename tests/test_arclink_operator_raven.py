@@ -230,6 +230,13 @@ def test_operator_raven_upgrade_check_is_injected_and_fail_closed() -> None:
     try:
         fail_closed = raven.dispatch_operator_raven_command(conn, "/upgrade_check")
         expect("fail-closed" in fail_closed["message"], fail_closed["message"])
+        hermes_alias = raven.dispatch_operator_raven_command(
+            conn,
+            "/upgrade_hermes",
+            upgrade_check_runner=lambda: {"status": "ok", "current": "abcdef1234567890"},
+        )
+        expect(hermes_alias.get("command") == "upgrade_check", str(hermes_alias))
+        expect("Operator Raven upgrade check" in hermes_alias["message"], hermes_alias["message"])
 
         result = raven.dispatch_operator_raven_command(
             conn,

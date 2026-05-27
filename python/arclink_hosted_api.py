@@ -2139,6 +2139,7 @@ def _handle_telegram_webhook(
         scale_agent_expansion_price_id=config.scale_agent_expansion_price_id,
         base_domain=config.base_domain,
         telegram_bot_token=telegram_config.bot_token,
+        env=config.env,
     )
     if result is None:
         return _json_response(200, {"ok": True, "action": "ignored"}, request_id=request_id)

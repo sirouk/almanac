@@ -71,6 +71,18 @@ Weak:
 
 ## Account-Aware Commands
 
+Configured Operator Telegram identities are intercepted before Captain
+onboarding. When `OPERATOR_NOTIFY_CHANNEL_PLATFORM=telegram`,
+`OPERATOR_NOTIFY_CHANNEL_ID`, and `ARCLINK_OPERATOR_TELEGRAM_USER_IDS` match
+the incoming Telegram update, `/start`, `/help`, `/raven`, `/raven_name`, and
+free-form text show the Operator Raven bridge instead of checkout copy.
+Operator commands such as `/operator_status`, `/operator_fleet`,
+`/worker_probe <host-id> --dry-run`, `/user_lookup <query>`,
+`/pod_repair <deployment-id> --dry-run`, `/upgrade_check`, `/upgrade_hermes`,
+`/rollout_plan <target> --dry-run`, and `/academy_status <query>` route to the
+read-only/dry-run Operator Raven surface. Non-operator Telegram users continue
+through the Captain public bot contract.
+
 Registered public commands before the active Telegram per-chat scope takes
 over:
 

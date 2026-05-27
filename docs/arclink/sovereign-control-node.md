@@ -110,9 +110,8 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
      `443`. Control-plane callbacks stay path-based under the worker Tailscale
      FQDN, while published per-pod Helm/Hermes URLs use a stable tailnet HTTPS
      port such as `https://worker.tailnet.ts.net:8443/` so Hermes can run at
-     the root path. `subdomain` can be selected only for environments that
-     really provide resolvable/certified sub-subdomains under the Tailscale
-     name.
+     the root path. Tailscale mode is path-based; use `domain` ingress with
+     wildcard DNS when ArcPods need per-Captain subdomains.
    - Each pod reserves a per-deployment Notion callback URL and webhook secret
      reference. Domain mode renders
      `https://u-<prefix>.<base-domain>/notion/webhook`. Tailscale path mode

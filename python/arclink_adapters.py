@@ -247,13 +247,11 @@ def arclink_tailscale_hostnames(prefix: str, tailscale_dns_name: str, *, strateg
     if clean_strategy == "path":
         return {role: clean_host for role in ("dashboard", "files", "code", "hermes")}
     if clean_strategy == "subdomain":
-        return {
-            "dashboard": f"u-{clean_prefix}.{clean_host}",
-            "files": f"files-{clean_prefix}.{clean_host}",
-            "code": f"code-{clean_prefix}.{clean_host}",
-            "hermes": f"hermes-{clean_prefix}.{clean_host}",
-        }
-    raise ValueError("ArcLink Tailscale host strategy must be path or subdomain")
+        raise ValueError(
+            "Tailscale MagicDNS/Funnel does not support ArcLink dynamic per-Captain "
+            "subdomains; use Tailscale path routing or domain ingress with wildcard DNS"
+        )
+    raise ValueError("ArcLink Tailscale host strategy must be path")
 
 
 def arclink_role_path_prefixes(prefix: str) -> dict[str, str]:

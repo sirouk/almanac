@@ -497,8 +497,13 @@ def _clean_ingress_mode(value: str | None) -> str:
 
 def _clean_tailscale_strategy(value: str | None) -> str:
     strategy = str(value or "path").strip().lower()
-    if strategy not in {"path", "subdomain"}:
-        raise ArcLinkProvisioningError("ArcLink Tailscale host strategy must be path or subdomain")
+    if strategy == "subdomain":
+        raise ArcLinkProvisioningError(
+            "Tailscale MagicDNS/Funnel does not support ArcLink dynamic per-Captain "
+            "subdomains; use path routing or domain ingress with wildcard DNS"
+        )
+    if strategy != "path":
+        raise ArcLinkProvisioningError("ArcLink Tailscale host strategy must be path")
     return strategy
 
 

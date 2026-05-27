@@ -692,8 +692,8 @@ understood:
 - Placement rejects unhealthy, drained, or insufficient-capacity workers.
 - Provisioning writes secret references and deployment intent, then applies
   through the selected executor.
-- Ingress is either domain/Cloudflare/Traefik or Tailscale path/subdomain, with
-  clear teardown evidence.
+- Ingress is either domain/Cloudflare/Traefik with wildcard subdomains or
+  Tailscale path routing, with clear teardown evidence.
 - Rollback preserves state by default and only deletes volumes with explicit
   destructive metadata and confirmation.
 - Recovery surfaces include credential reissue, dashboard repair, provider

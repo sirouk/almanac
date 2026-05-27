@@ -2072,6 +2072,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("Create/repair local fleet Unix user and authorize this key now" in text, "expected local fleet bootstrap helper prompt")
     expect("ensure_local_fleet_ssh_access()" in text, "expected idempotent local fleet authorized_keys helper")
     expect("test_local_fleet_ssh_access()" in text, "expected local fleet SSH smoke test helper")
+    expect("ensure_control_local_fleet_worker_registered()" in text, "expected local starter worker to be auto-registered before readiness")
     expect("run_control_fleet_ssh_key()" in text, "expected a first-class fleet public key command")
     expect("register_control_remote_fleet_worker()" in text, "expected interactive remote fleet worker registration")
     expect("register_fleet_host(" in text, "expected remote worker registration to persist fleet inventory")
@@ -2135,6 +2136,57 @@ normalize_control_deployment_style unknown-value
         str(lines),
     )
     print("PASS test_control_deployment_style_aliases_are_normalized")
+
+
+def test_control_reconfigure_prompt_normalization_is_shell_safe() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "normalize_tailscale_host_strategy() {", "ensure_control_fleet_ssh_key() {")
+    script = f"""
+set -euo pipefail
+{snippet}
+normalize_tailscale_host_strategy subdomain
+normalize_operator_channel_set Discord
+normalize_operator_channel_set 'discord, telegram'
+normalize_operator_channel_set 'telegram+discord'
+normalize_operator_channel_set 'tui only'
+normalize_operator_primary_channel Discord
+normalize_operator_primary_channel none
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"control prompt normalization failed: {result.stderr}")
+    lines = result.stdout.strip().splitlines()
+    expect(
+        lines == ["path", "discord", "telegram,discord", "telegram,discord", "tui-only", "discord", "tui-only"],
+        str(lines),
+    )
+    expect("price ID ($" not in text, "control price prompt labels must not expand $1/$2 under set -u")
+    expect("price ID (USD 149/month)" in text, "expected shell-safe price prompt labels")
+    expect("tr '[:upper:] ' '[:lower:]'" not in text, "operator channel normalization must not use invalid tr classes")
+    expect(
+        "Tailscale deployment URL strategy (path only; use domain mode for wildcard subdomains)" in text,
+        "expected Tailscale strategy prompt to document path-only MagicDNS/Funnel behavior",
+    )
+    print("PASS test_control_reconfigure_prompt_normalization_is_shell_safe")
+
+
+def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
+    text = DEPLOY_SH.read_text()
+    helper = extract(text, "ensure_control_local_fleet_worker_registered() {", "run_control_enrollment() {")
+    install_flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
+    reconfigure_flow = extract(text, "run_control_reconfigure_flow() {", "control_host_priv_dir() {")
+    expect("ARCLINK_REGISTER_LOCAL_FLEET_HOST" in helper, "helper should honor the local starter flag")
+    expect("register_fleet_host" in helper, "helper should persist a fleet host row")
+    expect('"registered_by": "deploy.sh control local starter auto-register"' in helper, "helper should tag auto-registration metadata")
+    expect("tags={\"starter\": True, \"local\": True}" in helper, "helper should tag the local starter worker")
+    expect(
+        install_flow.index("ensure_control_local_fleet_worker_registered") < install_flow.index("print_control_provisioning_readiness_summary"),
+        "install should auto-register the local starter before printing readiness",
+    )
+    expect(
+        reconfigure_flow.index("ensure_control_local_fleet_worker_registered") < reconfigure_flow.index("print_control_provisioning_readiness_summary"),
+        "reconfigure should auto-register the local starter before printing readiness",
+    )
+    print("PASS test_control_reconfigure_autoregisters_local_starter_worker")
 
 
 def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
@@ -3843,6 +3895,8 @@ def main() -> int:
         test_write_answers_file_persists_host_dependency_choices,
         test_deploy_sh_exposes_docker_control_center,
         test_control_deployment_style_aliases_are_normalized,
+        test_control_reconfigure_prompt_normalization_is_shell_safe,
+        test_control_reconfigure_autoregisters_local_starter_worker,
         test_control_runtime_reset_is_backup_first_and_guarded,
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,

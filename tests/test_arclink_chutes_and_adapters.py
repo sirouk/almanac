@@ -234,6 +234,23 @@ def test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded() -> 
     print("PASS test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded")
 
 
+def test_tailscale_subdomain_strategy_is_rejected() -> None:
+    mod = load_module("arclink_adapters.py", "arclink_adapters_tailnet_subdomain_reject_test")
+    try:
+        mod.arclink_access_urls(
+            prefix="abc123",
+            base_domain="worker.example.test",
+            ingress_mode="tailscale",
+            tailscale_dns_name="worker.example.test",
+            tailscale_host_strategy="subdomain",
+        )
+    except ValueError as exc:
+        expect("MagicDNS/Funnel" in str(exc) and "wildcard DNS" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected Tailscale subdomain routing to be rejected")
+    print("PASS test_tailscale_subdomain_strategy_is_rejected")
+
+
 def test_chutes_key_rotate_and_state_tracking() -> None:
     chutes = load_module("arclink_chutes.py", "arclink_chutes_rotate_test")
     mgr = chutes.FakeChutesKeyManager()
@@ -736,6 +753,7 @@ def main() -> int:
     test_chutes_catalog_refresh_picks_up_new_models()
     test_chutes_catalog_parses_pricing_and_tracks_model_lifecycle()
     test_tailscale_path_access_urls_use_rooted_tailnet_ports_when_recorded()
+    test_tailscale_subdomain_strategy_is_rejected()
     test_chutes_boundary_fails_closed_without_scoped_secret_or_budget()
     test_chutes_boundary_publishes_defined_credential_lifecycle()
     test_chutes_boundary_warns_and_blocks_at_budget_limit()
@@ -744,7 +762,7 @@ def main() -> int:
     test_fake_inference_enforces_chutes_boundary()
     test_chutes_usage_ingestion_updates_budget_boundary_without_secrets()
     test_chutes_usage_ingestion_blocks_after_hard_limit()
-    print("PASS all 23 ArcLink Chutes/adapter tests")
+    print("PASS all 24 ArcLink Chutes/adapter tests")
     return 0
 
 

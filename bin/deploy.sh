@@ -8690,8 +8690,36 @@ normalize_tailscale_host_strategy() {
   local value="${1:-path}"
   value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
   case "$value" in
-    path|subdomain) printf '%s\n' "$value" ;;
+    path|"") printf '%s\n' "path" ;;
+    subdomain) printf '%s\n' "path" ;;
     *) printf '%s\n' "path" ;;
+  esac
+}
+
+normalize_operator_channel_set() {
+  local value="${1:-tui-only}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  value="${value//_/-}"
+  value="${value//;/,}"
+  value="${value//+/,}"
+  case "$value" in
+    ""|none|off|disabled|tui|tuionly|tui-only) printf '%s\n' "tui-only" ;;
+    telegram) printf '%s\n' "telegram" ;;
+    discord) printf '%s\n' "discord" ;;
+    both|telegram,discord|discord,telegram|telegramdiscord|discordtelegram) printf '%s\n' "telegram,discord" ;;
+    *) printf '%s\n' "$value" ;;
+  esac
+}
+
+normalize_operator_primary_channel() {
+  local value="${1:-tui-only}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  value="${value//_/-}"
+  case "$value" in
+    ""|none|off|disabled|tui|tuionly|tui-only) printf '%s\n' "tui-only" ;;
+    telegram) printf '%s\n' "telegram" ;;
+    discord) printf '%s\n' "discord" ;;
+    *) printf '%s\n' "$value" ;;
   esac
 }
 
@@ -9330,6 +9358,121 @@ PY
   print_control_provisioning_readiness_summary
 }
 
+ensure_control_local_fleet_worker_registered() {
+  local docker_env="" db_path="" hostname="" region="" capacity_slots="" state_root_base=""
+  local edge_target="" ssh_host="" ssh_user="" executor_adapter="" ingress_mode="" result_json=""
+
+  docker_env="$(docker_env_file_path)"
+  if [[ ! -r "$docker_env" ]]; then
+    return 0
+  fi
+  load_docker_runtime_config
+  if [[ "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-1}" != "1" || "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}" != "1" ]]; then
+    return 0
+  fi
+
+  hostname="$(trim_control_value "${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}")"
+  region="$(trim_control_value "${ARCLINK_LOCAL_FLEET_REGION:-}")"
+  capacity_slots="$(trim_control_value "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
+  state_root_base="$(trim_control_value "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")"
+  edge_target="$(trim_control_value "${ARCLINK_EDGE_TARGET:-}")"
+  ssh_host="$(trim_control_value "${ARCLINK_LOCAL_FLEET_SSH_HOST:-}")"
+  ssh_user="$(trim_control_value "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}")"
+  executor_adapter="$(trim_control_value "${ARCLINK_EXECUTOR_ADAPTER:-local}")"
+  ingress_mode="$(trim_control_value "${ARCLINK_INGRESS_MODE:-domain}")"
+
+  if [[ -z "$hostname" ]] || ! is_safe_control_fleet_host_value "$hostname"; then
+    echo "Local starter worker auto-registration skipped: unsafe or empty hostname '$hostname'." >&2
+    return 0
+  fi
+  if [[ -n "$ssh_host" ]] && ! is_safe_control_fleet_host_value "$ssh_host"; then
+    echo "Local starter worker auto-registration skipped: unsafe SSH host '$ssh_host'." >&2
+    return 0
+  fi
+  if [[ -n "$ssh_user" ]] && ! is_safe_local_fleet_user "$ssh_user"; then
+    echo "Local starter worker auto-registration skipped: unsafe SSH user '$ssh_user'." >&2
+    return 0
+  fi
+  if [[ ! "$capacity_slots" =~ ^[0-9]+$ || "$capacity_slots" -lt 1 ]]; then
+    echo "Local starter worker capacity '$capacity_slots' is invalid; using 4." >&2
+    capacity_slots="4"
+  fi
+  if [[ "$state_root_base" != /* || "$state_root_base" == "/" ]]; then
+    echo "Local starter worker state root '$state_root_base' is invalid; using /arcdata/deployments." >&2
+    state_root_base="/arcdata/deployments"
+  fi
+
+  if [[ "$executor_adapter" == "ssh" ]]; then
+    ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="1"
+    ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" "$hostname")"
+    if [[ -n "$ssh_host" ]]; then
+      ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$ssh_host")"
+    fi
+    write_docker_runtime_config "$docker_env"
+    CONFIG_TARGET="$docker_env"
+  fi
+
+  db_path="$(control_host_db_path)"
+  result_json="$(
+    ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$state_root_base" "$edge_target" "$ssh_host" "$ssh_user" "$executor_adapter" "$ingress_mode" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+from arclink_control import ensure_schema
+from arclink_fleet import register_fleet_host
+
+
+db_path = Path(sys.argv[1])
+hostname = sys.argv[2].strip().lower()
+region = sys.argv[3].strip().lower()
+capacity_slots = int(sys.argv[4])
+state_root_base = sys.argv[5].strip()
+edge_target = sys.argv[6].strip()
+ssh_host = sys.argv[7].strip()
+ssh_user = sys.argv[8].strip()
+executor_adapter = sys.argv[9].strip().lower() or "local"
+ingress_mode = sys.argv[10].strip().lower() or "domain"
+
+metadata: dict[str, object] = {
+    "executor": executor_adapter,
+    "ingress_mode": ingress_mode,
+    "edge_target": edge_target,
+    "state_root_base": state_root_base,
+    "registered_by": "deploy.sh control local starter auto-register",
+}
+if ssh_host:
+    metadata["ssh_host"] = ssh_host
+if ssh_user:
+    metadata["ssh_user"] = ssh_user
+
+db_path.parent.mkdir(parents=True, exist_ok=True)
+conn = sqlite3.connect(str(db_path), timeout=15.0)
+conn.row_factory = sqlite3.Row
+try:
+    conn.execute("PRAGMA busy_timeout = 15000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    ensure_schema(conn)
+    row = register_fleet_host(
+        conn,
+        hostname=hostname,
+        region=region,
+        tags={"starter": True, "local": True},
+        capacity_slots=capacity_slots,
+        metadata=metadata,
+    )
+    print(json.dumps({"host_id": row["host_id"], "hostname": row["hostname"], "capacity_slots": row["capacity_slots"]}, sort_keys=True))
+finally:
+    conn.close()
+PY
+  )"
+  echo "Ensured local starter Sovereign worker in inventory: $result_json"
+}
+
 run_control_enrollment() {
   local docker_env="" subcommand="" forced_command="" db_path="" actor="" new_secret=""
 
@@ -9664,7 +9807,12 @@ collect_control_install_answers() {
         ;;
     esac
     ARCLINK_TAILSCALE_NOTION_PATH="$(normalize_http_path "$(ask "Tailscale public control-node Notion webhook path (ArcPod callbacks are per deployment)" "${ARCLINK_TAILSCALE_NOTION_PATH:-${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}}")")"
-    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="$(normalize_tailscale_host_strategy "$(ask "Tailscale deployment URL strategy (path/subdomain)" "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}")")"
+    echo "Tailscale MagicDNS/Funnel does not provide wildcard per-Captain subdomains; ArcLink uses path routing in Tailscale mode."
+    tailscale_strategy_answer="$(ask "Tailscale deployment URL strategy (path only; use domain mode for wildcard subdomains)" "${ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY:-path}")"
+    if [[ "$(printf '%s' "$tailscale_strategy_answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" == "subdomain" ]]; then
+      echo "Tailscale subdomain routing is not supported for MagicDNS/Funnel; using path routing." >&2
+    fi
+    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY="$(normalize_tailscale_host_strategy "$tailscale_strategy_answer")"
     ARCLINK_BASE_DOMAIN="$ARCLINK_TAILSCALE_DNS_NAME"
     ARCLINK_EDGE_TARGET="$ARCLINK_TAILSCALE_DNS_NAME"
     ARCLINK_TAILSCALE_CONTROL_URL="https://$ARCLINK_TAILSCALE_DNS_NAME"
@@ -9696,11 +9844,11 @@ collect_control_install_answers() {
   ARCLINK_WEB_PORT="$(ask "Control web local port" "$default_web_port")"
   ARCLINK_CORS_ORIGIN="$(normalize_optional_answer "$(ask "Browser CORS origin (type none to clear)" "$default_cors_origin")")"
   ARCLINK_COOKIE_DOMAIN="$(normalize_optional_answer "$(ask "Session cookie domain (type none to clear)" "$default_cookie_domain")")"
-  ARCLINK_FOUNDERS_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Limited 100 Founders price ID ($149/month)" "$default_founders_price_id")")"
+  ARCLINK_FOUNDERS_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Limited 100 Founders price ID (USD 149/month)" "$default_founders_price_id")")"
   if [[ -z "$ARCLINK_FOUNDERS_PRICE_ID" ]]; then
     ARCLINK_FOUNDERS_PRICE_ID="price_arclink_founders"
   fi
-  ARCLINK_SOVEREIGN_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Sovereign price ID ($199/month)" "$default_sovereign_price_id")")"
+  ARCLINK_SOVEREIGN_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Sovereign price ID (USD 199/month)" "$default_sovereign_price_id")")"
   if [[ -z "$ARCLINK_SOVEREIGN_PRICE_ID" ]]; then
     ARCLINK_SOVEREIGN_PRICE_ID="price_arclink_sovereign"
   fi
@@ -9709,15 +9857,15 @@ collect_control_install_answers() {
     ARCLINK_FIRST_AGENT_PRICE_ID="price_arclink_founders"
   fi
   ARCLINK_DEFAULT_PRICE_ID="$ARCLINK_FOUNDERS_PRICE_ID"
-  ARCLINK_SCALE_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Scale price ID ($275/month)" "$default_scale_price_id")")"
+  ARCLINK_SCALE_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Scale price ID (USD 275/month)" "$default_scale_price_id")")"
   if [[ -z "$ARCLINK_SCALE_PRICE_ID" ]]; then
     ARCLINK_SCALE_PRICE_ID="price_arclink_scale"
   fi
-  ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Sovereign Agentic Expansion price ID ($99/month)" "$default_sovereign_agent_expansion_price_id")")"
+  ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Sovereign Agentic Expansion price ID (USD 99/month)" "$default_sovereign_agent_expansion_price_id")")"
   if [[ -z "$ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID" ]]; then
     ARCLINK_SOVEREIGN_AGENT_EXPANSION_PRICE_ID="price_arclink_sovereign_agent_expansion"
   fi
-  ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Scale Agentic Expansion price ID ($79/month)" "$default_scale_agent_expansion_price_id")")"
+  ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Scale Agentic Expansion price ID (USD 79/month)" "$default_scale_agent_expansion_price_id")")"
   if [[ -z "$ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID" ]]; then
     ARCLINK_SCALE_AGENT_EXPANSION_PRICE_ID="price_arclink_scale_agent_expansion"
   fi
@@ -9855,7 +10003,7 @@ collect_control_install_answers() {
   if [[ -z "$ARCLINK_CURATOR_CHANNELS" ]]; then
     ARCLINK_CURATOR_CHANNELS="tui-only"
   fi
-  ARCLINK_CURATOR_CHANNELS="$(printf '%s' "$ARCLINK_CURATOR_CHANNELS" | tr '[:upper:] ' '[:lower:]')"
+  ARCLINK_CURATOR_CHANNELS="$(normalize_operator_channel_set "$ARCLINK_CURATOR_CHANNELS")"
   case "$ARCLINK_CURATOR_CHANNELS" in
     both|telegram,discord|discord,telegram) ARCLINK_CURATOR_CHANNELS="telegram,discord" ;;
     telegram|discord|tui-only) ;;
@@ -9865,7 +10013,7 @@ collect_control_install_answers() {
       ;;
   esac
   OPERATOR_NOTIFY_CHANNEL_PLATFORM="$(normalize_optional_answer "$(ask "Primary operator response channel (tui-only/telegram/discord)" "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}")")"
-  OPERATOR_NOTIFY_CHANNEL_PLATFORM="$(printf '%s' "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" | tr '[:upper:] ' '[:lower:]')"
+  OPERATOR_NOTIFY_CHANNEL_PLATFORM="$(normalize_operator_primary_channel "$OPERATOR_NOTIFY_CHANNEL_PLATFORM")"
   case "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" in
     tui-only|telegram|discord) ;;
     *)
@@ -10058,6 +10206,7 @@ run_control_install_flow() {
   run_arclink_docker build
   run_arclink_docker up
   load_docker_runtime_config
+  ensure_control_local_fleet_worker_registered
   publish_control_tailscale_ingress
   register_control_public_bot_actions
   run_arclink_docker record-release
@@ -10076,6 +10225,7 @@ run_control_reconfigure_flow() {
   fi
   run_arclink_docker config -q
   load_docker_runtime_config
+  ensure_control_local_fleet_worker_registered
   publish_control_tailscale_ingress
   register_control_public_bot_actions
   run_arclink_docker ports

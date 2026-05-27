@@ -43,10 +43,12 @@ are reached through a Tailscale DNS name. `deploy.sh control install` asks for:
 - `ARCLINK_TAILSCALE_DNS_NAME`, for example `s1396.tailnet.ts.net`.
 - `ARCLINK_TAILSCALE_HTTPS_PORT`, default `443`.
 - `ARCLINK_TAILSCALE_NOTION_PATH`, default `/notion/webhook`.
-- `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY`, default `path`.
+- `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY`, fixed to `path`.
 
-The default `path` strategy avoids assuming that sub-subdomains under a
-Tailscale name can be resolved and certificated. Access URLs are rendered as:
+The `path` strategy is the production shape for Tailscale mode because
+Tailscale MagicDNS/Funnel does not provide ArcLink with dynamic wildcard
+subdomains and certificates for onboarded Captains. Access URLs are rendered
+as:
 
 | URL | Service |
 |-----|---------|
@@ -56,11 +58,9 @@ Tailscale name can be resolved and certificated. Access URLs are rendered as:
 | `https://{tailscale_dns_name}/u/{prefix}/hermes` | Hermes agent gateway |
 | `https://{tailscale_dns_name}/u/{prefix}/notion/webhook` | Per-deployment Notion callback |
 
-The optional `subdomain` strategy renders `u-{prefix}.{tailscale_dns_name}`,
-and `hermes-{prefix}.{tailscale_dns_name}`. Drive and Code remain dashboard
-plugin paths in this mode too. Use subdomains only when the operator has
-confirmed that DNS and certificates for that shape actually work in the
-tailnet.
+If an operator wants per-Captain subdomains, ArcLink should run in `domain`
+ingress mode with a managed wildcard DNS/certificate boundary instead of
+Tailscale mode.
 
 ## DNS Management
 

@@ -300,7 +300,7 @@ include Captain report text, Markdown, or raw ledger snippets.
 | `ARCLINK_TAILSCALE_DNS_NAME` | Control or worker node FQDN |
 | `ARCLINK_TAILSCALE_HTTPS_PORT` | Funnel/Serve HTTPS port, default `443` |
 | `ARCLINK_TAILSCALE_NOTION_PATH` | Public Notion webhook path |
-| `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY` | `path` by default; `subdomain` only when proven |
+| `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY` | `path`; Tailscale MagicDNS/Funnel does not provide ArcLink's dynamic per-Captain wildcard subdomains |
 | `ARCLINK_TAILNET_SERVICE_PORT_BASE` | First HTTPS port for per-deployment Hermes/files/code tailnet apps in Tailscale path mode |
 
 **Fake mode:** Default. Records and intent are persisted to SQLite but no

@@ -208,6 +208,12 @@ are present in `arclink-priv/config/docker.env`:
   private network, or tailnet source ranges that should reach admin/control
   API routes.
 - `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`
+- `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted`, written only after the
+  operator accepts the `GAP-019` trusted-host prompt for this private Control
+  Node host. This gates the Docker/root-adjacent broker/helper services used by
+  local provisioning, upgrade, gateway, migration-capture, and agent process
+  actions so a new install fails early with a plain decision instead of later
+  unhealthy broker containers.
 - `ARCLINK_CONTROL_DEPLOYMENT_STYLE=single-machine`, `hetzner`, or
   `akamai-linode`; `deploy.sh control install` asks this before ingress so the
   operator records whether the control node is a starter single-host setup or

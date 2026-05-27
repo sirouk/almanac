@@ -8723,6 +8723,46 @@ normalize_operator_primary_channel() {
   esac
 }
 
+docker_trusted_host_risk_accepted() {
+  local value="${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}"
+  value="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  [[ "$value" == "accepted" ]]
+}
+
+collect_control_trusted_host_acknowledgement() {
+  local default_accept="0"
+
+  if docker_trusted_host_risk_accepted; then
+    default_accept="1"
+  fi
+
+  echo
+  echo "Docker trusted-host acknowledgement:"
+  echo "  Sovereign Control Node starts broker/helper services that mediate"
+  echo "  local Docker Compose, root-owned helper, upgrade, migration-capture,"
+  echo "  gateway, and agent-process actions."
+  echo "  They fail closed unless this private operator host explicitly accepts"
+  echo "  the GAP-019 trusted-host residual risk."
+  if [[ "$(ask_yes_no "Accept GAP-019 trusted-host residual risk for this operator machine" "$default_accept")" == "1" ]]; then
+    ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED="accepted"
+  else
+    ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=""
+    echo "Sovereign Control Node setup stopped before starting broker/helper services." >&2
+    echo "Accept the trusted-host boundary or run on a host you are willing to treat as the ArcLink operator machine." >&2
+    return 1
+  fi
+}
+
+verify_control_docker_trusted_host_risk_accepted() {
+  if docker_trusted_host_risk_accepted; then
+    return 0
+  fi
+  echo "Sovereign Control Node cannot start broker/helper services yet." >&2
+  echo "Set ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted in private Docker config after operator review," >&2
+  echo "or rerun ./deploy.sh control install/reconfigure interactively and accept the GAP-019 trusted-host prompt." >&2
+  return 1
+}
+
 ensure_control_fleet_ssh_key() {
   local rotate="${1:-0}"
   local runtime_priv_dir="/home/arclink/arclink/arclink-priv"
@@ -9943,6 +9983,7 @@ collect_control_install_answers() {
       fi
     fi
   fi
+  collect_control_trusted_host_acknowledgement
   if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" && "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" != "1" ]]; then
     echo
     echo "No starter Sovereign worker host is selected."
@@ -10203,6 +10244,8 @@ run_control_install_flow() {
     verify_control_upgrade_checkout_clean
     sync_control_upgrade_checkout_from_upstream
   fi
+  load_docker_runtime_config
+  verify_control_docker_trusted_host_risk_accepted
   run_arclink_docker build
   run_arclink_docker up
   load_docker_runtime_config
@@ -10223,6 +10266,8 @@ run_control_reconfigure_flow() {
   if [[ "${ARCLINK_CONTROL_SKIP_CONFIG:-0}" != "1" && -t 0 ]]; then
     collect_control_install_answers
   fi
+  load_docker_runtime_config
+  verify_control_docker_trusted_host_risk_accepted
   run_arclink_docker config -q
   load_docker_runtime_config
   ensure_control_local_fleet_worker_registered

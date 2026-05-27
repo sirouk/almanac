@@ -2189,6 +2189,27 @@ def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
     print("PASS test_control_reconfigure_autoregisters_local_starter_worker")
 
 
+def test_control_install_collects_trusted_host_acknowledgement_before_build() -> None:
+    text = DEPLOY_SH.read_text()
+    helpers = extract(text, "docker_trusted_host_risk_accepted() {", "ensure_control_fleet_ssh_key() {")
+    collect = extract(text, "collect_control_install_answers() {", "run_docker_install_flow() {")
+    install_flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
+    reconfigure_flow = extract(text, "run_control_reconfigure_flow() {", "control_host_priv_dir() {")
+    expect("Accept GAP-019 trusted-host residual risk for this operator machine" in helpers, "expected explicit trusted-host prompt")
+    expect('ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED="accepted"' in helpers, "expected accepted value to be written only after acknowledgement")
+    expect("collect_control_trusted_host_acknowledgement" in collect, "control answers should collect trusted-host acknowledgement")
+    expect("verify_control_docker_trusted_host_risk_accepted" in install_flow, "control install/upgrade should verify trusted-host acknowledgement")
+    expect(
+        install_flow.index("verify_control_docker_trusted_host_risk_accepted") < install_flow.index("run_arclink_docker build"),
+        "control install/upgrade should fail before image build when trusted-host acknowledgement is missing",
+    )
+    expect(
+        reconfigure_flow.index("verify_control_docker_trusted_host_risk_accepted") < reconfigure_flow.index("run_arclink_docker config -q"),
+        "control reconfigure should fail early when trusted-host acknowledgement is missing",
+    )
+    print("PASS test_control_install_collects_trusted_host_acknowledgement_before_build")
+
+
 def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     text = DEPLOY_SH.read_text()
     reset = extract(text, "run_control_runtime_reset() {", "control_command_from_mode() {")
@@ -3897,6 +3918,7 @@ def main() -> int:
         test_control_deployment_style_aliases_are_normalized,
         test_control_reconfigure_prompt_normalization_is_shell_safe,
         test_control_reconfigure_autoregisters_local_starter_worker,
+        test_control_install_collects_trusted_host_acknowledgement_before_build,
         test_control_runtime_reset_is_backup_first_and_guarded,
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,

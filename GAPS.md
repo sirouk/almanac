@@ -162,6 +162,10 @@ what needs policy, and what needs an authorized proof window.
   gate: the seven high-authority brokers/helpers require
   `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` in private Docker config
   before binding request listeners or processing direct helper/broker work.
+  `deploy.sh control install` and `deploy.sh control reconfigure` now surface
+  that acknowledgement as an explicit operator prompt and fail before image
+  build/config generation when it is missing, instead of letting new operators
+  discover the boundary through unhealthy broker containers.
   `GAP-019-AM` now makes `agent-process-helper` and `agent-supervisor` reject
   dynamic-loader, Python path/startup, shell startup, Git/SSH command-steering,
   and secret-looking process env keys before helper logs, subprocess execution,

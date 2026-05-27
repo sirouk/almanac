@@ -61,11 +61,16 @@ secret manager. Never commit them.
    only when credentials and operator approval are present.
 5. Configure the hosted API boundary: session hash pepper, cookie/CORS values,
    and the admin/control CIDR allow-list.
-6. Configure Stripe price ids and webhook secret.
-7. Configure public bot webhook URLs through the generated control host. The
+6. Accept the `GAP-019` Docker trusted-host acknowledgement when this machine
+   is the operator-owned Control Node host. The prompt writes
+   `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` only to private Docker
+   config; without it, the broker/helper services fail closed before local
+   Docker/root-adjacent provisioning, upgrade, gateway, and process actions.
+7. Configure Stripe price ids and webhook secret.
+8. Configure public bot webhook URLs through the generated control host. The
    Telegram webhook must use `TELEGRAM_WEBHOOK_SECRET`; requests without the
    matching `X-Telegram-Bot-Api-Secret-Token` fail closed.
-8. Run `./deploy.sh control health`.
+9. Run `./deploy.sh control health`.
 
 If a value changes, use `./deploy.sh control reconfigure` and then rerun health.
 
@@ -104,6 +109,9 @@ queued action concurrently.
 
 Before enabling live mutation paths, verify:
 
+- The Control Node host is the trusted operator machine and the private
+  `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` acknowledgement was
+  made deliberately.
 - `ARCLINK_EXECUTOR_ADAPTER` and live/E2E enablement are deliberate.
 - The provisioner can reach Docker/fleet hosts and private state.
 - Action worker results are recorded and visible in admin evidence/audit views.

@@ -354,8 +354,23 @@ Academy Trainer must be governed as carefully as provisioning.
 - Do not call a role trained until source acquisition, quality scoring,
   curriculum generation, equipping, and evaluation have all passed.
 
-The first implementation slice should be local and safe: define the Academy
-manifest/schema, source-lane registry, quality scoring skeleton, vault layout,
-SOUL overlay plan, continuing-education job model, and tests. Live provider
-generation, external crawling at scale, transcription, and hosted continuing
-education proof should stay gated until authorized.
+The first implementation slices are now local and safe:
+`python/arclink_academy_trainer.py` defines the Academy schemas, source-lane
+registry, fake acquisition request/result/report structures, fake corpus
+manifest, quality scoring, curriculum and evaluation records, no-write
+SOUL/vault/qmd/memory/skill application plan, and continuing-education refresh
+plan. `tests/test_arclink_academy_trainer.py` proves the default registry,
+fake acquisition fixtures for every enabled default lane, fail-closed policy
+refusals, evaluation statuses, compact review summaries, secret-free outputs,
+and refresh-state gates. Crew Training can now stage a compact no-write Academy
+review status on the active recipe overlay with audit/event rows, persist a
+weekly Continuing Education review/gate summary with no network and no Agent
+writes, and expose weekly review, evaluation, graduation, next-review,
+blocked-source, and proof-gate status through the user dashboard, Crew Recipe
+API, and read-only Operator Raven. The action worker can now queue an audited
+`academy_apply_preview` from that staged review, validate the active Crew Recipe
+and application-plan references, and record a compact no-write result without
+executor or filesystem calls. Live provider generation, external crawling,
+ASR/transcription, real vault/qmd/Hermes-home application, trained-Agent
+workspace proof, hosted continuing education scheduling, and source-governance
+policy stay gated until authorized and implemented.

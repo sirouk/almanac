@@ -75,6 +75,130 @@ def _fake_executor_with_secrets(executor_mod):
     )
 
 
+class _NoSideEffectExecutor:
+    def __init__(self, executor_mod):
+        self.config = executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake")
+
+    def __getattr__(self, name: str):
+        def fail(*args, **kwargs):
+            raise AssertionError(f"rollout local materialization must not call executor method {name}")
+
+        return fail
+
+
+def _rollout_state_roots(deployment_id: str) -> dict[str, str]:
+    root = f"/arcdata/deployments/{deployment_id}"
+    return {
+        "root": root,
+        "config": f"{root}/config",
+        "state": f"{root}/state",
+        "vault": f"{root}/vault",
+        "hermes_home": f"{root}/state/hermes-home",
+    }
+
+
+def _seed_rollout_arcpod(
+    control,
+    conn,
+    *,
+    deployment_id: str,
+    current_version: str = "v1.0.0",
+    health_status: str = "healthy",
+) -> None:
+    user_id = f"user_{deployment_id}"
+    control.upsert_arclink_user(
+        conn,
+        user_id=user_id,
+        email=f"{deployment_id}@example.test",
+        entitlement_state="paid",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        prefix=f"{deployment_id.replace('_', '-')}-pod",
+        base_domain="example.test",
+        status="active",
+        metadata={
+            "release_version": current_version,
+            "state_roots": _rollout_state_roots(deployment_id),
+            "dashboard_password": f"secret://arclink/deployments/{deployment_id}/dashboard",
+        },
+    )
+    for service_name in ("hermes-gateway", "hermes-dashboard", "qmd-mcp"):
+        control.upsert_arclink_service_health(
+            conn,
+            deployment_id=deployment_id,
+            service_name=service_name,
+            status=health_status,
+        )
+
+
+def _seed_academy_apply_preview(control, conn, academy) -> dict[str, str]:
+    user_id = "user_academy_preview"
+    recipe_id = "crew_academy_preview"
+    control.upsert_arclink_user(
+        conn,
+        user_id=user_id,
+        email="academy-preview@example.test",
+        entitlement_state="paid",
+    )
+    source = academy.fake_academy_source(
+        source_id="src-worker-academy",
+        lane_id="wikimedia",
+        title="Worker Academy Source",
+        origin_url="https://example.test/wiki/worker-academy",
+        retrieved_at="2026-05-27T00:00:00Z",
+        license_status="cc-by-sa",
+        permission_status="public_allowed",
+        storage_policy="derived_summary",
+        content="Academy worker previews must record readiness without applying files.",
+        citations=["worker source", "preview source", "no-write source"],
+        metadata={"revision": "worker-academy-1", "official": True, "examples": True},
+    )
+    manifest = academy.build_academy_corpus(
+        role_id="role-worker-academy",
+        role_title="Worker Academy Agent",
+        topic="Academy action worker previews",
+        sources=[source],
+        created_at="2026-05-27T01:00:00Z",
+    )
+    application = academy.build_agent_application_plan(
+        manifest,
+        agent_id="agent-worker-academy",
+        created_at="2026-05-27T02:00:00Z",
+    )
+    status = academy.build_academy_review_status(
+        manifest=manifest,
+        application_plan=application,
+        staged_at="2026-05-27T03:00:00Z",
+    )
+    status["recipe_id"] = recipe_id
+    status["review_persisted"] = True
+    conn.execute(
+        """
+        INSERT INTO arclink_crew_recipes (
+          recipe_id, user_id, preset, capacity, role, mission, treatment,
+          soul_overlay_json, applied_at, archived_at, status
+        ) VALUES (?, ?, 'Frontier', 'development', 'founder', 'ship safely', 'peer', ?, ?, '', 'active')
+        """,
+        (
+            recipe_id,
+            user_id,
+            json.dumps({"crew_recipe_text": "Crew Recipe", "academy_training": status}, sort_keys=True),
+            "2026-05-27T03:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    return {
+        "user_id": user_id,
+        "recipe_id": recipe_id,
+        "manifest_id": manifest.manifest_id,
+        "application_plan_id": application.plan_id,
+        "agent_id": "agent-worker-academy",
+    }
+
+
 def test_restart_action_through_fake_executor() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_restart")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_restart")
@@ -534,6 +658,98 @@ def test_backup_write_check_fails_closed_without_authorized_runner() -> None:
     print("PASS test_backup_write_check_fails_closed_without_authorized_runner")
 
 
+def test_academy_apply_preview_action_records_no_write_result_without_executor() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_academy_preview")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_academy_preview")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_academy_preview")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_academy_preview")
+    academy = load_module("arclink_academy_trainer.py", "arclink_academy_aw_preview")
+    conn = memory_db(control)
+    seeded = _seed_academy_apply_preview(control, conn, academy)
+    action = _queue_action(
+        dashboard,
+        conn,
+        action_type="academy_apply_preview",
+        target_kind="user",
+        target_id=seeded["user_id"],
+        key="academy-preview-action-1",
+        metadata={
+            "recipe_id": seeded["recipe_id"],
+            "manifest_id": seeded["manifest_id"],
+            "application_plan_id": seeded["application_plan_id"],
+            "agent_id": seeded["agent_id"],
+            "local_only": True,
+            "no_write": True,
+            "writes_enabled": False,
+            "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+        },
+    )
+    result = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+    expect(result is not None and result["status"] == "succeeded", str(result))
+    preview = result["result"]
+    expect(preview["status"] == "ready_for_application_proof", str(preview))
+    expect(preview["operation_kind"] == "academy_application_preview", str(preview))
+    expect(preview["no_write"] is True and preview["writes_enabled"] is False, str(preview))
+    expect(preview["mutation_performed"] is False, str(preview))
+    expect(preview["workspace_mutation_performed"] is False, str(preview))
+    expect(preview["filesystem_mutation_performed"] is False, str(preview))
+    expect(preview["executor_called"] is False, str(preview))
+    expect({"PG-PROVIDER", "PG-HERMES"} <= set(preview["proof_gates"]), str(preview))
+    expect("content" not in json.dumps(preview, sort_keys=True).casefold(), str(preview))
+
+    link = conn.execute(
+        """
+        SELECT * FROM arclink_action_operation_links
+        WHERE action_id = ? AND operation_kind = 'academy_application_preview'
+        """,
+        (action["action_id"],),
+    ).fetchone()
+    expect(link is not None and link["idempotency_key"] == "academy-preview-action-1", str(link))
+    event_types = [row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events ORDER BY created_at").fetchall()]
+    expect("academy_application_preview_recorded" in event_types, str(event_types))
+    audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
+    expect("academy_application_preview_recorded" in audit_actions, str(audit_actions))
+    print("PASS test_academy_apply_preview_action_records_no_write_result_without_executor")
+
+
+def test_academy_apply_preview_action_fails_closed_on_workspace_write_request() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_academy_preview_fail")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_academy_preview_fail")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_academy_preview_fail")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_academy_preview_fail")
+    academy = load_module("arclink_academy_trainer.py", "arclink_academy_aw_preview_fail")
+    conn = memory_db(control)
+    seeded = _seed_academy_apply_preview(control, conn, academy)
+    action = _queue_action(
+        dashboard,
+        conn,
+        action_type="academy_apply_preview",
+        target_kind="user",
+        target_id=seeded["user_id"],
+        key="academy-preview-action-fail-1",
+        metadata={
+            "recipe_id": seeded["recipe_id"],
+            "manifest_id": seeded["manifest_id"],
+            "application_plan_id": seeded["application_plan_id"],
+            "agent_id": seeded["agent_id"],
+            "local_only": True,
+            "no_write": True,
+            "writes_enabled": True,
+            "workspace_path": "/home/user/.local/share/arclink-agent/hermes-home/SOUL.md",
+            "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+        },
+    )
+    result = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+    expect(result is not None and result["status"] == "failed", str(result))
+    expect("workspace" in result["error"].casefold() or "writes_enabled" in result["error"].casefold(), str(result))
+    expect("SOUL.md" not in result["error"], str(result))
+    intent = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (action["action_id"],)).fetchone()
+    expect(intent["status"] == "failed", str(dict(intent)))
+    links = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_operation_links").fetchone()
+    expect(int(links["n"]) == 0, str(dict(links)))
+    print("PASS test_academy_apply_preview_action_fails_closed_on_workspace_write_request")
+
+
 def test_reprovision_dispatches_pod_migration() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_reprovision")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision")
@@ -972,13 +1188,178 @@ def test_action_worker_returns_safe_error_code_for_executor_errors() -> None:
     print("PASS test_action_worker_returns_safe_error_code_for_executor_errors")
 
 
+def test_rollout_action_materializes_ready_three_pod_plan_without_executor_side_effects() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_rollout_ready")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_rollout_ready")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_rollout_ready")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_rollout_ready")
+    conn = memory_db(control)
+    deployment_ids = ["dep_rollout_a", "dep_rollout_b", "dep_rollout_c"]
+    for deployment_id in deployment_ids:
+        _seed_rollout_arcpod(control, conn, deployment_id=deployment_id)
+
+    action = _queue_action(
+        dashboard,
+        conn,
+        action_type="rollout",
+        target_kind="system",
+        target_id="all-arcpods",
+        key="rollout-three-pods-worker",
+        metadata={"target_version": "v2.0.0", "batch_size": 2, "deployment_ids": deployment_ids},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+
+    expect(result["status"] == "succeeded", str(result))
+    expect(result["action_type"] == "rollout", str(result))
+    payload = result["result"]
+    expect(payload["status"] == "queued_local_job", str(payload))
+    expect(payload["operation_kind"] == "arcpod_update_rollout", str(payload))
+    expect(payload["operation_idempotency_key"] == "rollout-three-pods-worker", str(payload))
+    expect(payload["rollout_count"] == 3, str(payload))
+    expect(payload["created_rollout_count"] == 3, str(payload))
+    expect(payload["batch_deployment_ids"] == [["dep_rollout_a", "dep_rollout_b"], ["dep_rollout_c"]], str(payload))
+    expect(payload["live_mutation_performed"] is False, str(payload))
+    expect(payload["proof_gate"] == "PG-UPGRADE/PG-HERMES", str(payload))
+    expect("secret://" not in json.dumps(result, sort_keys=True), str(result))
+
+    rows = conn.execute("SELECT * FROM arclink_rollouts ORDER BY created_at ASC, rollout_id ASC").fetchall()
+    expect(len(rows) == 3, str([dict(row) for row in rows]))
+    metadata = [json.loads(row["metadata_json"]) for row in rows]
+    expect([item["batch_index"] for item in metadata] == [1, 1, 2], str(metadata))
+    link = conn.execute(
+        """
+        SELECT * FROM arclink_action_operation_links
+        WHERE action_id = ? AND operation_kind = 'arcpod_update_rollout'
+        """,
+        (action["action_id"],),
+    ).fetchone()
+    expect(link is not None and link["idempotency_key"] == "rollout-three-pods-worker", str(dict(link) if link else None))
+    print("PASS test_rollout_action_materializes_ready_three_pod_plan_without_executor_side_effects")
+
+
+def test_rollout_action_executes_one_local_batch_when_explicitly_requested() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_rollout_execute")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_rollout_execute")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_rollout_execute")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_rollout_execute")
+    conn = memory_db(control)
+    deployment_ids = ["dep_rollout_exec_a", "dep_rollout_exec_b", "dep_rollout_exec_c"]
+    for deployment_id in deployment_ids:
+        _seed_rollout_arcpod(control, conn, deployment_id=deployment_id)
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="rollout",
+        target_kind="system",
+        target_id="all-arcpods",
+        key="rollout-execute-local-batch",
+        metadata={
+            "target_version": "v2.0.0",
+            "batch_size": 2,
+            "deployment_ids": deployment_ids,
+            "execute_local_batch": True,
+        },
+    )
+    result = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+
+    expect(result["status"] == "succeeded", str(result))
+    payload = result["result"]
+    expect(payload["status"] == "executed_local_batch", str(payload))
+    expect(payload["batch_execution"]["status"] == "completed", str(payload))
+    expect(payload["batch_execution"]["deployment_ids"] == ["dep_rollout_exec_a", "dep_rollout_exec_b"], str(payload))
+    expect(payload["batch_execution"]["live_mutation_performed"] is False, str(payload))
+    rows = conn.execute("SELECT * FROM arclink_rollouts ORDER BY created_at ASC, rollout_id ASC").fetchall()
+    status_by_dep = {row["deployment_id"]: row["status"] for row in rows}
+    expect(status_by_dep == {
+        "dep_rollout_exec_a": "completed",
+        "dep_rollout_exec_b": "completed",
+        "dep_rollout_exec_c": "planned",
+    }, str(status_by_dep))
+    metadata = json.loads(rows[0]["metadata_json"])
+    expect(metadata["execution"]["adapter"] == "fake", str(metadata))
+    expect(metadata["execution"]["record_only"] is True, str(metadata))
+    expect(metadata["health_smoke"]["status"] == "pending_live_proof", str(metadata))
+    expect("secret://" not in json.dumps(payload, sort_keys=True), str(payload))
+    print("PASS test_rollout_action_executes_one_local_batch_when_explicitly_requested")
+
+
+def test_rollout_action_refuses_blocked_preflight_without_rollout_rows() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_rollout_blocked")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_rollout_blocked")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_rollout_blocked")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_rollout_blocked")
+    conn = memory_db(control)
+    _seed_rollout_arcpod(control, conn, deployment_id="dep_rollout_ready")
+    _seed_rollout_arcpod(control, conn, deployment_id="dep_rollout_blocked", health_status="failed")
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="rollout",
+        target_kind="system",
+        target_id="all-arcpods",
+        key="rollout-blocked-worker",
+        metadata={"target_version": "v2.0.0", "deployment_ids": ["dep_rollout_ready", "dep_rollout_blocked"]},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+
+    expect(result["status"] == "failed", str(result))
+    expect(result["error_code"] == "action_validation_error", str(result))
+    expect("ready" in result["error"] or "preflight" in result["error"], str(result))
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"] == 0, "blocked rollout must not create rows")
+    print("PASS test_rollout_action_refuses_blocked_preflight_without_rollout_rows")
+
+
+def test_rollout_action_idempotent_replay_does_not_duplicate_rollout_rows() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_rollout_idem")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_rollout_idem")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_rollout_idem")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_rollout_idem")
+    conn = memory_db(control)
+    deployment_ids = ["dep_rollout_idem_a", "dep_rollout_idem_b"]
+    for deployment_id in deployment_ids:
+        _seed_rollout_arcpod(control, conn, deployment_id=deployment_id)
+    metadata = {"target_version": "v2.0.0", "batch_size": 1, "deployment_ids": deployment_ids}
+
+    first_action = _queue_action(
+        dashboard,
+        conn,
+        action_type="rollout",
+        target_kind="system",
+        target_id="all-arcpods",
+        key="rollout-idem-worker",
+        metadata=metadata,
+    )
+    first = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+    expect(first["status"] == "succeeded", str(first))
+    expect(first["result"]["created_rollout_count"] == 2, str(first))
+
+    conn.execute(
+        "UPDATE arclink_action_intents SET status = 'queued', worker_id = '', claimed_at = '', updated_at = ? WHERE action_id = ?",
+        (control.utc_now_iso(), first_action["action_id"]),
+    )
+    conn.commit()
+    replay = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+
+    expect(replay["status"] == "succeeded", str(replay))
+    expect(replay["result"]["created_rollout_count"] == 0, str(replay))
+    expect(replay["result"]["rollout_ids"] == first["result"]["rollout_ids"], str((first, replay)))
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"] == 2, "replay must not duplicate rollout rows")
+    links = conn.execute(
+        "SELECT action_id FROM arclink_action_operation_links WHERE operation_kind = 'arcpod_update_rollout' ORDER BY action_id"
+    ).fetchall()
+    expect([row["action_id"] for row in links] == [first_action["action_id"]], str([dict(row) for row in links]))
+    print("PASS test_rollout_action_idempotent_replay_does_not_duplicate_rollout_rows")
+
+
 def test_legacy_unwired_action_rows_fail_safely() -> None:
     """Legacy rows for not-yet-wired action types fail instead of staying queueable."""
     control = load_module("arclink_control.py", "arclink_control_aw_pending_all")
     executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_pending_all")
     worker = load_module("arclink_action_worker.py", "arclink_action_worker_pending_all")
     conn = memory_db(control)
-    unwired_types = ["suspend", "unsuspend", "rollout", "force_resynth", "rotate_bot_key"]
+    unwired_types = ["suspend", "unsuspend", "force_resynth", "rotate_bot_key"]
     now = control.utc_now_iso()
     for action_type in unwired_types:
         conn.execute(
@@ -1228,6 +1609,8 @@ if __name__ == "__main__":
     test_comp_applies_entitlement_gate()
     test_comp_replay_does_not_duplicate_audit()
     test_backup_write_check_fails_closed_without_authorized_runner()
+    test_academy_apply_preview_action_records_no_write_result_without_executor()
+    test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
     test_reprovision_dispatches_pod_migration()
     test_reprovision_non_dry_run_requires_root_capture_opt_in()
     test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode()
@@ -1241,6 +1624,10 @@ if __name__ == "__main__":
     test_idempotent_retry()
     test_executor_error_secret_material_is_redacted()
     test_action_worker_returns_safe_error_code_for_executor_errors()
+    test_rollout_action_materializes_ready_three_pod_plan_without_executor_side_effects()
+    test_rollout_action_executes_one_local_batch_when_explicitly_requested()
+    test_rollout_action_refuses_blocked_preflight_without_rollout_rows()
+    test_rollout_action_idempotent_replay_does_not_duplicate_rollout_rows()
     test_legacy_unwired_action_rows_fail_safely()
     test_fake_executor_live_flag_is_false()
     test_deployment_action_routes_to_active_placement_host()
@@ -1248,4 +1635,4 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 36 action worker tests passed.")
+    print(f"\nAll 42 action worker tests passed.")

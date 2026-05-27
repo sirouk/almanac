@@ -46,7 +46,7 @@ def test_product_surface_renders_usable_first_screen_and_checkout_flow() -> None
 
     home = surface.handle_arclink_product_surface_request(conn, method="GET", path="/")
     expect(home.status == 200, home.body)
-    expect("Start Deployment" in home.body and "User Dashboard" in home.body and "Admin" in home.body, home.body)
+    expect("Start ArcPod" in home.body and "Captain Dashboard" in home.body and "Admin" in home.body, home.body)
     expect("#FB5005" in home.body and "purple" not in home.body.lower(), home.body)
     expect("Live provider mutations" in home.body, home.body)
 
@@ -117,7 +117,8 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
     expect("Onboarding Funnel" in admin.body and "Queued Actions" in admin.body, admin.body)
     expect("Action Readiness Matrix" in admin.body and "PG-PROVISION" in admin.body, admin.body)
     expect("disabled until worker wiring lands" in admin.body, admin.body)
-    expect("Force Resynth - disabled" in admin.body and "Rollout - disabled" in admin.body, admin.body)
+    expect("Force Resynth - disabled" in admin.body, admin.body)
+    expect("Rollout</td><td>disabled</td><td>PG-UPGRADE/PG-HERMES" in admin.body, admin.body)
     for label in ("Payments", "Infrastructure", "Security And Abuse", "Releases And Maintenance", "Logs And Events", "Audit"):
         expect(label in admin.body, admin.body)
     unauth_form_action = surface.handle_arclink_product_surface_request(

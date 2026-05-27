@@ -90,6 +90,33 @@ def seed_control_state(control, fleet, conn) -> None:
         capacity_slots=4,
         metadata={"token_ref": "secret://arclink/fleet/local-worker"},
     )
+    for deployment_id in ("dep-rollout-1", "dep-rollout-2"):
+        root = f"/arcdata/deployments/{deployment_id}"
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id=deployment_id,
+            user_id=str(user["user_id"]),
+            prefix=deployment_id,
+            base_domain="example.test",
+            status="active",
+            metadata={
+                "release_version": "v1.0.0",
+                "state_roots": {
+                    "root": root,
+                    "config": f"{root}/config",
+                    "state": f"{root}/state",
+                    "vault": f"{root}/vault",
+                    "hermes_home": f"{root}/state/hermes-home",
+                },
+            },
+        )
+        for service_name in ("hermes-gateway", "hermes-dashboard", "qmd-mcp"):
+            control.upsert_arclink_service_health(
+                conn,
+                deployment_id=deployment_id,
+                service_name=service_name,
+                status="healthy",
+            )
 
 
 def with_seeded_db():
@@ -138,6 +165,9 @@ def test_operator_raven_status_is_read_only_and_truthful() -> None:
         expect(before_actions == after_actions, "status command must not queue an action")
         expect("Operator Raven status" in text, text)
         expect("ready to provision ArcPods" in text, text)
+        expect("Rollouts:" in text and "fake/local batch records only" in text, text)
+        expect(result["provisioning_readiness"]["state"] == "ready_to_provision", str(result["provisioning_readiness"]))
+        expect(result["provisioning_readiness"]["live_proof_required"] is True, str(result["provisioning_readiness"]))
         expect("PG-PROD" in text and "PG-UPGRADE" in text, text)
         expect("secret://" not in text, text)
         expect("cus_should_not_render" not in text, text)
@@ -171,6 +201,7 @@ def test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secret
         user = raven.dispatch_operator_raven_command(conn, "/user_lookup alex@example.test")
         expect("user-alex" in user["message"], user["message"])
         expect("provisioning_failed=1" in user["message"], user["message"])
+        expect("academy=not_started" in user["message"], user["message"])
         expect("cus_should_not_render" not in user["message"], user["message"])
         expect("secret://" not in user["message"], user["message"])
 
@@ -219,6 +250,93 @@ def test_operator_raven_upgrade_check_is_injected_and_fail_closed() -> None:
         cleanup_db(tmp, old_env)
 
 
+def test_operator_raven_rollout_plan_is_dry_run_only() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        before_rollouts = conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"]
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+
+        blocked = raven.dispatch_operator_raven_command(conn, "/rollout_plan v2.0.0")
+        expect("dry-run only" in blocked["message"], blocked["message"])
+
+        result = raven.dispatch_operator_raven_command(
+            conn,
+            "/rollout_plan v2.0.0 --dry-run --batch-size=1",
+        )
+        text = result["message"]
+        expect("Operator Raven rollout plan dry-run" in text, text)
+        expect("Target: v2.0.0" in text, text)
+        expect("Candidates: 2 ready=2 blocked=0" in text, text)
+        expect("Batches: 2 at batch size 1" in text, text)
+        expect("Batch 1: dep-rollout-1" in text, text)
+        expect("No rollout or action was queued." in text, text)
+        expect("/arcdata/" not in text, text)
+        expect("secret://" not in text, text)
+        expect(result["rollout_plan"]["mutation_performed"] is False, str(result["rollout_plan"]))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"] == before_rollouts, "no rollout rows")
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "no actions queued")
+        print("PASS test_operator_raven_rollout_plan_is_dry_run_only")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_academy_status_is_read_only_and_proof_gated() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        academy_status = {
+            "status": "ready_for_review",
+            "summary": "Academy local corpus is staged for review with 2 source(s); live trained-Agent proof remains pending.",
+            "manifest_id": "academy-local-test",
+            "source_count": 2,
+            "weekly_review_status": "ready_for_review",
+            "evaluation_status": "ready_for_review",
+            "graduation_status": "blocked_by_live_proof",
+            "next_review_at": "2026-06-22T00:00:00Z",
+            "review_needed_count": 1,
+            "blocked_source_count": 0,
+            "source_state_counts": {"changed": 1, "unchanged": 1, "review_needed": 1},
+            "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+            "next_actions": ["Run authorized PG-PROVIDER and PG-HERMES proof before claiming a trained Agent."],
+            "live_proof_required": True,
+            "local_only": True,
+            "no_write": True,
+        }
+        conn.execute(
+            """
+            INSERT INTO arclink_crew_recipes (
+              recipe_id, user_id, preset, capacity, role, mission, treatment,
+              soul_overlay_json, applied_at, archived_at, status
+            ) VALUES (?, 'user-alex', 'Frontier', 'development', 'operator',
+              'review Academy status', 'peer', ?, ?, '', 'active')
+            """,
+            (
+                "crew_operator_academy",
+                json.dumps({"crew_recipe_text": "Crew Recipe", "academy_training": academy_status}, sort_keys=True),
+                "2026-05-27T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        result = raven.dispatch_operator_raven_command(conn, "/academy_status alex@example.test")
+        text = result["message"]
+        expect("Operator Raven Academy status" in text, text)
+        expect("academy=ready_for_review" in text, text)
+        expect("sources=2" in text, text)
+        expect("weekly=ready_for_review" in text, text)
+        expect("evaluation=ready_for_review" in text, text)
+        expect("graduation=blocked_by_live_proof" in text, text)
+        expect("review_needed=1" in text, text)
+        expect("next_review=2026-06-22T00:00:00Z" in text, text)
+        expect("PG-PROVIDER,PG-HERMES" in text, text)
+        expect("No action was queued" in text, text)
+        expect(result["mutation_performed"] is False, str(result))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "academy status must not queue actions")
+        expect("secret://" not in text, text)
+        print("PASS test_operator_raven_academy_status_is_read_only_and_proof_gated")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
 def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -253,5 +371,7 @@ if __name__ == "__main__":
     test_operator_raven_fleet_and_worker_probe_are_dry_run_only()
     test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secrets()
     test_operator_raven_upgrade_check_is_injected_and_fail_closed()
+    test_operator_raven_rollout_plan_is_dry_run_only()
+    test_operator_raven_academy_status_is_read_only_and_proof_gated()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
-    print("PASS all 5 Operator Raven tests")
+    print("PASS all 7 Operator Raven tests")

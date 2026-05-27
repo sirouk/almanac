@@ -475,6 +475,60 @@ def _estimate_usage_cents(config: RouterConfig, input_tokens: int, output_tokens
     return max(0, int(estimated))
 
 
+def _fallback_reservation_pricing(
+    conn: sqlite3.Connection,
+    config: RouterConfig,
+    *,
+    primary_model: str,
+    primary_entry: Mapping[str, Any] | None,
+    input_tokens: int,
+    max_tokens: int,
+) -> dict[str, Any]:
+    choices: list[dict[str, Any]] = []
+    for model in _router_fallback_candidates(config, primary_model):
+        entry = primary_entry if model == primary_model else get_model_catalog_entry(conn, provider="chutes", model_id=model)
+        input_price, output_price, source = _model_price_cents(config, entry)
+        choices.append(
+            {
+                "model": model,
+                "reserved_cents": _estimate_reservation_cents_for_model(config, entry, input_tokens, max_tokens),
+                "pricing_source": source,
+                "input_cents_per_million": input_price,
+                "output_cents_per_million": output_price,
+                "catalog_entry": dict(entry or {}),
+            }
+        )
+    if not choices:
+        input_price, output_price, source = _model_price_cents(config, primary_entry)
+        choices.append(
+            {
+                "model": primary_model,
+                "reserved_cents": _estimate_reservation_cents_for_model(config, primary_entry, input_tokens, max_tokens),
+                "pricing_source": source,
+                "input_cents_per_million": input_price,
+                "output_cents_per_million": output_price,
+                "catalog_entry": dict(primary_entry or {}),
+            }
+        )
+    selected = max(choices, key=lambda item: int(item.get("reserved_cents") or 0))
+    return {
+        "selected": selected,
+        "choices": [
+            {
+                key: item[key]
+                for key in (
+                    "model",
+                    "reserved_cents",
+                    "pricing_source",
+                    "input_cents_per_million",
+                    "output_cents_per_million",
+                )
+            }
+            for item in choices
+        ],
+    }
+
+
 def _resolve_router_model(
     conn: sqlite3.Connection,
     config: RouterConfig,
@@ -541,6 +595,106 @@ def _upstream_status_is_retryable(config: RouterConfig, status_code: int) -> boo
 
 def _safe_upstream_error(value: Any) -> str:
     return redact_then_truncate(value, limit=300)
+
+
+def _metadata_json(metadata: Mapping[str, Any]) -> str:
+    return json.dumps(dict(metadata or {}), sort_keys=True, separators=(",", ":"))
+
+
+def _public_fallback_attempts(attempts: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    public: list[dict[str, Any]] = []
+    for item in attempts:
+        public.append(
+            {
+                "attempt_index": int(item.get("attempt_index") or len(public)),
+                "model": str(item.get("attempted_model") or item.get("model") or ""),
+                "status_code": int(item.get("status_code") or 0),
+                "retryable": bool(item.get("retryable")),
+                "outcome": str(item.get("outcome") or ""),
+                "next_model": str(item.get("next_model") or ""),
+            }
+        )
+    return public
+
+
+def _router_metadata_for_response(
+    *,
+    requested_model: str,
+    primary_model: str,
+    final_model: str,
+    fallback_attempts: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+    streaming_fallback: str = "",
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "requested_model": requested_model,
+        "primary_model": primary_model,
+        "upstream_model": final_model,
+        "fallback_used": final_model != primary_model,
+        "fallback_attempts": _public_fallback_attempts(fallback_attempts),
+    }
+    if streaming_fallback:
+        metadata["streaming_fallback"] = streaming_fallback
+    return metadata
+
+
+def _sse_data(payload: Mapping[str, Any]) -> bytes:
+    return ("data: " + json.dumps(dict(payload), sort_keys=True, separators=(",", ":")) + "\n\n").encode("utf-8")
+
+
+def _fallback_attempt_metadata(
+    *,
+    reservation: Mapping[str, Any],
+    auth_record: Mapping[str, Any],
+    requested_model: str,
+    primary_model: str,
+    attempted_model: str,
+    next_model: str,
+    status_code: int,
+    stream: bool,
+    outcome: str,
+    error_summary: str,
+    attempt_index: int,
+    retryable: bool,
+) -> dict[str, Any]:
+    return {
+        "request_id": str(reservation.get("request_id") or ""),
+        "deployment_id": str(auth_record.get("deployment_id") or reservation.get("deployment_id") or ""),
+        "user_id": str(auth_record.get("user_id") or reservation.get("user_id") or ""),
+        "provider": "chutes",
+        "requested_model": requested_model,
+        "primary_model": primary_model,
+        "attempted_model": attempted_model,
+        "next_model": next_model,
+        "status_code": int(status_code),
+        "retryable": bool(retryable),
+        "stream": bool(stream),
+        "outcome": outcome,
+        "attempt_index": int(attempt_index),
+        "error_summary": _safe_upstream_error(error_summary),
+    }
+
+
+def _record_fallback_attempt_event(config: RouterConfig, metadata: Mapping[str, Any]) -> None:
+    try:
+        conn = _open_control_conn(config)
+        try:
+            conn.execute(
+                """
+                INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
+                VALUES (?, 'deployment', ?, 'llm_router:fallback_attempt', ?, ?)
+                """,
+                (
+                    f"evt_{uuid.uuid4().hex}",
+                    str(metadata.get("deployment_id") or ""),
+                    _metadata_json(metadata),
+                    _utc_now_iso(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return
 
 
 def _usage_from_payload(payload: Mapping[str, Any], *, fallback_input_tokens: int, fallback_output_tokens: int) -> tuple[int, int, int, str]:
@@ -624,15 +778,24 @@ def _create_budget_reservation(
     deployment_id: str,
     user_id: str,
     reserved_cents: int,
+    metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     reservation_id = f"llmres_{uuid.uuid4().hex[:24]}"
     conn.execute(
         """
         INSERT INTO arclink_llm_budget_reservations (
-          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'reserved', ?)
+          reservation_id, request_id, deployment_id, user_id, reserved_cents, status, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'reserved', ?, ?)
         """,
-        (reservation_id, request_id, deployment_id, user_id, max(1, int(reserved_cents)), _utc_now_iso()),
+        (
+            reservation_id,
+            request_id,
+            deployment_id,
+            user_id,
+            max(1, int(reserved_cents)),
+            _metadata_json(metadata or {}),
+            _utc_now_iso(),
+        ),
     )
     conn.commit()
     return {
@@ -641,18 +804,36 @@ def _create_budget_reservation(
         "deployment_id": deployment_id,
         "user_id": user_id,
         "reserved_cents": max(1, int(reserved_cents)),
+        "metadata": dict(metadata or {}),
     }
 
 
-def _release_budget_reservation(conn: sqlite3.Connection, reservation_id: str, *, status: str = "released", settled_cents: int = 0) -> None:
-    conn.execute(
-        """
-        UPDATE arclink_llm_budget_reservations
-        SET status = ?, settled_cents = ?, settled_at = ?
-        WHERE reservation_id = ? AND status = 'reserved'
-        """,
-        (status, max(0, int(settled_cents)), _utc_now_iso(), reservation_id),
-    )
+def _release_budget_reservation(
+    conn: sqlite3.Connection,
+    reservation_id: str,
+    *,
+    status: str = "released",
+    settled_cents: int = 0,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    if metadata is None:
+        conn.execute(
+            """
+            UPDATE arclink_llm_budget_reservations
+            SET status = ?, settled_cents = ?, settled_at = ?
+            WHERE reservation_id = ? AND status = 'reserved'
+            """,
+            (status, max(0, int(settled_cents)), _utc_now_iso(), reservation_id),
+        )
+    else:
+        conn.execute(
+            """
+            UPDATE arclink_llm_budget_reservations
+            SET status = ?, settled_cents = ?, metadata_json = ?, settled_at = ?
+            WHERE reservation_id = ? AND status = 'reserved'
+            """,
+            (status, max(0, int(settled_cents)), _metadata_json(metadata), _utc_now_iso(), reservation_id),
+        )
     conn.commit()
 
 
@@ -881,7 +1062,16 @@ def _preflight_chat_request(
             retry_after=1,
         )
 
-    reserved_cents = _estimate_reservation_cents_for_model(config, catalog_entry, prompt_tokens, max_tokens)
+    pricing_choice = _fallback_reservation_pricing(
+        conn,
+        config,
+        primary_model=upstream_model,
+        primary_entry=catalog_entry,
+        input_tokens=prompt_tokens,
+        max_tokens=max_tokens,
+    )
+    selected_pricing = dict(pricing_choice["selected"])
+    reserved_cents = int(selected_pricing.get("reserved_cents") or config.min_reservation_cents)
     if boundary.remaining_cents < reserved_cents:
         _queue_arc_pod_fuel_notice(
             conn,
@@ -894,20 +1084,42 @@ def _preflight_chat_request(
 
     _record_rate_limits(conn, auth_record)
     request_id = f"llmreq_{uuid.uuid4().hex[:24]}"
+    reservation_metadata = {
+        "request_id": request_id,
+        "deployment_id": deployment_id,
+        "user_id": str(auth_record.get("user_id") or ""),
+        "requested_model": model,
+        "primary_model": upstream_model,
+        "final_model": upstream_model,
+        "fallback_used": False,
+        "fallback_candidate_count": len(_router_fallback_candidates(config, upstream_model)),
+        "fallback_pricing_reserved": str(selected_pricing.get("model") or "") != upstream_model,
+        "reservation_pricing_model": str(selected_pricing.get("model") or upstream_model),
+        "reservation_pricing_source": str(selected_pricing.get("pricing_source") or ""),
+        "reservation_input_cents_per_million": int(selected_pricing.get("input_cents_per_million") or 0),
+        "reservation_output_cents_per_million": int(selected_pricing.get("output_cents_per_million") or 0),
+        "reserved_cents": reserved_cents,
+        "reservation_pricing_candidates": pricing_choice["choices"],
+        "pricing_adjusted_at_settlement": False,
+        "model_resolution": model_resolution,
+    }
     reservation = _create_budget_reservation(
         conn,
         request_id=request_id,
         deployment_id=deployment_id,
         user_id=str(auth_record.get("user_id") or ""),
         reserved_cents=reserved_cents,
+        metadata=reservation_metadata,
     )
     reservation["input_token_estimate"] = prompt_tokens
     reservation["output_token_estimate"] = max_tokens if max_tokens > 0 else min(config.max_tokens_cap, 1024)
     reservation["requested_model"] = model
     reservation["upstream_model"] = upstream_model
     reservation["model_pricing"] = dict(catalog_entry or {})
+    reservation["reservation_pricing_model"] = str(selected_pricing.get("model") or upstream_model)
+    reservation["reservation_model_pricing"] = dict(selected_pricing.get("catalog_entry") or {})
     reservation["model_resolution"] = model_resolution
-    reservation["pricing_source"] = _model_price_cents(config, catalog_entry)[2]
+    reservation["pricing_source"] = str(selected_pricing.get("pricing_source") or "")
     return reservation, None
 
 
@@ -955,8 +1167,12 @@ def _record_router_usage(
     total_tokens: int,
     source_kind: str,
     error_summary: str = "",
+    fallback_attempts: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]] = (),
+    streaming_fallback: str = "",
 ) -> int:
-    pricing_entry = reservation.get("model_pricing") if isinstance(reservation.get("model_pricing"), Mapping) else None
+    reservation_pricing_entry = reservation.get("reservation_model_pricing") if isinstance(reservation.get("reservation_model_pricing"), Mapping) else None
+    usage_pricing_entry = get_model_catalog_entry(conn, provider="chutes", model_id=model)
+    pricing_entry = usage_pricing_entry if usage_pricing_entry is not None else None
     actual_cents = _estimate_usage_cents(config, input_tokens, output_tokens, pricing_entry) if status == "succeeded" else 0
     estimated_cents = int(reservation.get("reserved_cents") or 0)
     now = _utc_now_iso()
@@ -964,13 +1180,47 @@ def _record_router_usage(
     request_id = str(reservation.get("request_id") or "")
     deployment_id = str(auth_record.get("deployment_id") or reservation.get("deployment_id") or "")
     user_id = str(auth_record.get("user_id") or reservation.get("user_id") or "")
+    requested_model = str(reservation.get("requested_model") or "")
+    primary_model = str(reservation.get("upstream_model") or requested_model)
+    reservation_pricing_model = str(reservation.get("reservation_pricing_model") or primary_model)
+    reservation_pricing_source = str(reservation.get("pricing_source") or "")
+    if reservation_pricing_entry is not None:
+        _, _, reservation_pricing_source = _model_price_cents(config, reservation_pricing_entry)
+    _, _, usage_pricing_source = _model_price_cents(config, pricing_entry)
+    pricing_adjusted = bool(model != reservation_pricing_model)
+    usage_metadata: dict[str, Any] = {
+        "request_id": request_id,
+        "reservation_id": str(reservation.get("reservation_id") or ""),
+        "deployment_id": deployment_id,
+        "user_id": user_id,
+        "provider": "chutes",
+        "requested_model": requested_model,
+        "primary_model": primary_model,
+        "usage_model": model,
+        "final_model": model,
+        "fallback_used": bool(model != primary_model),
+        "fallback_pricing_reserved": bool(reservation_pricing_model != primary_model),
+        "fallback_attempt_count": len(fallback_attempts),
+        "fallback_attempts": _public_fallback_attempts(fallback_attempts),
+        "stream": bool(stream),
+        "streaming_fallback": streaming_fallback,
+        "source_kind": source_kind,
+        "status": status,
+        "reservation_pricing_model": reservation_pricing_model,
+        "reservation_pricing_source": reservation_pricing_source,
+        "usage_pricing_model": model,
+        "usage_pricing_source": usage_pricing_source,
+        "reserved_cents": estimated_cents,
+        "settled_cents": actual_cents,
+        "pricing_adjusted_at_settlement": pricing_adjusted,
+    }
     conn.execute(
         """
         INSERT INTO arclink_llm_usage_events (
           usage_id, request_id, deployment_id, user_id, provider, model,
           input_tokens, output_tokens, total_tokens, estimated_cents, actual_cents,
-          status, stream, source_kind, error_summary, started_at, completed_at
-        ) VALUES (?, ?, ?, ?, 'chutes', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          status, stream, source_kind, error_summary, metadata_json, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, 'chutes', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             usage_id,
@@ -987,6 +1237,7 @@ def _record_router_usage(
             1 if stream else 0,
             source_kind,
             _safe_upstream_error(error_summary),
+            _metadata_json(usage_metadata),
             now,
             now,
         ),
@@ -1028,6 +1279,7 @@ def _record_router_usage(
         str(reservation.get("reservation_id") or ""),
         status="settled" if status == "succeeded" else "failed",
         settled_cents=actual_cents,
+        metadata=usage_metadata,
     )
     return actual_cents
 
@@ -1043,7 +1295,7 @@ async def _forward_non_streaming(
     model = str(payload.get("model") or "").strip()
     upstream_model = str(reservation.get("upstream_model") or model).strip()
     candidates = _router_fallback_candidates(config, upstream_model)
-    fallback_errors: list[dict[str, Any]] = []
+    fallback_attempts: list[dict[str, Any]] = []
     upstream = None
     final_model = upstream_model
     data: dict[str, Any] = {}
@@ -1060,8 +1312,24 @@ async def _forward_non_streaming(
                 )
             except httpx.HTTPError as exc:
                 error_summary = _safe_upstream_error(str(exc))
-                fallback_errors.append({"model": candidate_model, "status_code": 502, "error": error_summary})
-                if index + 1 < len(candidates):
+                next_model = candidates[index + 1] if index + 1 < len(candidates) else ""
+                attempt = _fallback_attempt_metadata(
+                    reservation=reservation,
+                    auth_record=auth_record,
+                    requested_model=model,
+                    primary_model=upstream_model,
+                    attempted_model=candidate_model,
+                    next_model=next_model,
+                    status_code=502,
+                    stream=False,
+                    outcome="retrying" if next_model else "failed",
+                    error_summary=error_summary,
+                    attempt_index=index,
+                    retryable=bool(next_model),
+                )
+                fallback_attempts.append(attempt)
+                _record_fallback_attempt_event(config, attempt)
+                if next_model:
                     continue
                 conn = _open_control_conn(config)
                 try:
@@ -1078,6 +1346,7 @@ async def _forward_non_streaming(
                         total_tokens=int(reservation.get("input_token_estimate") or 0),
                         source_kind="upstream_error",
                         error_summary=error_summary,
+                        fallback_attempts=fallback_attempts,
                     )
                 finally:
                     conn.close()
@@ -1085,8 +1354,25 @@ async def _forward_non_streaming(
 
             if upstream.status_code >= 400:
                 error_summary = _safe_upstream_error(upstream.text)
-                fallback_errors.append({"model": candidate_model, "status_code": upstream.status_code, "error": error_summary})
-                if _upstream_status_is_retryable(config, upstream.status_code) and index + 1 < len(candidates):
+                retryable = _upstream_status_is_retryable(config, upstream.status_code)
+                next_model = candidates[index + 1] if retryable and index + 1 < len(candidates) else ""
+                attempt = _fallback_attempt_metadata(
+                    reservation=reservation,
+                    auth_record=auth_record,
+                    requested_model=model,
+                    primary_model=upstream_model,
+                    attempted_model=candidate_model,
+                    next_model=next_model,
+                    status_code=upstream.status_code,
+                    stream=False,
+                    outcome="retrying" if next_model else "failed",
+                    error_summary=error_summary,
+                    attempt_index=index,
+                    retryable=retryable,
+                )
+                fallback_attempts.append(attempt)
+                _record_fallback_attempt_event(config, attempt)
+                if next_model:
                     continue
                 conn = _open_control_conn(config)
                 try:
@@ -1103,6 +1389,7 @@ async def _forward_non_streaming(
                         total_tokens=int(reservation.get("input_token_estimate") or 0),
                         source_kind="upstream_error",
                         error_summary=error_summary,
+                        fallback_attempts=fallback_attempts,
                     )
                 finally:
                     conn.close()
@@ -1112,8 +1399,24 @@ async def _forward_non_streaming(
                 parsed = upstream.json()
             except Exception:
                 error_summary = _safe_upstream_error(upstream.text)
-                fallback_errors.append({"model": candidate_model, "status_code": 502, "error": error_summary})
-                if index + 1 < len(candidates):
+                next_model = candidates[index + 1] if index + 1 < len(candidates) else ""
+                attempt = _fallback_attempt_metadata(
+                    reservation=reservation,
+                    auth_record=auth_record,
+                    requested_model=model,
+                    primary_model=upstream_model,
+                    attempted_model=candidate_model,
+                    next_model=next_model,
+                    status_code=502,
+                    stream=False,
+                    outcome="retrying" if next_model else "failed",
+                    error_summary=error_summary,
+                    attempt_index=index,
+                    retryable=bool(next_model),
+                )
+                fallback_attempts.append(attempt)
+                _record_fallback_attempt_event(config, attempt)
+                if next_model:
                     continue
                 conn = _open_control_conn(config)
                 try:
@@ -1130,6 +1433,7 @@ async def _forward_non_streaming(
                         total_tokens=int(reservation.get("input_token_estimate") or 0),
                         source_kind="invalid_upstream_json",
                         error_summary=error_summary,
+                        fallback_attempts=fallback_attempts,
                     )
                 finally:
                     conn.close()
@@ -1143,19 +1447,15 @@ async def _forward_non_streaming(
         fallback_input_tokens=int(reservation.get("input_token_estimate") or 0),
         fallback_output_tokens=0,
     )
-    if final_model != upstream_model or fallback_errors:
+    if final_model != upstream_model or fallback_attempts:
         data.setdefault(
             "arclink_router",
-            {
-                "requested_model": model,
-                "primary_model": upstream_model,
-                "upstream_model": final_model,
-                "fallback_used": final_model != upstream_model,
-                "fallback_attempts": [
-                    {"model": item["model"], "status_code": item["status_code"]}
-                    for item in fallback_errors
-                ],
-            },
+            _router_metadata_for_response(
+                requested_model=model,
+                primary_model=upstream_model,
+                final_model=final_model,
+                fallback_attempts=fallback_attempts,
+            ),
         )
     conn = _open_control_conn(config)
     try:
@@ -1171,6 +1471,7 @@ async def _forward_non_streaming(
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             source_kind=source_kind,
+            fallback_attempts=fallback_attempts,
         )
     finally:
         conn.close()
@@ -1187,43 +1488,135 @@ async def _stream_upstream_response(
 ) -> AsyncIterator[bytes]:
     model = str(payload.get("model") or "").strip()
     upstream_model = str(reservation.get("upstream_model") or model).strip()
+    candidates = _router_fallback_candidates(config, upstream_model)
     input_tokens = int(reservation.get("input_token_estimate") or 0)
     output_tokens = 0
     total_tokens = input_tokens
     source_kind = "fallback_estimate"
     status = "succeeded"
     error_summary = ""
+    final_model = upstream_model
+    fallback_attempts: list[dict[str, Any]] = []
+    streaming_fallback = ""
+    yielded_any = False
     try:
         async with _upstream_client(config, request.app.state) as client:
-            async with client.stream(
-                "POST",
-                _upstream_url(config, "chat/completions"),
-                json=_prepare_upstream_payload(payload, model=upstream_model),
-                headers=_upstream_headers(config),
-            ) as upstream:
-                if upstream.status_code >= 400:
+            for index, candidate_model in enumerate(candidates):
+                final_model = candidate_model
+                try:
+                    async with client.stream(
+                        "POST",
+                        _upstream_url(config, "chat/completions"),
+                        json=_prepare_upstream_payload(payload, model=candidate_model),
+                        headers=_upstream_headers(config),
+                    ) as upstream:
+                        if upstream.status_code >= 400:
+                            status = "failed"
+                            error_summary = _safe_upstream_error(await upstream.aread())
+                            retryable = _upstream_status_is_retryable(config, upstream.status_code)
+                            next_model = candidates[index + 1] if retryable and index + 1 < len(candidates) else ""
+                            attempt = _fallback_attempt_metadata(
+                                reservation=reservation,
+                                auth_record=auth_record,
+                                requested_model=model,
+                                primary_model=upstream_model,
+                                attempted_model=candidate_model,
+                                next_model=next_model,
+                                status_code=upstream.status_code,
+                                stream=True,
+                                outcome="retrying" if next_model else "failed",
+                                error_summary=error_summary,
+                                attempt_index=index,
+                                retryable=retryable,
+                            )
+                            fallback_attempts.append(attempt)
+                            _record_fallback_attempt_event(config, attempt)
+                            if next_model:
+                                streaming_fallback = "pre_stream"
+                                continue
+                            yield _sse_data(
+                                {
+                                    "error": {
+                                        "message": "Chutes upstream returned an error.",
+                                        "type": "arclink_router_error",
+                                        "code": "upstream_error",
+                                    },
+                                    "arclink_router": _router_metadata_for_response(
+                                        requested_model=model,
+                                        primary_model=upstream_model,
+                                        final_model=candidate_model,
+                                        fallback_attempts=fallback_attempts,
+                                        streaming_fallback=streaming_fallback or "not_available",
+                                    ),
+                                }
+                            )
+                            return
+                        if fallback_attempts or candidate_model != upstream_model:
+                            streaming_fallback = streaming_fallback or "pre_stream"
+                            yield _sse_data(
+                                {
+                                    "arclink_router": _router_metadata_for_response(
+                                        requested_model=model,
+                                        primary_model=upstream_model,
+                                        final_model=candidate_model,
+                                        fallback_attempts=fallback_attempts,
+                                        streaming_fallback=streaming_fallback,
+                                    )
+                                }
+                            )
+                        status = "succeeded"
+                        error_summary = ""
+                        async for chunk in upstream.aiter_bytes():
+                            usage = _usage_from_sse_chunk(chunk)
+                            if usage is not None:
+                                input_tokens, output_tokens, total_tokens = usage
+                                source_kind = "provider_usage"
+                            yielded_any = True
+                            yield chunk
+                        return
+                except (httpx.HTTPError, OSError) as exc:
                     status = "failed"
-                    error_summary = _safe_upstream_error(await upstream.aread())
-                    yield (
-                        "data: "
-                        + '{"error":{"message":"Chutes upstream returned an error.","type":"arclink_router_error","code":"upstream_error"}}'
-                        + "\n\n"
-                    ).encode("utf-8")
+                    error_summary = _safe_upstream_error(str(exc))
+                    next_model = candidates[index + 1] if (not yielded_any and index + 1 < len(candidates)) else ""
+                    outcome = "retrying" if next_model else ("failed_after_stream_started" if yielded_any else "failed")
+                    attempt = _fallback_attempt_metadata(
+                        reservation=reservation,
+                        auth_record=auth_record,
+                        requested_model=model,
+                        primary_model=upstream_model,
+                        attempted_model=candidate_model,
+                        next_model=next_model,
+                        status_code=502,
+                        stream=True,
+                        outcome=outcome,
+                        error_summary=error_summary,
+                        attempt_index=index,
+                        retryable=bool(next_model),
+                    )
+                    fallback_attempts.append(attempt)
+                    _record_fallback_attempt_event(config, attempt)
+                    if next_model:
+                        streaming_fallback = "pre_stream"
+                        continue
+                    if yielded_any:
+                        streaming_fallback = streaming_fallback or "unavailable_after_stream_started"
+                    yield _sse_data(
+                        {
+                            "error": {
+                                "message": "Chutes upstream request failed.",
+                                "type": "arclink_router_error",
+                                "code": "upstream_unavailable",
+                            },
+                            "arclink_router": _router_metadata_for_response(
+                                requested_model=model,
+                                primary_model=upstream_model,
+                                final_model=candidate_model,
+                                fallback_attempts=fallback_attempts,
+                                streaming_fallback=streaming_fallback or "not_available",
+                            ),
+                        }
+                    )
                     return
-                async for chunk in upstream.aiter_bytes():
-                    usage = _usage_from_sse_chunk(chunk)
-                    if usage is not None:
-                        input_tokens, output_tokens, total_tokens = usage
-                        source_kind = "provider_usage"
-                    yield chunk
-    except (httpx.HTTPError, OSError) as exc:
-        status = "failed"
-        error_summary = _safe_upstream_error(str(exc))
-        yield (
-            "data: "
-            + '{"error":{"message":"Chutes upstream request failed.","type":"arclink_router_error","code":"upstream_unavailable"}}'
-            + "\n\n"
-        ).encode("utf-8")
     finally:
         if source_kind == "fallback_estimate" and status == "succeeded":
             output_tokens = int(reservation.get("output_token_estimate") or 0)
@@ -1235,7 +1628,7 @@ async def _stream_upstream_response(
                 config,
                 reservation=reservation,
                 auth_record=auth_record,
-                model=upstream_model,
+                model=final_model,
                 stream=True,
                 status=status,
                 input_tokens=input_tokens,
@@ -1243,6 +1636,8 @@ async def _stream_upstream_response(
                 total_tokens=total_tokens,
                 source_kind=source_kind if status == "succeeded" else "upstream_error",
                 error_summary=error_summary,
+                fallback_attempts=fallback_attempts,
+                streaming_fallback=streaming_fallback,
             )
         finally:
             conn.close()

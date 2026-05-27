@@ -1030,8 +1030,8 @@ def _package_prompt_reply(
         action="prompt_package",
         reply=(
             f"{header}\n\n"
-            "ArcLink brings a private ArcPod online for you: agent memory, files, code workspace, tool lanes, model access, and a live Hermes dashboard under one governed identity. "
-            "Raven stays on the bridge while your Crew wakes up; the Agents do the work once the pod is lit.\n\n"
+            "ArcLink brings a private ArcPod online for you: Agent memory, files, code workspace, tool lanes, model access, and a live Hermes dashboard under one governed identity. "
+            "Raven stays on the bridge while your Crew wakes up; the Agents do the work once the Pod is lit.\n\n"
             "Choose your launch lane.\n\n"
             f"Founders Offer is ${FOUNDERS_MONTHLY_DOLLARS}/mo: one ArcPod for the first 100 Captains.\n"
             f"3X Scale Plan is ${SCALE_MONTHLY_DOLLARS}/mo: three Agents live on ArcLink with Federation.\n\n"
@@ -3478,7 +3478,7 @@ def _deployment_not_ready_reply(deployment: Mapping[str, Any]) -> str:
             f"{phrase} Stripe has not cleared the handoff yet - send `checkout` and I will reopen the gate."
         )
     if status == "provisioning_failed":
-        return f"{phrase} I'll come back to you on this same channel the moment the lane is safe again."
+        return f"{phrase} Next: check `/status`; I will come back to you on this same channel the moment the lane is safe again."
     return f"{phrase} I will move when it reaches active - not before."
 
 

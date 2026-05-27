@@ -36,12 +36,13 @@ close. The highest-signal open product gaps are:
 - `GAP-029`: Operator Raven is not yet a full-service chat-native control plane.
 - `GAP-030`: Control Node product readiness can still be reached without a
   verified worker-capacity proof.
-- `GAP-031`: the router has model gates, but not an explicit retry cascade for
-  provider `429` and similar fallback-worthy errors.
+- `GAP-031`: the router has local fallback semantics, but not live provider
+  overload proof.
 - `GAP-032`: Hermes and component upgrades exist, but there is not yet a
   Control Node rolling update orchestrator across all ArcPods.
-- `GAP-033`: the repo has many surface-specific tests, but not one enforced
-  cross-surface polish gate for Raven, dashboard, plugins, CLI, and TUI output.
+- `GAP-033`: a local cross-surface polish gate now exists, but live
+  browser/chat/workspace proof is still required before the experience is
+  product-real.
 
 ## North Star
 
@@ -135,10 +136,12 @@ The complete Control Node install story should be:
 Current source supports most of this. Workerless interactive installs now stop
 or continue only as control-plane-only with ArcPod provisioning disabled, a
 remote worker smoke pass re-enables the provisioner, and install/reconfigure/
-worker registration print a provisioning readiness summary. The remaining
-flaw is surface coverage: dashboard/admin/API and Operator Raven still need
-the same "ready to provision" status backed by worker probe and capacity
-truth. That is tracked by `GAP-030`.
+worker registration print a provisioning readiness summary. Admin/dashboard,
+scale operations, Operator Raven, and the admin web page now share the same
+local readiness state for control-plane-only, blocked, pending-SSH, and
+ready-to-provision cases. The remaining flaw is live proof: `GAP-030` still
+requires `PG-FLEET`/`PG-PROVISION` evidence for the chosen worker path before
+ArcLink can claim real worker readiness.
 
 ## Operator Raven And Control
 
@@ -218,11 +221,12 @@ The finished control stack should behave like this:
 - The browser dashboard, CLI, and Raven should agree on whether a job is
   pending, running, failed, blocked by policy, blocked by proof, or complete.
 
-Current source has hosted API/admin/dashboard/action-worker foundations. The
-missing product layer is a shared Operator Raven schema and enough common
-read/action models that the chat surface can be powerful without becoming a
-parallel control plane. That work remains under `GAP-029`, `GAP-030`,
-`GAP-032`, and `GAP-033`.
+Current source has hosted API/admin/dashboard/action-worker foundations plus a
+first shared Operator Raven schema, local readiness surfaces, and a
+cross-surface copy contract. The remaining product layer is broader
+policy-backed Operator Raven mutation and authorized live proof that chat,
+browser, workspace, and upgrade surfaces render and execute correctly. That
+work remains under `GAP-029`, `GAP-030`, `GAP-032`, and `GAP-033`.
 
 ## Public Web, Account, And Checkout
 
@@ -322,8 +326,14 @@ style grammar:
   truth.
 - Operator copy should be precise, auditable, and fast to scan.
 
-Current source has many surface-specific tests and a professional finish gate,
-but not one enforced cross-surface experience proof. That is `GAP-033`.
+Current source now has a local enforced finish gate:
+`python/arclink_surface_contract.py` and
+`tests/test_arclink_surface_contract.py` check representative Captain Raven,
+Operator Raven, dashboard readiness, product surface, Drive/Code/Terminal
+plugin status, and CLI readiness copy for audience vocabulary, blocked-state
+next actions, proof-gate honesty, chat markdown balance, secret redaction, and
+raw-traceback refusal. `GAP-033` remains open for live browser, bot, and
+workspace proof.
 
 ## Inference And Router Policy
 
@@ -355,8 +365,14 @@ relay, model replacements, and auto-promotion. Control Node install now asks
 for a default model or provider-side fallback CSV, allowed models, and
 ArcLink-owned fallback models/status codes. Non-streaming chat completions now
 retry bounded fallback candidates on configured retryable provider failures.
-Streaming fallback behavior, richer failed-attempt audit, cost-different
-fallback reservation policy, and live provider proof remain under `GAP-031`.
+Streaming requests can retry fallback candidates before any upstream chunk is
+emitted; once a stream has started, the router labels fallback as unavailable
+instead of replaying a partially delivered request. Failed fallback attempts are
+audited with sanitized events, and usage/reservation metadata distinguishes the
+requested, primary, final, reservation-pricing, and usage-pricing models.
+Catalog-backed reservations account for the most expensive configured fallback
+candidate, while settlement uses the final model actually used.
+Live provider proof remains under `GAP-031`.
 
 ## Pods, Isolation, And SOUL
 
@@ -437,11 +453,31 @@ policy requires it, replace weaker materials with stronger current ones,
 rebuild lesson cards/indexes/memory stubs, run evaluations, and produce a
 Captain/Operator report before updating the Agent.
 
+The first local slice now exists in source. `python/arclink_academy_trainer.py`
+defines the no-network Academy schemas, default governed source-lane registry,
+fake acquisition reports, fake corpus manifests, deterministic quality scoring,
+curriculum/evaluation records, no-write SOUL/vault/qmd/memory/skill
+application plans, a no-write `academy_apply_preview` action-worker boundary,
+and weekly Continuing Education review/gate persistence. It fails closed for
+disabled lanes, unsupported lanes, requested live actions, missing
+license/permission or required lane metadata, raw-storage violations,
+unreviewed public skills, secret-looking fixture material, deletion/tombstone
+violations, and any attempt to represent live crawling, ASR/transcription, or
+provider generation as local success. It also rejects unsafe observed-source
+payloads before weekly review persistence. Compact Academy status summaries can
+be staged on the active Crew Recipe overlay with audit and event rows,
+projected into the dashboard Crew Training panel and Crew Recipe API, queried
+read-only from Operator Raven, and previewed through the local action worker
+without executor or filesystem calls. Real live source acquisition,
+provider-assisted generation, workspace application proof, real Agent
+application writes, hosted weekly scheduling, and governance decisions remain
+under `GAP-034`.
+
 This is larger than the current Crew Recipe system. The current source locally
 supports deterministic recipe/SOUL projection and proof-gated live recipe
 generation. Academy corpus acquisition, compliant archival, curriculum
 generation, continuing education, source-lane governance, skill selection, and
-graduation gates are tracked separately by `GAP-034`.
+graduation proof are tracked separately by `GAP-034`.
 
 ## Slash Menus And Guided Control
 
@@ -565,8 +601,15 @@ The complete update dream is rolling and centrally visible:
    repair plan and rollback option.
 
 Current source has Control Node upgrade, component pin checks, release state,
-and notification rails. It does not yet have a full rolling ArcPod update
-orchestrator. That is `GAP-032`.
+notification rails, a first ArcPod rollout dry-run planner, and a local
+action-worker path that materializes ready plans into deterministic per-Pod
+planned rollout rows. The local path preserves candidate Pods, batch order,
+preflight blockers, rollback/state-root requirements, pending health/smoke
+proof, action-operation links, and secret-free result metadata through admin
+scale operations and action-worker audit. It can also record one explicit
+fake/local batch with `in_progress`, `completed`, or `failed` row truth, repair
+hints, and stop-on-failure behavior. It does not yet have real refresh/apply
+execution or live multi-Pod proof. That remains `GAP-032`.
 
 ## Billing, Entitlements, And Refuel
 
@@ -908,8 +951,9 @@ The complete surface-fit standard is:
   user-visible copy should be centralized enough that future localization is
   possible.
 
-This belongs under `GAP-033` until representative browser, bot, plugin, CLI,
-and TUI fixtures enforce it.
+Local fixture enforcement now belongs to `tests/test_arclink_surface_contract.py`.
+`GAP-033` stays open until authorized browser, bot, plugin, CLI, and TUI proof
+confirms the rendered experience outside local fixtures.
 
 ## Supply Chain, Build, And Release Integrity
 

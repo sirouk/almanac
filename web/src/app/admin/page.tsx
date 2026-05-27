@@ -16,6 +16,7 @@ interface AdminData {
   subscriptions?: Record<string, string>[];
   active_sessions?: { user: number; admin: number };
   recent_failures?: Record<string, string>[];
+  provisioning_readiness?: AdminProvisioningReadiness;
   action_execution_readiness?: AdminActionReadiness;
   wrapped?: AdminWrappedData;
 }
@@ -63,6 +64,21 @@ interface AdminActionReadiness {
   action_matrix?: AdminActionSupport[];
   executor_adapter?: string;
   queue_policy?: string;
+  note?: string;
+}
+
+interface AdminProvisioningReadiness {
+  state?: string;
+  ready_to_provision?: boolean;
+  summary?: string;
+  provisioner_enabled?: boolean;
+  executor_adapter?: string;
+  eligible_worker_count?: number;
+  available_slots?: number;
+  total_workers?: number;
+  active_workers?: number;
+  next_action?: string;
+  proof_gate?: string;
   note?: string;
 }
 
@@ -269,6 +285,7 @@ export default function AdminPage() {
                 <StatCard label="Admin Sessions" value={data.active_sessions?.admin ?? 0} detail="Active operators" />
               </div>
               <AdminTriageBoard data={data} onTab={setTab} />
+              <ProvisioningReadinessPanel readiness={data.provisioning_readiness} onTab={setTab} />
               {data.sections?.length ? (
                 <div className="grid gap-3 lg:grid-cols-2">
                   {data.sections.map((section) => (
@@ -642,7 +659,7 @@ export default function AdminPage() {
               <h1 className="font-display text-2xl font-bold">Releases &amp; Maintenance</h1>
               <SectionCard data={data} section="releases_maintenance" />
               <p className="text-sm text-soft-white/40">
-                Image versions, canary rollout, maintenance mode, rollback, and announcements available when live executor is connected.
+                ArcPod rollout jobs use local preflight plus explicit fake/local batch records, and remain PG-UPGRADE/PG-HERMES gated until live refresh, health, and smoke proof exists.
               </p>
             </div>
           )}
@@ -708,6 +725,7 @@ export default function AdminPage() {
                   <OperatorSection title="Host Readiness" ready={(operatorSnapshot.host_readiness as Record<string, unknown>)?.ready as boolean} checks={((operatorSnapshot.host_readiness as Record<string, unknown>)?.checks as Record<string, unknown>[]) || []} />
                   <OperatorSection title="Provider Diagnostics" ready={(operatorSnapshot.provider_diagnostics as Record<string, unknown>)?.all_ok as boolean} checks={((operatorSnapshot.provider_diagnostics as Record<string, unknown>)?.checks as Record<string, unknown>[]) || []} />
                   <ScaleOperationsSection snapshot={scaleOperations} />
+                  <ProvisioningReadinessPanel readiness={(scaleOperations?.provisioning_readiness as AdminProvisioningReadiness) || data?.provisioning_readiness} onTab={setTab} />
                   <div className="rounded-lg border border-border bg-surface p-4">
                     <div className="flex items-center justify-between">
                       <h3 className="font-display font-semibold">Live Journey</h3>
@@ -887,6 +905,7 @@ function AdminTriageBoard({ data, onTab }: { data: AdminData; onTab: (tab: Tab) 
   const sections = data.sections || [];
   const readySections = sections.filter((section) => isGoodStatus(section.status)).length;
   const queuedActions = sections.find((section) => section.section === "queued_actions")?.counts?.queued || 0;
+  const provisioning = data.provisioning_readiness;
   const disabledActions = [
     ...(data.action_execution_readiness?.pending_not_implemented || []),
     ...(data.action_execution_readiness?.disabled || []),
@@ -900,6 +919,13 @@ function AdminTriageBoard({ data, onTab }: { data: AdminData; onTab: (tab: Tab) 
       status: readySections === sections.length && sections.length ? "ready" : "attention",
       detail: "Health, bots, security, release, and queue read models.",
       tab: "health" as Tab,
+    },
+    {
+      label: "Provisioning readiness",
+      value: provisioning?.ready_to_provision ? "Ready" : "Blocked",
+      status: provisioning?.ready_to_provision ? "ready" : (provisioning?.state || "blocked"),
+      detail: provisioning?.summary || "ArcPod provisioning readiness is separate from control-plane health.",
+      tab: "operator" as Tab,
     },
     {
       label: "Recent failures",
@@ -991,6 +1017,47 @@ function AdminTriageBoard({ data, onTab }: { data: AdminData; onTab: (tab: Tab) 
             {data.action_execution_readiness?.note || "Live proof-gated or unsupported operations are labeled instead of presented as executable controls."}
           </p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ProvisioningReadinessPanel({ readiness, onTab }: { readiness?: AdminProvisioningReadiness; onTab: (tab: Tab) => void }) {
+  const status = readiness?.ready_to_provision ? "ready" : (readiness?.state || "blocked");
+  return (
+    <div className="border border-border bg-surface/85 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.18em] text-signal-orange">Provisioning readiness</p>
+          <h3 className="mt-1 font-display text-xl font-semibold">
+            {readiness?.summary || "Control plane up; ArcPod provisioning state unavailable"}
+          </h3>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-soft-white/50">
+            Control-plane health, action-worker readiness, and ArcPod provisioning readiness are separate signals. {readiness?.note || "No live worker proof was run from this admin page."}
+          </p>
+        </div>
+        <StatusBadge status={status} />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <MiniMetric label="Eligible workers" value={readiness?.eligible_worker_count || 0} />
+        <MiniMetric label="Available slots" value={readiness?.available_slots || 0} />
+        <MiniMetric label="Active workers" value={readiness?.active_workers || 0} />
+        <MiniMetric label="Total workers" value={readiness?.total_workers || 0} />
+        <MiniMetric label="Provisioner" value={readiness?.provisioner_enabled ? 1 : 0} />
+      </div>
+      <div className="mt-4 flex flex-col gap-3 border border-border/70 bg-carbon/70 px-3 py-3 text-sm md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-soft-white/60">{readiness?.next_action || "Open worker registration and smoke-test a worker before enabling provisioning."}</p>
+          <p className="mt-1 text-xs text-soft-white/35">
+            Proof gate: {readiness?.proof_gate || "PG-FLEET/PG-PROVISION"} remains required before claiming live worker readiness.
+          </p>
+        </div>
+        <button
+          onClick={() => onTab("operator")}
+          className="shrink-0 rounded border border-border px-3 py-2 text-xs font-semibold text-soft-white/70 transition hover:border-signal-orange/60 hover:text-soft-white"
+        >
+          Open operator view
+        </button>
       </div>
     </div>
   );

@@ -12,6 +12,7 @@ from typing import Any, Mapping, Protocol
 import urllib.error
 import urllib.request
 
+from arclink_boundary import json_dumps_safe, reject_secret_material
 from arclink_chutes import evaluate_chutes_deployment_boundary
 from arclink_control import append_arclink_audit, append_arclink_event, utc_now_iso
 from arclink_memory_synthesizer import UNSAFE_OUTPUT_PATTERNS
@@ -233,6 +234,265 @@ def prior_crew_recipe(conn: sqlite3.Connection, *, user_id: str) -> dict[str, An
         (str(user_id or "").strip(),),
     ).fetchone()
     return _recipe_public(dict(row)) if row is not None else None
+
+
+def crew_academy_status(conn: sqlite3.Connection, *, user_id: str) -> dict[str, Any]:
+    current = current_crew_recipe(conn, user_id=user_id)
+    if current is None:
+        return _academy_not_started_status(
+            summary="Crew Training needs an active recipe before Academy artifacts can be staged.",
+        )
+    overlay = current.get("soul_overlay") if isinstance(current.get("soul_overlay"), Mapping) else {}
+    academy = overlay.get("academy_training") if isinstance(overlay, Mapping) else None
+    if not isinstance(academy, Mapping):
+        status = _academy_not_started_status(
+            summary="No Academy corpus has been staged for this active Crew Recipe.",
+        )
+        status["recipe_id"] = str(current.get("recipe_id") or "")
+        status["recipe_applied_at"] = str(current.get("applied_at") or "")
+        return status
+    status = _academy_status_public(academy)
+    status["recipe_id"] = str(current.get("recipe_id") or status.get("recipe_id") or "")
+    status["recipe_applied_at"] = str(current.get("applied_at") or "")
+    return status
+
+
+def stage_crew_academy_review(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    manifest: Any,
+    application_plan: Any | None = None,
+    continuing_education_plan: Any | None = None,
+    graduation_gate: Any | None = None,
+    actor_id: str = "",
+    reason: str = "Academy local review staged",
+) -> dict[str, Any]:
+    """Persist a review-only Academy status summary onto the active recipe."""
+    clean_user_id = str(user_id or "").strip()
+    _user_row(conn, clean_user_id)
+    current = current_crew_recipe(conn, user_id=clean_user_id)
+    if current is None:
+        raise ArcLinkCrewRecipeError("Academy review requires an active Crew Recipe")
+    from arclink_academy_trainer import build_academy_review_status
+
+    now = utc_now_iso()
+    academy_status = build_academy_review_status(
+        manifest=manifest,
+        application_plan=application_plan,
+        continuing_education_plan=continuing_education_plan,
+        graduation_gate=graduation_gate,
+        staged_at=now,
+    )
+    academy_status["recipe_id"] = str(current.get("recipe_id") or "")
+    academy_status["review_persisted"] = True
+    reject_secret_material(
+        academy_status,
+        label="ArcLink Academy review",
+        error_cls=ArcLinkCrewRecipeError,
+    )
+
+    overlay = dict(current.get("soul_overlay") or {})
+    overlay["academy_training"] = academy_status
+    reject_secret_material(
+        overlay,
+        label="ArcLink Crew Academy overlay",
+        error_cls=ArcLinkCrewRecipeError,
+    )
+    conn.execute(
+        """
+        UPDATE arclink_crew_recipes
+        SET soul_overlay_json = ?
+        WHERE recipe_id = ? AND user_id = ? AND status = 'active'
+        """,
+        (
+            json_dumps_safe(overlay, label="ArcLink Crew Academy overlay", error_cls=ArcLinkCrewRecipeError),
+            str(current["recipe_id"]),
+            clean_user_id,
+        ),
+    )
+    audit_metadata = {
+        "recipe_id": str(current["recipe_id"]),
+        "manifest_id": str(academy_status.get("manifest_id") or ""),
+        "status": str(academy_status.get("status") or ""),
+        "source_count": int(academy_status.get("source_count") or 0),
+        "weekly_review_status": str(academy_status.get("weekly_review_status") or ""),
+        "evaluation_status": str(academy_status.get("evaluation_status") or ""),
+        "graduation_status": str(academy_status.get("graduation_status") or ""),
+        "agent_update_status": str(academy_status.get("agent_update_status") or ""),
+        "review_needed_count": int(academy_status.get("review_needed_count") or 0),
+        "blocked_source_count": int(academy_status.get("blocked_source_count") or 0),
+        "next_review_at": str(academy_status.get("next_review_at") or ""),
+        "proof_gates": list(academy_status.get("proof_gates") or []),
+        "local_only": True,
+        "no_network": True,
+        "no_write": True,
+        "writes_enabled": False,
+        "live_proof_required": True,
+    }
+    clean_actor = str(actor_id or clean_user_id).strip()
+    append_arclink_audit(
+        conn,
+        action="crew_academy_review_staged",
+        actor_id=clean_actor,
+        target_kind="user",
+        target_id=clean_user_id,
+        reason=str(reason or "Academy local review staged")[:240],
+        metadata=audit_metadata,
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="user",
+        subject_id=clean_user_id,
+        event_type="crew_academy_review_staged",
+        metadata=audit_metadata,
+        commit=False,
+    )
+    conn.commit()
+    return {
+        "academy_training": crew_academy_status(conn, user_id=clean_user_id),
+        "recipe": current_crew_recipe(conn, user_id=clean_user_id),
+        "mutation_performed": True,
+        "workspace_mutation_performed": False,
+        "live_proof_required": True,
+    }
+
+
+def stage_crew_academy_weekly_review(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    manifest: Any,
+    observed_sources: Mapping[str, Mapping[str, Any]],
+    application_plan: Any | None = None,
+    checked_at: str = "",
+    next_review_at: str = "",
+    actor_id: str = "",
+    reason: str = "Academy weekly Continuing Education review staged",
+) -> dict[str, Any]:
+    """Build and persist a local weekly Academy review on the active recipe."""
+    from arclink_academy_trainer import academy_graduation_gate, build_continuing_education_plan
+
+    weekly_review = build_continuing_education_plan(
+        manifest,
+        observed_sources=observed_sources,
+        checked_at=checked_at or utc_now_iso(),
+        next_review_at=next_review_at or None,
+    )
+    graduation_gate = academy_graduation_gate(manifest=manifest)
+    return stage_crew_academy_review(
+        conn,
+        user_id=user_id,
+        manifest=manifest,
+        application_plan=application_plan,
+        continuing_education_plan=weekly_review,
+        graduation_gate=graduation_gate,
+        actor_id=actor_id,
+        reason=reason,
+    )
+
+
+def _academy_not_started_status(*, summary: str) -> dict[str, Any]:
+    return {
+        "status": "not_started",
+        "summary": str(summary or "No Academy corpus has been staged."),
+        "manifest_id": "",
+        "role_id": "",
+        "role_title": "",
+        "topic": "",
+        "source_count": 0,
+        "lane_count": 0,
+        "lanes": [],
+        "quality": {"accepted": 0, "low_quality": 0, "min_score": 0, "average_score": 0},
+        "curriculum_status": "not_started",
+        "application_status": "not_started",
+        "application_plan_id": "",
+        "application_agent_id": "",
+        "application_role_id": "",
+        "continuing_education_status": "not_started",
+        "weekly_review_status": "not_started",
+        "evaluation_status": "not_started",
+        "graduation_status": "not_started",
+        "agent_update_status": "not_started",
+        "next_review_at": "",
+        "source_state_counts": {
+            "unchanged": 0,
+            "changed": 0,
+            "stale": 0,
+            "superseded": 0,
+            "removed": 0,
+            "tombstoned": 0,
+            "deleted_tombstoned": 0,
+            "review_needed": 0,
+        },
+        "review_needed_count": 0,
+        "blocked_source_count": 0,
+        "blocked_source_ids": [],
+        "review_required_source_ids": [],
+        "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+        "next_actions": [
+            "Build a local Academy corpus from approved source fixtures.",
+            "Stage the no-write application plan for Crew Training review.",
+        ],
+        "review_surfaces": ["Crew Training", "dashboard", "Operator Raven"],
+        "local_only": True,
+        "no_network": True,
+        "no_write": True,
+        "writes_enabled": False,
+        "live_proof_required": True,
+        "review_persisted": False,
+    }
+
+
+def _academy_status_public(academy: Mapping[str, Any]) -> dict[str, Any]:
+    allowed = (
+        "status",
+        "summary",
+        "manifest_id",
+        "role_id",
+        "role_title",
+        "topic",
+        "source_count",
+        "lane_count",
+        "lanes",
+        "quality",
+        "curriculum_status",
+        "application_status",
+        "application_plan_id",
+        "application_agent_id",
+        "application_role_id",
+        "continuing_education_status",
+        "weekly_review_status",
+        "evaluation_status",
+        "graduation_status",
+        "agent_update_status",
+        "next_review_at",
+        "source_state_counts",
+        "review_needed_count",
+        "blocked_source_count",
+        "blocked_source_ids",
+        "review_required_source_ids",
+        "proof_gates",
+        "next_actions",
+        "review_surfaces",
+        "local_only",
+        "no_network",
+        "no_write",
+        "writes_enabled",
+        "live_proof_required",
+        "review_persisted",
+        "staged_at",
+    )
+    payload = {key: academy.get(key) for key in allowed if key in academy}
+    base = _academy_not_started_status(summary="No Academy corpus has been staged.")
+    base.update(payload)
+    reject_secret_material(
+        base,
+        label="ArcLink Academy status",
+        error_cls=ArcLinkCrewRecipeError,
+    )
+    return base
 
 
 def _pod_count_and_agents(deployments: list[Mapping[str, Any]]) -> tuple[int, str, str]:

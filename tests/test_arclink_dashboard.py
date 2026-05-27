@@ -117,6 +117,17 @@ def seed_dashboard(control, onboarding, conn):
     return prepared
 
 
+def rollout_state_roots(deployment_id: str) -> dict[str, str]:
+    root = f"/arcdata/deployments/{deployment_id}"
+    return {
+        "root": root,
+        "config": f"{root}/config",
+        "state": f"{root}/state",
+        "vault": f"{root}/vault",
+        "hermes_home": f"{root}/state/hermes-home",
+    }
+
+
 def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_user_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_user_test")
@@ -132,6 +143,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
             "deployment_health",
             "access_links",
             "wrapped",
+            "academy_training",
             "bot_setup",
             "backup",
             "files",
@@ -162,6 +174,8 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     expect(section_index["hermes"]["label"] == "Hermes Dashboard", str(section_index["hermes"]))
     expect(section_index["hermes"]["url"] == "https://hermes-amber-vault-1a2b.example.test", str(section_index["hermes"]))
     expect(section_index["wrapped"]["status"] == "ready", str(section_index["wrapped"]))
+    expect(section_index["academy_training"]["status"] == "not_started", str(section_index["academy_training"]))
+    expect(view["academy_training"]["status"] == "not_started", str(view["academy_training"]))
     expect(view["wrapped"]["wrapped_frequency"] == "daily", str(view["wrapped"]))
     expect(view["wrapped"]["reports"][0]["report_id"] == "wrap_dashboard", str(view["wrapped"]))
     expect("sk_test_dashboard_secret" not in view["wrapped"]["reports"][0]["plain_text"], str(view["wrapped"]["reports"][0]))
@@ -188,6 +202,157 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
         expect(forbidden not in text, text)
     expect("metadata_json" not in text, text)
     print("PASS test_user_dashboard_read_model_projects_safe_operational_summary")
+
+
+def test_user_dashboard_projects_staged_academy_review_status() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_academy_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_academy_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_academy_test")
+    academy = load_module("arclink_academy_trainer.py", "arclink_academy_dashboard_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    source = academy.fake_academy_source(
+        source_id="src-dashboard-academy",
+        lane_id="wikimedia",
+        title="Dashboard Academy Source",
+        origin_url="https://example.test/wiki/dashboard-academy",
+        retrieved_at="2026-05-27T00:00:00Z",
+        license_status="cc-by-sa",
+        permission_status="public_allowed",
+        storage_policy="derived_summary",
+        content="Academy status should be compact enough for Captain dashboard review.",
+        citations=["dashboard source", "review source", "quality source"],
+        metadata={"revision": "dashboard-academy-1", "official": True, "examples": True},
+    )
+    manifest = academy.build_academy_corpus(
+        role_id="role-dashboard-academy",
+        role_title="Dashboard Academy Agent",
+        topic="dashboard Academy review",
+        sources=[source],
+        created_at="2026-05-27T00:00:00Z",
+    )
+    application = academy.build_agent_application_plan(
+        manifest,
+        agent_id="agent-dashboard-academy",
+        created_at="2026-05-27T01:00:00Z",
+    )
+    status = academy.build_academy_review_status(
+        manifest=manifest,
+        application_plan=application,
+        staged_at="2026-05-27T02:00:00Z",
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_crew_recipes (
+          recipe_id, user_id, preset, capacity, role, mission, treatment,
+          soul_overlay_json, applied_at, archived_at, status
+        ) VALUES (?, ?, 'Frontier', 'development', 'founder', 'ship',
+          'peer', ?, ?, '', 'active')
+        """,
+        (
+            "crew_dashboard_academy",
+            prepared["user_id"],
+            json.dumps({"crew_recipe_text": "Crew Recipe", "academy_training": status}, sort_keys=True),
+            control.utc_now_iso(),
+        ),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    academy_status = view["academy_training"]
+    deployment = view["deployments"][0]
+    section_index = {section["section"]: section for section in deployment["sections"]}
+    expect(academy_status["status"] == "ready_for_review", str(academy_status))
+    expect(academy_status["source_count"] == 1, str(academy_status))
+    expect("PG-PROVIDER" in academy_status["proof_gates"], str(academy_status))
+    expect(section_index["academy_training"]["status"] == "ready_for_review", str(section_index["academy_training"]))
+    expect(deployment["academy_training"]["manifest_id"] == manifest.manifest_id, str(deployment["academy_training"]))
+    text = json.dumps(view, sort_keys=True)
+    expect("secret://" not in text and "sk_" not in text, text)
+    print("PASS test_user_dashboard_projects_staged_academy_review_status")
+
+
+def test_dashboard_exposes_academy_weekly_and_graduation_status() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_academy_weekly_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_academy_weekly_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_academy_weekly_test")
+    academy = load_module("arclink_academy_trainer.py", "arclink_academy_dashboard_weekly_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    source = academy.fake_academy_source(
+        source_id="src-dashboard-weekly",
+        lane_id="wikimedia",
+        title="Dashboard Weekly Academy Source",
+        origin_url="https://example.test/wiki/dashboard-weekly",
+        retrieved_at="2026-05-27T00:00:00Z",
+        license_status="cc-by-sa",
+        permission_status="public_allowed",
+        storage_policy="derived_summary",
+        content="Academy weekly status should be compact enough for Captain dashboard review.",
+        citations=["dashboard source", "weekly source", "quality source"],
+        metadata={"revision": "dashboard-weekly-1", "official": True, "examples": True},
+    )
+    manifest = academy.build_academy_corpus(
+        role_id="role-dashboard-weekly",
+        role_title="Dashboard Weekly Agent",
+        topic="dashboard weekly Academy review",
+        sources=[source],
+        created_at="2026-05-27T00:00:00Z",
+    )
+    application = academy.build_agent_application_plan(
+        manifest,
+        agent_id="agent-dashboard-weekly",
+        created_at="2026-05-27T01:00:00Z",
+    )
+    weekly = academy.build_continuing_education_plan(
+        manifest,
+        observed_sources={"src-dashboard-weekly": {"content_hash": "changed-" + manifest.sources["src-dashboard-weekly"]["content_hash"]}},
+        checked_at="2026-06-15T00:00:00Z",
+        next_review_at="2026-06-22T00:00:00Z",
+    )
+    graduation = academy.academy_graduation_gate(manifest=manifest)
+    status = academy.build_academy_review_status(
+        manifest=manifest,
+        application_plan=application,
+        continuing_education_plan=weekly,
+        graduation_gate=graduation,
+        staged_at="2026-06-15T01:00:00Z",
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_crew_recipes (
+          recipe_id, user_id, preset, capacity, role, mission, treatment,
+          soul_overlay_json, applied_at, archived_at, status
+        ) VALUES (?, ?, 'Frontier', 'development', 'founder', 'ship',
+          'peer', ?, ?, '', 'active')
+        """,
+        (
+            "crew_dashboard_weekly",
+            prepared["user_id"],
+            json.dumps({"crew_recipe_text": "Crew Recipe", "academy_training": status}, sort_keys=True),
+            control.utc_now_iso(),
+        ),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    academy_status = view["academy_training"]
+    section_index = {section["section"]: section for section in view["deployments"][0]["sections"]}
+    academy_section = section_index["academy_training"]
+    expect(academy_status["weekly_review_status"] == "ready_for_review", str(academy_status))
+    expect(academy_status["evaluation_status"] == "ready_for_review", str(academy_status))
+    expect(academy_status["graduation_status"] == "blocked_by_live_proof", str(academy_status))
+    expect(academy_status["next_review_at"] == "2026-06-22T00:00:00Z", str(academy_status))
+    expect(academy_status["review_needed_count"] == 1, str(academy_status))
+    expect(academy_status["blocked_source_count"] == 0, str(academy_status))
+    expect(academy_section["weekly_review_status"] == "ready_for_review", str(academy_section))
+    expect(academy_section["graduation_status"] == "blocked_by_live_proof", str(academy_section))
+    expect(academy_section["next_review_at"] == "2026-06-22T00:00:00Z", str(academy_section))
+    expect(academy_section["review_needed_count"] == 1, str(academy_section))
+    text = json.dumps(view, sort_keys=True)
+    expect("Academy weekly status should" not in text, text)
+    expect("secret://" not in text and "sk_" not in text, text)
+    print("PASS test_dashboard_exposes_academy_weekly_and_graduation_status")
 
 
 def test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants() -> None:
@@ -699,6 +864,9 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
     expect(view["deployments"][0]["deployment_id"] == prepared["deployment_id"], str(view["deployments"]))
     expect(any(row["status"] == "degraded" for row in view["service_health"]), str(view["service_health"]))
     expect(view["provisioning_jobs"][0]["status"] == "failed", str(view["provisioning_jobs"]))
+    expect("provisioning_readiness" in view, str(view.keys()))
+    expect(view["provisioning_readiness"]["live_proof_required"] is True, str(view["provisioning_readiness"]))
+    expect(view["provisioning_readiness"]["proof_gate"] == "PG-FLEET/PG-PROVISION", str(view["provisioning_readiness"]))
     expect(view["action_intents"][0]["status"] == "queued", str(view["action_intents"]))
     expect(view["dns_drift"][0]["metadata"]["kind"] == "missing", str(view["dns_drift"]))
     expect(view["audit_rows"][0]["action"] == "admin_action:restart", str(view["audit_rows"]))
@@ -706,6 +874,88 @@ def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None
     expect(any(item["kind"] == "service_health" for item in view["recent_failures"]), str(view["recent_failures"]))
     expect("raw_json" not in json.dumps(view, sort_keys=True), str(view))
     print("PASS test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures")
+
+
+def test_scale_operations_snapshot_exposes_rollout_dry_run_plan() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_rollout_plan_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_rollout_plan_test")
+    rollout = load_module("arclink_rollout.py", "arclink_rollout_dashboard_rollout_plan_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(
+        conn,
+        user_id="user-rollout",
+        email="rollout@example.test",
+        display_name="Rollout Captain",
+        entitlement_state="paid",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_rollout_dash",
+        user_id="user-rollout",
+        prefix="rollout-dash",
+        base_domain="example.test",
+        status="active",
+        metadata={
+            "release_version": "v1.0.0",
+            "state_roots": rollout_state_roots("dep_rollout_dash"),
+            "dashboard_password": "secret://arclink/deployments/dep_rollout_dash/dashboard",
+        },
+    )
+    for service_name in ("hermes-gateway", "hermes-dashboard", "qmd-mcp"):
+        control.upsert_arclink_service_health(
+            conn,
+            deployment_id="dep_rollout_dash",
+            service_name=service_name,
+            status="healthy",
+        )
+    before_rollouts = conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"]
+    before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+
+    snapshot = dashboard.build_scale_operations_snapshot(
+        conn,
+        rollout_target_version="v2.0.0",
+        rollout_batch_size=1,
+    )
+    plan = snapshot["rollout_dry_run_plan"]
+
+    expect(snapshot["rollout_surface"] == "local_job_queueable_with_bounded_fake_execution", str(snapshot))
+    expect("PG-UPGRADE/PG-HERMES" in snapshot["rollout_execution_boundary"], str(snapshot))
+    expect(plan["status"] == "ready", str(plan))
+    expect(plan["candidate_count"] == 1, str(plan))
+    expect(plan["batches"][0]["deployment_ids"] == ["dep_rollout_dash"], str(plan["batches"]))
+    expect(plan["execution"]["enabled"] is False, str(plan["execution"]))
+    expect(plan["mutation_performed"] is False, str(plan))
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"] == before_rollouts, "no rollout rows")
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "no actions queued")
+    expect("secret://" not in json.dumps(plan, sort_keys=True), str(plan))
+
+    job = rollout.materialize_arcpod_update_rollout_job(
+        conn,
+        plan=plan,
+        action_id="act_dash_rollout_status",
+        idempotency_key="dash-rollout-status",
+    )
+    execution = rollout.execute_arcpod_update_rollout_batch(
+        conn,
+        rollout_group_id=job["rollout_group_id"],
+        executor={
+            "adapter": "fake",
+            "record_only": True,
+            "results": {"dep_rollout_dash": {"status": "failed", "reason": "fake local apply stopped"}},
+        },
+    )
+    status_snapshot = dashboard.build_scale_operations_snapshot(conn)
+    active = status_snapshot["active_rollouts"]
+    expect(execution["status"] == "failed", str(execution))
+    expect(len(active) == 1, str(active))
+    expect(active[0]["status"] == "failed", str(active))
+    expect(active[0]["execution_status"] == "failed", str(active))
+    expect(active[0]["execution_adapter"] == "fake", str(active))
+    expect(active[0]["health_smoke_status"] == "blocked_by_local_failure", str(active))
+    expect(active[0]["proof_gate"] == "PG-UPGRADE/PG-HERMES", str(active))
+    expect(active[0]["live_proof_required"] is True, str(active))
+    expect("secret://" not in json.dumps(active, sort_keys=True), str(active))
+    print("PASS test_scale_operations_snapshot_exposes_rollout_dry_run_plan")
 
 
 def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> None:
@@ -768,6 +1018,8 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
+    test_user_dashboard_projects_staged_academy_review_status()
+    test_dashboard_exposes_academy_weekly_and_graduation_status()
     test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants()
     test_user_dashboard_projects_local_notion_ssot_verification_without_secret_token()
     test_user_dashboard_projects_raven_backup_pending_key_setup()
@@ -777,8 +1029,9 @@ def main() -> int:
     test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
+    test_scale_operations_snapshot_exposes_rollout_dry_run_plan()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 11 ArcLink dashboard tests")
+    print("PASS all 14 ArcLink dashboard tests")
     return 0
 
 

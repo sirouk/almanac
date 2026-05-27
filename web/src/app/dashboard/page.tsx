@@ -318,6 +318,24 @@ interface ProviderStateData {
   deployment_models?: ProviderDeploymentModel[];
 }
 
+interface AcademyTrainingStatus {
+  status?: string;
+  summary?: string;
+  source_count?: number;
+  proof_gates?: string[];
+  next_actions?: string[];
+  application_status?: string;
+  continuing_education_status?: string;
+  weekly_review_status?: string;
+  evaluation_status?: string;
+  graduation_status?: string;
+  next_review_at?: string;
+  review_needed_count?: number;
+  blocked_source_count?: number;
+  source_state_counts?: Record<string, number>;
+  live_proof_required?: boolean;
+}
+
 interface CrewRecipe {
   recipe_id?: string;
   preset?: string;
@@ -327,13 +345,14 @@ interface CrewRecipe {
   treatment?: string;
   applied_at?: string;
   status?: string;
-  soul_overlay?: { crew_recipe_text?: string };
+  soul_overlay?: { crew_recipe_text?: string; academy_training?: AcademyTrainingStatus };
 }
 
 interface CrewRecipeState {
   current?: CrewRecipe | null;
   prior?: CrewRecipe | null;
   whats_changed?: { status?: string; summary?: string };
+  academy_training?: AcademyTrainingStatus;
 }
 
 interface CrewRecipePreview {
@@ -459,6 +478,10 @@ function formatDate(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function formatStatusLabel(value?: string) {
+  return String(value || "unknown").replace(/_/g, " ");
 }
 
 export default function DashboardPage() {
@@ -816,6 +839,7 @@ export default function DashboardPage() {
   const activeDeployment = deployments[0];
   const health = healthSummary(deployments);
   const entitlementState = data?.entitlement?.state || billing?.entitlement?.state || "unknown";
+  const academyTraining = crewRecipe?.academy_training || crewRecipe?.current?.soul_overlay?.academy_training;
 
   return (
     <div className="flex min-h-screen flex-col bg-jet/70">
@@ -1061,6 +1085,28 @@ export default function DashboardPage() {
                   <div className="border border-border bg-surface/80 p-4">
                     <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">What Changed</p>
                     <p className="mt-3 text-sm text-soft-white/60">{crewRecipe?.whats_changed?.summary || "No prior Crew Recipe to compare."}</p>
+                  </div>
+                  <div className="border border-border bg-surface/80 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Academy Review</p>
+                      <StatusBadge status={academyTraining?.status || "not_started"} />
+                    </div>
+                    <p className="mt-3 text-sm text-soft-white/60">
+                      {academyTraining?.summary || "No Academy corpus has been staged for this Crew Recipe."}
+                    </p>
+                    <div className="mt-3 grid gap-2 text-xs text-soft-white/45 sm:grid-cols-2">
+                      <span>Sources: {academyTraining?.source_count ?? 0}</span>
+                      <span>Weekly: {formatStatusLabel(academyTraining?.weekly_review_status || "not_started")}</span>
+                      <span>Evaluation: {formatStatusLabel(academyTraining?.evaluation_status || "not_started")}</span>
+                      <span>Graduation: {formatStatusLabel(academyTraining?.graduation_status || "not_started")}</span>
+                      <span>Review needed: {academyTraining?.review_needed_count ?? 0}</span>
+                      <span>Blocked sources: {academyTraining?.blocked_source_count ?? 0}</span>
+                      <span>Next review: {academyTraining?.next_review_at ? formatDate(academyTraining.next_review_at) : "not scheduled"}</span>
+                      <span>Proof: {(academyTraining?.proof_gates || ["PG-PROVIDER", "PG-HERMES"]).join(", ")}</span>
+                    </div>
+                    {academyTraining?.next_actions?.[0] && (
+                      <p className="mt-3 text-xs leading-5 text-soft-white/45">{academyTraining.next_actions[0]}</p>
+                    )}
                   </div>
                 </div>
               </div>

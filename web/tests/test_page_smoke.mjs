@@ -134,6 +134,11 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("api.userDashboard"), "missing dashboard API call");
     assert.ok(content.includes("api.updateAgentIdentity"), "missing Agent identity API call");
     assert.ok(content.includes("Crew Training"), "missing Crew Training UI");
+    assert.ok(content.includes("Academy Review"), "missing Academy Review panel");
+    assert.ok(content.includes("Weekly:"), "dashboard should show Academy weekly review status");
+    assert.ok(content.includes("Graduation:"), "dashboard should show Academy graduation gate status");
+    assert.ok(content.includes("Next review:"), "dashboard should show Academy next-review status");
+    assert.ok(content.includes("Blocked sources:"), "dashboard should show Academy blocked-source count");
     assert.ok(content.includes("api.previewCrewRecipe"), "missing Crew Training preview API call");
     assert.ok(content.includes("api.applyCrewRecipe"), "missing Crew Training apply API call");
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
@@ -177,6 +182,11 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("Disabled and proof-gated actions"), "admin page should label disabled operations");
     assert.ok(content.includes("Disabled or proof-gated actions"), "admin action form should not imply every disabled action only lacks worker wiring");
     assert.ok(content.includes("Action readiness matrix"), "admin action form should render the source-owned readiness matrix");
+    assert.ok(content.includes("Provisioning readiness"), "admin page should label ArcPod provisioning readiness separately");
+    assert.ok(content.includes("Control-plane health, action-worker readiness, and ArcPod provisioning readiness are separate"), "admin page should separate provisioning readiness from general health and action readiness");
+    assert.ok(content.includes("PG-FLEET/PG-PROVISION"), "admin page should keep live worker proof gates visible");
+    assert.ok(content.includes("PG-UPGRADE/PG-HERMES"), "admin page should keep rollout live proof gates visible");
+    assert.ok(content.includes("ArcPod rollout jobs use local preflight"), "admin page should describe rollout jobs as local preflight gated");
   });
 
   it("No page claims live provisioning with fake adapters", () => {

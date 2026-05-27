@@ -208,9 +208,20 @@ Control Node install asks for the default model string and allowed-model list.
 If the selected provider supports provider-side model fallback, the default
 model can be a provider-accepted CSV string such as `model-a,model-b`.
 Separately, `ARCLINK_LLM_ROUTER_FALLBACK_MODELS` enables an ArcLink-owned
-bounded retry cascade for configured retryable statuses. The current local
-implementation covers non-streaming chat completion fallback; streaming and
-live provider proof remain tracked by `GAP-031`.
+bounded retry cascade for configured retryable statuses. The local
+implementation covers non-streaming chat completion fallback and streaming
+fallback before any upstream chunks have been emitted. Once a streaming response
+has started, the router does not pretend it can safely replay the request; it
+emits explicit router metadata that streaming fallback is unavailable after the
+stream has started, settles the reservation, and records the failed stream
+without prompt or chunk text. Live provider proof remains tracked by `GAP-031`.
+
+Fallback attempts are audited as sanitized `llm_router:fallback_attempt` events.
+Usage and reservation rows include metadata for requested, primary, final,
+reservation-pricing, and usage-pricing models so cost-different fallbacks are
+visible. When catalog prices are available, the request reservation accounts for
+the highest configured fallback candidate cost and settlement uses the final
+model actually used.
 
 ## Model Catalog And Promotion
 

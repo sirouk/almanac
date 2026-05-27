@@ -298,11 +298,11 @@ closure is required before a launch or core journey claim can move forward.
 | `GAP-026` | Upgrade paths cannot be called live-ready | Authorized live proof | Run `PG-UPGRADE` across the relevant shared-host, Docker, Control Node, and component-pin upgrade path with release-state, health, and smoke evidence. |
 | `GAP-028` | Shared Host fresh install/enrollment cannot be called currently smoke-proven | Authorized host-mutating proof | Run `PG-SHARED-HOST` on a supported Linux/systemd host with redacted install, health, enrollment, and cleanup evidence. |
 | `GAP-029` | Sovereign Operator Raven is not yet a full-service control plane | Product buildout plus operator-security policy | First read-only/dry-run slice exists; expand only through typed, authorized, audited action-worker/broker commands. |
-| `GAP-030` | Control Node install can be up before worker capacity is proven | Code repair plus fleet/provisioning proof | Gate "ready to provision" on at least one verified worker, or clearly finish install as "control plane up, provisioning blocked." |
-| `GAP-031` | Router/provider failover lacks explicit `>=429` fallback cascade | Code repair plus provider proof | Add bounded router fallback models, preserve provider-side CSV fallback guidance, record fallback usage, and prove overload recovery without raw prompt leakage. |
-| `GAP-032` | Hermes/ArcPod updates are not yet rolling from the Control Node | Orchestrator buildout plus upgrade proof | Add bounded-parallel ArcPod update orchestration with per-pod health/smoke evidence and rollback/stop behavior. |
-| `GAP-033` | Cross-surface experience quality is not enforced as one gate | Quality gate plus focused UI/bot/CLI tests | Add a shared finish gate for Raven, dashboard, plugins, CLI, and TUI copy/formatting so product surfaces stay clear and polished. |
-| `GAP-034` | Academy Trainer is not yet a full subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Build the Academy source-lane registry, archive manifest, curriculum/evaluation pipeline, SOUL/skill/vault application, and weekly continuing education job before claiming Crew members become trained experts. |
+| `GAP-030` | Control Node install can be up before worker capacity is proven | Fleet/provisioning live proof after local readiness surfacing | Run `PG-FLEET`/`PG-PROVISION` for the chosen worker path now that admin/dashboard and Operator Raven expose the same fail-closed readiness state. |
+| `GAP-031` | Router/provider failover needs live overload proof | Provider proof after local fallback repair | Local non-streaming and pre-streaming fallback semantics, sanitized attempt audit, fallback-aware reservations, and final-model pricing labels exist; prove overload recovery without raw prompt leakage. |
+| `GAP-032` | Hermes/ArcPod updates are not yet rolling from the Control Node | Orchestrator buildout plus upgrade proof | Dry-run planning, typed rollout jobs, and bounded fake/local batch records exist; next closure requires authorized real refresh/apply execution plus health/smoke proof. |
+| `GAP-033` | Cross-surface experience quality needs live finish proof | Local quality gate exists; browser/chat/workspace proof remains | Keep the shared finish gate in place and run representative `PG-BOTS`, `PG-HERMES`, and product browser proof before treating polish as product-real. |
+| `GAP-034` | Academy Trainer is not yet a full subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Local schema, source-lane registry, fake acquisition adapters, fake corpus, no-write application plan, continuing-education gates, Crew Training persistence, dashboard status, and Operator Raven status exist; run authorized source/provider/workspace proof before claiming trained experts. |
 | `GAP-011` | Closed locally: foundation docs now align with Control Node boundaries | Documentation repair plus truth test | Keep `tests/test_documentation_truths.py` guarding stale prototype wording. |
 | `GAP-025` | Closed locally: broad Python suite is green | Regression triage and repair | Keep `python3 -m pytest -q tests` as the broad no-secret local validation gate. |
 
@@ -1704,7 +1704,12 @@ when they were active blockers during this buildout pass. Treat rows marked
   `agent-process-helper` rejection-incident path when only `ARCLINK_PRIV_DIR`
   was configured; `python/arclink_rejection_incidents.py` was repaired, the
   focused Docker incident tests passed, and the broad suite rerun passed with
-  1305 passed, 6 skipped, and 81 warnings in 64.08s.
+  1305 passed, 6 skipped, and 81 warnings in 64.08s. The suite stayed green
+  after the `GAP-034-B` Academy review/status integration on 2026-05-27 with
+  1338 passed, 6 skipped, and 89 warnings in 65.50s, and after the
+  `GAP-031-A` router fallback slice with 1340 passed, 6 skipped, and 97
+  warnings in 65.50s, and after the `GAP-033-A` cross-surface contract slice
+  with 1342 passed, 6 skipped, and 97 warnings in 65.36s.
 - Missing proof/tests: none for the broad no-secret local Python suite. This
   does not close live proof gates or web/Node validation.
 - Impact: the checkout may now be described as broad Python regression-clean for
@@ -1888,10 +1893,10 @@ when they were active blockers during this buildout pass. Treat rows marked
   restore operations out of chat until they have typed schemas, confirmation,
   audit rows, and focused tests.
 
-### GAP-030 - Sovereign worker readiness is partial
+### GAP-030 - Sovereign worker readiness live proof is missing
 
 - Severity: P1
-- Status: partial, proof-gated
+- Status: proof-gated
 - Journey joints: `J-09`, `J-10`, `J-17`, `J-27`
 - Proof gates: `PG-PROVISION`, `PG-FLEET`
 - Joint: Control Node install, worker admission, fleet placement, ArcPod apply
@@ -1909,23 +1914,29 @@ when they were active blockers during this buildout pass. Treat rows marked
   provides manual/provider worker registration, probe, drain, remove,
   rotate-key, and strategy commands. Control install, reconfigure, and worker
   registration now print a provisioning readiness summary that separates
-  "ready to provision ArcPods" from blocked/control-plane-only states.
-- Missing proof/tests: deeper behavioral regression tests for pending-SSH,
-  local-worker, and remote-worker cases; dashboard/admin/API readiness state;
-  Operator Raven readiness status; live `PG-FLEET`/`PG-PROVISION` evidence for
-  the chosen worker path.
-- Impact: the first install can look successful while the first Captain's paid
-  ArcPod would remain blocked at placement/apply time.
+  "ready to provision ArcPods" from blocked/control-plane-only states. A
+  2026-05-27 local slice adds `control_node_provisioning_readiness(conn,
+  env=...)`, threads it into the admin dashboard read model, scale operations
+  snapshot, Operator Raven status, and the admin web page, and proves
+  no-worker/control-plane-only, blocked no-worker, local-ready, pending-SSH,
+  and remote-ready fixtures without live probes (`python/arclink_dashboard.py`,
+  `python/arclink_operator_raven.py`, `web/src/app/admin/page.tsx`,
+  `tests/test_arclink_admin_actions.py`, `tests/test_arclink_dashboard.py`,
+  `tests/test_arclink_operator_raven.py`, `web/tests/test_page_smoke.mjs`).
+- Missing proof/tests: live `PG-FLEET`/`PG-PROVISION` evidence for the chosen
+  worker path.
+- Impact: local surfaces now fail closed instead of confusing "control plane
+  up" with "ready to provision"; ArcLink still cannot claim live worker
+  readiness until a real worker path is proven.
 - Owner/surface: `bin/deploy.sh` Control Node install, fleet inventory,
   provisioning readiness, admin/dashboard readiness copy.
-- Next repair: promote the readiness summary into admin/dashboard and Operator
-  Raven status, add behavioral tests for no-worker/pending-SSH/local/remote
-  cases, and run the chosen worker live proof before closing the row.
+- Next repair: run the chosen worker live proof before closing the row, keeping
+  evidence redacted and outside tracked public docs.
 
-### GAP-031 - LLM Router fallback cascade is partial
+### GAP-031 - LLM Router fallback cascade live proof is missing
 
 - Severity: P2
-- Status: partial, provider-proof-gated
+- Status: proof-gated
 - Journey joints: `J-07`, `J-08`, `J-24`, `J-27`
 - Proof gates: `PG-PROVIDER`
 - Joint: central inference, Raven/Crew Training/model fallback, budget state
@@ -1945,21 +1956,24 @@ when they were active blockers during this buildout pass. Treat rows marked
   replacements, and catalog auto-promotion policy (`bin/deploy.sh`). The local
   router now retries non-streaming chat completions across
   `ARCLINK_LLM_ROUTER_FALLBACK_MODELS` for configured retryable statuses,
-  records the final fallback model in usage, adds sanitized response metadata,
-  and preserves prompt/secret non-storage
+  can retry streaming requests before any upstream chunks are emitted, records
+  sanitized `llm_router:fallback_attempt` events, writes usage/reservation
+  metadata that distinguishes requested, primary, and final models, settles
+  usage with the final model's catalog price when available, reserves against
+  the highest configured fallback candidate price when catalog prices are
+  available, labels streaming fallback as unavailable once a stream has already
+  started, and preserves prompt/secret non-storage
   (`tests/test_arclink_llm_router.py`).
-- Missing proof/tests: streaming fallback behavior, live/provider overload
-  proof, richer audit rows for failed pre-fallback attempts, and pricing/budget
-  reservation refinement when fallback models have materially different costs.
-- Impact: non-streaming provider overload has a local fallback rail, but
-  streaming requests and live provider behavior still need explicit proof
-  before the whole inference path can be called fallback-complete.
+- Missing proof/tests: live/provider overload proof against the actual provider
+  and any source defects that proof reveals.
+- Impact: local router fallback behavior is explicit and audited, but live
+  provider behavior still needs authorized proof before the whole inference path
+  can be called fallback-complete.
 - Owner/surface: LLM router, model provider config, provider adapter, Raven/Crew
   Training copy, dashboard/provider state.
-- Next repair: add streaming-safe fallback semantics or clear streaming
-  limitations, add richer fallback attempt audit, refine pricing/reservation
-  behavior for cost-different fallback models, and run live `PG-PROVIDER`
-  overload proof.
+- Next repair: run live `PG-PROVIDER` overload proof with redacted evidence,
+  including non-streaming fallback, pre-stream fallback, no raw prompt/completion
+  leakage, and final-model usage/pricing audit rows.
 
 ### GAP-032 - Control Node lacks rolling Hermes/ArcPod update orchestration
 
@@ -1976,15 +1990,33 @@ when they were active blockers during this buildout pass. Treat rows marked
   per-pod health/smoke evidence. Failures halt the rollout, preserve state,
   and produce a rollback or repair plan.
 - Actual evidence: deploy/control upgrade, release state, component pin
-  checks, public-bot unmanaged-upgrade refusal, pin upgrade notifications, and
-  local upgrade tests exist (`bin/deploy.sh`, `bin/component-upgrade.sh`,
+  checks, public-bot unmanaged-upgrade refusal, pin upgrade notifications,
+  local upgrade tests, a first read-only ArcPod rollout dry-run planner, a
+  local typed rollout job materializer/action-worker path, and a bounded
+  fake/local batch execution recorder exist
+  (`bin/deploy.sh`, `bin/component-upgrade.sh`,
   `python/arclink_pin_upgrade_check.py`, `python/arclink_public_bots.py`,
+  `python/arclink_rollout.py`, `python/arclink_action_worker.py`,
+  `python/arclink_dashboard.py`, `python/arclink_operator_raven.py`,
   `tests/test_arclink_upgrade_notifications.py`,
-  `tests/test_deploy_regressions.py`). They do not yet form a Control
-  Node-owned rolling ArcPod update orchestrator.
-- Missing proof/tests: ArcPod update job model, batch concurrency policy,
-  preflight/backup freshness checks, per-pod refresh/health/smoke collection,
-  stop-on-failure semantics, dashboard/Operator Raven status, and live
+  `tests/test_deploy_regressions.py`, `tests/test_arclink_rollout.py`,
+  `tests/test_arclink_action_worker.py`, `tests/test_arclink_admin_actions.py`,
+  `tests/test_arclink_dashboard.py`, `tests/test_arclink_operator_raven.py`).
+  The dry-run planner selects active candidate ArcPods, validates batch-size
+  policy, blocks missing state roots or unhealthy service rows, preserves
+  rollback/state-root metadata, exposes health/smoke placeholders, and is
+  visible from admin scale operations and Operator Raven. The action worker can
+  now queue a `rollout` action with `target_version`, rerun the local preflight,
+  materialize deterministic per-Pod planned rollout rows, preserve batch order
+  and rollback/state-root metadata, optionally record one explicit fake/local
+  batch with `in_progress`/`completed`/`failed` state transitions, stop later
+  batches after a failed Pod, surface dashboard status truth, link the action to
+  an `arcpod_update_rollout` operation, keep results secret-free, and refuse
+  blocked/empty plans or missing executor contracts without calling deploy,
+  Docker, systemd, SSH, provider, bot, or live proof commands.
+- Missing proof/tests: authorized worker-backed real refresh/apply execution,
+  backup freshness enforcement beyond local placeholders, real per-pod
+  health/smoke collection, rollback/repair execution, and live
   `PG-UPGRADE`/`PG-HERMES` evidence.
 - Impact: Hermes and ArcLink updates remain locally guarded but operationally
   fragmented; at scale, upgrades risk becoming sequential, manual, or
@@ -1992,14 +2024,15 @@ when they were active blockers during this buildout pass. Treat rows marked
 - Owner/surface: Control Node upgrade orchestration, provisioning/action
   workers, Hermes install/refresh scripts, command-menu refresh, health/live
   proof.
-- Next repair: build the upgrade job model and dry-run planner first, then
-  implement bounded batch execution through existing refresh/apply rails and
-  prove one small multi-pod rollout before claiming rolling updates.
+- Next repair: in an authorized proof window, replace or extend the fake/local
+  batch recorder with real refresh/apply worker execution, then prove one small
+  multi-pod rollout with redacted `PG-UPGRADE`/`PG-HERMES` evidence before
+  claiming rolling updates.
 
-### GAP-033 - Cross-surface experience finish gate is not enforced
+### GAP-033 - Cross-surface experience finish gate needs live proof
 
 - Severity: P2
-- Status: quality-gap, test-gap
+- Status: quality-gap, proof-gated
 - Journey joints: `J-01`, `J-03`, `J-04`, `J-13`, `J-14`, `J-19`, `J-24`,
   `J-27`
 - Proof gates: `PG-PROD`, `PG-BOTS`, `PG-HERMES`
@@ -2011,26 +2044,33 @@ when they were active blockers during this buildout pass. Treat rows marked
   redaction, no raw tracebacks to Captains, and explicit next actions after
   errors or blocked proof gates.
 - Actual evidence: individual surfaces have local tests, docs, and product
-  copy checks, and a professional finish gate exists in docs. The repository
-  does not yet have a single cross-surface assertion set that guards Raven
-  messages, Discord/Telegram command payloads, web dashboard copy, plugin
-  empty/error states, CLI/TUI summaries, and operator diagnostics together.
-- Missing proof/tests: shared fixture-based message snapshots or lint rules for
-  representative Captain, Operator, plugin, dashboard, and CLI states;
-  platform-specific markdown checks for Telegram/Discord; and browser proof for
-  dashboard/plugin text fit and non-overlap.
+  copy checks, and a professional finish gate exists in docs. `GAP-033-A` adds
+  a shared local copy contract in `python/arclink_surface_contract.py` plus
+  `tests/test_arclink_surface_contract.py`. The gate renders or reads real
+  local surfaces for a Captain Raven happy path, a Captain Raven blocked path,
+  Operator Raven status, dashboard provisioning-readiness state, the product
+  surface home page, Drive/Code/Terminal plugin status payloads, and
+  no-lifecycle deploy-script readiness copy. It checks audience vocabulary,
+  blocked/proof-gated next actions, proof-gate honesty, chat markdown balance,
+  secret-looking values, raw tracebacks, and stale Captain-facing technical
+  terms. The slice also repairs Captain-visible launch/product copy from
+  lower-case Agent/Pod and "deployment"/"user" wording to ArcPod, Pod, Agent,
+  Captain, Raven, and ArcLink support where appropriate.
+- Missing proof/tests: authorized representative `PG-BOTS`, `PG-HERMES`, and
+  product browser proof for Telegram/Discord rendering, dashboard/plugin text
+  fit and non-overlap, and any source defects those proof rows reveal.
 - Impact: product surfaces can drift independently and become clunky even while
   the underlying workflows remain correct.
 - Owner/surface: public bots, web dashboard, Hermes plugins, CLI/TUI deploy
   output, docs/product voice.
-- Next repair: define the cross-surface style contract, add representative
-  snapshot/lint tests, and run the focused browser/chat proof cluster before
-  treating experience polish as product-real.
+- Next repair: keep `tests/test_arclink_surface_contract.py` in the focused
+  local gate, then run the authorized focused browser/chat/workspace proof
+  cluster before treating experience polish as product-real.
 
 ### GAP-034 - Academy Trainer corpus and continuing education pipeline is unbuilt
 
 - Severity: P1
-- Status: product-gap, local-gap, policy-question, data-governance-gap,
+- Status: partial, product-gap, policy-question, data-governance-gap,
   provider-proof-gated
 - Journey joints: `J-21`, `J-23`, `J-24`, `J-27`, `J-28`
 - Proof gates: `PG-PROVIDER`, `PG-HERMES`
@@ -2050,32 +2090,73 @@ when they were active blockers during this buildout pass. Treat rows marked
   overlay projection, managed context, memory synthesis, vault/qmd rails, and
   proof-gated live recipe generation (`python/arclink_crew_recipes.py`,
   `python/arclink_memory_synthesizer.py`,
-  `plugins/hermes-agent/arclink-managed-context/`). The new Academy target is
-  now specified in `docs/arclink/academy-trainer.md` and summarized in
-  `docs/arclink/sovereign-control-node-symphony.md`, but the source-lane
-  registry, crawler/fetcher policy, archive manifests, curriculum builder,
-  quality scoring, skill selection, evaluation gate, weekly refresh job, and
-  dashboard/Raven surfaces are not implemented.
-- Missing proof/tests: Academy manifest/schema tests; source-lane registry
-  tests; no-secret archive/tombstone tests; YouTube transcript authorization
-  policy tests; Reddit deletion/retention compliance tests; Wikipedia/GitHub/
-  arXiv/OpenAlex/Semantic Scholar metadata fetcher tests with fake fixtures;
-  curriculum and lesson-card generation tests; SOUL overlay replacement tests;
-  vault/qmd/memory/skill application tests; continuing education refresh tests;
-  evaluation/graduation tests; dashboard/Raven status/copy tests; live/provider
-  proof for Academy generation and workspace proof for the trained Agent.
-- Impact: a Captain can create a Crew Recipe and apply role/personality rails,
-  but ArcLink cannot yet claim it exhaustively equips a Crew member with a
-  reusable expert corpus, archived training materials, selected skills, and
-  continuing education.
+  `plugins/hermes-agent/arclink-managed-context/`). `GAP-034-A` adds
+  `python/arclink_academy_trainer.py`, `config/academy-source-lanes.example.json`,
+  and `tests/test_arclink_academy_trainer.py`: the local module defines typed
+  source-lane, source, manifest, quality, curriculum, evaluation, application
+  plan, and continuing-education schemas; ships a governed fake/local source
+  lane registry; refuses disabled lanes, missing permission metadata, raw
+  storage violations, secret-looking metadata, unreviewed public skills,
+  deletion/tombstone violations, and live crawling/provider/transcription
+  requests; and produces deterministic fake corpus manifests, lesson cards,
+  no-write SOUL/vault/qmd/memory/skill application plans, and refresh gates.
+  `GAP-034-B` adds compact Academy review-status summaries, stages that
+  no-write local review state on the active Crew Recipe overlay with audit and
+  event rows, exposes `not_started`/blocked/`ready_for_review`/proof-pending
+  Academy state through the user dashboard and Crew Recipe API, renders an
+  Academy Review panel in the dashboard Crew Training tab, and adds read-only
+  Operator Raven Academy status/user lookup output without queueing actions.
+  `GAP-034-C` adds local acquisition request/result/report structures and
+  fake-adapter fixture coverage for video transcripts, Reddit discussions,
+  Wikimedia, GitHub repositories, scholarly/standards, web articles,
+  skill/tool catalog entries, and organization-private material. The adapter
+  preserves no-network/no-write boundaries, enforces required lane metadata,
+  returns compact accepted/rejected/proof-gated counts, and rejects disabled or
+  unsupported lanes, requested live actions, missing license/permission, unsafe
+  raw storage, deleted Reddit content without tombstones, unreviewed public
+  skills, duplicate source IDs, and secret-looking fixture metadata/content.
+  `GAP-034-D` adds a typed Academy application preview request/result boundary,
+  includes compact application-plan and target-agent references in staged
+  Academy review status, wires `academy_apply_preview` through the admin action
+  worker as a control-DB local action, records audit/event/operation-link
+  metadata, and refuses write-enabled, live-action, unsafe-path,
+  secret-looking, mismatched, blocked, or unstaged requests before success. The
+  preview never calls an executor and reports `local_only=true`,
+  `no_write=true`, `writes_enabled=false`, and `PG-PROVIDER`/`PG-HERMES`.
+  `GAP-034-E` adds a source-owned weekly Continuing Education artifact that
+  classifies changed, stale, superseded, removed, tombstoned/deleted,
+  unchanged, and review-needed source states without raw source content; rejects
+  unsafe observed-source payloads before persistence; adds a local
+  evaluation/graduation gate that returns `blocked_by_policy`,
+  `blocked_by_quality`, `ready_for_review`, or `blocked_by_live_proof`;
+  persists weekly/gate status on the active Crew Recipe overlay with
+  `local_only=true`, `no_network=true`, `no_write=true`,
+  `writes_enabled=false`, and `live_proof_required=true`; records secret-free
+  audit/event metadata; and exposes weekly review, evaluation, graduation,
+  next-review, blocked-source, and proof-gate status in the dashboard and
+  Operator Raven without implying the Agent was updated.
+  The target remains specified in `docs/arclink/academy-trainer.md` and
+  summarized in `docs/arclink/sovereign-control-node-symphony.md`.
+- Missing proof/tests: real SOUL overlay replacement/application writes,
+  vault/qmd/memory/skill application worker writes beyond the no-write preview,
+  hosted weekly scheduler proof, live/provider proof for Academy generation,
+  source-governance policy, and workspace proof for the trained Agent.
+- Impact: a Captain can create a Crew Recipe and ArcLink can now build a
+  reviewable local Academy plan from governed fake acquisition fixtures, stage
+  that plan on the Crew Recipe, queue an audited no-write application preview,
+  persist a weekly local review/gate summary, and see honest dashboard/Raven
+  status, but ArcLink still cannot claim it exhaustively equips a Crew member
+  with live-acquired sources, applied vault/qmd/memory/skill artifacts,
+  provider-generated synthesis, hosted scheduling, or trained-Agent workspace
+  behavior until the remaining policy and proof gates pass.
 - Owner/surface: Academy Trainer, Crew Training, memory synthesis, vault/qmd,
   skills, managed context, dashboard/Raven, source governance.
-- Next repair: implement the local Academy schema and source-lane registry
-  first, with fake-source fixtures for corpus manifests, quality scoring,
-  curriculum output, SOUL/vault/skill application, continuing education refresh,
-  and evaluation gates. Keep live crawling, ASR/transcription, provider
-  generation, and external proof gated until policy and credentials are
-  authorized.
+- Next repair: run or decide the remaining `GAP-034` policy/proof handoffs.
+  Keep real Agent application writes, live crawling, ASR/transcription,
+  provider generation, hosted scheduling, workspace proof, and external proof
+  gated until policy and credentials are authorized. Add more local code only
+  when those handoffs expose a concrete source defect or the operator records a
+  new local product decision.
 
 ## Not Gaps / Already Real
 
@@ -2283,20 +2364,24 @@ Focused local checks for code-owned gaps:
 - GAP-030: add Control Node install/readiness tests for no-worker,
   pending-SSH, local-worker, and remote-worker paths so "control plane up" and
   "ready to provision" cannot be confused.
-- GAP-031: add mocked router provider-overload tests for bounded fallback
-  retries, usage metadata, no raw prompt/completion storage, and response
-  metadata that truthfully labels fallback use.
+- GAP-031: keep mocked router fallback tests for bounded retries, pre-stream
+  fallback, usage/reservation metadata, no raw prompt/completion storage, and
+  response metadata that truthfully labels fallback use; close only after live
+  `PG-PROVIDER` overload proof.
 - GAP-032: add rolling-update planner tests before executor work: candidate
   pod selection, batch limits, preflight failures, stop-on-failure, per-pod
   health/smoke summaries, and rollback/repair output.
-- GAP-033: add representative message/copy fixtures for Captain Raven,
-  Operator Raven, web dashboard, Drive/Code/Terminal states, CLI/TUI summaries,
-  and platform markdown rendering expectations.
-- GAP-034: add fake-source Academy fixtures before any live crawling. Start
-  with schema/manifest tests for source lanes, archive/tombstone policy,
-  quality scoring, curriculum/lesson-card output, SOUL overlay application,
-  vault/qmd/memory/skill staging, continuing education refresh, and evaluation
-  gates. Do not run live YouTube/Reddit/GitHub/scholar/web searches in CI.
+- GAP-033: keep `tests/test_arclink_surface_contract.py` covering
+  representative Captain Raven, Operator Raven, dashboard readiness, product
+  surface, Drive/Code/Terminal status, CLI readiness copy, and markdown/secret/
+  traceback/vocabulary expectations; add fixtures when new surfaces become
+  product-critical.
+- GAP-034: keep fake-source Academy fixture, fake acquisition, review-status,
+  Crew Training persistence, no-write application-preview, weekly review,
+  dashboard, and Operator Raven tests in place before any live crawling. Add
+  more local Academy tests only after a policy decision or proof run identifies
+  a concrete source defect. Do not run live
+  YouTube/Reddit/GitHub/scholar/web searches in CI.
 
 Live proof checks must not run by default in CI and must skip cleanly without
 credentials.

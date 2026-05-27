@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 
 class OperatorRavenError(ValueError):
@@ -54,6 +54,17 @@ _COMMAND_ALIASES = {
     "operatorupgradecheck": "upgrade_check",
     "upgrade_check": "upgrade_check",
     "upgradecheck": "upgrade_check",
+    "rollout_plan": "rollout_plan",
+    "rolloutplan": "rollout_plan",
+    "upgrade_plan": "rollout_plan",
+    "upgradeplan": "rollout_plan",
+    "arcpod_rollout": "rollout_plan",
+    "arcpodrollout": "rollout_plan",
+    "academy_status": "academy_status",
+    "academystatus": "academy_status",
+    "academy": "academy_status",
+    "crew_academy": "academy_status",
+    "crewacademy": "academy_status",
 }
 
 _SECRETISH_RE = re.compile(
@@ -101,6 +112,8 @@ def dispatch_operator_raven_command(
         "user_lookup": _handle_user_lookup,
         "pod_repair_dry_run": _handle_pod_repair_dry_run,
         "upgrade_check": _handle_upgrade_check,
+        "rollout_plan": _handle_rollout_plan,
+        "academy_status": _handle_academy_status,
     }
     result = handlers[command.name](
         conn,
@@ -122,26 +135,23 @@ def _handle_status(
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
 ) -> dict[str, Any]:
-    from arclink_dashboard import admin_action_execution_readiness
+    from arclink_dashboard import admin_action_execution_readiness, control_node_provisioning_readiness
     from arclink_fleet import fleet_capacity_summary
 
     capacity = _safe_call(lambda: fleet_capacity_summary(conn), default={"hosts": [], "available_slots": 0})
     readiness = _safe_call(lambda: admin_action_execution_readiness(env=env), default={"executor_adapter": "disabled", "action_support": {}})
-    eligible = [
-        host for host in capacity.get("hosts", [])
-        if str(host.get("status") or "") == "active"
-        and not bool(host.get("drain"))
-        and int(host.get("headroom") or 0) > 0
-    ]
-    provisioner_enabled = _truthy(env.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", ""))
-    if provisioner_enabled and eligible:
-        provisioning = f"ready to provision ArcPods ({len(eligible)} eligible worker(s), {int(capacity.get('available_slots') or 0)} available slot(s))"
-    elif provisioner_enabled:
-        provisioning = "blocked, provisioner enabled but no eligible worker has available capacity"
-    else:
-        provisioning = "control plane up, ArcPod provisioning disabled until a worker is registered and smoke-tested"
+    provisioning_readiness = _safe_call(
+        lambda: control_node_provisioning_readiness(conn, env=env),
+        default={
+            "summary": "control plane up; ArcPod provisioning status unavailable",
+            "state": "unknown",
+            "next_action": "Open the admin dashboard readiness panel.",
+        },
+    )
+    provisioning = str(provisioning_readiness.get("summary") or "control plane up; ArcPod provisioning status unavailable")
     user_counts = _count_by_status(conn, "arclink_users")
     deployment_counts = _count_by_status(conn, "arclink_deployments")
+    rollout_counts = _count_by_status(conn, "arclink_rollouts")
     support = readiness.get("action_support") if isinstance(readiness, Mapping) else {}
     queueable = sum(1 for item in (support or {}).values() if bool(item.get("queueable")))
     lines = [
@@ -150,11 +160,18 @@ def _handle_status(
         f"Fleet: {int(capacity.get('active_hosts') or 0)} active / {int(capacity.get('total_hosts') or 0)} total worker(s)",
         f"Users: {_format_counts(user_counts)}",
         f"Deployments: {_format_counts(deployment_counts)}",
+        f"Rollouts: {_format_counts(rollout_counts)}",
         f"Admin actions: {queueable} queueable via {readiness.get('executor_adapter', 'disabled')}",
+        "Rollout control: dry-run plans and explicit fake/local batch records only; use /rollout_plan <target-version> --dry-run",
+        "Academy: use /academy_status <user-id|email> for local Crew Training review state",
         "Live proof still required: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
-        "Next: /operator_fleet, /user_lookup <query>, /pod_repair <deployment> --dry-run, /upgrade_check",
+        "Next: /operator_fleet, /user_lookup <query>, /academy_status <query>, /pod_repair <deployment> --dry-run, /rollout_plan <target> --dry-run, /upgrade_check",
     ]
-    return {"message": "\n".join(lines), "readiness": provisioning}
+    return {
+        "message": "\n".join(lines),
+        "readiness": provisioning,
+        "provisioning_readiness": provisioning_readiness,
+    }
 
 
 def _handle_fleet_list(
@@ -231,14 +248,54 @@ def _handle_user_lookup(
         dep_counts: dict[str, int] = {}
         for dep in deployments:
             dep_counts[str(dep.get("status") or "unknown")] = dep_counts.get(str(dep.get("status") or "unknown"), 0) + 1
+        academy = _academy_summary_for_user(conn, str(row.get("user_id") or ""))
         lines.append(
             f"- {row.get('user_id')}: {row.get('display_name') or 'unnamed'} "
             f"<{row.get('email') or 'no-email'}>, status={row.get('status')}, "
-            f"entitlement={row.get('entitlement_state') or 'none'}, deployments={_format_counts(dep_counts)}"
+            f"entitlement={row.get('entitlement_state') or 'none'}, deployments={_format_counts(dep_counts)}, "
+            f"academy={academy['status']}"
         )
     if len(rows) == 5:
         lines.append("Showing first 5 matches.")
     return {"message": "\n".join(lines), "users": rows}
+
+
+def _handle_academy_status(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+) -> dict[str, Any]:
+    query = " ".join(command.args).strip()
+    if not query:
+        return {"message": "Use /academy_status <user-id|email|display-name>."}
+    rows = _find_users(conn, query)
+    lines = ["Operator Raven Academy status"]
+    if not rows:
+        lines.append(f"No user matched {query}.")
+        return {"message": "\n".join(lines), "users": []}
+    payloads = []
+    for row in rows[:5]:
+        user_id = str(row.get("user_id") or "")
+        academy = _academy_summary_for_user(conn, user_id)
+        payloads.append({"user_id": user_id, "academy_training": academy})
+        lines.append(
+            f"- {user_id}: {row.get('display_name') or 'unnamed'}, "
+            f"academy={academy['status']}, sources={academy['source_count']}, "
+            f"weekly={academy.get('weekly_review_status') or 'not_started'}, "
+            f"evaluation={academy.get('evaluation_status') or 'not_started'}, "
+            f"graduation={academy.get('graduation_status') or 'not_started'}, "
+            f"review_needed={int(academy.get('review_needed_count') or 0)}, "
+            f"blocked_sources={int(academy.get('blocked_source_count') or 0)}, "
+            f"next_review={academy.get('next_review_at') or 'not_scheduled'}, "
+            f"proof={','.join(academy.get('proof_gates') or [])}"
+        )
+        next_actions = academy.get("next_actions") if isinstance(academy.get("next_actions"), list) else []
+        if next_actions:
+            lines.append(f"  Next: {next_actions[0]}")
+    lines.append("No action was queued. Academy live generation and workspace proof remain PG-PROVIDER/PG-HERMES gated.")
+    return {"message": "\n".join(lines), "academy": payloads}
 
 
 def _handle_pod_repair_dry_run(
@@ -312,8 +369,105 @@ def _handle_upgrade_check(
     return {"message": "\n".join(lines), "upgrade": result}
 
 
+def _handle_rollout_plan(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+) -> dict[str, Any]:
+    if not command.dry_run:
+        return {
+            "message": "ArcPod rollout planning is dry-run only in this Operator Raven slice. Use /rollout_plan <target-version> --dry-run.",
+        }
+    target_version = _first_non_option_arg(command.args) or str(env.get("ARCLINK_ROLLOUT_TARGET_VERSION") or "").strip()
+    if not target_version:
+        return {"message": "Use /rollout_plan <target-version> --dry-run."}
+    from arclink_rollout import ArcLinkRolloutError, plan_arcpod_update_rollout
+
+    try:
+        batch_size = _batch_size_arg(command.args)
+    except OperatorRavenError as exc:
+        return {
+            "message": (
+                "Operator Raven rollout plan dry-run\n"
+                f"Status: blocked\nTarget: {target_version}\nRepair: {exc}\n"
+                "No rollout or action was queued."
+            ),
+        }
+    try:
+        plan = plan_arcpod_update_rollout(
+            conn,
+            target_version=target_version,
+            batch_size=batch_size,
+            env=env,
+        )
+    except ArcLinkRolloutError as exc:
+        return {
+            "message": (
+                "Operator Raven rollout plan dry-run\n"
+                f"Status: blocked\nTarget: {target_version}\nRepair: {exc}\n"
+                "No rollout or action was queued."
+            ),
+        }
+    lines = [
+        "Operator Raven rollout plan dry-run",
+        f"Target: {plan['target_version']}",
+        f"Status: {plan['status']}",
+        f"Candidates: {plan['candidate_count']} ready={plan['ready_count']} blocked={plan['blocked_count']}",
+        f"Batches: {plan['batch_count']} at batch size {plan['batch_size']}",
+        f"Stop on failure: {str(bool(plan['stop_on_failure'])).lower()}",
+        f"Proof gate: {plan['proof_gate']}",
+    ]
+    if plan["status"] == "blocked":
+        for item in plan.get("repair_summary", [])[:5]:
+            lines.append(f"Repair: {item}")
+    else:
+        for batch in plan.get("batches", [])[:5]:
+            lines.append(f"Batch {batch['batch_index']}: {', '.join(batch['deployment_ids'])}")
+    lines.append("No rollout or action was queued.")
+    return {"message": "\n".join(lines), "rollout_plan": plan}
+
+
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _first_non_option_arg(args: Sequence[str]) -> str:
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        value = str(arg or "").strip()
+        if not value:
+            continue
+        if value in {"--batch-size", "--batch_size"}:
+            skip_next = True
+            continue
+        if value.startswith("--batch-size=") or value.startswith("--batch_size=") or value.startswith("batch_size="):
+            continue
+        if value.startswith("--"):
+            continue
+        return value
+    return ""
+
+
+def _batch_size_arg(args: Sequence[str]) -> int | None:
+    args_list = [str(arg or "").strip() for arg in args]
+    for index, value in enumerate(args_list):
+        if value in {"--batch-size", "--batch_size"} and index + 1 < len(args_list):
+            try:
+                return int(args_list[index + 1])
+            except ValueError:
+                raise OperatorRavenError("rollout plan batch size must be an integer")
+        for prefix in ("--batch-size=", "--batch_size=", "batch_size="):
+            if value.startswith(prefix):
+                try:
+                    return int(value[len(prefix):])
+                except ValueError:
+                    raise OperatorRavenError("rollout plan batch size must be an integer")
+    return None
 
 
 def _safe_call(func: Callable[[], Any], *, default: Any) -> Any:
@@ -324,7 +478,7 @@ def _safe_call(func: Callable[[], Any], *, default: Any) -> Any:
 
 
 def _count_by_status(conn: sqlite3.Connection, table: str) -> dict[str, int]:
-    if table not in {"arclink_users", "arclink_deployments"}:
+    if table not in {"arclink_users", "arclink_deployments", "arclink_rollouts"}:
         return {}
     try:
         rows = conn.execute(f"SELECT status, COUNT(*) AS count FROM {table} GROUP BY status ORDER BY status").fetchall()
@@ -391,6 +545,43 @@ def _deployments_for_user(conn: sqlite3.Connection, user_id: str) -> list[dict[s
     except sqlite3.Error:
         return []
     return [dict(row) for row in rows]
+
+
+def _academy_summary_for_user(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
+    try:
+        from arclink_crew_recipes import crew_academy_status
+
+        status = crew_academy_status(conn, user_id=user_id)
+    except Exception:  # noqa: BLE001 - Operator Raven status must fail closed.
+        status = {
+            "status": "unavailable",
+            "summary": "Academy status unavailable; open the dashboard Crew Training panel.",
+            "source_count": 0,
+            "weekly_review_status": "unavailable",
+            "evaluation_status": "unavailable",
+            "graduation_status": "unavailable",
+            "next_review_at": "",
+            "review_needed_count": 0,
+            "blocked_source_count": 0,
+            "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+            "next_actions": ["Open the dashboard Crew Training panel."],
+            "live_proof_required": True,
+        }
+    return {
+        "status": str(status.get("status") or "unknown"),
+        "summary": str(status.get("summary") or ""),
+        "source_count": int(status.get("source_count") or 0),
+        "weekly_review_status": str(status.get("weekly_review_status") or "not_started"),
+        "evaluation_status": str(status.get("evaluation_status") or "not_started"),
+        "graduation_status": str(status.get("graduation_status") or "not_started"),
+        "next_review_at": str(status.get("next_review_at") or ""),
+        "review_needed_count": int(status.get("review_needed_count") or 0),
+        "blocked_source_count": int(status.get("blocked_source_count") or 0),
+        "proof_gates": [str(item) for item in status.get("proof_gates") or []],
+        "next_actions": [str(item) for item in status.get("next_actions") or []],
+        "manifest_id": str(status.get("manifest_id") or ""),
+        "live_proof_required": bool(status.get("live_proof_required", True)),
+    }
 
 
 def _find_deployment(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any] | None:

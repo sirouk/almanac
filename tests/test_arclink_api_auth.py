@@ -225,6 +225,7 @@ def test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited() -
         session_token=session["session_token"],
     )
     expect(current.payload["current"]["preset"] == "Frontier", str(current.payload))
+    expect(current.payload["academy_training"]["status"] == "not_started", str(current.payload))
     api.upsert_arclink_admin(conn, admin_id="admin_crew_recipe", email="crew-admin@example.test", role="ops")
     admin_session = api.create_arclink_admin_session(
         conn,

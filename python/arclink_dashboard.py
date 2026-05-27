@@ -34,10 +34,11 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
         "cancel",
         "backup_write_check",
         "rollout",
+        "academy_apply_preview",
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check", "rollout", "academy_apply_preview"})
 ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
 ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
     "restart": {
@@ -112,6 +113,15 @@ ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
         "live_proof_gate": "PG-BACKUP",
         "local_contract": "records the GitHub write-check boundary and keeps backup activation inactive unless verified write evidence exists",
     },
+    "academy_apply_preview": {
+        "label": "Academy apply preview",
+        "worker_support": "wired",
+        "operation_kind": "academy_application_preview",
+        "target_kinds": ("user", "deployment"),
+        "required_adapter": "action worker with control DB access; no executor, filesystem, provider, bot, Docker, SSH, or deploy adapter",
+        "live_proof_gate": "PG-HERMES/PG-PROVIDER",
+        "local_contract": "queues an audited no-write Academy application preview from a staged Crew Recipe review; real Agent application remains proof-gated",
+    },
     "suspend": {
         "label": "Suspend",
         "worker_support": "pending_not_implemented",
@@ -150,18 +160,19 @@ ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
     },
     "rollout": {
         "label": "Rollout",
-        "worker_support": "pending_not_implemented",
-        "operation_kind": "",
+        "worker_support": "wired",
+        "operation_kind": "arcpod_update_rollout",
         "target_kinds": ("deployment", "system"),
-        "required_adapter": "not queueable until worker dispatch lands",
-        "live_proof_gate": "PG-PROVISION",
-        "local_contract": "visible as a planned operation only; no queueing or live side effect is exposed",
+        "required_adapter": "action worker with control DB access; explicit fake/local record-only execution contract for bounded batch execution",
+        "live_proof_gate": "PG-UPGRADE/PG-HERMES",
+        "local_contract": "queues audited local ArcPod update rollout rows from a ready dry-run preflight plan and can record one bounded fake/local batch; live refresh and health/smoke proof remain gated",
     },
 }
 ARCLINK_USER_DASHBOARD_SECTIONS = (
     "deployment_health",
     "access_links",
     "wrapped",
+    "academy_training",
     "bot_setup",
     "backup",
     "files",
@@ -278,6 +289,126 @@ def admin_action_execution_readiness(env: Mapping[str, str] | None = None) -> di
             if executable
             else "executor probes are not ready; admin actions fail closed in the UI"
         ),
+    }
+
+
+def control_node_provisioning_readiness(
+    conn: sqlite3.Connection,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Return the local Control Node ArcPod provisioning readiness read model.
+
+    This helper is intentionally read-only. SSH, Docker, provider, ingress, and
+    live worker probes stay under PG-FLEET/PG-PROVISION.
+    """
+    from arclink_fleet import fleet_capacity_summary
+
+    source_env = env if env is not None else os.environ
+    provisioner_enabled = _truthy(source_env.get("ARCLINK_CONTROL_PROVISIONER_ENABLED"))
+    executor_adapter = str(source_env.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower() or "disabled"
+    capacity = fleet_capacity_summary(conn)
+    hosts = list(capacity.get("hosts") or [])
+    eligible_workers = [
+        {
+            "host_id": str(host.get("host_id") or ""),
+            "hostname": str(host.get("hostname") or ""),
+            "region": str(host.get("region") or ""),
+            "headroom": max(0, int(host.get("headroom") or 0)),
+            "executor_adapter": executor_adapter,
+        }
+        for host in hosts
+        if str(host.get("status") or "") == "active"
+        and not bool(host.get("drain"))
+        and int(host.get("headroom") or 0) > 0
+    ]
+    eligible_slots = sum(int(host["headroom"]) for host in eligible_workers)
+    blockers: list[dict[str, str]] = []
+
+    if executor_adapter not in {"fake", "local", "ssh"}:
+        blockers.append(
+            {
+                "name": "executor_adapter",
+                "detail": "ARCLINK_EXECUTOR_ADAPTER must be fake, local, or ssh before ArcPod provisioning can run.",
+            }
+        )
+    if not eligible_workers:
+        blockers.append(
+            {
+                "name": "worker_capacity",
+                "detail": "No active, undrained worker has available capacity.",
+            }
+        )
+
+    ssh_blockers: list[dict[str, str]] = []
+    if executor_adapter == "ssh":
+        machine_enabled = _truthy(
+            source_env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED")
+            or source_env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED")
+        )
+        host = str(
+            source_env.get("ARCLINK_ACTION_WORKER_SSH_HOST")
+            or source_env.get("ARCLINK_LOCAL_FLEET_SSH_HOST")
+            or ""
+        ).strip().lower()
+        allowed_hosts = _csv_set(
+            str(
+                source_env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
+                or source_env.get("ARCLINK_ACTION_WORKER_SSH_HOST_ALLOWLIST")
+                or ""
+            )
+        )
+        key_path = str(source_env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
+        if not machine_enabled:
+            ssh_blockers.append({"name": "ssh_machine_mode", "detail": "SSH machine mode is disabled."})
+        if not host or host not in allowed_hosts:
+            ssh_blockers.append({"name": "ssh_host", "detail": "SSH host is missing or not allowlisted."})
+        if not key_path:
+            ssh_blockers.append({"name": "ssh_key", "detail": "Fleet SSH key path is missing."})
+        blockers.extend(ssh_blockers)
+
+    if not provisioner_enabled:
+        state = "control_plane_only"
+        ready = False
+        next_action = "Register and smoke-test a Sovereign worker, then enable ARCLINK_CONTROL_PROVISIONER_ENABLED."
+        summary = "control plane up; ArcPod provisioning disabled until a worker is registered and smoke-tested"
+    elif ssh_blockers:
+        state = "pending_ssh"
+        ready = False
+        next_action = "Complete SSH machine-mode host allowlist and fleet key configuration, then run an authorized worker smoke proof."
+        summary = "blocked pending SSH worker configuration"
+    elif eligible_workers and executor_adapter in {"fake", "local", "ssh"}:
+        state = "ready_to_provision"
+        ready = True
+        next_action = "Run PG-FLEET/PG-PROVISION before claiming live worker readiness."
+        summary = f"ready to provision ArcPods ({len(eligible_workers)} eligible worker(s), {eligible_slots} available slot(s))"
+    elif not eligible_workers:
+        state = "blocked_no_worker"
+        ready = False
+        next_action = "Register, probe, and un-drain at least one worker with available capacity."
+        summary = "blocked; no eligible worker has available capacity"
+    else:
+        state = "blocked_executor"
+        ready = False
+        next_action = "Configure a supported executor adapter and rerun the local readiness check."
+        summary = "blocked; executor adapter is not configured for provisioning"
+
+    return {
+        "state": state,
+        "ready_to_provision": ready,
+        "summary": summary,
+        "provisioner_enabled": provisioner_enabled,
+        "executor_adapter": executor_adapter,
+        "eligible_worker_count": len(eligible_workers),
+        "available_slots": eligible_slots,
+        "total_workers": int(capacity.get("total_hosts") or 0),
+        "active_workers": int(capacity.get("active_hosts") or 0),
+        "eligible_workers": eligible_workers,
+        "blockers": blockers,
+        "next_action": next_action,
+        "proof_gate": "PG-FLEET/PG-PROVISION",
+        "live_proof_required": True,
+        "note": "Local readiness is not live worker proof; no SSH, Docker, provider, ingress, or deploy command was run.",
     }
 
 
@@ -435,11 +566,13 @@ def build_scale_operations_snapshot(
     conn: sqlite3.Connection,
     *,
     stale_action_threshold_seconds: int = 3600,
+    rollout_target_version: str = "",
+    rollout_batch_size: int | None = None,
 ) -> dict[str, Any]:
     """Build operator-visible scale operations read model."""
     from arclink_fleet import fleet_capacity_summary
     from arclink_inventory import list_inventory_machines
-    from arclink_rollout import list_rollouts
+    from arclink_rollout import ArcLinkRolloutError, plan_arcpod_update_rollout
 
     capacity = fleet_capacity_summary(conn)
     inventory = [
@@ -510,27 +643,76 @@ def build_scale_operations_snapshot(
     ]
 
     # Active rollouts
-    active_rollouts = [
-        {
-            "rollout_id": str(r["rollout_id"]),
-            "deployment_id": str(r["deployment_id"]),
-            "version_tag": str(r["version_tag"]),
-            "status": str(r["status"]),
-            "current_wave": int(r["current_wave"]),
-            "wave_count": int(r["wave_count"]),
-        }
-        for r in conn.execute(
-            "SELECT * FROM arclink_rollouts WHERE status IN ('planned', 'in_progress', 'paused') ORDER BY created_at DESC LIMIT 20",
-        ).fetchall()
-    ]
+    active_rollouts = []
+    for r in conn.execute(
+        "SELECT * FROM arclink_rollouts WHERE status IN ('planned', 'in_progress', 'paused', 'failed') ORDER BY created_at DESC LIMIT 20",
+    ).fetchall():
+        rollout_metadata = json_loads_safe(str(r["metadata_json"] or "{}"))
+        rollout_metadata = dict(rollout_metadata) if isinstance(rollout_metadata, Mapping) else {}
+        execution = rollout_metadata.get("execution")
+        execution = dict(execution) if isinstance(execution, Mapping) else {}
+        health_smoke = rollout_metadata.get("health_smoke")
+        health_smoke = dict(health_smoke) if isinstance(health_smoke, Mapping) else {}
+        active_rollouts.append(
+            {
+                "rollout_id": str(r["rollout_id"]),
+                "deployment_id": str(r["deployment_id"]),
+                "version_tag": str(r["version_tag"]),
+                "status": str(r["status"]),
+                "current_wave": int(r["current_wave"]),
+                "wave_count": int(r["wave_count"]),
+                "rollout_group_id": str(rollout_metadata.get("rollout_group_id") or ""),
+                "batch_index": int(rollout_metadata.get("batch_index") or 0),
+                "batch_position": int(rollout_metadata.get("batch_position") or 0),
+                "execution_status": str(execution.get("status") or ""),
+                "execution_adapter": str(execution.get("adapter") or ""),
+                "health_smoke_status": str(health_smoke.get("status") or ""),
+                "proof_gate": str(rollout_metadata.get("proof_gate") or ""),
+                "live_proof_required": bool(rollout_metadata.get("live_proof_required")),
+            }
+        )
 
-    # Provisioner state: check env for enabled flag
-    provisioner_enabled = bool(
-        os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "").strip()
-        and os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "").strip().lower()
-        not in ("0", "false", "no", "off")
-    )
     action_readiness = admin_action_execution_readiness()
+    provisioning_readiness = control_node_provisioning_readiness(conn)
+    clean_rollout_target = str(
+        rollout_target_version
+        or os.environ.get("ARCLINK_ROLLOUT_TARGET_VERSION")
+        or os.environ.get("ARCLINK_UPGRADE_TARGET_VERSION")
+        or ""
+    ).strip()
+    if clean_rollout_target:
+        try:
+            rollout_dry_run_plan = plan_arcpod_update_rollout(
+                conn,
+                target_version=clean_rollout_target,
+                batch_size=rollout_batch_size,
+                env=os.environ,
+            )
+        except ArcLinkRolloutError as exc:
+            rollout_dry_run_plan = {
+                "plan_kind": "arcpod_update_rollout",
+                "mode": "dry_run",
+                "status": "blocked",
+                "target_version": clean_rollout_target,
+                "preflight_blockers": [{"code": "planner_error", "message": str(exc)}],
+                "repair_summary": [str(exc)],
+                "execution": {"enabled": False, "reason": "dry-run planner refused the rollout request"},
+                "mutation_performed": False,
+                "proof_gate": "PG-UPGRADE/PG-HERMES",
+                "live_proof_required": True,
+            }
+    else:
+        rollout_dry_run_plan = {
+            "plan_kind": "arcpod_update_rollout",
+            "mode": "dry_run",
+            "status": "not_configured",
+            "target_version": "",
+            "summary": "Set ARCLINK_ROLLOUT_TARGET_VERSION or pass rollout_target_version to preview a bounded ArcPod update plan.",
+            "execution": {"enabled": False, "reason": "no target version configured"},
+            "mutation_performed": False,
+            "proof_gate": "PG-UPGRADE/PG-HERMES",
+            "live_proof_required": True,
+        }
 
     return {
         "fleet_capacity": capacity,
@@ -544,13 +726,16 @@ def build_scale_operations_snapshot(
         "recent_action_attempts": recent_attempts,
         "last_executor_result": recent_attempts[0] if recent_attempts else {},
         "active_rollouts": active_rollouts,
-        "rollout_surface": "internal_read_only",
+        "rollout_dry_run_plan": rollout_dry_run_plan,
+        "rollout_surface": "local_job_queueable_with_bounded_fake_execution",
+        "rollout_execution_boundary": "dry-run previews are read-only; queued rollout actions can materialize rows and explicitly record one fake/local batch, but live refresh, health, and smoke proof remain PG-UPGRADE/PG-HERMES gated",
         "provisioner": {
-            "enabled": provisioner_enabled,
+            "enabled": bool(provisioning_readiness["provisioner_enabled"]),
             "executor_adapter": action_readiness["executor_adapter"],
-            "status": "active" if provisioner_enabled else "disabled",
-            "note": "" if provisioner_enabled else "ARCLINK_CONTROL_PROVISIONER_ENABLED is not set; provisioning worker is idle",
+            "status": str(provisioning_readiness["state"]),
+            "note": str(provisioning_readiness["summary"]),
         },
+        "provisioning_readiness": provisioning_readiness,
         "action_execution_readiness": action_readiness,
     }
 
@@ -1134,6 +1319,7 @@ def _user_dashboard_sections(
     billing: Mapping[str, Any],
     notion_setup: Mapping[str, Any],
     backup_setup: Mapping[str, Any],
+    academy_training: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     qmd = next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""})
     memory = next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""})
@@ -1166,6 +1352,21 @@ def _user_dashboard_sections(
             "label": "ArcLink Wrapped",
             "status": "ready",
             "summary": "Captain-facing period reports and cadence controls",
+        },
+        {
+            "section": "academy_training",
+            "label": "Academy Training",
+            "status": str(academy_training.get("status") or "not_started"),
+            "summary": str(academy_training.get("summary") or ""),
+            "proof_gates": list(academy_training.get("proof_gates") or []),
+            "source_count": int(academy_training.get("source_count") or 0),
+            "weekly_review_status": str(academy_training.get("weekly_review_status") or "not_started"),
+            "evaluation_status": str(academy_training.get("evaluation_status") or "not_started"),
+            "graduation_status": str(academy_training.get("graduation_status") or "not_started"),
+            "next_review_at": str(academy_training.get("next_review_at") or ""),
+            "review_needed_count": int(academy_training.get("review_needed_count") or 0),
+            "blocked_source_count": int(academy_training.get("blocked_source_count") or 0),
+            "source_state_counts": dict(academy_training.get("source_state_counts") or {}),
         },
         {
             "section": "bot_setup",
@@ -1438,6 +1639,8 @@ def read_arclink_user_dashboard(
     ]
     deployment_cards: list[dict[str, Any]] = []
     wrapped = list_user_wrapped_reports(conn, user_id)
+    from arclink_crew_recipes import crew_academy_status
+    academy_training = crew_academy_status(conn, user_id=user_id)
     for row in deployments:
         dep = dict(row)
         health = _service_health(conn, str(dep["deployment_id"]))
@@ -1498,6 +1701,7 @@ def read_arclink_user_dashboard(
                 "model": model,
                 "notion_setup": notion_setup,
                 "backup_setup": backup_setup,
+                "academy_training": academy_training,
                 "freshness": {
                     "qmd": next((item for item in health if item["service_name"] == "qmd-mcp"), {"status": "unknown", "checked_at": ""}),
                     "memory": next((item for item in health if item["service_name"] == "memory-synth"), {"status": "unknown", "checked_at": ""}),
@@ -1510,6 +1714,7 @@ def read_arclink_user_dashboard(
                     billing=billing,
                     notion_setup=notion_setup,
                     backup_setup=backup_setup,
+                    academy_training=academy_training,
                 ),
                 "service_health": health,
                 "recent_events": _deployment_events(conn, str(dep["deployment_id"]), limit=recent_limit),
@@ -1530,6 +1735,7 @@ def read_arclink_user_dashboard(
         },
         "wrapped": wrapped,
         "share_inbox": _user_share_inbox_summary(conn, user_id),
+        "academy_training": academy_training,
         "deployments": deployment_cards,
     }
 
@@ -2026,6 +2232,7 @@ def read_arclink_admin_dashboard(
         "service_health": service_health,
         "dns_drift": dns_drift,
         "provisioning_jobs": provisioning_jobs,
+        "provisioning_readiness": control_node_provisioning_readiness(conn),
         "action_intents": action_intents,
         "action_execution_readiness": admin_action_execution_readiness(),
         "wrapped": wrapped,
@@ -2063,6 +2270,12 @@ def queue_arclink_admin_action(
         raise ArcLinkDashboardError(f"ArcLink admin action type is not queueable until worker support lands: {clean_action}")
     if clean_target_kind not in ARCLINK_ADMIN_TARGET_KINDS or not clean_target_id:
         raise ArcLinkDashboardError("ArcLink admin actions require a supported target")
+    allowed_target_kinds = tuple(ARCLINK_ADMIN_ACTION_SUPPORT.get(clean_action, {}).get("target_kinds") or ())
+    if allowed_target_kinds and clean_target_kind not in allowed_target_kinds:
+        allowed = ", ".join(str(kind) for kind in allowed_target_kinds)
+        raise ArcLinkDashboardError(
+            f"ArcLink admin action {clean_action} does not support target kind {clean_target_kind}; allowed: {allowed}"
+        )
     if not clean_reason:
         raise ArcLinkDashboardError("ArcLink admin actions require a reason")
     if not clean_key:

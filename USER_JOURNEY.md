@@ -571,13 +571,22 @@ The next dream layer is Academy Trainer: role-specific source discovery,
 lawful transcript/discussion/paper/repo/web corpus assembly, lesson cards,
 skill maps, SOUL overlays, vault/qmd/memory application, evaluation, and weekly
 Continuing Education for each Crew member
-(`docs/arclink/academy-trainer.md`). That is intentionally tracked as a
-separate product gap because current Crew Training does not yet build reusable
-subject-matter corpora or continuing education pipelines.
+(`docs/arclink/academy-trainer.md`). The first local foundation now exists:
+`python/arclink_academy_trainer.py` and
+`tests/test_arclink_academy_trainer.py` define governed fake/local source
+lanes, fake acquisition adapters, corpus manifests, quality scoring,
+curriculum/evaluation output, no-write Agent application plans, and
+weekly Continuing Education review/gate persistence. ArcLink can also queue an
+audited no-write Academy apply preview from a staged Crew Recipe review and
+show weekly review, evaluation, graduation, next-review, blocked-source, and
+proof-gate status in dashboard and Operator Raven. It still does not
+live-crawl, transcribe, call providers, mutate Hermes homes, write vault/qmd
+state, run real application-worker writes, host the weekly scheduler, or prove
+trained-Agent workspace behavior.
 
 Status: local control/API surfaces are `real`; live LLM recipe generation
-and live bot delivery are `proof-gated`; Academy Trainer is `product-gap`
-under `GAP-034`.
+and live bot delivery are `proof-gated`; Academy Trainer is `partial` local
+foundation plus `product-gap`/policy/proof gates under `GAP-034`.
 
 ## 11. Admin And Operator Journey
 
@@ -1035,12 +1044,40 @@ instead of reopening this atlas unless source behavior changes.
 The current Sovereign Control Node dream-shape expansion is captured in
 `docs/arclink/sovereign-control-node-symphony.md`. It deliberately keeps the
 remaining gaps visible: full-service Operator Raven (`GAP-029`), worker
-readiness at install (`GAP-030`), router fallback cascade (`GAP-031`), rolling
-ArcPod/Hermes updates (`GAP-032`), and one enforced cross-surface experience
-gate (`GAP-033`). `GAP-029` now has a first local read-only/dry-run Operator
+readiness at install (`GAP-030`), router fallback proof (`GAP-031`), rolling
+ArcPod/Hermes updates (`GAP-032`), and live cross-surface experience proof
+(`GAP-033`). `GAP-029` now has a first local read-only/dry-run Operator
 Raven slice for status, fleet list, worker probe dry-run, user lookup, pod
 repair dry-run, and injected upgrade check, but broad chat-native mutation
-remains policy/proof gated.
+remains policy/proof gated. `GAP-030` now has local admin/dashboard,
+Operator Raven, and web readiness surfacing for no-worker, pending-SSH, local,
+and remote worker states, but live worker proof remains `PG-FLEET` and
+`PG-PROVISION`. `GAP-032` now has a local ArcPod rollout dry-run planner for
+candidate selection, batch policy, preflight blockers, rollback/state-root
+preservation, and admin/Operator Raven visibility, plus a local action-worker
+path that materializes ready plans into deterministic per-Pod rollout rows
+without live side effects and can explicitly record one bounded fake/local
+batch with stop-on-failure status truth. Real refresh/apply execution and live
+`PG-UPGRADE`/`PG-HERMES` proof remain open. `GAP-031` now has local
+non-streaming and pre-stream fallback, sanitized failed-attempt audit,
+fallback-aware reservations, and final-model usage/pricing labels; live
+`PG-PROVIDER` overload proof remains open. `GAP-034` now has a local Academy
+foundation, fake acquisition adapter coverage, review/status integration, and
+weekly Continuing Education persistence:
+governed fixture records can be accepted, rejected, or proof-gated without
+network calls, then accepted sources can feed Academy manifests and no-write
+application plans that are summarized, staged on an active Crew Recipe, shown
+in the dashboard Crew Training panel and Crew Recipe API, persisted as a
+weekly review/gate summary, and reported by Operator Raven without implying
+live-trained Agent proof. Real Academy live source acquisition,
+provider/transcription generation, workspace application, application-worker
+writes, hosted scheduling, and source-governance decisions remain open under
+`GAP-034`.
+`GAP-033` now has a local cross-surface contract gate for representative
+Captain Raven, Operator Raven, dashboard readiness, product surface,
+Drive/Code/Terminal plugin status, and CLI readiness copy; live browser,
+workspace, and Telegram/Discord rendering proof remains open under
+`PG-PROD`, `PG-HERMES`, and `PG-BOTS`.
 
 Final reader test: if a future agent can explain both the beautiful intended
 journey and the current hard truth without adding live claims, this document has

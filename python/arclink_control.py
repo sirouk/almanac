@@ -1235,6 +1235,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           stream INTEGER NOT NULL DEFAULT 0,
           source_kind TEXT NOT NULL DEFAULT '',
           error_summary TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
           started_at TEXT NOT NULL,
           completed_at TEXT NOT NULL DEFAULT ''
         );
@@ -1247,6 +1248,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           reserved_cents INTEGER NOT NULL,
           settled_cents INTEGER NOT NULL DEFAULT 0,
           status TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'released', 'failed')),
+          metadata_json TEXT NOT NULL DEFAULT '{}',
           created_at TEXT NOT NULL,
           settled_at TEXT NOT NULL DEFAULT ''
         );
@@ -1813,6 +1815,8 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     _ensure_column(conn, "arclink_model_catalog", "version_sort_key", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_model_catalog", "first_seen_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_model_catalog", "last_seen_at", "TEXT NOT NULL DEFAULT ''")
+    _ensure_column(conn, "arclink_llm_usage_events", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "arclink_llm_budget_reservations", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
     _ensure_column(conn, "arclink_action_intents", "worker_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_action_intents", "claimed_at", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "arclink_pod_migrations", "source_placement_id", "TEXT NOT NULL DEFAULT ''")

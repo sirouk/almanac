@@ -105,6 +105,41 @@ def fake_stream_transport(chunks: list[bytes], marks: list[str]):
     return transport
 
 
+def fake_sequence_stream_transport(responses: list[dict[str, Any]], marks: list[str]):
+    import httpx
+
+    class ChunkStream(httpx.AsyncByteStream):
+        def __init__(self, chunks: list[bytes]) -> None:
+            self.chunks = chunks
+
+        async def __aiter__(self):
+            for idx, chunk in enumerate(self.chunks):
+                marks.append(f"yield:{idx}")
+                yield chunk
+
+    requests: list[dict[str, Any]] = []
+    queue = list(responses)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append({"payload": json.loads(request.content.decode("utf-8"))})
+        if not queue:
+            return httpx.Response(500, content=b"unexpected extra upstream stream request")
+        item = queue.pop(0)
+        status_code = int(item.get("status_code", 200))
+        if "chunks" in item:
+            return httpx.Response(
+                status_code,
+                headers={"content-type": "text/event-stream"},
+                stream=ChunkStream(list(item["chunks"])),
+            )
+        raw = item.get("content", b"")
+        return httpx.Response(status_code, content=raw.encode("utf-8") if isinstance(raw, str) else raw)
+
+    transport = httpx.MockTransport(handler)
+    transport.requests = requests  # type: ignore[attr-defined]
+    return transport
+
+
 def fake_broken_stream_transport(first_chunk: bytes, error_message: str):
     import httpx
 
@@ -1198,6 +1233,99 @@ def test_chat_retries_configured_fallback_model_after_retryable_upstream_error()
     print("PASS test_chat_retries_configured_fallback_model_after_retryable_upstream_error")
 
 
+def test_chat_fallback_uses_final_model_pricing_and_sanitized_attempt_audit() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        control = load_module("arclink_control.py", "arclink_control_llm_router_fallback_pricing_test")
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            control.upsert_model_catalog(
+                conn,
+                provider="chutes",
+                models={
+                    "model-a": {
+                        "input_cents_per_million": 1,
+                        "output_cents_per_million": 1,
+                    },
+                    "model-b": {
+                        "input_cents_per_million": 100000,
+                        "output_cents_per_million": 200000,
+                    },
+                },
+            )
+        finally:
+            conn.close()
+        upstream = fake_sequence_upstream_transport(
+            [
+                {"status_code": 429, "content": "rate limited token=sk-proj-abcdefghijklmnopqrstuvwxyz"},
+                {
+                    "status_code": 200,
+                    "json": {
+                        "id": "chatcmpl_cost_fallback",
+                        "object": "chat.completion",
+                        "model": "model-b",
+                        "choices": [{"message": {"role": "assistant", "content": "fallback ok"}}],
+                        "usage": {"prompt_tokens": 1000, "completion_tokens": 1000, "total_tokens": 2000},
+                    },
+                },
+            ]
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "model-b",
+                "ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES": "429",
+            },
+            upstream_transport=upstream,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "do not store cost fallback prompt"}]},
+        )
+        expect(response.status_code == 200, response.text)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            usage = conn.execute("SELECT model, actual_cents, metadata_json FROM arclink_llm_usage_events").fetchone()
+            reservation = conn.execute("SELECT reserved_cents, settled_cents, metadata_json FROM arclink_llm_budget_reservations").fetchone()
+            event = conn.execute(
+                "SELECT metadata_json FROM arclink_events WHERE event_type = 'llm_router:fallback_attempt'"
+            ).fetchone()
+            serialized = "\n".join(
+                str(dict(row))
+                for table in ("arclink_llm_usage_events", "arclink_llm_budget_reservations", "arclink_events", "arclink_deployments")
+                for row in conn.execute(f"SELECT * FROM {table}").fetchall()
+            )
+        finally:
+            conn.close()
+        usage_meta = json.loads(usage["metadata_json"])
+        reservation_meta = json.loads(reservation["metadata_json"])
+        event_meta = json.loads(event["metadata_json"])
+        expect(usage["model"] == "model-b" and int(usage["actual_cents"]) == 300, dict(usage))
+        expect(usage_meta["requested_model"] == "model-a" and usage_meta["primary_model"] == "model-a", str(usage_meta))
+        expect(usage_meta["usage_model"] == "model-b" and usage_meta["fallback_used"] is True, str(usage_meta))
+        expect(usage_meta["reservation_pricing_model"] == "model-b", str(usage_meta))
+        expect(usage_meta["usage_pricing_model"] == "model-b", str(usage_meta))
+        expect(reservation_meta["requested_model"] == "model-a" and reservation_meta["final_model"] == "model-b", str(reservation_meta))
+        expect(reservation["reserved_cents"] > 1 and reservation["settled_cents"] == 300, dict(reservation))
+        expect(reservation_meta["reservation_pricing_model"] == "model-b", str(reservation_meta))
+        expect(reservation_meta["fallback_used"] is True and reservation_meta["fallback_pricing_reserved"] is True, str(reservation_meta))
+        expect(reservation_meta["pricing_adjusted_at_settlement"] is False, str(reservation_meta))
+        expect(event_meta["attempted_model"] == "model-a" and event_meta["next_model"] == "model-b", str(event_meta))
+        expect(event_meta["status_code"] == 429 and event_meta["outcome"] == "retrying", str(event_meta))
+        expect("sk-proj" not in serialized and "do not store cost fallback prompt" not in serialized, serialized)
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_fallback_uses_final_model_pricing_and_sanitized_attempt_audit")
+
+
 def test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -1232,6 +1360,75 @@ def test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_str
     finally:
         tmp.cleanup()
     print("PASS test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string")
+
+
+def test_chat_streaming_retries_pre_stream_fallback_and_records_metadata() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        marks: list[str] = []
+        chunks = [
+            b'data: {"id":"chunk_fallback","choices":[{"delta":{"content":"hel"}}]}\n\n',
+            b'data: {"id":"chunk_fallback","choices":[{"delta":{"content":"lo"}}],"usage":{"prompt_tokens":6,"completion_tokens":2,"total_tokens":8}}\n\n',
+            b"data: [DONE]\n\n",
+        ]
+        upstream = fake_sequence_stream_transport(
+            [
+                {"status_code": 429, "content": "stream overloaded api_key=cpk_live_SECRETSECRETSECRETSECRET"},
+                {"status_code": 200, "chunks": chunks},
+            ],
+            marks,
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "model-b",
+                "ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES": "429",
+            },
+            upstream_transport=upstream,
+        )
+        with client.stream(
+            "POST",
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "stream": True, "messages": [{"role": "user", "content": "do not store streaming prompt"}]},
+        ) as response:
+            body = b"".join(response.iter_bytes())
+        text = body.decode("utf-8")
+        expect(response.status_code == 200, text)
+        expect(len(upstream.requests) == 2, str(upstream.requests))  # type: ignore[attr-defined]
+        expect(upstream.requests[0]["payload"]["model"] == "model-a", str(upstream.requests))  # type: ignore[attr-defined]
+        expect(upstream.requests[1]["payload"]["model"] == "model-b", str(upstream.requests))  # type: ignore[attr-defined]
+        expect('"arclink_router"' in text and '"fallback_used":true' in text.replace(" ", ""), text)
+        expect(b"".join(chunks) in body, text)
+        expect(marks == ["yield:0", "yield:1", "yield:2"], str(marks))
+        expect("cpk_live" not in text and "do not store streaming prompt" not in text, text)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            usage = conn.execute("SELECT model, status, stream, metadata_json FROM arclink_llm_usage_events").fetchone()
+            event = conn.execute(
+                "SELECT metadata_json FROM arclink_events WHERE event_type = 'llm_router:fallback_attempt'"
+            ).fetchone()
+            serialized = "\n".join(
+                str(dict(row))
+                for table in ("arclink_llm_usage_events", "arclink_llm_budget_reservations", "arclink_events", "arclink_deployments")
+                for row in conn.execute(f"SELECT * FROM {table}").fetchall()
+            )
+        finally:
+            conn.close()
+        usage_meta = json.loads(usage["metadata_json"])
+        event_meta = json.loads(event["metadata_json"])
+        expect(usage["model"] == "model-b" and usage["status"] == "succeeded" and usage["stream"] == 1, dict(usage))
+        expect(usage_meta["fallback_used"] is True and usage_meta["streaming_fallback"] == "pre_stream", str(usage_meta))
+        expect(event_meta["stream"] is True and event_meta["outcome"] == "retrying", str(event_meta))
+        expect("cpk_live" not in serialized and "do not store streaming prompt" not in serialized, serialized)
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_streaming_retries_pre_stream_fallback_and_records_metadata")
 
 
 def test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage() -> None:
@@ -1303,9 +1500,11 @@ def main() -> int:
     test_chat_streaming_passes_chunks_and_records_provider_usage()
     test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations()
     test_chat_retries_configured_fallback_model_after_retryable_upstream_error()
+    test_chat_fallback_uses_final_model_pricing_and_sanitized_attempt_audit()
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
+    test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 18 ArcLink LLM router tests")
+    print("PASS all 20 ArcLink LLM router tests")
     return 0
 
 

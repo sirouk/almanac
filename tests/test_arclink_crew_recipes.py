@@ -64,6 +64,59 @@ def seed_user_and_deployments(control, conn: sqlite3.Connection, tmpdir: str, *,
     return {"user_id": user_id, "deployment_1": deployment_ids[0], "deployment_2": deployment_ids[1]}
 
 
+def academy_review_artifacts(academy):
+    sources = [
+        academy.fake_academy_source(
+            source_id="src-review-wiki",
+            lane_id="wikimedia",
+            title="Review Systems Overview",
+            origin_url="https://example.test/wiki/review-systems",
+            retrieved_at="2026-05-27T00:00:00Z",
+            license_status="cc-by-sa",
+            permission_status="public_allowed",
+            storage_policy="derived_summary",
+            content="Review systems need source maps, quality gates, and clear proof boundaries.",
+            citations=["overview", "source map", "quality gate"],
+            metadata={"revision": "review-systems-1", "official": True, "examples": True},
+        ),
+        academy.fake_academy_source(
+            source_id="src-review-skill",
+            lane_id="skill_tool_catalog",
+            title="Reviewed Academy Skill",
+            origin_url="local-skill-catalog://academy-review",
+            retrieved_at="2026-05-27T00:00:00Z",
+            license_status="internal-approved",
+            permission_status="operator_approved",
+            storage_policy="metadata_only",
+            content="Use retrieval before specialist advice.",
+            citations=["local skill review"],
+            metadata={"public_skill": True, "review_status": "approved", "skill_id": "academy-review"},
+            review_status="approved",
+        ),
+    ]
+    manifest = academy.build_academy_corpus(
+        role_id="role-review-agent",
+        role_title="Review Agent",
+        topic="review-ready Academy training",
+        sources=sources,
+        created_at="2026-05-27T00:00:00Z",
+    )
+    application = academy.build_agent_application_plan(
+        manifest,
+        agent_id="agent-review",
+        created_at="2026-05-27T01:00:00Z",
+    )
+    refresh = academy.build_continuing_education_plan(
+        manifest,
+        observed_sources={
+            source_id: {"content_hash": source["content_hash"]}
+            for source_id, source in manifest.sources.items()
+        },
+        checked_at="2026-05-28T00:00:00Z",
+    )
+    return manifest, application, refresh
+
+
 def test_validation_and_deterministic_fallback() -> None:
     control = load_module("arclink_control.py", "arclink_control_crew_validation_test")
     crew = load_module("arclink_crew_recipes.py", "arclink_crew_validation_test")
@@ -265,9 +318,137 @@ def test_whats_changed_diff() -> None:
     print("PASS test_whats_changed_diff")
 
 
+def test_academy_review_stages_on_active_recipe_without_workspace_writes() -> None:
+    control = load_module("arclink_control.py", "arclink_control_crew_academy_test")
+    crew = load_module("arclink_crew_recipes.py", "arclink_crew_academy_test")
+    academy = load_module("arclink_academy_trainer.py", "arclink_academy_crew_test")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seeded = seed_user_and_deployments(control, conn, tmpdir)
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        before_memory_paths = list(Path(tmpdir).glob("**/memory.json"))
+        crew.apply_crew_recipe(
+            conn,
+            user_id=seeded["user_id"],
+            role="founder",
+            mission="ship",
+            treatment="peer",
+            preset="Frontier",
+            capacity="development",
+        )
+        manifest, application, refresh = academy_review_artifacts(academy)
+        staged = crew.stage_crew_academy_review(
+            conn,
+            user_id=seeded["user_id"],
+            manifest=manifest,
+            application_plan=application,
+            continuing_education_plan=refresh,
+            actor_id="admin_academy",
+        )
+        status = staged["academy_training"]
+        expect(status["status"] == "ready_for_review", str(status))
+        expect(status["source_count"] == 2, str(status))
+        expect(status["review_persisted"] is True, str(status))
+        expect(status["live_proof_required"] is True, str(status))
+        expect({"PG-PROVIDER", "PG-HERMES"} <= set(status["proof_gates"]), str(status))
+        expect(staged["workspace_mutation_performed"] is False, str(staged))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "Academy staging must not queue actions")
+        expect(list(Path(tmpdir).glob("**/memory.json")) == before_memory_paths, "Academy review staging must not write Agent memory")
+        current = crew.current_crew_recipe(conn, user_id=seeded["user_id"])
+        expect(current["soul_overlay"]["academy_training"]["manifest_id"] == manifest.manifest_id, str(current))
+        public_status = crew.crew_academy_status(conn, user_id=seeded["user_id"])
+        expect(public_status["manifest_id"] == manifest.manifest_id, str(public_status))
+        audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
+        expect("crew_academy_review_staged" in audit_actions, str(audit_actions))
+        event_types = [row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events ORDER BY created_at").fetchall()]
+        expect("crew_academy_review_staged" in event_types, str(event_types))
+        text = json.dumps(staged, sort_keys=True)
+        expect("secret://" not in text and "sk_" not in text, text)
+    print("PASS test_academy_review_stages_on_active_recipe_without_workspace_writes")
+
+
+def test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes() -> None:
+    control = load_module("arclink_control.py", "arclink_control_crew_academy_weekly_test")
+    crew = load_module("arclink_crew_recipes.py", "arclink_crew_academy_weekly_test")
+    academy = load_module("arclink_academy_trainer.py", "arclink_academy_crew_weekly_test")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seeded = seed_user_and_deployments(control, conn, tmpdir)
+        crew.apply_crew_recipe(
+            conn,
+            user_id=seeded["user_id"],
+            role="founder",
+            mission="ship",
+            treatment="peer",
+            preset="Frontier",
+            capacity="development",
+        )
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        before_memory_paths = list(Path(tmpdir).glob("**/memory.json"))
+        manifest, application, _refresh = academy_review_artifacts(academy)
+        staged = crew.stage_crew_academy_weekly_review(
+            conn,
+            user_id=seeded["user_id"],
+            manifest=manifest,
+            application_plan=application,
+            observed_sources={
+                "src-review-wiki": {"content_hash": manifest.sources["src-review-wiki"]["content_hash"]},
+                "src-review-skill": {"content_hash": "changed-" + manifest.sources["src-review-skill"]["content_hash"]},
+            },
+            checked_at="2026-06-15T00:00:00Z",
+            next_review_at="2026-06-22T00:00:00Z",
+            actor_id="admin_academy",
+            reason="weekly Academy review test",
+        )
+        status = staged["academy_training"]
+        expect(status["status"] == "ready_for_review", str(status))
+        expect(status["weekly_review_status"] == "ready_for_review", str(status))
+        expect(status["evaluation_status"] == "ready_for_review", str(status))
+        expect(status["graduation_status"] == "blocked_by_live_proof", str(status))
+        expect(status["next_review_at"] == "2026-06-22T00:00:00Z", str(status))
+        expect(status["review_needed_count"] == 1, str(status))
+        expect(status["blocked_source_count"] == 0, str(status))
+        expect(status["source_state_counts"]["changed"] == 1, str(status))
+        expect(status["local_only"] is True and status["no_network"] is True and status["no_write"] is True, str(status))
+        expect(status["writes_enabled"] is False and status["live_proof_required"] is True, str(status))
+        expect(staged["workspace_mutation_performed"] is False, str(staged))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "Academy weekly review must not queue actions")
+        expect(list(Path(tmpdir).glob("**/memory.json")) == before_memory_paths, "Academy weekly review must not write Agent memory")
+        current = crew.current_crew_recipe(conn, user_id=seeded["user_id"])
+        overlay_status = current["soul_overlay"]["academy_training"]
+        expect(overlay_status["manifest_id"] == manifest.manifest_id, str(overlay_status))
+        expect(overlay_status["weekly_review_status"] == "ready_for_review", str(overlay_status))
+        audit_rows = [
+            json.loads(row["metadata_json"])
+            for row in conn.execute(
+                "SELECT metadata_json FROM arclink_audit_log WHERE action = 'crew_academy_review_staged'"
+            ).fetchall()
+        ]
+        expect(audit_rows, "weekly review audit row missing")
+        audit = audit_rows[-1]
+        expect(audit["recipe_id"] == current["recipe_id"], str(audit))
+        expect(audit["manifest_id"] == manifest.manifest_id, str(audit))
+        expect(audit["status"] == "ready_for_review", str(audit))
+        expect(audit["review_needed_count"] == 1, str(audit))
+        expect(audit["blocked_source_count"] == 0, str(audit))
+        expect(audit["graduation_status"] == "blocked_by_live_proof", str(audit))
+        event_rows = [
+            json.loads(row["metadata_json"])
+            for row in conn.execute(
+                "SELECT metadata_json FROM arclink_events WHERE event_type = 'crew_academy_review_staged'"
+            ).fetchall()
+        ]
+        expect(event_rows and event_rows[-1]["review_needed_count"] == 1, str(event_rows))
+        text = json.dumps(staged, sort_keys=True)
+        expect("secret://" not in text and "sk_" not in text, text)
+    print("PASS test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes")
+
+
 if __name__ == "__main__":
     test_validation_and_deterministic_fallback()
     test_provider_success_and_unsafe_retry_fallback()
     test_operator_configured_provider_can_train_without_deployment_boundary()
     test_confirm_archives_prior_audits_and_projects_overlay_without_memory_writes()
     test_whats_changed_diff()
+    test_academy_review_stages_on_active_recipe_without_workspace_writes()
+    test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes()

@@ -1,5 +1,190 @@
 # Build Completion Notes
 
+## 2026-05-27 Document Phase Handoff After GAP-034-E
+
+Gap slice: documentation/status handoff for the empty unattended `LOCAL` queue
+after `GAP-034-E`. No source behavior, live proof, deploy/install/upgrade,
+Docker lifecycle, provider, Stripe, bot, Notion, Cloudflare, Tailscale, SSH, or
+host-mutating command was run.
+
+Files changed:
+
+- `IMPLEMENTATION_PLAN.md`: marked the document phase complete, checked off the
+  stale-slice/status/validation/no-overclaim tasks, and recorded the focused
+  local validation results.
+- `mission_status.md`: added the document-phase handoff and current remaining
+  live-proof, policy, and residual-risk gates.
+- `research/BUILD_COMPLETION_NOTES.md`: added this resumability note.
+
+Commands run:
+
+- `python3 tests/test_documentation_truths.py`
+- `python3 tests/test_public_repo_hygiene.py`
+- `python3 -m pytest -q tests/test_arclink_docker.py -k 'docker_authority_inventory_matches_compose_boundary or docker_docs_cover_socket' --maxfail=5`
+- `git diff --check`
+
+Remaining gates:
+
+- Live proof: `PG-PROD`, `PG-STRIPE`, `PG-BOTS`, `PG-INGRESS`,
+  `PG-HERMES`, `PG-NOTION`, `PG-BACKUP`, `PG-PROVISION`, `PG-FLEET`,
+  `PG-PROVIDER`, `PG-UPGRADE`, and `PG-SHARED-HOST`.
+- Policy: provider self-service, browser `Request Share` adapter,
+  Captain-initiated migration, provider dashboard/Raven changes, Discord
+  Curator authority, broader Operator Raven mutation, and Academy source
+  governance.
+- Residual risk: `GAP-019` trusted-host Docker/root-helper boundary remains
+  open until accepted, replaced by stronger isolation, or tied to authorized
+  live alert integration.
+
+## 2026-05-27 GAP-034-E Academy Weekly Review And Graduation Gate
+
+Gap slice: reduce `GAP-034` by making weekly Academy Continuing Education
+persistence and local graduation readiness real source behavior. This does not
+claim live source acquisition, provider generation, hosted scheduling, real
+Agent writes, or trained-Agent workspace proof.
+
+Reproduction:
+
+- The focused command from `IMPLEMENTATION_PLAN.md` failed before edits because
+  the four `GAP-034-E` tests did not exist.
+
+Changes:
+
+- `python/arclink_academy_trainer.py`: added weekly review counts/status,
+  next-review metadata, unsafe observed-source rejection, and a graduation gate
+  that fails closed as `blocked_by_live_proof` without `PG-PROVIDER` and
+  `PG-HERMES` proof references.
+- `python/arclink_crew_recipes.py`: persists weekly/gate Academy status on the
+  active Crew Recipe overlay with no network, no Agent writes, and secret-free
+  audit/event metadata.
+- `python/arclink_dashboard.py`, `python/arclink_operator_raven.py`, and
+  `web/src/app/dashboard/page.tsx`: expose weekly review, evaluation,
+  graduation, next-review, blocked-source, and proof-gate status without
+  implying trained-Agent application.
+- `tests/test_arclink_academy_trainer.py`,
+  `tests/test_arclink_crew_recipes.py`,
+  `tests/test_arclink_dashboard.py`, and
+  `tests/test_arclink_operator_raven.py`: added the focused local proof
+  cluster.
+- `GAPS.md`, `IMPLEMENTATION_PLAN.md`, `USER_JOURNEY.md`,
+  `docs/arclink/academy-trainer.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`, and
+  `mission_status.md`: recorded that remaining `GAP-034` work is proof/policy
+  unless a future handoff exposes a source defect.
+
+Validation:
+
+- `python3 -m pytest -q tests/test_arclink_academy_trainer.py::test_weekly_continuing_education_review_classifies_changes_and_keeps_no_write_boundary tests/test_arclink_academy_trainer.py::test_academy_graduation_gate_blocks_without_live_provider_and_workspace_proof tests/test_arclink_crew_recipes.py::test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes tests/test_arclink_dashboard.py::test_dashboard_exposes_academy_weekly_and_graduation_status --maxfail=1`
+- `python3 -m pytest -q tests/test_arclink_academy_trainer.py tests/test_arclink_crew_recipes.py tests/test_arclink_dashboard.py tests/test_arclink_operator_raven.py --maxfail=1`
+- `python3 -m py_compile python/arclink_academy_trainer.py python/arclink_crew_recipes.py python/arclink_dashboard.py python/arclink_operator_raven.py`
+- `cd web && npm test`
+- `cd web && npm run lint`
+- `python3 -m pytest -q tests` with 1353 passed, 6 skipped, and 97 warnings
+  in 65.87s
+
+Remaining:
+
+- `GAP-034` still needs source-governance decisions, authorized provider/
+  source acquisition proof, hosted weekly scheduler proof, real Agent
+  application writes, and trained-Agent workspace proof.
+- No unconditional unattended local row remains in `IMPLEMENTATION_PLAN.md`
+  after this slice; future local work should come from a proof/policy demotion
+  or a newly recorded source defect.
+
+## 2026-05-27 GAP-033-A Cross-Surface Product Finish Contract
+
+Gap slice: reduce `GAP-033` from no shared local experience gate to a
+source-owned contract plus representative real-surface fixtures. Live
+Telegram/Discord, browser, and Hermes workspace proof remain open under
+`PG-BOTS`, `PG-PROD`, and `PG-HERMES`.
+
+Reproduction:
+
+- `python3 tests/test_arclink_surface_contract.py` failed before edits because
+  the file did not exist.
+- After adding the gate, it failed on real copy drift: Captain-visible Raven
+  and product-surface text still used lower-case Agent/Pod wording,
+  `deployment`/`user` language, and "operator" in blocked Captain copy.
+
+Changes:
+
+- `python/arclink_surface_contract.py`: added the shared local surface contract
+  for audience vocabulary, blocked/proof-gated next actions, proof-gate
+  honesty, chat markdown balance, secret-looking value refusal, raw traceback
+  refusal, and concise line/size limits.
+- `tests/test_arclink_surface_contract.py`: added representative fixtures that
+  render or read real local Captain Raven, Operator Raven, dashboard,
+  product-surface, Drive/Code/Terminal plugin, and no-lifecycle CLI readiness
+  surfaces.
+- `python/arclink_product.py`, `python/arclink_public_bots.py`, and
+  `python/arclink_product_surface.py`: repaired only the copy failures found
+  by the new gate, moving Captain-visible text to ArcPod, Pod, Agent, Captain,
+  Raven, and ArcLink support vocabulary.
+- `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `research/COVERAGE_MATRIX.md`, `IMPLEMENTATION_PLAN.md`, and
+  `mission_status.md`: recorded the local gate without claiming live proof.
+
+Validation:
+
+- `python3 tests/test_arclink_surface_contract.py`
+- `python3 tests/test_arclink_public_bots.py`
+- `python3 tests/test_arclink_product_surface.py`
+- `python3 tests/test_arclink_operator_raven.py`
+- `python3 tests/test_arclink_dashboard.py`
+- `python3 tests/test_arclink_plugins.py`
+- `python3 -m py_compile python/arclink_surface_contract.py python/arclink_product.py python/arclink_public_bots.py python/arclink_product_surface.py`
+- `cd web && npm test`
+- `python3 -m pytest -q tests` with 1342 passed, 6 skipped, and 97 warnings
+  in 65.36s.
+
+Remaining:
+
+- `GAP-033` still needs authorized `PG-BOTS`, `PG-HERMES`, and product browser
+  proof for real Telegram/Discord rendering, dashboard/plugin text fit, and
+  workspace behavior.
+- The next unattended local row is `GAP-034` application-worker boundaries,
+  weekly persistence, or evaluation/graduation unless authorized proof demotes
+  another row into a concrete source defect.
+
+## 2026-05-27 GAP-031-A Streaming-Safe Router Fallback
+
+Gap slice: reduce `GAP-031` from local router semantics work to live
+`PG-PROVIDER` overload proof. This does not claim live Chutes/provider behavior;
+it makes the local router fallback contract explicit and auditable.
+
+Files changed:
+
+- `python/arclink_llm_router.py`: added sanitized fallback-attempt audit events,
+  pre-streaming fallback retry, explicit no-replay metadata after stream start,
+  usage/reservation metadata for requested, primary, final, reservation-pricing,
+  and usage-pricing models, fallback-aware reservation pricing, and final-model
+  catalog pricing at settlement.
+- `python/arclink_control.py`: added `metadata_json` columns to router usage and
+  budget reservation tables with migration guards.
+- `tests/test_arclink_llm_router.py`: added failing local reproductions for
+  pre-stream fallback metadata, sanitized attempt audit, prompt non-storage, and
+  cost-different final-model pricing.
+- `docs/arclink/llm-router.md`, `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`, `IMPLEMENTATION_PLAN.md`,
+  and `mission_status.md`: recorded the local repair while keeping live
+  provider proof open.
+
+Commands run:
+
+- `python3 tests/test_arclink_llm_router.py` passed before edits with 18 tests.
+- After adding the `GAP-031-A` tests, the same command failed on missing router
+  metadata columns, reproducing the local gap.
+- `python3 tests/test_arclink_llm_router.py` passed after the repair with 20
+  tests.
+- `python3 -m pytest -q tests` passed with 1340 passed, 6 skipped, and 97
+  warnings.
+
+Remaining: run authorized `PG-PROVIDER` overload proof with redacted evidence
+for non-streaming fallback, pre-stream fallback, prompt/completion non-leakage,
+and pricing/audit rows. No live provider, deploy/install/upgrade, Docker,
+payment, bot, SSH, or host mutation command was run.
+
 ## 2026-05-27 GAP-029-A Operator Raven Minimal Console
 
 Gap slice: reduce `GAP-029` with the smallest safe Operator Raven vertical
@@ -11518,3 +11703,459 @@ Residual risk:
   explicit during install; they do not create the full Operator Raven control
   plane, streaming fallback semantics, live provider fallback proof, or rolling
   ArcPod updates.
+
+## 2026-05-27 GAP-030-A Provisioning Readiness Surfaces
+
+Scope: local Sovereign Control Node worker-readiness surfacing. This pass
+reduced `GAP-030` from a local/admin-surface gap to a live worker proof gate.
+
+Files changed:
+
+- `python/arclink_dashboard.py`: added
+  `control_node_provisioning_readiness(conn, env=...)`, including
+  control-plane-only, blocked no-worker, pending-SSH, and ready-to-provision
+  states; exposed the read model through the admin dashboard and scale
+  operations snapshots.
+- `python/arclink_operator_raven.py`: Operator Raven `status` now uses the
+  shared provisioning-readiness helper and returns the structured readiness
+  object.
+- `web/src/app/admin/page.tsx`: added a dedicated provisioning readiness panel
+  so ArcPod readiness is visibly separate from control-plane health and
+  action-worker readiness.
+- `tests/test_arclink_admin_actions.py`, `tests/test_arclink_dashboard.py`,
+  `tests/test_arclink_operator_raven.py`, and `web/tests/test_page_smoke.mjs`:
+  added local coverage for no-worker/control-plane-only, blocked no-worker,
+  local-ready, pending-SSH, remote-ready, dashboard, Operator Raven, and admin
+  page copy.
+- `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `IMPLEMENTATION_PLAN.md`, and `mission_status.md`: recorded the local repair
+  without claiming live fleet/provisioning proof.
+
+Validation:
+
+- `python3 -m pytest -q tests` passed before the slice: 1312 passed, 6 skipped,
+  89 warnings in 64.24s.
+- `python3 tests/test_arclink_admin_actions.py` passed: 9 tests.
+- `python3 tests/test_arclink_dashboard.py` passed: 11 tests.
+- `python3 tests/test_arclink_operator_raven.py` passed: 5 tests.
+- `python3 -m py_compile python/arclink_dashboard.py python/arclink_operator_raven.py`
+  passed.
+- `(cd web && npm test)` passed: 75 tests.
+- `(cd web && npm run lint)` passed.
+- `(cd web && npm run build)` passed.
+- `python3 tests/test_documentation_truths.py` passed: 10 tests.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+- `python3 -m pytest -q tests` passed after the slice: 1313 passed, 6 skipped,
+  89 warnings in 64.06s.
+
+Residual risk:
+
+- `GAP-030` remains open as a live proof gate. Run authorized
+  `PG-FLEET`/`PG-PROVISION` for the chosen worker path before claiming live
+  ArcPod provisioning readiness.
+
+## 2026-05-27 GAP-032-A ArcPod Rollout Dry-Run Planner
+
+Scope: local `GAP-032` planner/model slice for rolling ArcPod/Hermes updates.
+No deploy/install/upgrade, Docker, SSH, provider, bot, host mutation, or live
+proof command was run.
+
+Files changed:
+
+- `python/arclink_rollout.py`: added the dry-run-only
+  `plan_arcpod_update_rollout(...)` schema with deterministic candidate
+  batching, batch-size policy validation, missing-state-root and unhealthy
+  service blockers, rollback/state preservation, pending health/smoke proof
+  fields, and explicit no-mutation execution metadata.
+- `python/arclink_dashboard.py`: threads the planner into the admin scale
+  operations read model when a target rollout version is supplied.
+- `python/arclink_operator_raven.py`: adds dry-run-only `/rollout_plan`
+  handling and keeps the chat summary compact, path-free, and non-mutating.
+- `tests/test_arclink_rollout.py`, `tests/test_arclink_dashboard.py`, and
+  `tests/test_arclink_operator_raven.py`: cover the planner, dashboard read
+  model, and Operator Raven surface.
+- `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `IMPLEMENTATION_PLAN.md`, and `mission_status.md`: record `GAP-032-A`
+  honestly without claiming live rolling updates.
+
+Validation:
+
+- Reproduction before repair: `plan_arcpod_update_rollout` was missing from
+  `python/arclink_rollout.py`.
+- `python3 tests/test_arclink_rollout.py` passed: 13 tests.
+- `python3 tests/test_arclink_dashboard.py` passed: 12 tests.
+- `python3 tests/test_arclink_operator_raven.py` passed: 6 tests.
+- `python3 tests/test_arclink_admin_actions.py` passed: 9 tests.
+- Targeted hosted API scale-operations test passed:
+  `test_admin_scale_operations_requires_auth_and_returns_snapshot`.
+- `python3 -m py_compile python/arclink_rollout.py python/arclink_dashboard.py python/arclink_operator_raven.py`
+  passed.
+- `python3 tests/test_documentation_truths.py` passed: 10 tests.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+- `python3 -m pytest -q tests` passed: 1319 passed, 6 skipped, 89 warnings
+  in 64.33s.
+
+Residual risk:
+
+- `GAP-032` still needs worker-backed typed execution, bounded batch apply,
+  real backup freshness enforcement, per-Pod health/smoke collection,
+  rollback/repair execution, and authorized `PG-UPGRADE`/`PG-HERMES` proof.
+
+## 2026-05-27 GAP-032-B Local Typed Rollout Jobs
+
+Scope: reduced `GAP-032` from planner-only to local typed rollout job
+materialization. No deploy/install/upgrade, Docker, systemd, SSH, provider,
+Stripe, bot, host mutation, or live proof command was run.
+
+Changes:
+
+- `python/arclink_rollout.py`: added
+  `materialize_arcpod_update_rollout_job(...)` for ready dry-run plans. It
+  creates deterministic per-Pod planned rollout rows, preserves batch order,
+  rollback/state roots, pending health/smoke and backup placeholders, proof
+  gates, and idempotent replay.
+- `python/arclink_action_worker.py`: added local `rollout` dispatch. The worker
+  reruns preflight, refuses blocked/empty plans, materializes the local job,
+  links `arcpod_update_rollout`, classifies rollout preflight failures as
+  action validation errors, and never calls executor side-effect methods.
+- `python/arclink_dashboard.py`, product/web admin surfaces, and focused tests:
+  mark `rollout` as locally modeled/queueable when executor probes pass while
+  keeping `PG-UPGRADE/PG-HERMES` proof gates visible.
+- `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `IMPLEMENTATION_PLAN.md`, and `mission_status.md`: record the local repair
+  without claiming bounded refresh/apply execution or live rolling updates.
+
+Validation:
+
+- Pre-edit baseline: `python3 tests/test_arclink_action_worker.py` passed
+  because rollout worker coverage was missing. After adding failing tests,
+  `python3 tests/test_arclink_rollout.py` failed on missing
+  `materialize_arcpod_update_rollout_job`.
+- Focused Python tests passed:
+  `tests/test_arclink_rollout.py`, `tests/test_arclink_action_worker.py`,
+  `tests/test_arclink_admin_actions.py`, `tests/test_arclink_dashboard.py`,
+  `tests/test_arclink_operator_raven.py`,
+  `tests/test_arclink_upgrade_notifications.py`,
+  `tests/test_arclink_pin_upgrade_detector.py`,
+  `tests/test_arclink_hosted_api.py`, and
+  `tests/test_arclink_product_surface.py`.
+- Compile/docs/hygiene passed:
+  `python3 -m py_compile python/arclink_rollout.py python/arclink_action_worker.py python/arclink_dashboard.py python/arclink_operator_raven.py`,
+  `python3 tests/test_documentation_truths.py`,
+  `python3 tests/test_public_repo_hygiene.py`, and `git diff --check`.
+- Web checks passed: `npm test`, `npm run lint`, `npm run build`, and
+  `npx playwright test tests/browser/product-checks.spec.ts --grep "Admin"`
+  on rerun. The first Playwright attempt was invalidated by a concurrent build
+  rewriting `.next` and failed at web-server startup.
+- Broad suite passed: `python3 -m pytest -q tests` with 1325 passed, 6 skipped,
+  89 warnings in 64.55s.
+
+Remaining:
+
+- `GAP-032` remains open for bounded per-Pod refresh/apply execution, backup
+  freshness enforcement beyond placeholders, real health/smoke collection,
+  rollback/repair execution, and authorized `PG-UPGRADE`/`PG-HERMES` proof.
+
+## 2026-05-27 GAP-032-C Bounded Local Rollout Execution
+
+Scope: completed the local `GAP-032-C` batch execution harness without
+deploy/install/upgrade, Docker, systemd, SSH, provider, Stripe, bot, host
+mutation, or live proof commands.
+
+Changes:
+
+- `python/arclink_rollout.py`: added
+  `execute_arcpod_update_rollout_batch(...)`, an explicit fake/local
+  `record_only=true` contract that records intended ArcPod refresh/apply steps,
+  moves materialized rollout rows through `in_progress` to `completed` or
+  `failed`, keeps health/smoke and backup proof placeholders, records repair
+  hints, halts later batches after failure, and replays completed batches
+  idempotently.
+- `python/arclink_action_worker.py`: keeps `rollout` materialization as the
+  default and records one local batch only when `execute_local_batch` or
+  `execute_batch` metadata is explicitly present.
+- `python/arclink_dashboard.py`, `python/arclink_operator_raven.py`,
+  `web/src/app/admin/page.tsx`, and focused tests: expose local execution truth
+  while keeping `PG-UPGRADE`/`PG-HERMES` live proof labels visible.
+- `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `IMPLEMENTATION_PLAN.md`, and `mission_status.md`: route remaining
+  `GAP-032` closure to authorized real refresh/apply and live proof instead of
+  pretending fake/local records are production rolling updates.
+
+Validation:
+
+- Pre-edit reproduction failed on missing
+  `execute_arcpod_update_rollout_batch` in `python/arclink_rollout.py`.
+- Focused Python tests passed:
+  `tests/test_arclink_rollout.py`, `tests/test_arclink_action_worker.py`,
+  `tests/test_arclink_admin_actions.py`, `tests/test_arclink_dashboard.py`,
+  `tests/test_arclink_operator_raven.py`,
+  `tests/test_arclink_upgrade_notifications.py`,
+  `tests/test_arclink_pin_upgrade_detector.py`, and
+  `tests/test_arclink_product_surface.py`.
+- Compile/docs/hygiene/web checks passed:
+  `python3 -m py_compile python/arclink_rollout.py python/arclink_action_worker.py python/arclink_dashboard.py python/arclink_operator_raven.py`,
+  `tests/test_documentation_truths.py`, `tests/test_public_repo_hygiene.py`,
+  `git diff --check`, `npm test`, `npm run lint`, `npm run build`, and
+  `npx playwright test tests/browser/product-checks.spec.ts --grep "Admin"`.
+- Broad suite passed: `python3 -m pytest -q tests` with 1329 passed, 6 skipped,
+  89 warnings in 65.23s.
+
+Remaining:
+
+- `GAP-032` is now local-fake-execution complete but still proof-gated for real
+  refresh/apply, health/smoke, rollback/repair, backup freshness, and
+  `PG-UPGRADE`/`PG-HERMES`.
+- The next unattended local build row is `GAP-034-A` Academy schema and
+  source-lane registry.
+
+## 2026-05-27 GAP-034-A Academy Local Foundation
+
+Scope: implemented the local no-network/no-write Academy Trainer foundation
+without deploy/install/upgrade, Docker, systemd, SSH, provider, Stripe, bot,
+host mutation, qmd mutation, vault writes, Hermes-home mutation, or live proof
+commands.
+
+Changes:
+
+- `python/arclink_academy_trainer.py`: added typed source-lane, source, corpus
+  manifest, quality, curriculum, evaluation, Agent application-plan, and
+  continuing-education schemas.
+- The default source-lane registry now covers video transcripts, Reddit
+  discussion, Wikimedia, GitHub repositories, scholarly/standards sources, web
+  articles, skill/tool catalogs, and organization-private material with
+  explicit authorization, permission, raw-storage, tombstone/deletion,
+  fake-fixture, and live-proof boundaries.
+- Local validation fails closed for disabled lanes, missing license/permission
+  metadata, raw-storage violations, secret-looking metadata, unreviewed public
+  skills, Reddit deletion/tombstone violations, and live
+  crawling/transcription/provider-generation requests.
+- Fake local sources produce deterministic corpus manifests, content hashes,
+  citation maps, quality scores, lesson cards, curriculum/evaluation records,
+  no-write SOUL/vault/qmd/memory/skill application plans, and
+  continuing-education refresh gates.
+- `config/academy-source-lanes.example.json` provides a fictional public
+  source-lane governance example.
+- `GAPS.md`, `USER_JOURNEY.md`, `docs/arclink/academy-trainer.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `research/COVERAGE_MATRIX.md`, `IMPLEMENTATION_PLAN.md`, and
+  `mission_status.md` record the local repair without claiming live Academy
+  acquisition, provider generation, or workspace application proof.
+
+Validation:
+
+- Pre-edit reproduction: `python3 tests/test_arclink_academy_trainer.py`
+  initially failed because the focused test/module did not exist.
+- `python3 tests/test_arclink_academy_trainer.py` passed: 5 tests.
+- Adjacent/focused checks passed:
+  `python3 -m py_compile python/arclink_academy_trainer.py`,
+  `python3 -m json.tool config/academy-source-lanes.example.json`,
+  `python3 tests/test_arclink_crew_recipes.py`,
+  `python3 tests/test_memory_synthesizer.py`,
+  `python3 tests/test_arclink_mcp_schemas.py`,
+  `python3 tests/test_arclink_plugins.py`,
+  `python3 tests/test_documentation_truths.py`,
+  `python3 tests/test_public_repo_hygiene.py`, and `git diff --check`.
+- Broad suite passed: `python3 -m pytest -q tests` with 1334 passed,
+  6 skipped, 89 warnings in 65.38s.
+
+Remaining:
+
+- `GAP-034` remains open for fake-adapter acquisition tests, real source
+  acquisition, provider-assisted generation/transcription, application-worker
+  writes, workspace application proof, source-governance policy decisions, and
+  authorized `PG-PROVIDER`/`PG-HERMES` evidence.
+
+## 2026-05-27 GAP-034-B Academy Review/Status Integration
+
+Scope: connected local Academy artifacts into review-only Crew Training,
+dashboard, and Operator Raven surfaces without deploy/install/upgrade, Docker,
+systemd, SSH, provider, Stripe, bot, host mutation, qmd mutation, vault writes,
+Hermes-home mutation, external crawling, ASR/transcription, or live proof
+commands.
+
+Changes:
+
+- `python/arclink_academy_trainer.py`: added
+  `build_academy_review_status(...)`, a compact, secret-free status artifact
+  with source counts, quality summary, application/refresh status, proof gates,
+  next actions, and live-proof honesty.
+- `python/arclink_crew_recipes.py`: added `stage_crew_academy_review(...)` to
+  persist the review summary on the active Crew Recipe overlay with audit/event
+  rows, plus `crew_academy_status(...)` for read surfaces. It does not queue
+  actions or write workspace, qmd, vault, skill, memory, or Hermes-home state.
+- `python/arclink_dashboard.py`, `python/arclink_api_auth.py`, and
+  `web/src/app/dashboard/page.tsx`: expose Academy Training status through the
+  user dashboard read model, Crew Recipe API, and Crew Training panel.
+- `python/arclink_operator_raven.py`: adds read-only Academy status reporting
+  via user lookup and `/academy_status <user>`, with `PG-PROVIDER` and
+  `PG-HERMES` still visible.
+- `GAPS.md`, `USER_JOURNEY.md`,
+  `docs/arclink/academy-trainer.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `research/COVERAGE_MATRIX.md`, `IMPLEMENTATION_PLAN.md`, and
+  `mission_status.md`: record the local integration without claiming live
+  source acquisition, provider generation, or trained-Agent workspace proof.
+
+Validation:
+
+- Focused tests passed:
+  `python3 tests/test_arclink_academy_trainer.py`,
+  `python3 tests/test_arclink_crew_recipes.py`,
+  `python3 tests/test_arclink_dashboard.py`, and
+  `python3 tests/test_arclink_operator_raven.py`.
+- Nearby API/web checks passed:
+  `python3 tests/test_arclink_api_auth.py`,
+  `python3 tests/test_arclink_hosted_api.py`,
+  `node web/tests/test_page_smoke.mjs`,
+  `cd web && npm test -- --runInBand`,
+  `cd web && npm run lint`, `cd web && npm run build`, and
+  `cd web && npm run test:browser` with 55 passed and 3 skipped.
+- Compile check passed:
+  `python3 -m py_compile python/arclink_academy_trainer.py python/arclink_crew_recipes.py python/arclink_dashboard.py python/arclink_api_auth.py python/arclink_operator_raven.py`.
+- Broad suite passed:
+  `python3 -m pytest -q tests` with 1338 passed, 6 skipped, 89 warnings in
+  65.50s.
+
+Remaining:
+
+- `GAP-034` remains open for no-write-to-applied worker boundaries, weekly
+  persistence, evaluation/graduation flows, real source acquisition,
+  provider-assisted generation/transcription, workspace application proof,
+  source-governance policy decisions, and authorized `PG-PROVIDER`/`PG-HERMES`
+  evidence.
+
+## 2026-05-27 GAP-034-C Academy Fake Acquisition Adapters
+
+Scope: implemented the no-network/no-write Academy fake acquisition adapter
+contract without deploy/install/upgrade, Docker lifecycle, systemd, SSH,
+provider calls, Stripe, public bots, host mutation, qmd mutation, vault writes,
+Hermes-home mutation, external crawling, ASR/transcription, or live proof
+commands.
+
+Changes:
+
+- `python/arclink_academy_trainer.py`: added
+  `AcademyAcquisitionRequest`, `AcademyAcquisitionResult`,
+  `AcademyAcquisitionReport`, and `acquire_fake_academy_sources(...)`. Local
+  fixture rows now become governed `AcademySource` objects plus a compact
+  secret-free accepted/rejected/proof-gated report.
+- `python/arclink_academy_trainer.py`: now enforces each lane's required
+  metadata during source validation so fake acquisition output can pass
+  directly into corpus, application-plan, review-status, and continuing
+  education helpers without looser duplicate validation.
+- `tests/test_arclink_academy_trainer.py`: proves all enabled default lanes
+  have local fake fixtures: video transcript, Reddit discussion, Wikimedia,
+  GitHub repository, scholarly/standards, web article, skill/tool catalog, and
+  organization-private material.
+- `tests/test_arclink_academy_trainer.py`: proves rejected and proof-gated
+  rows fail closed for disabled/unsupported lanes, requested live actions,
+  missing license/permission metadata, unsafe raw storage, deleted Reddit
+  content without tombstones, unreviewed public skills, duplicate source IDs,
+  and secret-looking fixture content.
+- `tests/test_arclink_crew_recipes.py` and `tests/test_arclink_dashboard.py`:
+  align existing Academy fixtures with required lane metadata.
+- `GAPS.md`, `IMPLEMENTATION_PLAN.md`, `USER_JOURNEY.md`,
+  `docs/arclink/academy-trainer.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`, and `mission_status.md`:
+  record the local repair without claiming live crawling, provider generation,
+  ASR/transcription, workspace application, or trained-Agent proof.
+
+Validation:
+
+- Broad local gate checked first:
+  `python3 -m pytest -q tests` with 1342 passed, 6 skipped, 97 warnings in
+  65.43s.
+- Pre-edit reproduction:
+  `python3 tests/test_arclink_academy_trainer.py` passed the old 6-test
+  baseline, while a focused local probe failed because
+  `AcademyAcquisitionRequest`, `AcademyAcquisitionResult`, and
+  `acquire_fake_academy_sources` were missing.
+- Focused tests passed:
+  `python3 tests/test_arclink_academy_trainer.py`,
+  `python3 tests/test_arclink_crew_recipes.py`,
+  `python3 tests/test_arclink_dashboard.py`, and
+  `python3 tests/test_arclink_operator_raven.py`.
+- Compile check passed:
+  `python3 -m py_compile python/arclink_academy_trainer.py python/arclink_crew_recipes.py python/arclink_dashboard.py python/arclink_operator_raven.py`.
+- Post-slice broad suite passed:
+  `python3 -m pytest -q tests` with 1344 passed, 6 skipped, 97 warnings in
+  65.95s.
+
+Remaining:
+
+- `GAP-034` remains open for no-write-to-applied application-worker
+  boundaries, weekly persistence, evaluation/graduation flows, real source
+  acquisition, provider-assisted generation/transcription, workspace
+  application proof, source-governance policy decisions, and authorized
+  `PG-PROVIDER`/`PG-HERMES` evidence.
+
+## 2026-05-27 GAP-034-D Academy No-Write Apply Preview
+
+Scope: implemented the local Academy no-write-to-applied action-worker preview
+boundary without deploy/install/upgrade, Docker lifecycle, systemd, SSH,
+provider calls, Stripe, public bots, host mutation, qmd mutation, vault writes,
+Hermes-home mutation, external crawling, ASR/transcription, or live proof
+commands.
+
+Changes:
+
+- `python/arclink_academy_trainer.py`: added
+  `AcademyApplicationPreviewRequest`,
+  `AcademyApplicationPreviewResult`,
+  `build_academy_application_preview_request(...)`, and
+  `build_academy_application_preview_result(...)`. The helpers accept staged
+  manifest/application-plan references plus user/agent/recipe identity, require
+  `local_only=true`, `no_write=true`, `writes_enabled=false`, keep
+  `PG-PROVIDER`/`PG-HERMES` visible, and return compact secret-free status
+  without raw source content.
+- `python/arclink_academy_trainer.py` and `python/arclink_crew_recipes.py`:
+  staged Academy status now carries compact application-plan and target-Agent
+  references so the worker can validate active Crew Recipe state before
+  recording a preview.
+- `python/arclink_action_worker.py`: added `academy_apply_preview` dispatch as
+  a local control-DB action. It records audit, event, and operation-link
+  metadata, never calls the executor, and refuses mismatched, unstaged,
+  blocked, write-enabled, live-action, unsafe-path, workspace/host mutation, or
+  secret-looking requests before success.
+- `python/arclink_dashboard.py`: added the admin readiness/support matrix entry
+  for the preview action with an explicit no-write local contract and
+  `PG-HERMES`/`PG-PROVIDER` gate for real Agent application.
+- `tests/test_arclink_academy_trainer.py`,
+  `tests/test_arclink_action_worker.py`, and
+  `tests/test_arclink_admin_actions.py`: added focused coverage for successful
+  no-write preview recording, no executor calls, operation linking, and
+  fail-closed unsafe request handling.
+- `GAPS.md`, `IMPLEMENTATION_PLAN.md`, `USER_JOURNEY.md`,
+  `docs/arclink/academy-trainer.md`,
+  `docs/arclink/sovereign-control-node-symphony.md`, and `mission_status.md`:
+  record the local repair without claiming live-trained Agent behavior.
+
+Validation:
+
+- Pre-edit reproduction:
+  an in-memory admin action probe rejected `academy_apply_preview` as an
+  unsupported action type.
+- Focused tests passed:
+  `python3 tests/test_arclink_academy_trainer.py`,
+  `python3 tests/test_arclink_action_worker.py`, and
+  `python3 tests/test_arclink_admin_actions.py`.
+- Adjacent tests and compile passed:
+  `python3 tests/test_arclink_crew_recipes.py`,
+  `python3 tests/test_arclink_dashboard.py`,
+  `python3 tests/test_arclink_operator_raven.py`, and
+  `python3 -m py_compile python/arclink_academy_trainer.py python/arclink_crew_recipes.py python/arclink_action_worker.py python/arclink_dashboard.py python/arclink_operator_raven.py`.
+
+Remaining:
+
+- `GAP-034` remains open for weekly Academy persistence,
+  evaluation/graduation, real vault/qmd/Hermes-home/SOUL/skill application
+  writes, trained-Agent workspace proof, real source acquisition,
+  provider-assisted generation/transcription, source-governance policy
+  decisions, and authorized `PG-PROVIDER`/`PG-HERMES` evidence.

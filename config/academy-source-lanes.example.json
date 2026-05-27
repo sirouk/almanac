@@ -1,0 +1,68 @@
+{
+  "description": "Fictional public example for Academy source governance. Live acquisition remains proof-gated.",
+  "local_fixture_shape": {
+    "required": [
+      "source_id",
+      "lane_id",
+      "title",
+      "origin_url",
+      "retrieved_at",
+      "license_status",
+      "permission_status",
+      "storage_policy",
+      "metadata"
+    ],
+    "notes": "Local fake acquisition fixtures are test artifacts only. They must preserve no_network/no_write and include each lane's required metadata before they can become AcademySource records."
+  },
+  "lanes": {
+    "video_transcript": {
+      "enabled": true,
+      "authorization_required": "creator, platform, Captain, or operator transcript authorization",
+      "raw_storage_policy": "raw transcript only with recorded authorization",
+      "live_actions_enabled": false
+    },
+    "reddit_discussion": {
+      "enabled": true,
+      "authorization_required": "official API/OAuth access and platform retention policy",
+      "raw_storage_policy": "never in unattended local fixtures",
+      "deletion_policy": "tombstone deleted or removed content before Agent update",
+      "live_actions_enabled": false
+    },
+    "wikimedia": {
+      "enabled": true,
+      "authorization_required": "public API use with revision and license metadata",
+      "raw_storage_policy": "allowed with compatible license; derived summaries preferred",
+      "live_actions_enabled": false
+    },
+    "github_repository": {
+      "enabled": true,
+      "authorization_required": "public or organization-approved repository access and license review",
+      "raw_storage_policy": "raw files only when license and product policy allow",
+      "live_actions_enabled": false
+    },
+    "scholarly_standard": {
+      "enabled": true,
+      "authorization_required": "open-access, standards-body, or operator-approved full text rights",
+      "raw_storage_policy": "metadata-only by default",
+      "live_actions_enabled": false
+    },
+    "web_article": {
+      "enabled": true,
+      "authorization_required": "stable public URL, authorship/date, and allowed snapshot policy",
+      "raw_storage_policy": "derived summaries by default",
+      "live_actions_enabled": false
+    },
+    "skill_tool_catalog": {
+      "enabled": true,
+      "authorization_required": "local, bundled, organization, or reviewed public skill source",
+      "raw_storage_policy": "metadata-only until skill review accepts code/content storage",
+      "live_actions_enabled": false
+    },
+    "organization_private": {
+      "enabled": true,
+      "authorization_required": "Captain/operator supplied material and private data governance approval",
+      "raw_storage_policy": "private raw storage only with explicit operator policy and scoped access",
+      "live_actions_enabled": false
+    }
+  }
+}

@@ -55,6 +55,7 @@ from arclink_chutes import (
 )
 from arclink_crew_recipes import (
     apply_crew_recipe,
+    crew_academy_status,
     current_crew_recipe,
     preview_crew_recipe,
     prior_crew_recipe,
@@ -1253,6 +1254,7 @@ def read_user_crew_recipe_api(
             "current": current_crew_recipe(conn, user_id=user_id),
             "prior": prior_crew_recipe(conn, user_id=user_id),
             "whats_changed": whats_changed(conn, user_id=user_id),
+            "academy_training": crew_academy_status(conn, user_id=user_id),
         },
     )
 

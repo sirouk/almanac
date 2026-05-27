@@ -41,6 +41,12 @@ from arclink_executor import (
 from arclink_provisioning import render_arclink_state_roots
 from arclink_pod_migration import garbage_collect_pod_migrations, migrate_pod
 from arclink_dashboard import ARCLINK_BACKUP_FAILED_CLOSED_REASON, record_arclink_backup_write_check_failed_closed
+from arclink_rollout import (
+    ArcLinkRolloutError,
+    execute_arcpod_update_rollout_batch,
+    materialize_arcpod_update_rollout_job,
+    plan_arcpod_update_rollout,
+)
 
 
 class ArcLinkActionWorkerError(ValueError):
@@ -74,7 +80,7 @@ def _safe_error_message(exc: Exception) -> str:
 
 
 def _safe_error_code(exc: Exception) -> str:
-    if isinstance(exc, ArcLinkActionWorkerError):
+    if isinstance(exc, (ArcLinkActionWorkerError, ArcLinkRolloutError)):
         return "action_validation_error"
     if isinstance(exc, ArcLinkExecutorError) or exc.__class__.__name__ == "ArcLinkExecutorError":
         return "executor_error"
@@ -240,6 +246,55 @@ def _validate_explicit_target(metadata: Mapping[str, Any], key: str, resolved: s
     explicit = str(metadata.get(key) or "").strip()
     if explicit and resolved and explicit != resolved:
         raise ArcLinkActionWorkerError(f"ArcLink action metadata {key} does not match server-resolved target")
+
+
+def _rollout_deployment_ids(
+    *,
+    target_kind: str,
+    target_id: str,
+    metadata: Mapping[str, Any],
+) -> list[str]:
+    raw = metadata.get("deployment_ids", metadata.get("deployments", ()))
+    deployment_ids: list[str] = []
+    if isinstance(raw, str):
+        deployment_ids = [item.strip() for item in raw.split(",") if item.strip()]
+    elif isinstance(raw, (list, tuple)):
+        deployment_ids = [str(item or "").strip() for item in raw if str(item or "").strip()]
+    elif raw:
+        raise ArcLinkActionWorkerError("rollout deployment_ids metadata must be a list or comma-separated string")
+    seen: set[str] = set()
+    deployment_ids = [item for item in deployment_ids if not (item in seen or seen.add(item))]
+
+    if target_kind == "deployment":
+        if deployment_ids and target_id not in deployment_ids:
+            raise ArcLinkActionWorkerError("rollout deployment_ids must include the deployment action target")
+        return deployment_ids or [target_id]
+    if target_kind == "system":
+        return deployment_ids
+    raise ArcLinkActionWorkerError("rollout action requires a deployment or system target")
+
+
+def _rollout_batch_size(metadata: Mapping[str, Any]) -> int | None:
+    raw = metadata.get("batch_size")
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ArcLinkActionWorkerError("rollout batch_size metadata must be an integer") from exc
+
+
+def _rollout_execution_batch_index(metadata: Mapping[str, Any]) -> int | None:
+    raw = metadata.get("execute_batch_index", metadata.get("batch_index"))
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ArcLinkActionWorkerError("rollout execution batch_index metadata must be an integer") from exc
+    if value < 1:
+        raise ArcLinkActionWorkerError("rollout execution batch_index metadata must be at least 1")
+    return value
 
 
 def _resolve_stripe_action(
@@ -926,6 +981,94 @@ def _dispatch_action(
             "operation_idempotency_key": operation_key,
         }
 
+    if action_type == "academy_apply_preview":
+        if target_kind not in {"user", "deployment"}:
+            raise ArcLinkActionWorkerError("academy_apply_preview action requires a user or deployment target")
+        if target_kind == "deployment":
+            deployment = _deployment_row(conn, target_id)
+            user_id = str(deployment["user_id"] or "").strip()
+        else:
+            user_id = target_id
+        if not user_id:
+            raise ArcLinkActionWorkerError("academy_apply_preview action could not resolve a user target")
+        explicit_user = str(metadata.get("user_id") or "").strip()
+        if explicit_user and explicit_user != user_id:
+            raise ArcLinkActionWorkerError("academy_apply_preview metadata user_id does not match action target")
+        from arclink_academy_trainer import (
+            build_academy_application_preview_request,
+            build_academy_application_preview_result,
+        )
+        from arclink_crew_recipes import crew_academy_status
+
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key or action_id)
+        staged_status = crew_academy_status(conn, user_id=user_id)
+        request_payload = {
+            **dict(metadata),
+            "request_id": action_id,
+            "user_id": user_id,
+            "target_kind": target_kind,
+            "target_id": target_id,
+            "requested_by": str(metadata.get("actor_id") or "system:action_worker"),
+        }
+        preview_request = build_academy_application_preview_request(
+            request_payload,
+            request_id=action_id,
+            target_kind=target_kind,
+            target_id=target_id,
+            requested_at=utc_now_iso(),
+            requested_by=str(metadata.get("actor_id") or "system:action_worker"),
+        )
+        preview = build_academy_application_preview_result(
+            preview_request,
+            staged_status=staged_status,
+            created_at=utc_now_iso(),
+        )
+        result = preview.to_dict()
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind=str(result["operation_kind"]),
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        event_metadata = {
+            "action_id": action_id,
+            "operation_kind": str(result["operation_kind"]),
+            "operation_idempotency_key": operation_key,
+            "recipe_id": str(result["recipe_id"]),
+            "manifest_id": str(result["manifest_id"]),
+            "application_plan_id": str(result["application_plan_id"]),
+            "agent_id": str(result["agent_id"]),
+            "proof_gates": list(result["proof_gates"]),
+            "local_only": True,
+            "no_write": True,
+            "writes_enabled": False,
+        }
+        append_arclink_event(
+            conn,
+            subject_kind="user",
+            subject_id=user_id,
+            event_type="academy_application_preview_recorded",
+            metadata=event_metadata,
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action="academy_application_preview_recorded",
+            actor_id=str(metadata.get("actor_id") or "system:action_worker"),
+            target_kind="user",
+            target_id=user_id,
+            reason="Academy application preview recorded; no Agent application was performed",
+            metadata=event_metadata,
+            commit=False,
+        )
+        return {
+            **result,
+            "action": "academy_apply_preview",
+            "operation_idempotency_key": operation_key,
+        }
+
     if action_type == "reprovision":
         if target_kind != "deployment":
             raise ArcLinkActionWorkerError("reprovision action requires a deployment target")
@@ -962,6 +1105,88 @@ def _dispatch_action(
             "operation_kind": "pod_migration",
             "operation_idempotency_key": operation_key,
         }
+
+    if action_type == "rollout":
+        target_version = str(
+            metadata.get("target_version")
+            or metadata.get("version_tag")
+            or metadata.get("target_release")
+            or ""
+        ).strip()
+        if not target_version:
+            raise ArcLinkActionWorkerError("rollout action requires target_version metadata")
+        _reject_secrets(target_version, path="$.metadata.target_version")
+        deployment_ids = _rollout_deployment_ids(
+            target_kind=target_kind,
+            target_id=target_id,
+            metadata=metadata,
+        )
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key or action_id).strip()
+        if not operation_key:
+            raise ArcLinkActionWorkerError("rollout action requires an operation idempotency key")
+        _reject_secrets(operation_key, path="$.metadata.idempotency_key")
+        rollout_env = {**dict(env or os.environ)}
+        metadata_env = {key: str(value) for key, value in dict(metadata.get("env") or {}).items()} if isinstance(metadata.get("env"), Mapping) else {}
+        if metadata_env:
+            rollout_env.update(metadata_env)
+        plan = plan_arcpod_update_rollout(
+            conn,
+            target_version=target_version,
+            batch_size=_rollout_batch_size(metadata),
+            deployment_ids=deployment_ids,
+            env=rollout_env,
+        )
+        job = materialize_arcpod_update_rollout_job(
+            conn,
+            plan=plan,
+            action_id=action_id,
+            idempotency_key=operation_key,
+            actor_id=str(metadata.get("actor_id") or "system:action_worker"),
+        )
+        batch_execution: dict[str, Any] | None = None
+        if _truthy(metadata.get("execute_local_batch") or metadata.get("execute_batch")):
+            execution_results = metadata.get("rollout_execution_results", {})
+            if execution_results and not isinstance(execution_results, Mapping):
+                raise ArcLinkActionWorkerError("rollout_execution_results metadata must be an object")
+            batch_execution = execute_arcpod_update_rollout_batch(
+                conn,
+                rollout_group_id=str(job["rollout_group_id"]),
+                batch_index=_rollout_execution_batch_index(metadata),
+                executor={
+                    "adapter": str(executor.config.adapter_name),
+                    "record_only": True,
+                    "results": dict(execution_results) if isinstance(execution_results, Mapping) else {},
+                },
+                actor_id=str(metadata.get("actor_id") or "system:action_worker"),
+            )
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="arcpod_update_rollout",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        result = {
+            **job,
+            "action": "rollout",
+            "operation_kind": "arcpod_update_rollout",
+            "operation_idempotency_key": operation_key,
+        }
+        if batch_execution is not None:
+            result.update(
+                {
+                    "status": "executed_local_batch",
+                    "batch_execution": batch_execution,
+                    "execution": {
+                        "enabled": True,
+                        "reason": "explicit execute_local_batch requested; one fake/local rollout batch was recorded only",
+                        "adapter": str(executor.config.adapter_name),
+                        "record_only": True,
+                    },
+                }
+            )
+        return result
 
     raise ArcLinkActionWorkerError(f"unsupported action type: {action_type}")
 

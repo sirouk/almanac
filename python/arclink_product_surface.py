@@ -79,7 +79,7 @@ def seed_arclink_product_surface_fixture(conn: sqlite3.Connection, *, env: Mappi
         channel_identity="fixture@arclink.local",
         session_id="onb_surface_fixture",
         email_hint="fixture@arclink.local",
-        display_name_hint="Fixture Operator",
+        display_name_hint="Fixture Captain",
         selected_plan_id="founders",
         selected_model_id=chutes_default_model(env or {}),
         current_step="checkout",
@@ -298,7 +298,7 @@ def _layout(title: str, main: str) -> str:
     <div class="brand">ARCLINK</div>
     <nav>
       <a href="/">Onboarding</a>
-      <a href="/user">User Dashboard</a>
+      <a href="/user">Captain Dashboard</a>
       <a href="/admin">Admin</a>
       <a href="/api/admin">API</a>
     </nav>
@@ -334,25 +334,25 @@ def _home(conn: sqlite3.Connection, *, error: str = "") -> ArcLinkSurfaceRespons
     deployment_rows = "".join(
         f"<tr><td>{escape(row['prefix'])}</td><td>{escape(row['status'])}</td><td><a href=\"/user?user_id={quote(row['user_id'])}\">{escape(row['user_id'])}</a></td></tr>"
         for row in deployments
-    ) or "<tr><td colspan=\"3\">No deployments yet.</td></tr>"
+    ) or "<tr><td colspan=\"3\">No ArcPods yet.</td></tr>"
     error_html = f"<p class=\"warn\">{escape(error)}</p>" if error else ""
     html = f"""
 <section class="hero">
   <div>
     <span class="tag">Private AI infrastructure</span>
     <h1>Your AI workforce. Deployed.</h1>
-    <p>Start an ArcLink deployment, open a no-secret checkout contract, then inspect the user and admin control planes backed by local data.</p>
+    <p>Raven helps each Captain start an ArcPod, open a no-secret checkout contract, then inspect the Captain and admin control planes backed by local data.</p>
     <div class="grid">
       <div class="panel"><div class="metric">{len(sessions)}</div><p>Onboarding sessions</p></div>
-      <div class="panel"><div class="metric">{len(deployments)}</div><p>Deployment records</p></div>
+      <div class="panel"><div class="metric">{len(deployments)}</div><p>ArcPod records</p></div>
       <div class="panel"><div class="metric">0</div><p>Live provider mutations</p></div>
     </div>
   </div>
   <form class="panel stack" method="post" action="/onboarding/start">
-    <h2>Start Deployment</h2>
+    <h2>Start ArcPod</h2>
     {error_html}
     <div><label>Email</label><input name="email" type="email" value="operator@example.test" required></div>
-    <div><label>Name</label><input name="name" value="Operator"></div>
+    <div><label>Captain Name</label><input name="name" value="Captain"></div>
     <div><label>Plan</label><select name="plan"><option value="founders">Limited 100 Founders</option><option value="sovereign">Sovereign</option><option value="scale">Scale</option></select></div>
     <div><label>Model</label><input name="model" value="{escape(chutes_default_model({}))}"></div>
     <button type="submit">Start &gt;</button>
@@ -364,8 +364,8 @@ def _home(conn: sqlite3.Connection, *, error: str = "") -> ArcLinkSurfaceRespons
     <table><thead><tr><th>Session</th><th>Channel</th><th>Status</th><th>Plan</th></tr></thead><tbody>{session_rows}</tbody></table>
   </div>
   <div class="panel">
-    <h2>Deployment State</h2>
-    <table><thead><tr><th>Prefix</th><th>Status</th><th>User</th></tr></thead><tbody>{deployment_rows}</tbody></table>
+    <h2>ArcPod State</h2>
+    <table><thead><tr><th>Prefix</th><th>Status</th><th>Captain</th></tr></thead><tbody>{deployment_rows}</tbody></table>
   </div>
 </section>"""
     return ArcLinkSurfaceResponse(status=200, body=_layout("Onboarding", html))
@@ -393,7 +393,7 @@ def _session_page(conn: sqlite3.Connection, session_id: str, *, error: str = "")
         checkout = f"<p>Checkout URL: <a href=\"{escape(session['checkout_url'])}\">{escape(session['checkout_url'])}</a></p>"
     error_html = f"<p class=\"warn\">{escape(error)}</p>" if error else ""
     user_link = (
-        f"<a class=\"button secondary\" href=\"/user?user_id={quote(str(session['user_id']))}\">Open User Dashboard</a>"
+        f"<a class=\"button secondary\" href=\"/user?user_id={quote(str(session['user_id']))}\">Open Captain Dashboard</a>"
         if session.get("user_id")
         else ""
     )
@@ -497,7 +497,7 @@ def _user_dashboard(conn: sqlite3.Connection, user_id: str = "") -> ArcLinkSurfa
   </div>
   {''.join(cards) or '<div class="panel"><p>No deployments for this user.</p></div>'}
 </section>"""
-    return ArcLinkSurfaceResponse(status=200, body=_layout("User Dashboard", html))
+    return ArcLinkSurfaceResponse(status=200, body=_layout("Captain Dashboard", html))
 
 
 _ADMIN_ACTION_LABELS = {

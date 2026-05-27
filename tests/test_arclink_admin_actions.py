@@ -120,7 +120,7 @@ def test_admin_action_rejects_unwired_action_types() -> None:
     control = load_module("arclink_control.py", "arclink_control_admin_action_unwired_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_unwired_test")
     conn = memory_db(control)
-    for action_type in ("rollout", "force_resynth", "rotate_bot_key", "suspend", "unsuspend"):
+    for action_type in ("force_resynth", "rotate_bot_key", "suspend", "unsuspend"):
         try:
             dashboard.queue_arclink_admin_action(
                 conn,
@@ -270,7 +270,8 @@ def test_admin_dashboard_exposes_action_execution_readiness() -> None:
     expect("reprovision" in ready["executable"], str(ready))
     expect("dns_repair" in ready["executable"], str(ready))
     expect("comp" in ready["executable"], str(ready))
-    expect("rollout" in ready["pending_not_implemented"], str(ready))
+    expect("rollout" in ready["executable"], str(ready))
+    expect("academy_apply_preview" in ready["executable"], str(ready))
     expect("force_resynth" in ready["disabled"], str(ready))
     expect(ready["probes"][0]["ok"] is True, str(ready))
     expect(set(ready["executable"]).isdisjoint(set(ready["pending_not_implemented"])), str(ready))
@@ -303,6 +304,8 @@ def test_admin_action_readiness_publishes_source_owned_support_matrix() -> None:
         "refund": "PG-STRIPE",
         "cancel": "PG-STRIPE",
         "comp": "LOCAL-CONTROL-DB",
+        "rollout": "PG-UPGRADE/PG-HERMES",
+        "academy_apply_preview": "PG-HERMES/PG-PROVIDER",
     }
     for action_type, proof_gate in expected_gates.items():
         entry = support[action_type]
@@ -312,11 +315,18 @@ def test_admin_action_readiness_publishes_source_owned_support_matrix() -> None:
         expect(entry["local_contract"], str(entry))
         expect(entry["required_adapter"], str(entry))
 
-    pending = support["rollout"]
-    expect(pending["queueable"] is False, str(pending))
-    expect(pending["readiness"] == "pending_not_implemented", str(pending))
-    expect("worker support" in pending["fail_closed_reason"], str(pending))
-    expect("rollout" in ready["pending_not_implemented"], str(ready))
+    rollout = support["rollout"]
+    expect(rollout["queueable"] is True, str(rollout))
+    expect(rollout["readiness"] == "queueable", str(rollout))
+    expect(rollout["operation_kind"] == "arcpod_update_rollout", str(rollout))
+    expect("dry-run preflight" in rollout["local_contract"], str(rollout))
+    expect("rollout" not in ready["pending_not_implemented"], str(ready))
+
+    academy_preview = support["academy_apply_preview"]
+    expect(academy_preview["queueable"] is True, str(academy_preview))
+    expect(academy_preview["operation_kind"] == "academy_application_preview", str(academy_preview))
+    expect("no-write Academy application preview" in academy_preview["local_contract"], str(academy_preview))
+    expect("no executor" in academy_preview["required_adapter"], str(academy_preview))
 
     blocked = dashboard.admin_action_execution_readiness(env={})
     blocked_restart = blocked["action_support"]["restart"]
@@ -324,6 +334,145 @@ def test_admin_action_readiness_publishes_source_owned_support_matrix() -> None:
     expect(blocked_restart["readiness"] == "disabled", str(blocked_restart))
     expect("executor probes" in blocked_restart["fail_closed_reason"], str(blocked_restart))
     print("PASS test_admin_action_readiness_publishes_source_owned_support_matrix")
+
+
+def test_admin_action_matrix_marks_academy_apply_preview_queueable_but_pg_hermes_gated() -> None:
+    control = load_module("arclink_control.py", "arclink_control_admin_academy_preview_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_academy_preview_test")
+    conn = memory_db(control)
+    action = dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_1",
+        action_type="academy_apply_preview",
+        target_kind="user",
+        target_id="user_academy",
+        reason="operator requested no-write Academy application preview",
+        idempotency_key="academy-preview-admin-1",
+        metadata={
+            "recipe_id": "crew_academy",
+            "manifest_id": "academy-123",
+            "application_plan_id": "academy-plan-123",
+            "agent_id": "agent-academy",
+            "local_only": True,
+            "no_write": True,
+            "writes_enabled": False,
+            "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+        },
+    )
+    expect(action["status"] == "queued", str(action))
+    metadata = json.loads(action["metadata_json"])
+    expect(metadata["writes_enabled"] is False, str(metadata))
+    ready = dashboard.admin_action_execution_readiness(env={"ARCLINK_EXECUTOR_ADAPTER": "fake"})
+    academy_preview = ready["action_support"]["academy_apply_preview"]
+    expect(academy_preview["queueable"] is True, str(academy_preview))
+    expect(academy_preview["worker_support"] == "wired", str(academy_preview))
+    expect(academy_preview["live_proof_gate"] == "PG-HERMES/PG-PROVIDER", str(academy_preview))
+    expect("academy_apply_preview" not in ready["pending_not_implemented"], str(ready))
+    expect("PG-HERMES" in academy_preview["live_proof_gate"], str(academy_preview))
+    print("PASS test_admin_action_matrix_marks_academy_apply_preview_queueable_but_pg_hermes_gated")
+
+
+def test_admin_action_queue_enforces_per_action_target_kinds() -> None:
+    control = load_module("arclink_control.py", "arclink_control_admin_action_target_kinds_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_target_kinds_test")
+    conn = memory_db(control)
+    invalid = (
+        ("rollout", "user"),
+        ("academy_apply_preview", "subscription"),
+        ("restart", "user"),
+    )
+    for action_type, target_kind in invalid:
+        try:
+            dashboard.queue_arclink_admin_action(
+                conn,
+                admin_id="admin_1",
+                action_type=action_type,
+                target_kind=target_kind,
+                target_id="target_1",
+                reason="target kind contract check",
+                idempotency_key=f"{action_type}-{target_kind}-invalid",
+            )
+            raise AssertionError(f"expected {action_type} to reject target kind {target_kind}")
+        except dashboard.ArcLinkDashboardError as exc:
+            expect("does not support target kind" in str(exc), str(exc))
+    expect(
+        conn.execute("SELECT COUNT(*) AS count FROM arclink_action_intents").fetchone()["count"] == 0,
+        "invalid target kinds should not leave queued action rows",
+    )
+    print("PASS test_admin_action_queue_enforces_per_action_target_kinds")
+
+
+def test_control_node_provisioning_readiness_surfaces_worker_capacity_without_live_probe() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_readiness_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_provisioning_readiness_test")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_provisioning_readiness_test")
+    conn = memory_db(control)
+
+    control_plane_only = dashboard.control_node_provisioning_readiness(
+        conn,
+        env={"ARCLINK_CONTROL_PROVISIONER_ENABLED": "0"},
+    )
+    expect(control_plane_only["state"] == "control_plane_only", str(control_plane_only))
+    expect(control_plane_only["ready_to_provision"] is False, str(control_plane_only))
+    expect(control_plane_only["eligible_worker_count"] == 0, str(control_plane_only))
+    expect("Register and smoke-test" in control_plane_only["next_action"], str(control_plane_only))
+
+    blocked = dashboard.control_node_provisioning_readiness(
+        conn,
+        env={"ARCLINK_CONTROL_PROVISIONER_ENABLED": "1", "ARCLINK_EXECUTOR_ADAPTER": "local"},
+    )
+    expect(blocked["state"] == "blocked_no_worker", str(blocked))
+    expect(blocked["ready_to_provision"] is False, str(blocked))
+    expect(any(item["name"] == "worker_capacity" for item in blocked["blockers"]), str(blocked))
+
+    fleet.register_fleet_host(
+        conn,
+        host_id="host-local",
+        hostname="local-worker.example.test",
+        region="iad",
+        capacity_slots=3,
+    )
+    local_ready = dashboard.control_node_provisioning_readiness(
+        conn,
+        env={"ARCLINK_CONTROL_PROVISIONER_ENABLED": "1", "ARCLINK_EXECUTOR_ADAPTER": "local"},
+    )
+    expect(local_ready["state"] == "ready_to_provision", str(local_ready))
+    expect(local_ready["ready_to_provision"] is True, str(local_ready))
+    expect(local_ready["eligible_worker_count"] == 1, str(local_ready))
+    expect(local_ready["available_slots"] == 3, str(local_ready))
+    expect(local_ready["proof_gate"] == "PG-FLEET/PG-PROVISION", str(local_ready))
+    expect("no SSH" in local_ready["note"], str(local_ready))
+
+    remote_pending = dashboard.control_node_provisioning_readiness(
+        conn,
+        env={"ARCLINK_CONTROL_PROVISIONER_ENABLED": "1", "ARCLINK_EXECUTOR_ADAPTER": "ssh"},
+    )
+    expect(remote_pending["state"] == "pending_ssh", str(remote_pending))
+    expect(remote_pending["ready_to_provision"] is False, str(remote_pending))
+    expect(any(item["name"] == "ssh_key" for item in remote_pending["blockers"]), str(remote_pending))
+
+    remote_ready = dashboard.control_node_provisioning_readiness(
+        conn,
+        env={
+            "ARCLINK_CONTROL_PROVISIONER_ENABLED": "1",
+            "ARCLINK_EXECUTOR_ADAPTER": "ssh",
+            "ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED": "1",
+            "ARCLINK_ACTION_WORKER_SSH_HOST": "local-worker.example.test",
+            "ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST": "local-worker.example.test",
+            "ARCLINK_FLEET_SSH_KEY_PATH": "/tmp/arclink-fake-fleet-key",
+        },
+    )
+    expect(remote_ready["state"] == "ready_to_provision", str(remote_ready))
+    expect(remote_ready["ready_to_provision"] is True, str(remote_ready))
+    expect(remote_ready["eligible_workers"][0]["hostname"] == "local-worker.example.test", str(remote_ready))
+
+    view = dashboard.read_arclink_admin_dashboard(conn)
+    expect("provisioning_readiness" in view, str(view.keys()))
+    expect("ready_to_provision" in view["provisioning_readiness"], str(view["provisioning_readiness"]))
+    scale = dashboard.build_scale_operations_snapshot(conn)
+    expect("provisioning_readiness" in scale, str(scale.keys()))
+    expect(scale["provisioner"]["status"] == scale["provisioning_readiness"]["state"], str(scale["provisioner"]))
+    print("PASS test_control_node_provisioning_readiness_surfaces_worker_capacity_without_live_probe")
 
 
 def main() -> int:
@@ -335,7 +484,10 @@ def main() -> int:
     test_admin_refund_and_cancel_actions_record_audited_notes()
     test_admin_dashboard_exposes_action_execution_readiness()
     test_admin_action_readiness_publishes_source_owned_support_matrix()
-    print("PASS all 8 ArcLink admin action tests")
+    test_admin_action_matrix_marks_academy_apply_preview_queueable_but_pg_hermes_gated()
+    test_admin_action_queue_enforces_per_action_target_kinds()
+    test_control_node_provisioning_readiness_surfaces_worker_capacity_without_live_probe()
+    print("PASS all 10 ArcLink admin action tests")
     return 0
 
 

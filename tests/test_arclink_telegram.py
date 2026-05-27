@@ -169,6 +169,48 @@ def test_telegram_operator_identity_uses_operator_raven_before_public_onboarding
     expect(captain_start is not None, "non-operator /start should still reply")
     expect(captain_start["action"] == "prompt_package", str(captain_start))
     expect("Founders Offer" in captain_start["text"], captain_start["text"])
+
+    both_channel_operator = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 43,
+            "message": {
+                "message_id": 4,
+                "chat": {"id": 99, "type": "private"},
+                "from": {"id": 99},
+                "text": "/operator_status",
+            },
+        },
+        env={
+            "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+            "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+            "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+            "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+        },
+    )
+    expect(both_channel_operator is not None, "both-channel Telegram operator DM should reply")
+    expect(both_channel_operator["action"] == "operator_raven_status", str(both_channel_operator))
+
+    group_leak_attempt = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 44,
+            "message": {
+                "message_id": 5,
+                "chat": {"id": -10042, "type": "group"},
+                "from": {"id": 99},
+                "text": "/operator_status",
+            },
+        },
+        env={
+            "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+            "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+            "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+            "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+        },
+    )
+    expect(group_leak_attempt is not None, "group public bot path should still reply safely")
+    expect(group_leak_attempt["action"] != "operator_raven_status", str(group_leak_attempt))
     print("PASS test_telegram_operator_identity_uses_operator_raven_before_public_onboarding")
 
 
@@ -226,6 +268,31 @@ def test_telegram_registers_public_bot_actions() -> None:
     expect(calls[1].get("scope") == {"type": "all_private_chats"}, str(calls[1]))
     expect("agents" in result["registered"] and "plan" in result["registered"], str(result))
     print("PASS test_telegram_registers_public_bot_actions")
+
+
+def test_telegram_registers_operator_command_scope() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_operator_commands_test")
+    calls: list[dict[str, object]] = []
+    tg.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+    result = tg.register_arclink_operator_telegram_commands(
+        "123:abc",
+        env={
+            "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+            "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+            "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+            "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+        },
+    )
+
+    expect(len(calls) == 1, str(calls))
+    expect(calls[0].get("scope") == {"type": "chat", "chat_id": 99}, str(calls[0]))
+    command_names = {item["command"] for item in calls[0]["commands"]}
+    expect("operator_status" in command_names, str(command_names))
+    expect("upgrade_hermes" in command_names, str(command_names))
+    expect("Founders Offer" not in str(calls[0]), str(calls[0]))
+    expect(result["skipped"] is False, str(result))
+    print("PASS test_telegram_registers_operator_command_scope")
 
 
 def test_telegram_active_chat_scope_adds_agent_commands() -> None:
@@ -465,6 +532,7 @@ def main() -> int:
     test_telegram_operator_identity_uses_operator_raven_before_public_onboarding()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
+    test_telegram_registers_operator_command_scope()
     test_telegram_active_chat_scope_adds_agent_commands()
     test_telegram_active_media_carries_native_update_to_agent_bridge()
     test_telegram_status_reports_selected_agent_label()
@@ -472,7 +540,7 @@ def main() -> int:
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 13 ArcLink Telegram adapter tests")
+    print("PASS all 14 ArcLink Telegram adapter tests")
     return 0
 
 

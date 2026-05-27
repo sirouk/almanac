@@ -104,6 +104,17 @@ ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES = frozenset(
         "upgrade_hermes",
     )
 )
+ARCLINK_OPERATOR_TELEGRAM_COMMANDS: tuple[dict[str, str], ...] = (
+    {"command": "operator_status", "description": "Operator: control-node status"},
+    {"command": "fleet_list", "description": "Operator: fleet and capacity"},
+    {"command": "worker_probe", "description": "Operator: worker proof dry run"},
+    {"command": "user_lookup", "description": "Operator: find Captain or Pod"},
+    {"command": "pod_repair", "description": "Operator: repair plan dry run"},
+    {"command": "upgrade_check", "description": "Operator: upgrade state"},
+    {"command": "upgrade_hermes", "description": "Operator: Hermes upgrade check"},
+    {"command": "rollout_plan", "description": "Operator: rollout plan"},
+    {"command": "academy_status", "description": "Operator: Academy status"},
+)
 
 
 class ArcLinkTelegramError(RuntimeError):
@@ -692,6 +703,42 @@ def register_arclink_public_telegram_commands(
     }
 
 
+def register_arclink_operator_telegram_commands(
+    bot_token: str,
+    *,
+    env: Mapping[str, str],
+) -> dict[str, Any]:
+    clean_token = str(bot_token or "").strip()
+    if not clean_token:
+        raise ArcLinkTelegramError("TELEGRAM_BOT_TOKEN is required to register ArcLink operator commands")
+    if not _operator_telegram_enabled(env):
+        return {"skipped": True, "reason": "telegram_operator_disabled", "registered": [], "scopes": []}
+
+    chat_ids: list[str] = []
+    primary_platform = str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or "").strip().lower()
+    primary_chat = str(env.get("OPERATOR_NOTIFY_CHANNEL_ID") or "").strip()
+    if primary_platform == "telegram" and primary_chat:
+        chat_ids.append(primary_chat)
+    chat_ids.extend(sorted(_operator_telegram_user_ids(env)))
+
+    seen: set[str] = set()
+    scopes: list[dict[str, Any]] = []
+    for raw_chat_id in chat_ids:
+        chat_id = str(raw_chat_id or "").strip()
+        if not chat_id or chat_id in seen:
+            continue
+        seen.add(chat_id)
+        scope_chat_id: Any = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+        scope = {"type": "chat", "chat_id": scope_chat_id}
+        telegram_set_my_commands(bot_token=clean_token, commands=list(ARCLINK_OPERATOR_TELEGRAM_COMMANDS), scope=scope)
+        scopes.append(scope)
+    return {
+        "registered": [item["command"] for item in ARCLINK_OPERATOR_TELEGRAM_COMMANDS],
+        "scopes": scopes,
+        "skipped": not bool(scopes),
+    }
+
+
 def telegram_get_updates(
     *,
     bot_token: str,
@@ -880,6 +927,19 @@ def _telegram_command_token(raw: str) -> str:
     return token
 
 
+def _operator_telegram_channels(env: Mapping[str, str]) -> set[str]:
+    return {
+        value.strip().lower()
+        for value in str(env.get("ARCLINK_CURATOR_CHANNELS") or "").split(",")
+        if value.strip()
+    }
+
+
+def _operator_telegram_enabled(env: Mapping[str, str]) -> bool:
+    platform = str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or "").strip().lower()
+    return platform == "telegram" or "telegram" in _operator_telegram_channels(env)
+
+
 def _operator_telegram_user_ids(env: Mapping[str, str]) -> set[str]:
     return {
         value.strip()
@@ -889,20 +949,19 @@ def _operator_telegram_user_ids(env: Mapping[str, str]) -> set[str]:
 
 
 def _operator_telegram_sender_allowed(parsed: Mapping[str, Any], env: Mapping[str, str]) -> bool:
-    if str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or "").strip().lower() != "telegram":
+    if not _operator_telegram_enabled(env):
         return False
+    primary_platform = str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or "").strip().lower()
     configured_chat = str(env.get("OPERATOR_NOTIFY_CHANNEL_ID") or "").strip()
-    if not configured_chat:
-        return False
     chat_id = str(parsed.get("chat_id") or "").strip()
     sender_id = str(parsed.get("user_id") or "").strip()
     chat_type = str(parsed.get("chat_type") or "").strip().lower()
     operator_ids = _operator_telegram_user_ids(env)
-    if operator_ids and sender_id not in operator_ids:
+    if not operator_ids or not sender_id or sender_id not in operator_ids:
         return False
-    if chat_id == configured_chat:
+    if primary_platform == "telegram" and configured_chat and chat_id == configured_chat:
         return True
-    if operator_ids and chat_type == "private" and chat_id == sender_id:
+    if chat_type == "private" and chat_id == sender_id:
         return True
     return False
 

@@ -72,16 +72,23 @@ Weak:
 ## Account-Aware Commands
 
 Configured Operator Telegram identities are intercepted before Captain
-onboarding. When `OPERATOR_NOTIFY_CHANNEL_PLATFORM=telegram`,
-`OPERATOR_NOTIFY_CHANNEL_ID`, and `ARCLINK_OPERATOR_TELEGRAM_USER_IDS` match
-the incoming Telegram update, `/start`, `/help`, `/raven`, `/raven_name`, and
-free-form text show the Operator Raven bridge instead of checkout copy.
+onboarding. When Telegram is the primary operator channel, the configured
+`OPERATOR_NOTIFY_CHANNEL_ID` plus `ARCLINK_OPERATOR_TELEGRAM_USER_IDS` must
+match the incoming Telegram update. When the operator enables both Telegram and
+Discord but makes another channel primary, private Telegram DMs from the
+allowed operator user IDs still route to Operator Raven, while group chats stay
+on the safe Captain/public contract. `/start`, `/help`, `/raven`,
+`/raven_name`, and free-form text show the Operator Raven bridge instead of
+checkout copy.
 Operator commands such as `/operator_status`, `/operator_fleet`,
 `/worker_probe <host-id> --dry-run`, `/user_lookup <query>`,
 `/pod_repair <deployment-id> --dry-run`, `/upgrade_check`, `/upgrade_hermes`,
 `/rollout_plan <target> --dry-run`, and `/academy_status <query>` route to the
 read-only/dry-run Operator Raven surface. Non-operator Telegram users continue
 through the Captain public bot contract.
+During public bot registration, ArcLink also writes chat-scoped Telegram
+command menus for configured operator Telegram chats so the Operator sees the
+operator command set rather than only the Captain menu.
 
 Registered public commands before the active Telegram per-chat scope takes
 over:

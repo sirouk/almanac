@@ -22,6 +22,7 @@ from arclink_telegram import (
     arclink_public_bot_telegram_agent_commands,
     ensure_arclink_public_telegram_webhook,
     refresh_arclink_public_telegram_chat_commands,
+    register_arclink_operator_telegram_commands,
     register_arclink_public_telegram_commands,
 )
 
@@ -272,6 +273,10 @@ def register_public_bot_commands(env: Mapping[str, str] | None = None) -> dict[s
     if telegram.bot_token:
         try:
             results["telegram"] = register_arclink_public_telegram_commands(telegram.bot_token)
+            results["telegram"]["operator_scopes"] = register_arclink_operator_telegram_commands(
+                telegram.bot_token,
+                env=merged,
+            )
             results["telegram"]["webhook"] = ensure_arclink_public_telegram_webhook(
                 telegram.bot_token,
                 telegram.webhook_url,

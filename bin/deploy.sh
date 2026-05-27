@@ -8959,6 +8959,78 @@ is_local_fleet_ssh_host() {
   return 1
 }
 
+install_local_fleet_probe_wrapper() {
+  local user="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
+  local hostname_value="${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
+  local ssh_port="22"
+  local state_root="/var/lib/arclink-fleet"
+  local etc_dir="/etc/arclink"
+  local config_file="$etc_dir/fleet-worker.env"
+  local admission_file="$state_root/admission.state"
+  local fingerprint_file="$state_root/machine-fingerprint"
+  local wrapper_source="$BOOTSTRAP_DIR/bin/arclink-fleet-probe-wrapper"
+  local wrapper_target="/usr/local/bin/arclink-fleet-probe-wrapper"
+  local machine_id_path=""
+  local fingerprint=""
+  local user_group=""
+
+  if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+    echo "Local fleet probe wrapper install needs root." >&2
+    return 1
+  fi
+  if ! is_safe_local_fleet_user "$user"; then
+    echo "Refusing unsafe local fleet Unix user: $user" >&2
+    return 1
+  fi
+  if [[ ! -x "$wrapper_source" ]]; then
+    echo "Missing executable fleet probe wrapper source: $wrapper_source" >&2
+    return 1
+  fi
+
+  install -d -m 0755 "$etc_dir" /usr/local/bin
+  install -d -m 0700 "$state_root"
+  install -m 0755 "$wrapper_source" "$wrapper_target"
+  printf 'admitting\n' >"$admission_file"
+
+  if [[ -r /etc/machine-id ]]; then
+    machine_id_path="/etc/machine-id"
+  else
+    machine_id_path="$state_root/machine-id"
+    if [[ ! -f "$machine_id_path" ]]; then
+      python3 - "$machine_id_path" <<'PY'
+import secrets
+import sys
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write(secrets.token_hex(32) + "\n")
+PY
+      chmod 600 "$machine_id_path" 2>/dev/null || true
+    fi
+  fi
+  fingerprint="$(python3 - "$machine_id_path" "$hostname_value" "$ssh_port" <<'PY'
+import hashlib
+import sys
+machine_id_path, hostname, ssh_port = sys.argv[1:4]
+with open(machine_id_path, "r", encoding="utf-8", errors="ignore") as handle:
+    machine_id = handle.readline().strip()
+digest = hashlib.sha256(f"arclink-fleet-v1\0{machine_id}\0{hostname}\0{ssh_port}".encode("utf-8")).hexdigest()
+print(f"sha256:{digest}")
+PY
+)"
+  printf '%s\n' "$fingerprint" >"$fingerprint_file"
+  {
+    printf 'ARCLINK_FLEET_STATE_ROOT=%q\n' "$state_root"
+    printf 'ARCLINK_FLEET_ADMISSION_FILE=%q\n' "$admission_file"
+    printf 'ARCLINK_FLEET_FINGERPRINT_FILE=%q\n' "$fingerprint_file"
+    printf 'ARCLINK_FLEET_HOSTNAME=%q\n' "$hostname_value"
+    printf 'ARCLINK_FLEET_SSH_PORT=%q\n' "$ssh_port"
+  } >"$config_file"
+  chmod 644 "$config_file" 2>/dev/null || true
+  user_group="$(id -gn "$user" 2>/dev/null || printf '%s' "$user")"
+  chown -R "$user:$user_group" "$state_root" 2>/dev/null || true
+  chmod 700 "$state_root" 2>/dev/null || true
+  chmod 600 "$admission_file" "$fingerprint_file" 2>/dev/null || true
+}
+
 ensure_local_fleet_ssh_access() {
   local user="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
   local host="${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}"
@@ -9011,6 +9083,7 @@ ensure_local_fleet_ssh_access() {
     mkdir -p "$ARCLINK_STATE_ROOT_BASE"
     chown "$user:$user_group" "$ARCLINK_STATE_ROOT_BASE" || true
   fi
+  install_local_fleet_probe_wrapper
   echo "Prepared local fleet SSH access for $user@$host."
 }
 
@@ -9048,11 +9121,12 @@ test_local_fleet_ssh_access() {
   if [[ -n "$known_hosts" ]]; then
     ssh_opts+=(-o "UserKnownHostsFile=$known_hosts")
   fi
-  if ssh "${ssh_opts[@]}" "$user@$host" true >/dev/null 2>&1; then
-    echo "Verified local fleet SSH connectivity: $user@$host"
+  if ssh "${ssh_opts[@]}" "$user@$host" true >/dev/null 2>&1 && \
+      ssh "${ssh_opts[@]}" "$user@$host" arclink-fleet-probe-wrapper liveness >/dev/null 2>&1; then
+    echo "Verified local fleet SSH connectivity and probe wrapper: $user@$host"
     return 0
   fi
-  echo "Could not verify local fleet SSH connectivity for $user@$host." >&2
+  echo "Could not verify local fleet SSH connectivity and probe wrapper for $user@$host." >&2
   echo "Install/enable OpenSSH server on this host, then rerun ./deploy.sh control install or reconfigure." >&2
   return 1
 }

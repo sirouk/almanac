@@ -96,6 +96,10 @@ def test_join_fake_root_is_idempotent_and_does_not_persist_token() -> None:
         second = run(cmd, env=env)
         expect(second.returncode == 0, f"second join failed: {second.stderr}\n{second.stdout}")
         expect((state_root / "admission.state").read_text(encoding="utf-8").strip() == "admitting", "worker should be admitted")
+        config_file = root / "etc" / "arclink" / "fleet-worker.env"
+        expect(config_file.exists(), "join should write the probe wrapper config")
+        expect((config_file.stat().st_mode & 0o777) == 0o644, oct(config_file.stat().st_mode & 0o777))
+        expect((state_root.stat().st_mode & 0o777) == 0o755, oct(state_root.stat().st_mode & 0o777))
         callbacks = [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
         expect(len(callbacks) == 1, str(callbacks))
         payload = callbacks[0]["payload"]

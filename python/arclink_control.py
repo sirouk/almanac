@@ -2121,6 +2121,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         );
         """
     )
+    _migrate_fleet_host_probes_schema(conn)
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_fleet_hosts_hostname
@@ -2129,6 +2130,8 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_hosts_region_tier ON arclink_fleet_hosts (region_tier, placement_priority, status, drain)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_enrollments_status_expiry ON arclink_fleet_enrollments (status, expires_at)")
+    conn.execute("DROP INDEX IF EXISTS idx_arclink_fleet_host_probes_host_kind_time")
+    conn.execute("DROP INDEX IF EXISTS idx_arclink_fleet_host_probes_machine_kind_time")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_host_probes_host_kind_time ON arclink_fleet_host_probes (host_id, kind, probed_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_arclink_fleet_audit_chain_inventory_time ON arclink_fleet_audit_chain (inventory_id, event_at)")
     conn.execute(
@@ -2210,6 +2213,72 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [str(row["name"]) for row in rows]
+
+
+def _sql_column_expr(columns: set[str], column: str, fallback: str) -> str:
+    return column if column in columns else fallback
+
+
+def _migrate_fleet_host_probes_schema(conn: sqlite3.Connection) -> None:
+    columns = set(_table_columns(conn, "arclink_fleet_host_probes"))
+    required = {"probe_id", "host_id", "probed_at", "kind", "ok", "latency_ms", "payload_json", "error"}
+    if required <= columns:
+        return
+
+    kind_expr = "'liveness'"
+    if "kind" in columns:
+        kind_expr = "CASE WHEN kind IN ('liveness', 'capacity', 'inventory') THEN kind ELSE 'liveness' END"
+    elif "probe_kind" in columns:
+        kind_expr = "CASE WHEN probe_kind IN ('liveness', 'capacity', 'inventory') THEN probe_kind ELSE 'liveness' END"
+
+    ok_expr = "0"
+    if "ok" in columns:
+        ok_expr = "CASE WHEN CAST(ok AS INTEGER) = 1 THEN 1 ELSE 0 END"
+    elif "status" in columns:
+        ok_expr = "CASE WHEN LOWER(COALESCE(status, '')) IN ('ok', 'success', 'healthy', 'active', 'ready') THEN 1 ELSE 0 END"
+
+    select_columns = [
+        _sql_column_expr(columns, "probe_id", "'flprb_legacy_' || lower(hex(randomblob(12)))"),
+        _sql_column_expr(columns, "host_id", "''"),
+        _sql_column_expr(columns, "probed_at", "datetime('now')"),
+        kind_expr,
+        ok_expr,
+        _sql_column_expr(columns, "latency_ms", "0"),
+        _sql_column_expr(columns, "payload_json", "'{}'"),
+        _sql_column_expr(columns, "error", "''"),
+    ]
+
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS arclink_fleet_host_probes__new;
+        CREATE TABLE arclink_fleet_host_probes__new (
+          probe_id TEXT PRIMARY KEY,
+          host_id TEXT NOT NULL,
+          probed_at TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('liveness', 'capacity', 'inventory')),
+          ok INTEGER NOT NULL CHECK (ok IN (0, 1)),
+          latency_ms INTEGER NOT NULL DEFAULT 0,
+          payload_json TEXT NOT NULL DEFAULT '',
+          error TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO arclink_fleet_host_probes__new (
+          probe_id, host_id, probed_at, kind, ok, latency_ms, payload_json, error
+        )
+        SELECT {', '.join(select_columns)}
+        FROM arclink_fleet_host_probes
+        """
+    )
+    conn.executescript(
+        """
+        DROP TABLE arclink_fleet_host_probes;
+        ALTER TABLE arclink_fleet_host_probes__new RENAME TO arclink_fleet_host_probes;
+        """
+    )
+    conn.commit()
 
 
 def _migrate_arclink_rollouts_status_schema(conn: sqlite3.Connection) -> None:

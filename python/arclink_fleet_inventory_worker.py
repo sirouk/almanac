@@ -150,7 +150,17 @@ def _host_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         ORDER BY h.hostname, h.host_id
         """
     ).fetchall()
-    return [dict(row) for row in rows]
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        host = dict(row)
+        metadata = json_loads_safe(str(host.get("metadata_json") or "{}"))
+        if isinstance(metadata, Mapping):
+            if not str(host.get("ssh_host") or "").strip():
+                host["ssh_host"] = str(metadata.get("ssh_host") or "").strip()
+            if not str(host.get("ssh_user") or "").strip():
+                host["ssh_user"] = str(metadata.get("ssh_user") or "").strip()
+        normalized.append(host)
+    return normalized
 
 
 def _linked_machine_id(host: Mapping[str, Any]) -> str:

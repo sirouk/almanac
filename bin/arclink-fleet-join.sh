@@ -258,6 +258,15 @@ ensure_user() {
   fi
 }
 
+repair_state_permissions() {
+  if [[ -n "$SYSTEM_ROOT" ]]; then
+    chmod 755 "$STATE_ROOT" 2>/dev/null || true
+    return 0
+  fi
+  chown -R "$SSH_USER:$SSH_USER" "$STATE_ROOT" 2>/dev/null || true
+  chmod 700 "$STATE_ROOT" 2>/dev/null || true
+}
+
 user_home_dir() {
   if [[ -n "$SYSTEM_ROOT" ]]; then
     printf '%s\n' "$HOME_BASE/$SSH_USER"
@@ -309,7 +318,7 @@ install_probe_wrapper() {
     printf 'ARCLINK_FLEET_HOSTNAME=%q\n' "$HOSTNAME_VALUE"
     printf 'ARCLINK_FLEET_SSH_PORT=%q\n' "$SSH_PORT"
   } >"$CONFIG_FILE"
-  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+  chmod 644 "$CONFIG_FILE" 2>/dev/null || true
 }
 
 ensure_docker_group() {
@@ -478,12 +487,16 @@ main() {
   printf 'disabled\n' >"$ADMISSION_FILE"
   ensure_prereqs
   ensure_user
+  repair_state_permissions
   install_authorized_key
   install_probe_wrapper
   ensure_docker_group
   fingerprint="$(compute_fingerprint)"
   printf '%s\n' "$fingerprint" >"$FINGERPRINT_FILE"
   chmod 600 "$FINGERPRINT_FILE" 2>/dev/null || true
+  if [[ -z "$SYSTEM_ROOT" ]]; then
+    chown "$SSH_USER:$SSH_USER" "$ADMISSION_FILE" "$FINGERPRINT_FILE" 2>/dev/null || true
+  fi
   build_payload "$fingerprint"
 
   if [[ "$already_admitting" == "1" ]]; then

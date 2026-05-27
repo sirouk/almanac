@@ -6922,6 +6922,7 @@ def test_docker_health_script_checks_container_runtime() -> None:
         "ssot-batcher",
         "notification-delivery",
         "health-watch",
+        "fleet-inventory-worker",
         "curator-refresh",
         "qmd-refresh",
         "pdf-ingest",

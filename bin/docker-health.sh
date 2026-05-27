@@ -216,6 +216,7 @@ check_docker_job_status_files() {
     ssot-batcher
     notification-delivery
     health-watch
+    fleet-inventory-worker
     curator-refresh
     qmd-refresh
     pdf-ingest

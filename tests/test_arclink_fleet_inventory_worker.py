@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 from arclink_test_helpers import expect, load_module, memory_db
 
@@ -76,6 +77,90 @@ def test_due_worker_records_probe_rows_and_updates_capacity() -> None:
     expect(health["hosts"]["health_states"]["active"] == 1, str(health))
     expect(health["probes"]["total"] == 3 and health["probes"]["ok"] == 3, str(health))
     print("PASS test_due_worker_records_probe_rows_and_updates_capacity")
+
+
+def test_legacy_probe_schema_is_migrated_for_worker() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_legacy_probe_test")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_legacy_probe_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_legacy_probe_test")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE arclink_fleet_host_probes (
+          probe_id TEXT PRIMARY KEY,
+          host_id TEXT NOT NULL DEFAULT '',
+          machine_id TEXT NOT NULL DEFAULT '',
+          probe_kind TEXT NOT NULL,
+          status TEXT NOT NULL,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          error TEXT NOT NULL DEFAULT '',
+          probed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_host_probes (
+          probe_id, host_id, machine_id, probe_kind, status, payload_json, error, probed_at
+        ) VALUES ('flprb_legacy', 'host_legacy', '', 'capacity', 'ok', '{}', '', '2026-05-16T11:00:00+00:00')
+        """
+    )
+    control.ensure_schema(conn)
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(arclink_fleet_host_probes)").fetchall()}
+    expect({"kind", "ok", "latency_ms"} <= columns, str(columns))
+    legacy = conn.execute("SELECT kind, ok, latency_ms FROM arclink_fleet_host_probes WHERE probe_id = 'flprb_legacy'").fetchone()
+    expect(dict(legacy) == {"kind": "capacity", "ok": 1, "latency_ms": 0}, str(dict(legacy)))
+    _, host = _seed_machine(control, inventory, conn)
+
+    def runner(host_row, kind):
+        return worker.ProbeResult(ok=True, payload={"ok": True, "kind": kind, "observed_load": 0}, latency_ms=7)
+
+    result = worker.process_due_hosts(
+        conn,
+        runner=runner,
+        now_iso="2026-05-16T12:00:00+00:00",
+        force=True,
+        notify=False,
+    )
+    expect(result["probe_count"] == 3, str(result))
+    probe_count = conn.execute("SELECT COUNT(*) AS count FROM arclink_fleet_host_probes WHERE host_id = ?", (host["host_id"],)).fetchone()["count"]
+    expect(probe_count == 3, f"expected three migrated-schema probe rows, got {probe_count}")
+    print("PASS test_legacy_probe_schema_is_migrated_for_worker")
+
+
+def test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_metadata_ssh_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_metadata_ssh_test")
+    conn = memory_db(control)
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_hosts (
+          host_id, hostname, region, tags_json, status, drain, capacity_slots,
+          observed_load, metadata_json, created_at, updated_at
+        ) VALUES (
+          'host_local', 's1396', 'starter', '{}', 'active', 0, 8, 0,
+          '{"ssh_host":"localhost","ssh_user":"arclink"}',
+          '2026-05-16T12:00:00+00:00', '2026-05-16T12:00:00+00:00'
+        )
+        """
+    )
+    seen: list[tuple[str, str]] = []
+
+    def runner(host_row, kind):
+        seen.append((str(host_row.get("ssh_host") or ""), str(host_row.get("ssh_user") or "")))
+        return worker.ProbeResult(ok=True, payload={"ok": True, "kind": kind, "observed_load": 0}, latency_ms=3)
+
+    result = worker.process_due_hosts(
+        conn,
+        runner=runner,
+        now_iso="2026-05-16T12:01:00+00:00",
+        force=True,
+        notify=False,
+    )
+    expect(result["probe_count"] == 3, str(result))
+    expect(seen == [("localhost", "arclink"), ("localhost", "arclink"), ("localhost", "arclink")], str(seen))
+    print("PASS test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine")
 
 
 def test_liveness_thresholds_degrade_unreachable_and_recover() -> None:
@@ -170,5 +255,7 @@ def test_probe_errors_are_redacted_and_retention_is_pruned() -> None:
 
 if __name__ == "__main__":
     test_due_worker_records_probe_rows_and_updates_capacity()
+    test_legacy_probe_schema_is_migrated_for_worker()
+    test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine()
     test_liveness_thresholds_degrade_unreachable_and_recover()
     test_probe_errors_are_redacted_and_retention_is_pruned()

@@ -5,6 +5,14 @@
 Turn the ArcLink dream system described in `USER_JOURNEY.md` into working,
 tested repository reality, using `GAPS.md` as the implementation queue.
 
+The primary trajectory is the Sovereign Control Node: the paid self-serve
+ArcLink universe with public website/API onboarding, Raven, Stripe,
+entitlements, fleet placement, ArcPod provisioning, dashboards, Hermes,
+knowledge, sharing, inference, upgrades, backups, and operator control.
+Shared Host and Shared Host Docker remain valid ArcLink substrates, but for
+this mission they are secondary validation/support paths unless they block the
+Control Node path, shared install artifacts, or local test truth.
+
 This is an implementation mission, not another atlas pass. Close every
 unattended local gap with source changes, tests, and honest documentation
 updates. When a row requires live credentials, an external proof window, an
@@ -14,8 +22,12 @@ and leave an exact handoff item for the operator.
 
 ## Operating Contract
 
-- Read `AGENTS.md`, `USER_JOURNEY.md`, `GAPS.md`, `IMPLEMENTATION_PLAN.md`, and
-  `research/COVERAGE_MATRIX.md` first.
+- Read `AGENTS.md`, `docs/arclink/sovereign-control-node-symphony.md`,
+  `docs/arclink/academy-trainer.md`, `USER_JOURNEY.md`, `GAPS.md`,
+  `IMPLEMENTATION_PLAN.md`, and `research/COVERAGE_MATRIX.md` first.
+- Keep the Sovereign Control Node as the center of gravity. Treat Shared Host
+  and Shared Host Docker work as supporting validation unless a current gap
+  explicitly requires those modes.
 - Do not read `arclink-priv/`, user homes, secret files, deploy keys, `.env`
   values, OAuth stores, bot tokens, or live credentials.
 - Do not run live deploy/install/upgrade, Docker up/down/reconcile, Stripe,
@@ -41,10 +53,15 @@ and leave an exact handoff item for the operator.
    `RESIDUAL_RISK_ACCEPTANCE`.
 2. If `GAP-025` has regressed, repair the broad no-secret local validation
    story first. A broken broad suite undermines every local `real` claim.
-3. P0/P1 rows with local repairable work, especially `GAP-019` helper/broker
-   isolation and fail-closed security work.
+3. Prioritize local Sovereign Control Node rows and surfaces: `GAP-029`
+   Operator Raven full-service control, `GAP-030` sovereign worker readiness,
+   `GAP-031` LLM Router fallback/inference completeness, `GAP-032` rolling
+   Hermes/ArcPod update orchestration, `GAP-033` cross-surface experience
+   finish, and `GAP-034` Academy Trainer subject-matter corpus/continuing
+   education. Pull in `GAP-019` or other security rows when they protect the
+   Control Node path.
 4. P2/P3 rows that are locally repairable or share code ownership with the
-   active P0/P1 slice.
+   active Control Node slice.
 5. Live proof and policy rows only after the operator explicitly supplies
    credentials, authorization, or a decision in a separate proof window.
 

@@ -1,6 +1,150 @@
 # Mission Status
 
-Updated: 2026-05-26
+Updated: 2026-05-27
+
+## GAP-029-A Operator Raven Minimal Console
+
+Status: the first local Operator Raven slice is implemented and tested. This
+does not close `GAP-029`; it reduces the row from "no shared Operator Raven
+command/action layer" to "first read-only/dry-run layer exists."
+
+What changed:
+
+- `python/arclink_operator_raven.py`: new shared parser/dispatcher for
+  `status`, `fleet list`, `worker probe --dry-run`, `user lookup`,
+  `pod repair --dry-run`, and injected `upgrade check`.
+- `python/arclink_curator_onboarding.py`: Telegram operator command menu and
+  command routing now include the shared Operator Raven commands while keeping
+  existing operator-channel and approval-code checks.
+- `python/arclink_curator_discord_onboarding.py`: Discord operator slash/text
+  commands now use the shared Operator Raven layer while keeping the configured
+  operator-channel gate.
+- `tests/test_arclink_operator_raven.py`: proves command parsing, secret-free
+  output, no action queueing for dry-run commands, upgrade-check injection, and
+  chat adapter authorization boundaries.
+- `GAPS.md`, `research/COVERAGE_MATRIX.md`, `IMPLEMENTATION_PLAN.md`, and
+  `research/BUILD_COMPLETION_NOTES.md`: recorded the local slice without
+  claiming full Operator Raven, live proof, or policy closure.
+
+Validation:
+
+- `python3 tests/test_arclink_operator_raven.py` passed: 5 tests.
+- `python3 -m py_compile python/arclink_operator_raven.py python/arclink_curator_onboarding.py python/arclink_curator_discord_onboarding.py` passed.
+- `python3 tests/test_arclink_curator_onboarding_regressions.py` passed: 10 tests.
+- `python3 tests/test_arclink_enrollment_provisioner_regressions.py` passed: 26 tests.
+- `python3 tests/test_arclink_admin_actions.py` passed: 8 tests.
+- `python3 tests/test_arclink_fleet.py` passed: 18 tests.
+- `python3 tests/test_arclink_upgrade_notifications.py` passed: 9 tests.
+- `python3 tests/test_documentation_truths.py` passed: 10 tests.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `git diff --check` passed.
+- `python3 -m pytest -q tests` passed: 1312 passed, 6 skipped, 89 warnings.
+
+Remaining: `GAP-029` still needs broader audited action-worker/broker-backed
+commands, confirmation policy, runbook coverage, live bot proof where
+applicable, and the `GAP-027` Discord authority decision before broad chat
+mutation can ship. The next local slice is `GAP-030` readiness surfacing unless
+the operator chooses to continue widening Operator Raven read-only coverage
+first.
+
+No live proof, Docker lifecycle, deploy/install/upgrade, systemd, credentialed
+service, private-state read, or host mutation was run.
+
+## Deployment Mode Viability Audit
+
+Status: the non-Control-Node modes were checked from source. Shared Host Mode
+and Shared Host Docker Mode are still viable, first-class paths in code and
+docs. `bin/deploy.sh` dispatches all three command families:
+
+- Sovereign Control Node: `./deploy.sh control ...`
+- Shared Host: direct commands such as `./deploy.sh install`, `upgrade`,
+  `health`, enrollment, Curator setup, and component upgrade commands
+- Shared Host Docker: `./deploy.sh docker ...`
+
+Ground truth: Shared Host has active install/upgrade/health code,
+systemd-service installers, Curator bootstrap, enrolled-agent realignment, and
+the host-mutating `test.sh` / `bin/ci-install-smoke.sh` smoke path. Shared Host
+Docker has an actively maintained Compose/supervisor path and extensive Docker
+regression coverage. The missing register item was proof ownership, not code
+viability.
+
+Handoff edit:
+
+- `README.md`: front-loaded the introduction, lore intro, three-mode breakdown,
+  install trace, and day-two management commands so the mode story starts with
+  Sovereign Control Node and then distinguishes Shared Host and Shared Host
+  Docker.
+- `bin/deploy.sh`: clarified the top-level interactive mode menu and made the
+  Sovereign Control Node and Shared Host Docker submenus match Shared Host by
+  offering Back as well as Exit.
+- `tests/test_deploy_regressions.py`: extended menu regression coverage for
+  the clearer mode split and submenu return behavior.
+- `GAPS.md`: added `GAP-028` and `PG-SHARED-HOST` for fresh Shared Host
+  install/enrollment smoke proof.
+- `USER_JOURNEY.md`: stated that Shared Host is maintained but currently
+  host-proof gated.
+- `research/COVERAGE_MATRIX.md`: mapped `GAP-028` to `J-15`, `J-18`, and
+  `J-27`.
+- `docs/arclink/local-validation.md`: named `./test.sh` /
+  `bin/ci-install-smoke.sh` as the `PG-SHARED-HOST` proof path.
+- `IMPLEMENTATION_PLAN.md`: routed `GAP-028` to an authorized host-smoke
+  window.
+- `mission_status.md` and `research/BUILD_COMPLETION_NOTES.md`: recorded this
+  audit.
+
+Validation:
+
+- `python3 tests/test_documentation_truths.py` passed: 10 tests.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- `bash -n deploy.sh bin/deploy.sh` passed.
+- Gap/proof cross-reference check passed: `PG-SHARED-HOST` now has `GAP-028`
+  as its owning row, and every `GAP-028` journey joint is represented in the
+  coverage matrix.
+- `python3 tests/test_deploy_regressions.py` passed: 115 tests.
+- `python3 tests/test_health_regressions.py` passed: 20 tests.
+- `python3 tests/test_arclink_docker.py` passed: 56 tests.
+- `git diff --check` passed.
+
+No live proof, Docker lifecycle, deploy/install/upgrade, systemd, credentialed
+service, private-state read, or host mutation was run.
+
+## Journey/Gaps Atlas Consistency Repair
+
+Status: the current `USER_JOURNEY.md`, `GAPS.md`,
+`research/COVERAGE_MATRIX.md`, and Ralphie steering paths were rechecked
+against source evidence. A full Ralphie atlas restart is not needed. The atlas
+is coherent, but two missing explicit handoffs were repaired:
+
+- `GAP-026` now owns `PG-UPGRADE`, which was present in the proof-gate table
+  and coverage matrix but had no structured gap row.
+- `GAP-027` now records the Discord Curator operator-action authority decision:
+  either accept configured operator-channel membership as the approval factor,
+  or add second-factor/role allowlist/nonce parity with matching tests.
+
+Handoff edits:
+
+- `GAPS.md`: added `GAP-026` and `GAP-027`, updated planning guidance, policy
+  questions, and test-plan handoffs.
+- `USER_JOURNEY.md`: added the live upgrade proof callout and the Curator
+  operator-authority boundary.
+- `research/COVERAGE_MATRIX.md`: linked `GAP-026` and `GAP-027` to the owning
+  journey joints.
+- `docs/arclink/operations-runbook.md`: named the current Discord
+  operator-channel authority model and its unresolved policy boundary.
+- `IMPLEMENTATION_PLAN.md`: refreshed the queue so the new rows are routed to
+  live proof and policy decision, not unattended local repair.
+
+Validation:
+
+- `python3 tests/test_documentation_truths.py` passed: 10 tests.
+- `python3 tests/test_public_repo_hygiene.py` passed.
+- Gap/proof cross-reference check passed: `PG-UPGRADE` now has `GAP-026` as
+  its owning row, and `GAP-026`/`GAP-027` are referenced by the journey,
+  coverage matrix, plan, and mission status.
+- `git diff --check` passed.
+
+No live proof, Docker lifecycle, deploy/install/upgrade, systemd, credentialed
+service, private-state read, or host mutation was run.
 
 ## Ralphie Plan Refresh: Required-Read Recheck
 
@@ -24,14 +168,15 @@ Validation:
   passed: 2 passed, 62 deselected.
 - `git diff --check` passed.
 
-Remaining gates are unchanged: authorized live proof for `GAP-001`,
+Remaining gates after the current atlas repair: authorized live proof for `GAP-001`,
 `GAP-002`, `GAP-003`, `GAP-004`, `GAP-005`, `GAP-007`, `GAP-013`,
-`GAP-015`, `GAP-018`, `GAP-020`, `GAP-021`, `GAP-022`, and `GAP-023`;
+`GAP-015`, `GAP-018`, `GAP-020`, `GAP-021`, `GAP-022`, `GAP-023`, and
+`GAP-026`;
 operator/product decisions for `GAP-006`, `GAP-014`, `GAP-017`, and
-`GAP-024`; and `GAP-019` residual-risk acceptance, stronger isolation design,
-or authorized live alert integration. No live proof, Docker lifecycle,
-deploy/install/upgrade, systemd, credentialed service, private-state read, or
-host mutation was run.
+`GAP-024`, plus Discord Curator operator-action policy for `GAP-027`; and
+`GAP-019` residual-risk acceptance, stronger isolation design, or authorized
+live alert integration. No live proof, Docker lifecycle, deploy/install/upgrade,
+systemd, credentialed service, private-state read, or host mutation was run.
 
 ## Ralphie Document Phase: Source Truth Handoff After Lint Repair
 
@@ -2439,7 +2584,18 @@ Local broad Python validation is green in this checkout, but production live
 proof remains explicitly unclaimed. The outstanding live gates stay in
 `GAPS.md` as `PG-PROD`, `PG-STRIPE`, `PG-BOTS`, `PG-PROVISION`, `PG-FLEET`,
 `PG-INGRESS`, `PG-PROVIDER`, `PG-NOTION`, `PG-HERMES`, `PG-BACKUP`, and
-`PG-UPGRADE`. `GAP-016`, `GAP-009`, and `GAP-010` are locally closed, and
+`PG-UPGRADE`. The Sovereign Control Node symphony pass added `GAP-029`
+through `GAP-033` for full-service Operator Raven, worker readiness, router
+fallback, rolling ArcPod/Hermes updates, and cross-surface experience proof;
+the local Control Node install repairs now collect operator Raven channel
+intent, router model/fallback policy, and prevent workerless installs from
+looking product-ready by disabling provisioning until a starter worker is
+selected or a remote worker smoke test passes. The router now has local
+non-streaming fallback retries for configured retryable upstream failures, and
+Control Node install/reconfigure/worker registration prints provisioning
+readiness; streaming fallback, dashboard/Operator Raven readiness surfacing,
+and live provider/worker proof remain open.
+`GAP-016`, `GAP-009`, and `GAP-010` are locally closed, and
 `GAP-019-N` through `GAP-019-R` are locally repaired as migration-capture,
 agent-user, agent-process, agent-user-helper capability, and process-helper env
 exposure hardening slices, `GAP-019-X` through `GAP-019-AB` are locally

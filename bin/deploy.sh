@@ -156,6 +156,12 @@ CLOUDFLARE_API_TOKEN_REF="${CLOUDFLARE_API_TOKEN_REF:-}"
 CLOUDFLARE_ZONE_ID="${CLOUDFLARE_ZONE_ID:-}"
 CHUTES_API_KEY="${CHUTES_API_KEY:-}"
 ARCLINK_LLM_ROUTER_CHUTES_API_KEY="${ARCLINK_LLM_ROUTER_CHUTES_API_KEY:-}"
+ARCLINK_LLM_ROUTER_DEFAULT_MODEL="${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}"
+ARCLINK_LLM_ROUTER_ALLOWED_MODELS="${ARCLINK_LLM_ROUTER_ALLOWED_MODELS:-}"
+ARCLINK_LLM_ROUTER_FALLBACK_MODELS="${ARCLINK_LLM_ROUTER_FALLBACK_MODELS:-}"
+ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES="${ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES:-}"
+ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS="${ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS:-}"
+ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE="${ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE:-1}"
 ARCLINK_SSOT_NOTION_ROOT_PAGE_URL="${ARCLINK_SSOT_NOTION_ROOT_PAGE_URL:-}"
 ARCLINK_SSOT_NOTION_ROOT_PAGE_ID="${ARCLINK_SSOT_NOTION_ROOT_PAGE_ID:-}"
 ARCLINK_SSOT_NOTION_SPACE_URL="${ARCLINK_SSOT_NOTION_SPACE_URL:-}"
@@ -1172,9 +1178,15 @@ choose_mode() {
     cat <<'EOF'
 ArcLink deploy menu
 
+  Choose one operating mode. Each mode has its own install, health, repair,
+  upgrade, and teardown lane.
+
   1) Sovereign Control Node control center (Dockerized billing, bots, fleet, provisioning)
+     Product path: paid self-serve control plane and ArcPod provisioning
   2) Shared Host mode control center (operator-led)
+     Systemd path: Curator, enrolled Unix users, and shared host services
   3) Shared Host Docker control center (operator-led shared services, not ArcPods)
+     Compose path: containerized Shared Host substrate and validation
   4) Exit
 EOF
 
@@ -1331,7 +1343,8 @@ ArcLink Shared Host Docker control center
  13) Show Docker logs
  14) Stop Docker stack
  15) Teardown Docker stack and named volumes
- 16) Exit
+ 16) Back
+ 17) Exit
 EOF
 
   while true; do
@@ -1352,8 +1365,9 @@ EOF
       13) DOCKER_DEPLOY_COMMAND="logs"; return 0 ;;
       14) DOCKER_DEPLOY_COMMAND="down"; return 0 ;;
       15) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
-      16) exit 0 ;;
-      *) echo "Please choose 1 through 16." ;;
+      16) return 1 ;;
+      17) exit 0 ;;
+      *) echo "Please choose 1 through 17." ;;
     esac
   done
 }
@@ -1379,7 +1393,8 @@ ArcLink Sovereign Control Node control center
  13) Inventory and ASU placement
  14) Stop control node stack
  15) Teardown control node stack and named volumes
- 16) Exit
+ 16) Back
+ 17) Exit
 EOF
 
   while true; do
@@ -1400,8 +1415,9 @@ EOF
       13) CONTROL_DEPLOY_COMMAND="inventory"; return 0 ;;
       14) CONTROL_DEPLOY_COMMAND="down"; return 0 ;;
       15) CONTROL_DEPLOY_COMMAND="teardown"; return 0 ;;
-      16) exit 0 ;;
-      *) echo "Please choose 1 through 16." ;;
+      16) return 1 ;;
+      17) exit 0 ;;
+      *) echo "Please choose 1 through 17." ;;
     esac
   done
 }
@@ -2318,6 +2334,12 @@ emit_runtime_config() {
     write_kv CLOUDFLARE_ZONE_ID "${CLOUDFLARE_ZONE_ID:-}"
     write_kv CHUTES_API_KEY "${CHUTES_API_KEY:-}"
     write_kv ARCLINK_LLM_ROUTER_CHUTES_API_KEY "${ARCLINK_LLM_ROUTER_CHUTES_API_KEY:-${CHUTES_API_KEY:-}}"
+    write_kv ARCLINK_LLM_ROUTER_DEFAULT_MODEL "${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}"
+    write_kv ARCLINK_LLM_ROUTER_ALLOWED_MODELS "${ARCLINK_LLM_ROUTER_ALLOWED_MODELS:-${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}}"
+    write_kv ARCLINK_LLM_ROUTER_FALLBACK_MODELS "${ARCLINK_LLM_ROUTER_FALLBACK_MODELS:-}"
+    write_kv ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES "${ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES:-429,500,502,503,504}"
+    write_kv ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS "${ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS:-}"
+    write_kv ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE "${ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE:-1}"
     write_kv ARCLINK_NOTION_WEBHOOK_HOST "$ARCLINK_NOTION_WEBHOOK_HOST"
     write_kv ARCLINK_NOTION_WEBHOOK_PORT "$ARCLINK_NOTION_WEBHOOK_PORT"
     write_kv ARCLINK_NOTION_WEBHOOK_PUBLIC_URL "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
@@ -9193,6 +9215,11 @@ EOF
   ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="1"
   ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" "$ssh_host")"
   ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$hostname")"
+  if [[ "$smoke_status" == "passed" ]]; then
+    ARCLINK_CONTROL_PROVISIONER_ENABLED="1"
+  elif [[ "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}" != "1" ]]; then
+    echo "Worker registration did not pass smoke proof; ArcPod provisioning remains disabled until a worker smoke test passes." >&2
+  fi
 
   write_docker_runtime_config "$docker_env"
   CONFIG_TARGET="$docker_env"
@@ -9300,6 +9327,7 @@ PY
       echo "Warning: could not refresh control workers automatically. Run ./deploy.sh control up control-provisioner control-action-worker control-api after the stack is built." >&2
     fi
   fi
+  print_control_provisioning_readiness_summary
 }
 
 run_control_enrollment() {
@@ -9759,12 +9787,26 @@ collect_control_install_answers() {
         echo "Run deploy.sh as root to create/repair the local fleet Unix user automatically." >&2
       fi
     fi
-    if [[ "$local_fleet_access_prepared" != "1" ]] && \
+  if [[ "$local_fleet_access_prepared" != "1" ]] && \
       { [[ "${ARCLINK_EXECUTOR_ADAPTER:-}" == "ssh" ]] || [[ "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" == "1" ]]; }; then
       ssh_key_confirmed="$(ask_yes_no "I have added this public key to the starter/fleet node authorized_keys" "0")"
       if [[ "$ssh_key_confirmed" != "1" ]]; then
         echo "Continuing. SSH fleet applies will remain blocked until that key is trusted by the target node." >&2
       fi
+    fi
+  fi
+  if [[ "$ARCLINK_CONTROL_PROVISIONER_ENABLED" == "1" && "$ARCLINK_REGISTER_LOCAL_FLEET_HOST" != "1" ]]; then
+    echo
+    echo "No starter Sovereign worker host is selected."
+    echo "ArcLink can bring up the Control Node web/API/admin surfaces, but paid ArcPod provisioning is blocked until a worker is registered and smoke-tested."
+    if [[ "${ARCLINK_CONTROL_ALLOW_WORKERLESS_BOOTSTRAP:-0}" == "1" ]] || \
+      ask_yes_no "Continue as control-plane only and disable ArcPod provisioning until a worker is registered" "0"; then
+      ARCLINK_CONTROL_PROVISIONER_ENABLED="0"
+      echo "ArcPod provisioning disabled. Register a worker with ./deploy.sh control register-worker, then rerun ./deploy.sh control reconfigure." >&2
+    else
+      echo "Sovereign Control Node install stopped before config write because no worker machine was selected." >&2
+      echo "Choose a local starter worker, or register/prove a remote worker in a separate control worker-registration pass." >&2
+      return 1
     fi
   fi
 
@@ -9778,12 +9820,75 @@ collect_control_install_answers() {
   fi
   CHUTES_API_KEY="$(ask_secret_with_default "Chutes owner API key (ENTER keeps current, type none to clear)" "${CHUTES_API_KEY:-}")"
   ARCLINK_LLM_ROUTER_CHUTES_API_KEY="${ARCLINK_LLM_ROUTER_CHUTES_API_KEY:-${CHUTES_API_KEY:-}}"
+  ARCLINK_LLM_ROUTER_DEFAULT_MODEL="$(normalize_optional_answer "$(ask "LLM router default model or provider-side fallback CSV" "${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}")")"
+  if [[ -z "$ARCLINK_LLM_ROUTER_DEFAULT_MODEL" ]]; then
+    ARCLINK_LLM_ROUTER_DEFAULT_MODEL="moonshotai/Kimi-K2.6-TEE"
+  fi
+  if [[ "$ARCLINK_LLM_ROUTER_DEFAULT_MODEL" != *,* ]]; then
+    echo "Tip: if your inference provider supports provider-side fallback, use a two-model CSV such as model-a,model-b." >&2
+  fi
+  ARCLINK_LLM_ROUTER_ALLOWED_MODELS="$(normalize_optional_answer "$(ask "LLM router allowed models or provider-side fallback strings" "${ARCLINK_LLM_ROUTER_ALLOWED_MODELS:-$ARCLINK_LLM_ROUTER_DEFAULT_MODEL}")")"
+  if [[ -z "$ARCLINK_LLM_ROUTER_ALLOWED_MODELS" ]]; then
+    ARCLINK_LLM_ROUTER_ALLOWED_MODELS="$ARCLINK_LLM_ROUTER_DEFAULT_MODEL"
+  fi
+  ARCLINK_LLM_ROUTER_FALLBACK_MODELS="$(normalize_optional_answer "$(ask "LLM router retry fallback models for 429/5xx, comma-separated (type none to clear)" "${ARCLINK_LLM_ROUTER_FALLBACK_MODELS:-}")")"
+  ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES="$(normalize_optional_answer "$(ask "LLM router fallback status codes, comma-separated" "${ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES:-429,500,502,503,504}")")"
+  if [[ -z "$ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES" ]]; then
+    ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES="429,500,502,503,504"
+  fi
+  ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS="$(normalize_optional_answer "$(ask "LLM router emergency model replacements old=new,comma-separated (type none to clear)" "${ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS:-}")")"
+  ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE="$(ask_yes_no "Allow LLM router catalog auto-promotion to newer active same-family models" "${ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE:-1}")"
   TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Public Telegram bot token (ENTER keeps current, type none to clear)" "${TELEGRAM_BOT_TOKEN:-}")"
   TELEGRAM_BOT_USERNAME="$(normalize_optional_answer "$(ask "Public Telegram bot username (type none to clear)" "${TELEGRAM_BOT_USERNAME:-}")")"
   TELEGRAM_WEBHOOK_SECRET="$(ask_secret_with_default "Public Telegram webhook secret token (ENTER keeps current, type none to clear)" "${TELEGRAM_WEBHOOK_SECRET:-}")"
   DISCORD_BOT_TOKEN="$(ask_secret_with_default "Public Discord bot token (ENTER keeps current, type none to clear)" "${DISCORD_BOT_TOKEN:-}")"
   DISCORD_APP_ID="$(normalize_optional_answer "$(ask "Discord application ID (type none to clear)" "${DISCORD_APP_ID:-}")")"
   DISCORD_PUBLIC_KEY="$(ask_secret_with_default "Discord public key (ENTER keeps current, type none to clear)" "${DISCORD_PUBLIC_KEY:-}")"
+
+  echo
+  echo "Operator Raven/control channel:"
+  echo "  tui-only          - no chat-native operator control during bootstrap"
+  echo "  telegram          - Telegram is enabled for operator control/notifications"
+  echo "  discord           - Discord is enabled for operator control/notifications"
+  echo "  telegram,discord  - both chat surfaces are enabled; one remains primary"
+  ARCLINK_CURATOR_CHANNELS="$(normalize_optional_answer "$(ask "Operator Raven enabled channels" "${ARCLINK_CURATOR_CHANNELS:-tui-only}")")"
+  if [[ -z "$ARCLINK_CURATOR_CHANNELS" ]]; then
+    ARCLINK_CURATOR_CHANNELS="tui-only"
+  fi
+  ARCLINK_CURATOR_CHANNELS="$(printf '%s' "$ARCLINK_CURATOR_CHANNELS" | tr '[:upper:] ' '[:lower:]')"
+  case "$ARCLINK_CURATOR_CHANNELS" in
+    both|telegram,discord|discord,telegram) ARCLINK_CURATOR_CHANNELS="telegram,discord" ;;
+    telegram|discord|tui-only) ;;
+    *)
+      echo "Unknown operator Raven channel set '$ARCLINK_CURATOR_CHANNELS'; using tui-only." >&2
+      ARCLINK_CURATOR_CHANNELS="tui-only"
+      ;;
+  esac
+  OPERATOR_NOTIFY_CHANNEL_PLATFORM="$(normalize_optional_answer "$(ask "Primary operator response channel (tui-only/telegram/discord)" "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}")")"
+  OPERATOR_NOTIFY_CHANNEL_PLATFORM="$(printf '%s' "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" | tr '[:upper:] ' '[:lower:]')"
+  case "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" in
+    tui-only|telegram|discord) ;;
+    *)
+      echo "Unknown primary operator response channel '$OPERATOR_NOTIFY_CHANNEL_PLATFORM'; using tui-only." >&2
+      OPERATOR_NOTIFY_CHANNEL_PLATFORM="tui-only"
+      ;;
+  esac
+  if [[ "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" != "tui-only" ]]; then
+    OPERATOR_NOTIFY_CHANNEL_ID="$(normalize_optional_answer "$(ask "Primary operator chat/channel ID (type none to clear)" "${OPERATOR_NOTIFY_CHANNEL_ID:-}")")"
+  else
+    OPERATOR_NOTIFY_CHANNEL_ID=""
+  fi
+  if [[ ",$ARCLINK_CURATOR_CHANNELS," == *",telegram,"* || "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" == "telegram" ]]; then
+    ARCLINK_OPERATOR_TELEGRAM_USER_IDS="$(normalize_optional_answer "$(ask "Allowed operator Telegram user IDs, comma-separated (type none to clear)" "${ARCLINK_OPERATOR_TELEGRAM_USER_IDS:-}")")"
+    if [[ -z "$TELEGRAM_BOT_TOKEN" ]]; then
+      echo "Telegram operator control is selected, but the public Telegram bot token is empty." >&2
+    fi
+  fi
+  if [[ ",$ARCLINK_CURATOR_CHANNELS," == *",discord,"* || "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" == "discord" ]]; then
+    if [[ -z "$DISCORD_BOT_TOKEN" || -z "$DISCORD_APP_ID" || -z "$DISCORD_PUBLIC_KEY" ]]; then
+      echo "Discord operator control is selected, but one or more Discord credentials are empty." >&2
+    fi
+  fi
 
   write_docker_runtime_config "$docker_env"
   CONFIG_TARGET="$docker_env"
@@ -9958,6 +10063,7 @@ run_control_install_flow() {
   run_arclink_docker record-release
   run_arclink_docker ports
   run_arclink_docker health
+  print_control_provisioning_readiness_summary
   finish_deploy_operation
   trap 'arclink_deploy_stable_copy_cleanup' EXIT
 }
@@ -9973,6 +10079,7 @@ run_control_reconfigure_flow() {
   publish_control_tailscale_ingress
   register_control_public_bot_actions
   run_arclink_docker ports
+  print_control_provisioning_readiness_summary
 }
 
 control_host_priv_dir() {
@@ -10007,6 +10114,66 @@ control_host_db_path() {
 control_host_state_root_base() {
   load_docker_runtime_config
   printf '%s\n' "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
+}
+
+print_control_provisioning_readiness_summary() {
+  local docker_env="" db_path=""
+
+  docker_env="$(docker_env_file_path)"
+  if [[ ! -r "$docker_env" ]]; then
+    echo "Sovereign provisioning readiness: control config is not readable yet."
+    return 0
+  fi
+  db_path="$(control_host_db_path)"
+  ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "$db_path" <<'PY'
+from __future__ import annotations
+
+import os
+import sqlite3
+import sys
+from pathlib import Path
+
+from arclink_control import ensure_schema
+from arclink_fleet import fleet_capacity_summary
+
+
+def truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+db_path = Path(sys.argv[1])
+provisioner_enabled = truthy(os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "1"))
+if not provisioner_enabled:
+    print("Sovereign provisioning readiness: control plane up, ArcPod provisioning disabled until a worker is registered and smoke-tested.")
+    raise SystemExit(0)
+if not db_path.exists():
+    print("Sovereign provisioning readiness: blocked, no fleet inventory database yet.")
+    raise SystemExit(0)
+
+conn = sqlite3.connect(str(db_path), timeout=15.0)
+conn.row_factory = sqlite3.Row
+try:
+    ensure_schema(conn)
+    summary = fleet_capacity_summary(conn)
+finally:
+    conn.close()
+
+eligible = [
+    host for host in summary["hosts"]
+    if host["status"] == "active" and not host["drain"] and int(host["headroom"]) > 0
+]
+if eligible:
+    print(
+        "Sovereign provisioning readiness: ready to provision ArcPods "
+        f"({len(eligible)} eligible worker(s), {summary['available_slots']} available slot(s))."
+    )
+else:
+    print(
+        "Sovereign provisioning readiness: blocked, no active non-drained worker "
+        "with available capacity. Run ./deploy.sh control register-worker or inventory probe."
+    )
+PY
 }
 
 new_control_runtime_backup_dir() {
@@ -10701,8 +10868,12 @@ run_docker_deploy_flow() {
     command="$(docker_command_from_mode "$MODE")"
   fi
   if [[ -z "$command" || "$command" == "menu" ]]; then
-    choose_docker_mode
-    command="${DOCKER_DEPLOY_COMMAND:-}"
+    if choose_docker_mode; then
+      command="${DOCKER_DEPLOY_COMMAND:-}"
+    else
+      choose_mode
+      return 0
+    fi
   fi
 
   case "$command" in

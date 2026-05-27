@@ -35,7 +35,10 @@ python3 tests/test_public_repo_hygiene.py
 ```
 
 `./test.sh` is heavier than focused validation because it includes a sudo
-install smoke.
+install smoke. Treat that path, or a narrower authorized
+`sudo bin/ci-install-smoke.sh` run, as the `PG-SHARED-HOST` proof for fresh
+Shared Host install/enrollment viability; do not run it in unattended local
+passes because it mutates the host.
 
 ## Web And Playwright
 

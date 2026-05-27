@@ -83,6 +83,8 @@ class RouterConfig:
     chutes_api_key: str
     default_model: str
     allowed_models: tuple[str, ...]
+    fallback_models: tuple[str, ...]
+    fallback_status_codes: tuple[int, ...]
     model_auto_promote: bool
     model_replacements: Mapping[str, str]
     refresh_model_catalog_on_startup: bool
@@ -118,6 +120,7 @@ class RouterConfig:
             "chutes_base_url": self.chutes_base_url,
             "db_configured": bool(self.db_path.strip()),
             "model_count": len(self.allowed_models),
+            "fallback_model_count": len(self.fallback_models),
             "model_auto_promote": self.model_auto_promote,
             "model_catalog_refresh_on_startup": self.refresh_model_catalog_on_startup,
         }
@@ -135,6 +138,17 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
     allowed_models = _clean_csv(source.get("ARCLINK_LLM_ROUTER_ALLOWED_MODELS"))
     if not allowed_models:
         allowed_models = (default_model,)
+    fallback_models = _clean_csv(source.get("ARCLINK_LLM_ROUTER_FALLBACK_MODELS"))
+    fallback_status_codes: list[int] = []
+    for item in _clean_csv(source.get("ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES")):
+        try:
+            code = int(item)
+        except ValueError:
+            continue
+        if 400 <= code <= 599 and code not in fallback_status_codes:
+            fallback_status_codes.append(code)
+    if not fallback_status_codes:
+        fallback_status_codes = [429, 500, 502, 503, 504]
     replacements: dict[str, str] = {}
     for item in _clean_csv(source.get("ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS")):
         old, sep, new = item.partition("=")
@@ -147,6 +161,8 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
         chutes_api_key=chutes_key,
         default_model=default_model,
         allowed_models=allowed_models,
+        fallback_models=fallback_models,
+        fallback_status_codes=tuple(fallback_status_codes),
         model_auto_promote=_truthy(source.get("ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE"), default=True),
         model_replacements=replacements,
         refresh_model_catalog_on_startup=_truthy(
@@ -496,6 +512,33 @@ def _resolve_router_model(
     return requested, entry, {"requested_model": requested, "upstream_model": requested, "replacement_reason": ""}
 
 
+def _router_model_allowed(config: RouterConfig, model: str, allowed_models: tuple[str, ...]) -> bool:
+    clean_model = str(model or "").strip()
+    if not clean_model:
+        return False
+    if clean_model in allowed_models:
+        return True
+    # Some providers accept a comma-bearing model string as provider-side
+    # fallback. Preserve that as a single default model even when the allowlist
+    # itself is represented as comma-separated values.
+    return bool(config.default_model and clean_model == config.default_model)
+
+
+def _router_fallback_candidates(config: RouterConfig, primary_model: str) -> tuple[str, ...]:
+    candidates: list[str] = []
+    for model in (str(primary_model or "").strip(), *config.fallback_models):
+        clean = str(model or "").strip()
+        if clean and clean not in candidates:
+            candidates.append(clean)
+    return tuple(candidates)
+
+
+def _upstream_status_is_retryable(config: RouterConfig, status_code: int) -> bool:
+    if int(status_code) in set(config.fallback_status_codes):
+        return True
+    return int(status_code) >= 500
+
+
 def _safe_upstream_error(value: Any) -> str:
     return redact_then_truncate(value, limit=300)
 
@@ -785,7 +828,7 @@ def _preflight_chat_request(
     if not model:
         return None, _router_error(400, "missing_model", "ArcLink LLM router requires a model.")
     allowed_models = tuple(auth_record.get("allowed_models") or ()) or config.allowed_models
-    if model not in allowed_models:
+    if not _router_model_allowed(config, model, allowed_models):
         return None, _router_error(403, "model_not_allowed", "Requested model is not allowed for this ArcPod.")
     upstream_model, catalog_entry, model_resolution = _resolve_router_model(conn, config, model, allowed_models)
 
@@ -999,89 +1042,121 @@ async def _forward_non_streaming(
 ) -> JSONResponse:
     model = str(payload.get("model") or "").strip()
     upstream_model = str(reservation.get("upstream_model") or model).strip()
-    upstream_payload = _prepare_upstream_payload(payload, model=upstream_model)
-    try:
-        async with _upstream_client(config, request.app.state) as client:
-            upstream = await client.post(
-                _upstream_url(config, "chat/completions"),
-                json=upstream_payload,
-                headers=_upstream_headers(config),
-            )
-    except httpx.HTTPError as exc:
-        error_summary = _safe_upstream_error(str(exc))
-        conn = _open_control_conn(config)
-        try:
-            _record_router_usage(
-                conn,
-                config,
-                reservation=reservation,
-                auth_record=auth_record,
-                model=upstream_model,
-                stream=False,
-                status="failed",
-                input_tokens=int(reservation.get("input_token_estimate") or 0),
-                output_tokens=0,
-                total_tokens=int(reservation.get("input_token_estimate") or 0),
-                source_kind="upstream_error",
-                error_summary=error_summary,
-            )
-        finally:
-            conn.close()
-        return _router_error(502, "upstream_unavailable", "Chutes upstream request failed.")
+    candidates = _router_fallback_candidates(config, upstream_model)
+    fallback_errors: list[dict[str, Any]] = []
+    upstream = None
+    final_model = upstream_model
+    data: dict[str, Any] = {}
+    source_kind = "provider_usage"
 
-    if upstream.status_code >= 400:
-        error_summary = _safe_upstream_error(upstream.text)
-        conn = _open_control_conn(config)
-        try:
-            _record_router_usage(
-                conn,
-                config,
-                reservation=reservation,
-                auth_record=auth_record,
-                model=upstream_model,
-                stream=False,
-                status="failed",
-                input_tokens=int(reservation.get("input_token_estimate") or 0),
-                output_tokens=0,
-                total_tokens=int(reservation.get("input_token_estimate") or 0),
-                source_kind="upstream_error",
-                error_summary=error_summary,
-            )
-        finally:
-            conn.close()
-        return _router_error(upstream.status_code if upstream.status_code < 500 else 502, "upstream_error", error_summary or "Chutes upstream returned an error.")
+    async with _upstream_client(config, request.app.state) as client:
+        for index, candidate_model in enumerate(candidates):
+            final_model = candidate_model
+            try:
+                upstream = await client.post(
+                    _upstream_url(config, "chat/completions"),
+                    json=_prepare_upstream_payload(payload, model=candidate_model),
+                    headers=_upstream_headers(config),
+                )
+            except httpx.HTTPError as exc:
+                error_summary = _safe_upstream_error(str(exc))
+                fallback_errors.append({"model": candidate_model, "status_code": 502, "error": error_summary})
+                if index + 1 < len(candidates):
+                    continue
+                conn = _open_control_conn(config)
+                try:
+                    _record_router_usage(
+                        conn,
+                        config,
+                        reservation=reservation,
+                        auth_record=auth_record,
+                        model=candidate_model,
+                        stream=False,
+                        status="failed",
+                        input_tokens=int(reservation.get("input_token_estimate") or 0),
+                        output_tokens=0,
+                        total_tokens=int(reservation.get("input_token_estimate") or 0),
+                        source_kind="upstream_error",
+                        error_summary=error_summary,
+                    )
+                finally:
+                    conn.close()
+                return _router_error(502, "upstream_unavailable", "Chutes upstream request failed.")
 
-    try:
-        data = upstream.json()
-    except Exception:
-        error_summary = _safe_upstream_error(upstream.text)
-        conn = _open_control_conn(config)
-        try:
-            _record_router_usage(
-                conn,
-                config,
-                reservation=reservation,
-                auth_record=auth_record,
-                model=upstream_model,
-                stream=False,
-                status="failed",
-                input_tokens=int(reservation.get("input_token_estimate") or 0),
-                output_tokens=0,
-                total_tokens=int(reservation.get("input_token_estimate") or 0),
-                source_kind="invalid_upstream_json",
-                error_summary=error_summary,
-            )
-        finally:
-            conn.close()
-        return _router_error(502, "invalid_upstream_response", "Chutes upstream returned invalid JSON.")
+            if upstream.status_code >= 400:
+                error_summary = _safe_upstream_error(upstream.text)
+                fallback_errors.append({"model": candidate_model, "status_code": upstream.status_code, "error": error_summary})
+                if _upstream_status_is_retryable(config, upstream.status_code) and index + 1 < len(candidates):
+                    continue
+                conn = _open_control_conn(config)
+                try:
+                    _record_router_usage(
+                        conn,
+                        config,
+                        reservation=reservation,
+                        auth_record=auth_record,
+                        model=candidate_model,
+                        stream=False,
+                        status="failed",
+                        input_tokens=int(reservation.get("input_token_estimate") or 0),
+                        output_tokens=0,
+                        total_tokens=int(reservation.get("input_token_estimate") or 0),
+                        source_kind="upstream_error",
+                        error_summary=error_summary,
+                    )
+                finally:
+                    conn.close()
+                return _router_error(upstream.status_code if upstream.status_code < 500 else 502, "upstream_error", error_summary or "Chutes upstream returned an error.")
 
-    if not isinstance(data, dict):
-        data = {}
+            try:
+                parsed = upstream.json()
+            except Exception:
+                error_summary = _safe_upstream_error(upstream.text)
+                fallback_errors.append({"model": candidate_model, "status_code": 502, "error": error_summary})
+                if index + 1 < len(candidates):
+                    continue
+                conn = _open_control_conn(config)
+                try:
+                    _record_router_usage(
+                        conn,
+                        config,
+                        reservation=reservation,
+                        auth_record=auth_record,
+                        model=candidate_model,
+                        stream=False,
+                        status="failed",
+                        input_tokens=int(reservation.get("input_token_estimate") or 0),
+                        output_tokens=0,
+                        total_tokens=int(reservation.get("input_token_estimate") or 0),
+                        source_kind="invalid_upstream_json",
+                        error_summary=error_summary,
+                    )
+                finally:
+                    conn.close()
+                return _router_error(502, "invalid_upstream_response", "Chutes upstream returned invalid JSON.")
+            data = parsed if isinstance(parsed, dict) else {}
+            source_kind = "provider_usage"
+            break
+
     input_tokens, output_tokens, total_tokens, source_kind = _usage_from_payload(
         data,
         fallback_input_tokens=int(reservation.get("input_token_estimate") or 0),
         fallback_output_tokens=0,
     )
+    if final_model != upstream_model or fallback_errors:
+        data.setdefault(
+            "arclink_router",
+            {
+                "requested_model": model,
+                "primary_model": upstream_model,
+                "upstream_model": final_model,
+                "fallback_used": final_model != upstream_model,
+                "fallback_attempts": [
+                    {"model": item["model"], "status_code": item["status_code"]}
+                    for item in fallback_errors
+                ],
+            },
+        )
     conn = _open_control_conn(config)
     try:
         _record_router_usage(
@@ -1089,7 +1164,7 @@ async def _forward_non_streaming(
             config,
             reservation=reservation,
             auth_record=auth_record,
-            model=upstream_model,
+            model=final_model,
             stream=False,
             status="succeeded",
             input_tokens=input_tokens,
@@ -1099,7 +1174,7 @@ async def _forward_non_streaming(
         )
     finally:
         conn.close()
-    return JSONResponse(status_code=upstream.status_code, content=data)
+    return JSONResponse(status_code=upstream.status_code if upstream is not None else 200, content=data)
 
 
 async def _stream_upstream_response(

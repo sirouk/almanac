@@ -47,6 +47,10 @@ from arclink_onboarding_flow import (
     process_onboarding_message,
     resolve_curator_telegram_bot_token,
 )
+from arclink_operator_raven import (
+    dispatch_operator_raven_command,
+    operator_raven_command_requested,
+)
 from arclink_telegram import (
     telegram_answer_callback_query,
     telegram_edit_message_text,
@@ -73,6 +77,12 @@ TELEGRAM_USER_COMMANDS = [
     {"command": "sshkey", "description": "Install remote-Hermes SSH key"},
 ]
 TELEGRAM_OPERATOR_COMMANDS = [
+    {"command": "operator_status", "description": "Show Control Node status"},
+    {"command": "operator_fleet", "description": "List Sovereign fleet workers"},
+    {"command": "worker_probe", "description": "Dry-run worker readiness probe"},
+    {"command": "user_lookup", "description": "Look up a Captain account"},
+    {"command": "pod_repair", "description": "Dry-run ArcPod repair plan"},
+    {"command": "upgrade_check", "description": "Check upgrade status safely"},
     {"command": "approve", "description": "Approve onboarding/request/write"},
     {"command": "deny", "description": "Deny onboarding/request/write"},
     {"command": "upgrade", "description": "Queue ArcLink host upgrade"},
@@ -223,7 +233,11 @@ def operator_message_allowed(cfg: Config, message: dict[str, Any]) -> bool:
 def _operator_command_requested(text: str) -> bool:
     parts = text.strip().split(maxsplit=1)
     command = _telegram_command_token(parts[0] if parts else "")
-    return command in {"/approve", "/deny", "/upgrade", "/retry-contact", "/retry_contact"} or command.startswith("/retry")
+    return (
+        command in {"/approve", "/deny", "/upgrade", "/retry-contact", "/retry_contact"}
+        or command.startswith("/retry")
+        or operator_raven_command_requested(text)
+    )
 
 
 def _operator_approval_code() -> str:
@@ -295,6 +309,15 @@ def _handle_operator_command(
     parts = text.strip().split(maxsplit=2)
     command = _telegram_command_token(parts[0] if parts else "")
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
+    if operator_raven_command_requested(text):
+        try:
+            with connect_db(cfg) as conn:
+                result = dispatch_operator_raven_command(conn, text, env=os.environ)
+            send_text(bot_token, operator_chat_id, str(result.get("message") or "Operator Raven command returned no output."))
+        except Exception as exc:  # noqa: BLE001
+            send_text(bot_token, operator_chat_id, f"Operator Raven command failed closed: {exc}")
+        return
+
     if command == "/upgrade":
         if not _operator_command_code_ok(command=command, text=text, bot_token=bot_token, operator_chat_id=operator_chat_id):
             return

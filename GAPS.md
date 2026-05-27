@@ -224,13 +224,14 @@ what needs policy, and what needs an authorized proof window.
   `deployment-exec-broker`, `migration-capture-helper`, `agent-user-helper`,
   `agent-supervisor-broker`, and `operator-upgrade-broker` using only scoped
   state roots or a narrow dashboard-broker incident mount.
-- Core journey blockers: `GAP-002` through `GAP-006` and `GAP-018` affect
+- Core journey blockers: `GAP-002` through `GAP-006`, `GAP-018`,
+  `GAP-026`, and `GAP-028` affect
   payment, bots, provisioning, Hermes workspace proof, provider policy, and
-  admin live side effects. `GAP-018` now has a local source-owned readiness
-  matrix, but live side effects remain proof-gated. `GAP-007` now fails closed
-  locally and remains live-proof-gated by `PG-NOTION`; `GAP-011`, `GAP-012`,
-  and `GAP-025` are locally closed as of the 2026-05-22 product-matrix truth
-  guard pass.
+  admin live side effects, plus live upgrade and Shared Host install proof.
+  `GAP-018` now has a local source-owned readiness matrix, but live side
+  effects remain proof-gated. `GAP-007` now fails closed locally and remains
+  live-proof-gated by `PG-NOTION`; `GAP-011`, `GAP-012`, and `GAP-025` are
+  locally closed as of the 2026-05-22 product-matrix truth guard pass.
 - Planning backlog: remaining P2/P3 rows cover live backup restore proof,
   browser share broker/adapter proof, live share notification delivery,
   migration, cloud fleet proof, Crew Training generation, selected-agent
@@ -241,8 +242,8 @@ what needs policy, and what needs an authorized proof window.
   locally repaired.
 - Policy gates: provider self-service, provider account lifecycle, threshold
   behavior, Captain migration, browser share broker/adapter, backup automation,
-  and destructive teardown authority need operator decisions before code should
-  pretend the behavior is settled.
+  destructive teardown authority, and Discord Curator operator-action authority
+  need operator decisions before code should pretend the behavior is settled.
 - Proof gates: no live gate in the Proof Gates table is closed by this document
   handoff. Move a row to `real` only after the named proof runs and redacted
   evidence exists outside tracked public docs.
@@ -256,7 +257,8 @@ Use the register as an ordered work queue, not as a loose list of concerns.
    is currently green, but must be rerun after each source/test slice.
 2. Then schedule P1 user-journey blockers: live billing, bot delivery,
    provisioning/ingress, Hermes workspace proof, provider policy/proof, Notion
-   verification truth, and admin live action proof.
+   verification truth, admin live action proof, live upgrade proof, and Shared
+   Host install/enrollment smoke proof.
 3. Pull P2/P3 rows when they share code ownership with an active P0/P1 slice, or
    when the operator explicitly accepts the higher-priority residual risk.
 4. For every row, choose the closure type before editing: code repair, local
@@ -293,6 +295,14 @@ closure is required before a launch or core journey claim can move forward.
 | `GAP-006` | Agents may deploy without settled provider/inference behavior | Policy decision plus authorized provider proof | Decide provider self-service/account policy, then prove router inference, key lifecycle, usage, and budget behavior. |
 | `GAP-007` | Notion setup can no longer be mistaken locally for live-verified integration | Authorized live Notion proof remains | Run shared-root read/write/webhook proof before saying setup is complete. |
 | `GAP-018` | Admin buttons may be confused with live side effects | Authorized live proof after local matrix repair | Source-owned readiness matrix is local; next closure requires proving the smallest safe live action subset. |
+| `GAP-026` | Upgrade paths cannot be called live-ready | Authorized live proof | Run `PG-UPGRADE` across the relevant shared-host, Docker, Control Node, and component-pin upgrade path with release-state, health, and smoke evidence. |
+| `GAP-028` | Shared Host fresh install/enrollment cannot be called currently smoke-proven | Authorized host-mutating proof | Run `PG-SHARED-HOST` on a supported Linux/systemd host with redacted install, health, enrollment, and cleanup evidence. |
+| `GAP-029` | Sovereign Operator Raven is not yet a full-service control plane | Product buildout plus operator-security policy | First read-only/dry-run slice exists; expand only through typed, authorized, audited action-worker/broker commands. |
+| `GAP-030` | Control Node install can be up before worker capacity is proven | Code repair plus fleet/provisioning proof | Gate "ready to provision" on at least one verified worker, or clearly finish install as "control plane up, provisioning blocked." |
+| `GAP-031` | Router/provider failover lacks explicit `>=429` fallback cascade | Code repair plus provider proof | Add bounded router fallback models, preserve provider-side CSV fallback guidance, record fallback usage, and prove overload recovery without raw prompt leakage. |
+| `GAP-032` | Hermes/ArcPod updates are not yet rolling from the Control Node | Orchestrator buildout plus upgrade proof | Add bounded-parallel ArcPod update orchestration with per-pod health/smoke evidence and rollback/stop behavior. |
+| `GAP-033` | Cross-surface experience quality is not enforced as one gate | Quality gate plus focused UI/bot/CLI tests | Add a shared finish gate for Raven, dashboard, plugins, CLI, and TUI copy/formatting so product surfaces stay clear and polished. |
+| `GAP-034` | Academy Trainer is not yet a full subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Build the Academy source-lane registry, archive manifest, curriculum/evaluation pipeline, SOUL/skill/vault application, and weekly continuing education job before claiming Crew members become trained experts. |
 | `GAP-011` | Closed locally: foundation docs now align with Control Node boundaries | Documentation repair plus truth test | Keep `tests/test_documentation_truths.py` guarding stale prototype wording. |
 | `GAP-025` | Closed locally: broad Python suite is green | Regression triage and repair | Keep `python3 -m pytest -q tests` as the broad no-secret local validation gate. |
 
@@ -557,7 +567,7 @@ when they were active blockers during this buildout pass. Treat rows marked
   phrases that caused this gap.
 - Missing proof/tests: none for the local documentation truth repair. Live
   proof gates such as `PG-PROD`, `PG-BOTS`, `PG-PROVISION`, `PG-PROVIDER`, and
-  `PG-UPGRADE` remain open.
+  `PG-UPGRADE`/`GAP-026` remain open.
 - Impact: an operator or future agent may call the wrong deploy path or
   understate/overstate current capability if the truth guard regresses.
 - Owner/surface: docs, operations.
@@ -1704,6 +1714,369 @@ when they were active blockers during this buildout pass. Treat rows marked
 - Next repair: rerun `python3 -m pytest -q tests` after each future source/test
   slice; reopen this row or split a new gap if broad validation regresses.
 
+### GAP-026 - Live upgrade proof is unproven
+
+- Severity: P1
+- Status: proof-gated, ops-gap
+- Journey joints: `J-15`, `J-16`, `J-17`, `J-25`, `J-27`
+- Proof gates: `PG-UPGRADE`
+- Joint: shared-host, Docker, Control Node, and component-pin upgrades
+- Expected: an authorized operator can run the relevant upgrade family,
+  preserve private state, align agents, record release state, restart/realign
+  services, and finish with strict health plus smoke evidence.
+- Actual evidence: upgrade commands and local guardrails exist for shared-host,
+  Docker, Control Node, deploy-key, and component-pin paths (`AGENTS.md`,
+  `bin/deploy.sh`, `bin/component-upgrade.sh`,
+  `python/arclink_operator_upgrade_broker.py`, `python/arclink_pin_upgrade_check.py`,
+  `docs/arclink/sovereign-control-node.md`,
+  `docs/arclink/control-node-production-runbook.md`,
+  `tests/test_deploy_regressions.py`,
+  `tests/test_arclink_upgrade_notifications.py`,
+  `tests/test_arclink_pin_upgrade_detector.py`). The proof-gate table already
+  declares `PG-UPGRADE`, but this row is the owning register entry that was
+  missing from the active gap map.
+- Missing proof/tests: authorized live upgrade evidence for the applicable
+  command family, including release-state output, strict health, smoke/live
+  proof where available, and redacted operator-action logs for queued Docker
+  operator upgrades or component-pin upgrades.
+- Impact: ArcLink can describe upgrade mechanics as locally guarded, but cannot
+  claim live upgrade readiness for Shared Host, Docker validation, Sovereign
+  Control Node, or component-pin application until the real upgrade path is
+  exercised.
+- Owner/surface: release/ops, deploy keys, component pins, operator upgrade
+  broker.
+- Next repair: run the smallest authorized `PG-UPGRADE` slice for the target
+  deployment mode, archive redacted release/health/smoke evidence outside the
+  public repo, and split any failed stage into its own repair row.
+
+### GAP-027 - Discord Curator operator-action authority needs an explicit policy
+
+- Severity: P2
+- Status: policy-question, security-risk, doc-gap, test-gap
+- Journey joints: `J-14`, `J-18`, `J-25`, `J-28`
+- Joint: Curator operator-channel approvals, retries, SSOT writes, and queued
+  upgrades
+- Expected: every Curator operator action lane should state which factor grants
+  authority and should have tests for that choice. Either Discord operator
+  channel membership is the accepted approval factor, or Discord needs parity
+  with Telegram's typed approval code, a role/user allowlist, or another
+  explicit nonce/second-factor design.
+- Actual evidence: Telegram operator commands can require
+  `ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or
+  `ARCLINK_OPERATOR_APPROVAL_CODE`, and approval/install buttons are refused
+  when that code is configured (`python/arclink_curator_onboarding.py`,
+  `tests/test_arclink_curator_onboarding_regressions.py`,
+  `docs/arclink/operations-runbook.md`). Discord operator slash commands and
+  message components are restricted to the configured operator channel, then
+  `/approve`, `/deny`, `/upgrade`, retry-contact, SSOT, and pin-upgrade actions
+  execute from that channel (`python/arclink_curator_discord_onboarding.py`).
+  Existing Discord tests assert the commands/buttons are exposed and routed,
+  but do not encode whether channel membership alone is the intended security
+  model (`tests/test_arclink_enrollment_provisioner_regressions.py`,
+  `tests/test_arclink_upgrade_notifications.py`).
+- Missing proof/tests: operator policy and matching tests for the Discord
+  authority model. If channel membership is accepted, document the Discord
+  server/channel permission assumptions and add a regression that preserves
+  that exact boundary. If not, implement and test the chosen second factor or
+  allowlist before treating Discord operator actions as final.
+- Impact: future operators and agents may incorrectly assume Telegram's
+  approval-code hardening covers Discord, or may harden one lane while leaving
+  the other ambiguous.
+- Owner/surface: Curator Discord operator channel, operator security policy,
+  onboarding/provisioning approvals, upgrade notifications.
+- Next repair: make the policy decision, then update Curator Discord code,
+  runbooks, and regression tests so the intended authority model is explicit.
+
+### GAP-028 - Shared Host install and enrollment smoke is not current
+
+- Severity: P1
+- Status: proof-gated, ops-gap
+- Journey joints: `J-15`, `J-18`, `J-27`
+- Proof gates: `PG-SHARED-HOST`
+- Joint: operator-led Shared Host fresh install, Curator/enrollment, health,
+  and cleanup proof
+- Expected: the operator-led Shared Host path can still be called viable for a
+  fresh supported Linux/systemd host only after the host-mutating install smoke
+  proves install, service-user units, Curator/user-agent enrollment rails,
+  health, live agent tool smoke where available, and cleanup.
+- Actual evidence: the code path remains first-class and locally guarded:
+  direct deploy dispatch exposes `./deploy.sh install`, `./deploy.sh upgrade`,
+  `./deploy.sh health`, enrollment, Curator setup, and component commands
+  (`bin/deploy.sh`); `run_root_install` bootstraps system packages, syncs the
+  public repo, writes runtime config, installs system and user services,
+  bootstraps Curator, realigns enrolled agents, records release state, runs
+  strict health, and runs `bin/live-agent-tool-smoke.sh` when present
+  (`bin/deploy.sh`); `test.sh` delegates to `bin/ci-preflight.sh` and the sudo
+  Shared Host install smoke (`test.sh`, `bin/ci-install-smoke.sh`). Static and
+  local regression coverage remains substantial across deploy, health,
+  systemd, enrollment, and user-service contracts
+  (`tests/test_deploy_regressions.py`, `tests/test_health_regressions.py`,
+  `tests/test_arclink_agent_user_services.py`,
+  `tests/test_arclink_enrollment_provisioner_regressions.py`). The current gap
+  register, however, only had `PG-UPGRADE` for post-install upgrade proof and
+  did not own the fresh Shared Host install/enrollment smoke as a current
+  authorized host proof.
+- Missing proof/tests: a current `./test.sh` or
+  `sudo bin/ci-install-smoke.sh` run on a supported host, with redacted
+  install/health/enrollment/cleanup evidence. This is host-mutating local
+  proof, not credentialed product E2E proof, and it must remain separate from
+  the Sovereign Control Node `PG-PROD` path.
+- Impact: Shared Host Mode is maintained in source and tests, but future
+  operators may overstate it as freshly smoke-proven when the current checkout
+  has only static/local regression evidence in the public handoff.
+- Owner/surface: Shared Host deploy/install, systemd services, Curator,
+  enrollment provisioner, health.
+- Next repair: in an explicit host proof window, run `./test.sh` or the
+  narrower sudo install smoke on a supported disposable Linux/systemd host,
+  keep logs secret-free/redacted, and update this row plus
+  `research/COVERAGE_MATRIX.md` and `USER_JOURNEY.md` with the result.
+
+### GAP-029 - Sovereign Operator Raven is not a full-service control plane
+
+- Severity: P1
+- Status: product-gap, security-sensitive, local-gap
+- Journey joints: `J-03`, `J-04`, `J-14`, `J-17`, `J-25`, `J-26`, `J-27`,
+  `J-28`
+- Proof gates: `PG-BOTS`, `PG-PROVISION`, `PG-FLEET`, `PG-UPGRADE`,
+  `PG-BACKUP`
+- Joint: operator chat control for health, fleet, users, pods, billing,
+  provider, upgrades, backups, live proof, and incidents
+- Expected: the Sovereign operator can pair Telegram, Discord, or both during
+  Control Node install, choose a primary response channel, and manage the
+  stack from Operator Raven with the same audited action rails available to the
+  admin dashboard and CLI. Natural-language requests may diagnose and plan, but
+  all mutation must resolve to typed, allowlisted, audited commands with
+  role-scoped authorization, replay-resistant confirmation where needed, and
+  secret-free output.
+- Actual evidence: the Control Node install now asks for operator Raven
+  channels and primary response intent (`bin/deploy.sh`). Existing source has
+  public Raven flows, operator notifications, Telegram approval-code support,
+  Discord operator-channel actions, admin action workers, pin-upgrade
+  notifications, and upgrade brokers
+  (`python/arclink_public_bots.py`, `python/arclink_curator_onboarding.py`,
+  `python/arclink_curator_discord_onboarding.py`,
+  `python/arclink_notification_delivery.py`,
+  `python/arclink_action_worker.py`,
+  `python/arclink_operator_upgrade_broker.py`). A 2026-05-27 local slice adds
+  a shared read-only/dry-run Operator Raven command layer for `status`,
+  `fleet list`, `worker probe --dry-run`, `user lookup`,
+  `pod repair --dry-run`, and injected `upgrade check`
+  (`python/arclink_operator_raven.py`). Telegram and Discord operator adapters
+  now route those commands through the shared schema while preserving existing
+  Telegram operator approval-code behavior and Discord operator-channel
+  gating (`python/arclink_curator_onboarding.py`,
+  `python/arclink_curator_discord_onboarding.py`). Focused coverage proves
+  secret-free output, no action queueing for dry-run commands, fake/local
+  upgrade-check injection, and adapter authorization boundaries
+  (`tests/test_arclink_operator_raven.py`).
+- Missing proof/tests: broad mutation policy, audit rows, runbook coverage, and
+  tests for Operator Raven actions beyond the first read-only/dry-run slice:
+  fleet admission/probe/drain execution, user suspend/restore, pod
+  repair/rollback/teardown execution, billing/provider state mutation,
+  backup/restore, upgrade orchestration, evidence/live proof, and incident
+  diagnostics. Discord authority policy from `GAP-027` must be resolved or
+  inherited before broad operator actions ship.
+- Impact: operators still need CLI/admin dashboard/manual runbooks for many
+  day-two tasks, so the chat-native "full power of ArcLink in the operator's
+  hand" promise is not yet real.
+- Owner/surface: Operator Raven, notification delivery, admin action worker,
+  operator security policy, deploy/control menus.
+- Next repair: expand from the first read-only/dry-run slice into audited
+  action-worker/broker-backed Operator Raven commands only after the intended
+  chat authority and confirmation policy is explicit. Keep destructive,
+  credential-sensitive, live deploy, Docker, SSH, provider, Stripe, and backup
+  restore operations out of chat until they have typed schemas, confirmation,
+  audit rows, and focused tests.
+
+### GAP-030 - Sovereign worker readiness is partial
+
+- Severity: P1
+- Status: partial, proof-gated
+- Journey joints: `J-09`, `J-10`, `J-17`, `J-27`
+- Proof gates: `PG-PROVISION`, `PG-FLEET`
+- Joint: Control Node install, worker admission, fleet placement, ArcPod apply
+- Expected: a Sovereign Control Node can start its web/API/admin surfaces
+  without workers, but it must not claim product readiness for paid ArcPod
+  provisioning until at least one eligible worker has been registered, probed,
+  authorized for the selected executor, and shown with available capacity.
+- Actual evidence: `collect_control_install_answers()` asks for deployment
+  style, executor adapter, worker state-root base, optional local worker
+  registration, local SSH user, fleet SSH key handoff, and local SSH repair
+  (`bin/deploy.sh`). Workerless interactive installs now either stop before
+  config write or explicitly continue as control-plane-only with
+  `ARCLINK_CONTROL_PROVISIONER_ENABLED=0`. Remote worker registration enables
+  the provisioner only after a passed smoke test. `run_control_inventory()`
+  provides manual/provider worker registration, probe, drain, remove,
+  rotate-key, and strategy commands. Control install, reconfigure, and worker
+  registration now print a provisioning readiness summary that separates
+  "ready to provision ArcPods" from blocked/control-plane-only states.
+- Missing proof/tests: deeper behavioral regression tests for pending-SSH,
+  local-worker, and remote-worker cases; dashboard/admin/API readiness state;
+  Operator Raven readiness status; live `PG-FLEET`/`PG-PROVISION` evidence for
+  the chosen worker path.
+- Impact: the first install can look successful while the first Captain's paid
+  ArcPod would remain blocked at placement/apply time.
+- Owner/surface: `bin/deploy.sh` Control Node install, fleet inventory,
+  provisioning readiness, admin/dashboard readiness copy.
+- Next repair: promote the readiness summary into admin/dashboard and Operator
+  Raven status, add behavioral tests for no-worker/pending-SSH/local/remote
+  cases, and run the chosen worker live proof before closing the row.
+
+### GAP-031 - LLM Router fallback cascade is partial
+
+- Severity: P2
+- Status: partial, provider-proof-gated
+- Journey joints: `J-07`, `J-08`, `J-24`, `J-27`
+- Proof gates: `PG-PROVIDER`
+- Joint: central inference, Raven/Crew Training/model fallback, budget state
+- Expected: Raven, Agents, Crew Training, and memory/knowledge synthesis should
+  route through central inference policy where possible. The operator can
+  configure primary and fallback models, including provider-side CSV model
+  strings where supported, and the router can retry bounded fallback candidates on
+  `429`, overload, or explicitly configured transient provider errors while
+  recording fallback metadata and preserving usage/budget controls.
+- Actual evidence: the router already supports central provider relay, scoped
+  router keys, sanitized usage records, request/body/token/rate/concurrency
+  limits, budget reservations, allowed models, model replacements, and model
+  auto-promotion (`python/arclink_llm_router.py`,
+  `docs/arclink/llm-router.md`, `tests/test_arclink_llm_router.py`). Control
+  Node install now asks for the router default model or provider-side fallback
+  CSV, allowed models, router fallback models/status codes, emergency
+  replacements, and catalog auto-promotion policy (`bin/deploy.sh`). The local
+  router now retries non-streaming chat completions across
+  `ARCLINK_LLM_ROUTER_FALLBACK_MODELS` for configured retryable statuses,
+  records the final fallback model in usage, adds sanitized response metadata,
+  and preserves prompt/secret non-storage
+  (`tests/test_arclink_llm_router.py`).
+- Missing proof/tests: streaming fallback behavior, live/provider overload
+  proof, richer audit rows for failed pre-fallback attempts, and pricing/budget
+  reservation refinement when fallback models have materially different costs.
+- Impact: non-streaming provider overload has a local fallback rail, but
+  streaming requests and live provider behavior still need explicit proof
+  before the whole inference path can be called fallback-complete.
+- Owner/surface: LLM router, model provider config, provider adapter, Raven/Crew
+  Training copy, dashboard/provider state.
+- Next repair: add streaming-safe fallback semantics or clear streaming
+  limitations, add richer fallback attempt audit, refine pricing/reservation
+  behavior for cost-different fallback models, and run live `PG-PROVIDER`
+  overload proof.
+
+### GAP-032 - Control Node lacks rolling Hermes/ArcPod update orchestration
+
+- Severity: P1
+- Status: product-gap, proof-gated
+- Journey joints: `J-17`, `J-18`, `J-19`, `J-21`, `J-23`, `J-25`, `J-27`
+- Proof gates: `PG-UPGRADE`, `PG-HERMES`
+- Joint: Control Node release upgrade, Hermes runtime pins, ArcPod refresh,
+  skills/plugins/docs/memory alignment
+- Expected: a Control Node upgrade can stage or apply the new release, then
+  update ArcPods in bounded parallel batches. Each Pod refreshes Hermes runtime
+  pins, ArcLink skills, dashboard plugins, command menus, managed context,
+  pinned Hermes docs, qmd/memory hooks, and service definitions, then reports
+  per-pod health/smoke evidence. Failures halt the rollout, preserve state,
+  and produce a rollback or repair plan.
+- Actual evidence: deploy/control upgrade, release state, component pin
+  checks, public-bot unmanaged-upgrade refusal, pin upgrade notifications, and
+  local upgrade tests exist (`bin/deploy.sh`, `bin/component-upgrade.sh`,
+  `python/arclink_pin_upgrade_check.py`, `python/arclink_public_bots.py`,
+  `tests/test_arclink_upgrade_notifications.py`,
+  `tests/test_deploy_regressions.py`). They do not yet form a Control
+  Node-owned rolling ArcPod update orchestrator.
+- Missing proof/tests: ArcPod update job model, batch concurrency policy,
+  preflight/backup freshness checks, per-pod refresh/health/smoke collection,
+  stop-on-failure semantics, dashboard/Operator Raven status, and live
+  `PG-UPGRADE`/`PG-HERMES` evidence.
+- Impact: Hermes and ArcLink updates remain locally guarded but operationally
+  fragmented; at scale, upgrades risk becoming sequential, manual, or
+  under-observed.
+- Owner/surface: Control Node upgrade orchestration, provisioning/action
+  workers, Hermes install/refresh scripts, command-menu refresh, health/live
+  proof.
+- Next repair: build the upgrade job model and dry-run planner first, then
+  implement bounded batch execution through existing refresh/apply rails and
+  prove one small multi-pod rollout before claiming rolling updates.
+
+### GAP-033 - Cross-surface experience finish gate is not enforced
+
+- Severity: P2
+- Status: quality-gap, test-gap
+- Journey joints: `J-01`, `J-03`, `J-04`, `J-13`, `J-14`, `J-19`, `J-24`,
+  `J-27`
+- Proof gates: `PG-PROD`, `PG-BOTS`, `PG-HERMES`
+- Joint: Telegram, Discord, web/PWA, admin dashboard, Hermes dashboard
+  plugins, CLI, and TUI output
+- Expected: ArcLink surfaces should share a clear style contract: compact
+  structured copy, role-appropriate Raven/Agent/Operator voice, markdown that
+  renders cleanly on chat platforms, buttons/choices for guided flows, secret
+  redaction, no raw tracebacks to Captains, and explicit next actions after
+  errors or blocked proof gates.
+- Actual evidence: individual surfaces have local tests, docs, and product
+  copy checks, and a professional finish gate exists in docs. The repository
+  does not yet have a single cross-surface assertion set that guards Raven
+  messages, Discord/Telegram command payloads, web dashboard copy, plugin
+  empty/error states, CLI/TUI summaries, and operator diagnostics together.
+- Missing proof/tests: shared fixture-based message snapshots or lint rules for
+  representative Captain, Operator, plugin, dashboard, and CLI states;
+  platform-specific markdown checks for Telegram/Discord; and browser proof for
+  dashboard/plugin text fit and non-overlap.
+- Impact: product surfaces can drift independently and become clunky even while
+  the underlying workflows remain correct.
+- Owner/surface: public bots, web dashboard, Hermes plugins, CLI/TUI deploy
+  output, docs/product voice.
+- Next repair: define the cross-surface style contract, add representative
+  snapshot/lint tests, and run the focused browser/chat proof cluster before
+  treating experience polish as product-real.
+
+### GAP-034 - Academy Trainer corpus and continuing education pipeline is unbuilt
+
+- Severity: P1
+- Status: product-gap, local-gap, policy-question, data-governance-gap,
+  provider-proof-gated
+- Journey joints: `J-21`, `J-23`, `J-24`, `J-27`, `J-28`
+- Proof gates: `PG-PROVIDER`, `PG-HERMES`
+- Joint: Crew Training, Academy corpus, SOUL overlays, Agent knowledge,
+  continuing education, source governance
+- Expected: Crew Training should be able to prepare a new or existing Agent as a
+  genuine subject-matter performer by building a lawful, reusable Academy
+  corpus from selected video transcripts, Reddit practitioner discussion,
+  Wikipedia/Wikimedia pages, GitHub repositories, scholarly papers, standards,
+  blogs/articles/threads, skill repositories, datasets, benchmarks, and
+  organization-provided sources. The pipeline should produce a topic map,
+  curriculum, lesson cards, source map, approved skills, qmd/vector indexes,
+  memory synthesis seeds, SOUL overlay, evaluation tasks, and weekly Continuing
+  Education updates.
+- Actual evidence: current source supports deterministic Crew Recipes,
+  preview/apply/admin-on-behalf apply, active/archived recipe state, SOUL
+  overlay projection, managed context, memory synthesis, vault/qmd rails, and
+  proof-gated live recipe generation (`python/arclink_crew_recipes.py`,
+  `python/arclink_memory_synthesizer.py`,
+  `plugins/hermes-agent/arclink-managed-context/`). The new Academy target is
+  now specified in `docs/arclink/academy-trainer.md` and summarized in
+  `docs/arclink/sovereign-control-node-symphony.md`, but the source-lane
+  registry, crawler/fetcher policy, archive manifests, curriculum builder,
+  quality scoring, skill selection, evaluation gate, weekly refresh job, and
+  dashboard/Raven surfaces are not implemented.
+- Missing proof/tests: Academy manifest/schema tests; source-lane registry
+  tests; no-secret archive/tombstone tests; YouTube transcript authorization
+  policy tests; Reddit deletion/retention compliance tests; Wikipedia/GitHub/
+  arXiv/OpenAlex/Semantic Scholar metadata fetcher tests with fake fixtures;
+  curriculum and lesson-card generation tests; SOUL overlay replacement tests;
+  vault/qmd/memory/skill application tests; continuing education refresh tests;
+  evaluation/graduation tests; dashboard/Raven status/copy tests; live/provider
+  proof for Academy generation and workspace proof for the trained Agent.
+- Impact: a Captain can create a Crew Recipe and apply role/personality rails,
+  but ArcLink cannot yet claim it exhaustively equips a Crew member with a
+  reusable expert corpus, archived training materials, selected skills, and
+  continuing education.
+- Owner/surface: Academy Trainer, Crew Training, memory synthesis, vault/qmd,
+  skills, managed context, dashboard/Raven, source governance.
+- Next repair: implement the local Academy schema and source-lane registry
+  first, with fake-source fixtures for corpus manifests, quality scoring,
+  curriculum output, SOUL/vault/skill application, continuing education refresh,
+  and evaluation gates. Keep live crawling, ASR/transcription, provider
+  generation, and external proof gated until policy and credentials are
+  authorized.
+
 ## Not Gaps / Already Real
 
 These surfaces were checked and found covered at the source/local level. They
@@ -1811,6 +2184,7 @@ proof and store redacted evidence outside tracked public docs.
 | `PG-HERMES` | Live Hermes dashboard, gateway response, qmd retrieval, memory refresh, Drive/Code/Terminal browser workflows | `bin/arclink-live-proof --journey workspace --live --json` with TLS URL and auth (`docs/arclink/live-e2e-secrets-needed.md:49-52`) |
 | `PG-BACKUP` | Control DB restore, per-deployment volume restore, private/user backup restore, disaster drill | staging restore of control DB plus at least one ArcPod state stack (`docs/arclink/backup-restore.md:72-77`) |
 | `PG-UPGRADE` | Live shared-host, Docker, Control Node, and component-pin upgrades | release-state proof from the relevant deploy/upgrade command family |
+| `PG-SHARED-HOST` | Shared Host fresh install, Curator/enrollment rails, health, and cleanup | `./test.sh` or `sudo bin/ci-install-smoke.sh` on a supported Linux/systemd host with redacted evidence |
 
 ## Policy Questions
 
@@ -1829,6 +2203,23 @@ proof and store redacted evidence outside tracked public docs.
   versus operator-only?
 - Destructive teardown: define who may request volume deletion and what
   confirmation/evidence is required.
+- Discord Curator operator actions: accept configured operator-channel
+  membership as the approval factor, or add a second factor/role allowlist/nonce
+  before approving onboarding, SSOT writes, retries, and upgrade actions.
+- Operator Raven scope: should chat-native operator control be allowed to queue
+  every admin action, or only a curated subset that excludes destructive and
+  credential-sensitive operations?
+- Worker readiness: should Control Node install hard-fail when no worker is
+  verified, or finish as a non-provisioning control plane with a prominent
+  blocked status?
+- Provider fallback: should router fallback be globally configured per product,
+  per plan, per Captain, or per operator incident override?
+- Rolling updates: what maximum batch size, health gate, and rollback threshold
+  should govern ArcPod/Hermes updates at scale?
+- Academy source governance: which source lanes are enabled by default, what
+  raw material may be archived, how Reddit/user-generated deletion requests are
+  enforced, which video transcript paths are authorized, and when derived
+  lesson cards may survive after raw source removal?
 
 ## Test Plan
 
@@ -1875,6 +2266,37 @@ Focused local checks for code-owned gaps:
   skipped unless proof env gates are set.
 - GAP-025 is locally closed; rerun the broad no-secret Python suite after future
   source/test slices and reopen or split a new gap on regression.
+- GAP-026 is live-proof gated; keep local deploy, component-pin, and upgrade
+  notification regressions green, but do not close it without authorized
+  release-state, health, and smoke evidence from the relevant upgrade path.
+- GAP-027 needs a policy decision first; then add either Discord channel-policy
+  regression coverage or second-factor/allowlist/nonce tests for the chosen
+  Curator operator-action model.
+- GAP-028 is host-proof gated; keep deploy, health, systemd, and enrollment
+  regressions green, but do not close it without a current authorized
+  `./test.sh` or `bin/ci-install-smoke.sh` run on a supported host.
+- GAP-029: keep the first Operator Raven schema/adapter tests in
+  `tests/test_arclink_operator_raven.py`, and add focused tests before
+  widening chat mutation. Preserve role scoping, no-secret output,
+  replay/confirmation policy, and action-worker/broker routing in both
+  Telegram and Discord tests.
+- GAP-030: add Control Node install/readiness tests for no-worker,
+  pending-SSH, local-worker, and remote-worker paths so "control plane up" and
+  "ready to provision" cannot be confused.
+- GAP-031: add mocked router provider-overload tests for bounded fallback
+  retries, usage metadata, no raw prompt/completion storage, and response
+  metadata that truthfully labels fallback use.
+- GAP-032: add rolling-update planner tests before executor work: candidate
+  pod selection, batch limits, preflight failures, stop-on-failure, per-pod
+  health/smoke summaries, and rollback/repair output.
+- GAP-033: add representative message/copy fixtures for Captain Raven,
+  Operator Raven, web dashboard, Drive/Code/Terminal states, CLI/TUI summaries,
+  and platform markdown rendering expectations.
+- GAP-034: add fake-source Academy fixtures before any live crawling. Start
+  with schema/manifest tests for source lanes, archive/tombstone policy,
+  quality scoring, curriculum/lesson-card output, SOUL overlay application,
+  vault/qmd/memory/skill staging, continuing education refresh, and evaluation
+  gates. Do not run live YouTube/Reddit/GitHub/scholar/web searches in CI.
 
 Live proof checks must not run by default in CI and must skip cleanly without
 credentials.

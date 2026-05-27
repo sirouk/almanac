@@ -171,6 +171,8 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_CHUTES_BASE_URL` | `https://llm.chutes.ai/v1` | Upstream Chutes-compatible base URL |
 | `ARCLINK_LLM_ROUTER_DEFAULT_MODEL` | Chutes Kimi default | Default model when no per-key allowlist is set |
 | `ARCLINK_LLM_ROUTER_ALLOWED_MODELS` | default model | Comma-separated router-level model allowlist |
+| `ARCLINK_LLM_ROUTER_FALLBACK_MODELS` | none | Comma-separated router-owned fallback models attempted after retryable provider errors |
+| `ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES` | `429,500,502,503,504` | Provider status codes that trigger a fallback attempt when fallback models remain |
 | `ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE` | `1` | Allows newer/deprecated/unavailable catalog rows to route to their replacement or latest same-family active model |
 | `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS` | none | Comma-separated `old-model=new-model` overrides for emergency promotion |
 | `ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP` | `1` | Refreshes Chutes `/models` into `arclink_model_catalog` when the router starts |
@@ -201,6 +203,14 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_SCALE_MONTHLY_INFERENCE_CREDIT_CENTS` | `$55.00` | Override Scale monthly included inference budget |
 | `ARCLINK_SOVEREIGN_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS` | `$19.80` | Override Sovereign extra-Agent monthly included inference budget |
 | `ARCLINK_SCALE_AGENT_EXPANSION_MONTHLY_INFERENCE_CREDIT_CENTS` | `$15.80` | Override Scale extra-Agent monthly included inference budget |
+
+Control Node install asks for the default model string and allowed-model list.
+If the selected provider supports provider-side model fallback, the default
+model can be a provider-accepted CSV string such as `model-a,model-b`.
+Separately, `ARCLINK_LLM_ROUTER_FALLBACK_MODELS` enables an ArcLink-owned
+bounded retry cascade for configured retryable statuses. The current local
+implementation covers non-streaming chat completion fallback; streaming and
+live provider proof remain tracked by `GAP-031`.
 
 ## Model Catalog And Promotion
 

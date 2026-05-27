@@ -1465,6 +1465,10 @@ def test_deploy_menu_defaults_to_sovereign_control_node() -> None:
         "expected top-level menu to expose Sovereign Control Node mode",
     )
     expect(
+        "Choose one operating mode. Each mode has its own install, health, repair," in mode_snippet,
+        "expected top-level menu to explain the mode split",
+    )
+    expect(
         "Shared Host Docker control center (operator-led shared services, not ArcPods)" in mode_snippet,
         "expected top-level menu to expose Shared Host Docker mode",
     )
@@ -2022,6 +2026,8 @@ def test_write_answers_file_persists_host_dependency_choices() -> None:
 
 def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
+    control_menu = extract(text, "choose_control_mode() {", "detect_tailscale() {")
+    docker_menu = extract(text, "choose_docker_mode() {", "choose_control_mode() {")
     expect("deploy.sh control install" in text, "expected Sovereign Control Node install command in deploy usage")
     expect("deploy.sh control backup" in text, "expected Sovereign Control Node runtime backup command in deploy usage")
     expect("deploy.sh control reset-runtime" in text, "expected Sovereign Control Node runtime reset command in deploy usage")
@@ -2035,6 +2041,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("Reset production user data after double confirmation" in text, "expected Sovereign submenu to expose guarded production reset")
     expect("Show fleet SSH public key" in text, "expected Sovereign submenu to expose fleet public key")
     expect("Register remote fleet worker" in text, "expected Sovereign submenu to expose remote worker registration")
+    expect("16) Back" in control_menu and "17) Exit" in control_menu, "expected Sovereign submenu to return to the mode chooser")
     expect('MODE="control"' in text and 'CONTROL_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to control submenu")
     expect("run_control_install_flow()" in text, "expected idempotent control install flow")
     expect("run_control_runtime_backup()" in text, "expected first-class control runtime backup flow")
@@ -2071,8 +2078,30 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" in text, "expected remote worker registration to update SSH executor allowlist")
     expect("usermod -aG docker" in text, "expected local fleet user to be granted Docker group access when available")
     expect("I have added this public key to the starter/fleet node authorized_keys" in text, "expected idempotent fleet SSH key handoff prompt")
+    expect("No starter Sovereign worker host is selected." in text, "expected workerless control installs to be called out")
+    expect("control-plane only and disable ArcPod provisioning" in text, "expected workerless installs to finish as blocked control-plane only")
+    expect("ARCLINK_CONTROL_ALLOW_WORKERLESS_BOOTSTRAP" in text, "expected explicit workerless bootstrap override")
+    expect('ARCLINK_CONTROL_PROVISIONER_ENABLED="0"' in text, "expected workerless bootstrap to disable provisioning")
+    expect("print_control_provisioning_readiness_summary()" in text, "expected control flows to print provisioning readiness")
+    expect("Sovereign provisioning readiness: ready to provision ArcPods" in text, "expected ready-to-provision summary copy")
+    expect("Sovereign provisioning readiness: blocked" in text, "expected blocked provisioning summary copy")
+    expect("Operator Raven/control channel" in text, "expected Sovereign install to collect operator Raven channel intent")
+    expect("Operator Raven enabled channels" in text, "expected Sovereign install to choose one or both operator chat surfaces")
+    expect('both|telegram,discord|discord,telegram' in text, "expected Sovereign install to normalize both-channel operator Raven answers")
+    expect("Primary operator response channel (tui-only/telegram/discord)" in text, "expected Sovereign install to choose a primary operator response channel")
+    expect("Allowed operator Telegram user IDs" in text, "expected Sovereign install to collect Telegram operator allowlist hints")
+    expect("LLM router default model or provider-side fallback CSV" in text, "expected Sovereign install to ask for router fallback-capable model string")
+    expect("use a two-model CSV such as model-a,model-b" in text, "expected Sovereign install to encourage provider-side fallback")
+    expect("LLM router allowed models or provider-side fallback strings" in text, "expected Sovereign install to persist router allowed models")
+    expect("LLM router retry fallback models for 429/5xx" in text, "expected Sovereign install to collect router retry fallback models")
+    expect("LLM router fallback status codes" in text, "expected Sovereign install to collect retryable router status codes")
+    expect("LLM router emergency model replacements old=new" in text, "expected Sovereign install to collect emergency model replacement policy")
+    expect("write_kv ARCLINK_LLM_ROUTER_DEFAULT_MODEL" in text, "expected runtime config to persist router default model")
+    expect("write_kv ARCLINK_LLM_ROUTER_ALLOWED_MODELS" in text, "expected runtime config to persist router allowed models")
+    expect("write_kv ARCLINK_LLM_ROUTER_FALLBACK_MODELS" in text, "expected runtime config to persist router fallback models")
     expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
     expect("ArcLink Shared Host Docker control center" in text, "expected Shared Host Docker submenu")
+    expect("16) Back" in docker_menu and "17) Exit" in docker_menu, "expected Docker submenu to return to the mode chooser")
     expect('MODE="docker"' in text and 'DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Shared Host Docker submenu")
     expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
     expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")
@@ -2184,11 +2213,13 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     expect("test_remote_fleet_ssh_access" in register, "worker registration should smoke-test SSH executor readiness")
     expect("ARCLINK_EXECUTOR_ADAPTER=\"ssh\"" in register, "worker registration should be able to enable SSH execution")
     expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=\"1\"" in register, "worker registration should enable machine-mode guard")
+    expect('smoke_status" == "passed"' in register and 'ARCLINK_CONTROL_PROVISIONER_ENABLED="1"' in register, "worker registration should enable provisioning only after a passed smoke test")
     expect("append_control_csv_value" in register, "worker registration should append hosts to the allowlist")
     expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" in register, "worker registration should update SSH host allowlist")
     expect("register_fleet_host(" in register, "worker registration should persist a fleet host row")
     expect('"ssh_host": ssh_host' in register and '"ssh_user": ssh_user' in register, "worker registration should store SSH metadata")
     expect("run_arclink_docker up control-provisioner control-action-worker control-api" in register, "worker registration should refresh control workers")
+    expect("print_control_provisioning_readiness_summary" in register, "worker registration should print provisioning readiness after refresh")
     print("PASS test_control_fleet_worker_registration_is_first_class")
 
 

@@ -18,6 +18,10 @@ Document ownership is split deliberately:
   IDs.
 - `research/COVERAGE_MATRIX.md` owns the `J-##` audit map from journey joints to
   source areas and tests.
+- `docs/arclink/sovereign-control-node-symphony.md` owns the long-form
+  Sovereign Control Node product score: the complete desired operator,
+  Captain, Raven, ArcPod, inference, knowledge, plugin, and upgrade traversal
+  against current source truth.
 
 Fast handoff for future agents:
 
@@ -563,8 +567,17 @@ read, preview, apply, admin-on-behalf apply, archived prior recipe state, and a
 deterministic fallback when live LLM generation is unavailable or unsafe
 (`docs/arclink/control-node-production-runbook.md:186-205`).
 
+The next dream layer is Academy Trainer: role-specific source discovery,
+lawful transcript/discussion/paper/repo/web corpus assembly, lesson cards,
+skill maps, SOUL overlays, vault/qmd/memory application, evaluation, and weekly
+Continuing Education for each Crew member
+(`docs/arclink/academy-trainer.md`). That is intentionally tracked as a
+separate product gap because current Crew Training does not yet build reusable
+subject-matter corpora or continuing education pipelines.
+
 Status: local control/API surfaces are `real`; live LLM recipe generation
-and live bot delivery are `proof-gated`.
+and live bot delivery are `proof-gated`; Academy Trainer is `product-gap`
+under `GAP-034`.
 
 ## 11. Admin And Operator Journey
 
@@ -599,6 +612,19 @@ upgrade, health, enrollment trace/reset, org profile, Notion migration/transfer,
 service repair, deploy keys, and release state. Docker shared-host validation
 uses the `./deploy.sh docker ...` family. Live ArcPod product operations use the
 `./deploy.sh control ...` family.
+
+Shared Host fresh install remains a maintained operator path, not a deprecated
+leftover. Its source path runs system bootstrap, repo/private-state setup,
+system and user service installation, Curator bootstrap, agent realignment,
+strict health, and live-agent smoke when present. What is not current in this
+handoff is a fresh host-mutating install/enrollment proof: `GAP-028` and
+`PG-SHARED-HOST` own the need for an authorized `./test.sh` or
+`bin/ci-install-smoke.sh` run before calling that mode freshly smoke-proven.
+
+Those upgrade paths are locally modeled and regression-tested, but live upgrade
+readiness is still governed by `GAP-026` and `PG-UPGRADE`: the relevant
+shared-host, Docker, Control Node, or component-pin upgrade needs redacted
+release-state, health, and smoke evidence before the claim can move to `real`.
 
 Backups are documented for control database, per-deployment state roots,
 Nextcloud/Postgres volumes, vault git history, and configuration, with a
@@ -942,6 +968,13 @@ queued Docker-mode operator upgrades to `operator-upgrade-broker`, while
 Together, these controls leave writeable Docker socket access and the remaining
 root helpers as operator trust boundaries, not tenant-safe sandboxes.
 
+Curator operator approval is a separate authority boundary. Telegram operator
+commands can require a typed approval code; Discord operator commands and
+message components currently rely on the configured operator channel as the
+gate. `GAP-027` tracks the remaining product/security decision: explicitly
+accept Discord channel membership as the approval factor, or add second-factor,
+role/user allowlist, or nonce parity before treating that path as final.
+
 ## 13. Recovery Atlas
 
 - Web checkout paused: cancel page marks the onboarding session cancelled when
@@ -981,10 +1014,11 @@ root helpers as operator trust boundaries, not tenant-safe sandboxes.
 ## 14. Gap And Proof Pointers
 
 This journey intentionally does not repeat the gap register. The blocking
-production and validation claims are tracked as `GAP-001` through `GAP-025` in `GAPS.md`, with
-canonical proof-gate IDs such as `PG-PROD`, `PG-STRIPE`, `PG-BOTS`,
-`PG-PROVISION`, `PG-FLEET`, `PG-INGRESS`, `PG-PROVIDER`, `PG-NOTION`,
-`PG-HERMES`, `PG-BACKUP`, and `PG-UPGRADE`.
+production and validation claims are tracked as `GAP-001` through `GAP-028` in
+`GAPS.md`, with canonical proof-gate IDs such as `PG-PROD`, `PG-STRIPE`,
+`PG-BOTS`, `PG-PROVISION`, `PG-FLEET`, `PG-INGRESS`, `PG-PROVIDER`,
+`PG-NOTION`, `PG-HERMES`, `PG-BACKUP`, `PG-UPGRADE`, and
+`PG-SHARED-HOST`.
 
 Until those gates pass, ArcLink should be described as a locally `real` and
 tested control plane with credential-gated production proof outstanding.
@@ -997,6 +1031,16 @@ The public documentation handoff is therefore terminal for the document phase:
 `USER_JOURNEY.md` owns the intended experience, `GAPS.md` owns the hard missing
 and unproven work, and new implementation should start from the gap register
 instead of reopening this atlas unless source behavior changes.
+
+The current Sovereign Control Node dream-shape expansion is captured in
+`docs/arclink/sovereign-control-node-symphony.md`. It deliberately keeps the
+remaining gaps visible: full-service Operator Raven (`GAP-029`), worker
+readiness at install (`GAP-030`), router fallback cascade (`GAP-031`), rolling
+ArcPod/Hermes updates (`GAP-032`), and one enforced cross-surface experience
+gate (`GAP-033`). `GAP-029` now has a first local read-only/dry-run Operator
+Raven slice for status, fleet list, worker probe dry-run, user lookup, pod
+repair dry-run, and injected upgrade check, but broad chat-native mutation
+remains policy/proof gated.
 
 Final reader test: if a future agent can explain both the beautiful intended
 journey and the current hard truth without adding live claims, this document has

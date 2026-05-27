@@ -3698,6 +3698,14 @@ write_arclink_dream_buildout_steering_file() {
 Turn the ArcLink dream system described in `USER_JOURNEY.md` into working,
 tested repository reality, using `GAPS.md` as the implementation queue.
 
+The primary trajectory is the Sovereign Control Node: the paid self-serve
+ArcLink universe with public website/API onboarding, Raven, Stripe,
+entitlements, fleet placement, ArcPod provisioning, dashboards, Hermes,
+knowledge, sharing, inference, upgrades, backups, and operator control.
+Shared Host and Shared Host Docker remain valid ArcLink substrates, but for
+this mission they are secondary validation/support paths unless they block the
+Control Node path, shared install artifacts, or local test truth.
+
 This is an implementation mission, not another atlas pass. Close every
 unattended local gap with source changes, tests, and honest documentation
 updates. When a row requires live credentials, an external proof window, an
@@ -3707,8 +3715,12 @@ and leave an exact handoff item for the operator.
 
 ## Operating Contract
 
-- Read `AGENTS.md`, `USER_JOURNEY.md`, `GAPS.md`, `IMPLEMENTATION_PLAN.md`, and
-  `research/COVERAGE_MATRIX.md` first.
+- Read `AGENTS.md`, `docs/arclink/sovereign-control-node-symphony.md`,
+  `docs/arclink/academy-trainer.md`, `USER_JOURNEY.md`, `GAPS.md`,
+  `IMPLEMENTATION_PLAN.md`, and `research/COVERAGE_MATRIX.md` first.
+- Keep the Sovereign Control Node as the center of gravity. Treat Shared Host
+  and Shared Host Docker work as supporting validation unless a current gap
+  explicitly requires those modes.
 - Do not read `arclink-priv/`, user homes, secret files, deploy keys, `.env`
   values, OAuth stores, bot tokens, or live credentials.
 - Do not run live deploy/install/upgrade, Docker up/down/reconcile, Stripe,
@@ -3734,10 +3746,15 @@ and leave an exact handoff item for the operator.
    `RESIDUAL_RISK_ACCEPTANCE`.
 2. If `GAP-025` has regressed, repair the broad no-secret local validation
    story first. A broken broad suite undermines every local `real` claim.
-3. P0/P1 rows with local repairable work, especially `GAP-019` helper/broker
-   isolation and fail-closed security work.
+3. Prioritize local Sovereign Control Node rows and surfaces: `GAP-029`
+   Operator Raven full-service control, `GAP-030` sovereign worker readiness,
+   `GAP-031` LLM Router fallback/inference completeness, `GAP-032` rolling
+   Hermes/ArcPod update orchestration, `GAP-033` cross-surface experience
+   finish, and `GAP-034` Academy Trainer subject-matter corpus/continuing
+   education. Pull in `GAP-019` or other security rows when they protect the
+   Control Node path.
 4. P2/P3 rows that are locally repairable or share code ownership with the
-   active P0/P1 slice.
+   active Control Node slice.
 5. Live proof and policy rows only after the operator explicitly supplies
    credentials, authorization, or a decision in a separate proof window.
 
@@ -3795,18 +3812,24 @@ working reality without confusing local repairs with live/policy gates.
 Required behavior:
 
 - Read `AGENTS.md`, `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`,
-  `USER_JOURNEY.md`, `GAPS.md`, `IMPLEMENTATION_PLAN.md`, and
-  `research/COVERAGE_MATRIX.md`.
+  `docs/arclink/sovereign-control-node-symphony.md`,
+  `docs/arclink/academy-trainer.md`, `USER_JOURNEY.md`, `GAPS.md`,
+  `IMPLEMENTATION_PLAN.md`, and `research/COVERAGE_MATRIX.md`.
 - Build a current queue from `GAPS.md`: `LOCAL`, `LIVE_PROOF`,
   `POLICY_DECISION`, and `RESIDUAL_RISK_ACCEPTANCE`.
 - Start with `GAP-025` only if it has regressed; otherwise prioritize the
-  highest-severity local repairable row.
+  highest-severity local repairable Sovereign Control Node row. Favor
+  `GAP-029`, `GAP-030`, `GAP-031`, `GAP-032`, `GAP-033`, and `GAP-034` before
+  secondary Shared Host mode work, unless a secondary mode blocks the Control
+  Node path or local validation.
 - Replace or update `IMPLEMENTATION_PLAN.md` with an active repair plan:
   checked-off completed atlas work, unchecked current implementation tasks, the
   exact focused tests to run, and the local/live/policy boundary for each row.
 - Choose a bounded first slice. Favor failures that touch user-facing journeys:
-  public bot onboarding, Notion onboarding/CLI, plugins/workspace, deploy/health
-  shell paths, vault/repo/backup, or any P0/P1 row with local repairability.
+  Operator Raven, Captain Raven, control install readiness, worker/fleet
+  readiness, LLM Router inference, ArcPod/Hermes update orchestration, public
+  bots, plugins/workspace, vault/knowledge/sharing, backups, or any P0/P1 row
+  with local repairability.
 - Do not plan live external or host-mutating commands for this unattended pass.
 - If no local queue remains, plan the documentation/handoff pass instead of
   inventing speculative code work.
@@ -3826,7 +3849,12 @@ Required behavior:
 
 - Follow `research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md`.
 - Prefer `GAP-025` failure clusters only if broad local validation has regressed;
-  otherwise close the highest-severity `LOCAL` queue row.
+  otherwise close the highest-severity Sovereign Control Node `LOCAL` queue row.
+- Treat the Control Node dream as the product path: operator/captain Raven,
+  control install questions, readiness gates, provisioning workers, inference
+  fallback, Academy Trainer, dashboard/plugins, knowledge, sharing, isolated
+  pods, backups, and rolling updates should become real source behavior
+  wherever the current gap register says local work remains.
 - Reproduce at least one failing/missing behavior with a focused local command
   before editing when practical.
 - Patch source and tests together. Use existing ArcLink patterns. Do not edit
@@ -3852,6 +3880,9 @@ Validate the current buildout slice.
 Required checks:
 
 - Run focused tests for every touched source surface.
+- For Control Node slices, prefer the nearest deploy, router, public bot,
+  provisioning, dashboard/plugin, web, and documentation truth tests before
+  widening validation.
 - Run `git diff --check`.
 - Run docs/hygiene checks when public docs changed.
 - If the slice targeted `GAP-025`, rerun the affected failing files and, when
@@ -3911,6 +3942,9 @@ Required finish:
 
 - Update `GAPS.md` only for rows whose source/test/proof status changed.
 - Update `USER_JOURNEY.md` only when the user journey changed.
+- Update `docs/arclink/sovereign-control-node-symphony.md` when the target
+  product shape, operator/captain traversal, or dream-governance contract
+  changes.
 - Update `IMPLEMENTATION_PLAN.md` and `mission_status.md` with current repair
   status.
 - Add a succinct note to `research/BUILD_COMPLETION_NOTES.md` naming the gap
@@ -3935,6 +3969,7 @@ arclink_dream_buildout_gap_snapshot() {
     echo "## ArcLink Gap Closure Runtime Context"
     echo ""
     echo "- This is an unattended local repair run. Do not run live proof, deploy/install/upgrade, Docker lifecycle, Stripe, bots, provider, Cloudflare, Tailscale, SSH fleet, or host-mutating commands without explicit operator authorization."
+    echo "- Primary trajectory: Sovereign Control Node. Secondary modes are supporting validation unless they block Control Node readiness, shared artifacts, or a listed local gap."
     echo "- Treat non-real rows as one of: LOCAL, LIVE_PROOF, POLICY_DECISION, or RESIDUAL_RISK_ACCEPTANCE."
     echo "- Only LOCAL rows are blockers for this unattended buildout. LIVE_PROOF, POLICY_DECISION, and RESIDUAL_RISK_ACCEPTANCE rows must be recorded as handoff items, not fake-closed and not listed in reviewer <gaps>."
     echo "- If no LOCAL row remains, update handoff artifacts and route forward through document rather than inventing work or quitting."
@@ -4052,11 +4087,11 @@ prepare_arclink_dream_buildout() {
     write_arclink_dream_buildout_steering_file
     write_arclink_dream_buildout_prompt_files
 
-    BACKLOG_SOURCES="GAPS.md,IMPLEMENTATION_PLAN.md,mission_status.md,research/COVERAGE_MATRIX.md,research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md,research/BUILD_COMPLETION_NOTES.md"
+    BACKLOG_SOURCES="GAPS.md,IMPLEMENTATION_PLAN.md,mission_status.md,research/COVERAGE_MATRIX.md,research/RALPHIE_ARCLINK_DREAM_BUILDOUT_STEERING.md,docs/arclink/sovereign-control-node-symphony.md,docs/arclink/academy-trainer.md,docs/arclink/sovereign-control-node.md,docs/arclink/control-node-production-runbook.md,docs/arclink/raven-public-bot.md,docs/arclink/llm-router.md,research/BUILD_COMPLETION_NOTES.md"
 
     write_project_goals_file "ArcLink dream buildout / gap-closure mission.
 
-Build the system described in USER_JOURNEY.md into working repository reality by closing every locally repairable GAPS.md row. First triage current non-real rows into local repairs, live proof gates, operator policy decisions, and residual-risk acceptance. Repair GAP-025 only if broad local validation has regressed, then prioritize P0/P1 local repairable blockers. Use Codex and Claude at high rigor. Work in bounded repair slices with source changes, tests, and honest docs.
+Build the Sovereign Control Node dream described in USER_JOURNEY.md, docs/arclink/sovereign-control-node-symphony.md, and docs/arclink/academy-trainer.md into working repository reality by closing every locally repairable GAPS.md row. First triage current non-real rows into local repairs, live proof gates, operator policy decisions, and residual-risk acceptance. Repair GAP-025 only if broad local validation has regressed, then prioritize Control Node local blockers: Operator Raven control, Captain Raven traversal, provisioning/worker readiness, LLM Router fallback/inference, isolated ArcPods, Academy Trainer, dashboard/plugins, knowledge/sharing, backups, upgrades, and cross-surface experience. Treat Shared Host and Shared Host Docker as secondary validation unless they block the Control Node path. Use Codex and Claude at high rigor. Work in bounded repair slices with source changes, tests, and honest docs.
 
 Do not read private state or secrets. Do not run live external services or host-mutating deploy/Docker/Stripe/bot/provider/Cloudflare/Tailscale/SSH commands unless the operator later authorizes a separate proof window. Fail closed for live/policy/residual-risk gates rather than faking completion, and route to a documented handoff when only those gates remain."
 
@@ -4066,11 +4101,11 @@ Do not read private state or secrets. Do not run live external services or host-
     if is_true "$seed_bootstrap"; then
         write_bootstrap_context_file \
             "existing" \
-            "Implement ArcLink's dream system end to end by closing every locally repairable GAPS.md row and preparing exact handoffs for live proof, policy, and residual-risk gates." \
+            "Implement ArcLink's Sovereign Control Node dream end to end by closing every locally repairable GAPS.md row and preparing exact handoffs for live proof, policy, and residual-risk gates." \
             "true" \
             "false" \
             "No secrets, no private state, no live external mutations, no host mutation, no unsupported live claims." \
-            "Local repairable gaps are closed or actively reduced; broad local validation stays green; remaining live/policy/residual-risk gates are explicit, fail closed, and have operator handoff instructions." \
+            "Local repairable Sovereign Control Node gaps are closed or actively reduced; broad local validation stays green; remaining live/policy/residual-risk gates are explicit, fail closed, and have operator handoff instructions." \
             "true" \
             "" \
             "Code, tests, docs, and runbooks needed to close GAPS.md. Avoid unrelated refactors." \

@@ -41,6 +41,10 @@ from arclink_onboarding_flow import (
     process_onboarding_message,
     resolve_curator_discord_bot_token,
 )
+from arclink_operator_raven import (
+    dispatch_operator_raven_command,
+    operator_raven_command_requested,
+)
 
 
 def _discord_validator(curator_bot_id: str):
@@ -251,6 +255,14 @@ async def main() -> None:
             return False
         return True
 
+    def _operator_raven_response(content: str) -> str:
+        try:
+            with connect_db(cfg) as conn:
+                result = dispatch_operator_raven_command(conn, content, env=os.environ)
+            return str(result.get("message") or "Operator Raven command returned no output.")
+        except Exception as exc:  # noqa: BLE001
+            return f"Operator Raven command failed closed: {exc}"
+
     async def _process_discord_input(
         *,
         chat_id: str,
@@ -360,6 +372,10 @@ async def main() -> None:
 
         parts = content.strip().split(maxsplit=2)
         command = parts[0].lower() if parts else ""
+        if operator_raven_command_requested(content):
+            await message.channel.send(_operator_raven_response(content))
+            return True
+
         if command == "/upgrade":
             actor = _format_actor_label(message.author)
             await message.channel.send(
@@ -511,6 +527,45 @@ async def main() -> None:
             await interaction.response.send_message(str(result.get("message") or "Queued contact retry."))
         except Exception as exc:  # noqa: BLE001
             await interaction.response.send_message(f"Could not retry contact: {exc}", ephemeral=True)
+
+    @tree.command(name="operator-status", description="Show Control Node Operator Raven status.")
+    async def operator_status_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/operator_status"))
+
+    @tree.command(name="operator-fleet", description="List Sovereign fleet workers.")
+    async def operator_fleet_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/operator_fleet"))
+
+    @tree.command(name="worker-probe", description="Dry-run a worker readiness probe.")
+    @app_commands.describe(target="Fleet host id or hostname")
+    async def worker_probe_command(interaction, target: str) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response(f"/worker_probe {target.strip()} --dry-run"))
+
+    @tree.command(name="user-lookup", description="Look up a Captain account without exposing secrets.")
+    @app_commands.describe(query="User id, email, or display name")
+    async def user_lookup_command(interaction, query: str) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response(f"/user_lookup {query.strip()}"))
+
+    @tree.command(name="pod-repair", description="Dry-run an ArcPod repair plan.")
+    @app_commands.describe(deployment_id="ArcPod deployment id")
+    async def pod_repair_command(interaction, deployment_id: str) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response(f"/pod_repair {deployment_id.strip()} --dry-run"))
+
+    @tree.command(name="upgrade-check", description="Check upgrade status without queuing an upgrade.")
+    async def upgrade_check_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/upgrade_check"))
 
     @client.event
     async def on_ready() -> None:  # type: ignore[no-untyped-def]

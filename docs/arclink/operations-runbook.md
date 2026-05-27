@@ -88,6 +88,12 @@ Telegram operator approvals can require a typed second factor by setting
 and `/retry_contact` commands must include the code, and approval/install
 buttons are refused with guidance to use the typed command.
 
+Discord Curator operator actions are currently gated by the configured
+operator channel. That is a channel-permission authority model, not parity with
+Telegram's typed approval code. Keep the Discord operator channel tightly
+permissioned until `GAP-027` is resolved by either accepting that policy in
+tests/runbooks or adding a Discord second factor or allowlist.
+
 Hosted user sessions expose credential handoff state through
 `GET /api/v1/user/credentials` and acknowledge storage through
 `POST /api/v1/user/credentials/acknowledge`. These responses use masked secret
@@ -878,6 +884,10 @@ direct provider balance application remain proof-gated.
 |-----|---------|
 | `CHUTES_API_KEY` | Owner key for model catalog and key management |
 | `ARCLINK_LLM_ROUTER_CHUTES_API_KEY` | Central Chutes credential used only by the Control Node LLM router |
+| `ARCLINK_LLM_ROUTER_DEFAULT_MODEL` | Default model string; may be a provider-side fallback CSV when the provider supports it |
+| `ARCLINK_LLM_ROUTER_ALLOWED_MODELS` | Router-level allowlist for model strings accepted from ArcPods |
+| `ARCLINK_LLM_ROUTER_FALLBACK_MODELS` | Router-owned fallback models attempted after retryable provider errors |
+| `ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES` | Provider status codes, default `429,500,502,503,504`, that trigger fallback while candidates remain |
 | `ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP` | Refresh Chutes `/models` into the Control Node catalog on router startup |
 | `ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE` | Route older, deprecated, or unavailable same-family model requests to the latest active model |
 | `ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS` | Emergency `old-model=new-model` overrides for fleet-wide model moves |

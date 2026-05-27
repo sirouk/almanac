@@ -54,6 +54,35 @@ def fake_upstream_transport(
     return transport
 
 
+def fake_sequence_upstream_transport(responses: list[dict[str, Any]]):
+    import httpx
+
+    requests: list[dict[str, Any]] = []
+    queue = list(responses)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raw_body = request.content
+        try:
+            body = json.loads(raw_body.decode("utf-8") if raw_body else "{}")
+        except Exception:
+            body = {}
+        requests.append({"method": request.method, "url": str(request.url), "payload": body, "headers": dict(request.headers)})
+        if not queue:
+            return httpx.Response(500, content=b"unexpected extra upstream request")
+        item = queue.pop(0)
+        if item.get("raise"):
+            raise httpx.ConnectError(str(item["raise"]), request=request)
+        status_code = int(item.get("status_code", 200))
+        if "content" in item:
+            raw = item["content"]
+            return httpx.Response(status_code, content=raw.encode("utf-8") if isinstance(raw, str) else raw)
+        return httpx.Response(status_code, json=item.get("json") or {})
+
+    transport = httpx.MockTransport(handler)
+    transport.requests = requests  # type: ignore[attr-defined]
+    return transport
+
+
 def fake_stream_transport(chunks: list[bytes], marks: list[str]):
     import httpx
 
@@ -1105,6 +1134,106 @@ def test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations() -> Non
     print("PASS test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations")
 
 
+def test_chat_retries_configured_fallback_model_after_retryable_upstream_error() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        upstream = fake_sequence_upstream_transport(
+            [
+                {"status_code": 429, "content": "rate limited token=sk-proj-abcdefghijklmnopqrstuvwxyz"},
+                {
+                    "status_code": 200,
+                    "json": {
+                        "id": "chatcmpl_fallback",
+                        "object": "chat.completion",
+                        "model": "model-b",
+                        "choices": [{"message": {"role": "assistant", "content": "fallback ok"}}],
+                        "usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+                    },
+                },
+            ]
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "model-b",
+                "ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES": "429",
+            },
+            upstream_transport=upstream,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "do not store fallback prompt"}]},
+        )
+        payload = response.json()
+        expect(response.status_code == 200, str(payload))
+        expect(len(upstream.requests) == 2, str(upstream.requests))  # type: ignore[attr-defined]
+        expect(upstream.requests[0]["payload"]["model"] == "model-a", str(upstream.requests))  # type: ignore[attr-defined]
+        expect(upstream.requests[1]["payload"]["model"] == "model-b", str(upstream.requests))  # type: ignore[attr-defined]
+        router_meta = payload.get("arclink_router") or {}
+        expect(router_meta.get("fallback_used") is True, str(router_meta))
+        expect(router_meta.get("primary_model") == "model-a" and router_meta.get("upstream_model") == "model-b", str(router_meta))
+        expect("sk-proj" not in response.text and "do not store fallback prompt" not in response.text, response.text)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        usage = conn.execute("SELECT * FROM arclink_llm_usage_events").fetchone()
+        open_reservations = conn.execute(
+            "SELECT COUNT(*) AS count FROM arclink_llm_budget_reservations WHERE status = 'reserved'"
+        ).fetchone()["count"]
+        serialized = "\n".join(
+            str(dict(row))
+            for table in ("arclink_llm_usage_events", "arclink_llm_budget_reservations", "arclink_events", "arclink_deployments")
+            for row in conn.execute(f"SELECT * FROM {table}").fetchall()
+        )
+        conn.close()
+        expect(open_reservations == 0, f"expected no leaked reservations, found {open_reservations}")
+        expect(usage["status"] == "succeeded" and usage["model"] == "model-b", dict(usage))
+        expect("do not store fallback prompt" not in serialized and "sk-proj" not in serialized, serialized)
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_retries_configured_fallback_model_after_retryable_upstream_error")
+
+
+def test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a", "model-b"])
+        upstream = fake_upstream_transport(
+            {
+                "id": "chatcmpl_provider_side_fallback",
+                "object": "chat.completion",
+                "model": "model-a,model-b",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+            }
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MODEL": "model-a,model-b",
+                "ARCLINK_LLM_ROUTER_ALLOWED_MODELS": "model-a,model-b",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            },
+            upstream_transport=upstream,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a,model-b", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(response.status_code == 200, response.text)
+        expect(upstream.requests[0]["payload"]["model"] == "model-a,model-b", str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+    print("PASS test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string")
+
+
 def test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -1173,8 +1302,10 @@ def main() -> int:
     test_router_auth_rejects_missing_invalid_and_suspended_keys()
     test_chat_streaming_passes_chunks_and_records_provider_usage()
     test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations()
+    test_chat_retries_configured_fallback_model_after_retryable_upstream_error()
+    test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 16 ArcLink LLM router tests")
+    print("PASS all 18 ArcLink LLM router tests")
     return 0
 
 

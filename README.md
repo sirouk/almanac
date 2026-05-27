@@ -1,5 +1,7 @@
 # ArcLink
 
+## Introduction
+
 ArcLink is the self-serve private AI deployment product being built from the
 shared-host substrate. It keeps the proven Hermes, qmd, vault, memory,
 dashboard plugins, Notion, bot, health, and deploy machinery, then adds
@@ -29,6 +31,95 @@ real Stripe, Cloudflare, Chutes, Telegram, Discord, and production host
 credentials are supplied for domain mode, or real Stripe, Tailscale, Chutes,
 Telegram, Discord, and production host credentials are supplied for Tailscale
 mode.
+
+## Lore Intro
+
+ArcLink treats a private AI deployment as a working ship, not a loose chatbot
+signup. The Captain owns the deployment, Raven guides the public onboarding and
+control surface, an ArcPod is the provisioned home for that Captain's AI
+workspace, Agents are the Hermes-powered occupants, and Crew is the set of
+Agents working for the Captain. Operators keep the host, fleet, credentials,
+health, backups, and upgrade rails honest.
+
+That vocabulary matters because the system has two different promises:
+
+- Captains should see a coherent product path: choose an ArcPod, pay, connect
+  channels, open the workspace, and manage Agents without learning host
+  internals.
+- Operators should see a coherent operations path: install one of the supported
+  host modes, prove it, repair it, upgrade it, back it up, and know which
+  command owns each boundary.
+
+## Deployment Paths
+
+ArcLink has three first-class deployment paths. They all start at `deploy.sh`,
+but they are not interchangeable. The Sovereign Control Node is the product
+control plane. Shared Host is the operator-led systemd substrate. Shared Host
+Docker is the containerized form of that operator substrate, not the paid
+ArcPod control path. The long-form product traversal for the primary path
+lives in [Sovereign Control Node Symphony](docs/arclink/sovereign-control-node-symphony.md).
+The subject-matter Crew Training target is captured in
+[ArcLink Academy Trainer](docs/arclink/academy-trainer.md).
+
+| Path | Install | Manages | Runtime manager | Current proof owner |
+| --- | --- | --- | --- | --- |
+| **Sovereign Control Node Mode** | `./deploy.sh control install` or `./deploy.sh` -> `1` -> `1` | Public website/API, Stripe, shared Raven bots, Captain onboarding, fleet placement, ArcPod provisioning, user/admin dashboards, control backups and resets. | Docker Compose control plane | `PG-PROD`, `PG-STRIPE`, `PG-PROVISION`, `PG-FLEET`, `PG-INGRESS`, `PG-UPGRADE` |
+| **Shared Host Mode** | `./deploy.sh install` or `./deploy.sh` -> `2` -> `1` | Operator-led Curator, enrolled Unix users, per-user Hermes homes, systemd services, shared MCP/qmd/Nextcloud/Notion, host health and repair. | Linux systemd plus selected containers | `PG-SHARED-HOST`, `PG-UPGRADE` |
+| **Shared Host Docker Mode** | `./deploy.sh docker install` or `./deploy.sh` -> `3` -> `1` | Containerized Shared Host substrate, Curator/enrollment validation, Docker agent supervision, shared services, Docker health and live smoke. | Docker Compose shared-host substrate | `PG-SHARED-HOST`, `PG-UPGRADE`, `GAP-019` trusted-host boundary |
+
+### How The Three Paths Install
+
+Sovereign Control Node install enters `run_control_install_flow()` in
+`bin/deploy.sh`. It ensures control-node prerequisites, bootstraps
+`arclink-priv/`, collects product/control config when interactive, writes
+`arclink-priv/config/docker.env`, builds and starts the Docker Compose control
+stack, publishes Tailscale ingress when configured, registers public bot
+actions when credentials exist, records release state, prints ports, and runs
+control health.
+
+Shared Host install enters `run_install_flow()` and then `run_root_install()`.
+It collects operator-facing host config, prepares deploy-key and private-state
+answers, escalates only the privileged install step through `sudo` when needed,
+bootstraps system packages, service-user state, userland runtime, systemd
+units, Curator, shared services, optional Tailscale/Nextcloud/Notion lanes, and
+strict host health. This is the full operator-led systemd path.
+
+Shared Host Docker install enters `run_docker_install_flow()`. It bootstraps
+Docker runtime files, collects the same operator substrate config when
+interactive, builds and starts the Docker stack, optionally runs Curator setup,
+reconciles the private operating profile and Docker agent supervisor, records
+release state, prints ports, runs Docker health, and finishes with the live
+agent MCP tool smoke.
+
+### One Menu, Three Control Centers
+
+The interactive `./deploy.sh` menu first asks which operating mode you want,
+then opens that mode's control center. Sovereign Control Node actions live
+under the control menu and are the Dockerized paid-ArcPod path. Shared Host
+actions live under the Shared Host menu. Shared Host Docker actions live under
+the Docker menu and are for operator-led shared services, not ArcPods. The
+top-level default is Sovereign Control Node Mode. Direct commands that do not
+include `control` or `docker`, such as `./deploy.sh install`, use Shared Host
+Mode.
+
+Day-two management follows the same split:
+
+```bash
+./deploy.sh control health
+./deploy.sh control upgrade
+./deploy.sh control backup
+./deploy.sh control inventory list
+
+./deploy.sh health
+./deploy.sh upgrade
+./deploy.sh enrollment-status
+./deploy.sh curator-setup
+
+./deploy.sh docker health
+./deploy.sh docker upgrade
+./deploy.sh docker enrollment-status
+./deploy.sh docker live-smoke
+```
 
 ## What Ships Today
 
@@ -269,27 +360,6 @@ Use `./deploy.sh install` when you intentionally want Shared Host Mode:
 operator-led onboarding, approved enrollments, enrolled Unix users, and shared
 host services. Use `./deploy.sh docker install` when you intentionally want the
 containerized Shared Host substrate.
-
-## Deployment Paths
-
-ArcLink has three first-class deployment paths. They share `deploy.sh`, health,
-repair, upgrade, and recovery vocabulary, but they represent different product
-shapes.
-
-| Path | Best for | Command shape | Runtime manager |
-| --- | --- | --- | --- |
-| **Sovereign Control Node Mode** | Dockerized paid self-serve ArcLink control plane: website/API onboarding, shared bots, Stripe, domain-or-Tailscale ingress intent, fleet placement, provisioning jobs, user/admin dashboards. | `./deploy.sh control install`, `./deploy.sh control health` | Docker Compose control plane |
-| **Shared Host Mode** | Operator-led ArcLink installs, Curator approval workflows, enrolled Unix users, shared MCP/QMD/Nextcloud/Notion services, and production host operations. | `./deploy.sh install`, `./deploy.sh upgrade`, `./deploy.sh health` | Linux systemd plus selected containers |
-| **Shared Host Docker Mode** | Containerized validation and operation of the operator-led Shared Host substrate, including Curator/enrollment flows and shared services. This is not the paid ArcPod control path. | `./deploy.sh docker install`, `./deploy.sh docker health` | Docker Compose shared-host substrate |
-
-The interactive `./deploy.sh` menu first asks which mode you want, then opens
-that mode's control center. Sovereign Control Node actions live under the
-control menu and are the Dockerized paid-ArcPod path. Shared Host actions
-live under the Shared Host menu. Shared Host Docker actions live under the
-Docker menu and are for operator-led shared services, not ArcPods. The
-top-level default is Sovereign Control Node Mode. Direct commands that do not
-include `control` or `docker`, such as `./deploy.sh install`, use Shared Host
-Mode.
 
 ## Local Validation
 
@@ -1236,6 +1306,8 @@ docs/arclink/llm-router.md           # Control Node LLM router behavior and proo
 docs/arclink/wrapped.md              # ArcLink Wrapped ownership and scheduler behavior
 docs/arclink/brand-system.md         # visual identity and voice
 docs/arclink/sovereign-control-node.md # control-node deploy and logic trace
+docs/arclink/sovereign-control-node-symphony.md # full Control Node dream score
+docs/arclink/academy-trainer.md      # subject-matter Crew Training target
 docs/arclink/control-node-production-runbook.md # proof-gated production checklist
 docs/arclink/first-day-user-guide.md # first-day customer/user workflow
 docs/arclink/notion-human-guide.md   # shared SSOT, indexed Notion, personal Notion

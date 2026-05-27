@@ -10385,6 +10385,22 @@ new_control_runtime_backup_dir() {
   printf '%s\n' "$target"
 }
 
+tar_tree_without_sockets() {
+  local output="$1"
+  local base_dir="$2"
+  local relative_root="$3"
+  local exclude_root="${4:-}"
+
+  (
+    cd "$base_dir" || exit 1
+    if [[ -n "$exclude_root" ]]; then
+      find "$relative_root" -path "$exclude_root" -prune -o ! -type s -print0
+    else
+      find "$relative_root" ! -type s -print0
+    fi | tar --null -czf "$output" -T -
+  )
+}
+
 create_control_runtime_backup() {
   local backup_dir="$1"
   local host_priv="" db_path="" counts_path="" db_backup="" inventory_path=""
@@ -10458,9 +10474,7 @@ PY
 
   if [[ -d "$host_priv" ]]; then
     set +e
-    tar -czf "$backup_dir/arclink-priv.tgz" \
-      --exclude='arclink-priv/state/reset-backups' \
-      -C "$BOOTSTRAP_DIR" arclink-priv
+    tar_tree_without_sockets "$backup_dir/arclink-priv.tgz" "$BOOTSTRAP_DIR" "arclink-priv" "arclink-priv/state/reset-backups"
     tar_rc=$?
     set -e
     if [[ "$tar_rc" -eq 1 ]]; then
@@ -10472,7 +10486,7 @@ PY
 
   if [[ -d "$arcdata_root" ]] && find "$arcdata_root" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
     set +e
-    tar -czf "$backup_dir/arcdata-deployments.tgz" -C "$(dirname "$arcdata_root")" "$(basename "$arcdata_root")"
+    tar_tree_without_sockets "$backup_dir/arcdata-deployments.tgz" "$(dirname "$arcdata_root")" "$(basename "$arcdata_root")"
     tar_rc=$?
     set -e
     if [[ "$tar_rc" -eq 1 ]]; then
@@ -10606,6 +10620,50 @@ stop_control_runtime_writers() {
   fi
 }
 
+stop_control_generated_pod_containers() {
+  local compose_file="" deployment_dir="" project="" state_root=""
+  local -a compose_files=()
+  local -a container_names=()
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 0
+  fi
+
+  state_root="$(control_host_state_root_base)"
+  if [[ -z "$state_root" || "$state_root" == "/" ]]; then
+    echo "Refusing to stop generated pods with unsafe ARCLINK_STATE_ROOT_BASE: ${state_root:-blank}" >&2
+    return 1
+  fi
+
+  if [[ -d "$state_root" ]]; then
+    while IFS= read -r compose_file; do
+      compose_files+=("$compose_file")
+    done < <(find "$state_root" -mindepth 2 -maxdepth 4 -type f \( -name compose.yaml -o -name docker-compose.yaml \) 2>/dev/null | sort -u)
+  fi
+
+  for compose_file in "${compose_files[@]}"; do
+    project="$(docker ps -a --filter "label=com.docker.compose.project.config_files=$compose_file" --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | head -n 1)"
+    if [[ -z "$project" ]]; then
+      deployment_dir="$(basename "$(dirname "$(dirname "$compose_file")")")"
+      project="arclink-${deployment_dir%%-*}"
+    fi
+    echo "Stopping generated pod stack before backup: $project"
+    docker compose -p "$project" -f "$compose_file" stop >/dev/null 2>&1 || true
+  done
+
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && container_names+=("$name")
+  done < <(
+    {
+      docker ps -a --filter 'name=arclink-arcdep_' --format '{{.Names}}' 2>/dev/null
+      docker ps -a --filter 'name=arclink-dep_' --format '{{.Names}}' 2>/dev/null
+    } | sort -u
+  )
+  if [[ "${#container_names[@]}" -gt 0 ]]; then
+    docker stop "${container_names[@]}" >/dev/null 2>&1 || true
+  fi
+}
+
 remove_control_generated_pods() {
   local compose_file="" deployment_dir="" project="" container_names="" state_root=""
   local -a compose_files=()
@@ -10636,7 +10694,10 @@ remove_control_generated_pods() {
     docker compose -p "$project" -f "$compose_file" down --remove-orphans --volumes >/dev/null 2>&1 || true
   done
 
-  container_names="$(docker ps -a --filter 'name=arclink-arcdep_' --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')"
+  container_names="$({
+    docker ps -a --filter 'name=arclink-arcdep_' --format '{{.Names}}' 2>/dev/null
+    docker ps -a --filter 'name=arclink-dep_' --format '{{.Names}}' 2>/dev/null
+  } | sort -u | tr '\n' ' ')"
   if [[ -n "$container_names" ]]; then
     # shellcheck disable=SC2086
     docker rm -f $container_names >/dev/null 2>&1 || true
@@ -10866,12 +10927,15 @@ run_control_runtime_reset() {
   docker_env="$(docker_env_file_path)"
   CONFIG_TARGET="$docker_env"
 
+  db_path="$(control_host_db_path)"
+  echo "Stopping control-plane writers before reset backup..."
+  stop_control_runtime_writers
+  echo "Stopping generated ArcPod containers before reset backup..."
+  stop_control_generated_pod_containers
+
   backup_dir="$(new_control_runtime_backup_dir)"
   create_control_runtime_backup "$backup_dir"
 
-  db_path="$(control_host_db_path)"
-  echo "Stopping control-plane writers before reset..."
-  stop_control_runtime_writers
   echo "Stopping and removing generated ArcPod stacks..."
   remove_control_generated_pods
   echo "Removing generated per-deployment secret-store directories..."

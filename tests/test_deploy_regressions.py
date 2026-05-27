@@ -2219,6 +2219,11 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
         reset.index("create_control_runtime_backup") < reset.index("reset_control_runtime_database"),
         "expected reset to back up before touching the database",
     )
+    expect("stop_control_generated_pod_containers" in text, "expected reset to quiesce generated pods before backup")
+    expect(
+        reset.index("stop_control_generated_pod_containers") < reset.index("create_control_runtime_backup"),
+        "expected generated pods to stop before reset backup tar reads pod data",
+    )
     expect("confirm_control_runtime_reset" in reset, "expected reset to require confirmation")
     expect('confirm_control_runtime_reset "$scope"' in reset, "expected reset confirmation to receive sandbox/production scope")
     expect("ARCLINK_CONFIRM_RUNTIME_RESET" in text, "expected reset to support explicit non-interactive confirmation")
@@ -2231,6 +2236,7 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     expect("/arcdata/deployments" in text, "expected reset to remove generated pod state")
     expect("arclink-priv.tgz" in backup, "expected backup to snapshot private state")
     expect("arcdata-deployments.tgz" in backup, "expected backup to snapshot generated pod data")
+    expect("tar_tree_without_sockets" in text, "expected backup to skip runtime sockets instead of warning on them")
     expect("arclink_channel_pairing_codes" in text, "expected reset to clear channel pairing codes")
     expect("arclink_users" in text, "expected reset to clear client users")
     expect("arclink_deployments" in text, "expected reset to clear deployments")

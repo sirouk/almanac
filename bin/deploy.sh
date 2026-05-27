@@ -9516,6 +9516,7 @@ ensure_control_local_fleet_worker_registered() {
     state_root_base="/arcdata/deployments"
   fi
   if [[ -n "$ssh_host" ]] && is_local_fleet_ssh_host "$ssh_host"; then
+    ensure_control_fleet_ssh_key "0"
     ensure_local_fleet_ssh_access
     test_local_fleet_ssh_access
   fi

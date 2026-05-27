@@ -9515,6 +9515,10 @@ ensure_control_local_fleet_worker_registered() {
     echo "Local starter worker state root '$state_root_base' is invalid; using /arcdata/deployments." >&2
     state_root_base="/arcdata/deployments"
   fi
+  if [[ -n "$ssh_host" ]] && is_local_fleet_ssh_host "$ssh_host"; then
+    ensure_local_fleet_ssh_access
+    test_local_fleet_ssh_access
+  fi
 
   if [[ "$executor_adapter" == "ssh" ]]; then
     ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="1"

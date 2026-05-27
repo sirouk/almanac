@@ -21,6 +21,7 @@ from arclink_secrets_regex import redact_secret_material, redact_then_truncate
 PROBE_KINDS = ("liveness", "capacity", "inventory")
 DEFAULT_CADENCES = {"liveness": 60, "capacity": 300, "inventory": 900}
 DEFAULT_RETENTION = 1000
+LOCAL_SSH_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
 
 
 class ArcLinkFleetInventoryWorkerError(ValueError):
@@ -95,6 +96,39 @@ def _latest_probe_at(conn: sqlite3.Connection, *, host_id: str, kind: str) -> st
     return str(row["probed_at"] or "") if row is not None else ""
 
 
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_local_ssh_host(ssh_host: str) -> bool:
+    return str(ssh_host or "").strip().lower().rstrip(".") in LOCAL_SSH_HOST_ALIASES
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _docker_local_starter_probe(host: Mapping[str, Any], clean_kind: str) -> ProbeResult:
+    capacity_slots = max(1, _int_value(host.get("capacity_slots"), 1))
+    observed_load = max(0, _int_value(host.get("observed_load"), 0))
+    payload: dict[str, Any] = {
+        "ok": True,
+        "kind": clean_kind,
+        "admitting": True,
+        "hostname": str(host.get("hostname") or ""),
+        "observed_at": utc_now_iso(),
+        "probe_mode": "docker-local-starter",
+        "capacity_slots": capacity_slots,
+        "observed_load": observed_load,
+    }
+    if clean_kind in {"capacity", "inventory"}:
+        payload["hardware_summary"] = {"capacity_slots": capacity_slots}
+    return ProbeResult(ok=True, payload=payload, latency_ms=0)
+
+
 def probe_due(conn: sqlite3.Connection, *, host_id: str, kind: str, now_iso: str, cadence_seconds: int) -> bool:
     last = parse_utc_iso(_latest_probe_at(conn, host_id=host_id, kind=kind))
     if last is None:
@@ -112,6 +146,8 @@ class SshProbeRunner:
 
     def __call__(self, host: Mapping[str, Any], kind: str) -> ProbeResult:
         clean_kind = _clean_kind(kind)
+        if host.get("_arclink_docker_local_starter_probe"):
+            return _docker_local_starter_probe(host, clean_kind)
         ssh_host = str(host.get("ssh_host") or host.get("hostname") or "").strip()
         ssh_user = str(host.get("ssh_user") or "arclink").strip()
         if not ssh_host:
@@ -159,6 +195,14 @@ def _host_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 host["ssh_host"] = str(metadata.get("ssh_host") or "").strip()
             if not str(host.get("ssh_user") or "").strip():
                 host["ssh_user"] = str(metadata.get("ssh_user") or "").strip()
+            executor = str(metadata.get("executor") or "").strip().lower()
+        else:
+            executor = ""
+        host["_arclink_docker_local_starter_probe"] = bool(
+            _truthy_env("ARCLINK_DOCKER_MODE")
+            and executor == "local"
+            and _is_local_ssh_host(str(host.get("ssh_host") or ""))
+        )
         normalized.append(host)
     return normalized
 

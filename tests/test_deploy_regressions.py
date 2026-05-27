@@ -2182,6 +2182,8 @@ def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
     expect("register_fleet_host" in helper, "helper should persist a fleet host row")
     expect('"registered_by": "deploy.sh control local starter auto-register"' in helper, "helper should tag auto-registration metadata")
     expect("tags={\"starter\": True, \"local\": True}" in helper, "helper should tag the local starter worker")
+    expect("ensure_local_fleet_ssh_access" in helper, "helper should repair local starter SSH/probe access during install and upgrade")
+    expect("test_local_fleet_ssh_access" in helper, "helper should verify local starter probe access during install and upgrade")
     expect(
         install_flow.index("ensure_control_local_fleet_worker_registered") < install_flow.index("print_control_provisioning_readiness_summary"),
         "install should auto-register the local starter before printing readiness",

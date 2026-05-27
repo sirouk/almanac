@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 
 from arclink_test_helpers import expect, load_module, memory_db
@@ -163,6 +164,45 @@ def test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine(
     print("PASS test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine")
 
 
+def test_worker_uses_container_safe_probe_for_docker_local_starter() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_docker_local_starter_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_docker_local_starter_test")
+    conn = memory_db(control)
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_hosts (
+          host_id, hostname, region, tags_json, status, drain, capacity_slots,
+          observed_load, metadata_json, created_at, updated_at
+        ) VALUES (
+          'host_local', 's1396', 'starter', '{}', 'active', 0, 8, 0,
+          '{"executor":"local","ssh_host":"localhost","ssh_user":"arclink"}',
+          '2026-05-16T12:00:00+00:00', '2026-05-16T12:00:00+00:00'
+        )
+        """
+    )
+    previous = os.environ.get("ARCLINK_DOCKER_MODE")
+    os.environ["ARCLINK_DOCKER_MODE"] = "1"
+    try:
+        result = worker.process_due_hosts(
+            conn,
+            now_iso="2026-05-16T12:01:00+00:00",
+            force=True,
+            notify=False,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("ARCLINK_DOCKER_MODE", None)
+        else:
+            os.environ["ARCLINK_DOCKER_MODE"] = previous
+    expect(result["probe_count"] == 3, str(result))
+    probes = conn.execute("SELECT kind, ok, payload_json FROM arclink_fleet_host_probes ORDER BY kind").fetchall()
+    expect({str(row["kind"]): int(row["ok"]) for row in probes} == {"capacity": 1, "inventory": 1, "liveness": 1}, [dict(row) for row in probes])
+    expect(all('"probe_mode": "docker-local-starter"' in str(row["payload_json"]) for row in probes), [dict(row) for row in probes])
+    host = conn.execute("SELECT status, capacity_slots FROM arclink_fleet_hosts WHERE host_id = 'host_local'").fetchone()
+    expect(dict(host) == {"status": "active", "capacity_slots": 8}, str(dict(host)))
+    print("PASS test_worker_uses_container_safe_probe_for_docker_local_starter")
+
+
 def test_liveness_thresholds_degrade_unreachable_and_recover() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_threshold_test")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_threshold_test")
@@ -257,5 +297,6 @@ if __name__ == "__main__":
     test_due_worker_records_probe_rows_and_updates_capacity()
     test_legacy_probe_schema_is_migrated_for_worker()
     test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine()
+    test_worker_uses_container_safe_probe_for_docker_local_starter()
     test_liveness_thresholds_degrade_unreachable_and_recover()
     test_probe_errors_are_redacted_and_retention_is_pruned()

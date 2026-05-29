@@ -100,9 +100,11 @@ Conditional local rows:
   source defect.
 - `GAP-032`: local fake execution is complete; real refresh/apply needs an
   authorized proof window or an explicit source defect from proof.
-- `GAP-034`: add local code only when source-governance decisions or
-  authorized proof identify a concrete source defect or new local product
-  decision.
+- `GAP-034`: Captain-facing local `/academy` selection and per-Agent staging
+  are now wired. Further local code should still wait for source-governance
+  decisions, authorized proof, or a concrete source defect; do not imply live
+  source acquisition or graduated trained-Agent workspace application until
+  the proof gates close.
 - Any live-proof row: demote to local repair only when an authorized proof
   produces a concrete source/test/doc defect.
 

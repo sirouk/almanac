@@ -1,11 +1,15 @@
 # ArcLink Academy Trainer
 
 This document describes the target system for turning Crew Training from a
-character-and-role recipe into a reusable subject-matter training pipeline. It
-is a product score, not a shipped claim. Current source has deterministic Crew
-Recipe generation and SOUL overlay paths; the Academy Trainer described here is
-a larger buildout that must be tracked through `GAPS.md` before it is called
-real.
+character-and-role recipe into a reusable subject-matter training pipeline. The
+Captain-facing local lane is now wired: after Crew Training, `/academy` lets a
+Captain pick one Agent, or choose Train All and walk the Crew one by one with
+Skip available. That lane stages governed local Academy artifacts, records
+per-Agent review status, mirrors the status into deployment metadata, and
+projects the specialist identity summary into the Agent's managed context.
+Live source acquisition, provider-generated curricula, raw archival, workspace
+application writes, and final graduation still require the proof and policy
+handoffs tracked in `GAP-034`.
 
 ## Purpose
 
@@ -30,6 +34,29 @@ The target experience is:
    high-value material, tombstones removed content where required, updates
    lesson cards, and re-runs evaluation tasks before pushing updates to the
    Agent.
+
+## Current Shipped Slice
+
+Current source supports the governed local slice:
+
+- `/academy` in Captain Telegram/Discord chats opens Academy Training after an
+  active Crew Recipe exists. Friendly aliases such as Quick Training, Quick
+  Briefing, Quick Align, and Quick Huddle route to the same governed lane.
+- Captains can choose one Agent or Train All; Train All walks each Agent with
+  Train/Skip controls.
+- Each trained Agent receives a local, no-network Academy review plan built
+  from approved fixture lanes: Crew mission brief, role/source-map baseline,
+  and reviewed retrieval/tool-choice skill.
+- The review plan includes curriculum, source map, lesson cards, SOUL overlay
+  sections, qmd/memory seed intents, approved skill intents, practice tasks,
+  evaluation tasks, and Continuing Education status.
+- ArcLink persists per-Agent Academy status on the active Crew Recipe, mirrors
+  it into deployment metadata, writes a compact Academy identity summary into
+  `state/arclink-identity-context.json` when the Agent home is local, and
+  surfaces the aggregate in the dashboard and Operator Raven.
+- This slice does not crawl the web, call providers, write the Agent vault,
+  mutate `SOUL.md`, rebuild qmd, or mark an Agent graduated. Those actions are
+  still proof-gated.
 
 ## Source Lanes
 

@@ -408,10 +408,16 @@ proof under `GAP-022`.
 
 ## Academy Trainer And Subject-Matter Formation
 
-Crew Training should eventually become Academy Training: a full subject-matter
-preparation pipeline that makes each Crew member genuinely equipped for its
-role instead of merely styled as a specialist. The detailed target system lives
-in `docs/arclink/academy-trainer.md`.
+Crew Training now has an Academy Training lane for governed local
+subject-matter formation. Crew Training still curates the roster, roles,
+personalities, and additive SOUL overlay; Academy Training takes one Agent (or
+walks the whole Crew one by one with Skip available) and stages a specialist
+corpus, curriculum, source map, SOUL overlay plan, skill/tool recipes,
+qmd/memory seed intents, practice tasks, evaluation tasks, and continuing
+education review for that Agent. Captain-facing copy can call this lane Quick
+Training, Quick Briefing, Quick Align, or Quick Huddle while keeping
+`/academy` as the explicit command. The detailed target system lives in
+`docs/arclink/academy-trainer.md`.
 
 The finished Academy should:
 
@@ -453,7 +459,7 @@ policy requires it, replace weaker materials with stronger current ones,
 rebuild lesson cards/indexes/memory stubs, run evaluations, and produce a
 Captain/Operator report before updating the Agent.
 
-The first local slice now exists in source. `python/arclink_academy_trainer.py`
+The Captain-facing local slice now exists in source. `python/arclink_academy_trainer.py`
 defines the no-network Academy schemas, default governed source-lane registry,
 fake acquisition reports, fake corpus manifests, deterministic quality scoring,
 curriculum/evaluation records, no-write SOUL/vault/qmd/memory/skill
@@ -464,14 +470,17 @@ license/permission or required lane metadata, raw-storage violations,
 unreviewed public skills, secret-looking fixture material, deletion/tombstone
 violations, and any attempt to represent live crawling, ASR/transcription, or
 provider generation as local success. It also rejects unsafe observed-source
-payloads before weekly review persistence. Compact Academy status summaries can
-be staged on the active Crew Recipe overlay with audit and event rows,
-projected into the dashboard Crew Training panel and Crew Recipe API, queried
-read-only from Operator Raven, and previewed through the local action worker
-without executor or filesystem calls. Real live source acquisition,
-provider-assisted generation, workspace application proof, real Agent
-application writes, hosted weekly scheduling, and governance decisions remain
-under `GAP-034`.
+payloads before weekly review persistence. Compact Academy status summaries are
+now staged per Agent on the active Crew Recipe overlay with audit and event
+rows, mirrored into deployment metadata, projected into the Agent's local
+managed identity context, shown in the dashboard Crew Training panel and Crew
+Recipe API, queried read-only from Operator Raven, and previewed through the
+local action worker without executor or filesystem calls. Captains enter this
+lane with `/academy`, can pick one Agent, or choose Train All to walk the Crew
+one by one and skip Agents they do not want trained. Real live source
+acquisition, provider-assisted generation, workspace application proof, real
+Agent application writes, hosted weekly scheduling, and source-governance
+decisions remain under `GAP-034`.
 
 This is larger than the current Crew Recipe system. The current source locally
 supports deterministic recipe/SOUL projection and proof-gated live recipe

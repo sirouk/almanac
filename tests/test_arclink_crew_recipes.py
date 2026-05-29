@@ -444,6 +444,55 @@ def test_academy_weekly_review_persists_on_active_recipe_without_workspace_write
     print("PASS test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes")
 
 
+def test_academy_agent_training_stages_per_agent_and_projects_identity() -> None:
+    control = load_module("arclink_control.py", "arclink_control_crew_academy_agent_test")
+    crew = load_module("arclink_crew_recipes.py", "arclink_crew_academy_agent_test")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        seeded = seed_user_and_deployments(control, conn, tmpdir)
+        crew.apply_crew_recipe(
+            conn,
+            user_id=seeded["user_id"],
+            role="founder",
+            mission="ship a specialist crew",
+            treatment="peer",
+            preset="Frontier",
+            capacity="development",
+        )
+        first = crew.stage_crew_academy_agent_training(
+            conn,
+            user_id=seeded["user_id"],
+            deployment_id=seeded["deployment_1"],
+            actor_id=seeded["user_id"],
+        )
+        expect(first["agent_academy_training"]["status"] == "ready_for_review", str(first))
+        expect(first["agent_academy_training"]["source_count"] == 3, str(first))
+        second = crew.skip_crew_academy_agent_training(
+            conn,
+            user_id=seeded["user_id"],
+            deployment_id=seeded["deployment_2"],
+            actor_id=seeded["user_id"],
+        )
+        status = second["academy_training"]
+        expect(status["agent_count"] == 2, str(status))
+        expect(status["trained_agent_count"] == 1, str(status))
+        expect(status["skipped_agent_count"] == 1, str(status))
+        expect(status["pending_agent_count"] == 0, str(status))
+        agents = {item["deployment_id"]: item for item in status["agents"]}
+        expect(agents[seeded["deployment_1"]]["status"] == "ready_for_review", str(agents))
+        expect(agents[seeded["deployment_2"]]["status"] == "skipped", str(agents))
+        first_row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?", (seeded["deployment_1"],)).fetchone()
+        metadata = json.loads(first_row["metadata_json"])
+        expect(metadata["academy_training"]["manifest_id"], str(metadata))
+        identity_path = Path(tmpdir) / "agent-1" / "hermes-home" / "state" / "arclink-identity-context.json"
+        identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        expect(identity["academy_status"] == "ready_for_review", str(identity))
+        expect(identity["academy_source_count"] == "3", str(identity))
+        audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
+        expect("crew_academy_agent_training_staged" in audit_actions, str(audit_actions))
+    print("PASS test_academy_agent_training_stages_per_agent_and_projects_identity")
+
+
 if __name__ == "__main__":
     test_validation_and_deterministic_fallback()
     test_provider_success_and_unsafe_retry_fallback()
@@ -452,3 +501,4 @@ if __name__ == "__main__":
     test_whats_changed_diff()
     test_academy_review_stages_on_active_recipe_without_workspace_writes()
     test_academy_weekly_review_persists_on_active_recipe_without_workspace_writes()
+    test_academy_agent_training_stages_per_agent_and_projects_identity()

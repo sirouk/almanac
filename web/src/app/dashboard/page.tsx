@@ -334,6 +334,18 @@ interface AcademyTrainingStatus {
   blocked_source_count?: number;
   source_state_counts?: Record<string, number>;
   live_proof_required?: boolean;
+  agent_count?: number;
+  trained_agent_count?: number;
+  pending_agent_count?: number;
+  skipped_agent_count?: number;
+  agents?: Array<{
+    deployment_id?: string;
+    agent_name?: string;
+    agent_title?: string;
+    status?: string;
+    source_count?: number;
+    graduation_status?: string;
+  }>;
 }
 
 interface CrewRecipe {
@@ -1096,6 +1108,9 @@ export default function DashboardPage() {
                     </p>
                     <div className="mt-3 grid gap-2 text-xs text-soft-white/45 sm:grid-cols-2">
                       <span>Sources: {academyTraining?.source_count ?? 0}</span>
+                      <span>Agents: {academyTraining?.trained_agent_count ?? 0}/{academyTraining?.agent_count ?? 0} trained</span>
+                      <span>Skipped: {academyTraining?.skipped_agent_count ?? 0}</span>
+                      <span>Pending: {academyTraining?.pending_agent_count ?? 0}</span>
                       <span>Weekly: {formatStatusLabel(academyTraining?.weekly_review_status || "not_started")}</span>
                       <span>Evaluation: {formatStatusLabel(academyTraining?.evaluation_status || "not_started")}</span>
                       <span>Graduation: {formatStatusLabel(academyTraining?.graduation_status || "not_started")}</span>
@@ -1106,6 +1121,16 @@ export default function DashboardPage() {
                     </div>
                     {academyTraining?.next_actions?.[0] && (
                       <p className="mt-3 text-xs leading-5 text-soft-white/45">{academyTraining.next_actions[0]}</p>
+                    )}
+                    {!!academyTraining?.agents?.length && (
+                      <div className="mt-3 space-y-1 text-xs text-soft-white/50">
+                        {academyTraining.agents.slice(0, 6).map((agent) => (
+                          <div key={agent.deployment_id || agent.agent_name} className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2">
+                            <span>{agent.agent_name || "Agent"}{agent.agent_title ? ` · ${agent.agent_title}` : ""}</span>
+                            <span>{formatStatusLabel(agent.status || "not_started")} · {agent.source_count ?? 0} source(s)</span>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>

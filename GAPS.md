@@ -306,7 +306,7 @@ closure is required before a launch or core journey claim can move forward.
 | `GAP-031` | Router/provider failover needs live overload proof | Provider proof after local fallback repair | Local non-streaming and pre-streaming fallback semantics, sanitized attempt audit, fallback-aware reservations, and final-model pricing labels exist; prove overload recovery without raw prompt leakage. |
 | `GAP-032` | Hermes/ArcPod updates are not yet rolling from the Control Node | Orchestrator buildout plus upgrade proof | Dry-run planning, typed rollout jobs, and bounded fake/local batch records exist; next closure requires authorized real refresh/apply execution plus health/smoke proof. |
 | `GAP-033` | Cross-surface experience quality needs live finish proof | Local quality gate exists; browser/chat/workspace proof remains | Keep the shared finish gate in place and run representative `PG-BOTS`, `PG-HERMES`, and product browser proof before treating polish as product-real. |
-| `GAP-034` | Academy Trainer is not yet a full subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Local schema, source-lane registry, fake acquisition adapters, fake corpus, no-write application plan, continuing-education gates, Crew Training persistence, dashboard status, and Operator Raven status exist; run authorized source/provider/workspace proof before claiming trained experts. |
+| `GAP-034` | Academy Trainer is not yet a full live subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Captain-facing `/academy` now stages per-Agent local training plans with Train All / one-by-one Skip, identity projection, source-lane registry, fake acquisition adapters, no-write application plan, continuing-education gates, dashboard status, and Operator Raven status; run authorized source/provider/workspace proof before claiming graduated trained experts. |
 | `GAP-011` | Closed locally: foundation docs now align with Control Node boundaries | Documentation repair plus truth test | Keep `tests/test_documentation_truths.py` guarding stale prototype wording. |
 | `GAP-025` | Closed locally: broad Python suite is green | Regression triage and repair | Keep `python3 -m pytest -q tests` as the broad no-secret local validation gate. |
 
@@ -2145,13 +2145,16 @@ when they were active blockers during this buildout pass. Treat rows marked
   vault/qmd/memory/skill application worker writes beyond the no-write preview,
   hosted weekly scheduler proof, live/provider proof for Academy generation,
   source-governance policy, and workspace proof for the trained Agent.
-- Impact: a Captain can create a Crew Recipe and ArcLink can now build a
+- Impact: a Captain can create a Crew Recipe, run `/academy`, pick one Agent or
+  walk the whole Crew one by one with Skip, and ArcLink can now build a
   reviewable local Academy plan from governed fake acquisition fixtures, stage
-  that plan on the Crew Recipe, queue an audited no-write application preview,
-  persist a weekly local review/gate summary, and see honest dashboard/Raven
-  status, but ArcLink still cannot claim it exhaustively equips a Crew member
-  with live-acquired sources, applied vault/qmd/memory/skill artifacts,
-  provider-generated synthesis, hosted scheduling, or trained-Agent workspace
+  that plan per Agent on the Crew Recipe, project compact specialist identity
+  into the Agent's managed context when local, queue an audited no-write
+  application preview, persist a weekly local review/gate summary, and see
+  honest dashboard/Raven status, but ArcLink still cannot claim it exhaustively
+  equips a Crew member with live-acquired sources, applied
+  vault/qmd/memory/skill artifacts, provider-generated synthesis, hosted
+  scheduling, or trained-Agent workspace
   behavior until the remaining policy and proof gates pass.
 - Owner/surface: Academy Trainer, Crew Training, memory synthesis, vault/qmd,
   skills, managed context, dashboard/Raven, source governance.

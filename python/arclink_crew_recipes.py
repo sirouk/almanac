@@ -189,6 +189,23 @@ def _deployment_rows(conn: sqlite3.Connection, user_id: str) -> list[dict[str, A
     return [dict(row) for row in rows]
 
 
+def _deployment_row_for_user(conn: sqlite3.Connection, *, user_id: str, deployment_id: str) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    row = conn.execute(
+        """
+        SELECT *
+        FROM arclink_deployments
+        WHERE user_id = ? AND deployment_id = ?
+          AND status NOT IN ('cancelled', 'teardown_complete', 'torn_down')
+        """,
+        (clean_user, clean_deployment),
+    ).fetchone()
+    if row is None:
+        raise ArcLinkCrewRecipeError("Academy Training target Agent was not found on this Crew")
+    return dict(row)
+
+
 def _recipe_public(row: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -442,6 +459,11 @@ def _academy_not_started_status(*, summary: str) -> dict[str, Any]:
         "writes_enabled": False,
         "live_proof_required": True,
         "review_persisted": False,
+        "agent_count": 0,
+        "trained_agent_count": 0,
+        "pending_agent_count": 0,
+        "skipped_agent_count": 0,
+        "agents": [],
     }
 
 
@@ -483,6 +505,11 @@ def _academy_status_public(academy: Mapping[str, Any]) -> dict[str, Any]:
         "live_proof_required",
         "review_persisted",
         "staged_at",
+        "agent_count",
+        "trained_agent_count",
+        "pending_agent_count",
+        "skipped_agent_count",
+        "agents",
     )
     payload = {key: academy.get(key) for key in allowed if key in academy}
     base = _academy_not_started_status(summary="No Academy corpus has been staged.")
@@ -493,6 +520,501 @@ def _academy_status_public(academy: Mapping[str, Any]) -> dict[str, Any]:
         error_cls=ArcLinkCrewRecipeError,
     )
     return base
+
+
+def _slug(value: str, *, fallback: str = "academy") -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug[:80] or fallback
+
+
+def _agent_label(deployment: Mapping[str, Any]) -> str:
+    return str(
+        deployment.get("agent_name")
+        or deployment.get("prefix")
+        or deployment.get("deployment_id")
+        or "Agent"
+    ).strip()
+
+
+def _agent_title(deployment: Mapping[str, Any]) -> str:
+    return str(deployment.get("agent_title") or _agent_label(deployment)).strip()
+
+
+def build_crew_academy_artifacts_for_agent(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    created_at: str = "",
+) -> dict[str, Any]:
+    """Build governed local Academy artifacts for one Captain-owned Agent.
+
+    This is still the local/no-network Academy slice: it creates reviewable
+    curriculum, source-map, SOUL-overlay, skill, qmd, and memory intents from
+    approved local fixtures. It does not crawl, call providers, or write Agent
+    workspace files.
+    """
+    clean_user = str(user_id or "").strip()
+    current = current_crew_recipe(conn, user_id=clean_user)
+    if current is None:
+        raise ArcLinkCrewRecipeError("Academy Training requires an active Crew Recipe")
+    deployment = _deployment_row_for_user(conn, user_id=clean_user, deployment_id=deployment_id)
+    from arclink_academy_trainer import (
+        academy_graduation_gate,
+        build_academy_corpus,
+        build_agent_application_plan,
+        build_continuing_education_plan,
+        fake_academy_source,
+    )
+
+    now = str(created_at or utc_now_iso())
+    label = _agent_label(deployment)
+    title = _agent_title(deployment)
+    role_slug = _slug(f"{deployment_id}-{title}", fallback=_slug(deployment_id, fallback="agent"))
+    mission = str(current.get("mission") or "").strip()
+    capacity = str(current.get("capacity") or "").strip()
+    preset = str(current.get("preset") or "").strip()
+    topic = f"{title} specialist formation for {mission or capacity or 'the Captain mission'}"
+    sources = [
+        fake_academy_source(
+            source_id=f"src-{role_slug}-crew-brief",
+            lane_id="organization_private",
+            title=f"{label} Crew mission brief",
+            origin_url=f"arclink-crew-recipe://{current.get('recipe_id') or clean_user}/{deployment_id}",
+            retrieved_at=now,
+            license_status="internal-approved",
+            permission_status="operator_approved",
+            storage_policy="derived_summary",
+            content=(
+                f"Captain role: {current.get('role') or 'unspecified'}. "
+                f"Mission: {mission or 'unspecified'}. "
+                f"Preset: {preset or 'unspecified'}. Capacity: {capacity or 'unspecified'}. "
+                f"{label} should specialize as {title}, retrieve before specialist claims, cite sources, "
+                "and keep unsafe or unsupported work behind Raven and ArcLink proof gates."
+            ),
+            citations=["Crew Recipe", "Captain mission", "Agent title"],
+            metadata={
+                "owner": clean_user,
+                "audience_scope": "role-training-only",
+                "official": True,
+                "examples": True,
+                "cross_source_agreement": True,
+            },
+        ),
+        fake_academy_source(
+            source_id=f"src-{role_slug}-source-map",
+            lane_id="wikimedia",
+            title=f"{title} source map baseline",
+            origin_url=f"https://example.test/academy/{role_slug}/source-map",
+            retrieved_at=now,
+            license_status="cc-by-sa",
+            permission_status="public_allowed",
+            storage_policy="derived_summary",
+            content=(
+                f"A {title} needs a topic map, vocabulary, decision checks, practice tasks, "
+                "and cross-source agreement before giving specialist advice. The Agent should "
+                "distinguish facts, assumptions, risks, and next retrieval targets."
+            ),
+            citations=["topic map", "vocabulary", "decision checks", "practice tasks"],
+            metadata={
+                "revision": f"{role_slug}-baseline-1",
+                "official": True,
+                "examples": True,
+                "fresh": True,
+            },
+        ),
+        fake_academy_source(
+            source_id=f"src-{role_slug}-retrieval-skill",
+            lane_id="skill_tool_catalog",
+            title=f"{title} retrieval and tool-choice skill",
+            origin_url="local-skill-catalog://academy-retrieval-and-tool-choice",
+            retrieved_at=now,
+            license_status="internal-approved",
+            permission_status="operator_approved",
+            storage_policy="metadata_only",
+            content=(
+                "Use knowledge.search-and-fetch or vault.search-and-fetch before specialist answers; "
+                "use Drive, Code, Terminal, and MCP rails according to the Agent's authorized scope; "
+                "ask Raven or the Captain for proof-gated work."
+            ),
+            citations=["knowledge.search-and-fetch", "vault.search-and-fetch", "authorized tool scope"],
+            metadata={
+                "skill_id": "academy-retrieval-and-tool-choice",
+                "review_status": "approved",
+                "public_skill": True,
+                "maintained": True,
+                "examples": True,
+            },
+            review_status="approved",
+        ),
+    ]
+    manifest = build_academy_corpus(
+        role_id=f"role-{role_slug}",
+        role_title=title,
+        topic=topic,
+        sources=sources,
+        created_at=now,
+    )
+    application = build_agent_application_plan(
+        manifest,
+        agent_id=str(deployment.get("deployment_id") or deployment_id),
+        created_at=now,
+    )
+    refresh = build_continuing_education_plan(
+        manifest,
+        observed_sources={
+            source_id: {"content_hash": source["content_hash"]}
+            for source_id, source in manifest.sources.items()
+        },
+        checked_at=now,
+    )
+    graduation = academy_graduation_gate(manifest=manifest)
+    return {
+        "deployment": deployment,
+        "manifest": manifest,
+        "application_plan": application,
+        "continuing_education_plan": refresh,
+        "graduation_gate": graduation,
+    }
+
+
+def _academy_status_for_agent(
+    *,
+    deployment: Mapping[str, Any],
+    manifest: Any,
+    application_plan: Any,
+    continuing_education_plan: Any,
+    graduation_gate: Any,
+    staged_at: str,
+    skipped: bool = False,
+) -> dict[str, Any]:
+    if skipped:
+        return {
+            "deployment_id": str(deployment.get("deployment_id") or ""),
+            "agent_name": _agent_label(deployment),
+            "agent_title": _agent_title(deployment),
+            "status": "skipped",
+            "summary": "Captain skipped Academy Training for this Agent.",
+            "manifest_id": "",
+            "application_plan_id": "",
+            "source_count": 0,
+            "lane_count": 0,
+            "graduation_status": "skipped",
+            "staged_at": staged_at,
+            "review_persisted": True,
+            "local_only": True,
+            "no_network": True,
+            "no_write": True,
+            "writes_enabled": False,
+            "live_proof_required": False,
+        }
+    from arclink_academy_trainer import build_academy_review_status
+
+    status = build_academy_review_status(
+        manifest=manifest,
+        application_plan=application_plan,
+        continuing_education_plan=continuing_education_plan,
+        graduation_gate=graduation_gate,
+        staged_at=staged_at,
+    )
+    status.update(
+        {
+            "deployment_id": str(deployment.get("deployment_id") or ""),
+            "agent_name": _agent_label(deployment),
+            "agent_title": _agent_title(deployment),
+            "review_persisted": True,
+        }
+    )
+    return status
+
+
+def _academy_agents_from_status(status: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(status, Mapping):
+        return {}
+    raw_agents = status.get("agents")
+    agents: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_agents, Mapping):
+        iterable = raw_agents.values()
+    elif isinstance(raw_agents, list):
+        iterable = raw_agents
+    else:
+        iterable = ()
+    for item in iterable:
+        if not isinstance(item, Mapping):
+            continue
+        deployment_id = str(item.get("deployment_id") or "").strip()
+        if deployment_id:
+            agents[deployment_id] = dict(item)
+    return agents
+
+
+def _academy_agent_public(item: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "deployment_id": str(item.get("deployment_id") or ""),
+        "agent_name": str(item.get("agent_name") or ""),
+        "agent_title": str(item.get("agent_title") or ""),
+        "status": str(item.get("status") or "not_started"),
+        "summary": str(item.get("summary") or ""),
+        "manifest_id": str(item.get("manifest_id") or ""),
+        "application_plan_id": str(item.get("application_plan_id") or ""),
+        "source_count": int(item.get("source_count") or 0),
+        "lane_count": int(item.get("lane_count") or 0),
+        "graduation_status": str(item.get("graduation_status") or ""),
+        "staged_at": str(item.get("staged_at") or ""),
+        "proof_gates": list(item.get("proof_gates") or []),
+        "local_only": bool(item.get("local_only", True)),
+        "no_network": bool(item.get("no_network", True)),
+        "no_write": bool(item.get("no_write", True)),
+        "writes_enabled": bool(item.get("writes_enabled", False)),
+        "live_proof_required": bool(item.get("live_proof_required", True)),
+    }
+
+
+def _academy_rollup_status(
+    *,
+    recipe: Mapping[str, Any],
+    deployments: Sequence[Mapping[str, Any]],
+    agents: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    public_agents = [_academy_agent_public(agents[str(dep.get("deployment_id") or "")]) for dep in deployments if str(dep.get("deployment_id") or "") in agents]
+    trained = [item for item in public_agents if item["status"] not in {"skipped", "not_started"}]
+    skipped = [item for item in public_agents if item["status"] == "skipped"]
+    pending = max(0, len(deployments) - len(public_agents))
+    source_count = sum(int(item.get("source_count") or 0) for item in trained)
+    proof_gates = sorted({gate for item in trained for gate in item.get("proof_gates", [])})
+    if trained:
+        status = "ready_for_review"
+        summary = (
+            f"Academy Training staged for {len(trained)} of {len(deployments)} Agent(s); "
+            f"{len(skipped)} skipped, {pending} pending. Provider and Hermes proof remain required before graduation."
+        )
+    elif skipped and not pending:
+        status = "skipped"
+        summary = "Captain skipped Academy Training for every Agent in this Crew."
+    else:
+        status = "not_started"
+        summary = "No Academy corpus has been staged for this active Crew Recipe."
+    first = trained[0] if trained else {}
+    return {
+        "status": status,
+        "summary": summary,
+        "manifest_id": str(first.get("manifest_id") or ""),
+        "role_id": "",
+        "role_title": str(first.get("agent_title") or ""),
+        "topic": "",
+        "source_count": source_count,
+        "lane_count": max((int(item.get("lane_count") or 0) for item in trained), default=0),
+        "lanes": [],
+        "quality": {"accepted": source_count, "low_quality": 0, "min_score": 70, "average_score": 0},
+        "curriculum_status": "ready_for_review" if trained else "not_started",
+        "application_status": "ready_for_review" if trained else "not_started",
+        "application_plan_id": str(first.get("application_plan_id") or ""),
+        "application_agent_id": str(first.get("deployment_id") or ""),
+        "application_role_id": "",
+        "continuing_education_status": "ready_for_review" if trained else "not_started",
+        "weekly_review_status": "ready_for_review" if trained else "not_started",
+        "evaluation_status": "ready_for_review" if trained else "not_started",
+        "graduation_status": "blocked_by_live_proof" if trained else status,
+        "agent_update_status": "identity_projected" if trained else "not_started",
+        "next_review_at": "",
+        "source_state_counts": {
+            "unchanged": source_count,
+            "changed": 0,
+            "stale": 0,
+            "superseded": 0,
+            "removed": 0,
+            "tombstoned": 0,
+            "deleted_tombstoned": 0,
+            "review_needed": 0,
+        },
+        "review_needed_count": 0,
+        "blocked_source_count": 0,
+        "blocked_source_ids": [],
+        "review_required_source_ids": [],
+        "proof_gates": proof_gates or ["PG-PROVIDER", "PG-HERMES"],
+        "next_actions": [
+            "Review staged Academy plans for each Agent.",
+            "Run provider and Hermes proof before graduating trained specialists.",
+        ],
+        "review_surfaces": ["Crew Training", "dashboard", "Operator Raven"],
+        "local_only": True,
+        "no_network": True,
+        "no_write": True,
+        "writes_enabled": False,
+        "live_proof_required": bool(trained),
+        "review_persisted": True,
+        "recipe_id": str(recipe.get("recipe_id") or ""),
+        "recipe_applied_at": str(recipe.get("applied_at") or ""),
+        "agent_count": len(deployments),
+        "trained_agent_count": len(trained),
+        "pending_agent_count": pending,
+        "skipped_agent_count": len(skipped),
+        "agents": public_agents,
+    }
+
+
+def _persist_academy_agent_status(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment: Mapping[str, Any],
+    agent_status: Mapping[str, Any],
+    actor_id: str = "",
+    reason: str = "Academy Agent Training staged",
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    current = current_crew_recipe(conn, user_id=clean_user)
+    if current is None:
+        raise ArcLinkCrewRecipeError("Academy Training requires an active Crew Recipe")
+    deployments = _deployment_rows(conn, clean_user)
+    overlay = dict(current.get("soul_overlay") or {})
+    agents = _academy_agents_from_status(overlay.get("academy_training") if isinstance(overlay, Mapping) else None)
+    clean_status = _academy_agent_public(agent_status)
+    deployment_id = str(deployment.get("deployment_id") or clean_status.get("deployment_id") or "").strip()
+    clean_status["deployment_id"] = deployment_id
+    agents[deployment_id] = clean_status
+    rollup = _academy_rollup_status(recipe=current, deployments=deployments, agents=agents)
+    overlay["academy_training"] = rollup
+    reject_secret_material(overlay, label="ArcLink Crew Academy overlay", error_cls=ArcLinkCrewRecipeError)
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_crew_recipes
+        SET soul_overlay_json = ?
+        WHERE recipe_id = ? AND user_id = ? AND status = 'active'
+        """,
+        (
+            json_dumps_safe(overlay, label="ArcLink Crew Academy overlay", error_cls=ArcLinkCrewRecipeError),
+            str(current["recipe_id"]),
+            clean_user,
+        ),
+    )
+    metadata = _json_loads(str(deployment.get("metadata_json") or "{}"), {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["academy_training"] = clean_status
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?, updated_at = ?
+        WHERE deployment_id = ? AND user_id = ?
+        """,
+        (_json_dumps(metadata), now, deployment_id, clean_user),
+    )
+    audit_metadata = {
+        "recipe_id": str(current["recipe_id"]),
+        "deployment_id": deployment_id,
+        "agent_name": str(clean_status.get("agent_name") or ""),
+        "agent_title": str(clean_status.get("agent_title") or ""),
+        "manifest_id": str(clean_status.get("manifest_id") or ""),
+        "status": str(clean_status.get("status") or ""),
+        "source_count": int(clean_status.get("source_count") or 0),
+        "graduation_status": str(clean_status.get("graduation_status") or ""),
+        "local_only": True,
+        "no_network": True,
+        "no_write": True,
+        "writes_enabled": False,
+    }
+    clean_actor = str(actor_id or clean_user).strip()
+    append_arclink_audit(
+        conn,
+        action="crew_academy_agent_training_staged",
+        actor_id=clean_actor,
+        target_kind="deployment",
+        target_id=deployment_id,
+        reason=str(reason or "Academy Agent Training staged")[:240],
+        metadata=audit_metadata,
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="crew_academy_agent_training_staged",
+        metadata=audit_metadata,
+        commit=False,
+    )
+    conn.commit()
+    try:
+        from arclink_provisioning import project_arclink_deployment_identity_context
+
+        projection = project_arclink_deployment_identity_context(
+            conn,
+            deployment_id=deployment_id,
+            source="academy_training",
+        )
+    except Exception as exc:  # noqa: BLE001 - projection is best-effort and audited above.
+        projection = {"status": "skipped", "reason": str(exc)[:160]}
+    return {
+        "academy_training": crew_academy_status(conn, user_id=clean_user),
+        "agent_academy_training": clean_status,
+        "recipe": current_crew_recipe(conn, user_id=clean_user),
+        "identity_projection": projection,
+        "mutation_performed": True,
+        "workspace_mutation_performed": False,
+        "live_proof_required": bool(clean_status.get("live_proof_required", True)),
+    }
+
+
+def stage_crew_academy_agent_training(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    actor_id: str = "",
+    reason: str = "Academy Agent Training staged",
+) -> dict[str, Any]:
+    artifacts = build_crew_academy_artifacts_for_agent(
+        conn,
+        user_id=user_id,
+        deployment_id=deployment_id,
+    )
+    deployment = artifacts["deployment"]
+    staged_at = utc_now_iso()
+    agent_status = _academy_status_for_agent(
+        deployment=deployment,
+        manifest=artifacts["manifest"],
+        application_plan=artifacts["application_plan"],
+        continuing_education_plan=artifacts["continuing_education_plan"],
+        graduation_gate=artifacts["graduation_gate"],
+        staged_at=staged_at,
+    )
+    return _persist_academy_agent_status(
+        conn,
+        user_id=user_id,
+        deployment=deployment,
+        agent_status=agent_status,
+        actor_id=actor_id,
+        reason=reason,
+    )
+
+
+def skip_crew_academy_agent_training(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+    actor_id: str = "",
+    reason: str = "Academy Agent Training skipped",
+) -> dict[str, Any]:
+    deployment = _deployment_row_for_user(conn, user_id=user_id, deployment_id=deployment_id)
+    agent_status = _academy_status_for_agent(
+        deployment=deployment,
+        manifest=None,
+        application_plan=None,
+        continuing_education_plan=None,
+        graduation_gate=None,
+        staged_at=utc_now_iso(),
+        skipped=True,
+    )
+    return _persist_academy_agent_status(
+        conn,
+        user_id=user_id,
+        deployment=deployment,
+        agent_status=agent_status,
+        actor_id=actor_id,
+        reason=reason,
+    )
 
 
 def _pod_count_and_agents(deployments: list[Mapping[str, Any]]) -> tuple[int, str, str]:

@@ -252,6 +252,18 @@ def project_arclink_deployment_identity_context(
             "identity_source": str(source or "agent_identity_update"),
         }
     )
+    academy_training = metadata.get("academy_training") if isinstance(metadata.get("academy_training"), Mapping) else {}
+    if academy_training:
+        payload.update(
+            {
+                "academy_status": str(academy_training.get("status") or "").strip(),
+                "academy_summary": str(academy_training.get("summary") or "").strip(),
+                "academy_role_title": str(academy_training.get("agent_title") or academy_training.get("role_title") or "").strip(),
+                "academy_manifest_id": str(academy_training.get("manifest_id") or "").strip(),
+                "academy_source_count": str(academy_training.get("source_count") or "").strip(),
+                "academy_graduation_status": str(academy_training.get("graduation_status") or "").strip(),
+            }
+        )
     recipe_row = conn.execute(
         """
         SELECT soul_overlay_json

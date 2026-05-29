@@ -31,7 +31,15 @@ from arclink_control import (
     utc_after_seconds_iso,
     utc_now_iso,
 )
-from arclink_crew_recipes import ArcLinkCrewRecipeError, apply_crew_recipe, preview_crew_recipe, whats_changed
+from arclink_crew_recipes import (
+    ArcLinkCrewRecipeError,
+    apply_crew_recipe,
+    crew_academy_status,
+    preview_crew_recipe,
+    skip_crew_academy_agent_training,
+    stage_crew_academy_agent_training,
+    whats_changed,
+)
 from arclink_onboarding import (
     ARCLINK_ONBOARDING_ACTIVE_STATUSES,
     answer_arclink_onboarding_question,
@@ -164,11 +172,31 @@ ARCLINK_PUBLIC_BOT_RETIRE_CANCEL_COMMANDS = frozenset(
     }
 )
 ARCLINK_PUBLIC_BOT_TRAIN_CREW_COMMANDS = frozenset({"/train-crew", "/train_crew", "train-crew", "train crew"})
+ARCLINK_PUBLIC_BOT_ACADEMY_COMMANDS = (
+    "/academy",
+    "/academy-training",
+    "/academy_training",
+    "/quick-training",
+    "/quick_training",
+    "/quick-briefing",
+    "/quick_briefing",
+    "/quick-align",
+    "/quick_align",
+    "/quick-huddle",
+    "/quick_huddle",
+    "academy",
+    "academy training",
+    "quick training",
+    "quick briefing",
+    "quick align",
+    "quick huddle",
+)
 ARCLINK_PUBLIC_BOT_WHATS_CHANGED_COMMANDS = frozenset({"/whats-changed", "/whats_changed", "whats-changed", "what changed", "what's changed"})
 ARCLINK_PUBLIC_BOT_CREW_CONFIRM_COMMANDS = frozenset({"/confirm", "confirm", "apply", "/apply"})
 ARCLINK_PUBLIC_BOT_CREW_REGENERATE_COMMANDS = frozenset({"/regenerate", "regenerate", "try again", "/retry"})
 ARCLINK_PUBLIC_BOT_REFUEL_COMMANDS = ("/top-up", "/top_up", "/refuel", "/credits", "top-up", "top up", "refuel", "credits")
 CREW_TRAINING_WORKFLOW_KEYS = ("public_bot_workflow", "crew_training", "crew_training_updated_at")
+ACADEMY_TRAINING_WORKFLOW_KEYS = ("public_bot_workflow", "academy_training", "academy_training_updated_at")
 RETIRE_AGENT_WORKFLOW_KEYS = ("public_bot_workflow", "retire_agent", "retire_agent_updated_at")
 CREW_TREATMENT_CHOICES = {
     "captain": "Like a Captain - formal, ready to take orders",
@@ -446,6 +474,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         description="Run Crew Training for your ArcLink Crew",
     ),
     ArcLinkPublicBotAction(
+        key="academy",
+        telegram_command="academy",
+        discord_command="academy",
+        description="Stage Academy specialist training for your Agents",
+    ),
+    ArcLinkPublicBotAction(
         key="whats_changed",
         telegram_command="whats_changed",
         discord_command="whats-changed",
@@ -647,6 +681,22 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return "/agents"
     if verb in {"train", "train_crew", "train-crew", "crew_training"}:
         return "/train-crew"
+    if verb in {
+        "academy",
+        "academy_training",
+        "academy-training",
+        "train_academy",
+        "train-academy",
+        "quick_training",
+        "quick-training",
+        "quick_briefing",
+        "quick-briefing",
+        "quick_align",
+        "quick-align",
+        "quick_huddle",
+        "quick-huddle",
+    }:
+        return f"/academy {tail}".strip()
     if verb in {"whats_changed", "whats-changed", "changed", "changes"}:
         return "/whats-changed"
     if verb in {"top_up", "top-up", "topup", "refuel", "credits"}:
@@ -701,6 +751,10 @@ def _retire_agent_command_value(message: str, command: str) -> str | None:
         aliases=frozenset(ARCLINK_PUBLIC_BOT_RETIRE_AGENT_COMMANDS),
         prefixes=ARCLINK_PUBLIC_BOT_RETIRE_AGENT_TARGET_PREFIXES,
     )
+
+
+def _academy_command_value(message: str, command: str) -> str | None:
+    return _value_for_named_command(message, command, ARCLINK_PUBLIC_BOT_ACADEMY_COMMANDS)
 
 
 def _raven_name_command_value(message: str, command: str) -> str | None:
@@ -3930,13 +3984,14 @@ def _agents_reply(
             "Each Agent has one Helm link. Drive, Code, and Terminal live inside that Hermes dashboard as plugins; you do not need separate control links.",
             "Your dashboard username/password works across the Crew control interfaces. Use `/credentials` if you need the handoff again.",
             "",
-            "Use `/train-crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
+            "Use `/train-crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/academy` to stage subject-matter specialist training for one Agent or the whole Crew. Use `/name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
         ]
     )
     buttons: list[ArcLinkPublicBotButton] = open_buttons[:4]
     buttons.extend(
         [
             _button("Train My Crew", command="/train-crew", style="secondary"),
+            _button("Academy", command="/academy", style="secondary"),
             _button("Credentials", command="/credentials", style="secondary"),
         ]
     )
@@ -4327,6 +4382,39 @@ def _clear_crew_training_workflow(conn: sqlite3.Connection, session: Mapping[str
     )
 
 
+def _academy_training_data(session: Mapping[str, Any] | None) -> dict[str, Any]:
+    payload = _metadata(session)
+    data = payload.get("academy_training")
+    return dict(data) if isinstance(data, Mapping) else {}
+
+
+def _academy_training_update(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    workflow: str,
+    data: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={
+            "public_bot_workflow": workflow,
+            "academy_training": dict(data),
+            "academy_training_updated_at": utc_now_iso(),
+        },
+    )
+
+
+def _clear_academy_training_workflow(conn: sqlite3.Connection, session: Mapping[str, Any]) -> dict[str, Any]:
+    return _update_session_metadata(
+        conn,
+        session_id=str(session["session_id"]),
+        updates={},
+        clear=ACADEMY_TRAINING_WORKFLOW_KEYS,
+    )
+
+
 def _clear_retire_agent_workflow_if_open(conn: sqlite3.Connection, session: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
     if not session or not str(_metadata(session).get("public_bot_workflow") or "").startswith("retire_agent_"):
         return session
@@ -4529,8 +4617,363 @@ def _crew_training_confirm_reply(
         ),
         session=updated,
         deployment=deployment,
-        buttons=tuple([*open_buttons[:3], _button("Show My Crew", command="/agents", style="secondary"), _button("What Changed", command="/whats-changed", style="secondary")]),
+        buttons=tuple([
+            *open_buttons[:2],
+            _button("Quick Training", command="/academy", style="secondary"),
+            _button("Show My Crew", command="/agents", style="secondary"),
+            _button("What Changed", command="/whats-changed", style="secondary"),
+        ]),
     )
+
+
+def _academy_training_buttons(deployments: list[Mapping[str, Any]]) -> tuple[ArcLinkPublicBotButton, ...]:
+    buttons: list[ArcLinkPublicBotButton] = [_button("Train All", command="/academy all")]
+    for index, item in enumerate(deployments[:4], start=1):
+        label = _agent_label(item, index=index, conn=None)
+        buttons.append(_button(label[:32], command=f"/academy {item.get('deployment_id')}", style="secondary"))
+    buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
+    return tuple(buttons[:8])
+
+
+def _academy_status_lines(status: Mapping[str, Any]) -> list[str]:
+    agents = status.get("agents") if isinstance(status.get("agents"), list) else []
+    lines = [
+        f"Academy: {status.get('status') or 'not_started'}",
+        str(status.get("summary") or ""),
+    ]
+    for item in agents[:8]:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("agent_name") or item.get("deployment_id") or "Agent")
+        title = str(item.get("agent_title") or "").strip()
+        status_label = str(item.get("status") or "not_started")
+        source_count = int(item.get("source_count") or 0)
+        suffix = f" — {title}" if title else ""
+        lines.append(f"- {name}{suffix}: {status_label}, {source_count} source(s)")
+    return [line for line in lines if line]
+
+
+def _academy_training_start_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+    requested_value: str = "",
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or (session or {}).get("user_id") or "").strip()
+    deployments = _deployments_for_user(conn, user_id) if user_id else []
+    if session is None or not user_id or not deployments:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_training_not_ready",
+            reply="Academy Training opens after checkout creates your ArcPod roster.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Take Me Aboard", command="/packages"),),
+        )
+    try:
+        status = crew_academy_status(conn, user_id=user_id)
+        current_ready = str(status.get("recipe_id") or "").strip()
+    except Exception:
+        current_ready = ""
+    if not current_ready:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_training_needs_crew_recipe",
+            reply=(
+                "Academy Training needs an active Crew Recipe first. "
+                "Run Crew Training so I know each Agent's role, mission, and treatment, then come back to `/academy`."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Train My Crew", command="/train-crew"),),
+        )
+    clean_value = str(requested_value or "").strip()
+    if clean_value:
+        if clean_value.casefold() in {"all", "crew", "everyone", "each"}:
+            data = {
+                "queue": [str(item.get("deployment_id") or "") for item in deployments if str(item.get("deployment_id") or "").strip()],
+                "index": 0,
+                "trained": [],
+                "skipped": [],
+            }
+            updated = _academy_training_update(conn, session, workflow="academy_training_walk", data=data)
+            return _academy_training_walk_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                data=data,
+            )
+        match = _find_agent_deployment(deployments, clean_value, conn=conn)
+        if match is not None:
+            item, label = match
+            return _academy_training_stage_one_reply(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                target=item,
+                label=label,
+                clear_workflow=False,
+            )
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_training_agent_not_found",
+            reply="That Agent is not on your Crew roster. Pick one of the buttons or use `/agents` to inspect the names.",
+            session=session,
+            deployment=deployment,
+            buttons=_academy_training_buttons(deployments),
+        )
+    updated = _academy_training_update(conn, session, workflow="academy_training_select", data={})
+    count_label = "one Agent" if len(deployments) == 1 else f"{len(deployments)} Agents"
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_select_agent",
+        reply=(
+            f"Academy Training is open for {count_label}.\n\n"
+            "This stages a role-specific specialist corpus, curriculum, source map, SOUL overlay plan, skill/tool recipes, "
+            "practice tasks, and continuing-education review for each Agent. It is local and governed: no live crawling, "
+            "no raw workspace writes, and graduation still needs provider + Hermes proof.\n\n"
+            "Pick one Agent, or Train All to walk the Crew one by one with Skip available. You can also call this lane Quick Training, Quick Briefing, Quick Align, or Quick Huddle."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=_academy_training_buttons(deployments),
+    )
+
+
+def _academy_training_stage_one_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    target: Mapping[str, Any],
+    label: str,
+    clear_workflow: bool,
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or target.get("user_id") or "").strip()
+    try:
+        result = stage_crew_academy_agent_training(
+            conn,
+            user_id=user_id,
+            deployment_id=str(target.get("deployment_id") or ""),
+            actor_id=user_id,
+        )
+    except (ArcLinkCrewRecipeError, KeyError) as exc:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_training_failed",
+            reply=f"Academy Training could not stage `{label}`: {exc}",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Academy", command="/academy", style="secondary"),),
+        )
+    updated = _clear_academy_training_workflow(conn, session) if clear_workflow else session
+    agent_status = result.get("agent_academy_training") or {}
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_agent_staged",
+        reply=(
+            f"Academy staged for {label}.\n\n"
+            f"Status: {agent_status.get('status') or 'ready_for_review'}\n"
+            f"Sources: {agent_status.get('source_count') or 0}\n"
+            f"Graduation: {agent_status.get('graduation_status') or 'blocked_by_live_proof'}\n\n"
+            "I projected the specialist identity context for this Agent. The staged plan covers curriculum, source map, lesson cards, "
+            "SOUL overlay sections, qmd/memory seed intents, approved skill/tool recipes, practice tasks, and weekly review. "
+            "Live provider/Hermes proof is still required before calling the Agent graduated."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(
+            _button("Academy", command="/academy", style="secondary"),
+            _button("Show My Crew", command="/agents", style="secondary"),
+        ),
+    )
+
+
+def _academy_training_skip_one(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_id: str,
+) -> dict[str, Any]:
+    return skip_crew_academy_agent_training(
+        conn,
+        user_id=user_id,
+        deployment_id=deployment_id,
+        actor_id=user_id,
+    )
+
+
+def _academy_training_walk_prompt(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    deployments = _deployments_for_user(conn, user_id) if user_id else []
+    queue = [str(item or "").strip() for item in (data.get("queue") if isinstance(data.get("queue"), list) else []) if str(item or "").strip()]
+    index = int(data.get("index") or 0)
+    if index >= len(queue):
+        updated = _clear_academy_training_workflow(conn, session)
+        status = crew_academy_status(conn, user_id=user_id)
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_training_walk_complete",
+            reply="\n".join(["Academy Training pass complete.", "", *_academy_status_lines(status)]),
+            session=updated,
+            deployment=deployment,
+            buttons=(
+                _button("Show My Crew", command="/agents", style="secondary"),
+                _button("Academy", command="/academy", style="secondary"),
+            ),
+        )
+    current_id = queue[index]
+    match = _find_agent_deployment(deployments, current_id, conn=conn)
+    if match is None:
+        next_data = dict(data)
+        next_data["index"] = index + 1
+        updated = _academy_training_update(conn, session, workflow="academy_training_walk", data=next_data)
+        return _academy_training_walk_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=updated,
+            deployment=deployment,
+            data=next_data,
+        )
+    item, label = match
+    trained = len(data.get("trained") or [])
+    skipped = len(data.get("skipped") or [])
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_walk_prompt",
+        reply=(
+            f"Academy pass {index + 1}/{len(queue)}.\n\n"
+            f"Train {label} as `{item.get('agent_title') or 'specialist'}`?\n\n"
+            f"Done so far: {trained} trained, {skipped} skipped."
+        ),
+        session=session,
+        deployment=deployment,
+        buttons=(
+            _button("Train This Agent", command="train"),
+            _button("Skip", command="skip", style="secondary"),
+            _button("Cancel", command="/cancel", style="secondary"),
+        ),
+    )
+
+
+def _handle_academy_training_workflow(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    message: str,
+    command: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    workflow: str,
+) -> ArcLinkPublicBotTurn | None:
+    data = _academy_training_data(session)
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    deployments = _deployments_for_user(conn, user_id) if user_id else []
+    if workflow == "academy_training_select":
+        value = _academy_command_value(message, command)
+        if value is None:
+            value = message.strip()
+        return _academy_training_start_reply(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            requested_value=value,
+        )
+    if workflow == "academy_training_walk":
+        queue = [str(item or "").strip() for item in (data.get("queue") if isinstance(data.get("queue"), list) else []) if str(item or "").strip()]
+        index = int(data.get("index") or 0)
+        if index >= len(queue):
+            return _academy_training_walk_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
+            )
+        deployment_id = queue[index]
+        match = _find_agent_deployment(deployments, deployment_id, conn=conn)
+        next_data = dict(data)
+        next_data["index"] = index + 1
+        if command in {"train", "yes", "y", "/train"}:
+            if match is not None:
+                item, _label = match
+                stage_crew_academy_agent_training(
+                    conn,
+                    user_id=user_id,
+                    deployment_id=str(item.get("deployment_id") or deployment_id),
+                    actor_id=user_id,
+                )
+                trained = list(next_data.get("trained") or [])
+                trained.append(str(item.get("deployment_id") or deployment_id))
+                next_data["trained"] = trained
+            updated = _academy_training_update(conn, session, workflow="academy_training_walk", data=next_data)
+            return _academy_training_walk_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                data=next_data,
+            )
+        if command in {"skip", "no", "n", "/skip"}:
+            if match is not None:
+                item, _label = match
+                _academy_training_skip_one(
+                    conn,
+                    user_id=user_id,
+                    deployment_id=str(item.get("deployment_id") or deployment_id),
+                )
+                skipped = list(next_data.get("skipped") or [])
+                skipped.append(str(item.get("deployment_id") or deployment_id))
+                next_data["skipped"] = skipped
+            updated = _academy_training_update(conn, session, workflow="academy_training_walk", data=next_data)
+            return _academy_training_walk_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                data=next_data,
+            )
+        return _academy_training_walk_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=data,
+        )
+    return None
 
 
 def _whats_changed_reply(
@@ -4597,7 +5040,10 @@ def _handle_active_workflow(
             workflow=workflow,
         )
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
-        updated = _clear_crew_training_workflow(conn, session)
+        if workflow.startswith("academy_training_"):
+            updated = _clear_academy_training_workflow(conn, session)
+        else:
+            updated = _clear_crew_training_workflow(conn, session)
         return _turn(
             channel=channel,
             channel_identity=channel_identity,
@@ -4612,6 +5058,17 @@ def _handle_active_workflow(
                 _button("Take Me Aboard", command="/packages"),
                 _button("Check Status", command="/status", style="secondary"),
             ),
+        )
+    if workflow.startswith("academy_training_"):
+        return _handle_academy_training_workflow(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            message=message,
+            command=command,
+            session=session,
+            deployment=deployment,
+            workflow=workflow,
         )
     if workflow.startswith("crew_training_"):
         data = _crew_training_data(session)
@@ -5178,6 +5635,19 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             session=session,
             deployment=deployment,
+        )
+
+    academy_value = _academy_command_value(message, command)
+    if academy_value is not None:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        session = _clear_retire_agent_workflow_if_open(conn, session)
+        return _academy_training_start_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+            requested_value=academy_value,
         )
 
     if command in ARCLINK_PUBLIC_BOT_WHATS_CHANGED_COMMANDS:

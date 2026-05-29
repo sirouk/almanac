@@ -1942,6 +1942,64 @@ def test_public_bot_train_crew_flow_and_whats_changed() -> None:
     print("PASS test_public_bot_train_crew_flow_and_whats_changed")
 
 
+def test_public_bot_academy_training_walks_crew_with_skip() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_academy_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_academy_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:academy",
+        prefix="arc-academy",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_academy_second",
+        user_id=seeded["user_id"],
+        prefix="arc-academy-two",
+        base_domain="control.example.ts.net",
+        agent_name="Beacon",
+        agent_title="Research Specialist",
+        status="active",
+        metadata={"selected_plan_id": "sovereign"},
+    )
+    conn.commit()
+
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/train-crew")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="founder")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="ship an expert crew")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="peer")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="Frontier")
+    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="development")
+    applied = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="confirm")
+    expect(applied.action == "crew_training_applied", str(applied))
+    expect(any(button.label == "Quick Training" for button in applied.buttons), str(applied.buttons))
+
+    start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy")
+    expect(start.action == "academy_training_select_agent", str(start))
+    expect("role-specific specialist corpus" in start.reply, start.reply)
+    quick = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/quick-training")
+    expect(quick.action == "academy_training_select_agent", str(quick))
+    walk = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy all")
+    expect(walk.action == "academy_training_walk_prompt", str(walk))
+    trained = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="train")
+    expect(trained.action == "academy_training_walk_prompt", str(trained))
+    skipped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="skip")
+    expect(skipped.action == "academy_training_walk_complete", str(skipped))
+    expect("staged for 1 of 2" in skipped.reply and "1 skipped" in skipped.reply, skipped.reply)
+
+    current = conn.execute("SELECT soul_overlay_json FROM arclink_crew_recipes WHERE user_id = ? AND status = 'active'", (seeded["user_id"],)).fetchone()
+    overlay = json.loads(current["soul_overlay_json"])
+    academy = overlay["academy_training"]
+    expect(academy["trained_agent_count"] == 1, str(academy))
+    expect(academy["skipped_agent_count"] == 1, str(academy))
+    expect(len(academy["agents"]) == 2, str(academy))
+    audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
+    expect("crew_academy_agent_training_staged" in audit_actions, str(audit_actions))
+    print("PASS test_public_bot_academy_training_walks_crew_with_skip")
+
+
 def main() -> int:
     test_public_bot_turns_share_onboarding_contract_and_open_fake_checkout()
     test_public_bot_cancel_closes_open_checkout_without_creating_new_session()
@@ -1977,8 +2035,9 @@ def main() -> int:
     test_public_bot_can_update_wrapped_frequency()
     test_public_bot_greets_by_captured_display_name_and_offers_checkout_buttons()
     test_public_bot_train_crew_flow_and_whats_changed()
+    test_public_bot_academy_training_walks_crew_with_skip()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
-    print("PASS all 33 ArcLink public bot tests")
+    print("PASS all 34 ArcLink public bot tests")
     return 0
 
 

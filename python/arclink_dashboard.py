@@ -901,10 +901,11 @@ def _control_notion_webhook_public_url() -> str:
     ).strip().lower().strip(".")
     if not host:
         return ""
+    # This is the shared control-node callback, not a deployment Helm/dashboard
+    # URL. TAILSCALE_SERVE_PORT can be a per-agent app port such as 8444.
     port = str(
         os.environ.get("ARCLINK_TAILSCALE_HTTPS_PORT")
         or os.environ.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT")
-        or os.environ.get("TAILSCALE_SERVE_PORT")
         or "443"
     ).strip()
     if port and port != "443":

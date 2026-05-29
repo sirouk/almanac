@@ -1797,9 +1797,12 @@ def test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port() 
     with temp_env(
         {
             "ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None,
-            "ARCLINK_TAILSCALE_CONTROL_URL": "https://s1396.tail77f45e.ts.net",
+            "ARCLINK_TAILSCALE_CONTROL_URL": None,
+            "ARCLINK_TAILSCALE_DNS_NAME": "s1396.tail77f45e.ts.net",
             "ARCLINK_TAILSCALE_NOTION_PATH": "/notion/webhook",
-            "ARCLINK_TAILSCALE_HTTPS_PORT": "443",
+            "ARCLINK_TAILSCALE_HTTPS_PORT": None,
+            "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT": None,
+            "TAILSCALE_SERVE_PORT": "8444",
         }
     ):
         notion = bots.handle_arclink_public_bot_turn(

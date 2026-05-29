@@ -306,6 +306,11 @@ services:
     environment:
       <<: *arclink-operator-env
       ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+      # The setup one-shot registers the operator's scoped router key. It needs
+      # the same hash pepper the router uses, but the long-running operator
+      # gateway/dashboard still must not inherit broad control secrets.
+      ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER: ${ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER:-}
+      ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}
     command: ["./bin/install-operator-hermes-home.sh"]
     volumes:
       - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator

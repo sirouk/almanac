@@ -3908,6 +3908,10 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "one-shot setup must mount the control state DIRECTORY so its router-key write shares the WAL/-shm the router reads (a single-file mount silently loses the write)")
     expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in setup_block,
            "one-shot setup must scope the control DB env to setup only")
+    expect("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER: ${ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER:-}" in setup_block,
+           "one-shot setup must hash the operator router key with the same optional router pepper as the router")
+    expect("ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}" in setup_block,
+           "one-shot setup must hash the operator router key with the same session pepper fallback as the router")
     expect("ARCLINK_SQLITE_JOURNAL_MODE: MEMORY" not in setup_block,
            "one-shot setup must not force MEMORY journal; it shares the control DB's WAL like control-api")
     expect("condition: service_completed_successfully" in gateway_block and "condition: service_completed_successfully" in dashboard_block,

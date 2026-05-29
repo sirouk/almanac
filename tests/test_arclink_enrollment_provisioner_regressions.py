@@ -1305,6 +1305,25 @@ def test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode() -> 
             os.environ.update(old_env)
 
 
+def test_entrypoint_root_requirement_allows_docker_supervisor() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_root_gate_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ.pop("ARCLINK_DOCKER_MODE", None)
+        expect(provisioner._requires_root_entrypoint() is True, "bare-metal provisioner entrypoint should require root")
+        os.environ["ARCLINK_DOCKER_MODE"] = "1"
+        expect(
+            provisioner._requires_root_entrypoint() is False,
+            "Docker control-node supervisor runs unprivileged and delegates host mutation to broker containers",
+        )
+        print("PASS test_entrypoint_root_requirement_allows_docker_supervisor")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
 def test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1471,6 +1490,7 @@ def main() -> int:
     test_operator_action_finish_retries_transient_sqlite_lock()
     test_run_host_upgrade_seeds_home_when_missing()
     test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode()
+    test_entrypoint_root_requirement_allows_docker_supervisor()
     test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode()
     test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode()
     test_install_system_services_seeds_home_in_root_units()

@@ -720,6 +720,14 @@ def _docker_mode() -> bool:
     return str(os.environ.get("ARCLINK_DOCKER_MODE") or "").strip().lower() in {"1", "true", "yes"}
 
 
+def _requires_root_entrypoint() -> bool:
+    # Bare-metal provisioning mutates host users/services directly and must run
+    # as root. Docker control-node provisioning delegates those mutations to
+    # scoped helper/broker containers, while the supervisor loop itself runs as
+    # the unprivileged ArcLink service user.
+    return not _docker_mode()
+
+
 def _docker_agent_home_root(cfg: Config) -> Path:
     configured = str(os.environ.get("ARCLINK_DOCKER_AGENT_HOME_ROOT") or "").strip()
     if configured:
@@ -3240,7 +3248,7 @@ def _run_one(conn, cfg: Config, row: dict) -> None:
 
 def main() -> None:
     args = parse_args()
-    if os.geteuid() != 0:
+    if _requires_root_entrypoint() and os.geteuid() != 0:
         raise SystemExit("Run this as root.")
     cfg = Config.from_env()
     with connect_db_with_retry(cfg) as conn:

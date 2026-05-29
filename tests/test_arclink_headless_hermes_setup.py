@@ -240,6 +240,9 @@ def test_identity_only_writes_soul_and_dual_surface_prefill_config() -> None:
         expect("Code tab: https://kor.example.test/code" in soul_text, soul_text)
         expect("Shared Notion root: https://www.notion.so/Kor-Root-00000000000040008000000000000001" in soul_text, soul_text)
         expect("Notion callback for this ArcPod: https://kor.example.test/notion/webhook" in soul_text, soul_text)
+        expect("Learn missing preferences over time" in soul_text, soul_text)
+        expect("If `Kora Reed` is already a usable human name" in soul_text, soul_text)
+        expect("do not ask what to call them in the first greeting" in soul_text, soul_text)
         expect("$" not in soul_text, soul_text)
 
         identity_state = json.loads(identity_state_path.read_text(encoding="utf-8"))

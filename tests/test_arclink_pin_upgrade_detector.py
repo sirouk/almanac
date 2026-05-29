@@ -199,6 +199,9 @@ def test_detector_adds_operator_buttons_for_pinned_component_digest() -> None:
                 result = detector.run_detector(conn, cfg)
                 expect(result["notified"], str(result))
                 expect(result["included"] == ["hermes-agent", "hermes-docs"], str(result["included"]))
+                expect("Action paths:" in result["digest"], result["digest"])
+                expect("/upgrade queues the standard ArcLink upgrade/repair" in result["digest"], result["digest"])
+                expect("/pin_upgrade hermes" in result["digest"], result["digest"])
                 expect(result["digest"].count("./deploy.sh hermes-upgrade") == 1, result["digest"])
 
                 row = conn.execute(

@@ -544,7 +544,43 @@ def _build_digest(included: list[tuple[CheckResult, dict[str, Any]]],
             return f"{label} [{short}]"
         return short
 
+    def operator_component_name(component: str) -> str:
+        if component in {"hermes-agent", "hermes-docs"}:
+            return "hermes"
+        return component
+
+    approve_commands: list[str] = []
+    chat_commands: list[str] = []
+    for r, _state in included:
+        operator_component = operator_component_name(r.component)
+        chat_commands.append(f"/pin_upgrade {operator_component}")
+        if r.kind == "git-commit":
+            approve_commands.append(f"./deploy.sh {operator_component}-upgrade")
+        elif r.kind == "container-image":
+            approve_commands.append(f"./deploy.sh {r.component}-upgrade --tag <tag>")
+        elif r.kind == "git-tag":
+            approve_commands.append(f"./deploy.sh {r.component}-upgrade")
+        elif r.kind in ("npm", "release-asset"):
+            approve_commands.append(f"./deploy.sh {r.component}-upgrade")
+        elif r.kind == "nvm-version":
+            approve_commands.append(f"./deploy.sh {r.component}-upgrade --version <vX.Y.Z>")
+    approve_commands = list(dict.fromkeys(approve_commands))
+    chat_commands = list(dict.fromkeys(chat_commands))
+
     lines = ["Pinned-component upgrade digest:"]
+    lines.append("")
+    lines.append("Action paths:")
+    lines.append("  - Chat: /upgrade queues the standard ArcLink upgrade/repair from this operator channel.")
+    if chat_commands:
+        lines.append(
+            "  - This pinned-component upgrade: tap Install, or send "
+            + " / ".join(chat_commands)
+            + "."
+        )
+    for command in approve_commands:
+        lines.append(f"  - Host CLI: {command}")
+    lines.append("")
+
     for r, state in included:
         notify_count = int(state.get("notify_count") or 0)
         attempt = f"#{notify_count + 1} of {notify_limit}"
@@ -570,22 +606,6 @@ def _build_digest(included: list[tuple[CheckResult, dict[str, Any]]],
         )
         for r in silenced:
             lines.append(f"  - {r.component}: target {target_display(r)}")
-    lines.append("")
-    lines.append("Approve via:")
-    approve_commands: list[str] = []
-    for r, _state in included:
-        if r.kind == "git-commit":
-            approve_commands.append(f"./deploy.sh {r.component.split('-')[0]}-upgrade")
-        elif r.kind == "container-image":
-            approve_commands.append(f"./deploy.sh {r.component}-upgrade --tag <tag>")
-        elif r.kind == "git-tag":
-            approve_commands.append(f"./deploy.sh {r.component}-upgrade")
-        elif r.kind in ("npm", "release-asset"):
-            approve_commands.append(f"./deploy.sh {r.component}-upgrade")
-        elif r.kind == "nvm-version":
-            approve_commands.append(f"./deploy.sh {r.component}-upgrade --version <vX.Y.Z>")
-    for command in dict.fromkeys(approve_commands):
-        lines.append(f"  {command}")
     lines.append("")
     lines.append("Source of truth: config/pins.json. Detector throttles each release/version target to "
                  f"{notify_limit} notification{'s' if notify_limit != 1 else ''}.")

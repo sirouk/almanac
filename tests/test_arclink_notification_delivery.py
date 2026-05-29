@@ -1346,7 +1346,7 @@ def test_public_agent_gateway_bridge_passes_streaming_policy_to_container() -> N
                 extra={},
             )
             expect(ok is True and error == "", error)
-            expect(payloads[-1]["streaming_enabled"] is False, payloads[-1])
+            expect(payloads[-1]["streaming_enabled"] is True, payloads[-1])
 
             write_config(
                 config_path,
@@ -2037,7 +2037,7 @@ def test_upgrade_notification_delivery_defers_during_deploy_operation() -> None:
             os.environ.update(old_env)
 
 
-def test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning() -> None:
+def test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning() -> None:
     bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_contract_test")
     bridge_source = (PYTHON_DIR / "arclink_public_agent_bridge.py").read_text(encoding="utf-8")
     expect("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING" in bridge_source, bridge_source)
@@ -2046,9 +2046,12 @@ def test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_wit
     old_env = os.environ.copy()
     try:
         os.environ.pop("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", None)
-        expect(bridge._public_bridge_streaming_enabled() is False, "public bridge should default to final-send mode")
-        os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING"] = "1"
-        expect(bridge._public_bridge_streaming_enabled() is True, "streaming should remain operator opt-in")
+        os.environ.pop("HERMES_TOOL_PROGRESS_MODE", None)
+        expect(bridge._public_bridge_streaming_enabled() is True, "public bridge should default to Hermes-native streaming")
+        bridge._apply_public_bridge_options({"streaming_enabled": True})
+        expect(os.environ.get("HERMES_TOOL_PROGRESS_MODE") == "all", "bridge should opt into tool progress unless explicitly configured")
+        os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING"] = "0"
+        expect(bridge._public_bridge_streaming_enabled() is False, "streaming should remain explicitly disableable")
     finally:
         os.environ.clear()
         os.environ.update(old_env)
@@ -2059,7 +2062,36 @@ def test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_wit
     expect(bridge._is_slash_command("  /reload-mcp") is True, "leading whitespace slash command should be recognized")
     expect(bridge._is_slash_command("hello") is False, "chat text should not be a slash command")
     expect("message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT" in bridge_source, bridge_source)
-    print("PASS test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning")
+    print("PASS test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning")
+
+
+def test_public_agent_bridge_persists_telegram_approval_button_state() -> None:
+    bridge = load_module(PYTHON_DIR / "arclink_public_agent_bridge.py", "arclink_public_agent_bridge_approval_state_test")
+    old_env = os.environ.copy()
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            os.environ["HERMES_HOME"] = str(Path(tmp) / "hermes-home")
+            paths = bridge._write_approval_mapping(
+                platform="telegram",
+                chat_id="12345",
+                approval_id=7,
+                message_id="99",
+                session_key="telegram:12345:session",
+            )
+            path, mapping = bridge._approval_mapping_for_callback(
+                platform="telegram",
+                chat_id="12345",
+                approval_id=7,
+                message_id="99",
+            )
+            expect(path in paths, f"callback should find exact approval mapping: {path} {paths}")
+            expect(mapping.get("session_key") == "telegram:12345:session", str(mapping))
+            bridge._record_approval_choice(paths, "always")
+            expect(bridge._json_read(paths[0]).get("choice") == "always", bridge._json_read(paths[0]))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_public_agent_bridge_persists_telegram_approval_button_state")
 
 
 def test_public_agent_bridge_drains_telegram_batch_tasks_before_done() -> None:
@@ -2139,7 +2171,8 @@ def main() -> int:
     test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec()
     test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_docker()
     test_upgrade_notification_delivery_defers_during_deploy_operation()
-    test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning()
+    test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning()
+    test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
     print("PASS all notification delivery regression tests")

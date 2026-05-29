@@ -11,7 +11,7 @@ def test_discord_config_from_env() -> None:
     cfg = dc.DiscordConfig.from_env({
         "DISCORD_BOT_TOKEN": "token",
         "DISCORD_APP_ID": "app123",
-        "DISCORD_PUBLIC_KEY": "key",
+        "DISCORD_PUBLIC_KEY": "a" * 64,
     })
     expect(cfg.is_live, "should be live with all fields")
     empty = dc.DiscordConfig.from_env({})
@@ -279,23 +279,37 @@ def test_discord_full_onboarding_flow() -> None:
 
 def test_discord_verify_signature_test_mode() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_sig_test")
-    expect(dc.verify_discord_signature("body", "sig", "ts", "test_public_key"), "test key should pass")
+    from nacl.signing import SigningKey
+
+    signing_key = SigningKey.generate()
+    public_key = signing_key.verify_key.encode().hex()
+    timestamp = "1234567890"
+    body = "body"
+    signature = signing_key.sign(f"{timestamp}{body}".encode()).signature.hex()
+    expect(dc.verify_discord_signature(body, signature, timestamp, public_key), "real Discord signature should pass")
+    expect(not dc.verify_discord_signature("body", "sig", "ts", "test_public_key"), "test sentinel should fail closed")
     expect(not dc.verify_discord_signature("body", "sig", "ts", "real_key_without_nacl"), "bad key should fail")
     print("PASS test_discord_verify_signature_test_mode")
 
 
 def test_discord_webhook_handler() -> None:
     import json
+    from nacl.signing import SigningKey
+
     control = load_module("arclink_control.py", "arclink_control_dc_webhook_test")
     dc = load_module("arclink_discord.py", "arclink_discord_webhook_test")
     conn = memory_db(control)
-    config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="test_public_key", guild_id="g1")
+    signing_key = SigningKey.generate()
+    config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key=signing_key.verify_key.encode().hex(), guild_id="g1")
     timestamp = str(int(time.time()))
+
+    def sign(body: str) -> str:
+        return signing_key.sign(f"{timestamp}{body}".encode()).signature.hex()
 
     # PING
     ping_body = json.dumps({"id": "int_ping", "type": 1})
     result = dc.handle_discord_webhook_request(
-        conn, body=ping_body, signature="sig", timestamp=timestamp, config=config,
+        conn, body=ping_body, signature=sign(ping_body), timestamp=timestamp, config=config,
     )
     expect(result["type"] == 1, f"expected PONG, got {result}")
 
@@ -308,7 +322,7 @@ def test_discord_webhook_handler() -> None:
         "data": {"name": "arclink", "options": [{"name": "message", "value": "/start"}]},
     })
     result = dc.handle_discord_webhook_request(
-        conn, body=cmd_body, signature="sig", timestamp=timestamp, config=config,
+        conn, body=cmd_body, signature=sign(cmd_body), timestamp=timestamp, config=config,
     )
     expect(result["type"] == 4, f"expected type 4, got {result}")
     expect("Raven" in result["data"]["content"], result["data"]["content"])
@@ -335,7 +349,7 @@ def test_discord_webhook_handler() -> None:
 
     try:
         dc.handle_discord_webhook_request(
-            conn, body=cmd_body, signature="sig", timestamp=timestamp, config=config,
+            conn, body=cmd_body, signature=sign(cmd_body), timestamp=timestamp, config=config,
         )
     except dc.ArcLinkDiscordError as exc:
         expect("duplicate" in str(exc), str(exc))
@@ -355,7 +369,7 @@ def test_discord_live_transport_requires_config() -> None:
     else:
         raise AssertionError("expected error without token")
 
-    cfg_live = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="pk", guild_id="g1")
+    cfg_live = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key="a" * 64, guild_id="g1")
     transport = dc.LiveDiscordTransport(cfg_live)
     expect(transport.config.app_id == "app1", "config not set")
     print("PASS test_discord_live_transport_requires_config")
@@ -364,7 +378,7 @@ def test_discord_live_transport_requires_config() -> None:
 def test_discord_validate_live_readiness() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_readiness_test")
     full = dc.DiscordConfig.from_env({
-        "DISCORD_BOT_TOKEN": "tok", "DISCORD_APP_ID": "app1", "DISCORD_PUBLIC_KEY": "pk",
+        "DISCORD_BOT_TOKEN": "tok", "DISCORD_APP_ID": "app1", "DISCORD_PUBLIC_KEY": "a" * 64,
     })
     expect(full.validate_live_readiness() == [], f"expected empty, got {full.validate_live_readiness()}")
     empty = dc.DiscordConfig.from_env({})

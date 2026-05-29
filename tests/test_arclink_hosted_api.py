@@ -3955,22 +3955,28 @@ def test_telegram_credential_ack_edits_original_secret_message() -> None:
 
 def test_discord_webhook_route() -> None:
     import time as _time
+    from nacl.signing import SigningKey
+
     control = load_module("arclink_control.py", "arclink_control_hosted_dc_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_dc_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
     timestamp = str(int(_time.time()))
+    signing_key = SigningKey.generate()
 
-    # Ping interaction (with test_public_key sentinel)
+    def sign(body: str) -> str:
+        return signing_key.sign(f"{timestamp}{body}".encode()).signature.hex()
+
+    # Ping interaction with a real Ed25519 Discord signature.
     import os
-    os.environ["DISCORD_PUBLIC_KEY"] = "test_public_key"
+    os.environ["DISCORD_PUBLIC_KEY"] = signing_key.verify_key.encode().hex()
     os.environ["DISCORD_BOT_TOKEN"] = "fake"
     os.environ["DISCORD_APP_ID"] = "app123"
     try:
         ping_body = json.dumps({"id": "int_ping", "type": 1})
         status, payload, _ = hosted.route_arclink_hosted_api(
             conn, method="POST", path="/api/v1/webhooks/discord",
-            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": timestamp},
+            headers={"x-signature-ed25519": sign(ping_body), "x-signature-timestamp": timestamp},
             body=ping_body, config=config,
         )
         expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -3986,7 +3992,7 @@ def test_discord_webhook_route() -> None:
         })
         status, payload, _ = hosted.route_arclink_hosted_api(
             conn, method="POST", path="/api/v1/webhooks/discord",
-            headers={"x-signature-ed25519": "abc", "x-signature-timestamp": timestamp},
+            headers={"x-signature-ed25519": sign(interaction), "x-signature-timestamp": timestamp},
             body=interaction, config=config,
         )
         expect(status == 200, f"expected 200 got {status}: {payload}")

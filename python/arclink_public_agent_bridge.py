@@ -11,9 +11,13 @@ interim messages, delivery formatting, and plugin hooks.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any, Mapping
 from types import SimpleNamespace
@@ -76,6 +80,8 @@ def _is_slash_command(text: str) -> bool:
 
 
 FALSE_VALUES = {"0", "false", "no", "off"}
+BRIDGE_STATE_DIRNAME = "arclink-public-bridge"
+APPROVAL_POLL_SECONDS = 0.25
 
 
 def _bool_payload(value: Any, *, default: bool) -> bool:
@@ -94,14 +100,225 @@ def _bool_payload(value: Any, *, default: bool) -> bool:
 
 
 def _public_bridge_streaming_enabled() -> bool:
-    return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "0").strip().lower() not in FALSE_VALUES
+    return os.environ.get("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "1").strip().lower() not in FALSE_VALUES
 
 
 def _apply_public_bridge_options(payload: Mapping[str, Any]) -> None:
     if "streaming_enabled" in payload:
         os.environ["ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING"] = (
-            "1" if _bool_payload(payload.get("streaming_enabled"), default=False) else "0"
+            "1" if _bool_payload(payload.get("streaming_enabled"), default=True) else "0"
         )
+    if _public_bridge_streaming_enabled():
+        os.environ.setdefault("HERMES_TOOL_PROGRESS_MODE", "all")
+
+
+def _bridge_state_dir() -> Path:
+    hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    path = hermes_home / "state" / BRIDGE_STATE_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _hash_id(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "ignore")).hexdigest()[:32]
+
+
+def _json_read(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _json_write(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(payload), handle, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
+def _session_state_file(session_key: str) -> Path:
+    return _bridge_state_dir() / "sessions" / f"{_hash_id(session_key)}.json"
+
+
+def _load_bridge_session_state(session_key: str) -> None:
+    if not session_key:
+        return
+    state = _json_read(_session_state_file(session_key))
+    try:
+        from tools.approval import disable_session_yolo, enable_session_yolo
+
+        if bool(state.get("yolo_enabled")):
+            enable_session_yolo(session_key)
+        else:
+            disable_session_yolo(session_key)
+    except Exception:
+        pass
+
+
+def _persist_bridge_session_state(session_key: str) -> None:
+    if not session_key:
+        return
+    try:
+        from tools.approval import is_session_yolo_enabled
+
+        yolo_enabled = bool(is_session_yolo_enabled(session_key))
+    except Exception:
+        yolo_enabled = False
+    _json_write(
+        _session_state_file(session_key),
+        {
+            "session_key_hash": _hash_id(session_key),
+            "updated_at": int(time.time()),
+            "yolo_enabled": yolo_enabled,
+        },
+    )
+
+
+def _approval_paths(*, platform: str, chat_id: str, approval_id: int, message_id: str = "") -> list[Path]:
+    base = _bridge_state_dir() / "approvals" / platform
+    safe_chat = _hash_id(str(chat_id or ""))
+    paths: list[Path] = []
+    if str(message_id or "").strip():
+        paths.append(base / f"{safe_chat}-{str(message_id).strip()}-{approval_id}.json")
+    paths.append(base / f"{safe_chat}-{approval_id}.json")
+    return paths
+
+
+def _write_approval_mapping(
+    *,
+    platform: str,
+    chat_id: str,
+    approval_id: int,
+    message_id: str,
+    session_key: str,
+    timeout_seconds: int = 300,
+) -> list[Path]:
+    now = int(time.time())
+    payload = {
+        "platform": platform,
+        "chat_id_hash": _hash_id(str(chat_id or "")),
+        "approval_id": approval_id,
+        "message_id": str(message_id or ""),
+        "session_key": session_key,
+        "created_at": now,
+        "expires_at": now + max(30, min(3600, int(timeout_seconds or 300))),
+        "choice": "",
+    }
+    paths = _approval_paths(platform=platform, chat_id=chat_id, approval_id=approval_id, message_id=message_id)
+    for path in paths:
+        _json_write(path, payload)
+    return paths
+
+
+def _approval_mapping_for_callback(*, platform: str, chat_id: str, approval_id: int, message_id: str = "") -> tuple[Path | None, dict[str, Any]]:
+    now = int(time.time())
+    for path in _approval_paths(platform=platform, chat_id=chat_id, approval_id=approval_id, message_id=message_id):
+        data = _json_read(path)
+        if not data:
+            continue
+        try:
+            expires_at = int(data.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires_at = 0
+        if expires_at and expires_at < now:
+            continue
+        return path, data
+    return None, {}
+
+
+def _record_approval_choice(paths: list[Path], choice: str) -> None:
+    now = int(time.time())
+    for path in paths:
+        data = _json_read(path)
+        if not data:
+            continue
+        data["choice"] = str(choice or "")
+        data["resolved_at"] = now
+        _json_write(path, data)
+
+
+def _watch_durable_approval(paths: list[Path], *, session_key: str, timeout_seconds: int) -> None:
+    deadline = time.monotonic() + max(30, min(3600, int(timeout_seconds or 300)))
+    while time.monotonic() < deadline:
+        for path in paths:
+            data = _json_read(path)
+            choice = str(data.get("choice") or "").strip().lower()
+            if choice in {"once", "session", "always", "deny"}:
+                try:
+                    from tools.approval import resolve_gateway_approval
+
+                    resolve_gateway_approval(session_key, choice)
+                except Exception:
+                    pass
+                return
+        time.sleep(APPROVAL_POLL_SECONDS)
+
+
+def _install_telegram_bridge_state(adapter: Any, runner: Any, source: Any, *, chat_id: str) -> None:
+    try:
+        session_key = runner._session_key_for_source(source)
+    except Exception:
+        session_key = ""
+    _load_bridge_session_state(session_key)
+
+    original_send = getattr(adapter, "send_exec_approval", None)
+    if not callable(original_send):
+        return
+
+    async def _send_exec_approval_with_durable_state(*args: Any, **kwargs: Any) -> Any:
+        before = set(getattr(adapter, "_approval_state", {}) or {})
+        result = await original_send(*args, **kwargs)
+        after_state = getattr(adapter, "_approval_state", {}) or {}
+        new_ids = [item for item in after_state if item not in before]
+        approval_session = str(kwargs.get("session_key") or session_key or "")
+        result_message_id = str(getattr(result, "message_id", "") or "")
+        for approval_id in new_ids:
+            try:
+                approval_int = int(approval_id)
+            except (TypeError, ValueError):
+                continue
+            mapped_session = str(after_state.get(approval_id) or approval_session)
+            if not mapped_session:
+                continue
+            paths = _write_approval_mapping(
+                platform="telegram",
+                chat_id=str(kwargs.get("chat_id") or chat_id or ""),
+                approval_id=approval_int,
+                message_id=result_message_id,
+                session_key=mapped_session,
+            )
+            thread = threading.Thread(
+                target=_watch_durable_approval,
+                kwargs={"paths": paths, "session_key": mapped_session, "timeout_seconds": 300},
+                daemon=True,
+            )
+            thread.start()
+        return result
+
+    try:
+        adapter.send_exec_approval = _send_exec_approval_with_durable_state  # type: ignore[method-assign]
+    except Exception:
+        pass
+
+
+def _persist_telegram_bridge_state(runner: Any, source: Any) -> None:
+    try:
+        session_key = runner._session_key_for_source(source)
+    except Exception:
+        session_key = ""
+    _persist_bridge_session_state(session_key)
 
 
 def _enable_public_bridge_gateway_defaults(cfg: Any) -> None:
@@ -204,18 +421,19 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
     await bot.initialize()
     try:
         adapter._bot = bot  # type: ignore[attr-defined]
+        source = SessionSource(
+            platform=platform,
+            chat_id=chat_id,
+            chat_name=display_name,
+            chat_type="dm",
+            user_id=user_id,
+            user_name=display_name,
+            message_id=message_id,
+        )
+        _install_telegram_bridge_state(adapter, runner, source, chat_id=chat_id)
         if await _try_replay_native_telegram_update(adapter, bot, payload):
             pass
         else:
-            source = SessionSource(
-                platform=platform,
-                chat_id=chat_id,
-                chat_name=display_name,
-                chat_type="dm",
-                user_id=user_id,
-                user_name=display_name,
-                message_id=message_id,
-            )
             event = MessageEvent(
                 text=text,
                 message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
@@ -224,6 +442,7 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
             )
             await adapter.handle_message(event)
         await _drain_bridge_adapter_tasks(adapter)
+        _persist_telegram_bridge_state(runner, source)
     finally:
         try:
             await bot.shutdown()
@@ -257,6 +476,75 @@ async def _try_replay_native_telegram_update(adapter: Any, bot: Any, payload: Ma
     context = SimpleNamespace(bot=bot)
     callback = getattr(update, "callback_query", None)
     if callback is not None:
+        data = str(getattr(callback, "data", "") or "")
+        if data.startswith("ea:"):
+            parts = data.split(":", 2)
+            if len(parts) == 3:
+                try:
+                    approval_id = int(parts[2])
+                except (TypeError, ValueError):
+                    approval_id = 0
+                if approval_id:
+                    message_obj = getattr(callback, "message", None)
+                    callback_chat = getattr(message_obj, "chat", None)
+                    callback_chat_id = str(getattr(callback_chat, "id", "") or payload.get("chat_id") or "")
+                    callback_message_id = str(getattr(message_obj, "message_id", "") or payload.get("message_id") or "")
+                    mapping_path, mapping = _approval_mapping_for_callback(
+                        platform="telegram",
+                        chat_id=callback_chat_id,
+                        approval_id=approval_id,
+                        message_id=callback_message_id,
+                    )
+                    session_key = str(mapping.get("session_key") or "")
+                    if session_key:
+                        try:
+                            getattr(adapter, "_approval_state", {})[approval_id] = session_key
+                        except Exception:
+                            pass
+                        try:
+                            from tools import approval as approval_tools
+
+                            original_resolve = approval_tools.resolve_gateway_approval
+
+                            def _resolve_with_durable_choice(
+                                resolved_session: str,
+                                choice: str,
+                                resolve_all: bool = False,
+                            ) -> int:
+                                if resolved_session == session_key and mapping_path is not None:
+                                    _record_approval_choice(
+                                        _approval_paths(
+                                            platform="telegram",
+                                            chat_id=callback_chat_id,
+                                            approval_id=approval_id,
+                                            message_id=callback_message_id,
+                                        ),
+                                        choice,
+                                    )
+                                return original_resolve(resolved_session, choice, resolve_all)
+
+                            approval_tools.resolve_gateway_approval = _resolve_with_durable_choice
+                        except Exception:
+                            pass
+        try:
+            original_answer = callback.answer
+
+            async def _safe_answer(*args: Any, **kwargs: Any) -> Any:
+                try:
+                    return await original_answer(*args, **kwargs)
+                except Exception as exc:  # Telegram callback ids may already be acked by ArcLink ingress.
+                    text = str(exc)
+                    if (
+                        "Query is too old" in text
+                        or "query id is invalid" in text
+                        or "response timeout expired" in text
+                    ):
+                        return None
+                    raise
+
+            setattr(callback, "answer", _safe_answer)
+        except Exception:
+            pass
         handler = getattr(adapter, "_handle_callback_query", None)
         if callable(handler):
             await handler(update, context)

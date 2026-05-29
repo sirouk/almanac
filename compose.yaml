@@ -132,7 +132,15 @@ x-arclink-control-secret-env: &arclink-control-secret-env
   DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
 
 x-arclink-operator-env: &arclink-operator-env
-  <<: [*arclink-env, *arclink-control-secret-env]
+  ARCLINK_DOCKER_MODE: "1"
+  ARCLINK_PRODUCT_NAME: ${ARCLINK_PRODUCT_NAME:-ArcLink}
+  ARCLINK_BASE_DOMAIN: ${ARCLINK_BASE_DOMAIN:-arclink.online}
+  ARCLINK_REPO_DIR: /home/arclink/arclink
+  ARCLINK_PRIV_DIR: /home/arclink/arclink/arclink-priv
+  ARCLINK_DOCKER_CONTAINER_PRIV_DIR: /home/arclink/arclink/arclink-priv
+  ARCLINK_API_INTERNAL_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}
+  ARCLINK_OPERATOR_UPGRADE_BROKER_URL: ${ARCLINK_OPERATOR_UPGRADE_BROKER_URL:-http://operator-upgrade-broker:8917}
+  ARCLINK_GATEWAY_EXEC_BROKER_URL: ${ARCLINK_GATEWAY_EXEC_BROKER_URL:-http://gateway-exec-broker:8911}
   ARCLINK_OPERATOR_AGENT_RUNTIME: control-stack
   ARCLINK_RUNTIME_ENV_CONFIG: "1"
   ARCLINK_RUNTIME_CONFIG_FILE: /home/arclink/arclink/arclink-priv/state/operator/config/operator.env
@@ -140,7 +148,6 @@ x-arclink-operator-env: &arclink-operator-env
   ARCLINK_PRIV_CONFIG_DIR: /home/arclink/arclink/arclink-priv/state/operator/config
   ARCLINK_OPERATOR_STATE_DIR: /home/arclink/arclink/arclink-priv/state/operator
   ARCLINK_OPERATOR_SECRET_DIR: /home/arclink/arclink/arclink-priv/state/operator/secrets
-  ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
   ARCLINK_DEPLOYMENT_ID: operator
   ARCLINK_USER_ID: operator
   ARCLINK_PREFIX: operator
@@ -163,6 +170,8 @@ x-arclink-operator-env: &arclink-operator-env
   ARCLINK_CODE_WORKSPACE_ROOT: /home/arclink/arclink/arclink-priv/state/operator/workspace
   ARCLINK_TERMINAL_TUI_COMMAND: /opt/arclink/runtime/hermes-venv/bin/hermes
   HERMES_TUI_DIR: /opt/arclink/runtime/hermes-agent-src/ui-tui
+  ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING: ${ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING:-1}
+  HERMES_TOOL_PROGRESS_MODE: ${HERMES_TOOL_PROGRESS_MODE:-all}
   QMD_STATE_DIR: /home/arclink/arclink/arclink-priv/state/operator/qmd
   QMD_INDEX_NAME: operator-vault
   QMD_COLLECTION_NAME: operator-vault
@@ -182,6 +191,10 @@ x-arclink-operator-env: &arclink-operator-env
   ARCLINK_CHUTES_DEFAULT_MODEL: ${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}
   ARCLINK_MODEL_REASONING_DEFAULT: ${ARCLINK_MODEL_REASONING_DEFAULT:-medium}
   ARCLINK_HERMES_DASHBOARD_ACCESS_FILE: /home/arclink/arclink/arclink-priv/state/operator/hermes-home/state/arclink-web-access.json
+  RUNTIME_DIR: /opt/arclink/runtime
+  HOME: /home/arclink
+  XDG_CONFIG_HOME: /home/arclink/.qmd/config
+  XDG_CACHE_HOME: /home/arclink/.qmd/cache
   TELEGRAM_REACTIONS: "true"
   DISCORD_REACTIONS: "true"
 
@@ -285,100 +298,107 @@ services:
       timeout: 5s
       retries: 6
 
+  control-operator-hermes-setup:
+    <<: *arclink-app
+    restart: "no"
+    cap_drop:
+      - ALL
+    environment:
+      <<: *arclink-operator-env
+      ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+    command: ["./bin/install-operator-hermes-home.sh"]
+    volumes:
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
+      - ./arclink-priv/state/arclink-control.sqlite3:/home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+
   control-operator-qmd-mcp:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
     command: ["./bin/qmd-daemon.sh"]
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/qmd:/home/arclink/arclink/arclink-priv/state/operator/qmd
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
       - ./arclink-priv/state/operator/vault:/srv/vault
       - ./arclink-priv/state/operator/qmd:/srv/qmd
       - ./arclink-priv/state/operator/memory:/srv/memory
+    depends_on:
+      control-operator-hermes-setup:
+        condition: service_completed_successfully
 
   control-operator-hermes-gateway:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
-    command: ["bash", "-lc", "./bin/install-operator-hermes-home.sh && exec /opt/arclink/runtime/hermes-venv/bin/hermes gateway run --replace"]
+    command: ["bash", "-lc", "exec /opt/arclink/runtime/hermes-venv/bin/hermes gateway run --replace"]
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/hermes-home:/home/arclink/arclink/arclink-priv/state/operator/hermes-home
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
-      - ./arclink-priv/state/operator/workspace:/home/arclink/arclink/arclink-priv/state/operator/workspace
-      - ./arclink-priv/state/operator/linked-resources:/home/arclink/arclink/arclink-priv/state/operator/linked-resources:ro
-      - ./arclink-priv/state/operator/secrets:/home/arclink/arclink/arclink-priv/state/operator/secrets
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
     depends_on:
+      control-operator-hermes-setup:
+        condition: service_completed_successfully
       control-operator-qmd-mcp:
         condition: service_started
+    networks:
+      - default
+      - operator-upgrade-broker-net
+      - gateway-exec-broker-net
 
   control-operator-hermes-dashboard:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
-    command: ["bash", "-lc", "./bin/install-operator-hermes-home.sh && exec ./bin/run-hermes-dashboard-proxy.sh"]
+    command: ["bash", "-lc", "exec ./bin/run-hermes-dashboard-proxy.sh"]
     ports:
       - "127.0.0.1:${ARCLINK_OPERATOR_HERMES_PORT:-13210}:3210"
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/hermes-home:/home/arclink/arclink/arclink-priv/state/operator/hermes-home
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
-      - ./arclink-priv/state/operator/workspace:/home/arclink/arclink/arclink-priv/state/operator/workspace
-      - ./arclink-priv/state/operator/linked-resources:/home/arclink/arclink/arclink-priv/state/operator/linked-resources:ro
-      - ./arclink-priv/state/operator/secrets:/home/arclink/arclink/arclink-priv/state/operator/secrets
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
     depends_on:
+      control-operator-hermes-setup:
+        condition: service_completed_successfully
       control-operator-qmd-mcp:
         condition: service_started
+    networks:
+      - default
+      - operator-upgrade-broker-net
+      - gateway-exec-broker-net
 
   control-operator-dashboard:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
     command: ["./bin/arclink-dashboard-placeholder.sh"]
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
 
   control-operator-vault-watch:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
     command: ["./bin/vault-watch.sh"]
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
     depends_on:
       control-operator-qmd-mcp:
         condition: service_started
 
   control-operator-memory-synth:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
     command: ["./bin/docker-job-loop.sh", "operator-memory-synth", "1800", "./bin/memory-synth.sh"]
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
     depends_on:
       control-operator-qmd-mcp:
         condition: service_started
@@ -437,15 +457,13 @@ services:
 
   control-operator-arclink-wrapped:
     <<: *arclink-app
+    cap_drop:
+      - ALL
     environment:
       <<: *arclink-operator-env
     command: ["./bin/docker-job-loop.sh", "operator-arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"]
     volumes:
-      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
-      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
-      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
-      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
-      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
 
   notion-webhook:
     <<: *arclink-app

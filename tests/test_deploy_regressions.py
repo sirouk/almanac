@@ -3875,6 +3875,8 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "control install must invoke the in-container operator identity setup")
     expect("control-operator-hermes-gateway:" in compose_text and "control-operator-hermes-dashboard:" in compose_text,
            "compose.yaml must expose Operator Hermes inside the Control Node stack")
+    expect("control-operator-hermes-setup:" in compose_text,
+           "operator Hermes home/control-router setup must be isolated into a one-shot setup service")
     expect("control-operator-nextcloud:" in compose_text and "control-operator-memory-synth:" in compose_text,
            "operator services must include own files/vault and memory lanes")
     expect("install-operator-hermes-home.sh" in compose_text,
@@ -3890,12 +3892,24 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "operator services must not source the global Docker env over their operator-scoped paths")
     expect('ARCLINK_RUNTIME_ENV_CONFIG: "1"' in compose_text,
            "operator services must generate operator.env from the operator-scoped Compose environment")
-    expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in compose_text,
-           "operator services must keep live control DB CLI reach from inside the Control Node stack")
-    expect("./arclink-priv/state:/home/arclink/arclink/arclink-priv/state" in compose_text,
-           "operator services must mount live control state while indexing only the operator vault")
-    expect("./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config" in compose_text,
-           "operator services need their own writable config dir for shared ArcLink scripts")
+    gateway_block = compose_text.split("  control-operator-hermes-gateway:", 1)[1].split("\n\n", 1)[0]
+    dashboard_block = compose_text.split("  control-operator-hermes-dashboard:", 1)[1].split("\n\n", 1)[0]
+    setup_block = compose_text.split("  control-operator-hermes-setup:", 1)[1].split("\n\n", 1)[0]
+    for runtime_block in (gateway_block, dashboard_block):
+        expect("*arclink-control-secret-env" not in runtime_block,
+               f"interactive operator runtime must not inherit control secret env\n{runtime_block}")
+        expect("./arclink-priv/state:/home/arclink/arclink/arclink-priv/state" not in runtime_block,
+               f"interactive operator runtime must not mount broad control state\n{runtime_block}")
+        expect("ARCLINK_DB_PATH:" not in runtime_block,
+               f"interactive operator runtime must not receive the control DB path\n{runtime_block}")
+        expect("./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator" in runtime_block,
+               f"interactive operator runtime must mount only operator state\n{runtime_block}")
+    expect("./arclink-priv/state/arclink-control.sqlite3:/home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in setup_block,
+           "one-shot setup may touch the control DB to register the operator LLM router key")
+    expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in setup_block,
+           "one-shot setup must scope the control DB env to setup only")
+    expect("condition: service_completed_successfully" in gateway_block and "condition: service_completed_successfully" in dashboard_block,
+           "interactive operator runtime must wait for setup instead of touching the DB on each start")
     # The docker helper runs the idempotent ensure inside the control container.
     expect("operator-agent-setup)" in docker_text and "docker_operator_agent_setup" in docker_text,
            "arclink-docker.sh must expose operator-agent-setup")

@@ -2169,6 +2169,7 @@ docker_operator_agent_setup() {
   # Idempotent; --require-enabled makes it a no-op only when explicitly
   # disabled.
   prepare_compose
+  compose up -d --no-build --force-recreate control-operator-hermes-setup
   compose up -d --no-build agent-supervisor control-operator-qmd-mcp control-operator-hermes-gateway control-operator-hermes-dashboard
   compose exec -T \
     -e ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}" \

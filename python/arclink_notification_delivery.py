@@ -841,12 +841,12 @@ def _public_agent_bridge_streaming_enabled() -> bool:
     """Return whether public Agent turns should opt into Hermes streaming.
 
     The public bridge is a short-lived synthetic gateway process, separate from
-    Hermes' normal long-lived platform adapters. Default to final-message
-    delivery so a successful bridge means the Captain receives a visible answer;
-    operators can opt into the upstream streaming path after validating their
-    runtime with ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1.
+    Hermes' normal long-lived platform adapters. Default on so bridged Operator
+    and Captain chats preserve native Hermes progress, approval, and interim
+    status behavior; operators can still force final-message delivery with
+    ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=0.
     """
-    return config_env_value("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "0").strip().lower() not in {
+    return config_env_value("ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING", "1").strip().lower() not in {
         "0",
         "false",
         "no",

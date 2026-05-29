@@ -11,6 +11,7 @@ import logging
 import json
 import os
 import pathlib
+import re
 import sqlite3
 import sys
 import time
@@ -34,6 +35,7 @@ logger = logging.getLogger("arclink.discord")
 DISCORD_API_BASE = "https://discord.com/api/v10"
 DISCORD_USER_AGENT = "ArcLinkDiscord/1.0 (+https://github.com/example/arclink)"
 DEFAULT_DISCORD_TIMESTAMP_TOLERANCE_SECONDS = 300
+DISCORD_PUBLIC_KEY_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class ArcLinkDiscordError(RuntimeError):
@@ -204,7 +206,7 @@ class DiscordConfig:
 
     @property
     def is_live(self) -> bool:
-        return bool(self.bot_token and self.app_id and self.public_key)
+        return bool(self.bot_token and self.app_id and DISCORD_PUBLIC_KEY_RE.fullmatch(self.public_key))
 
     def validate_live_readiness(self) -> list[str]:
         """Return a list of missing config fields required for live operation."""
@@ -215,6 +217,8 @@ class DiscordConfig:
             missing.append("DISCORD_APP_ID")
         if not self.public_key:
             missing.append("DISCORD_PUBLIC_KEY")
+        elif not DISCORD_PUBLIC_KEY_RE.fullmatch(self.public_key):
+            missing.append("DISCORD_PUBLIC_KEY_64_HEX")
         return missing
 
 
@@ -223,12 +227,12 @@ def verify_discord_signature(
 ) -> bool:
     """Verify a Discord interaction signature (Ed25519).
 
-    In production this uses the nacl library. This stub returns True
-    when the public_key is the test sentinel 'test_public_key'.
-    For real verification, install PyNaCl.
+    Production must use Discord's real 64-hex Ed25519 public key. Test
+    sentinels are intentionally rejected so an unset/default config cannot
+    become an unauthenticated interaction webhook.
     """
-    if public_key == "test_public_key":
-        return True
+    if not DISCORD_PUBLIC_KEY_RE.fullmatch(str(public_key or "").strip()):
+        return False
     try:
         from nacl.signing import VerifyKey
         vk = VerifyKey(bytes.fromhex(public_key))

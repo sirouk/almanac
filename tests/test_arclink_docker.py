@@ -482,6 +482,7 @@ def test_compose_defines_full_stack_services() -> None:
         "nextcloud:",
         "arclink-mcp:",
         "qmd-mcp:",
+        "control-operator-hermes-setup:",
         "control-operator-qmd-mcp:",
         "control-operator-hermes-gateway:",
         "control-operator-hermes-dashboard:",
@@ -810,10 +811,14 @@ def test_compose_high_authority_brokers_and_helpers_are_scoped_off_default_netwo
         "operator-upgrade-broker-net": {
             "operator-upgrade-broker",
             "agent-supervisor",
+            "control-operator-hermes-gateway",
+            "control-operator-hermes-dashboard",
         },
         "gateway-exec-broker-net": {
             "gateway-exec-broker",
             "notification-delivery",
+            "control-operator-hermes-gateway",
+            "control-operator-hermes-dashboard",
         },
     }
     egress_networks = {
@@ -868,6 +873,8 @@ def test_compose_high_authority_brokers_and_helpers_are_scoped_off_default_netwo
             "operator-upgrade-broker-net",
         ],
         "notification-delivery": ["default", "gateway-exec-broker-net"],
+        "control-operator-hermes-gateway": ["default", "operator-upgrade-broker-net", "gateway-exec-broker-net"],
+        "control-operator-hermes-dashboard": ["default", "operator-upgrade-broker-net", "gateway-exec-broker-net"],
     }
     for service, expected in caller_expected.items():
         networks = compose_service_networks(blocks[service])

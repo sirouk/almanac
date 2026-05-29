@@ -292,7 +292,13 @@ def test_telegram_registers_operator_command_scope() -> None:
     expect("upgrade" in command_names, str(command_names))
     expect("pin_upgrade" in command_names, str(command_names))
     expect("action_status" in command_names, str(command_names))
+    expect("model" in command_names, str(command_names))
+    expect("provider" in command_names, str(command_names))
+    expect("reload_mcp" in command_names, str(command_names))
+    expect("update" not in command_names, "unsafe direct Hermes update must stay hidden")
     expect("Founders Offer" not in str(calls[0]), str(calls[0]))
+    expect(result.get("include_agent_commands") is True, str(result))
+    expect("model" in set(result.get("agent_command_names") or []), str(result))
     expect(result["skipped"] is False, str(result))
     print("PASS test_telegram_registers_operator_command_scope")
 

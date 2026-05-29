@@ -83,9 +83,51 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         print("PASS test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_operator")
 
 
+def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
+    commands = load_module("arclink_public_bot_commands.py", "arclink_public_bot_commands_operator_scope_test")
+    telegram = sys.modules["arclink_telegram"]
+
+    calls: list[dict[str, object]] = []
+    commands.register_arclink_public_telegram_commands = lambda token: {"registered": ["start"], "scopes": ["default"]}
+    commands.ensure_arclink_public_telegram_webhook = lambda token, url, secret: {"skipped": True}
+    commands.refresh_active_telegram_command_scopes = lambda env: {"refreshed": 0, "issues": 0, "skipped": False}
+    commands._agent_commands_from_gateway_container = lambda deployment_id: (
+        [
+            {"command": "model", "description": "Switch model"},
+            {"command": "provider", "description": "Provider alias"},
+            {"command": "update", "description": "Unsafe direct update"},
+        ],
+        "arclink-operator-hermes-gateway-1",
+        0,
+    )
+    telegram.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+    result = commands.register_public_bot_commands(
+        {
+            "TELEGRAM_BOT_TOKEN": "123:abc",
+            "TELEGRAM_WEBHOOK_URL": "https://example.test/tg",
+            "TELEGRAM_WEBHOOK_SECRET": "secret",
+            "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+            "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+            "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "42",
+        }
+    )
+
+    operator_scopes = result["telegram"]["operator_scopes"]
+    expect(operator_scopes["agent_command_source"] == "arclink-operator-hermes-gateway-1", str(operator_scopes))
+    registered = set(operator_scopes["registered"])
+    expect("operator_status" in registered and "upgrade" in registered, str(registered))
+    expect("model" in registered and "provider" in registered, str(registered))
+    expect("update" not in registered, str(registered))
+    exact_names = {item["command"] for call in calls for item in call["commands"]}
+    expect("model" in exact_names and "operator_status" in exact_names, str(calls))
+    print("PASS test_register_public_bot_commands_gives_operator_hermes_scope")
+
+
 def main() -> int:
     test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_operator()
-    print("PASS all 1 ArcLink public bot command registration tests")
+    test_register_public_bot_commands_gives_operator_hermes_scope()
+    print("PASS all 2 ArcLink public bot command registration tests")
     return 0
 
 

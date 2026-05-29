@@ -273,10 +273,17 @@ def register_public_bot_commands(env: Mapping[str, str] | None = None) -> dict[s
     if telegram.bot_token:
         try:
             results["telegram"] = register_arclink_public_telegram_commands(telegram.bot_token)
+            operator_agent_commands, operator_agent_source, operator_agent_hidden_count = _agent_commands_from_gateway_container(
+                "operator"
+            )
             results["telegram"]["operator_scopes"] = register_arclink_operator_telegram_commands(
                 telegram.bot_token,
                 env=merged,
+                agent_commands=operator_agent_commands if operator_agent_commands else None,
+                include_agent_commands=True,
             )
+            results["telegram"]["operator_scopes"]["agent_command_source"] = operator_agent_source
+            results["telegram"]["operator_scopes"]["source_hidden_count"] = operator_agent_hidden_count
             results["telegram"]["webhook"] = ensure_arclink_public_telegram_webhook(
                 telegram.bot_token,
                 telegram.webhook_url,
@@ -328,6 +335,16 @@ def main() -> int:
                 "Telegram active agent command scopes: refreshed "
                 f"{active_scopes.get('refreshed', 0)} chat(s), "
                 f"{active_scopes.get('issues', 0)} issue alert(s)"
+            )
+        operator_scopes = telegram.get("operator_scopes") or {}
+        if operator_scopes.get("skipped"):
+            print("Telegram operator Hermes command scopes: skipped (no operator Telegram scope)")
+        else:
+            print(
+                "Telegram operator Hermes command scopes: registered "
+                f"{len(operator_scopes.get('registered') or [])} command(s), "
+                f"{len(operator_scopes.get('agent_command_names') or [])} Hermes command(s) "
+                f"from {operator_scopes.get('agent_command_source') or 'fallback'}"
             )
     if discord.get("skipped"):
         print("Discord public bot actions: skipped (missing bot token or application ID)")

@@ -555,6 +555,64 @@ def arclink_public_bot_telegram_active_command_plan(
     }
 
 
+def arclink_operator_telegram_command_plan(
+    *,
+    agent_commands: list[dict[str, str]] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build the Operator Telegram command menu.
+
+    Operator chats are both the ArcLink control bridge and the Operator's own
+    Hermes chat. Keep the explicit Operator/Raven commands visible, then append
+    the same Hermes command inventory Captain active chats use. If an upstream
+    Hermes command collides with an Operator command, Operator control wins and
+    the agent command remains reachable by typing through Hermes-specific
+    alternatives where available.
+    """
+    commands: list[dict[str, str]] = []
+    used: set[str] = set()
+    for item in ARCLINK_OPERATOR_TELEGRAM_COMMANDS:
+        name = _telegram_command_name(str(item.get("command") or ""))
+        description = str(item.get("description") or "").strip()
+        if not name or not description or name in used:
+            continue
+        commands.append({"command": name, "description": description[:256]})
+        used.add(name)
+
+    raw_agent = list(agent_commands) if agent_commands is not None else arclink_public_bot_telegram_agent_commands(env=env)
+    agent_command_names: list[str] = []
+    conflicts: list[str] = []
+    suppressed: list[str] = []
+    hidden_count = 0
+    for item in raw_agent:
+        name = _telegram_command_name(str(item.get("command") or ""))
+        description = str(item.get("description") or "").strip()
+        if not name or not description:
+            continue
+        if name in ARCLINK_TELEGRAM_POLICY_SUPPRESSED_AGENT_COMMANDS:
+            suppressed.append(name)
+            continue
+        if name in used:
+            conflicts.append(name)
+            continue
+        if not description.lower().startswith("agent:"):
+            description = f"Agent: {description[:90]}"
+        if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
+            hidden_count += 1
+            continue
+        commands.append({"command": name, "description": description[:256]})
+        used.add(name)
+        agent_command_names.append(name)
+    return {
+        "commands": commands,
+        "agent_command_names": sorted(agent_command_names),
+        "operator_command_names": [item["command"] for item in ARCLINK_OPERATOR_TELEGRAM_COMMANDS],
+        "agent_conflicts": sorted(set(conflicts)),
+        "policy_suppressed": sorted(set(suppressed)),
+        "hidden_count": hidden_count,
+    }
+
+
 def arclink_public_bot_telegram_chat_commands(
     *,
     include_agent_commands: bool,
@@ -712,6 +770,8 @@ def register_arclink_operator_telegram_commands(
     bot_token: str,
     *,
     env: Mapping[str, str],
+    agent_commands: list[dict[str, str]] | None = None,
+    include_agent_commands: bool = True,
 ) -> dict[str, Any]:
     clean_token = str(bot_token or "").strip()
     if not clean_token:
@@ -726,6 +786,12 @@ def register_arclink_operator_telegram_commands(
         chat_ids.append(primary_chat)
     chat_ids.extend(sorted(_operator_telegram_user_ids(env)))
 
+    plan = arclink_operator_telegram_command_plan(
+        agent_commands=agent_commands,
+        env=env,
+    ) if include_agent_commands else {"commands": list(ARCLINK_OPERATOR_TELEGRAM_COMMANDS)}
+    commands = list(plan.get("commands") or ARCLINK_OPERATOR_TELEGRAM_COMMANDS)
+
     seen: set[str] = set()
     scopes: list[dict[str, Any]] = []
     for raw_chat_id in chat_ids:
@@ -735,12 +801,17 @@ def register_arclink_operator_telegram_commands(
         seen.add(chat_id)
         scope_chat_id: Any = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
         scope = {"type": "chat", "chat_id": scope_chat_id}
-        telegram_set_my_commands(bot_token=clean_token, commands=list(ARCLINK_OPERATOR_TELEGRAM_COMMANDS), scope=scope)
+        telegram_set_my_commands(bot_token=clean_token, commands=commands, scope=scope)
         scopes.append(scope)
     return {
-        "registered": [item["command"] for item in ARCLINK_OPERATOR_TELEGRAM_COMMANDS],
+        "registered": [item["command"] for item in commands],
         "scopes": scopes,
         "skipped": not bool(scopes),
+        "include_agent_commands": bool(include_agent_commands),
+        "agent_command_names": plan.get("agent_command_names", []),
+        "agent_conflicts": plan.get("agent_conflicts", []),
+        "policy_suppressed": plan.get("policy_suppressed", []),
+        "hidden_count": plan.get("hidden_count", 0),
     }
 
 

@@ -308,6 +308,84 @@ def test_wrapped_frequency_periods_due_and_admin_privacy() -> None:
     print("PASS test_wrapped_frequency_periods_due_and_admin_privacy")
 
 
+def test_wrapped_scheduler_skips_empty_new_agent_and_operator_inventory() -> None:
+    wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_empty_scheduler")
+    conn = memory_db()
+    conn.executemany(
+        """
+        INSERT INTO arclink_users (
+          user_id, email, display_name, agent_title, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'active', ?, ?)
+        """,
+        [
+            (
+                "user_empty",
+                "empty@example.test",
+                "Fresh Captain",
+                "Fresh Agent",
+                "2026-05-29T09:00:00+00:00",
+                "2026-05-29T09:00:00+00:00",
+            ),
+            (
+                "operator",
+                "operator@example.test",
+                "Operator",
+                "Operator Hermes",
+                "2026-05-29T09:00:00+00:00",
+                "2026-05-29T09:00:00+00:00",
+            ),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO arclink_deployments (
+          deployment_id, user_id, prefix, agent_name, agent_title, status,
+          metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+        """,
+        [
+            (
+                "dep_empty",
+                "user_empty",
+                "fresh",
+                "Fresh",
+                "Fresh Agent",
+                "{}",
+                "2026-05-29T09:00:00+00:00",
+                "2026-05-29T09:00:00+00:00",
+            ),
+            (
+                "operator",
+                "operator",
+                "operator",
+                "Atlas",
+                "Operator Hermes",
+                '{"operator_agent":true}',
+                "2026-05-29T09:00:00+00:00",
+                "2026-05-29T09:00:00+00:00",
+            ),
+        ],
+    )
+    conn.commit()
+
+    due = wrapped.list_due_wrapped_captains(conn, now="2026-05-30T12:00:00+00:00")
+    expect(due == [], str(due))
+    summary = wrapped.run_wrapped_scheduler_once(conn, now="2026-05-30T12:00:00+00:00")
+    expect(summary["due"] == 0 and summary["generated"] == 0 and summary["queued"] == 0, str(summary))
+
+    conn.execute(
+        """
+        INSERT INTO arclink_events (
+          event_id, subject_kind, subject_id, event_type, metadata_json, created_at
+        ) VALUES ('evt_real_signal', 'deployment', 'dep_empty', 'pod_message_sent', '{}', '2026-05-29T12:00:00+00:00')
+        """
+    )
+    conn.commit()
+    due_after_signal = wrapped.list_due_wrapped_captains(conn, now="2026-05-30T12:00:00+00:00")
+    expect([row["user_id"] for row in due_after_signal] == ["user_empty"], str(due_after_signal))
+    print("PASS test_wrapped_scheduler_skips_empty_new_agent_and_operator_inventory")
+
+
 def test_wrapped_delivery_queue_respects_quiet_hours_and_marks_cadence() -> None:
     wrapped = load_module(WRAPPED_PY, "arclink_wrapped_test_delivery")
     conn = memory_db()
@@ -431,7 +509,7 @@ def test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persiste
     for _ in range(3):
         summary = wrapped.run_wrapped_scheduler_once(
             conn,
-            now="2026-05-14T12:00:00+00:00",
+            now="2026-05-13T12:00:00+00:00",
             session_counter=broken_counter,
         )
     expect(summary["failed"] == 1, str(summary))
@@ -453,6 +531,7 @@ def main() -> int:
     test_generate_wrapped_report_is_scoped_redacted_and_persisted()
     test_wrapped_report_score_is_deterministic_for_same_inputs()
     test_wrapped_frequency_periods_due_and_admin_privacy()
+    test_wrapped_scheduler_skips_empty_new_agent_and_operator_inventory()
     test_wrapped_delivery_queue_respects_quiet_hours_and_marks_cadence()
     test_wrapped_delivery_normalizes_add_agent_contacts_and_skips_missing_channel()
     test_wrapped_scheduler_retries_failures_and_notifies_operator_after_persistent_failure()

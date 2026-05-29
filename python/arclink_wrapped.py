@@ -118,6 +118,16 @@ def _json_dumps(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), sort_keys=True)
 
 
+def _deployment_metadata(row: Mapping[str, Any]) -> Mapping[str, Any]:
+    parsed = _json_loads(str(row.get("metadata_json") or "{}"), {})
+    return parsed if isinstance(parsed, Mapping) else {}
+
+
+def _is_operator_deployment(row: Mapping[str, Any]) -> bool:
+    metadata = _deployment_metadata(row)
+    return str(row.get("deployment_id") or "") == "operator" or metadata.get("operator_agent") is True
+
+
 def _report_id() -> str:
     return f"wrap_{secrets.token_hex(12)}"
 
@@ -218,6 +228,10 @@ def _deployment_rows(conn: sqlite3.Connection, user_id: str) -> list[dict[str, A
         (str(user_id or "").strip(),),
     ).fetchall()
     return [dict(row) for row in rows if str(row["status"]) not in _TERMINAL_DEPLOYMENT_STATUSES]
+
+
+def _captain_deployment_rows(conn: sqlite3.Connection, user_id: str) -> list[dict[str, Any]]:
+    return [row for row in _deployment_rows(conn, user_id) if not _is_operator_deployment(row)]
 
 
 def _between_clause(column: str) -> str:
@@ -333,6 +347,78 @@ def _memory_rows(
         if deployment_set and any(deployment_id and deployment_id in source_key for deployment_id in deployment_set):
             scoped.append(item)
     return scoped
+
+
+def _wrapped_signal_counts(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_ids: Sequence[str],
+    period_start: str,
+    period_end: str,
+) -> dict[str, int]:
+    """Count real Captain activity for scheduler eligibility.
+
+    A deployment row alone is inventory, not a Wrapped-worthy signal. This gate
+    keeps fresh onboarding/add-agent events from producing empty reports.
+    """
+    return {
+        "events": len(
+            _event_rows(
+                conn,
+                user_id=user_id,
+                deployment_ids=deployment_ids,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        ),
+        "audits": len(
+            _audit_rows(
+                conn,
+                user_id=user_id,
+                deployment_ids=deployment_ids,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        ),
+        "pod_messages": len(
+            _message_rows(
+                conn,
+                user_id=user_id,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        ),
+        "memory_cards": len(
+            _memory_rows(
+                conn,
+                user_id=user_id,
+                deployment_ids=deployment_ids,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        ),
+    }
+
+
+def _has_wrapped_signal(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    deployment_ids: Sequence[str],
+    period_start: str,
+    period_end: str,
+) -> bool:
+    if not deployment_ids:
+        return False
+    counts = _wrapped_signal_counts(
+        conn,
+        user_id=user_id,
+        deployment_ids=deployment_ids,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    return any(int(value or 0) > 0 for value in counts.values())
 
 
 def _call_session_counter(
@@ -988,6 +1074,8 @@ def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime |
     for row in rows:
         frequency = normalize_wrapped_frequency(str(row["wrapped_frequency"] or "daily"))
         period_start, period_end = resolve_wrapped_period(frequency, now=now)
+        deployments = _captain_deployment_rows(conn, str(row["user_id"]))
+        deployment_ids = [str(item.get("deployment_id") or "") for item in deployments if str(item.get("deployment_id") or "")]
         latest = conn.execute(
             """
             SELECT status, novelty_score, created_at
@@ -1003,6 +1091,14 @@ def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime |
         elif str(latest["status"]) == "failed":
             reason = "failed_retry"
         else:
+            continue
+        if reason == "missing" and not _has_wrapped_signal(
+            conn,
+            user_id=str(row["user_id"]),
+            deployment_ids=deployment_ids,
+            period_start=period_start,
+            period_end=period_end,
+        ):
             continue
         due.append(
             {

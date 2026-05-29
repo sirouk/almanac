@@ -503,6 +503,8 @@ services:
     user: "0:0"
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_OVERRIDE
     environment:
       ARCLINK_DOCKER_MODE: "1"
       ARCLINK_CONTAINER_RUNTIME: docker

@@ -727,6 +727,7 @@ def test_compose_defines_full_stack_services() -> None:
         "queued" in operator_upgrade_broker_block
         and "operator upgrade execution" in operator_upgrade_broker_block
         and 'user: "0:0"' in operator_upgrade_broker_block
+        and compose_list_values(operator_upgrade_broker_block, "cap_add") == ["DAC_OVERRIDE"]
         and re.search(rf"^\s+- {re.escape(HOST_REPO_BIND)}\s*$", operator_upgrade_broker_block, re.MULTILINE)
         and HOST_REPO_BIND_RO not in operator_upgrade_broker_block,
         f"operator-upgrade-broker must own the explicit writable host repo exception\n{operator_upgrade_broker_block}",
@@ -1568,6 +1569,7 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
         f"operator-upgrade-broker must run as the trusted root broker so /root-hosted live checkouts are traversable\n{block}",
     )
     expect("cap_drop:\n      - ALL" in block, block)
+    expect(compose_list_values(block, "cap_add") == ["DAC_OVERRIDE"], block)
     expect("<<: *arclink-env" not in block, f"operator-upgrade-broker must not inherit broad app env\n{block}")
     expect(
         "*arclink-control-secret-env" not in block,
@@ -1632,6 +1634,7 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
     expect(boundary.get("host_repo_bind_includes_private_state") is True, f"operator-upgrade-broker must record private state through host repo bind: {boundary}")
     expect(boundary.get("global_container_secrets_mount") is False, f"operator-upgrade-broker must not mount global container secrets: {boundary}")
     expect(boundary.get("inherits_broad_app_env") is False, f"operator-upgrade-broker must not inherit broad app env: {boundary}")
+    expect(boundary.get("linux_capabilities") == "drop_all_add_DAC_OVERRIDE", f"operator-upgrade-broker must record its exact cap_add set: {boundary}")
     controls = row.get("gap_019_ab_controls")
     expect(isinstance(controls, dict), f"operator-upgrade-broker must record GAP-019-AB controls: {row}")
     assert isinstance(controls, dict)

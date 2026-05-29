@@ -2231,7 +2231,7 @@
         "global_container_secrets_mount": false,
         "inherits_broad_app_env": false,
         "child_process_env_allowlist": true,
-        "linux_capabilities": "all_dropped",
+        "linux_capabilities": "drop_all_add_DAC_OVERRIDE",
         "compose_networks": [
           "operator-upgrade-broker-net",
           "operator-upgrade-broker-egress-net"
@@ -2248,7 +2248,7 @@
       "why_socket_needed": "Queued Docker-mode operator upgrades and pinned-component apply/final-upgrade requests need to run Docker Compose from the live host checkout.",
       "proxy_or_broker_candidate_status": "GAP-019-B2 reviewed; GAP-019-U implemented: queued operator upgrade execution moved out of agent-supervisor-broker into this command-specific broker. GAP-019-AI rejects unsafe Docker CLI executable configuration before upgrade child subprocesses. GAP-019-AV rejects unsafe fixed deploy.sh and bin/component-upgrade.sh targets before private logs or upgrade subprocesses. GAP-019-AW rejects unsafe upstream deploy-key and known-hosts paths before child env construction, private logs, or upgrade subprocesses.",
       "monitoring_runbook_anchor": "docs/docker.md#docker-socket-and-private-state-trust-boundaries",
-      "residual_policy_state": "Writeable Docker socket, root container identity, and writable live host repo access remain host-root-equivalent; GAP-019 remains open until accepted or replaced with stronger isolation.",
+      "residual_policy_state": "Writeable Docker socket, root container identity with DAC_OVERRIDE, and writable live host repo access remain host-root-equivalent; GAP-019 remains open until accepted or replaced with stronger isolation.",
       "gap_019_al_controls": {
         "local_repair_status": "trusted_host_residual_risk_acceptance_gate_added",
         "acceptance_env": "ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED",
@@ -2302,7 +2302,7 @@
         ],
         "root_split_review": {
           "required": true,
-          "decision": "Runs as the explicit trusted root broker because live checkouts may be hosted under /root and Docker Compose bind paths must resolve to host-visible paths. cap_drop ALL and no-new-privileges remain set, but the writeable Docker socket plus writable host checkout stay host-root-equivalent."
+          "decision": "Runs as the explicit trusted root broker with DAC_OVERRIDE because live checkouts may be hosted under /root, Docker Compose bind paths must resolve to host-visible paths, and operator action logs are service-user-owned under private state. no-new-privileges remains set, but the writeable Docker socket plus writable host checkout stay host-root-equivalent."
         },
         "monitoring_controls": [
           "operator-upgrade-broker healthcheck",
@@ -2346,7 +2346,7 @@
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_rejects_raw_or_unsafe_requests",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "The root supervisor no longer runs raw Docker-mode operator upgrade commands, but operator-upgrade-broker's root container identity, writeable Docker socket, live host repo mount, and private-state reachability through that host repo remain trusted-host authority until the operator accepts residual risk or replaces them with stronger isolation."
+        "remaining_gate": "The root supervisor no longer runs raw Docker-mode operator upgrade commands, but operator-upgrade-broker's root container identity with DAC_OVERRIDE, writeable Docker socket, live host repo mount, and private-state reachability through that host repo remain trusted-host authority until the operator accepts residual risk or replaces them with stronger isolation."
       },
       "gap_019_u_controls": {
         "local_repair_status": "operator_upgrade_broker_split_from_agent_supervisor",

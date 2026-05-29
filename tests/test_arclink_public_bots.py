@@ -8,6 +8,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -18,6 +19,24 @@ PYTHON_DIR = REPO / "python"
 def expect(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+@contextmanager
+def temp_env(values: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        for key, value in values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def load_module(filename: str, name: str):
@@ -506,17 +525,20 @@ def test_public_bot_connect_notion_resolves_active_deployment_and_records_event(
     seeded = seed_active_public_bot_deployment(control, conn, prefix="arc-notionpod")
     seed_credential_handoffs(control, conn, seeded)
 
-    turn = bots.handle_arclink_public_bot_turn(
-        conn,
-        channel="telegram",
-        channel_identity="tg:42",
-        text="/connect-notion",
-    )
+    with temp_env({"ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": "https://control.example.ts.net/notion/webhook"}):
+        turn = bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="telegram",
+            channel_identity="tg:42",
+            text="/connect-notion",
+        )
     expect(turn.action == "connect_notion", str(turn))
     expect(
-        "https://control.example.ts.net/u/arc-notionpod/notion/webhook" in turn.reply,
+        "https://control.example.ts.net/notion/webhook" in turn.reply,
         turn.reply,
     )
+    expect("/u/arc-notionpod/notion/webhook" not in turn.reply, turn.reply)
+    expect("shared control-node callback" in turn.reply, turn.reply)
     expect("does not verify the Notion integration" in turn.reply, turn.reply)
     expect("ready for dashboard verification" in turn.reply, turn.reply)
     ready = bots.handle_arclink_public_bot_turn(
@@ -1079,12 +1101,13 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     expect(status.deployment_id == "arcdep_bob", str(status))
     expect("Agent at the helm: Bob" in status.reply, status.reply)
     expect("onboarding only" not in status.reply.lower(), status.reply)
-    notion = bots.handle_arclink_public_bot_turn(
-        conn,
-        channel="telegram",
-        channel_identity="tg:42",
-        text="/connect-notion",
-    )
+    with temp_env({"ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None, "ARCLINK_TAILSCALE_CONTROL_URL": None}):
+        notion = bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="telegram",
+            channel_identity="tg:42",
+            text="/connect-notion",
+        )
     expect(notion.action == "connect_notion", str(notion))
     expect("/u/arc-bob/notion/webhook" in notion.reply, notion.reply)
     print("PASS test_public_bot_agents_roster_add_agent_and_switch_are_account_aware")
@@ -1401,12 +1424,13 @@ def test_public_bot_pair_channel_links_account_across_telegram_and_discord() -> 
     )
     expect(roster.action == "show_agents", str(roster))
     expect("Your ArcLink crew" in roster.reply, roster.reply)
-    notion = bots.handle_arclink_public_bot_turn(
-        conn,
-        channel="discord",
-        channel_identity="discord:99",
-        text="/connect-notion",
-    )
+    with temp_env({"ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None, "ARCLINK_TAILSCALE_CONTROL_URL": None}):
+        notion = bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="discord",
+            channel_identity="discord:99",
+            text="/connect-notion",
+        )
     expect(notion.action == "connect_notion", str(notion))
     expect("/u/arc-pair/notion/webhook" in notion.reply, notion.reply)
     print("PASS test_public_bot_pair_channel_links_account_across_telegram_and_discord")
@@ -1735,6 +1759,62 @@ def test_public_bot_canonicalizes_tailscale_path_resource_urls() -> None:
     print("PASS test_public_bot_canonicalizes_tailscale_path_resource_urls")
 
 
+def test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_notion_control_url_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_notion_control_url_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:notion-port",
+        prefix="arc-notion-port",
+        base_domain="s1396.tail77f45e.ts.net",
+    )
+    seed_credential_handoffs(control, conn, seeded)
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "s1396.tail77f45e.ts.net",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8444},
+                    "tailnet_app_publication": {"status": "published", "successful_roles": ["hermes"]},
+                },
+                sort_keys=True,
+            ),
+            seeded["deployment_id"],
+        ),
+    )
+    conn.commit()
+
+    with temp_env(
+        {
+            "ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None,
+            "ARCLINK_TAILSCALE_CONTROL_URL": "https://s1396.tail77f45e.ts.net",
+            "ARCLINK_TAILSCALE_NOTION_PATH": "/notion/webhook",
+            "ARCLINK_TAILSCALE_HTTPS_PORT": "443",
+        }
+    ):
+        notion = bots.handle_arclink_public_bot_turn(
+            conn,
+            channel="telegram",
+            channel_identity="tg:notion-port",
+            text="/connect-notion",
+        )
+    expect(notion.action == "connect_notion", str(notion))
+    expect("https://s1396.tail77f45e.ts.net/notion/webhook" in notion.reply, notion.reply)
+    expect(":8444/notion/webhook" not in notion.reply, notion.reply)
+    expect("/u/arc-notion-port/notion/webhook" not in notion.reply, notion.reply)
+    print("PASS test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port")
+
+
 def test_public_bot_raven_display_name_is_channel_and_account_scoped() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_raven_name_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_raven_name_test")
@@ -2027,6 +2107,7 @@ def main() -> int:
     test_public_bot_ignores_cross_user_active_deployment_metadata()
     test_public_bot_withholds_unpublished_tailnet_app_urls()
     test_public_bot_canonicalizes_tailscale_path_resource_urls()
+    test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port()
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
     test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding()
     test_public_bot_refuel_lists_options_and_opens_payment_checkout()
@@ -2037,7 +2118,7 @@ def main() -> int:
     test_public_bot_train_crew_flow_and_whats_changed()
     test_public_bot_academy_training_walks_crew_with_skip()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
-    print("PASS all 34 ArcLink public bot tests")
+    print("PASS all 35 ArcLink public bot tests")
     return 0
 
 

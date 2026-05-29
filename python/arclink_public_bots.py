@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 import hashlib
+import os
 import re
 import secrets
 import sqlite3
@@ -3072,8 +3073,54 @@ def _dashboard_username(conn: sqlite3.Connection, deployment: Mapping[str, Any])
     return "arclink"
 
 
+def _join_url_path(base_url: str, path: str) -> str:
+    clean_base = str(base_url or "").strip().rstrip("/")
+    if not clean_base:
+        return ""
+    if not clean_base.startswith(("https://", "http://")):
+        clean_base = f"https://{clean_base}"
+    clean_path = "/" + str(path or "/").strip().lstrip("/")
+    return f"{clean_base}{clean_path}"
+
+
+def _control_notion_webhook_public_url() -> str:
+    explicit = str(os.environ.get("ARCLINK_NOTION_WEBHOOK_PUBLIC_URL") or "").strip()
+    if explicit:
+        return explicit
+    path = str(
+        os.environ.get("ARCLINK_TAILSCALE_NOTION_PATH")
+        or os.environ.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH")
+        or "/notion/webhook"
+    ).strip() or "/notion/webhook"
+    control_url = str(os.environ.get("ARCLINK_TAILSCALE_CONTROL_URL") or "").strip()
+    if control_url:
+        return _join_url_path(control_url, path)
+    host = str(
+        os.environ.get("ARCLINK_TAILSCALE_DNS_NAME")
+        or os.environ.get("TAILSCALE_DNS_NAME")
+        or ""
+    ).strip().lower().strip(".")
+    if not host:
+        return ""
+    port = str(
+        os.environ.get("ARCLINK_TAILSCALE_HTTPS_PORT")
+        or os.environ.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT")
+        or os.environ.get("TAILSCALE_SERVE_PORT")
+        or "443"
+    ).strip()
+    if port and port != "443":
+        host = f"{host}:{port}"
+    return _join_url_path(host, path)
+
+
 def _notion_callback_url(deployment: Mapping[str, Any]) -> str:
-    dashboard_url = str(_deployment_access(deployment).get("dashboard") or "").rstrip("/")
+    shared_url = _control_notion_webhook_public_url()
+    if shared_url:
+        return shared_url
+    access = _deployment_access(deployment)
+    if str(access.get("notion") or "").strip():
+        return str(access.get("notion") or "").strip()
+    dashboard_url = str(access.get("dashboard") or "").rstrip("/")
     return f"{dashboard_url}/notion/webhook" if dashboard_url else ""
 
 
@@ -3872,8 +3919,9 @@ def _connect_notion_reply(
         "",
         "Current model: ArcLink uses a brokered shared-root Notion SSOT rail with dashboard/operator verification. This command records setup intent and callback only; it does not verify the Notion integration, install secrets, support user-owned OAuth, or bypass the verification rail.",
         "",
-        "Drop this callback into the Notion webhook/subscription panel:",
+        "Drop this shared control-node callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
+        "Do not add a Helm, Drive, Code, or Agent port/path to it.",
         "",
         "Then share the page or database with the ArcLink integration. Email sharing alone is not treated as proof of API access. No tokens in chat - when I need a secret, the secure dashboard field is the only door.",
         "",

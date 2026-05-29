@@ -872,6 +872,46 @@ def _notion_index_available(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def _join_url_path(base_url: str, path: str) -> str:
+    clean_base = str(base_url or "").strip().rstrip("/")
+    if not clean_base:
+        return ""
+    if not clean_base.startswith(("https://", "http://")):
+        clean_base = f"https://{clean_base}"
+    clean_path = "/" + str(path or "/").strip().lstrip("/")
+    return f"{clean_base}{clean_path}"
+
+
+def _control_notion_webhook_public_url() -> str:
+    explicit = str(os.environ.get("ARCLINK_NOTION_WEBHOOK_PUBLIC_URL") or "").strip()
+    if explicit:
+        return explicit
+    path = str(
+        os.environ.get("ARCLINK_TAILSCALE_NOTION_PATH")
+        or os.environ.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH")
+        or "/notion/webhook"
+    ).strip() or "/notion/webhook"
+    control_url = str(os.environ.get("ARCLINK_TAILSCALE_CONTROL_URL") or "").strip()
+    if control_url:
+        return _join_url_path(control_url, path)
+    host = str(
+        os.environ.get("ARCLINK_TAILSCALE_DNS_NAME")
+        or os.environ.get("TAILSCALE_DNS_NAME")
+        or ""
+    ).strip().lower().strip(".")
+    if not host:
+        return ""
+    port = str(
+        os.environ.get("ARCLINK_TAILSCALE_HTTPS_PORT")
+        or os.environ.get("TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT")
+        or os.environ.get("TAILSCALE_SERVE_PORT")
+        or "443"
+    ).strip()
+    if port and port != "443":
+        host = f"{host}:{port}"
+    return _join_url_path(host, path)
+
+
 def _deployment_session_metadata(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any]:
     row = conn.execute(
         """
@@ -900,7 +940,11 @@ def _deployment_notion_setup(
     armed_until = str(get_setting(conn, "notion_webhook_verification_token_armed_until", "") or "").strip()
     index_available = _notion_index_available(conn)
     dashboard_url = str(urls.get("dashboard") or "").rstrip("/")
-    callback_url = str(urls.get("notion") or (f"{dashboard_url}/notion/webhook" if dashboard_url else "")).strip()
+    callback_url = str(
+        _control_notion_webhook_public_url()
+        or urls.get("notion")
+        or (f"{dashboard_url}/notion/webhook" if dashboard_url else "")
+    ).strip()
     ready_for_dashboard = public_status == "ready_for_dashboard_verification"
     if configured and verified_at:
         webhook_state = "webhook_verified"

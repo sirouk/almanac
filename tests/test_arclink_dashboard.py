@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -16,6 +18,24 @@ PYTHON_DIR = REPO / "python"
 def expect(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+@contextmanager
+def temp_env(values: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        for key, value in values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def load_module(filename: str, name: str):
@@ -135,7 +155,8 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     conn = memory_db(control)
     prepared = seed_dashboard(control, onboarding, conn)
 
-    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    with temp_env({"ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": "https://control.example.ts.net/notion/webhook"}):
+        view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
     expect(view["user"]["email"] == "dashboard@example.test", str(view))
     expect(
         {section["section"] for section in view["sections"]}
@@ -189,7 +210,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     expect(deployment["model"]["model_id"] == "model-default", str(deployment["model"]))
     expect(deployment["notion_setup"]["status"] == "available", str(deployment["notion_setup"]))
     expect(
-        deployment["notion_setup"]["callback_url"] == "https://u-amber-vault-1a2b.example.test/notion/webhook",
+        deployment["notion_setup"]["callback_url"] == "https://control.example.ts.net/notion/webhook",
         str(deployment["notion_setup"]),
     )
     expect(deployment["notion_setup"]["verification"]["live_workspace"] == "proof_gated", str(deployment["notion_setup"]))

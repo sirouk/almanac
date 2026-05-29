@@ -1204,6 +1204,11 @@ def _route_operator_free_form_to_agent(
             text=str(parsed.get("text") or ""),
             reply_to_message_id=message_id,
             display_name=str(parsed.get("display_name") or "").strip(),
+            platform_metadata={
+                "telegram_update_kind": parsed.get("telegram_update_kind", ""),
+                "telegram_update_json": parsed.get("telegram_update_json", ""),
+                "telegram_native_callback": parsed.get("telegram_native_callback"),
+            },
         )
         if queued is None:
             return None

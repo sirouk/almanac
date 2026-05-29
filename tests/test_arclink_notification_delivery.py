@@ -731,6 +731,18 @@ def test_operator_agent_turn_delivery_uses_control_stack_gateway() -> None:
                             "agent_label": "Operator Hermes",
                             "operator_turn": True,
                             "source_kind": "operator_chat",
+                            "telegram_update_kind": "callback_query",
+                            "telegram_native_callback": True,
+                            "telegram_update_json": json.dumps(
+                                {
+                                    "update_id": 123,
+                                    "callback_query": {
+                                        "id": "cb_1",
+                                        "message": {"message_id": 22, "chat": {"id": 123}},
+                                        "data": "ea:always:1",
+                                    },
+                                }
+                            ),
                         }
                     ),
                 },
@@ -739,6 +751,11 @@ def test_operator_agent_turn_delivery_uses_control_stack_gateway() -> None:
             expect(len(bridge_calls) == 1, str(bridge_calls))
             expect(bridge_calls[0]["notification_id"] == 77, str(bridge_calls))
             expect(bridge_calls[0]["prompt"] == "operator, are we up to date?", str(bridge_calls))
+            bridge_extra = bridge_calls[0]["extra"]
+            expect(bridge_extra["telegram_update_kind"] == "callback_query", str(bridge_extra))
+            expect(bridge_extra["telegram_native_callback"] is True, str(bridge_extra))
+            native_update = json.loads(str(bridge_extra["telegram_update_json"]))
+            expect(native_update["callback_query"]["data"] == "ea:always:1", str(native_update))
             print("PASS test_operator_agent_turn_delivery_uses_control_stack_gateway")
         finally:
             os.environ.clear()

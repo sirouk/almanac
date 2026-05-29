@@ -195,6 +195,10 @@ def test_operator_agent_turn_enqueues_only_when_ready() -> None:
             text="what is broken on the fleet?",
             reply_to_message_id="5005",
             display_name="Ops",
+            platform_metadata={
+                "telegram_update_kind": "message",
+                "telegram_update_json": '{"update_id": 1}',
+            },
         )
         expect(isinstance(nid, int) and nid > 0, f"expected a notification id, got {nid}")
         row = conn.execute(
@@ -208,6 +212,8 @@ def test_operator_agent_turn_enqueues_only_when_ready() -> None:
         expect(extra.get("deployment_id") == "operator", str(extra))
         expect(extra.get("source_kind") == "operator_chat", str(extra))
         expect(extra.get("telegram_reply_to_message_id") == "5005", str(extra))
+        expect(extra.get("telegram_update_kind") == "message", str(extra))
+        expect(extra.get("telegram_update_json") == '{"update_id": 1}', str(extra))
         print("PASS test_operator_agent_turn_enqueues_only_when_ready")
     finally:
         cleanup(tmp, old_env)
@@ -259,10 +265,53 @@ def test_telegram_operator_free_form_routes_to_agent_or_intro() -> None:
         cleanup(tmp, old_env)
 
 
+def test_telegram_operator_native_callback_routes_to_hermes_bridge() -> None:
+    tmp, old_env, conn, control, oa = with_db()
+    try:
+        telegram = load_module(PYTHON_DIR / "arclink_telegram.py", "arclink_telegram_operator_callback_test")
+        env = {
+            "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+            "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+            "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+        }
+        oa.ensure_operator_agent_user(conn, user_id="operator")
+        oa.ensure_operator_agent_deployment(conn, user_id="operator", status="active")
+        update = {
+            "update_id": 99,
+            "callback_query": {
+                "id": "cb_approval",
+                "from": {"id": 99, "first_name": "Ops"},
+                "message": {"message_id": 808, "chat": {"id": 42, "type": "private"}},
+                "data": "ea:always:1",
+            },
+        }
+        result = telegram.handle_telegram_update(conn, update, env=env)
+        expect(result is not None and result.get("action") == "operator_agent_turn_queued", str(result))
+        expect(result.get("callback_query_id") == "cb_approval", str(result))
+        row = conn.execute(
+            "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        expect(row is not None and row["target_kind"] == "public-agent-turn", str(dict(row) if row else None))
+        expect(row["target_id"] == "tg:42", str(dict(row)))
+        expect(row["message"] == "ea:always:1", str(dict(row)))
+        extra = json.loads(row["extra_json"]) if row["extra_json"] else {}
+        expect(extra.get("operator_turn") is True, str(extra))
+        expect(extra.get("source_kind") == "operator_chat", str(extra))
+        expect(extra.get("telegram_reply_to_message_id") == "808", str(extra))
+        expect(extra.get("telegram_update_kind") == "callback_query", str(extra))
+        expect(extra.get("telegram_native_callback") is True, str(extra))
+        raw_update = json.loads(str(extra.get("telegram_update_json") or "{}"))
+        expect(raw_update.get("callback_query", {}).get("data") == "ea:always:1", str(raw_update))
+        print("PASS test_telegram_operator_native_callback_routes_to_hermes_bridge")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_operator_agent_lifecycle_and_single_invariant()
     test_operator_agent_default_is_control_stack_active_not_arcpod_ready()
     test_operator_agent_enabled_defaults_on_with_explicit_opt_out()
     test_operator_agent_turn_enqueues_only_when_ready()
     test_telegram_operator_free_form_routes_to_agent_or_intro()
+    test_telegram_operator_native_callback_routes_to_hermes_bridge()
     print("PASS all operator agent tests")

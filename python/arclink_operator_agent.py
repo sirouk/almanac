@@ -207,6 +207,7 @@ def enqueue_operator_agent_turn(
     discord_channel_id: str = "",
     discord_user_id: str = "",
     discord_chat_type: str = "",
+    platform_metadata: Mapping[str, Any] | None = None,
 ) -> int | None:
     """Queue a free-form operator message for the operator's one Hermes agent.
 
@@ -231,6 +232,11 @@ def enqueue_operator_agent_turn(
     }
     if display_name:
         extra["display_name"] = display_name
+    if platform_metadata:
+        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
+            value = platform_metadata.get(key)
+            if value not in (None, ""):
+                extra[key] = value
     if clean_channel == "telegram" and reply_to_message_id:
         extra["telegram_reply_to_message_id"] = reply_to_message_id
     if clean_channel == "discord":

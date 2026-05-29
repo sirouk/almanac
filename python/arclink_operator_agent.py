@@ -314,7 +314,10 @@ def _env_default(name: str, fallback: str) -> str:
 def _operator_agent_enabled() -> bool:
     import os
 
-    return str(os.environ.get("ARCLINK_OPERATOR_AGENT_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+    raw = str(os.environ.get("ARCLINK_OPERATOR_AGENT_ENABLED") or "").strip().lower()
+    if raw in {"", "1", "true", "yes", "on"}:
+        return True
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -186,7 +186,7 @@ ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_BASE_S
 ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS:-900}"
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
-ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-0}"
+ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}"
 ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
 ARCLINK_OPERATOR_AGENT_EMAIL="${ARCLINK_OPERATOR_AGENT_EMAIL:-}"
 ARCLINK_OPERATOR_AGENT_DISPLAY_NAME="${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}"
@@ -2411,7 +2411,7 @@ emit_runtime_config() {
     write_kv OPERATOR_NOTIFY_CHANNEL_PLATFORM "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
     write_kv OPERATOR_NOTIFY_CHANNEL_ID "${OPERATOR_NOTIFY_CHANNEL_ID:-}"
     write_kv ARCLINK_OPERATOR_TELEGRAM_USER_IDS "${ARCLINK_OPERATOR_TELEGRAM_USER_IDS:-}"
-    write_kv ARCLINK_OPERATOR_AGENT_ENABLED "${ARCLINK_OPERATOR_AGENT_ENABLED:-0}"
+    write_kv ARCLINK_OPERATOR_AGENT_ENABLED "${ARCLINK_OPERATOR_AGENT_ENABLED:-1}"
     write_kv ARCLINK_OPERATOR_AGENT_USER_ID "${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
     write_kv ARCLINK_OPERATOR_AGENT_EMAIL "${ARCLINK_OPERATOR_AGENT_EMAIL:-}"
     write_kv ARCLINK_OPERATOR_AGENT_DISPLAY_NAME "${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}"
@@ -10171,7 +10171,7 @@ collect_control_install_answers() {
   # Captain pod. The operator talks to it from the operator channel; slash
   # commands still drive Operator Raven controls.
   if [[ "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" != "tui-only" ]]; then
-    if [[ "$(ask_yes_no "Give the operator a dedicated Hermes agent (one arcpod, maintained like the fleet)?" "${ARCLINK_OPERATOR_AGENT_ENABLED:-0}")" == "1" ]]; then
+    if [[ "$(ask_yes_no "Give the operator a dedicated Hermes agent (one arcpod, maintained like the fleet)?" "${ARCLINK_OPERATOR_AGENT_ENABLED:-1}")" == "1" ]]; then
       ARCLINK_OPERATOR_AGENT_ENABLED="1"
       ARCLINK_OPERATOR_AGENT_USER_ID="$(normalize_optional_answer "$(ask "ArcLink user id that owns the operator Hermes agent" "${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}")")"
       ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
@@ -10366,10 +10366,11 @@ run_control_install_flow() {
 }
 
 ensure_control_operator_agent() {
-  # Provision the operator's single Hermes agent (one ArcLink arcpod) when the
-  # operator opted in during onboarding. Idempotent and best-effort: the reserved
-  # arcpod is then built and maintained by the same fleet pipeline as Captains.
-  if [[ "${ARCLINK_OPERATOR_AGENT_ENABLED:-0}" != "1" ]]; then
+  # Provision the operator's single Hermes agent (one ArcLink arcpod) by
+  # default, unless explicitly disabled during onboarding. Idempotent and
+  # best-effort: the reserved arcpod is then built and maintained by the same
+  # fleet pipeline as Captains.
+  if [[ "${ARCLINK_OPERATOR_AGENT_ENABLED:-1}" != "1" ]]; then
     return 0
   fi
   echo "Ensuring the operator's single Hermes agent (one arcpod, maintained like the fleet)..."

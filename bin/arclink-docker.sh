@@ -2126,12 +2126,18 @@ docker_curator_setup() {
 docker_operator_agent_setup() {
   # Ensure the operator's single outer Hermes agent (one ArcLink arcpod owned by
   # the operator's selected ArcLink user) exists. Idempotent; --require-enabled
-  # makes it a no-op unless ARCLINK_OPERATOR_AGENT_ENABLED is set. The reserved
-  # arcpod is provisioned and maintained by the same fleet pipeline as Captains.
+  # makes it a no-op only when ARCLINK_OPERATOR_AGENT_ENABLED is explicitly
+  # disabled. The reserved arcpod is provisioned and maintained by the same
+  # fleet pipeline as Captains.
   prepare_compose
   compose up -d --no-build agent-supervisor
-  compose exec -T agent-supervisor env PYTHONPATH=/home/arclink/arclink/python \
-    python3 /home/arclink/arclink/python/arclink_operator_agent.py ensure --require-enabled "$@" || true
+  compose exec -T \
+    -e ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}" \
+    -e ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}" \
+    -e ARCLINK_OPERATOR_AGENT_EMAIL="${ARCLINK_OPERATOR_AGENT_EMAIL:-}" \
+    -e ARCLINK_OPERATOR_AGENT_DISPLAY_NAME="${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}" \
+    agent-supervisor env PYTHONPATH=/home/arclink/arclink/python \
+    python3 /home/arclink/arclink/python/arclink_operator_agent.py ensure --require-enabled "$@"
   echo "Operator Hermes agent ensured (one agent; provisioned and maintained like a fleet arcpod)."
 }
 

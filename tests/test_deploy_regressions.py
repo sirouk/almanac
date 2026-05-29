@@ -3868,6 +3868,8 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "control onboarding must offer the operator's single Hermes agent")
     expect("ARCLINK_OPERATOR_AGENT_USER_ID" in deploy_text and "ARCLINK_OPERATOR_AGENT_ENABLED" in deploy_text,
            "operator agent owner/enable must be collected")
+    expect('ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}"' in deploy_text,
+           "operator agent setup must default to enabled unless explicitly disabled")
     expect('write_kv ARCLINK_OPERATOR_AGENT_USER_ID' in deploy_text,
            "operator agent owner must be persisted to generated config")
     # Install flow provisions it through the existing arcpod pipeline, idempotently.
@@ -3878,8 +3880,12 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
     # The docker helper runs the idempotent ensure inside the control container.
     expect("operator-agent-setup)" in docker_text and "docker_operator_agent_setup" in docker_text,
            "arclink-docker.sh must expose operator-agent-setup")
+    expect('-e ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}"' in docker_text,
+           "docker operator-agent setup must pass the default-on enable flag into the supervisor container")
     expect("arclink_operator_agent.py ensure --require-enabled" in docker_text,
            "operator agent setup must call the idempotent, enable-guarded ensure")
+    expect("arclink_operator_agent.py ensure --require-enabled \"$@\" || true" not in docker_text,
+           "operator agent setup must not mask ensure failures")
     print("PASS test_control_install_wires_single_operator_hermes_agent")
 
 

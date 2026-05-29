@@ -129,6 +129,23 @@ def test_operator_agent_lifecycle_and_single_invariant() -> None:
         cleanup(tmp, old_env)
 
 
+def test_operator_agent_enabled_defaults_on_with_explicit_opt_out() -> None:
+    tmp, old_env, conn, _, oa = with_db()
+    try:
+        os.environ.pop("ARCLINK_OPERATOR_AGENT_ENABLED", None)
+        expect(oa._operator_agent_enabled() is True, "operator agent should default to enabled")
+        os.environ["ARCLINK_OPERATOR_AGENT_ENABLED"] = "0"
+        expect(oa._operator_agent_enabled() is False, "explicit zero should disable operator agent setup")
+        os.environ["ARCLINK_OPERATOR_AGENT_ENABLED"] = "false"
+        expect(oa._operator_agent_enabled() is False, "explicit false should disable operator agent setup")
+        os.environ["ARCLINK_OPERATOR_AGENT_ENABLED"] = "1"
+        expect(oa._operator_agent_enabled() is True, "explicit one should enable operator agent setup")
+        print("PASS test_operator_agent_enabled_defaults_on_with_explicit_opt_out")
+    finally:
+        conn.close()
+        cleanup(tmp, old_env)
+
+
 def test_operator_agent_turn_enqueues_only_when_ready() -> None:
     tmp, old_env, conn, control, oa = with_db()
     try:
@@ -221,6 +238,7 @@ def test_telegram_operator_free_form_routes_to_agent_or_intro() -> None:
 
 if __name__ == "__main__":
     test_operator_agent_lifecycle_and_single_invariant()
+    test_operator_agent_enabled_defaults_on_with_explicit_opt_out()
     test_operator_agent_turn_enqueues_only_when_ready()
     test_telegram_operator_free_form_routes_to_agent_or_intro()
     print("PASS all operator agent tests")

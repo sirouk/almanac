@@ -711,6 +711,13 @@ def _render_services(
     provider_secret_name = "chutes_api_key" if "chutes_api_key" in secret_target else "llm_router_api_key"
     nextcloud_db_name = _postgres_db_name(prefix="nextcloud", deployment_id=deployment_id)
     memory_volume = {"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR}
+    vault_volume = {"source": roots["vault"], "target": CONTAINER_VAULT_DIR}
+    workspace_volume = {"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR}
+    linked_resources_volume = {
+        "source": roots["linked_resources"],
+        "target": CONTAINER_LINKED_RESOURCES_DIR,
+        "read_only": True,
+    }
     hermes_host_ports: list[str] = []
     if (
         str(env.get("ARCLINK_INGRESS_MODE") or "").strip().lower() == "tailscale"
@@ -728,6 +735,7 @@ def _render_services(
             image=app_image,
             command=["./bin/arclink-dashboard-placeholder.sh"],
             environment=env,
+            volumes=[vault_volume, memory_volume],
             labels=labels["dashboard"],
             deploy=_limits("dashboard"),
             networks=_control_network(prefix, "dashboard"),
@@ -736,7 +744,13 @@ def _render_services(
             image=app_image,
             command=["hermes", "gateway", "run", "--replace"],
             environment=env,
-            volumes=[{"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME}],
+            volumes=[
+                {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
+                vault_volume,
+                memory_volume,
+                workspace_volume,
+                linked_resources_volume,
+            ],
             depends_on=["qmd-mcp", "managed-context-install"],
             secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
             deploy=_limits("hermes-gateway"),
@@ -748,9 +762,10 @@ def _render_services(
             environment=env,
             volumes=[
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
-                {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
-                {"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR},
-                {"source": roots["linked_resources"], "target": CONTAINER_LINKED_RESOURCES_DIR, "read_only": True},
+                vault_volume,
+                memory_volume,
+                workspace_volume,
+                linked_resources_volume,
             ],
             ports=hermes_host_ports,
             labels=labels["hermes"],
@@ -767,7 +782,7 @@ def _render_services(
             command=["./bin/qmd-daemon.sh"],
             environment=env,
             volumes=[
-                {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
+                vault_volume,
                 {"source": roots["qmd"], "target": CONTAINER_QMD_STATE_DIR},
                 memory_volume,
             ],
@@ -777,7 +792,7 @@ def _render_services(
             image=app_image,
             command=["./bin/vault-watch.sh"],
             environment=env,
-            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}, memory_volume],
+            volumes=[vault_volume, memory_volume],
             depends_on=["qmd-mcp"],
             deploy=_limits("vault-watch"),
         ),
@@ -786,7 +801,7 @@ def _render_services(
             command=["./bin/docker-job-loop.sh", "memory-synth", "1800", "./bin/memory-synth.sh"],
             environment=env,
             volumes=[
-                {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
+                vault_volume,
                 memory_volume,
             ],
             depends_on=["qmd-mcp"],
@@ -828,7 +843,7 @@ def _render_services(
             },
             volumes=[
                 {"source": roots["nextcloud_html"], "target": "/var/www/html"},
-                {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
+                vault_volume,
             ],
             labels=labels.get("files", {}),
             depends_on=["nextcloud-db", "nextcloud-redis"],
@@ -844,7 +859,7 @@ def _render_services(
             image=app_image,
             command=["./bin/arclink-notion-webhook.sh", "--host", "0.0.0.0", "--port", "8283"],
             environment=env,
-            volumes=[{"source": roots["vault"], "target": CONTAINER_VAULT_DIR}, memory_volume],
+            volumes=[vault_volume, memory_volume],
             labels=labels["notion"],
             secrets=[
                 {"source": "notion_webhook_secret", "target": secret_target["notion_webhook_secret"]},
@@ -856,21 +871,21 @@ def _render_services(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "notification-delivery", "5", "./bin/arclink-notification-delivery.sh"],
             environment=env,
-            volumes=[memory_volume],
+            volumes=[vault_volume, memory_volume],
             deploy=_limits("notification-delivery"),
         ),
         "arclink-wrapped": _service(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"],
             environment=env,
-            volumes=[memory_volume],
+            volumes=[vault_volume, memory_volume],
             deploy=_limits("arclink-wrapped"),
         ),
         "health-watch": _service(
             image=app_image,
             command=["./bin/docker-job-loop.sh", "health-watch", "300", "./bin/health-watch.sh"],
             environment=env,
-            volumes=[memory_volume],
+            volumes=[vault_volume, memory_volume],
             deploy=_limits("health-watch"),
         ),
         "managed-context-install": _service(
@@ -910,7 +925,7 @@ def _render_services(
             },
             volumes=[
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
-                {"source": roots["vault"], "target": CONTAINER_VAULT_DIR},
+                vault_volume,
             ],
             secrets=[
                 {"source": provider_secret_name, "target": secret_target[provider_secret_name]},

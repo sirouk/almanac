@@ -248,6 +248,18 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
             service_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"],
             f"{service_name} missing writable memory state volume: {services[service_name]}",
         )
+    for service_name, service in services.items():
+        service_volumes = {item["target"]: item["source"] for item in service.get("volumes", [])}
+        if service.get("environment", {}).get("VAULT_DIR") == "/srv/vault":
+            expect(
+                service_volumes.get("/srv/vault") == intent["state_roots"]["vault"],
+                f"{service_name} declares VAULT_DIR=/srv/vault but does not mount the deployment vault: {service}",
+            )
+        if service.get("environment", {}).get("STATE_DIR") == "/srv/memory":
+            expect(
+                service_volumes.get("/srv/memory") == intent["state_roots"]["memory"],
+                f"{service_name} declares STATE_DIR=/srv/memory but does not mount deployment memory: {service}",
+            )
     expect("code-server" not in services, str(services))
     expect(services["managed-context-install"]["command"][:2] == ["./bin/install-deployment-hermes-home.sh", "/home/arclink/arclink"], str(services["managed-context-install"]))
     managed_installer_volumes = {item["target"]: item["source"] for item in services["managed-context-install"]["volumes"]}

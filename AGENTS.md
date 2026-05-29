@@ -36,7 +36,7 @@ reserved for platform/admin/deploy surfaces and backend runbooks.
 ## Canonical Host Layout
 
 Legacy Shared Host layout (retired as a public install lane, retained for
-state migration and host-side Operator workbench development):
+state migration, tests, and installer reuse):
 
 ```text
 /home/arclink/

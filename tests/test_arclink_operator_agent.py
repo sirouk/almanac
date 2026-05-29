@@ -101,6 +101,8 @@ def test_operator_agent_lifecycle_and_single_invariant() -> None:
         expect(deployment["user_id"] == "operator", str(deployment))
         meta = json.loads(deployment["metadata_json"]) if isinstance(deployment["metadata_json"], str) else deployment["metadata_json"]
         expect(bool(meta.get("operator_agent")) is True, str(meta))
+        expect(meta.get("operator_agent_runtime") == "control-stack", str(meta))
+        expect(meta.get("not_arcpod") is True, str(meta))
         expect(int(meta.get("bundle_agent_count") or 0) == 1, str(meta))
 
         # Reserved (not ready) => not routable yet.
@@ -125,6 +127,27 @@ def test_operator_agent_lifecycle_and_single_invariant() -> None:
         conn.commit()
         expect(oa.operator_conversation_routable(conn) is True, "active operator deployment is routable")
         print("PASS test_operator_agent_lifecycle_and_single_invariant")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_operator_agent_default_is_control_stack_active_not_arcpod_ready() -> None:
+    tmp, old_env, conn, control, oa = with_db()
+    try:
+        result = oa.ensure_operator_agent(conn, user_id="operator")
+        expect(result["deployment_id"] == "operator", str(result))
+        expect(result["status"] == "active", str(result))
+        expect(result["runtime"] == "control-stack", str(result))
+        row = conn.execute(
+            "SELECT status, metadata_json FROM arclink_deployments WHERE deployment_id = 'operator'"
+        ).fetchone()
+        meta = json.loads(row["metadata_json"])
+        expect(row["status"] == "active", str(dict(row)))
+        expect(meta["operator_agent"] is True, str(meta))
+        expect(meta["operator_agent_runtime"] == "control-stack", str(meta))
+        expect(meta["provisioning_mode"] == "control-stack", str(meta))
+        expect(meta["not_arcpod"] is True, str(meta))
+        print("PASS test_operator_agent_default_is_control_stack_active_not_arcpod_ready")
     finally:
         cleanup(tmp, old_env)
 
@@ -238,6 +261,7 @@ def test_telegram_operator_free_form_routes_to_agent_or_intro() -> None:
 
 if __name__ == "__main__":
     test_operator_agent_lifecycle_and_single_invariant()
+    test_operator_agent_default_is_control_stack_active_not_arcpod_ready()
     test_operator_agent_enabled_defaults_on_with_explicit_opt_out()
     test_operator_agent_turn_enqueues_only_when_ready()
     test_telegram_operator_free_form_routes_to_agent_or_intro()

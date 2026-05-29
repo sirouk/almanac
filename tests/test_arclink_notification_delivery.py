@@ -671,6 +671,80 @@ def test_public_agent_turn_delivery_prefers_gateway_bridge_when_available() -> N
             os.environ.update(old_env)
 
 
+def test_operator_agent_turn_delivery_uses_control_stack_gateway() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_operator_delivery_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_operator_gateway_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            bridge_calls: list[dict[str, object]] = []
+
+            def fake_operator_gateway_turn(**kwargs):
+                bridge_calls.append(kwargs)
+                return True, ""
+
+            def forbidden_public_gateway(**kwargs):
+                raise AssertionError(f"operator turn should not use ArcPod gateway: {kwargs}")
+
+            delivery._run_operator_agent_gateway_turn = fake_operator_gateway_turn
+            delivery._run_public_agent_gateway_turn = forbidden_public_gateway
+            error = delivery.deliver_row(
+                cfg,
+                {
+                    "id": "77",
+                    "target_kind": "public-agent-turn",
+                    "target_id": "tg:123",
+                    "channel_kind": "telegram",
+                    "message": "operator, are we up to date?",
+                    "extra_json": json.dumps(
+                        {
+                            "deployment_id": "operator",
+                            "prefix": "operator-helm",
+                            "agent_label": "Operator Hermes",
+                            "operator_turn": True,
+                            "source_kind": "operator_chat",
+                        }
+                    ),
+                },
+            )
+            expect(error is None, str(error))
+            expect(len(bridge_calls) == 1, str(bridge_calls))
+            expect(bridge_calls[0]["notification_id"] == 77, str(bridge_calls))
+            expect(bridge_calls[0]["prompt"] == "operator, are we up to date?", str(bridge_calls))
+            print("PASS test_operator_agent_turn_delivery_uses_control_stack_gateway")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_turn_delivery_bridges_discord_channel_metadata() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1632,6 +1706,7 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
     original_trusted = broker.TRUSTED_DOCKER_BINARY_PATHS
     old_env = os.environ.get("ARCLINK_DOCKER_BINARY")
     old_state_root = os.environ.get("ARCLINK_STATE_ROOT_BASE")
+    old_control_project = os.environ.get("ARCLINK_CONTROL_COMPOSE_PROJECT")
     with tempfile.TemporaryDirectory() as tmp:
         docker_path = Path(tmp) / "docker"
         docker_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -1669,6 +1744,40 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                     "exec",
                     "-i",
                     "arclink-arcdep_test-hermes-gateway-1",
+                    "/opt/arclink/runtime/hermes-venv/bin/python3",
+                    "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                ],
+                str(calls),
+            )
+
+            calls.clear()
+            os.environ["ARCLINK_CONTROL_COMPOSE_PROJECT"] = "arclink"
+            broker.delivery._deployment_service_container = (
+                lambda *, project_name, service, docker_binary="docker": f"{project_name}-control-operator-hermes-gateway-1"
+            )
+            ok, error = broker.run_gateway_exec_request(
+                {
+                    "operator_stack": True,
+                    "project_name": "arclink",
+                    "payload": {
+                        "platform": "telegram",
+                        "bot_token": "token",
+                        "chat_id": "123",
+                        "user_id": "123",
+                        "text": "operator hello",
+                    },
+                    "timeout_seconds": 60,
+                }
+            )
+            expect(ok is True and error == "", error)
+            expect(
+                calls
+                and calls[0]["cmd"]
+                == [
+                    docker_binary,
+                    "exec",
+                    "-i",
+                    "arclink-control-operator-hermes-gateway-1",
                     "/opt/arclink/runtime/hermes-venv/bin/python3",
                     "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
                 ],
@@ -1769,6 +1878,10 @@ def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> No
                 os.environ.pop("ARCLINK_STATE_ROOT_BASE", None)
             else:
                 os.environ["ARCLINK_STATE_ROOT_BASE"] = old_state_root
+            if old_control_project is None:
+                os.environ.pop("ARCLINK_CONTROL_COMPOSE_PROJECT", None)
+            else:
+                os.environ["ARCLINK_CONTROL_COMPOSE_PROJECT"] = old_control_project
 
 
 def test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_docker() -> None:
@@ -1994,6 +2107,7 @@ def main() -> int:
     test_public_agent_turn_delivery_allows_explicit_quiet_fallback()
     test_public_agent_turn_delivery_fails_closed_without_quiet_fallback()
     test_public_agent_turn_delivery_prefers_gateway_bridge_when_available()
+    test_operator_agent_turn_delivery_uses_control_stack_gateway()
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes()
     test_public_agent_turn_runner_prefers_running_gateway_container()
@@ -2011,7 +2125,7 @@ def main() -> int:
     test_public_agent_bridge_defaults_to_final_send_and_can_enable_streaming_without_reasoning()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
-    print("PASS all 19 notification delivery regression tests")
+    print("PASS all notification delivery regression tests")
     return 0
 
 

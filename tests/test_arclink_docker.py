@@ -468,6 +468,8 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ARCLINK_HEALTH_WATCH_HEALTH_CMD: ./bin/docker-health.sh" in body, body)
     expect("POSTGRES_PASSWORD:?run ./deploy.sh control bootstrap first" in body, body)
     expect("NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("ARCLINK_OPERATOR_NEXTCLOUD_DB_PASSWORD:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("ARCLINK_OPERATOR_NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh control bootstrap first" in body, body)
     expect("ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
     expect("ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
     expect("ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
@@ -480,6 +482,14 @@ def test_compose_defines_full_stack_services() -> None:
         "nextcloud:",
         "arclink-mcp:",
         "qmd-mcp:",
+        "control-operator-qmd-mcp:",
+        "control-operator-hermes-gateway:",
+        "control-operator-hermes-dashboard:",
+        "control-operator-vault-watch:",
+        "control-operator-memory-synth:",
+        "control-operator-nextcloud-db:",
+        "control-operator-nextcloud-redis:",
+        "control-operator-nextcloud:",
         "notion-webhook:",
         "control-api:",
         "control-llm-router:",
@@ -6034,9 +6044,10 @@ def test_docker_operator_commands_are_present() -> None:
     )
     expect(
         "deployment_status" in refresh_block
+        and "operator_agent" in refresh_block
         and "down --remove-orphans </dev/null >/dev/null 2>&1" in refresh_block
         and "torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed" in refresh_block,
-        "deployment plugin refresh must skip and stop retiring or retired ArcPods\n" + refresh_block,
+        "deployment plugin refresh must skip and stop retiring or retired ArcPods and the in-stack operator identity\n" + refresh_block,
     )
     expect("--force-recreate dashboard" in body, body)
     expect("--force-recreate nextcloud" in body, body)
@@ -7071,6 +7082,8 @@ def test_docker_compose_config_validates_when_docker_is_available() -> None:
             **os.environ,
             "POSTGRES_PASSWORD": "compose-config-test-postgres",
             "NEXTCLOUD_ADMIN_PASSWORD": "compose-config-test-nextcloud",
+            "ARCLINK_OPERATOR_NEXTCLOUD_DB_PASSWORD": "compose-config-test-operator-postgres",
+            "ARCLINK_OPERATOR_NEXTCLOUD_ADMIN_PASSWORD": "compose-config-test-operator-nextcloud",
             "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN": "compose-config-test-broker-token",
             "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN": "compose-config-test-deployment-broker-token",
             "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN": "compose-config-test-agent-supervisor-broker-token",

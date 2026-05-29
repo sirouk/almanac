@@ -10,6 +10,14 @@ DOCKER_REQUIRED_STATE_DIRS=(
   "$REPO_DIR/arclink-priv/vault"
   "$REPO_DIR/arclink-priv/state"
   "$REPO_DIR/arclink-priv/state/nextcloud"
+  "$REPO_DIR/arclink-priv/state/operator/hermes-home"
+  "$REPO_DIR/arclink-priv/state/operator/config"
+  "$REPO_DIR/arclink-priv/state/operator/quarto"
+  "$REPO_DIR/arclink-priv/state/operator/vault"
+  "$REPO_DIR/arclink-priv/state/operator/memory"
+  "$REPO_DIR/arclink-priv/state/operator/workspace"
+  "$REPO_DIR/arclink-priv/state/operator/qmd"
+  "$REPO_DIR/arclink-priv/state/operator/nextcloud"
   "$REPO_DIR/arclink-priv/state/pdf-ingest/markdown"
   "$REPO_DIR/arclink-priv/state/notion-index/markdown"
   "$REPO_DIR/arclink-priv/secrets/container"
@@ -29,6 +37,14 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   control-action-worker
   vault-watch
   agent-supervisor
+  control-operator-qmd-mcp
+  control-operator-hermes-gateway
+  control-operator-hermes-dashboard
+  control-operator-vault-watch
+  control-operator-memory-synth
+  control-operator-nextcloud-db
+  control-operator-nextcloud-redis
+  control-operator-nextcloud
   health-watch
 )
 DOCKER_PORT_MANIFEST="$REPO_DIR/arclink-priv/state/docker/ports.json"
@@ -234,6 +250,11 @@ bootstrap() {
   ensure_env_file_value ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN "$(random_secret)"
   ensure_env_file_value ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN "$(random_secret)"
   ensure_env_file_value ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN "$(random_secret)"
+  ensure_env_file_value ARCLINK_OPERATOR_AGENT_ENABLED "1"
+  ensure_env_file_value ARCLINK_OPERATOR_HERMES_PORT "13210"
+  ensure_env_file_value ARCLINK_OPERATOR_NEXTCLOUD_PORT "28081"
+  ensure_env_file_value ARCLINK_OPERATOR_NEXTCLOUD_DB_PASSWORD "$(random_secret)"
+  ensure_env_file_value ARCLINK_OPERATOR_NEXTCLOUD_ADMIN_PASSWORD "$(random_secret)"
   ensure_env_file_value ARCLINK_AGENT_USER_HELPER_TOKEN "$(random_secret)"
   ensure_env_file_value ARCLINK_AGENT_PROCESS_HELPER_TOKEN "$(random_secret)"
   ensure_env_file_value ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN "$(random_secret)"
@@ -723,6 +744,7 @@ with sqlite3.connect(db_path) as conn:
         SELECT deployment_id, prefix, base_domain, metadata_json
         FROM arclink_deployments
         WHERE status IN ('active', 'provisioning', 'provisioning_ready')
+          AND COALESCE(metadata_json, '') NOT LIKE '%"operator_agent"%'
         ORDER BY created_at, deployment_id
         """
     ).fetchall()
@@ -906,9 +928,10 @@ with sqlite3.connect(db_path) as conn:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT deployment_id, prefix
+        SELECT deployment_id, prefix, metadata_json
         FROM arclink_deployments
         WHERE status IN ('active', 'provisioning', 'provisioning_ready')
+          AND COALESCE(metadata_json, '') NOT LIKE '%"operator_agent"%'
         ORDER BY created_at, deployment_id
         """
     ).fetchall()
@@ -1026,6 +1049,7 @@ def load_deployment_identities() -> dict[str, dict[str, str]]:
             SELECT deployment_id, prefix, agent_name, agent_title, metadata_json
             FROM arclink_deployments
             WHERE status IN ('active', 'first_contacted', 'provisioning', 'provisioning_ready')
+              AND COALESCE(metadata_json, '') NOT LIKE '%"operator_agent"%'
             """
         ).fetchall()
     for row in rows:
@@ -1378,19 +1402,35 @@ docker_refresh_deployment_managed_plugins() {
     project="arclink-$clean_id"
     deployment_status="$(
       python3 - "$db_path" "$deployment_id" <<'PY' 2>/dev/null || true
+import json
 import sqlite3
 import sys
 
 db_path, deployment_id = sys.argv[1], sys.argv[2]
 with sqlite3.connect(db_path) as conn:
     row = conn.execute(
-        "SELECT status FROM arclink_deployments WHERE deployment_id = ?",
+        "SELECT status, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
         (deployment_id,),
     ).fetchone()
-print(str(row[0] if row else ""))
+if not row:
+    print("")
+    raise SystemExit(0)
+try:
+    metadata = json.loads(str(row[1] or "{}"))
+except json.JSONDecodeError:
+    metadata = {}
+if isinstance(metadata, dict) and metadata.get("operator_agent"):
+    print("operator_agent")
+else:
+    print(str(row[0] or ""))
 PY
     )"
     case "$deployment_status" in
+      operator_agent)
+        env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+          docker compose -p "$project" -f "$compose_file" down --remove-orphans </dev/null >/dev/null 2>&1 || true
+        continue
+        ;;
       torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed)
         env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
           docker compose -p "$project" -f "$compose_file" down --remove-orphans </dev/null >/dev/null 2>&1 || true
@@ -2124,13 +2164,12 @@ docker_curator_setup() {
 }
 
 docker_operator_agent_setup() {
-  # Ensure the operator's single outer Hermes agent (one ArcLink arcpod owned by
-  # the operator's selected ArcLink user) exists. Idempotent; --require-enabled
-  # makes it a no-op only when ARCLINK_OPERATOR_AGENT_ENABLED is explicitly
-  # disabled. The reserved arcpod is provisioned and maintained by the same
-  # fleet pipeline as Captains.
+  # Ensure the operator's single Hermes identity exists. The runtime is the
+  # Control Node stack (control-operator-* services), not a fleet ArcPod.
+  # Idempotent; --require-enabled makes it a no-op only when explicitly
+  # disabled.
   prepare_compose
-  compose up -d --no-build agent-supervisor
+  compose up -d --no-build agent-supervisor control-operator-qmd-mcp control-operator-hermes-gateway control-operator-hermes-dashboard
   compose exec -T \
     -e ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}" \
     -e ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}" \
@@ -2138,7 +2177,18 @@ docker_operator_agent_setup() {
     -e ARCLINK_OPERATOR_AGENT_DISPLAY_NAME="${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}" \
     agent-supervisor env PYTHONPATH=/home/arclink/arclink/python \
     python3 /home/arclink/arclink/python/arclink_operator_agent.py ensure --require-enabled "$@"
-  echo "Operator Hermes agent ensured (one agent; provisioned and maintained like a fleet arcpod)."
+  echo "Operator Hermes agent ensured (one in-stack Control Node service set)."
+}
+
+docker_retire_legacy_operator_arcpod_project() {
+  local containers=""
+  containers="$(docker ps -aq --filter label=com.docker.compose.project=arclink-operator 2>/dev/null || true)"
+  if [[ -z "$containers" ]]; then
+    return 0
+  fi
+  echo "Retiring legacy operator ArcPod containers; Operator Hermes now runs in the Control Node stack."
+  # shellcheck disable=SC2086
+  docker rm -f $containers >/dev/null 2>&1 || true
 }
 
 docker_rotate_nextcloud_secrets() {
@@ -2327,6 +2377,7 @@ main() {
       prepare_compose
       repair_docker_app_named_volumes
       compose up -d --no-build "$@"
+      docker_retire_legacy_operator_arcpod_project || true
       docker_repair_deployment_dashboard_plugin_mounts || true
       docker_refresh_deployment_managed_plugins || true
       ;;

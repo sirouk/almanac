@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""The Operator's single outer Hermes agent.
+"""The Operator's single Hermes agent identity.
 
 Captains can buy several agents; the Operator gets exactly ONE. That one agent
-is an ordinary ArcLink arcpod (an ``arclink_deployments`` row) owned by the
-ArcLink user the operator selects during control-node onboarding. Because it is
-a normal arcpod it is maintained by the same fleet machinery as every Captain
-pod -- the ArcPod update rollout refreshes it, health/probe watch it, and the
-public-agent gateway bridge carries the operator's free-form conversation into
-its Hermes gateway.
+is a first-class service inside the Sovereign Control Node Compose stack, not a
+tenant ArcPod and not a legacy shared-host Unix-user install. The control DB
+still keeps a stable ``arclink_deployments`` identity row so the existing
+operator chat, audit, notification, and command-scope paths have one canonical
+subject to reference, but sovereign fleet workers must not provision or place it
+like a Captain deployment.
 
 This module is the single source of truth for that agent:
 
 * ``ensure_operator_agent_user`` / ``ensure_operator_agent_deployment`` create
-  (idempotently) the operator user and the single arcpod, enforcing the
-  one-agent invariant.
+  (idempotently) the operator user and the single control-stack identity,
+  enforcing the one-agent invariant.
 * ``operator_agent_deployment`` / ``operator_conversation_routable`` resolve it.
 * ``enqueue_operator_agent_turn`` routes a free-form operator message to that
-  arcpod through the existing ``public-agent-turn`` notification + bridge worker
-  -- the same path Captains' messages take.
+  in-stack Hermes gateway through the existing ``public-agent-turn``
+  notification worker with ``operator_turn`` metadata.
 
 It is intentionally control-DB only: it queues and resolves, it never runs
-Docker/SSH/provider commands. Live provisioning is delegated to the existing
-arcpod pipeline.
+Docker/SSH/provider commands. Runtime setup is handled by the Control Node
+Compose services and ``bin/install-operator-hermes-home.sh``.
 """
 from __future__ import annotations
 
@@ -39,12 +39,14 @@ class OperatorAgentError(ValueError):
 # Settings keys (arclink_settings) that pin the operator's single agent.
 OPERATOR_AGENT_DEPLOYMENT_SETTING = "operator_agent_deployment_id"
 OPERATOR_AGENT_USER_SETTING = "operator_agent_user_id"
+OPERATOR_AGENT_RUNTIME_SETTING = "operator_agent_runtime"
 
 # The reserved, stable identifiers for the operator's one agent. Stable ids keep
 # rollout/restart semantics uniform and make the one-agent invariant obvious.
 DEFAULT_OPERATOR_AGENT_DEPLOYMENT_ID = "operator"
 DEFAULT_OPERATOR_AGENT_PREFIX = "operator-helm"
 DEFAULT_OPERATOR_AGENT_USER_ID = "operator"
+DEFAULT_OPERATOR_AGENT_RUNTIME = "control-stack"
 
 # Deployment statuses a routable, talk-to-able operator agent can be in. Mirrors
 # arclink_public_bots.ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES.
@@ -86,11 +88,11 @@ def ensure_operator_agent_deployment(
     deployment_id: str = DEFAULT_OPERATOR_AGENT_DEPLOYMENT_ID,
     prefix: str = DEFAULT_OPERATOR_AGENT_PREFIX,
     base_domain: str = "",
-    status: str = "reserved",
+    status: str = "active",
     agent_title: str = "Operator Hermes",
     metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Reserve the operator's single arcpod, enforcing the one-agent invariant.
+    """Reserve the operator's single control-stack identity.
 
     Idempotent: re-running returns the existing operator deployment. Refuses to
     create a *second* operator agent -- if a different operator deployment is
@@ -117,6 +119,9 @@ def ensure_operator_agent_deployment(
 
     merged_metadata: dict[str, Any] = {
         "operator_agent": True,
+        "operator_agent_runtime": DEFAULT_OPERATOR_AGENT_RUNTIME,
+        "provisioning_mode": DEFAULT_OPERATOR_AGENT_RUNTIME,
+        "not_arcpod": True,
         "bundle_agent_count": 1,
         "bundle_agent_index": 1,
     }
@@ -136,10 +141,16 @@ def ensure_operator_agent_deployment(
             metadata=merged_metadata,
         )
     else:
-        deployment = existing
+        deployment = _stamp_existing_operator_deployment(
+            conn,
+            existing,
+            status=status,
+            metadata=merged_metadata,
+        )
 
     upsert_setting(conn, OPERATOR_AGENT_DEPLOYMENT_SETTING, clean_deployment)
     upsert_setting(conn, OPERATOR_AGENT_USER_SETTING, clean_user)
+    upsert_setting(conn, OPERATOR_AGENT_RUNTIME_SETTING, DEFAULT_OPERATOR_AGENT_RUNTIME)
     return deployment
 
 
@@ -199,10 +210,10 @@ def enqueue_operator_agent_turn(
 ) -> int | None:
     """Queue a free-form operator message for the operator's one Hermes agent.
 
-    Mirrors the Captain ``public-agent-turn`` enqueue in arclink_public_bots so
-    the existing notification + gateway-bridge worker carries the turn into the
-    operator arcpod's Hermes gateway (sessions, streaming, plugin hooks). Returns
-    the notification id, or None when no routable operator agent exists.
+    Mirrors the Captain ``public-agent-turn`` enqueue, but stamps
+    ``operator_turn`` so delivery uses the in-stack control-node gateway instead
+    of a per-deployment ArcPod gateway. Returns the notification id, or None
+    when no routable operator agent exists.
     """
     from arclink_control import append_arclink_event, queue_notification
 
@@ -263,6 +274,45 @@ def _deployment_row(conn: sqlite3.Connection, deployment_id: str) -> dict[str, A
     return dict(row) if row is not None else None
 
 
+def _stamp_existing_operator_deployment(
+    conn: sqlite3.Connection,
+    deployment: Mapping[str, Any],
+    *,
+    status: str,
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge the control-stack operator stamp onto an existing row."""
+    from arclink_boundary import json_loads_safe
+    from arclink_control import json_dumps, utc_now_iso
+
+    raw_metadata = deployment.get("metadata_json")
+    current_metadata = json_loads_safe(raw_metadata) if isinstance(raw_metadata, str) else raw_metadata
+    if not isinstance(current_metadata, Mapping):
+        current_metadata = {}
+    merged_metadata = {**dict(current_metadata), **dict(metadata)}
+    clean_status = str(status or "").strip() or str(deployment.get("status") or "").strip() or "active"
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+           SET status = ?, metadata_json = ?, updated_at = ?
+         WHERE deployment_id = ?
+        """,
+        (
+            clean_status,
+            json_dumps(merged_metadata),
+            now,
+            str(deployment.get("deployment_id") or ""),
+        ),
+    )
+    conn.commit()
+    updated = dict(deployment)
+    updated["status"] = clean_status
+    updated["metadata_json"] = json_dumps(merged_metadata)
+    updated["updated_at"] = now
+    return updated
+
+
 def ensure_operator_agent(
     conn: sqlite3.Connection,
     *,
@@ -272,15 +322,13 @@ def ensure_operator_agent(
     deployment_id: str = DEFAULT_OPERATOR_AGENT_DEPLOYMENT_ID,
     prefix: str = DEFAULT_OPERATOR_AGENT_PREFIX,
     base_domain: str = "",
-    status: str = "provisioning_ready",
+    status: str = "active",
 ) -> dict[str, Any]:
-    """Idempotently ensure the operator's user and single arcpod exist.
+    """Idempotently ensure the operator user and single control-stack identity.
 
-    Defaults the deployment to ``provisioning_ready`` so the existing sovereign
-    provisioning worker builds the operator's Hermes arcpod (comp entitlement
-    clears the provisioning gate), after which the standard ArcPod update rollout
-    maintains it like any Captain pod. Re-running is safe and never creates a
-    second operator agent.
+    Defaults the row to ``active`` because the runtime is the Control Node's own
+    Compose service set, not sovereign worker provisioning. Re-running is safe
+    and never creates a second operator agent.
     """
     user = ensure_operator_agent_user(
         conn,
@@ -300,6 +348,7 @@ def ensure_operator_agent(
         "user_id": str(user.get("user_id") or user_id),
         "deployment_id": str(deployment.get("deployment_id") or deployment_id),
         "status": str(deployment.get("status") or status),
+        "runtime": DEFAULT_OPERATOR_AGENT_RUNTIME,
         "single_agent_count": assert_single_operator_agent(conn),
     }
 
@@ -321,9 +370,9 @@ def _operator_agent_enabled() -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Manage the operator's single outer Hermes agent.")
+    parser = argparse.ArgumentParser(description="Manage the operator's single in-stack Hermes agent identity.")
     sub = parser.add_subparsers(dest="command", required=True)
-    ensure = sub.add_parser("ensure", help="Ensure the operator user + single arcpod exist (idempotent).")
+    ensure = sub.add_parser("ensure", help="Ensure the operator user + single control-stack identity exist (idempotent).")
     ensure.add_argument("--user-id", default=_env_default("ARCLINK_OPERATOR_AGENT_USER_ID", DEFAULT_OPERATOR_AGENT_USER_ID))
     ensure.add_argument("--email", default=_env_default("ARCLINK_OPERATOR_AGENT_EMAIL", ""))
     ensure.add_argument("--display-name", default=_env_default("ARCLINK_OPERATOR_AGENT_DISPLAY_NAME", ""))
@@ -332,8 +381,8 @@ def main(argv: list[str] | None = None) -> int:
     ensure.add_argument("--base-domain", default=_env_default("ARCLINK_OPERATOR_AGENT_BASE_DOMAIN", ""))
     ensure.add_argument(
         "--status",
-        default=_env_default("ARCLINK_OPERATOR_AGENT_STATUS", "provisioning_ready"),
-        help="Initial deployment status (default provisioning_ready triggers provisioning).",
+        default=_env_default("ARCLINK_OPERATOR_AGENT_STATUS", "active"),
+        help="Operator identity status (default active; runtime is the Control Node stack).",
     )
     ensure.add_argument(
         "--require-enabled",

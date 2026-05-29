@@ -340,12 +340,15 @@ def process_sovereign_batch(
         LEFT JOIN arclink_provisioning_jobs j
           ON j.deployment_id = d.deployment_id
          AND j.job_kind = ?
-        WHERE d.status = 'provisioning_ready'
-           OR (
-             d.status = 'provisioning_failed'
-             AND j.status = 'failed'
-             AND COALESCE(j.attempt_count, 0) < ?
+        WHERE (
+             d.status = 'provisioning_ready'
+             OR (
+               d.status = 'provisioning_failed'
+               AND j.status = 'failed'
+               AND COALESCE(j.attempt_count, 0) < ?
+             )
            )
+          AND COALESCE(d.metadata_json, '') NOT LIKE '%"operator_agent"%'
         ORDER BY d.updated_at ASC, d.deployment_id ASC
         LIMIT ?
         """,

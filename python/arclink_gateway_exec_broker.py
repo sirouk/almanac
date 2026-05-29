@@ -196,6 +196,34 @@ def _validate_payload(payload: Any) -> dict[str, Any]:
 def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str], dict[str, Any], int, str]:
     if "cmd" in request_body or "command" in request_body:
         raise ValueError("gateway exec broker does not accept raw commands")
+    operator_stack = bool(request_body.get("operator_stack"))
+    if operator_stack:
+        project_name = str(request_body.get("project_name") or "arclink").strip()
+        if not project_name:
+            raise ValueError("gateway exec project name is missing")
+        if project_name != (os.environ.get("ARCLINK_CONTROL_COMPOSE_PROJECT") or "arclink"):
+            raise ValueError("operator gateway exec project does not match the Control Node project")
+        if not delivery.PUBLIC_AGENT_BRIDGE_PROJECT_RE.fullmatch(project_name):
+            raise ValueError("gateway exec project name is not allowlisted")
+        payload = _validate_payload(request_body.get("payload"))
+        timeout_seconds = _clean_timeout(request_body.get("timeout_seconds"))
+        bridge_cmd = [
+            delivery.PUBLIC_AGENT_BRIDGE_PYTHON,
+            delivery.PUBLIC_AGENT_BRIDGE_SCRIPT,
+        ]
+        docker = _docker_binary()
+        container = delivery._deployment_service_container(
+            project_name=project_name,
+            service="control-operator-hermes-gateway",
+            docker_binary=docker,
+        )
+        if not container:
+            raise ValueError("operator Hermes gateway container not found in the Control Node stack")
+        semantic_cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+        valid, _kind, reason = delivery._validate_public_agent_bridge_cmd(semantic_cmd, project_name=project_name)
+        if not valid:
+            raise ValueError(f"gateway exec command rejected: {reason}")
+        return [docker, *semantic_cmd[1:]], payload, timeout_seconds, project_name
     deployment_id = _require_safe_segment(str(request_body.get("deployment_id") or ""), label="deployment id")
     prefix = _require_safe_segment(str(request_body.get("prefix") or ""), label="prefix", allow_blank=True)
     expected_project = delivery._compose_project_name(deployment_id)

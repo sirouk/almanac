@@ -356,6 +356,42 @@ def test_plan_arcpod_update_rollout_skips_already_current_deployments() -> None:
     print("PASS test_plan_arcpod_update_rollout_skips_already_current_deployments")
 
 
+def test_plan_arcpod_update_rollout_skips_operator_control_stack_identity() -> None:
+    control = load_module("arclink_control.py", "arclink_control_rlt_plan_operator_skip_control")
+    rollout = load_module("arclink_rollout.py", "arclink_rollout_plan_operator_skip")
+    conn = memory_db(control)
+    _seed_arcpod(control, conn, deployment_id="dep_real")
+    _seed_arcpod(control, conn, deployment_id="operator")
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+           SET user_id = 'operator',
+               prefix = 'operator-helm',
+               metadata_json = ?
+         WHERE deployment_id = 'operator'
+        """,
+        (
+            json.dumps(
+                {
+                    "operator_agent": True,
+                    "operator_agent_runtime": "control-stack",
+                    "release_version": "v1.0.0",
+                    "state_roots": _state_roots("operator"),
+                },
+                sort_keys=True,
+            ),
+        ),
+    )
+    conn.commit()
+
+    plan = rollout.plan_arcpod_update_rollout(conn, target_version="v2.0.0", batch_size=1)
+
+    expect(plan["status"] == "ready", str(plan))
+    expect(plan["candidate_count"] == 1, str(plan))
+    expect(plan["batches"][0]["deployment_ids"] == ["dep_real"], str(plan["batches"]))
+    print("PASS test_plan_arcpod_update_rollout_skips_operator_control_stack_identity")
+
+
 def test_materialize_arcpod_update_rollout_job_preserves_batches_and_gates() -> None:
     control = load_module("arclink_control.py", "arclink_control_rlt_materialize_control")
     rollout = load_module("arclink_rollout.py", "arclink_rollout_materialize")
@@ -633,10 +669,11 @@ if __name__ == "__main__":
     test_plan_arcpod_update_rollout_blocks_unhealthy_or_missing_state_roots()
     test_plan_arcpod_update_rollout_rejects_invalid_batch_sizes()
     test_plan_arcpod_update_rollout_skips_already_current_deployments()
+    test_plan_arcpod_update_rollout_skips_operator_control_stack_identity()
     test_materialize_arcpod_update_rollout_job_preserves_batches_and_gates()
     test_materialize_arcpod_update_rollout_job_is_idempotent()
     test_materialize_arcpod_update_rollout_job_refuses_blocked_or_empty_plan()
     test_execute_arcpod_update_rollout_batch_refuses_without_executor_contract()
     test_execute_arcpod_update_rollout_batch_completes_batch_and_replays()
     test_execute_arcpod_update_rollout_batch_failure_halts_later_batches()
-    print(f"\nAll 19 rollout tests passed.")
+    print("\nAll rollout tests passed.")

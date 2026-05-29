@@ -91,13 +91,13 @@ def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
     commands.register_arclink_public_telegram_commands = lambda token: {"registered": ["start"], "scopes": ["default"]}
     commands.ensure_arclink_public_telegram_webhook = lambda token, url, secret: {"skipped": True}
     commands.refresh_active_telegram_command_scopes = lambda env: {"refreshed": 0, "issues": 0, "skipped": False}
-    commands._agent_commands_from_gateway_container = lambda deployment_id: (
+    commands._operator_agent_commands_from_control_stack = lambda env: (
         [
             {"command": "model", "description": "Switch model"},
             {"command": "provider", "description": "Provider alias"},
             {"command": "update", "description": "Unsafe direct update"},
         ],
-        "arclink-operator-hermes-gateway-1",
+        "arclink-control-operator-hermes-gateway-1",
         0,
     )
     telegram.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
@@ -114,7 +114,7 @@ def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
     )
 
     operator_scopes = result["telegram"]["operator_scopes"]
-    expect(operator_scopes["agent_command_source"] == "arclink-operator-hermes-gateway-1", str(operator_scopes))
+    expect(operator_scopes["agent_command_source"] == "arclink-control-operator-hermes-gateway-1", str(operator_scopes))
     registered = set(operator_scopes["registered"])
     expect("operator_status" in registered and "upgrade" in registered, str(registered))
     expect("model" in registered and "provider" in registered, str(registered))

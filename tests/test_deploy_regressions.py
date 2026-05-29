@@ -3858,6 +3858,7 @@ def test_nextcloud_startup_repairs_persisted_runtime_config() -> None:
 def test_control_install_wires_single_operator_hermes_agent() -> None:
     deploy_text = DEPLOY_SH.read_text()
     docker_text = (REPO / "bin" / "arclink-docker.sh").read_text()
+    compose_text = (REPO / "compose.yaml").read_text()
     # Onboarding selects the ArcLink user that owns the operator's one agent.
     expect("Give the operator a dedicated Hermes agent" in deploy_text,
            "control onboarding must offer the operator's single Hermes agent")
@@ -3867,14 +3868,34 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "operator agent setup must default to enabled unless explicitly disabled")
     expect('write_kv ARCLINK_OPERATOR_AGENT_USER_ID' in deploy_text,
            "operator agent owner must be persisted to generated config")
-    # Install flow provisions it through the existing arcpod pipeline, idempotently.
+    # Install flow provisions the control-stack service identity, idempotently.
     expect("ensure_control_operator_agent" in deploy_text,
            "control install flow must ensure the operator agent")
     expect("run_arclink_docker operator-agent-setup" in deploy_text,
-           "control install must invoke the in-container operator agent setup")
+           "control install must invoke the in-container operator identity setup")
+    expect("control-operator-hermes-gateway:" in compose_text and "control-operator-hermes-dashboard:" in compose_text,
+           "compose.yaml must expose Operator Hermes inside the Control Node stack")
+    expect("control-operator-nextcloud:" in compose_text and "control-operator-memory-synth:" in compose_text,
+           "operator services must include own files/vault and memory lanes")
+    expect("install-operator-hermes-home.sh" in compose_text,
+           "operator Hermes services must seed their own Hermes home")
+    expect("/opt/arclink/runtime/hermes-venv/bin/hermes gateway run --replace" in compose_text,
+           "operator Hermes gateway must execute the pinned runtime hermes directly")
+    expect("ARCLINK_CONFIG_FILE: /home/arclink/arclink/arclink-priv/state/operator/config/operator.env" in compose_text,
+           "operator services must not source the global Docker env over their operator-scoped paths")
+    expect('ARCLINK_RUNTIME_ENV_CONFIG: "1"' in compose_text,
+           "operator services must generate operator.env from the operator-scoped Compose environment")
+    expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in compose_text,
+           "operator services must keep live control DB CLI reach from inside the Control Node stack")
+    expect("./arclink-priv/state:/home/arclink/arclink/arclink-priv/state" in compose_text,
+           "operator services must mount live control state while indexing only the operator vault")
+    expect("./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config" in compose_text,
+           "operator services need their own writable config dir for shared ArcLink scripts")
     # The docker helper runs the idempotent ensure inside the control container.
     expect("operator-agent-setup)" in docker_text and "docker_operator_agent_setup" in docker_text,
            "arclink-docker.sh must expose operator-agent-setup")
+    expect("not a fleet ArcPod" in deploy_text and "not a fleet ArcPod" in docker_text,
+           "operator agent docs must not describe the runtime as a Captain ArcPod")
     expect('-e ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-1}"' in docker_text,
            "docker operator-agent setup must pass the default-on enable flag into the supervisor container")
     expect("arclink_operator_agent.py ensure --require-enabled" in docker_text,

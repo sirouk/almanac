@@ -10030,12 +10030,11 @@ collect_control_install_answers() {
     fi
   fi
 
-  # The operator gets exactly one outer Hermes agent: a single ArcLink arcpod,
-  # owned by an ArcLink user selected here, provisioned and maintained like any
-  # Captain pod. The operator talks to it from the operator channel; slash
-  # commands still drive Operator Raven controls.
+  # The operator gets exactly one Hermes agent inside the Control Node stack,
+  # owned by the ArcLink operator identity selected here. It is not a fleet
+  # ArcPod; slash commands still drive Operator Raven controls.
   if [[ "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" != "tui-only" ]]; then
-    if [[ "$(ask_yes_no "Give the operator a dedicated Hermes agent (one arcpod, maintained like the fleet)?" "${ARCLINK_OPERATOR_AGENT_ENABLED:-1}")" == "1" ]]; then
+    if [[ "$(ask_yes_no "Give the operator a dedicated Hermes agent inside the Control Node stack?" "${ARCLINK_OPERATOR_AGENT_ENABLED:-1}")" == "1" ]]; then
       ARCLINK_OPERATOR_AGENT_ENABLED="1"
       ARCLINK_OPERATOR_AGENT_USER_ID="$(normalize_optional_answer "$(ask "ArcLink user id that owns the operator Hermes agent" "${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}")")"
       ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
@@ -10230,14 +10229,14 @@ run_control_install_flow() {
 }
 
 ensure_control_operator_agent() {
-  # Provision the operator's single Hermes agent (one ArcLink arcpod) by
-  # default, unless explicitly disabled during onboarding. Idempotent and
-  # best-effort: the reserved arcpod is then built and maintained by the same
-  # fleet pipeline as Captains.
+  # Provision the operator's single Hermes identity and bring up its Control
+  # Node stack services by default, unless explicitly disabled during
+  # onboarding. It is not a fleet ArcPod and is not placed by the sovereign
+  # worker.
   if [[ "${ARCLINK_OPERATOR_AGENT_ENABLED:-1}" != "1" ]]; then
     return 0
   fi
-  echo "Ensuring the operator's single Hermes agent (one arcpod, maintained like the fleet)..."
+  echo "Ensuring the operator's single Hermes agent inside the Control Node stack..."
   if ! run_arclink_docker operator-agent-setup; then
     echo "Operator Hermes agent setup did not complete; re-run 'deploy.sh control upgrade' once the stack is healthy." >&2
   fi

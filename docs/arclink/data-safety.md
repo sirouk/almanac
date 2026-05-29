@@ -8,7 +8,7 @@ on old hosts or in migration tests, but it is not the product install lane.
 | Mode | State Model | Notes |
 | --- | --- | --- |
 | Sovereign Control Node | Dockerized product control plane with per-ArcPod state roots, Compose projects, and secret references rendered from control-plane rows. Current ArcPod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; provisioning and admin action workers are enabled by default, but live provider/account mutation still fails closed unless the operator configures the executor and external credentials. |
-| Legacy Shared Host State | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; legacy enrolled-user Hermes homes may exist under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Retired public install lane. Keep for migration, archival recovery, and host-side Operator workbench development only. |
+| Legacy Shared Host State | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; legacy enrolled-user Hermes homes may exist under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Retired public install lane. Keep for migration, archival recovery, tests, and installer reuse only. |
 
 Do not apply a legacy path to the Control Node or an ArcPod without checking
 generated config and control-plane metadata.

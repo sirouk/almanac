@@ -131,6 +131,60 @@ x-arclink-control-secret-env: &arclink-control-secret-env
   DISCORD_APP_ID: ${DISCORD_APP_ID:-}
   DISCORD_PUBLIC_KEY: ${DISCORD_PUBLIC_KEY:-}
 
+x-arclink-operator-env: &arclink-operator-env
+  <<: [*arclink-env, *arclink-control-secret-env]
+  ARCLINK_OPERATOR_AGENT_RUNTIME: control-stack
+  ARCLINK_RUNTIME_ENV_CONFIG: "1"
+  ARCLINK_RUNTIME_CONFIG_FILE: /home/arclink/arclink/arclink-priv/state/operator/config/operator.env
+  ARCLINK_CONFIG_FILE: /home/arclink/arclink/arclink-priv/state/operator/config/operator.env
+  ARCLINK_PRIV_CONFIG_DIR: /home/arclink/arclink/arclink-priv/state/operator/config
+  ARCLINK_OPERATOR_STATE_DIR: /home/arclink/arclink/arclink-priv/state/operator
+  ARCLINK_OPERATOR_SECRET_DIR: /home/arclink/arclink/arclink-priv/state/operator/secrets
+  ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+  ARCLINK_DEPLOYMENT_ID: operator
+  ARCLINK_USER_ID: operator
+  ARCLINK_PREFIX: operator
+  ARCLINK_AGENT_NAME: ${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-Operator Hermes}
+  ARCLINK_AGENT_TITLE: ${ARCLINK_OPERATOR_AGENT_TITLE:-ArcLink Operator Hermes}
+  ARCLINK_DASHBOARD_AGENT_LABEL: ${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-Operator Hermes}
+  ARCLINK_DASHBOARD_AGENT_TITLE: ${ARCLINK_OPERATOR_AGENT_TITLE:-ArcLink Operator Hermes}
+  ARCLINK_DASHBOARD_USERNAME: ${ARCLINK_OPERATOR_AGENT_EMAIL:-operator}
+  ARCLINK_CAPTAIN_NAME: ${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}
+  ARCLINK_CAPTAIN_EMAIL: ${ARCLINK_OPERATOR_AGENT_EMAIL:-}
+  HERMES_HOME: /home/arclink/arclink/arclink-priv/state/operator/hermes-home
+  VAULT_DIR: /home/arclink/arclink/arclink-priv/state/operator/vault
+  DRIVE_ROOT: /home/arclink/arclink/arclink-priv/state/operator/vault
+  CODE_WORKSPACE_ROOT: /home/arclink/arclink/arclink-priv/state/operator/workspace
+  TERMINAL_WORKSPACE_ROOT: /home/arclink/arclink/arclink-priv/state/operator/workspace
+  DRIVE_LINKED_ROOT: /home/arclink/arclink/arclink-priv/state/operator/linked-resources
+  CODE_LINKED_ROOT: /home/arclink/arclink/arclink-priv/state/operator/linked-resources
+  ARCLINK_LINKED_RESOURCES_ROOT: /home/arclink/arclink/arclink-priv/state/operator/linked-resources
+  ARCLINK_DRIVE_ROOT: /home/arclink/arclink/arclink-priv/state/operator/vault
+  ARCLINK_CODE_WORKSPACE_ROOT: /home/arclink/arclink/arclink-priv/state/operator/workspace
+  ARCLINK_TERMINAL_TUI_COMMAND: /opt/arclink/runtime/hermes-venv/bin/hermes
+  HERMES_TUI_DIR: /opt/arclink/runtime/hermes-agent-src/ui-tui
+  QMD_STATE_DIR: /home/arclink/arclink/arclink-priv/state/operator/qmd
+  QMD_INDEX_NAME: operator-vault
+  QMD_COLLECTION_NAME: operator-vault
+  ARCLINK_MEMORY_SYNTH_STATE_DIR: /home/arclink/arclink/arclink-priv/state/operator/memory
+  STATE_DIR: /home/arclink/arclink/arclink-priv/state/operator/memory
+  PUBLISHED_DIR: /home/arclink/arclink/arclink-priv/state/operator/memory/published
+  QUARTO_PROJECT_DIR: /home/arclink/arclink/arclink-priv/state/operator/quarto
+  ARCLINK_MEMORY_SYNTH_STATUS_FILE: /home/arclink/arclink/arclink-priv/state/operator/memory/memory-synth/status.json
+  ARCLINK_MEMORY_SYNTH_LOCK_FILE: /home/arclink/arclink/arclink-priv/state/operator/memory/memory-synth/synth.lock
+  ARCLINK_HERMES_URL: ${ARCLINK_OPERATOR_HERMES_URL:-http://localhost:13210}
+  ARCLINK_DASHBOARD_URL: ${ARCLINK_OPERATOR_HERMES_URL:-http://localhost:13210}
+  ARCLINK_FILES_URL: ${ARCLINK_OPERATOR_FILES_URL:-http://localhost:28081}
+  ARCLINK_CODE_URL: ${ARCLINK_OPERATOR_CODE_URL:-http://localhost:13210/code}
+  ARCLINK_SHARE_REQUEST_BROKER_URL: ${ARCLINK_API_INTERNAL_URL:-http://control-api:8900}/api/v1/user/share-grants/broker
+  ARCLINK_PRIMARY_PROVIDER: ${ARCLINK_PRIMARY_PROVIDER:-chutes}
+  ARCLINK_CHUTES_BASE_URL: ${ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL:-http://control-llm-router:8090/v1}
+  ARCLINK_CHUTES_DEFAULT_MODEL: ${ARCLINK_LLM_ROUTER_DEFAULT_MODEL:-moonshotai/Kimi-K2.6-TEE}
+  ARCLINK_MODEL_REASONING_DEFAULT: ${ARCLINK_MODEL_REASONING_DEFAULT:-medium}
+  ARCLINK_HERMES_DASHBOARD_ACCESS_FILE: /home/arclink/arclink/arclink-priv/state/operator/hermes-home/state/arclink-web-access.json
+  TELEGRAM_REACTIONS: "true"
+  DISCORD_REACTIONS: "true"
+
 x-arclink-job: &arclink-job
   <<: *arclink-app
   restart: *restart-unless-stopped
@@ -230,6 +284,168 @@ services:
       interval: 30s
       timeout: 5s
       retries: 6
+
+  control-operator-qmd-mcp:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["./bin/qmd-daemon.sh"]
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/qmd:/home/arclink/arclink/arclink-priv/state/operator/qmd
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator/vault:/srv/vault
+      - ./arclink-priv/state/operator/qmd:/srv/qmd
+      - ./arclink-priv/state/operator/memory:/srv/memory
+
+  control-operator-hermes-gateway:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["bash", "-lc", "./bin/install-operator-hermes-home.sh && exec /opt/arclink/runtime/hermes-venv/bin/hermes gateway run --replace"]
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/hermes-home:/home/arclink/arclink/arclink-priv/state/operator/hermes-home
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator/workspace:/home/arclink/arclink/arclink-priv/state/operator/workspace
+      - ./arclink-priv/state/operator/linked-resources:/home/arclink/arclink/arclink-priv/state/operator/linked-resources:ro
+      - ./arclink-priv/state/operator/secrets:/home/arclink/arclink/arclink-priv/state/operator/secrets
+    depends_on:
+      control-operator-qmd-mcp:
+        condition: service_started
+
+  control-operator-hermes-dashboard:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["bash", "-lc", "./bin/install-operator-hermes-home.sh && exec ./bin/run-hermes-dashboard-proxy.sh"]
+    ports:
+      - "127.0.0.1:${ARCLINK_OPERATOR_HERMES_PORT:-13210}:3210"
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/hermes-home:/home/arclink/arclink/arclink-priv/state/operator/hermes-home
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+      - ./arclink-priv/state/operator/workspace:/home/arclink/arclink/arclink-priv/state/operator/workspace
+      - ./arclink-priv/state/operator/linked-resources:/home/arclink/arclink/arclink-priv/state/operator/linked-resources:ro
+      - ./arclink-priv/state/operator/secrets:/home/arclink/arclink/arclink-priv/state/operator/secrets
+    depends_on:
+      control-operator-qmd-mcp:
+        condition: service_started
+
+  control-operator-dashboard:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["./bin/arclink-dashboard-placeholder.sh"]
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+
+  control-operator-vault-watch:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["./bin/vault-watch.sh"]
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+    depends_on:
+      control-operator-qmd-mcp:
+        condition: service_started
+
+  control-operator-memory-synth:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["./bin/docker-job-loop.sh", "operator-memory-synth", "1800", "./bin/memory-synth.sh"]
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
+    depends_on:
+      control-operator-qmd-mcp:
+        condition: service_started
+
+  control-operator-nextcloud-db:
+    image: ${ARCLINK_POSTGRES_IMAGE:-docker.io/library/postgres}:${ARCLINK_POSTGRES_TAG:-16-alpine}
+    restart: *restart-unless-stopped
+    environment:
+      POSTGRES_DB: operator_nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${ARCLINK_OPERATOR_NEXTCLOUD_DB_PASSWORD:?run ./deploy.sh control bootstrap first}
+    volumes:
+      - ./arclink-priv/state/operator/nextcloud/db:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck-fast
+      test: ["CMD-SHELL", "pg_isready -U nextcloud -d operator_nextcloud"]
+
+  control-operator-nextcloud-redis:
+    image: ${ARCLINK_REDIS_IMAGE:-docker.io/library/redis}:${ARCLINK_REDIS_TAG:-7-alpine}
+    restart: *restart-unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./arclink-priv/state/operator/nextcloud/redis:/data
+    healthcheck:
+      <<: *healthcheck-fast
+      test: ["CMD", "redis-cli", "ping"]
+
+  control-operator-nextcloud:
+    image: ${ARCLINK_NEXTCLOUD_IMAGE:-docker.io/library/nextcloud}:${ARCLINK_NEXTCLOUD_TAG:-31-apache}
+    restart: *restart-unless-stopped
+    depends_on:
+      control-operator-nextcloud-db:
+        condition: service_healthy
+      control-operator-nextcloud-redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ARCLINK_OPERATOR_NEXTCLOUD_PORT:-28081}:80"
+    environment:
+      POSTGRES_HOST: control-operator-nextcloud-db
+      POSTGRES_DB: operator_nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: ${ARCLINK_OPERATOR_NEXTCLOUD_DB_PASSWORD:?run ./deploy.sh control bootstrap first}
+      NEXTCLOUD_ADMIN_USER: ${ARCLINK_OPERATOR_NEXTCLOUD_ADMIN_USER:-operator}
+      NEXTCLOUD_ADMIN_PASSWORD: ${ARCLINK_OPERATOR_NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh control bootstrap first}
+      REDIS_HOST: control-operator-nextcloud-redis
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1 ${NEXTCLOUD_TRUSTED_DOMAIN:-localhost}
+      OVERWRITEPROTOCOL: ${NEXTCLOUD_OVERWRITEPROTOCOL:-http}
+    volumes:
+      - ./arclink-priv/state/operator/nextcloud/html:/var/www/html
+      - ./arclink-priv/state/operator/vault:/srv/vault
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/status.php >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  control-operator-arclink-wrapped:
+    <<: *arclink-app
+    environment:
+      <<: *arclink-operator-env
+    command: ["./bin/docker-job-loop.sh", "operator-arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"]
+    volumes:
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+      - ./arclink-priv/state/operator/config:/home/arclink/arclink/arclink-priv/state/operator/config
+      - ./arclink-priv/state/operator/quarto:/home/arclink/arclink/arclink-priv/state/operator/quarto
+      - ./arclink-priv/state/operator/vault:/home/arclink/arclink/arclink-priv/state/operator/vault
+      - ./arclink-priv/state/operator/memory:/home/arclink/arclink/arclink-priv/state/operator/memory
 
   notion-webhook:
     <<: *arclink-app

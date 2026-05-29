@@ -220,7 +220,7 @@ PUBLIC_AGENT_BRIDGE_DEFERRED = "DEFERRED_TO_PUBLIC_AGENT_BRIDGE"
 PUBLIC_AGENT_BRIDGE_PYTHON = "/opt/arclink/runtime/hermes-venv/bin/python3"
 PUBLIC_AGENT_BRIDGE_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge.py"
 PUBLIC_AGENT_BRIDGE_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-PUBLIC_AGENT_BRIDGE_PROJECT_RE = re.compile(r"^arclink-[a-z0-9][a-z0-9_-]{0,80}$")
+PUBLIC_AGENT_BRIDGE_PROJECT_RE = re.compile(r"^arclink(?:-[a-z0-9][a-z0-9_-]{0,80})?$")
 GATEWAY_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Gateway-Exec-Token"
 
 
@@ -265,6 +265,20 @@ def _gateway_exec_broker_request(
     return {
         "deployment_id": str(deployment_id or "").strip(),
         "prefix": str(prefix or "").strip(),
+        "project_name": str(project_name or "").strip(),
+        "payload": payload,
+        "timeout_seconds": int(timeout_seconds),
+    }
+
+
+def _operator_gateway_exec_broker_request(
+    *,
+    project_name: str,
+    payload: dict[str, Any],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    return {
+        "operator_stack": True,
         "project_name": str(project_name or "").strip(),
         "payload": payload,
         "timeout_seconds": int(timeout_seconds),
@@ -544,6 +558,62 @@ def _run_public_agent_turn(*, deployment_id: str, prefix: str, prompt: str) -> t
     return response, ""
 
 
+def _public_agent_gateway_payload(
+    *,
+    channel_kind: str,
+    target_id: str,
+    prompt: str,
+    extra: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
+    clean_channel = channel_kind.strip().lower()
+    if clean_channel == "telegram":
+        bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = _strip_public_channel_prefix(target_id, "tg")
+        user_id = chat_id
+        message_id = str(extra.get("telegram_reply_to_message_id") or "").strip()
+        chat_type = "dm"
+    elif clean_channel == "discord":
+        bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
+        user_id = str(extra.get("discord_user_id") or _strip_public_channel_prefix(target_id, "discord")).strip()
+        chat_id = str(extra.get("discord_channel_id") or "").strip()
+        message_id = str(extra.get("discord_message_id") or "").strip()
+        chat_type = str(extra.get("discord_chat_type") or "dm").strip() or "dm"
+        if not bot_token:
+            return {}, "DISCORD_BOT_TOKEN is not configured for Hermes public gateway bridge"
+        if not chat_id and user_id:
+            try:
+                dm = discord_create_dm_channel(bot_token=bot_token, recipient_id=user_id)
+                chat_id = str(dm.get("id") or "").strip() if isinstance(dm, dict) else ""
+            except Exception as exc:  # noqa: BLE001
+                return {}, f"discord public gateway bridge could not open DM: {str(exc)[:180]}"
+    else:
+        return {}, f"Hermes public gateway bridge is not implemented for {clean_channel or 'blank'}"
+    if not bot_token:
+        return {}, f"{clean_channel.upper()}_BOT_TOKEN is not configured for Hermes public gateway bridge"
+    if not chat_id:
+        return {}, f"{clean_channel} public gateway bridge requires a channel id"
+    if not user_id:
+        return {}, f"{clean_channel} public gateway bridge requires a user id"
+    payload = {
+        "platform": clean_channel,
+        "bot_token": bot_token,
+        "chat_id": chat_id,
+        "channel_id": chat_id,
+        "user_id": user_id,
+        "text": prompt[:8000],
+        "message_id": message_id,
+        "display_name": str(extra.get("display_name") or extra.get("agent_label") or "").strip(),
+        "chat_type": chat_type,
+        "streaming_enabled": _public_agent_bridge_streaming_enabled(),
+    }
+    if clean_channel == "telegram":
+        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
+            value = extra.get(key)
+            if value not in (None, ""):
+                payload[key] = value
+    return payload, ""
+
+
 def _run_public_agent_gateway_turn(
     *,
     deployment_id: str,
@@ -562,56 +632,18 @@ def _run_public_agent_gateway_turn(
     bridge helper runs inside the deployment container and receives secrets via
     stdin so bot tokens never appear in argv.
     """
-    clean_channel = channel_kind.strip().lower()
-    if clean_channel == "telegram":
-        bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
-        chat_id = _strip_public_channel_prefix(target_id, "tg")
-        user_id = chat_id
-        message_id = str(extra.get("telegram_reply_to_message_id") or "").strip()
-        chat_type = "dm"
-    elif clean_channel == "discord":
-        bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
-        user_id = str(extra.get("discord_user_id") or _strip_public_channel_prefix(target_id, "discord")).strip()
-        chat_id = str(extra.get("discord_channel_id") or "").strip()
-        message_id = str(extra.get("discord_message_id") or "").strip()
-        chat_type = str(extra.get("discord_chat_type") or "dm").strip() or "dm"
-        if not bot_token:
-            return False, "DISCORD_BOT_TOKEN is not configured for Hermes public gateway bridge"
-        if not chat_id and user_id:
-            try:
-                dm = discord_create_dm_channel(bot_token=bot_token, recipient_id=user_id)
-                chat_id = str(dm.get("id") or "").strip() if isinstance(dm, dict) else ""
-            except Exception as exc:  # noqa: BLE001
-                return False, f"discord public gateway bridge could not open DM: {str(exc)[:180]}"
-    else:
-        return False, f"Hermes public gateway bridge is not implemented for {clean_channel or 'blank'}"
-    if not bot_token:
-        return False, f"{clean_channel.upper()}_BOT_TOKEN is not configured for Hermes public gateway bridge"
-    if not chat_id:
-        return False, f"{clean_channel} public gateway bridge requires a channel id"
-    if not user_id:
-        return False, f"{clean_channel} public gateway bridge requires a user id"
+    payload, error = _public_agent_gateway_payload(
+        channel_kind=channel_kind,
+        target_id=target_id,
+        prompt=prompt,
+        extra=extra,
+    )
+    if error:
+        return False, error
     project_name = _compose_project_name(deployment_id)
     if not project_name:
         return False, "deployment id is missing"
     timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
-    payload = {
-        "platform": clean_channel,
-        "bot_token": bot_token,
-        "chat_id": chat_id,
-        "channel_id": chat_id,
-        "user_id": user_id,
-        "text": prompt[:8000],
-        "message_id": message_id,
-        "display_name": str(extra.get("display_name") or extra.get("agent_label") or "").strip(),
-        "chat_type": chat_type,
-        "streaming_enabled": _public_agent_bridge_streaming_enabled(),
-    }
-    if clean_channel == "telegram":
-        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
-            value = extra.get(key)
-            if value not in (None, ""):
-                payload[key] = value
     broker_request = _gateway_exec_broker_request(
         deployment_id=deployment_id,
         prefix=prefix,
@@ -701,6 +733,92 @@ def _run_public_agent_gateway_turn(
     if isinstance(payload_out, dict) and payload_out.get("ok") is True:
         return True, ""
     return False, "Hermes public gateway bridge completed without an ok response"
+
+
+def _run_operator_agent_gateway_turn(
+    *,
+    channel_kind: str,
+    target_id: str,
+    prompt: str,
+    extra: dict[str, Any],
+    notification_id: int | None = None,
+) -> tuple[bool, str]:
+    """Route an Operator chat turn into the Control Node's in-stack Hermes gateway."""
+    payload, error = _public_agent_gateway_payload(
+        channel_kind=channel_kind,
+        target_id=target_id,
+        prompt=prompt,
+        extra=extra,
+    )
+    if error:
+        return False, error
+    project_name = config_env_value("ARCLINK_CONTROL_COMPOSE_PROJECT", "").strip() or "arclink"
+    if not PUBLIC_AGENT_BRIDGE_PROJECT_RE.fullmatch(project_name):
+        return False, "operator Hermes gateway Compose project is not allowlisted"
+    timeout_seconds = _int_env("ARCLINK_PUBLIC_AGENT_TURN_TIMEOUT_SECONDS", 180, minimum=15, maximum=900)
+    broker_request = _operator_gateway_exec_broker_request(
+        project_name=project_name,
+        payload=payload,
+        timeout_seconds=timeout_seconds + 30,
+    )
+    if _gateway_exec_broker_url():
+        if _public_agent_bridge_detached_enabled() and notification_id is not None:
+            started, error = _spawn_public_agent_gateway_bridge(
+                gateway_exec_request=broker_request,
+                notification_id=notification_id,
+            )
+            if started:
+                return True, PUBLIC_AGENT_BRIDGE_DEFERRED
+            return False, error
+        return _run_gateway_exec_broker_request(broker_request)
+    bridge_cmd = [
+        PUBLIC_AGENT_BRIDGE_PYTHON,
+        PUBLIC_AGENT_BRIDGE_SCRIPT,
+    ]
+    container = _deployment_service_container(
+        project_name=project_name,
+        service="control-operator-hermes-gateway",
+    )
+    if not container:
+        return False, "operator Hermes gateway container not found in the Control Node stack"
+    cmd = ["docker", "exec", "-i", container, *bridge_cmd]
+    valid, _command_kind, reason = _validate_public_agent_bridge_cmd(cmd, project_name=project_name)
+    if not valid:
+        return False, f"Hermes operator gateway bridge command rejected: {reason}"
+    if _public_agent_bridge_detached_enabled():
+        started, error = _spawn_public_agent_gateway_bridge(
+            cmd=cmd,
+            payload=payload,
+            notification_id=notification_id,
+            project_name=project_name,
+        )
+        if started and notification_id is not None:
+            return True, PUBLIC_AGENT_BRIDGE_DEFERRED
+        return started, error
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=json.dumps(payload, sort_keys=True),
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=timeout_seconds + 30,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "Hermes operator gateway bridge timed out"
+    except OSError as exc:
+        return False, f"could not start Hermes operator gateway bridge: {str(exc)[:180]}"
+    if proc.returncode != 0:
+        detail = ANSI_RE.sub("", (proc.stderr or proc.stdout or "")).strip().splitlines()
+        tail = detail[-1][:220] if detail else f"exit status {proc.returncode}"
+        return False, f"Hermes operator gateway bridge failed: {tail}"
+    try:
+        payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        payload_out = {}
+    if isinstance(payload_out, dict) and payload_out.get("ok") is True:
+        return True, ""
+    return False, "Hermes operator gateway bridge completed without an ok response"
 
 
 def _public_agent_bridge_detached_enabled() -> bool:
@@ -1177,15 +1295,25 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     prompt = str(row.get("message") or "").strip()
     if not prompt:
         return None
-    bridged, _bridge_error = _run_public_agent_gateway_turn(
-        deployment_id=deployment_id,
-        prefix=prefix,
-        channel_kind=channel_kind,
-        target_id=target_id,
-        prompt=prompt,
-        extra={**extra, "agent_label": label},
-        notification_id=int(row["id"]) if str(row.get("id") or "").isdigit() else None,
-    )
+    notification_id = int(row["id"]) if str(row.get("id") or "").isdigit() else None
+    if bool(extra.get("operator_turn")) or str(extra.get("source_kind") or "").strip() == "operator_chat":
+        bridged, _bridge_error = _run_operator_agent_gateway_turn(
+            channel_kind=channel_kind,
+            target_id=target_id,
+            prompt=prompt,
+            extra={**extra, "agent_label": label},
+            notification_id=notification_id,
+        )
+    else:
+        bridged, _bridge_error = _run_public_agent_gateway_turn(
+            deployment_id=deployment_id,
+            prefix=prefix,
+            channel_kind=channel_kind,
+            target_id=target_id,
+            prompt=prompt,
+            extra={**extra, "agent_label": label},
+            notification_id=notification_id,
+        )
     if bridged:
         if _bridge_error == PUBLIC_AGENT_BRIDGE_DEFERRED:
             return PUBLIC_AGENT_BRIDGE_DEFERRED

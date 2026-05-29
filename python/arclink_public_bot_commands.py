@@ -99,7 +99,52 @@ def _agent_commands_from_gateway_container(deployment_id: str) -> tuple[list[dic
     clean_deployment = str(deployment_id or "").strip()
     if not clean_deployment:
         return [], "missing-deployment", 0
-    container = f"arclink-{clean_deployment}-hermes-gateway-1"
+    return _agent_commands_from_gateway_service(
+        project_name=f"arclink-{clean_deployment}",
+        service="hermes-gateway",
+        fallback_container=f"arclink-{clean_deployment}-hermes-gateway-1",
+    )
+
+
+def _operator_agent_commands_from_control_stack(env: Mapping[str, str]) -> tuple[list[dict[str, str]], str, int]:
+    project = str(env.get("ARCLINK_CONTROL_COMPOSE_PROJECT") or "arclink").strip() or "arclink"
+    return _agent_commands_from_gateway_service(
+        project_name=project,
+        service="control-operator-hermes-gateway",
+        fallback_container=f"{project}-control-operator-hermes-gateway-1",
+    )
+
+
+def _agent_commands_from_gateway_service(
+    *,
+    project_name: str,
+    service: str,
+    fallback_container: str,
+) -> tuple[list[dict[str, str]], str, int]:
+    project = str(project_name or "").strip()
+    service_name = str(service or "").strip()
+    container = ""
+    if project and service_name:
+        lookup = [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={service_name}",
+            "--format",
+            "{{.Names}}",
+        ]
+        try:
+            proc = subprocess.run(lookup, check=False, capture_output=True, text=True, timeout=10)
+            if proc.returncode == 0:
+                container = next((line.strip() for line in str(proc.stdout or "").splitlines() if line.strip()), "")
+        except Exception:
+            container = ""
+    if not container:
+        container = str(fallback_container or "").strip()
+    if not container:
+        return [], "missing-container", 0
     script = r"""
 import json
 from hermes_cli.commands import telegram_menu_commands
@@ -273,9 +318,7 @@ def register_public_bot_commands(env: Mapping[str, str] | None = None) -> dict[s
     if telegram.bot_token:
         try:
             results["telegram"] = register_arclink_public_telegram_commands(telegram.bot_token)
-            operator_agent_commands, operator_agent_source, operator_agent_hidden_count = _agent_commands_from_gateway_container(
-                "operator"
-            )
+            operator_agent_commands, operator_agent_source, operator_agent_hidden_count = _operator_agent_commands_from_control_stack(merged)
             results["telegram"]["operator_scopes"] = register_arclink_operator_telegram_commands(
                 telegram.bot_token,
                 env=merged,

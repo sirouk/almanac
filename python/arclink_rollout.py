@@ -1298,6 +1298,7 @@ def _select_update_candidate_deployments(
         SELECT deployment_id, user_id, prefix, status, metadata_json, created_at, updated_at
         FROM arclink_deployments
         WHERE status IN ({','.join('?' for _ in sorted(ARCPOD_UPDATE_CANDIDATE_STATUSES))})
+          AND COALESCE(metadata_json, '') NOT LIKE '%"operator_agent"%'
         {requested_filter}
         ORDER BY created_at ASC, deployment_id ASC
         """,

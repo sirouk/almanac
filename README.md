@@ -33,7 +33,7 @@ fleet shape.
 | Sovereign Control Node | Hosted API, web control plane, Raven, Stripe/billing rails, public bots, fleet inventory, provisioning, admin actions, Academy, inference routing. | `./deploy.sh control install`, `upgrade`, `health`, `logs`, `ps`, `ports` |
 | Fleet Inventory | Expandable worker inventory for local, Hetzner, Akamai/Linode, and SSH-managed machines. | `./deploy.sh control register-worker`, `./deploy.sh control inventory ...` |
 | ArcPods | Captain deployments placed by the Control Node onto registered Docker-capable workers. | Control provisioner/action worker, dashboard, Raven, fleet commands |
-| Operator | Platform owner/admin surface. Operator Raven owns powerful control commands; Operator Hermes workbench must remain outside Captain ArcPods and operate against the Control Node. | Operator Telegram/Discord, `./deploy.sh control ...`, `/upgrade`, `/action_status` |
+| Operator | Platform owner/admin surface. Operator Raven owns powerful control commands; Operator Hermes runs as a first-class Control Node stack service, not a Captain ArcPod. | Operator Telegram/Discord, `./deploy.sh control ...`, `/upgrade`, `/action_status` |
 | Hermes Agent Runtime | Captain and Operator agent homes, plugins, skills, MCP, qmd, vault, memory synthesis, dashboard access, and command menus maintained by ArcLink installers. | `bin/install-deployment-hermes-home.sh`, rollout/upgrade rails |
 
 The Control Node still uses Docker Compose internally. That does not mean
@@ -106,8 +106,8 @@ These public modes are intentionally retired:
 - `./deploy.sh docker ...` as a Shared Host Docker control center
 - old operator-led enrollment commands that provisioned per-user Unix accounts
 
-Lower-level scripts for migration, tests, and host-side Operator workbench work
-may still exist in the tree. They are not the public product install path.
+Lower-level scripts for migration, tests, and installer reuse may still exist in
+the tree. They are not the public product install path.
 
 ## Operator And Captain Boundaries
 
@@ -119,8 +119,9 @@ Isolation goals:
 - Captains receive isolated ArcPods and Hermes homes.
 - Fleet workers are registered inventory controlled by the Control Node.
 - Operator Raven can queue audited system actions such as upgrades and repairs.
-- Operator Hermes should be a single host-side workbench owned by the deployment
-  user, not a Captain-style multi-agent bundle and not a Captain ArcPod.
+- Operator Hermes is a single in-stack Control Node service set owned by the
+  operator identity, not a Captain-style multi-agent bundle and not a Captain
+  ArcPod placed by the sovereign worker.
 - Shared vault, qmd, Notion, dashboard, plugin, terminal, code, and drive access
   must stay scoped through ArcLink’s generated credentials and MCP rails.
 

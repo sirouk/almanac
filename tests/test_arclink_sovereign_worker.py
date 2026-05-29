@@ -532,6 +532,34 @@ def test_sovereign_worker_is_disabled_until_explicitly_enabled() -> None:
     print("PASS test_sovereign_worker_is_disabled_until_explicitly_enabled")
 
 
+def test_sovereign_worker_skips_operator_control_stack_identity() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_operator_skip")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_operator_skip")
+    conn = memory_db(control)
+    control.upsert_arclink_user(
+        conn,
+        user_id="operator",
+        email="operator@example.test",
+        display_name="Operator",
+        entitlement_state="comp",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="operator",
+        user_id="operator",
+        prefix="operator-helm",
+        base_domain="example.test",
+        status="provisioning_ready",
+        metadata={"operator_agent": True, "operator_agent_runtime": "control-stack"},
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
+    expect(results == [], str(results))
+    row = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'operator'").fetchone()
+    expect(row["status"] == "provisioning_ready", str(dict(row)))
+    print("PASS test_sovereign_worker_skips_operator_control_stack_identity")
+
+
 def test_sovereign_worker_fails_closed_without_fleet_capacity() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_nohost")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_nohost")
@@ -927,6 +955,7 @@ if __name__ == "__main__":
     test_sovereign_worker_retries_legacy_teardown_without_chutes_client()
     test_tailnet_port_allocation_ignores_released_deployments()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
+    test_sovereign_worker_skips_operator_control_stack_identity()
     test_sovereign_worker_fails_closed_without_fleet_capacity()
     test_sovereign_worker_rechecks_lost_entitlement_before_placement()
     test_sovereign_worker_rechecks_missing_user_before_placement()
@@ -939,4 +968,4 @@ if __name__ == "__main__":
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()
     test_compose_secret_materialization_aligns_runtime_owner()
     test_dashboard_password_hash_sync_only_when_secret_is_new()
-    print("\nAll 19 Sovereign worker tests passed.")
+    print("\nAll Sovereign worker tests passed.")

@@ -1,403 +1,267 @@
-# ArcLink Academy Trainer
+# ArcLink Academy
 
-This document describes the target system for turning Crew Training from a
-character-and-role recipe into a reusable subject-matter training pipeline. The
-Captain-facing local lane is now wired: after Crew Training, `/academy` lets a
-Captain pick one Agent, or choose Train All and walk the Crew one by one with
-Skip available. That lane stages governed local Academy artifacts, records
-per-Agent review status, mirrors the status into deployment metadata, and
-projects the specialist identity summary into the Agent's managed context.
-Live source acquisition, provider-generated curricula, raw archival, workspace
-application writes, and final graduation still require the proof and policy
-handoffs tracked in `GAP-034`.
+The Academy turns an ArcPod Agent from "a SOUL.md that *claims* a specialty"
+into a genuinely prepared specialist with a curated corpus, role curriculum,
+selected skills, knowledge indexes, memory stubs, evaluation, and a continuing
+education rhythm. It is not a one-shot "pick a role" preview.
 
-## Purpose
+## The Model: a Skill -> a Sticky Mode -> Commit -> Forward-Maintain
 
-An ArcLink Agent should not become a subject-matter expert only because
-`SOUL.md` says it has a specialty. The Academy should prepare each Crew member
-with a curated corpus, a role-specific curriculum, selected skills, knowledge
-indexes, memory stubs, evaluation tasks, and a continuing education rhythm.
+The Academy is a **skill every ArcPod Agent ships with** (`arclink-academy`) with
+two faces:
 
-The target experience is:
+1. **Academy Mode (interactive, Captain-controlled).** The Captain (or the Agent)
+   opens it from a **button or `/academy`**. This flips the Agent into a
+   **sticky Academy Mode** -- a session that **does not end until the Captain
+   ends it**. It is not a single turn. Inside the mode, an **LLM Trainer** (routed
+   through the central ArcLink router) and the **Captain** co-curate: the Trainer
+   proposes a topic map, pulls and ranks sources from the governed lanes the
+   Captain authorizes, drafts a curriculum, lesson cards, a SOUL overlay, and
+   skill picks; the Captain steers role, depth, focus, and which lanes are
+   allowed. Everything in the mode is **staged/draft -- no live SOUL/skill
+   writes**.
 
-1. A Captain chooses or describes a role during Crew Training.
-2. Academy Trainer expands that role into a topic map, competency ladder,
-   source plan, safety policy, and evaluation rubric.
-3. Academy Trainer gathers and scores sources from approved lanes.
-4. It archives allowed source snapshots and creates durable lesson cards,
-   citations, skill maps, and retrieval indexes.
-5. It prepares the Agent's SOUL overlay, vault material, qmd collections,
-   memory synthesis seeds, tool recipes, skills, and first-week training plan.
-6. The Agent is deployed or refreshed only after a training gate proves the
-   curriculum is coherent, current, licensed/allowed, and useful.
-7. Weekly continuing education refreshes the corpus, preserves allowed
-   high-value material, tombstones removed content where required, updates
-   lesson cards, and re-runs evaluation tasks before pushing updates to the
-   Agent.
+2. **Forward-maintenance (autonomous, scheduled).** Once a graduate exists, the
+   same skill keeps it fresh on a weekly cadence: it routinely sweeps its lanes,
+   refreshes the corpus, re-synthesizes lesson cards, re-evaluates, and
+   **self-maintains its SOUL.md + skills** with deltas -- so graduates stay
+   ready for Captains always.
 
-## Current Shipped Slice
+**Commit ("everything put in its place").** When the **Captain ends the mode**,
+the staged plan is applied: the learning is written into the Agent
+**additively** -- SOUL overlay section, vault `Academy/{role}/` curriculum, qmd
+index, memory seeds, approved skills -- and the trainee becomes a **graduate**
+with weekly forward-maintenance armed. Real Agent writes are gated behind
+`PG-HERMES`; live source acquisition and provider curation behind `PG-PROVIDER`
+(`GAP-034`).
 
-Current source supports the governed local slice:
+## The Captain Experience
 
-- `/academy` in Captain Telegram/Discord chats opens Academy Training after an
-  active Crew Recipe exists. Friendly aliases such as Quick Training, Quick
-  Briefing, Quick Align, and Quick Huddle route to the same governed lane.
-- Captains can choose one Agent or Train All; Train All walks each Agent with
-  Train/Skip controls.
-- Each trained Agent receives a local, no-network Academy review plan built
-  from approved fixture lanes: Crew mission brief, role/source-map baseline,
-  and reviewed retrieval/tool-choice skill.
-- The review plan includes curriculum, source map, lesson cards, SOUL overlay
-  sections, qmd/memory seed intents, approved skill intents, practice tasks,
-  evaluation tasks, and Continuing Education status.
-- ArcLink persists per-Agent Academy status on the active Crew Recipe, mirrors
-  it into deployment metadata, writes a compact Academy identity summary into
-  `state/arclink-identity-context.json` when the Agent home is local, and
-  surfaces the aggregate in the dashboard and Operator Raven.
-- This slice does not crawl the web, call providers, write the Agent vault,
-  mutate `SOUL.md`, rebuild qmd, or mark an Agent graduated. Those actions are
-  still proof-gated.
+1. **Browse the Academy.** A gallery of specialist **Majors** (Programs) -- e.g.
+   *Systems-Practice Engineer*, *Research Analyst*, *Community Insight
+   Specialist*, *Standards & Compliance Reader*, *Domain Tutor* -- and a list of
+   existing **graduates** (already-trained Agents ready to adopt). Each Major
+   card shows its topic map, the source lanes it draws from, and quality posture.
+2. **Choose.** *Adopt a graduate* (clone a ready specialist's Major + staged
+   corpus into a chosen Agent -- the fast path) **or** *enroll a new Trainee*
+   (name it, pick a Major, set depth, authorize source lanes).
+3. **Enter Academy Mode** (sticky). Curate with the Trainer; iterate as long as
+   you want. Evaluate.
+4. **End the mode** when satisfied -> commit -> the Agent arrives in the ArcPod
+   knowing its Major. Weekly continuing education keeps it current.
+
+## Lifecycle State Machine
+
+```
+BROWSE majors / graduates
+  -> ADOPT graduate   OR   ENROLL trainee
+  -> ACADEMY MODE (sticky; LLM Trainer + Captain curate)  --- stays open until the Captain ends it
+        corpus assembly -> curriculum -> lesson cards -> evaluation   (staged, no-write)
+  -> CAPTAIN ENDS MODE -> graduation gate (PG-PROVIDER + PG-HERMES)
+  -> COMMIT: apply plan additively (SOUL overlay, vault, qmd, memory, skills)
+  -> GRADUATE (durable) -> FORWARD-MAINTAIN (weekly continuing education) --- loops
+```
+
+The fail-closed posture is structural: the local layer never emits
+"graduated/trained" content writes; it stages and records intent, and the
+control-plane mode/graduate state is real while the Agent-mutating apply waits
+on proof.
+
+## Entities And Data Model
+
+Control-plane scaffolding (now built, no-write):
+
+- **Program / Major** -- `academy_programs` table; managed by
+  `python/arclink_academy_programs.py` (`list_academy_programs`,
+  `upsert_academy_program`, `seed_default_academy_programs`). A Major is **pure
+  data**: `label`, `topic_map`, `source_lanes` (refs into the governed lane
+  registry), `role_template` (SOUL overlay text), `boundaries`, `default_depth`
+  (`survey`/`working`/`deep`), `quality_floor`, `required_skills`. **New trainee
+  types are rows, not code.**
+- **Trainee** -- `academy_trainees` table; binds a Major to an Agent
+  (`deployment_id`) plus the Captain's steer (`enroll_academy_trainee`). Status:
+  `enrolled` -> `in_academy` -> `graduated` (`archived`).
+- **Academy Mode session** -- `academy_mode_sessions` table; the **sticky** mode
+  (`open_academy_mode`, `academy_mode_status`, `end_academy_mode`). A unique
+  index guarantees one open session per trainee; the mode closes only when the
+  Captain ends it.
+- **Graduate** -- a trainee with `status='graduated'`; `browse_academy_graduates`
+  is the gallery; `adopt_academy_graduate` clones one onto another Agent.
+
+Curation/training entities (defined, proof-gated execution) live in
+`python/arclink_academy_trainer.py`: `SourceLanePolicy`, `AcademySource`,
+`QualityRecord`, `CurriculumRecord`, `EvaluationGate`, `CorpusManifest`,
+`AgentApplicationPlan`, `ContinuingEducationPlan`, and the no-write
+`academy_apply_preview` action-worker boundary.
+
+## Surfaces To Prepare (full inventory)
+
+Delivering the complete experience touches these surfaces. P-tags map to the
+phased plan below.
+
+- **Data model** (P0, done): `academy_programs`, `academy_trainees`,
+  `academy_mode_sessions` in `arclink_control.py`; lifecycle in
+  `arclink_academy_programs.py`.
+- **The Academy skill** (P0/P3): an `arclink-academy` Hermes skill bundled into
+  every ArcPod home (`bin/install-arclink-skills.sh` / deployment Hermes-home
+  install) that teaches the Agent how to run Academy Mode and which brokered
+  tools to use; the managed-context plugin surfaces "Academy Mode active."
+- **Sticky mode state** (P0, done): open/status/end, one-open-per-trainee,
+  Captain-ends-only semantics.
+- **Captain chat surface** (P1): `/academy` and the button in
+  `arclink_public_bots.py` / Telegram + Discord adapters open the browse ->
+  adopt/enroll -> mode flow; mode stays open across turns; an explicit
+  "graduate / end Academy" control commits.
+- **Dashboard surface** (P1): an Academy panel in `web/src/app/dashboard/` --
+  browse Majors + graduates, enroll, the live mode session, evaluation status,
+  next continuing-education time, and graduate adoption.
+- **Operator Raven** (P1): read-only Academy/graduate roster + per-Agent mode
+  status (extends the existing operator `academy_status`).
+- **Hosted API** (P1): versioned routes for list-majors, enroll, mode
+  open/status/end, browse-graduates, adopt -- owner/deployment scoped, CSRF on
+  mutations, no secrets.
+- **LLM Trainer curation engine** (P1, `PG-PROVIDER`): wire corpus ranking,
+  curriculum, lesson-card synthesis, and evaluation design to
+  `arclink_llm_router.py` (budget-reserved, audited).
+- **Live source lanes** (P2, `PG-PROVIDER`, per-lane policy): real adapters
+  behind the existing `acquire_*` boundary, one lane at a time.
+- **Commit / apply** (P3, `PG-HERMES`): promote `academy_apply_preview` to a real
+  `academy_apply` action that writes SOUL overlay / vault / qmd / memory /
+  skills through the deployment Hermes-home seams.
+- **Forward-maintenance scheduler** (P4): a weekly `academy-ce` job via
+  `bin/install-agent-cron-jobs.sh` / `bin/docker-job-loop.sh` that sweeps lanes,
+  rebuilds, re-evaluates, and pushes deltas only when the gate says `ready`.
+- **Tests/docs** (every phase): `tests/test_arclink_academy_programs.py` (P0),
+  surface contract, this doc, and the symphony.
 
 ## Source Lanes
 
-Academy Trainer should use multiple source lanes so no Agent learns a domain
-from a single brittle view.
+The Academy uses multiple lanes so no Agent learns a domain from one brittle
+view. All lanes are a **governed registry** today
+(`default_source_lane_registry`, `arclink_academy_trainer.py`) with full policy
+(authorization, license/permission, raw-storage, deletion/tombstone, quality
+weight, required metadata) and **fake fixtures only** -- live acquisition is OFF
+until wired per phase P2.
 
-### Video And Transcript Lane
+| Lane (`lane_id`) | Use | Live wiring | Gate |
+| --- | --- | --- | --- |
+| `video_transcript` | Lectures, talks, demos; lawful transcripts; labeled ASR | YouTube/caption API + ASR | `PG-PROVIDER` |
+| `reddit_discussion` | Practitioner vocabulary, pain, edge cases (raw never stored unless policy allows) | Reddit OAuth API | `PG-PROVIDER`/`PG-BOTS` |
+| `wikimedia` | Topic map, vocabulary, references, revisions | MediaWiki API | `PG-PROVIDER` |
+| `github_repository` | Architecture, tests, examples (cite, don't copy) | GitHub API/clone + license review | `PG-HERMES` |
+| `scholarly_standard` | arXiv/OpenAlex/Semantic Scholar/Crossref, standards, whitepapers | Scholarly APIs (metadata-first) | `PG-PROVIDER` |
+| `web_article` | Blogs, docs, postmortems, threads | Web search + snapshot | `PG-PROVIDER` |
+| `skill_tool_catalog` | Role skills/MCP/tool recipes (approved-only) | Skill/MCP registry + review workflow | `PG-HERMES` |
+| `organization_private` | Captain/operator-supplied docs (scrubbed) | Authorized ingestion + governance | `PG-HERMES` |
 
-Video can be an excellent training source when the transcript is reliable and
-lawfully acquired.
-
-- Search for high-quality lectures, tutorials, conference talks, interviews,
-  demos, and walkthroughs.
-- Prefer creator-provided transcripts, official caption tracks that the
-  Operator is authorized to access, public course transcripts, or transcripts
-  supplied by the Captain or organization.
-- When no transcript is available and rights allow it, Academy Trainer may run
-  an approved local/hosted ASR transcription skill and label the result as
-  machine-transcribed.
-- Capture video title, creator/channel, URL, published date, transcript source,
-  transcript confidence, license/permission status, retrieval date, and content
-  hash.
-- Split transcripts into lessons, demonstrations, heuristics, vocabulary,
-  mistakes-to-avoid, and follow-up resource links.
-- Never bypass paywalls, DRM, private videos, platform restrictions, or creator
-  permissions.
-
-The official YouTube Data API can list caption tracks for a video and points to
-caption download as the caption retrieval method, but caption retrieval requires
-the right authorization and permissions. Academy Trainer should therefore treat
-YouTube transcript ingestion as an authorized connector, not as a free-for-all
-scrape.
-
-### Reddit And Practitioner Discussion Lane
-
-Reddit is useful for practitioner vocabulary, recurring pain, edge cases,
-tooling opinions, and field-tested patterns. It is also user-generated content
-with strict retention and deletion requirements.
-
-- Use official Reddit Data API/OAuth access with a truthful User-Agent,
-  rate-limit handling, and subreddit/listing pagination.
-- Crawl only selected subreddits, posts, and comments that match the training
-  topic and quality filters.
-- Score threads by relevance, expert signal, recency, depth, moderation
-  quality, accepted corrections, and cross-source agreement.
-- Avoid treating upvotes as truth. Extract hypotheses, failure modes, common
-  workflows, tool comparisons, and practical language for future research.
-- Store raw Reddit content only when policy allows. If Reddit content or a user
-  account is deleted, comply with deletion requirements and tombstone the raw
-  archive.
-- Preserve durable non-identifying lesson cards where allowed: summarized
-  patterns, source URL, retrieval timestamp, and reason the lesson matters.
-- Never train an Agent to quote or expose private user details.
-
-### Wikipedia And Wikimedia Foundation Lane
-
-Wikipedia is a strong baseline for topic overview, vocabulary, history,
-references, adjacent concepts, and canonical disambiguation.
-
-- Use Wikimedia/MediaWiki APIs for search and page retrieval.
-- Pull article summaries, sections, references, categories, wikilinks,
-  language links, and revision metadata.
-- Treat Wikipedia as the map and bibliography, not the final authority.
-- Use page references to seed scholarly, standards, docs, and primary-source
-  lanes.
-- Revisit page revisions during continuing education when the topic is active.
-
-### GitHub And Systems Practice Lane
-
-For technical or operational domains, real repositories reveal how subject
-matter experts structure systems.
-
-- Search GitHub by topic, stars, forks, recency, language, license, README
-  content, organization/user, and archived status.
-- Inspect README, docs, examples, tests, architecture notes, issues,
-  discussions, release notes, and dependency manifests where permitted.
-- Prefer repositories that are maintained, licensed, documented, tested, and
-  used by real practitioners.
-- Extract patterns: architecture, workflows, naming, errors, tests, examples,
-  automation, safety boundaries, release habits, and tradeoffs.
-- Avoid copying code into the Agent's vault unless the license and product
-  policy allow it. Prefer explanatory lesson cards and citations.
-- Capture repository owner/name, URL, commit or tag, license, topics, stars,
-  last push, selected files, and hash/manifest.
-
-### Scholarly, Standards, And Whitepaper Lane
-
-Experts need state-of-the-art and foundational literature.
-
-- Search arXiv, OpenAlex, Semantic Scholar, Crossref, PubMed where relevant,
-  standards bodies, official whitepaper repositories, vendor research pages,
-  and domain-specific libraries.
-- Prefer primary papers, survey papers, benchmark papers, standards, official
-  guidance, and well-cited implementation reports.
-- Capture DOI/arXiv ID/OpenAlex/Semantic Scholar IDs, authors, title, venue,
-  year, abstract, license/open-access status, citation signals, and retrieval
-  date.
-- Archive PDFs or full text only when allowed. Otherwise store metadata,
-  abstract, citations, and a retrieval link.
-- Convert papers into durable lesson cards: claims, methods, constraints,
-  evidence, assumptions, open problems, and practical operator guidance.
-- Mark speculative or contradicted findings so Agents do not treat early
-  research as production truth.
-
-### Web, Blog, Article, Newsletter, And Thread Lane
-
-High-value practitioner knowledge often lives outside formal repositories.
-
-- Use web search to discover blogs, articles, newsletters, documentation,
-  forum threads, long-form posts, technical notes, and postmortems.
-- Prefer sources with clear authorship, dated updates, reputation, examples,
-  citations, and stable URLs.
-- Capture allowed snapshots, excerpts, metadata, and source hashes.
-- Score pages by authority, recency, specificity, evidence, and agreement with
-  other lanes.
-- Avoid thin SEO content, hallucinated content farms, scraped duplicates, and
-  unauthored advice unless they are useful only as negative examples.
-
-### Skill, MCP, Tool, And Template Lane
-
-Academy should equip an Agent with the skills and tools that match the role.
-
-- Search local ArcLink skills, bundled Hermes skills, organization-published
-  skills, trusted public skill repositories, MCP servers, templates, and tool
-  recipes.
-- Score each candidate by relevance, license, maintenance, safety, testability,
-  least-privilege fit, and overlap with existing ArcLink tools.
-- Prefer short, precise skills that teach the Agent which brokered tool to use,
-  what arguments are safe, and what proof to fetch before acting.
-- Install or stage only approved skills. Unknown public skills should be
-  reviewed and sandboxed before they influence an Agent.
-- Keep role-specific skills in a reusable Academy catalog so future Agents can
-  be prepared faster.
-
-### Additional Lanes
-
-Academy Trainer should also be able to use:
-
-- official product/vendor documentation;
-- standards and regulatory guidance;
-- public datasets and benchmark leaderboards;
-- patents and technical disclosures where relevant;
-- open courseware, syllabi, lecture notes, and textbooks with allowed licenses;
-- podcasts or interviews with authorized transcripts;
-- organization-private documents supplied by the Captain/Operator;
-- internal support tickets, incident reports, and postmortems when policy
-  allows and private data is scrubbed.
+Each stored item carries: source URL/origin, retrieval timestamp,
+license/permission status, content hash, extractor identity, quality score,
+freshness policy, deletion/tombstone policy, allowed storage class
+(metadata-only / derived-summary / raw-snapshot), and which Agents/Captains may
+use it. Never bypass paywalls, DRM, private content, robots/API policies, or
+deletion requirements; never store secret/private user data in reusable corpora.
 
 ## Corpus Repository And Archive
 
-The Academy corpus must be reusable without becoming a copyright or privacy
-dump.
+Private-state layout (`arclink-priv/state/academy/`): `sources/<id>/{source,
+snapshot, license, quality, tombstone}.json`, `topics/<id>/{topic-map,
+curriculum, resource-manifest, evaluation}.json`, `roles/<id>/{skill-map,
+soul-overlay, continuing-education}.json`, `lesson-cards/<topic>/<card>.md`,
+`indexes/{qmd,vector,citations}/`. Per-Agent vault namespace:
+`Vault/Academy/<role>/{README, Curriculum, Source_Map, Lesson_Cards/,
+Practice_Tasks/, Evaluation/, Skills/, Continuing_Education/}`.
 
-Recommended private-state layout:
+## Imparting Learning (the real write-path)
 
-```text
-arclink-priv/
-  state/academy/
-    sources/
-      <source-id>/source.json
-      <source-id>/snapshot.<ext>
-      <source-id>/license.json
-      <source-id>/quality.json
-      <source-id>/tombstone.json
-    topics/
-      <topic-id>/topic-map.json
-      <topic-id>/curriculum.json
-      <topic-id>/resource-manifest.json
-      <topic-id>/evaluation.json
-    roles/
-      <role-id>/skill-map.json
-      <role-id>/soul-overlay.json
-      <role-id>/continuing-education.json
-    lesson-cards/
-      <topic-id>/<card-id>.md
-    indexes/
-      qmd/
-      vector/
-      citations/
-```
+Commit wires the staged `AgentApplicationPlan` into the existing deployment
+Hermes-home chain (`bin/install-deployment-hermes-home.sh`), **additively**:
 
-Recommended per-Agent vault layout:
+- **SOUL.md**: render the role/expertise/boundaries overlay into a marked
+  Academy subsection (`arclink_org_profile`/`arclink_headless_hermes_setup` SOUL
+  render); never overwrite the human-authored body or personal memory.
+- **Skills**: add approved role skills via `bin/install-arclink-skills.sh` /
+  bundled-skills sync; never remove existing skills.
+- **qmd**: `bin/qmd-refresh.sh` re-indexes the vault after files land.
+- **Vault**: write only under `Academy/<role>/` (additive namespace).
+- **Memory**: seed `arclink_memory_synthesizer` candidates; its dedup path keeps
+  personal memory intact.
+- **Managed context**: surface the active Major through the managed-context
+  plugin.
 
-```text
-Vault/
-  Academy/
-    <agent-role>/
-      README.md
-      Curriculum.md
-      Source_Map.md
-      Lesson_Cards/
-      Practice_Tasks/
-      Evaluation/
-      Skills/
-      Continuing_Education/
-```
+Mechanically this is a new `academy_apply` action (parallel to the no-write
+`academy_apply_preview`) with `writes_enabled=True` + executor dispatch
+(`bin/refresh-agent-install.sh`-style), idempotent and audited through the
+action worker. `PG-HERMES` gated.
 
-Every stored item needs:
+## Continuing Education / Forward-Maintenance
 
-- source URL or origin;
-- retrieval timestamp;
-- license or permission status;
-- content hash;
-- extractor/transcriber identity;
-- quality score;
-- freshness policy;
-- deletion/tombstone policy;
-- whether raw content, derived summary, or metadata-only storage is allowed;
-- which Agents, Captains, or organizations may use it.
-
-## Training Pipeline
-
-The Academy Trainer should produce an Agent that knows how to learn and how to
-act, not merely an Agent with a large folder of text.
-
-Pipeline:
-
-1. Role intake: Captain goal, role, domain, level, constraints, tone, tools,
-   risk posture, and expected deliverables.
-2. Topic map: core concepts, subdomains, vocabulary, tools, workflows,
-   failure modes, ethics/safety, and adjacent domains.
-3. Source plan: lanes to use, source quotas, freshness needs, source authority
-   rules, licenses, and forbidden sources.
-4. Acquisition: fetch/search through approved connectors and rate-limited jobs.
-5. Extraction: transcript cleanup, PDF parsing, HTML cleanup, repo doc
-   extraction, thread summarization, and citation capture.
-6. Quality scoring: source authority, recency, specificity, examples,
-   cross-source agreement, contradiction flags, and bias/SEO/low-signal flags.
-7. Curriculum: beginner-to-expert ladder, practical drills, tool drills,
-   readings, demonstrations, and domain-specific checklists.
-8. Synthesis: durable lesson cards, vocabulary, heuristics, red flags,
-   decision trees, and "where to look next" maps.
-9. Equipping: SOUL overlay, skill map, MCP recipes, vault folders, qmd indexes,
-   memory synthesis seeds, and first-turn Raven/Agent briefing.
-10. Evaluation: scenario tasks, retrieval tests, tool-choice tests, refusal
-    tests, citation tests, and output-quality rubrics.
-11. Deployment: apply to a new Pod or retrain an existing Agent while
-    preserving historical memories/sessions unless the Captain explicitly
-    resets them.
-12. Audit: record what changed, what sources were used, what skills were
-    installed, what evaluations passed, and what remains provisional.
-
-## SOUL, Memory, Skills, And Vault Application
-
-Academy output should touch multiple Agent layers:
-
-- `SOUL.md`: update only the role, voice, expertise, operating heuristics,
-  boundaries, and domain-specific behavior sections that need replacement.
-- Memory: preserve personal/history memory unless the Captain requests a reset;
-  add Academy lesson summaries as managed recall stubs and retrieval hints.
-- Vault: install curriculum, source map, lesson cards, practice tasks,
-  evaluations, and continuing education notes.
-- qmd/vector indexes: index allowed material and derived lesson cards so tools
-  can search before answering.
-- Skills: install approved role skills and add compact tool recipes so the
-  Agent uses the right tools first.
-- Sessions: keep existing conversations intact, but add an Academy update note
-  so future turns know when retraining happened.
-- Dashboard: show training status, source lanes, evaluation results, next
-  continuing education time, and blocked/licensing issues.
-
-## Continuing Education
-
-Continuing Education should be a weekly Academy job, not an afterthought.
-
-The weekly cycle:
-
-1. Re-run source searches for each active role/topic.
-2. Refresh watched sources, repos, papers, docs, and threads.
-3. Detect changed, removed, deleted, stale, contradicted, or superseded
-   materials.
-4. Tombstone raw content where deletion or license policy requires it.
-5. Preserve allowed high-value archived material when it disappears from the
-   web, marking it as archived and no longer live-fetchable.
-6. Promote better new material over weaker old material while retaining
-   historical context when it remains allowed and useful.
-7. Rebuild lesson cards, source maps, qmd/vector indexes, memory stubs, skill
-   recommendations, and practice tasks.
-8. Run evaluation tasks and compare performance against the prior week.
-9. Produce a concise Captain/Operator report: what changed, what improved, what
-   was removed, what needs approval, and what the Agent now knows to do.
-10. Push updates to the Agent only after policy, license, and evaluation gates
-    pass.
-
-The balance is important: do not lose knowledge simply because a page moved,
-but also do not violate deletion, license, privacy, or platform rules. Archive
-allowed material; tombstone disallowed or deleted material; preserve derived
-non-identifying lessons only where policy permits.
+A weekly Academy job, not an afterthought. Cycle: re-run source searches; refresh
+watched sources; classify `unchanged/changed/stale/superseded/removed/tombstoned`
+(`build_continuing_education_plan`); tombstone disallowed/deleted material;
+preserve allowed high-value archived material; promote stronger material; rebuild
+lesson cards/indexes/memory stubs; re-run evaluations; produce a Captain/Operator
+report; push SOUL/skill deltas **only** when the gate says `ready`.
+`removed`/`tombstoned` sources hard-block the Agent update; reviews are
+content-stripped and secret-free; every cycle is audited. Scheduling reuses the
+existing cron/loop infra (P4).
 
 ## Evaluation And Graduation
 
-Academy Training is complete only when the Agent can demonstrate useful
-competence.
-
-Graduation gates:
-
-- Can explain the domain's core map and current limits.
-- Can retrieve and cite Academy sources before giving specialized advice.
-- Can choose the right ArcLink/Hermes/MCP skills for role tasks.
-- Can refuse unsafe, unsupported, or out-of-scope actions.
-- Can complete representative scenario tasks with concise next actions.
-- Can distinguish durable doctrine from fresh web results and provisional
-  research.
-- Can tell the Captain what it knows, what it does not know, and where it will
-  look next.
-
-Evaluation should create scored artifacts that can be reviewed by Operator
-Raven, dashboard, CLI, and future Ralphie runs.
+Graduation gates (`academy_evaluation_gate` / `academy_graduation_gate`): can
+explain the domain map and limits; retrieve-and-cite before specialized advice;
+choose the right ArcLink/Hermes/MCP skills; refuse unsafe/out-of-scope actions;
+complete representative scenario tasks; distinguish durable doctrine from fresh
+results; tell the Captain what it knows, does not know, and where it will look
+next. Evaluation produces scored artifacts reviewable by Operator Raven,
+dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
+`PG-PROVIDER` + `PG-HERMES` evidence exists.
 
 ## Governance And Proof
 
-Academy Trainer must be governed as carefully as provisioning.
-
 - Do not bypass platform terms, paywalls, DRM, private content, robots/API
   policies, or deletion requirements.
-- Do not store secret or private user data in reusable Academy corpora.
-- Do not make a public model-training claim from source material that is only
-  licensed for transient reading or private use.
+- Do not store secret or private user data in reusable corpora.
+- Do not make a public model-training claim from material licensed only for
+  transient reading or private use.
 - Do not let unreviewed public skills execute privileged tools.
-- Do not let Academy summaries become untraceable facts. Every lesson card
-  should point back to source metadata.
-- Do not call a role trained until source acquisition, quality scoring,
-  curriculum generation, equipping, and evaluation have all passed.
+- Every lesson card points back to source metadata; nothing becomes an
+  untraceable fact.
+- A role is not "trained" until acquisition, quality scoring, curriculum,
+  equipping, and evaluation all pass under the named proof gates.
 
-The first implementation slices are now local and safe:
-`python/arclink_academy_trainer.py` defines the Academy schemas, source-lane
-registry, fake acquisition request/result/report structures, fake corpus
-manifest, quality scoring, curriculum and evaluation records, no-write
-SOUL/vault/qmd/memory/skill application plan, and continuing-education refresh
-plan. `tests/test_arclink_academy_trainer.py` proves the default registry,
-fake acquisition fixtures for every enabled default lane, fail-closed policy
-refusals, evaluation statuses, compact review summaries, secret-free outputs,
-and refresh-state gates. Crew Training can now stage a compact no-write Academy
-review status on the active recipe overlay with audit/event rows, persist a
-weekly Continuing Education review/gate summary with no network and no Agent
-writes, and expose weekly review, evaluation, graduation, next-review,
-blocked-source, and proof-gate status through the user dashboard, Crew Recipe
-API, and read-only Operator Raven. The action worker can now queue an audited
-`academy_apply_preview` from that staged review, validate the active Crew Recipe
-and application-plan references, and record a compact no-write result without
-executor or filesystem calls. Live provider generation, external crawling,
-ASR/transcription, real vault/qmd/Hermes-home application, trained-Agent
-workspace proof, hosted continuing education scheduling, and source-governance
-policy stay gated until authorized and implemented.
+## Current Slice And Phased Plan
+
+**Shipped (P0, local, no-write, no proof gate):**
+
+- `academy_programs` / `academy_trainees` / `academy_mode_sessions` tables
+  (`arclink_control.py`) and the lifecycle module `arclink_academy_programs.py`:
+  a seeded catalog of Majors, enroll-trainee, the **sticky Academy Mode**
+  (open/status/end, one-open-per-trainee, Captain-ends-only), graduate gallery,
+  and graduate adoption. Commit at mode-end records intent + arms
+  forward-maintenance; it performs **no** Agent SOUL/skills/qmd/vault writes
+  (`mutation_performed=False`). Covered by
+  `tests/test_arclink_academy_programs.py`.
+- The pre-existing governed source-lane registry, fake acquisition, quality
+  scoring, curriculum/evaluation/graduation gates, no-write application plan, and
+  weekly continuing-education classification in `arclink_academy_trainer.py`.
+
+**Phased plan to the real deal:**
+
+- **P0 (done)** -- experience scaffolding as data + sticky mode (no gate).
+- **P1 (`PG-PROVIDER`)** -- LLM Trainer curation via the central router; Captain
+  chat/dashboard/Operator-Raven/API surfaces for browse/adopt/enroll/mode.
+- **P2 (`PG-PROVIDER`, per-lane policy)** -- live source acquisition, one lane at
+  a time (lowest-risk first: `wikimedia` -> `github` -> `scholarly` -> `web` ->
+  `video`+ASR -> `reddit` -> `skills` -> `organization_private`).
+- **P3 (`PG-HERMES`)** -- real commit: `academy_apply` writes SOUL
+  overlay/vault/qmd/memory/skills through the deployment Hermes-home seams,
+  additively.
+- **P4** -- hosted weekly forward-maintenance via the existing cron/loop
+  scheduler.
+
+Reuse summary: the **central LLM router** powers Trainer synthesis (P1-P2); the
+**action worker** powers preview -> apply and weekly delta application (P3-P4);
+the **existing cron/loop scheduler** powers the weekly cycle (P4). No new
+orchestration engine is introduced, and every phase keeps fail-closed
+validation, content/secret stripping, additive-only writes, and the named proof
+gates.

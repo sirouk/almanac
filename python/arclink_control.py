@@ -1434,6 +1434,72 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived', 'superseded'))
         );
 
+        -- Academy: catalog of specialist Programs ("Majors"). Pure data so new
+        -- trainee types are added as rows, not code. Each Major references the
+        -- governed source lanes in arclink_academy_trainer.default_source_lane_registry.
+        CREATE TABLE IF NOT EXISTS academy_programs (
+          program_id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          summary TEXT NOT NULL DEFAULT '',
+          topic_map TEXT NOT NULL DEFAULT '',
+          source_lanes_json TEXT NOT NULL DEFAULT '[]',
+          role_template TEXT NOT NULL DEFAULT '',
+          boundaries TEXT NOT NULL DEFAULT '',
+          default_depth TEXT NOT NULL DEFAULT 'working' CHECK (default_depth IN ('survey', 'working', 'deep')),
+          quality_floor INTEGER NOT NULL DEFAULT 70,
+          required_skills_json TEXT NOT NULL DEFAULT '[]',
+          origin TEXT NOT NULL DEFAULT 'catalog',
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+
+        -- Academy: a Trainee binds a Program/Major to an Agent (deployment) plus
+        -- the Captain's steer. Graduated trainees are the browsable graduates.
+        CREATE TABLE IF NOT EXISTS academy_trainees (
+          trainee_id TEXT PRIMARY KEY,
+          program_id TEXT NOT NULL DEFAULT '',
+          user_id TEXT NOT NULL DEFAULT '',
+          deployment_id TEXT NOT NULL DEFAULT '',
+          agent_id TEXT NOT NULL DEFAULT '',
+          name TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'enrolled' CHECK (status IN ('enrolled', 'in_academy', 'graduated', 'archived')),
+          mode_open INTEGER NOT NULL DEFAULT 0,
+          depth TEXT NOT NULL DEFAULT '',
+          captain_steer_json TEXT NOT NULL DEFAULT '{}',
+          staged_manifest_id TEXT NOT NULL DEFAULT '',
+          staged_plan_id TEXT NOT NULL DEFAULT '',
+          forward_maintained INTEGER NOT NULL DEFAULT 0,
+          adopted_from_trainee_id TEXT NOT NULL DEFAULT '',
+          enrolled_at TEXT NOT NULL DEFAULT '',
+          graduated_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+
+        -- Academy: a sticky Mode session. Opened by button or /academy; it stays
+        -- open until the Captain ends it. On end, the staged plan is committed
+        -- (real Agent writes are PG-HERMES gated) and forward-maintenance is armed.
+        CREATE TABLE IF NOT EXISTS academy_mode_sessions (
+          session_id TEXT PRIMARY KEY,
+          trainee_id TEXT NOT NULL DEFAULT '',
+          deployment_id TEXT NOT NULL DEFAULT '',
+          program_id TEXT NOT NULL DEFAULT '',
+          opened_by TEXT NOT NULL DEFAULT '',
+          opened_via TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'cancelled')),
+          commit_summary_json TEXT NOT NULL DEFAULT '{}',
+          opened_at TEXT NOT NULL DEFAULT '',
+          closed_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_academy_trainees_user_status
+        ON academy_trainees (user_id, status);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_academy_mode_sessions_open_trainee
+        ON academy_mode_sessions (trainee_id)
+        WHERE status = 'open';
+
         CREATE TABLE IF NOT EXISTS arclink_wrapped_reports (
           report_id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,

@@ -408,15 +408,22 @@ proof under `GAP-022`.
 
 ## Academy Trainer And Subject-Matter Formation
 
-Crew Training now has an Academy Training lane for governed local
-subject-matter formation. Crew Training still curates the roster, roles,
-personalities, and additive SOUL overlay; Academy Training takes one Agent (or
-walks the whole Crew one by one with Skip available) and stages a specialist
-corpus, curriculum, source map, SOUL overlay plan, skill/tool recipes,
-qmd/memory seed intents, practice tasks, evaluation tasks, and continuing
-education review for that Agent. Captain-facing copy can call this lane Quick
-Training, Quick Briefing, Quick Align, or Quick Huddle while keeping
-`/academy` as the explicit command. The detailed target system lives in
+The Academy is a **skill every ArcPod Agent ships with** (`arclink-academy`),
+not a one-shot role preview. Invoked from a button or `/academy`, it flips the
+Agent into a **sticky Academy Mode** that stays open until the Captain ends it.
+Inside the mode an **LLM Trainer** (routed through the central router) and the
+**Captain** co-curate a specialist corpus and curriculum from the governed
+source lanes; the Captain steers role, depth, focus, and lane authorization.
+When the Captain **ends the mode**, the staged plan is committed ("everything
+put in its place") -- the learning is written additively into the Agent's
+SOUL.md, skills, qmd, memory, and vault -- and the trainee becomes a **graduate**
+with weekly **forward-maintenance** (continuing education) armed to keep its
+SOUL/skills current. Captains can **browse Academy graduates** (ready
+specialists) and adopt one, or **enroll a new Trainee** against a **Major**
+(specialist Program). Majors are pure data, so new trainee types are added as
+rows, not code. Crew Training still curates the roster/roles/personality and the
+additive SOUL overlay; the Academy is the subject-matter formation layer. The
+detailed target system and full surface inventory live in
 `docs/arclink/academy-trainer.md`.
 
 The finished Academy should:
@@ -459,8 +466,18 @@ policy requires it, replace weaker materials with stronger current ones,
 rebuild lesson cards/indexes/memory stubs, run evaluations, and produce a
 Captain/Operator report before updating the Agent.
 
-The Captain-facing local slice now exists in source. `python/arclink_academy_trainer.py`
-defines the no-network Academy schemas, default governed source-lane registry,
+The control-plane experience scaffolding now exists in source (P0, no-write, no
+proof gate): `academy_programs`, `academy_trainees`, and `academy_mode_sessions`
+tables (`python/arclink_control.py`) plus `python/arclink_academy_programs.py`,
+which own the browsable catalog of **Majors** (a seeded specialist catalog;
+extensible as data), **Trainee** enrollment, the **sticky Academy Mode**
+(open/status/end, one open session per trainee, Captain-ends-only), the
+**graduate gallery**, and **graduate adoption**. Mode-end records the commit
+intent and arms forward-maintenance but performs no Agent SOUL/skills/qmd/vault
+writes (`mutation_performed=False`), covered by
+`tests/test_arclink_academy_programs.py`. The curation/training core remains in
+`python/arclink_academy_trainer.py`, which defines the no-network Academy
+schemas, default governed source-lane registry,
 fake acquisition reports, fake corpus manifests, deterministic quality scoring,
 curriculum/evaluation records, no-write SOUL/vault/qmd/memory/skill
 application plans, a no-write `academy_apply_preview` action-worker boundary,

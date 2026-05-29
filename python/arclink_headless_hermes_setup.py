@@ -519,8 +519,9 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
             "content": (
                 f"Your public-facing bot name is {label}. Introduce yourself as {label}, "
                 "not Hermes, unless you are explicitly explaining that Hermes is the runtime "
-                "you run on. Your durable identity lives at HERMES_HOME/SOUL.md; read it first "
-                "and let it lead."
+                "you run on. Hermes already injects your durable identity from "
+                "HERMES_HOME/SOUL.md; follow that identity without re-reading the file unless "
+                "the user asks to inspect it."
                 + (f" You are the dedicated ArcLink user agent for unix user {unix_user}." if unix_user else " You are an ArcLink user agent on a shared host.")
                 + (f" Your user is {user_name}." if user_name else "")
                 + " Treat the installed ArcLink skills and plugin-managed [managed:*] context "

@@ -131,6 +131,15 @@ if [[ -z "$agent_name" ]]; then
   agent_name="${ARCLINK_PREFIX:-ArcLink} Hermes"
 fi
 agent_title="${ARCLINK_AGENT_TITLE:-}"
+captain_name="${ARCLINK_CAPTAIN_NAME:-${ARCLINK_USER_NAME:-${ARCLINK_PREFIX:-ArcLink}}}"
+
+HERMES_HOME="$HERMES_HOME_TARGET" "$PYTHON_BIN" \
+  "$REPO_DIR/python/arclink_headless_hermes_setup.py" \
+  --identity-only \
+  --bot-name "$agent_name" \
+  --agent-title "$agent_title" \
+  --unix-user "arclink" \
+  --user-name "$captain_name" >/dev/null
 
 provider="${ARCLINK_PRIMARY_PROVIDER:-chutes}"
 secret_file="${ARCLINK_CHUTES_API_KEY_FILE:-/run/secrets/chutes_api_key}"
@@ -161,5 +170,5 @@ PY
     --bot-name "$agent_name" \
     --agent-title "$agent_title" \
     --unix-user "arclink" \
-    --user-name "${ARCLINK_CAPTAIN_NAME:-${ARCLINK_USER_NAME:-${ARCLINK_PREFIX:-ArcLink}}}" >/dev/null
+    --user-name "$captain_name" >/dev/null
 fi

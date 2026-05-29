@@ -6141,6 +6141,8 @@ def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
     expect("ARCLINK_ALLOW_SCAFFOLD_DEFAULTS=1" in body, body)
     expect('ARCLINK_HERMES_DOCS_VAULT_DIR="$docs_vault_dir"' in body, body)
     expect("Hermes docs sync failed; continuing" in body, body)
+    expect("--identity-only" in body, "deployment installer must refresh SOUL.md even when provider credentials are unavailable")
+    expect("captain_name=" in body and '--user-name "$captain_name"' in body, body)
     print("PASS test_deployment_hermes_home_installer_seeds_runtime_knowledge")
 
 

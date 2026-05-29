@@ -726,6 +726,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect(
         "queued" in operator_upgrade_broker_block
         and "operator upgrade execution" in operator_upgrade_broker_block
+        and 'user: "0:0"' in operator_upgrade_broker_block
         and re.search(rf"^\s+- {re.escape(HOST_REPO_BIND)}\s*$", operator_upgrade_broker_block, re.MULTILINE)
         and HOST_REPO_BIND_RO not in operator_upgrade_broker_block,
         f"operator-upgrade-broker must own the explicit writable host repo exception\n{operator_upgrade_broker_block}",
@@ -1562,6 +1563,10 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
     assert block is not None
     expect("/var/run/docker.sock:/var/run/docker.sock" in block, block)
     expect("group_add:" in block, block)
+    expect(
+        'user: "0:0"' in block,
+        f"operator-upgrade-broker must run as the trusted root broker so /root-hosted live checkouts are traversable\n{block}",
+    )
     expect("cap_drop:\n      - ALL" in block, block)
     expect("<<: *arclink-env" not in block, f"operator-upgrade-broker must not inherit broad app env\n{block}")
     expect(

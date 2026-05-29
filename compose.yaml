@@ -497,6 +497,10 @@ services:
 
   operator-upgrade-broker:
     <<: *arclink-app
+    # This broker intentionally owns the trusted-host upgrade boundary. It must
+    # run as root inside the container when the live checkout is under /root so
+    # Docker Compose resolves host bind paths to paths the host daemon can see.
+    user: "0:0"
     cap_drop:
       - ALL
     environment:

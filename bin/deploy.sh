@@ -547,8 +547,8 @@ Sovereign Control Node:
   deploy.sh control logs [SERVICE]
   deploy.sh control ps
   deploy.sh control backup          # private backup of control DB, private state, and generated pods
-  deploy.sh control reset-sandbox   # backup, then clear sandbox/test users and generated pods
-  deploy.sh control reset-production # backup, then clear production users after double confirmation
+  deploy.sh control reset-sandbox   # optionally backup, then clear sandbox/test users and generated pods
+  deploy.sh control reset-production # optionally backup, then clear production users after double confirmation
   deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
   deploy.sh control fleet-key --rotate --json
   deploy.sh control register-worker # interactively add a remote SSH fleet worker
@@ -1193,8 +1193,8 @@ Usage:
   deploy.sh control health
   deploy.sh control backup          # backup control DB, private state, and generated pods
   deploy.sh control reset-runtime   # compatibility alias for reset-sandbox
-  deploy.sh control reset-sandbox   # backup, then clear sandbox/test user data
-  deploy.sh control reset-production # backup, then clear production user data after double confirmation
+  deploy.sh control reset-sandbox   # optionally backup, then clear sandbox/test user data
+  deploy.sh control reset-production # optionally backup, then clear production user data after double confirmation
   deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
   deploy.sh control register-worker # interactively register a remote SSH fleet worker
   deploy.sh control enrollment mint
@@ -10519,7 +10519,7 @@ confirm_control_runtime_reset() {
       cat <<EOF
 ArcLink Sovereign PRODUCTION user-data reset
 
-This will back up first, then clear production user/customer runtime data on this control node:
+This can back up first, then clear production user/customer runtime data on this control node:
   - public Raven onboarding sessions and channel pairing codes
   - users, subscriptions, deployments, provisioning jobs, service health
   - generated ArcPod containers, named volumes, and /arcdata/deployments entries
@@ -10554,7 +10554,7 @@ EOF
       cat <<'EOF'
 ArcLink Sovereign sandbox user-data reset
 
-This will back up first, then clear sandbox/test user runtime data on this control node:
+This can back up first, then clear sandbox/test user runtime data on this control node:
   - public Raven onboarding sessions and channel pairing codes
   - users, subscriptions, deployments, provisioning jobs, service health
   - generated ArcPod containers, named volumes, and /arcdata/deployments entries
@@ -10652,6 +10652,46 @@ EOF
       return 1
       ;;
   esac
+}
+
+confirm_control_runtime_backup_choice() {
+  local scope="${1:-sandbox}"
+  local answer=""
+
+  CONTROL_RESET_CREATE_BACKUP="1"
+
+  if [[ ! -t 0 ]]; then
+    echo "Runtime backup before reset: yes (default for non-interactive resets)."
+    return 0
+  fi
+
+  cat <<EOF
+
+Runtime backup choice
+
+ArcLink can create a private reset backup before wiping ${scope} runtime data.
+Default: yes. This is safest, but it can take a while because it snapshots the
+control DB, private state, and generated ArcPod data.
+
+If you choose no, ArcLink skips the reset backup and proceeds with the wipe.
+EOF
+
+  while true; do
+    read -r -p "Create a private runtime backup before wiping data? [Y/n]: " answer
+    case "${answer:-Y}" in
+      y|Y|yes|YES|"")
+        CONTROL_RESET_CREATE_BACKUP="1"
+        return 0
+        ;;
+      n|N|no|NO)
+        CONTROL_RESET_CREATE_BACKUP="0"
+        return 0
+        ;;
+      *)
+        echo "Please answer yes or no." >&2
+        ;;
+    esac
+  done
 }
 
 stop_control_runtime_writers() {
@@ -11201,6 +11241,7 @@ run_control_runtime_reset() {
 
   confirm_control_runtime_reset "$scope"
   confirm_control_operator_runtime_reset "$scope"
+  confirm_control_runtime_backup_choice "$scope"
 
   begin_deploy_operation "control-reset-$scope" "$state_dir"
   trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
@@ -11209,17 +11250,21 @@ run_control_runtime_reset() {
   CONFIG_TARGET="$docker_env"
 
   db_path="$(control_host_db_path)"
-  echo "Stopping control-plane writers before reset backup..."
+  echo "Stopping control-plane writers before reset..."
   stop_control_runtime_writers
-  echo "Stopping generated ArcPod containers before reset backup..."
+  echo "Stopping generated ArcPod containers before reset..."
   stop_control_generated_pod_containers
   if [[ "${CONTROL_RESET_OPERATOR_STATE:-preserve}" == "wipe-operator" ]]; then
-    echo "Stopping Operator Hermes containers before reset backup..."
+    echo "Stopping Operator Hermes containers before reset..."
     stop_control_operator_runtime_containers
   fi
 
-  backup_dir="$(new_control_runtime_backup_dir)"
-  create_control_runtime_backup "$backup_dir"
+  if [[ "${CONTROL_RESET_CREATE_BACKUP:-1}" == "1" ]]; then
+    backup_dir="$(new_control_runtime_backup_dir)"
+    create_control_runtime_backup "$backup_dir"
+  else
+    echo "Skipping reset backup at operator request."
+  fi
 
   echo "Stopping and removing generated ArcPod stacks..."
   remove_control_generated_pods
@@ -11253,7 +11298,11 @@ run_control_runtime_reset() {
   ensure_control_operator_agent
 
   echo "ArcLink Sovereign $scope runtime reset complete."
-  echo "Backup kept at: $backup_dir"
+  if [[ -n "$backup_dir" ]]; then
+    echo "Backup kept at: $backup_dir"
+  else
+    echo "No reset backup was created."
+  fi
 
   finish_deploy_operation
   trap 'arclink_deploy_stable_copy_cleanup' EXIT

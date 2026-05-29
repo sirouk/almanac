@@ -2216,19 +2216,28 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     reset = extract(text, "run_control_runtime_reset() {", "control_command_from_mode() {")
     backup = extract(text, "create_control_runtime_backup() {", "run_control_runtime_backup() {")
     operator_confirm = extract(text, "confirm_control_operator_runtime_reset() {", "stop_control_runtime_writers() {")
-    expect("create_control_runtime_backup" in reset, "expected reset to create a backup before clearing data")
+    backup_confirm = extract(text, "confirm_control_runtime_backup_choice() {", "stop_control_runtime_writers() {")
+    expect("create_control_runtime_backup" in reset, "expected reset to offer a backup before clearing data")
     expect(
         reset.index("create_control_runtime_backup") < reset.index("reset_control_runtime_database"),
-        "expected reset to back up before touching the database",
+        "expected optional reset backup to run before touching the database",
     )
-    expect("stop_control_generated_pod_containers" in text, "expected reset to quiesce generated pods before backup")
+    expect("stop_control_generated_pod_containers" in text, "expected reset to quiesce generated pods before reset")
     expect(
         reset.index("stop_control_generated_pod_containers") < reset.index("create_control_runtime_backup"),
-        "expected generated pods to stop before reset backup tar reads pod data",
+        "expected generated pods to stop before optional reset backup tar reads pod data",
     )
     expect("confirm_control_runtime_reset" in reset, "expected reset to require confirmation")
     expect('confirm_control_runtime_reset "$scope"' in reset, "expected reset confirmation to receive sandbox/production scope")
     expect('confirm_control_operator_runtime_reset "$scope"' in reset, "expected reset to separately ask about Operator state")
+    expect('confirm_control_runtime_backup_choice "$scope"' in reset, "expected reset to ask whether to create a backup")
+    expect("CONTROL_RESET_CREATE_BACKUP" in reset, "expected reset to carry explicit backup yes/no mode")
+    expect("Create a private runtime backup before wiping data? [Y/n]" in backup_confirm,
+           "expected reset backup prompt to default yes but allow no")
+    expect("Skipping reset backup at operator request." in reset,
+           "expected reset to support skipping the long backup step")
+    expect("No reset backup was created." in reset,
+           "expected reset summary to disclose when backup was skipped")
     expect("CONTROL_RESET_OPERATOR_STATE" in reset, "expected reset to carry explicit Operator preservation/wipe mode")
     expect(
         "Preserving Operator Raven/Hermes state; resetting Captain/customer runtime only." in reset,

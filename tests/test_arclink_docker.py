@@ -426,6 +426,7 @@ def test_dockerfile_installs_pinned_runtime_assets() -> None:
     expect("config/pins.json" in body, body)
     expect("@tobilu/qmd@${qmd_version}" in body, body)
     expect("hermes-agent" in body and "hermes-venv" in body, body)
+    expect("hermes-agent-src/hermes_cli/dashboard_auth" in body and '"dashboard_auth"' in body, body)
     expect("stripe" in body, body)
     expect("[ -f /home/arclink/arclink/web/package-lock.json ]" in body, body)
     expect("cd /home/arclink/arclink/web" in body and "npm run build" in body, body)

@@ -95,6 +95,7 @@ RUN pin_value() { \
     "uvicorn>=0.30,<1" \
     "httpx>=0.27,<1" \
     "stripe>=10,<14" \
+  && /opt/arclink/runtime/hermes-venv/bin/python3 -c 'from pathlib import Path; import hermes_cli, shutil; source = Path("/opt/arclink/runtime/hermes-agent-src/hermes_cli/dashboard_auth"); target = Path(hermes_cli.__file__).resolve().parent / "dashboard_auth"; shutil.rmtree(target, ignore_errors=True); shutil.copytree(source, target) if source.is_dir() else None' \
   && if [ -d /opt/arclink/runtime/hermes-agent-src/web ]; then \
        cd /opt/arclink/runtime/hermes-agent-src/web \
        && npm ci --no-audit --no-fund \

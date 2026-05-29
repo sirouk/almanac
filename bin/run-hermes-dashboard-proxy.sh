@@ -7,6 +7,16 @@ backend_host="${ARCLINK_HERMES_DASHBOARD_BACKEND_HOST:-127.0.0.1}"
 backend_port="${ARCLINK_HERMES_DASHBOARD_BACKEND_PORT:-13210}"
 chutes_key_file="${ARCLINK_CHUTES_API_KEY_FILE:-}"
 access_file="${ARCLINK_HERMES_DASHBOARD_ACCESS_FILE:-${HERMES_HOME:-/home/arclink/.hermes}/state/arclink-web-access.json}"
+runtime_dir="${RUNTIME_DIR:-/opt/arclink/runtime}"
+hermes_bin="${ARCLINK_HERMES_BIN:-$runtime_dir/hermes-venv/bin/hermes}"
+if [[ ! -x "$hermes_bin" ]]; then
+  hermes_bin="$(command -v hermes || true)"
+fi
+
+if [[ -z "$hermes_bin" || ! -x "$hermes_bin" ]]; then
+  echo "Hermes dashboard binary not found; expected $runtime_dir/hermes-venv/bin/hermes" >&2
+  exit 1
+fi
 
 if [[ -n "$chutes_key_file" && -r "$chutes_key_file" ]]; then
   export CHUTES_API_KEY
@@ -21,7 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-hermes dashboard \
+"$hermes_bin" dashboard \
   --host "$backend_host" \
   --port "$backend_port" \
   --insecure \

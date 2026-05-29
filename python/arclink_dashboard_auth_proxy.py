@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import socketserver
+import threading
 import time
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
@@ -47,6 +48,8 @@ MOUNTED_SRCSET_ATTR_RE = re.compile(r"(?P<name>\bsrcset\s*=\s*)(?P<quote>[\"'])(
 MOUNTED_CSS_URL_RE = re.compile(r"url\(\s*(?P<quote>[\"']?)(?P<path>/(?!/)[^)\"']+)(?P=quote)\s*\)", re.IGNORECASE)
 MOUNTED_QUOTED_PATH_RE = re.compile(r"(?P<quote>\")(?P<path>/(?!/)[^\"\\]*(?:\\.[^\"\\]*)*)(?P=quote)")
 MOUNTED_PUBLIC_PATH_ROOTS = ("/api/", "/assets/", "/dashboard-plugins/", "/ds-assets/", "/fonts/")
+BACKEND_SESSION_HEADER_NAME = "X-Hermes-Session-Token"
+BACKEND_SESSION_TOKEN_RE = re.compile(r'window\.__HERMES_SESSION_TOKEN__\s*=\s*"(?P<token>[^"]+)"')
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -313,6 +316,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     target: str
     realm: str
     require_auth: bool = True
+    backend_session_token: str = ""
+    backend_session_token_target: str = ""
+    backend_session_token_lock = threading.Lock()
 
     def _make_token(self, username: str) -> str:
         now = int(time.time())
@@ -679,6 +685,52 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return _origin_matches_host(referer, host)
         return True
 
+    def _backend_session_token(self, *, force_refresh: bool = False) -> str:
+        """Read Hermes' loopback-only dashboard token from the local backend.
+
+        ArcLink's proxy is the public auth boundary. The Hermes dashboard behind
+        it still protects /api/* with an ephemeral in-process session token so
+        first-party plugin fetches need that header. The proxy learns the token
+        from the backend's own index HTML and forwards it only after the ArcLink
+        signed-session gate has accepted the browser request.
+        """
+        cls = type(self)
+        target_url = str(self.target or "")
+        with cls.backend_session_token_lock:
+            if (
+                not force_refresh
+                and cls.backend_session_token
+                and cls.backend_session_token_target == target_url
+            ):
+                return cls.backend_session_token
+
+            target = urlsplit(self.target)
+            if not target.hostname or not target.port:
+                return ""
+            connection = http.client.HTTPConnection(target.hostname, target.port, timeout=5)
+            request_path = (target.path.rstrip("/") or "") + "/"
+            try:
+                connection.request(
+                    "GET",
+                    request_path,
+                    headers={
+                        "Accept-Encoding": "identity",
+                        "Host": target.netloc,
+                    },
+                )
+                response = connection.getresponse()
+                payload = response.read()
+            except OSError:
+                return ""
+            finally:
+                connection.close()
+
+            match = BACKEND_SESSION_TOKEN_RE.search(payload.decode("utf-8", "replace"))
+            token = str(match.group("token") if match else "").strip()
+            cls.backend_session_token = token
+            cls.backend_session_token_target = target_url if token else ""
+            return token
+
     def _proxy(self) -> None:
         path = urlsplit(self.path).path
         if path == LOGIN_PATH:
@@ -717,7 +769,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         target = urlsplit(self.target)
-        connection = http.client.HTTPConnection(target.hostname, target.port, timeout=30)
         proxy_path = self.path
         if target.path and target.path != "/":
             proxy_path = f"{target.path.rstrip('/')}/{self.path.lstrip('/')}"
@@ -728,7 +779,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         headers = {}
         for key, value in self.headers.items():
             lowered = key.lower()
-            if lowered in HOP_BY_HOP_HEADERS or lowered in {"authorization", "cookie"}:
+            if lowered in HOP_BY_HOP_HEADERS or lowered in {"authorization", "cookie", BACKEND_SESSION_HEADER_NAME.lower()}:
                 continue
             headers[key] = value
         # We rewrite/inject small HTML/CSS/JSON payloads below. Ask the local
@@ -740,21 +791,33 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             headers["Cookie"] = forwarded_cookie
         if auth.forward_authorization:
             headers["Authorization"] = auth.forward_authorization
+        backend_token = self._backend_session_token()
+        if backend_token:
+            headers[BACKEND_SESSION_HEADER_NAME] = backend_token
         headers["Host"] = target.netloc
+
+        def request_backend(request_headers: dict[str, str]) -> tuple[int, str, list[tuple[str, str]], bytes]:
+            connection = http.client.HTTPConnection(target.hostname, target.port, timeout=30)
+            try:
+                connection.request(self.command, proxy_path, body=body or None, headers=request_headers)
+                response = connection.getresponse()
+                return response.status, response.reason, response.getheaders(), response.read()
+            finally:
+                connection.close()
+
         try:
-            connection.request(self.command, proxy_path, body=body or None, headers=headers)
-            response = connection.getresponse()
-            payload = response.read()
-            response_headers = response.getheaders()
-            reason = response.reason
-            status = response.status
+            status, reason, response_headers, payload = request_backend(headers)
+            if status == 401 and backend_token:
+                refreshed = self._backend_session_token(force_refresh=True)
+                if refreshed and refreshed != backend_token:
+                    retry_headers = dict(headers)
+                    retry_headers[BACKEND_SESSION_HEADER_NAME] = refreshed
+                    status, reason, response_headers, payload = request_backend(retry_headers)
         except OSError as exc:
             payload = f"Dashboard backend unavailable: {exc}\n".encode("utf-8", "replace")
             response_headers = [("Content-Type", "text/plain; charset=utf-8")]
             reason = "Bad Gateway"
             status = 502
-        finally:
-            connection.close()
         if status == 200:
             payload = self._rewrite_mounted_html_paths(payload, response_headers)
             payload = self._rewrite_mounted_css_paths(payload, response_headers)

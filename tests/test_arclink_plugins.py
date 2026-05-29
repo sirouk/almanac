@@ -126,6 +126,7 @@ def _assert_default_plugins_installed(hermes_home: Path) -> None:
     expect("name: arclink" in theme_body, theme_body)
     expect("customCSS: |" in theme_body, theme_body)
     expect("dashboard:\n  theme: arclink" in config_body or "\n  theme: arclink" in config_body, config_body)
+    expect("hidden_plugins:" in config_body and "  - example" in config_body, config_body)
     expect(
         not (hermes_home / "plugins" / "arclink-theme" / "dashboard" / "manifest.json").exists(),
         "ArcLink theme plugin should not add a dashboard navigation item",
@@ -314,6 +315,7 @@ def test_install_arclink_theme_plugin_sets_dashboard_theme_without_menu() -> Non
         expect("dashboard:\n" in config_body, config_body)
         expect("# keep dashboard comments" in config_body, config_body)
         expect("hidden_plugins:\n  - noisy-dashboard-plugin" in config_body, config_body)
+        expect("  - example" in config_body, config_body)
         expect("  theme: arclink" in config_body, config_body)
         expect("# ArcLink owns the managed default" in config_body, config_body)
         expect("  - existing-plugin" in config_body, config_body)

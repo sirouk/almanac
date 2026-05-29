@@ -35,13 +35,18 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
     last_authorization: str | None = None
     last_cookie: str | None = None
     last_accept_encoding: str | None = None
+    last_session_token: str | None = None
 
     def do_GET(self) -> None:  # noqa: N802
         type(self).last_authorization = self.headers.get("Authorization")
         type(self).last_cookie = self.headers.get("Cookie")
         type(self).last_accept_encoding = self.headers.get("Accept-Encoding")
+        type(self).last_session_token = self.headers.get("X-Hermes-Session-Token")
         if self.path in {"/", "/drive"}:
-            body = b"<html><body>dashboard<button>RESTART GATEWAY</button><button>UPDATE HERMES</button></body></html>"
+            body = (
+                b'<html><head><script>window.__HERMES_SESSION_TOKEN__="backend-session-token";</script></head>'
+                b"<body>dashboard<button>RESTART GATEWAY</button><button>UPDATE HERMES</button></body></html>"
+            )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -64,6 +69,22 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/api/private":
             if self.headers.get("Authorization") != "Bearer hermes-session-token":
+                body = b'{"detail":"Unauthorized"}'
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/api/plugin-private":
+            if self.headers.get("X-Hermes-Session-Token") != "backend-session-token":
                 body = b'{"detail":"Unauthorized"}'
                 self.send_response(401)
                 self.send_header("Content-Type", "application/json")
@@ -111,6 +132,7 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
         type(self).last_authorization = self.headers.get("Authorization")
         type(self).last_cookie = self.headers.get("Cookie")
         type(self).last_accept_encoding = self.headers.get("Accept-Encoding")
+        type(self).last_session_token = self.headers.get("X-Hermes-Session-Token")
         if self.path == "/api/mutate":
             body = b'{"ok":true}'
             self.send_response(200)
@@ -229,6 +251,37 @@ def test_proxy_allows_hermes_bearer_api_calls_after_session_login() -> None:
                 f"expected proxy session cookie to stay at the proxy, saw {TestBackend.last_cookie!r}",
             )
             print("PASS test_proxy_allows_hermes_bearer_api_calls_after_session_login")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
+def test_proxy_bridges_arclink_session_to_backend_hermes_api_token() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_backend_token_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            cookie = login(proxy.server_port)
+
+            status, headers, body = request(
+                proxy.server_port,
+                "/api/plugin-private",
+                headers={
+                    "Cookie": cookie,
+                    "X-Hermes-Session-Token": "browser-supplied-bogus-token",
+                },
+            )
+            expect(status == 200, f"expected bridged plugin API success, saw {status} {headers} {body!r}")
+            expect(
+                TestBackend.last_session_token == "backend-session-token",
+                f"expected proxy to inject backend token, saw {TestBackend.last_session_token!r}",
+            )
+            print("PASS test_proxy_bridges_arclink_session_to_backend_hermes_api_token")
         finally:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
@@ -536,6 +589,7 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
 
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
+    test_proxy_bridges_arclink_session_to_backend_hermes_api_token()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
     test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
     test_proxy_can_run_dashboard_helpers_without_auth()
@@ -543,7 +597,7 @@ def main() -> int:
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 8 dashboard-auth-proxy regression tests")
+    print("PASS all 9 dashboard-auth-proxy regression tests")
     return 0
 
 

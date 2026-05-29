@@ -259,6 +259,117 @@ config_file.write_text("\n".join(before + new_block + after).rstrip() + "\n", en
 PY
 }
 
+sync_dashboard_hidden_plugins_config() {
+  local config_file="$HERMES_HOME/config.yaml"
+  shift || true
+
+  python3 - "$config_file" "$@" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+config_file = Path(sys.argv[1])
+hidden_names = [item.strip() for item in sys.argv[2:] if item.strip()]
+if not hidden_names:
+    raise SystemExit(0)
+
+config_file.parent.mkdir(parents=True, exist_ok=True)
+lines = config_file.read_text(encoding="utf-8").splitlines() if config_file.exists() else []
+
+
+def is_top_level_key(line: str) -> bool:
+    return bool(re.match(r"^[A-Za-z0-9_][A-Za-z0-9_-]*\s*:", line))
+
+
+def child_indent(block: list[str]) -> int:
+    for line in block[1:]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^(\s+)[A-Za-z0-9_][A-Za-z0-9_-]*\s*:", line)
+        if match:
+            return len(match.group(1).replace("\t", "  "))
+        match = re.match(r"^(\s+)-\s*", line)
+        if match:
+            return len(match.group(1).replace("\t", "  "))
+    return 2
+
+
+def direct_child_key(line: str, indent: int) -> str:
+    match = re.match(r"^(\s+)([A-Za-z0-9_][A-Za-z0-9_-]*)\s*:", line)
+    if not match:
+        return ""
+    return match.group(2) if len(match.group(1).replace("\t", "  ")) == indent else ""
+
+
+def list_item_name(line: str) -> str:
+    match = re.match(r"^\s*-\s*(.+?)\s*$", line)
+    if not match:
+        return ""
+    return match.group(1).split("#", 1)[0].strip().strip("\"'")
+
+
+start = None
+for index, line in enumerate(lines):
+    if re.match(r"^dashboard\s*:", line):
+        start = index
+        break
+
+if start is None:
+    block = ["dashboard:", "  hidden_plugins:", *[f"  - {item}" for item in hidden_names]]
+    config_file.write_text("\n".join(lines + block).rstrip() + "\n", encoding="utf-8")
+    raise SystemExit(0)
+
+end = len(lines)
+for index in range(start + 1, len(lines)):
+    if lines[index].strip() and is_top_level_key(lines[index]):
+        end = index
+        break
+
+before = lines[:start]
+block = lines[start:end]
+after = lines[end:]
+if not re.match(r"^dashboard\s*:\s*(?:#.*)?$", block[0]):
+    block[0] = "dashboard:"
+
+indent = child_indent(block)
+prefix = " " * indent
+hidden_index = None
+hidden_end = len(block)
+seen: set[str] = set()
+for index, line in enumerate(block):
+    key = direct_child_key(line, indent)
+    if key == "hidden_plugins":
+        hidden_index = index
+        hidden_end = len(block)
+        for scan_index in range(index + 1, len(block)):
+            next_key = direct_child_key(block[scan_index], indent)
+            if next_key:
+                hidden_end = scan_index
+                break
+            item = list_item_name(block[scan_index])
+            if item:
+                seen.add(item)
+        break
+
+missing = [item for item in hidden_names if item not in seen]
+if missing:
+    additions = [f"{prefix}- {item}" for item in missing]
+    if hidden_index is None:
+        insert_at = 1
+        while insert_at < len(block) and (
+            not block[insert_at].strip() or block[insert_at].lstrip().startswith("#")
+        ):
+            insert_at += 1
+        block[insert_at:insert_at] = [f"{prefix}hidden_plugins:", *additions]
+    else:
+        block[hidden_end:hidden_end] = additions
+
+config_file.write_text("\n".join(before + block + after).rstrip() + "\n", encoding="utf-8")
+PY
+}
+
 plugin_dashboard_default_theme() {
   local manifest_file="$1"
 
@@ -450,6 +561,7 @@ fi
 
 sync_plugin_config "${normalized_plugins[@]}"
 sync_dashboard_theme_config "$dashboard_theme"
+sync_dashboard_hidden_plugins_config "$HERMES_HOME/config.yaml" example
 
 if [[ "${INSTALL_ARCLINK_PLUGINS_SKIP_HOOKS:-0}" != "1" ]]; then
   install_default_hooks

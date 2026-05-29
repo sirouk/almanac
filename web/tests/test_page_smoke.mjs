@@ -141,6 +141,14 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("Blocked sources:"), "dashboard should show Academy blocked-source count");
     assert.ok(content.includes("api.previewCrewRecipe"), "missing Crew Training preview API call");
     assert.ok(content.includes("api.applyCrewRecipe"), "missing Crew Training apply API call");
+    assert.ok(content.includes('"academy"'), "missing Academy tab");
+    assert.ok(content.includes("ArcLink Academy"), "missing ArcLink Academy panel");
+    assert.ok(content.includes("Enter Academy Mode"), "missing Academy Mode entry control");
+    assert.ok(content.includes("Graduate (close mode)"), "missing Captain-ends-mode control");
+    assert.ok(content.includes("Academy Graduates"), "missing Academy graduates gallery");
+    assert.ok(content.includes("api.enrollAcademyTrainee"), "missing Academy enroll API call");
+    assert.ok(content.includes("api.endAcademyMode"), "missing Academy mode-end API call");
+    assert.ok(content.includes("api.adoptAcademyGraduate"), "missing Academy adopt API call");
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
     assert.ok(content.includes("Drive"), "dashboard should link to Drive");
     assert.ok(content.includes("Code"), "dashboard should link to Code");

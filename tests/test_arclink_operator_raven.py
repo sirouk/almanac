@@ -383,6 +383,32 @@ def test_operator_raven_academy_status_is_read_only_and_proof_gated() -> None:
         cleanup_db(tmp, old_env)
 
 
+def test_operator_raven_academy_roster_is_read_only() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        programs = load_module(PYTHON_DIR / "arclink_academy_programs.py", "arclink_academy_programs_raven_roster_test")
+        programs.seed_default_academy_programs(conn)
+        trainee = programs.enroll_academy_trainee(
+            conn, program_id="research_analyst", user_id="user-alex", deployment_id="dep-alex", name="Ada"
+        )
+        session = programs.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by="user-alex")
+        programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor="user-alex", graduate=True)
+
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        result = raven.dispatch_operator_raven_command(conn, "/academy_roster")
+        text = result["message"]
+        expect(result["handled"] is True and result["mutation_performed"] is False, str(result))
+        expect("Operator Raven Academy roster" in text and "fleet-wide" in text, text)
+        expect("graduate" in text and "Ada" in text, text)
+        expect(len(result["academy_roster"]["graduates"]) == 1, str(result["academy_roster"]))
+        expect("No action was queued" in text and "PG-PROVIDER/PG-HERMES" in text, text)
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "roster must not queue")
+        expect("secret://" not in text, text)
+        print("PASS test_operator_raven_academy_roster_is_read_only")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
 def test_operator_raven_pod_repair_queues_real_intent_with_actor() -> None:
     tmp, old_env, conn, raven = with_seeded_db()
     try:
@@ -587,6 +613,7 @@ if __name__ == "__main__":
     test_operator_raven_upgrade_check_is_injected_and_fail_closed()
     test_operator_raven_rollout_plan_is_dry_run_only()
     test_operator_raven_academy_status_is_read_only_and_proof_gated()
+    test_operator_raven_academy_roster_is_read_only()
     test_operator_raven_pod_repair_queues_real_intent_with_actor()
     test_operator_raven_host_and_pin_upgrade_queue_operator_actions()
     test_operator_raven_rollout_queues_real_admin_action_with_actor()

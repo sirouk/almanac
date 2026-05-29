@@ -108,31 +108,40 @@ phased plan below.
   tools to use; the managed-context plugin surfaces "Academy Mode active."
 - **Sticky mode state** (P0, done): open/status/end, one-open-per-trainee,
   Captain-ends-only semantics.
-- **Captain chat surface** (P1): `/academy` and the button in
-  `arclink_public_bots.py` / Telegram + Discord adapters open the browse ->
-  adopt/enroll -> mode flow; mode stays open across turns; an explicit
-  "graduate / end Academy" control commits.
-- **Dashboard surface** (P1): an Academy panel in `web/src/app/dashboard/` --
-  browse Majors + graduates, enroll, the live mode session, evaluation status,
-  next continuing-education time, and graduate adoption.
-- **Operator Raven** (P1): read-only Academy/graduate roster + per-Agent mode
-  status (extends the existing operator `academy_status`).
-- **Hosted API** (P1): versioned routes for list-majors, enroll, mode
-  open/status/end, browse-graduates, adopt -- owner/deployment scoped, CSRF on
-  mutations, no secrets.
-- **LLM Trainer curation engine** (P1, `PG-PROVIDER`): wire corpus ranking,
-  curriculum, lesson-card synthesis, and evaluation design to
-  `arclink_llm_router.py` (budget-reserved, audited).
+- **Captain chat surface** (P1, *pending*): a new browse -> adopt/enroll -> mode
+  flow in `arclink_public_bots.py` / Telegram + Discord adapters; mode stays open
+  across turns; an explicit "graduate / end Academy" control commits. The legacy
+  crew-recipe `/academy` training flow remains intact and untouched; the new
+  program/trainee experience reuses `arclink_academy_programs` + the hosted API
+  below as a thin adapter layer when prioritized.
+- **Dashboard surface** (P1, done): the **Academy** tab in
+  `web/src/app/dashboard/page.tsx` -- browse Majors + graduates, enroll a
+  Trainee, enter/close (graduate or cancel) the sticky mode, and adopt a
+  graduate. Backed by the `api.*Academy*` client methods.
+- **Operator Raven** (P1, done): read-only `academy_roster` command in
+  `arclink_operator_raven.py` (fleet-wide or per-user graduates + in-academy +
+  enrolled), alongside the existing per-user `academy_status`.
+- **Hosted API** (P1, done): `GET /user/academy`, `GET /user/academy/mode-status`,
+  `POST /user/academy/{enroll,mode-open,mode-end,adopt}` -- owner-scoped, CSRF on
+  mutations, no secrets, in the OpenAPI spec.
+- **LLM Trainer curation engine** (P1): `curate_academy_trainee` /
+  `_compose_trainee_corpus` compose the governed corpus + application plan +
+  review, and `end_academy_mode` curates on graduation. Uses lane-valid local
+  fixtures today; live router synthesis stays `PG-PROVIDER` gated.
 - **Live source lanes** (P2, `PG-PROVIDER`, per-lane policy): real adapters
   behind the existing `acquire_*` boundary, one lane at a time.
-- **Commit / apply** (P3, `PG-HERMES`): promote `academy_apply_preview` to a real
-  `academy_apply` action that writes SOUL overlay / vault / qmd / memory /
-  skills through the deployment Hermes-home seams.
-- **Forward-maintenance scheduler** (P4): a weekly `academy-ce` job via
-  `bin/install-agent-cron-jobs.sh` / `bin/docker-job-loop.sh` that sweeps lanes,
-  rebuilds, re-evaluates, and pushes deltas only when the gate says `ready`.
-- **Tests/docs** (every phase): `tests/test_arclink_academy_programs.py` (P0),
-  surface contract, this doc, and the symphony.
+- **Commit / apply** (P3, done, `PG-HERMES` gated): the `academy_apply` action in
+  `arclink_action_worker.py` (`stage_academy_apply`) stages the additive SOUL /
+  vault / qmd / skills application plan. It is fail-closed: record-only adapters
+  stage, live adapters without `ARCLINK_ACADEMY_APPLY_LIVE` fail closed, and
+  authorized runs hand off to the deployment Hermes-home seam.
+- **Forward-maintenance scheduler** (P4, done): the weekly `control-academy-ce`
+  compose job runs `arclink_academy_scheduler.py` (`run_academy_forward_maintenance`),
+  a no-write weekly continuing-education review per graduate; live lane sweeps +
+  delta application stay `PG-PROVIDER`/`PG-HERMES` gated.
+- **Tests/docs** (every phase): `tests/test_arclink_academy_programs.py`,
+  `tests/test_arclink_academy_scheduler.py`, the action-worker + hosted-API +
+  operator-raven + web suites, this doc, and the symphony.
 
 ## Source Lanes
 
@@ -248,20 +257,28 @@ dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
 **Phased plan to the real deal:**
 
 - **P0 (done)** -- experience scaffolding as data + sticky mode (no gate).
-- **P1 (`PG-PROVIDER`)** -- LLM Trainer curation via the central router; Captain
-  chat/dashboard/Operator-Raven/API surfaces for browse/adopt/enroll/mode.
+- **P1 (mostly done)** -- curation engine composes corpus/plan/review locally and
+  on graduation (`curate_academy_trainee`); **hosted API**, **dashboard Academy
+  tab**, and **Operator Raven `academy_roster`** surfaces are built and tested.
+  *Remaining:* live LLM-Trainer synthesis via the central router (`PG-PROVIDER`)
+  and the Captain in-chat browse/adopt/enroll/mode flow (the legacy crew-recipe
+  `/academy` chat flow is untouched).
 - **P2 (`PG-PROVIDER`, per-lane policy)** -- live source acquisition, one lane at
   a time (lowest-risk first: `wikimedia` -> `github` -> `scholarly` -> `web` ->
   `video`+ASR -> `reddit` -> `skills` -> `organization_private`).
-- **P3 (`PG-HERMES`)** -- real commit: `academy_apply` writes SOUL
-  overlay/vault/qmd/memory/skills through the deployment Hermes-home seams,
-  additively.
-- **P4** -- hosted weekly forward-maintenance via the existing cron/loop
-  scheduler.
+- **P3 (done, code path; `PG-HERMES` gated)** -- the `academy_apply` action
+  (`stage_academy_apply`) stages the additive SOUL overlay/vault/qmd/skills plan
+  and is fail-closed: record-only adapters stage, live adapters without
+  `ARCLINK_ACADEMY_APPLY_LIVE` fail closed, authorized runs hand off to the
+  deployment Hermes-home seam. The live write itself awaits an authorized
+  `PG-HERMES` proof window.
+- **P4 (done, no-write; live sweep `PG-PROVIDER` gated)** -- the weekly
+  `control-academy-ce` compose job runs `arclink_academy_scheduler.py`'s no-write
+  continuing-education review per graduate.
 
-Reuse summary: the **central LLM router** powers Trainer synthesis (P1-P2); the
-**action worker** powers preview -> apply and weekly delta application (P3-P4);
-the **existing cron/loop scheduler** powers the weekly cycle (P4). No new
-orchestration engine is introduced, and every phase keeps fail-closed
-validation, content/secret stripping, additive-only writes, and the named proof
-gates.
+Reuse summary: the **central LLM router** powers Trainer synthesis (P1-P2, live
+remaining); the **action worker** powers preview -> apply and weekly delta
+application (P3-P4); the **`control-academy-ce` docker job** powers the weekly
+cycle (P4). No new orchestration engine is introduced, and every phase keeps
+fail-closed validation, content/secret stripping, additive-only writes, and the
+named proof gates.

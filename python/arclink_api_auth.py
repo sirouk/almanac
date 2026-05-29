@@ -61,6 +61,19 @@ from arclink_crew_recipes import (
     prior_crew_recipe,
     whats_changed,
 )
+from arclink_academy_programs import (
+    ArcLinkAcademyProgramError,
+    academy_mode_status,
+    adopt_academy_graduate,
+    browse_academy_graduates,
+    end_academy_mode,
+    enroll_academy_trainee,
+    get_academy_trainee,
+    get_open_academy_mode,
+    list_academy_trainees,
+    open_academy_mode,
+    seed_default_academy_programs,
+)
 from arclink_wrapped import list_user_wrapped_reports, set_wrapped_frequency, wrapped_admin_aggregate
 
 
@@ -1300,6 +1313,153 @@ def apply_user_crew_recipe_api(
         actor_id=user_id,
     )
     return ArcLinkApiResponse(status=200, payload=result)
+
+
+def _primary_deployment_id(conn: sqlite3.Connection, user_id: str) -> str:
+    """Best-effort resolve the user's ArcPod deployment for Academy enrollment.
+
+    Returns the most recently created active deployment, falling back to any
+    deployment, then to an empty string (apply remains proof-gated regardless).
+    """
+    row = conn.execute(
+        """
+        SELECT deployment_id FROM arclink_deployments
+        WHERE user_id = ?
+        ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, created_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    return str(row["deployment_id"] or "").strip() if row is not None else ""
+
+
+def _require_owned_trainee(conn: sqlite3.Connection, trainee_id: str, user_id: str) -> dict[str, Any]:
+    trainee = get_academy_trainee(conn, trainee_id)
+    if trainee is None or str(trainee.get("user_id") or "") != user_id:
+        raise ArcLinkAcademyProgramError("academy trainee not found for this account")
+    return trainee
+
+
+def read_user_academy_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+) -> ArcLinkApiResponse:
+    """Owner-scoped Academy overview: Majors catalog, my Trainees, graduate gallery."""
+    user_id = _authenticated_user_id(conn, session_id=session_id, session_token=session_token)
+    seed_default_academy_programs(conn)
+    gallery = browse_academy_graduates(conn)
+    return ArcLinkApiResponse(
+        status=200,
+        payload={
+            "majors": gallery.get("programs", []),
+            "graduates": gallery.get("graduates", []),
+            "trainees": list_academy_trainees(conn, user_id=user_id),
+        },
+    )
+
+
+def enroll_user_academy_trainee_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    program_id: str,
+    name: str = "",
+    depth: str = "",
+) -> ArcLinkApiResponse:
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    seed_default_academy_programs(conn)
+    trainee = enroll_academy_trainee(
+        conn,
+        program_id=str(program_id or "").strip(),
+        user_id=user_id,
+        deployment_id=_primary_deployment_id(conn, user_id),
+        name=str(name or "").strip(),
+        depth=str(depth or "").strip() or None,
+    )
+    return ArcLinkApiResponse(status=200, payload={"trainee": trainee})
+
+
+def open_user_academy_mode_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    trainee_id: str,
+    opened_via: str = "dashboard",
+) -> ArcLinkApiResponse:
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    _require_owned_trainee(conn, str(trainee_id or "").strip(), user_id)
+    session = open_academy_mode(
+        conn,
+        trainee_id=str(trainee_id or "").strip(),
+        opened_by=user_id,
+        opened_via=str(opened_via or "").strip() or "dashboard",
+    )
+    return ArcLinkApiResponse(status=200, payload=session)
+
+
+def read_user_academy_mode_status_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    trainee_id: str,
+) -> ArcLinkApiResponse:
+    user_id = _authenticated_user_id(conn, session_id=session_id, session_token=session_token)
+    _require_owned_trainee(conn, str(trainee_id or "").strip(), user_id)
+    return ArcLinkApiResponse(
+        status=200,
+        payload=academy_mode_status(conn, trainee_id=str(trainee_id or "").strip()),
+    )
+
+
+def end_user_academy_mode_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    trainee_id: str,
+    graduate: bool = True,
+) -> ArcLinkApiResponse:
+    """Captain ends the sticky Academy Mode: graduate (commit) or cancel."""
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    trainee = _require_owned_trainee(conn, str(trainee_id or "").strip(), user_id)
+    open_session = get_open_academy_mode(conn, trainee_id=str(trainee["trainee_id"]))
+    if open_session is None:
+        raise ArcLinkAcademyProgramError("no open Academy Mode for this trainee")
+    result = end_academy_mode(
+        conn,
+        session_id=str(open_session["session_id"]),
+        actor=user_id,
+        graduate=bool(graduate),
+    )
+    return ArcLinkApiResponse(status=200, payload=result)
+
+
+def adopt_user_academy_graduate_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    source_trainee_id: str,
+    name: str = "",
+) -> ArcLinkApiResponse:
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    trainee = adopt_academy_graduate(
+        conn,
+        source_trainee_id=str(source_trainee_id or "").strip(),
+        user_id=user_id,
+        deployment_id=_primary_deployment_id(conn, user_id),
+        name=str(name or "").strip(),
+    )
+    return ArcLinkApiResponse(status=200, payload={"trainee": trainee})
 
 
 def admin_apply_user_crew_recipe_api(

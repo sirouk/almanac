@@ -1069,6 +1069,71 @@ def _dispatch_action(
             "operation_idempotency_key": operation_key,
         }
 
+    if action_type == "academy_apply":
+        trainee_id = str(metadata.get("trainee_id") or "").strip()
+        if not trainee_id:
+            raise ArcLinkActionWorkerError("academy_apply action requires trainee_id metadata")
+        from arclink_academy_programs import stage_academy_apply
+
+        # Live Agent-home writes require a live adapter AND explicit PG-HERMES
+        # authorization. Without both, the apply is recorded fail-closed.
+        live_authorized = _truthy((env or os.environ).get("ARCLINK_ACADEMY_APPLY_LIVE"))
+        result = stage_academy_apply(
+            conn,
+            trainee_id=trainee_id,
+            adapter_name=str(executor.config.adapter_name),
+            live_authorized=live_authorized,
+            actor=str(metadata.get("actor_id") or "system:action_worker"),
+            created_at=utc_now_iso(),
+        )
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key or action_id)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind=str(result["operation_kind"]),
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        event_metadata = {
+            "action_id": action_id,
+            "operation_kind": str(result["operation_kind"]),
+            "operation_idempotency_key": operation_key,
+            "trainee_id": result["trainee_id"],
+            "program_id": result["program_id"],
+            "manifest_id": result["manifest_id"],
+            "plan_id": result["plan_id"],
+            "status": result["status"],
+            "writes_enabled": result["writes_enabled"],
+            "intent_counts": result["intent_counts"],
+            "proof_gates": result["proof_gates"],
+        }
+        subject_id = result["deployment_id"] or result["user_id"] or trainee_id
+        subject_kind = "deployment" if result["deployment_id"] else "user"
+        append_arclink_event(
+            conn,
+            subject_kind=subject_kind,
+            subject_id=subject_id,
+            event_type="academy_agent_apply_recorded",
+            metadata=event_metadata,
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action="academy_agent_apply_recorded",
+            actor_id=str(metadata.get("actor_id") or "system:action_worker"),
+            target_kind=subject_kind,
+            target_id=subject_id,
+            reason=str(result["note"]),
+            metadata=event_metadata,
+            commit=False,
+        )
+        return {
+            **result,
+            "action": "academy_apply",
+            "operation_idempotency_key": operation_key,
+        }
+
     if action_type == "reprovision":
         if target_kind != "deployment":
             raise ArcLinkActionWorkerError("reprovision action requires a deployment target")

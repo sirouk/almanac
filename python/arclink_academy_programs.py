@@ -461,7 +461,24 @@ def end_academy_mode(
     summary = dict(commit_summary or {})
     reject_secret_material({f"commit.{k}": v for k, v in summary.items()})
     final_status = "closed" if graduate else "cancelled"
+    now = _now()
+    resolved_manifest = str(staged_manifest_id or trainee.get("staged_manifest_id") or "").strip()
+    resolved_plan = str(staged_plan_id or trainee.get("staged_plan_id") or "").strip()
+    # On graduation, curate the specialist corpus + staged application plan if it
+    # has not been curated yet. This is no-write w.r.t. the Agent; the real apply
+    # is the PG-HERMES gated academy_apply action.
+    if graduate and not resolved_plan and not resolved_manifest:
+        try:
+            curated = curate_academy_trainee(conn, trainee_id=trainee["trainee_id"], created_at=now)
+            resolved_manifest = str(curated.get("manifest_id") or resolved_manifest)
+            resolved_plan = str(curated.get("plan_id") or resolved_plan)
+            review = curated.get("review") if isinstance(curated.get("review"), Mapping) else {}
+            summary.setdefault("review_status", str(review.get("status") or ""))
+            summary.setdefault("source_count", int(curated.get("source_count") or 0))
+        except Exception as exc:  # noqa: BLE001 - mode end must not crash on curation
+            summary.setdefault("curation_error", str(exc)[:200])
     summary.setdefault("graduated", bool(graduate))
+    summary.setdefault("manifest_id", resolved_manifest)
     summary.setdefault("apply_status", "staged" if graduate else "cancelled")
     summary.setdefault("apply_proof_gates", list(ACADEMY_APPLY_PROOF_GATES))
     summary.setdefault(
@@ -470,7 +487,6 @@ def end_academy_mode(
     )
     summary.setdefault("forward_maintenance", "weekly continuing education armed" if graduate else "not armed")
     summary.setdefault("actor", str(actor or "").strip() or "captain")
-    now = _now()
     conn.execute(
         "UPDATE academy_mode_sessions SET status = ?, commit_summary_json = ?, closed_at = ? WHERE session_id = ?",
         (final_status, _dumps(summary), now, session["session_id"]),
@@ -483,13 +499,7 @@ def end_academy_mode(
                 staged_manifest_id = ?, staged_plan_id = ?, graduated_at = ?, updated_at = ?
             WHERE trainee_id = ?
             """,
-            (
-                str(staged_manifest_id or trainee.get("staged_manifest_id") or "").strip(),
-                str(staged_plan_id or trainee.get("staged_plan_id") or "").strip(),
-                now,
-                now,
-                trainee["trainee_id"],
-            ),
+            (resolved_manifest, resolved_plan, now, now, trainee["trainee_id"]),
         )
     else:
         conn.execute(
@@ -571,6 +581,287 @@ def adopt_academy_graduate(
     )
     conn.commit()
     return get_academy_trainee(conn, trainee_id) or {}
+
+
+# Lane-valid fixture metadata so locally-generated corpora pass the governed
+# validation in arclink_academy_trainer.validate_academy_sources. Live source
+# acquisition replaces these fixtures behind PG-PROVIDER (see academy-trainer.md).
+_LANE_REQUIRED_META: dict[str, dict[str, Any]] = {
+    "video_transcript": {"transcript_source": "creator-provided", "transcript_confidence": "high"},
+    "reddit_discussion": {"subreddit": "r/practitioners", "thread_quality": "high"},
+    "wikimedia": {"revision": "rev-1"},
+    "github_repository": {"repo": "org/example", "commit_or_tag": "v1.0.0", "license": "mit"},
+    "scholarly_standard": {"identifier": "openalex:W000", "venue_or_body": "Example Standards Body"},
+    "web_article": {"author_or_org": "Example Practitioner", "published_at": "2026-01-01"},
+    "skill_tool_catalog": {"skill_id": "retrieval-and-cite", "review_status": "approved"},
+    "organization_private": {"owner": "operator", "audience_scope": "operator"},
+}
+
+
+def _fixture_sources_for_program(program: Mapping[str, Any], now: str) -> list[Any]:
+    """Build governed local-fixture sources for a Major's lanes (no network).
+
+    Live acquisition replaces this behind PG-PROVIDER; the fixtures here let the
+    curation pipeline run, score, and stage a plan entirely locally.
+    """
+    from arclink_academy_trainer import fake_academy_source
+
+    program_id = str(program.get("program_id") or "program")
+    label = str(program.get("label") or program_id)
+    sources: list[Any] = []
+    for index, lane in enumerate(program.get("source_lanes") or []):
+        meta = dict(_LANE_REQUIRED_META.get(str(lane), {}))
+        meta.update({"examples": True, "fresh": True, "freshness_days": 7})
+        sources.append(
+            fake_academy_source(
+                source_id=f"{program_id}-{lane}-{index}",
+                lane_id=str(lane),
+                title=f"{label}: {lane} reference",
+                origin_url=f"https://example.test/academy/{program_id}/{lane}",
+                retrieved_at=now,
+                license_status="operator-approved",
+                permission_status="operator-approved",
+                storage_policy="derived_summary",
+                content=f"Derived-summary lesson notes for {label} via the {lane} lane.",
+                citations=[
+                    f"https://example.test/cite/{program_id}/{lane}/1",
+                    f"https://example.test/cite/{program_id}/{lane}/2",
+                ],
+                metadata=meta,
+                review_status="approved" if str(lane) == "skill_tool_catalog" else "reviewed",
+            )
+        )
+    return sources
+
+
+def _plan_id(plan: Any) -> str:
+    for attr in ("plan_id", "application_plan_id", "id"):
+        value = getattr(plan, attr, "")
+        if value:
+            return str(value)
+    return ""
+
+
+def _compose_trainee_corpus(
+    conn: sqlite3.Connection,
+    trainee_id: str,
+    *,
+    sources: Sequence[Any] | None,
+    now: str,
+) -> dict[str, Any]:
+    """Compose the governed corpus + application plan + review for a Trainee.
+
+    Shared by curation (staging) and the apply action (intent extraction) so both
+    derive from the exact same deterministic builders.
+    """
+    from arclink_academy_trainer import (
+        build_academy_corpus,
+        build_agent_application_plan,
+        build_academy_review_status,
+    )
+
+    trainee = get_academy_trainee(conn, trainee_id)
+    if trainee is None:
+        raise ArcLinkAcademyProgramError(f"unknown academy trainee: {trainee_id}")
+    program = get_academy_program(conn, str(trainee.get("program_id") or ""))
+    if program is None:
+        raise ArcLinkAcademyProgramError("academy trainee has no Major program")
+    src = list(sources) if sources is not None else _fixture_sources_for_program(program, now)
+    steer = trainee.get("captain_steer") or {}
+    focus = str(steer.get("focus") or "").strip() or str(program.get("topic_map") or program.get("label") or "")
+    manifest = build_academy_corpus(
+        role_id=str(program["program_id"]),
+        role_title=str(program.get("label") or program["program_id"]),
+        topic=focus,
+        sources=src,
+        min_source_score=int(program.get("quality_floor") or 70),
+        created_at=now,
+    )
+    plan = build_agent_application_plan(
+        manifest,
+        agent_id=str(trainee.get("deployment_id") or trainee["trainee_id"]),
+        created_at=now,
+    )
+    review = build_academy_review_status(manifest=manifest, application_plan=plan, staged_at=now)
+    return {
+        "trainee": trainee,
+        "program": program,
+        "manifest": manifest,
+        "plan": plan,
+        "review": review,
+        "source_count": len(src),
+        "manifest_id": str(getattr(manifest, "manifest_id", "") or review.get("manifest_id") or ""),
+        "plan_id": _plan_id(plan),
+    }
+
+
+def curate_academy_trainee(
+    conn: sqlite3.Connection,
+    *,
+    trainee_id: str,
+    sources: Sequence[Any] | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Curate a Trainee's specialist corpus + curriculum + staged application plan.
+
+    Composes the governed corpus/plan/review builders in arclink_academy_trainer.
+    Uses lane-valid local fixtures when ``sources`` is not supplied (live source
+    acquisition + LLM-Trainer synthesis replace those behind PG-PROVIDER). It is
+    no-write with respect to the Agent: it stages the manifest/plan ids on the
+    trainee; real Agent SOUL/skills/qmd/vault writes remain PG-HERMES gated and
+    are performed only by the ``academy_apply`` action.
+    """
+    now = str(created_at or _now())
+    composed = _compose_trainee_corpus(conn, trainee_id, sources=sources, now=now)
+    manifest_id = composed["manifest_id"]
+    plan_id = composed["plan_id"]
+    conn.execute(
+        "UPDATE academy_trainees SET staged_manifest_id = ?, staged_plan_id = ?, updated_at = ? WHERE trainee_id = ?",
+        (manifest_id, plan_id, now, composed["trainee"]["trainee_id"]),
+    )
+    conn.commit()
+    return {
+        "trainee_id": composed["trainee"]["trainee_id"],
+        "manifest_id": manifest_id,
+        "plan_id": plan_id,
+        "review": composed["review"],
+        "source_count": composed["source_count"],
+        "mutation_performed": False,
+        "workspace_mutation_performed": False,
+    }
+
+
+def stage_academy_apply(
+    conn: sqlite3.Connection,
+    *,
+    trainee_id: str,
+    adapter_name: str = "fake",
+    live_authorized: bool = False,
+    actor: str = "",
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the redacted result for the ``academy_apply`` action (fail-closed).
+
+    Resolves a graduated Trainee's staged application plan, extracts the additive
+    imparting intents (SOUL overlay sections / approved skills / qmd memory seeds /
+    vault files), and computes whether live Agent-home writes are enabled.
+
+    Live writes require BOTH a live executor adapter AND explicit PG-HERMES
+    authorization (``live_authorized``). When either is missing the result is
+    ``staged`` (record-only adapters) or ``failed_closed`` (live adapter without
+    authorization) and ``writes_enabled`` stays ``False`` — no SOUL/skill/qmd/vault
+    file is written. The real imparting is performed by the PG-HERMES authorized
+    Hermes-home seam (``bin/install-deployment-hermes-home.sh`` chain); this action
+    stages the contract and records the intent.
+    """
+    now = str(created_at or _now())
+    composed = _compose_trainee_corpus(conn, trainee_id, sources=None, now=now)
+    trainee = composed["trainee"]
+    if str(trainee.get("status") or "") != "graduated":
+        raise ArcLinkAcademyProgramError("academy_apply requires a graduated trainee")
+    if trainee.get("mode_open"):
+        raise ArcLinkAcademyProgramError("academy_apply cannot run while Academy Mode is open")
+    plan = composed["plan"]
+    plan_dict = plan.to_dict() if hasattr(plan, "to_dict") else dict(plan)
+    intent_counts = {
+        "soul_overlay_sections": len(plan_dict.get("soul_overlay_sections") or []),
+        "approved_skill_intents": len(plan_dict.get("approved_skill_intents") or []),
+        "qmd_memory_seed_intents": len(plan_dict.get("qmd_memory_seed_intents") or []),
+        "vault_file_intents": len(plan_dict.get("vault_file_intents") or []),
+    }
+    review = composed["review"] if isinstance(composed["review"], Mapping) else {}
+    review_ready = str(review.get("status") or "") in {"ready_for_review", "live_proof_pending"}
+    adapter = str(adapter_name or "fake").strip().lower()
+    live_adapter = adapter in {"ssh", "live"}
+    writes_enabled = bool(live_adapter and live_authorized and review_ready)
+    if writes_enabled:
+        # Authorized live path: the real imparting runs through the PG-HERMES
+        # Hermes-home seam, not the control-plane action. We hand off the staged
+        # contract rather than writing SOUL files from here.
+        status = "handoff_to_hermes_home"
+        note = (
+            "PG-HERMES authorized: staged contract handed to the Hermes-home installer "
+            "(bin/install-deployment-hermes-home.sh) for the additive SOUL/skills/qmd/vault apply."
+        )
+    elif live_adapter and not live_authorized:
+        status = "failed_closed"
+        note = "Live adapter without PG-HERMES authorization; no Agent-home write was performed."
+    else:
+        status = "staged"
+        note = "Record-only adapter; application plan staged, no Agent-home write was performed."
+    return {
+        "operation_kind": "academy_agent_apply",
+        "trainee_id": trainee["trainee_id"],
+        "program_id": str(trainee.get("program_id") or ""),
+        "deployment_id": str(trainee.get("deployment_id") or ""),
+        "user_id": str(trainee.get("user_id") or ""),
+        "manifest_id": composed["manifest_id"],
+        "plan_id": composed["plan_id"],
+        "adapter": adapter,
+        "status": status,
+        "note": note,
+        "writes_enabled": writes_enabled,
+        "live_authorized": bool(live_authorized),
+        "review_status": str(review.get("status") or ""),
+        "intent_counts": intent_counts,
+        "proof_gates": list(ACADEMY_APPLY_PROOF_GATES),
+        "actor": str(actor or "").strip() or "system:action_worker",
+        "mutation_performed": False,
+        "workspace_mutation_performed": False,
+        "filesystem_mutation_performed": False,
+    }
+
+
+def academy_continuing_education(
+    conn: sqlite3.Connection,
+    *,
+    trainee_id: str,
+    observed_sources: Mapping[str, Mapping[str, Any]] | Sequence[Mapping[str, Any]] | None = None,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    """Build the weekly forward-maintenance plan for a graduate (no-write).
+
+    Live source sweeps populate ``observed_sources`` behind PG-PROVIDER; the
+    classification (unchanged/changed/stale/superseded/removed/tombstoned) and the
+    agent_update gate are produced locally. Real SOUL/skill deltas are applied
+    only by ``academy_apply`` and only when the gate says ready (PG-HERMES).
+    """
+    from arclink_academy_trainer import build_academy_corpus, build_continuing_education_plan
+
+    trainee = get_academy_trainee(conn, trainee_id)
+    if trainee is None:
+        raise ArcLinkAcademyProgramError(f"unknown academy trainee: {trainee_id}")
+    program = get_academy_program(conn, str(trainee.get("program_id") or ""))
+    if program is None:
+        raise ArcLinkAcademyProgramError("academy trainee has no Major program")
+    now = str(created_at or _now())
+    manifest = build_academy_corpus(
+        role_id=str(program["program_id"]),
+        role_title=str(program.get("label") or program["program_id"]),
+        topic=str(program.get("topic_map") or program.get("label") or ""),
+        sources=_fixture_sources_for_program(program, now),
+        min_source_score=int(program.get("quality_floor") or 70),
+        created_at=now,
+    )
+    # The trainer expects observed_sources keyed by source_id. Accept either a
+    # mapping or a list of source dicts (each carrying its own source_id).
+    observed_map: dict[str, Mapping[str, Any]] = {}
+    if isinstance(observed_sources, Mapping):
+        observed_map = {str(k): v for k, v in observed_sources.items()}
+    else:
+        for entry in observed_sources or []:
+            sid = str(entry.get("source_id") or "").strip()
+            if sid:
+                observed_map[sid] = entry
+    plan = build_continuing_education_plan(
+        manifest,
+        observed_sources=observed_map,
+        checked_at=now,
+    )
+    payload = plan.to_dict() if hasattr(plan, "to_dict") else dict(plan)
+    payload["trainee_id"] = trainee["trainee_id"]
+    payload["mutation_performed"] = False
+    return payload
 
 
 def _validate_source_lanes(source_lanes: Sequence[str]) -> list[str]:

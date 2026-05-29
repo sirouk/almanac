@@ -6,16 +6,16 @@
         "scheme": "bearer",
         "type": "http"
       },
-      "shareRequestBrokerAuth": {
-        "description": "Deployment-scoped Drive/Code share-request broker token. Token material is stored only in ArcPod runtime secrets; the hosted API stores and verifies only a hash.",
-        "in": "header",
-        "name": "X-ArcLink-Share-Request-Broker-Token",
-        "type": "apiKey"
-      },
       "sessionAuth": {
         "description": "Session-based auth via cookies or headers.",
         "in": "header",
         "name": "X-ArcLink-Session-Id",
+        "type": "apiKey"
+      },
+      "shareRequestBrokerAuth": {
+        "description": "Deployment-scoped Drive/Code share-request broker token. Token material is stored only in ArcPod runtime secrets; the hosted API stores and verifies only a hash.",
+        "in": "header",
+        "name": "X-ArcLink-Share-Request-Broker-Token",
         "type": "apiKey"
       }
     }
@@ -1237,6 +1237,108 @@
         "tags": [
           "meta"
         ]
+      }
+    },
+    "/api/v1/user/academy": {
+      "get": {
+        "operationId": "user_academy",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "User Academy",
+        "tags": []
+      }
+    },
+    "/api/v1/user/academy/adopt": {
+      "post": {
+        "operationId": "user_academy_adopt",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "User Academy Adopt",
+        "tags": []
+      }
+    },
+    "/api/v1/user/academy/enroll": {
+      "post": {
+        "operationId": "user_academy_enroll",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "User Academy Enroll",
+        "tags": []
+      }
+    },
+    "/api/v1/user/academy/mode-end": {
+      "post": {
+        "operationId": "user_academy_mode_end",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "User Academy Mode End",
+        "tags": []
+      }
+    },
+    "/api/v1/user/academy/mode-open": {
+      "post": {
+        "operationId": "user_academy_mode_open",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "User Academy Mode Open",
+        "tags": []
+      }
+    },
+    "/api/v1/user/academy/mode-status": {
+      "get": {
+        "operationId": "user_academy_mode_status",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "User Academy Mode Status",
+        "tags": []
       }
     },
     "/api/v1/user/agent-identity": {

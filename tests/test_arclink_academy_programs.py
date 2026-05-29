@@ -233,7 +233,116 @@ def test_academy_rejects_secret_material_and_unknown_program() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_curation_builds_corpus_plan_and_stages() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="u", deployment_id="dep-c")
+        result = ap.curate_academy_trainee(conn, trainee_id=t["trainee_id"])
+        expect(result["manifest_id"], "curation produces a manifest id")
+        expect(result["source_count"] == 3, f"systems-practice major has 3 lanes, got {result['source_count']}")
+        expect(result["mutation_performed"] is False and result["workspace_mutation_performed"] is False, "no Agent writes")
+        review = result["review"]
+        expect(review.get("status") in {"ready_for_review", "live_proof_pending"}, str(review))
+        refreshed = ap.get_academy_trainee(conn, t["trainee_id"])
+        expect(refreshed["staged_manifest_id"] == result["manifest_id"], "manifest staged on trainee")
+        print("PASS test_academy_curation_builds_corpus_plan_and_stages")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_commit_curates_on_graduation() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="u", deployment_id="dep-d")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u")
+        ended = ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="u", graduate=True)
+        grad = ended["trainee"]
+        expect(grad["status"] == "graduated", str(grad))
+        expect(grad["staged_manifest_id"], "graduation curated + staged a manifest")
+        cs = ended["session"]["commit_summary"]
+        expect(cs.get("manifest_id") == grad["staged_manifest_id"], str(cs))
+        expect(cs.get("review_status") in {"ready_for_review", "live_proof_pending"}, str(cs))
+        expect("PG-HERMES" in cs.get("apply_proof_gates", []), str(cs))
+        expect(ended["mutation_performed"] is False, "no live Agent writes at commit")
+        print("PASS test_academy_commit_curates_on_graduation")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_continuing_education_is_no_write() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="u", deployment_id="dep-e")
+        ce = ap.academy_continuing_education(conn, trainee_id=t["trainee_id"], observed_sources=[])
+        expect("agent_update_status" in ce, str(ce.keys()))
+        expect(ce["mutation_performed"] is False, "continuing education is no-write")
+        expect(ce["trainee_id"] == t["trainee_id"], str(ce))
+        print("PASS test_academy_continuing_education_is_no_write")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def _graduate(ap, conn, program_id, user_id, deployment_id):
+    t = ap.enroll_academy_trainee(conn, program_id=program_id, user_id=user_id, deployment_id=deployment_id)
+    s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by=user_id)
+    ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor=user_id, graduate=True)
+    return t
+
+
+def test_academy_apply_is_fail_closed() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = _graduate(ap, conn, "systems_practice_engineer", "u", "dep-apply")
+
+        # Record-only adapter -> staged, no writes.
+        staged = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="fake")
+        expect(staged["status"] == "staged", str(staged))
+        expect(staged["writes_enabled"] is False, "fake adapter never writes")
+        expect(staged["operation_kind"] == "academy_agent_apply", str(staged))
+        expect(staged["intent_counts"]["soul_overlay_sections"] >= 0, str(staged["intent_counts"]))
+        expect("PG-HERMES" in staged["proof_gates"], str(staged))
+
+        # Live adapter without PG-HERMES authorization -> failed_closed, no writes.
+        closed = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=False)
+        expect(closed["status"] == "failed_closed", str(closed))
+        expect(closed["writes_enabled"] is False, "live adapter without authorization never writes")
+
+        # Live adapter WITH authorization -> handoff to the PG-HERMES Hermes-home seam.
+        authd = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
+        expect(authd["status"] == "handoff_to_hermes_home", str(authd))
+        expect(authd["writes_enabled"] is True, "authorized live apply hands off to the imparting seam")
+        expect(authd["mutation_performed"] is False, "control plane itself performs no filesystem write")
+        print("PASS test_academy_apply_is_fail_closed")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_apply_requires_graduated_trainee() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="u", deployment_id="dep-ng")
+        raised = False
+        try:
+            ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="fake")
+        except ap.ArcLinkAcademyProgramError:
+            raised = True
+        expect(raised, "apply must reject a non-graduated trainee")
+        print("PASS test_academy_apply_requires_graduated_trainee")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
+    test_academy_apply_is_fail_closed()
+    test_academy_apply_requires_graduated_trainee()
+    test_academy_curation_builds_corpus_plan_and_stages()
+    test_academy_commit_curates_on_graduation()
+    test_academy_continuing_education_is_no_write()
     test_academy_catalog_seed_is_idempotent_and_browsable()
     test_academy_enroll_open_sticky_and_graduate()
     test_academy_cancel_mode_returns_to_enrolled()

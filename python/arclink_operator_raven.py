@@ -125,6 +125,14 @@ _COMMAND_ALIASES = {
     "academy": "academy_status",
     "crew_academy": "academy_status",
     "crewacademy": "academy_status",
+    "academy_roster": "academy_roster",
+    "academyroster": "academy_roster",
+    "academy_graduates": "academy_roster",
+    "academygraduates": "academy_roster",
+    "graduates": "academy_roster",
+    "trainees": "academy_roster",
+    "academy_trainees": "academy_roster",
+    "roster": "academy_roster",
 }
 
 # Commands that, outside of --dry-run, queue a real audited intent. The adapter
@@ -270,6 +278,7 @@ def dispatch_operator_raven_command(
         "rollout": _handle_rollout,
         "action_status": _handle_action_status,
         "academy_status": _handle_academy_status,
+        "academy_roster": _handle_academy_roster,
     }
     result = handlers[command.name](
         conn,
@@ -555,6 +564,74 @@ def _handle_academy_status(
             lines.append(f"  Next: {next_actions[0]}")
     lines.append("No action was queued. Academy live generation and workspace proof remain PG-PROVIDER/PG-HERMES gated.")
     return {"message": "\n".join(lines), "academy": payloads}
+
+
+def _handle_academy_roster(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Read-only Academy roster across the fleet: graduates + in-progress trainees.
+
+    Optionally scoped to a user when an argument is supplied. No action is queued;
+    live generation + Agent application remain PG-PROVIDER/PG-HERMES gated.
+    """
+    from arclink_academy_programs import (
+        browse_academy_graduates,
+        list_academy_trainees,
+        seed_default_academy_programs,
+    )
+
+    seed_default_academy_programs(conn)
+    scope_user = ""
+    if command.args:
+        rows = _find_users(conn, " ".join(command.args).strip())
+        if not rows:
+            return {"message": f"Academy roster: no user matched {' '.join(command.args).strip()}."}
+        scope_user = str(rows[0].get("user_id") or "")
+
+    gallery = browse_academy_graduates(conn, user_id=scope_user or None)
+    graduates = gallery.get("graduates", [])
+    in_academy = list_academy_trainees(conn, user_id=scope_user or None, status="in_academy")
+    enrolled = list_academy_trainees(conn, user_id=scope_user or None, status="enrolled")
+
+    header = "Operator Raven Academy roster" + (f" (user {scope_user})" if scope_user else " (fleet-wide)")
+    lines = [
+        header,
+        f"Majors: {len(gallery.get('programs', []))} | "
+        f"graduates: {len(graduates)} | in-academy: {len(in_academy)} | enrolled: {len(enrolled)}",
+    ]
+    for grad in graduates[:8]:
+        lines.append(
+            f"- graduate {grad.get('trainee_id')}: {grad.get('name') or 'unnamed'} "
+            f"[{grad.get('program_label') or grad.get('program_id')}] "
+            f"forward_maintained={bool(grad.get('forward_maintained'))}"
+        )
+    for trainee in in_academy[:8]:
+        lines.append(
+            f"- in-academy {trainee.get('trainee_id')}: {trainee.get('name') or 'unnamed'} "
+            f"[{trainee.get('program_id')}] mode_open={bool(trainee.get('mode_open'))} "
+            f"(ends only when the Captain closes Academy Mode)"
+        )
+    for trainee in enrolled[:8]:
+        lines.append(
+            f"- enrolled {trainee.get('trainee_id')}: {trainee.get('name') or 'unnamed'} [{trainee.get('program_id')}]"
+        )
+    lines.append("No action was queued. Academy live generation and Agent SOUL writes remain PG-PROVIDER/PG-HERMES gated.")
+    return {
+        "message": "\n".join(lines),
+        "academy_roster": {
+            "scope_user": scope_user,
+            "majors": len(gallery.get("programs", [])),
+            "graduates": graduates,
+            "in_academy": in_academy,
+            "enrolled": enrolled,
+        },
+    }
 
 
 def _handle_pod_repair(

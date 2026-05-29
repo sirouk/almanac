@@ -561,6 +561,88 @@ def test_user_crew_recipe_routes_require_csrf_and_apply_recipe() -> None:
     print("PASS test_user_crew_recipe_routes_require_csrf_and_apply_recipe")
 
 
+def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_academy_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_academy_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_academy_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_academy",
+        email="academy-route@example.test",
+        prefix="academy-route-1a2b",
+    )
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_academy_hosted")
+
+    # Overview: Majors catalog + (empty) trainees.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/academy",
+        headers=auth_headers(session), config=config,
+    )
+    expect(status == 200 and len(payload["majors"]) >= 5, f"academy overview expected catalog got {status}: {payload}")
+    expect(payload["trainees"] == [], f"no trainees yet got {payload['trainees']}")
+
+    enroll_body = json.dumps({"program_id": "systems_practice_engineer", "name": "Grace"})
+
+    # CSRF required.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/enroll",
+        headers=browser_auth_headers(session), body=enroll_body, config=config,
+    )
+    expect(status == 401, f"enroll without CSRF expected 401 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/enroll",
+        headers=browser_auth_headers(session, csrf=True), body=enroll_body, config=config,
+    )
+    expect(status == 200, f"enroll expected 200 got {status}: {payload}")
+    trainee_id = payload["trainee"]["trainee_id"]
+    expect(payload["trainee"]["deployment_id"] == prepared["deployment_id"], str(payload["trainee"]))
+    expect(payload["trainee"]["status"] == "enrolled", str(payload["trainee"]))
+
+    # Enter sticky Academy Mode.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/mode-open",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({"trainee_id": trainee_id}), config=config,
+    )
+    expect(status == 200 and payload["trainee"]["status"] == "in_academy", f"mode open got {status}: {payload}")
+
+    # Status read (GET, query param).
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/academy/mode-status",
+        headers=auth_headers(session), query={"trainee_id": trainee_id}, config=config,
+    )
+    expect(status == 200 and payload["mode_open"] is True, f"status got {status}: {payload}")
+
+    # Captain ends the mode -> graduate + commit (curates a staged plan).
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/mode-end",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({"trainee_id": trainee_id, "graduate": True}), config=config,
+    )
+    expect(status == 200 and payload["trainee"]["status"] == "graduated", f"graduate got {status}: {payload}")
+    expect(payload["trainee"]["staged_manifest_id"], "graduation staged a manifest")
+    expect(payload["mutation_performed"] is False, "commit performs no live Agent write")
+
+    # Cross-account isolation: another user cannot read this trainee's status.
+    other = seed_paid_deployment(
+        control, onboarding, conn,
+        session_id="onb_hosted_academy_other", email="academy-other@example.test", prefix="academy-other-9z8y",
+    )
+    other_session = api.create_arclink_user_session(conn, user_id=other["user_id"], session_id="usess_academy_other")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/academy/mode-status",
+        headers=auth_headers(other_session), query={"trainee_id": trainee_id}, config=config,
+    )
+    expect(status == 400, f"cross-account trainee read must not succeed got {status}: {payload}")
+    print("PASS test_user_academy_routes_browse_enroll_sticky_mode_and_graduate")
+
+
 def test_admin_dashboard_requires_admin_session() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_admin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_admin_test")
@@ -5404,6 +5486,7 @@ def main() -> int:
     test_user_agent_identity_route_requires_csrf_and_updates_deployment()
     test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only()
     test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
+    test_user_academy_routes_browse_enroll_sticky_mode_and_graduate()
     test_admin_dashboard_requires_admin_session()
     test_admin_action_requires_csrf_and_mutation_role()
     test_admin_crew_recipe_route_is_admin_csrf_and_audited()

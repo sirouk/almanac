@@ -750,6 +750,59 @@ def test_academy_apply_preview_action_fails_closed_on_workspace_write_request() 
     print("PASS test_academy_apply_preview_action_fails_closed_on_workspace_write_request")
 
 
+def _seed_academy_graduate(control, conn, programs) -> dict[str, str]:
+    user_id = "user_academy_apply"
+    deployment_id = "dep_academy_apply"
+    control.upsert_arclink_user(conn, user_id=user_id, email="academy-apply@example.test", entitlement_state="paid")
+    programs.seed_default_academy_programs(conn)
+    trainee = programs.enroll_academy_trainee(
+        conn, program_id="systems_practice_engineer", user_id=user_id, deployment_id=deployment_id, name="Apply Grace"
+    )
+    session = programs.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by=user_id)
+    programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor=user_id, graduate=True)
+    return {"user_id": user_id, "deployment_id": deployment_id, "trainee_id": trainee["trainee_id"]}
+
+
+def test_academy_apply_action_stages_fail_closed_without_authorization() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_academy_apply")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_academy_apply")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_academy_apply")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_academy_apply")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_aw_apply")
+    conn = memory_db(control)
+    seeded = _seed_academy_graduate(control, conn, programs)
+    action = _queue_action(
+        dashboard,
+        conn,
+        action_type="academy_apply",
+        target_kind="deployment",
+        target_id=seeded["deployment_id"],
+        key="academy-apply-action-1",
+        metadata={"trainee_id": seeded["trainee_id"]},
+    )
+    result = worker.process_next_arclink_action(conn, executor=_NoSideEffectExecutor(executor_mod))
+    expect(result is not None and result["status"] == "succeeded", str(result))
+    applied = result["result"]
+    # Fake adapter -> staged, never writes.
+    expect(applied["status"] == "staged", str(applied))
+    expect(applied["operation_kind"] == "academy_agent_apply", str(applied))
+    expect(applied["writes_enabled"] is False, str(applied))
+    expect(applied["mutation_performed"] is False and applied["filesystem_mutation_performed"] is False, str(applied))
+    expect({"PG-PROVIDER", "PG-HERMES"} <= set(applied["proof_gates"]), str(applied))
+    expect("content" not in json.dumps(applied, sort_keys=True).casefold(), str(applied))
+    link = conn.execute(
+        """
+        SELECT * FROM arclink_action_operation_links
+        WHERE action_id = ? AND operation_kind = 'academy_agent_apply'
+        """,
+        (action["action_id"],),
+    ).fetchone()
+    expect(link is not None and link["idempotency_key"] == "academy-apply-action-1", str(link))
+    audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
+    expect("academy_agent_apply_recorded" in audit_actions, str(audit_actions))
+    print("PASS test_academy_apply_action_stages_fail_closed_without_authorization")
+
+
 def test_reprovision_dispatches_pod_migration() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_reprovision")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision")
@@ -1611,6 +1664,7 @@ if __name__ == "__main__":
     test_backup_write_check_fails_closed_without_authorized_runner()
     test_academy_apply_preview_action_records_no_write_result_without_executor()
     test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
+    test_academy_apply_action_stages_fail_closed_without_authorization()
     test_reprovision_dispatches_pod_migration()
     test_reprovision_non_dry_run_requires_root_capture_opt_in()
     test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode()

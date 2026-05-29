@@ -705,6 +705,30 @@ services:
       - deployment-exec-broker-net
       - migration-capture-helper-net
 
+  control-academy-ce:
+    <<: *arclink-app
+    # Weekly no-write Academy continuing-education review for graduated, forward
+    # maintained Trainees. Performs no live source crawl and no Agent SOUL write;
+    # live acquisition stays PG-PROVIDER gated and apply stays PG-HERMES gated.
+    cap_drop:
+      - ALL
+    environment:
+      <<: [*arclink-env, *arclink-control-secret-env]
+    volumes:
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+    command:
+      - ./bin/docker-job-loop.sh
+      - control-academy-ce
+      - ${ARCLINK_ACADEMY_CE_INTERVAL_SECONDS:-604800}
+      - python3
+      - python/arclink_academy_scheduler.py
+      - --once
+      - --json
+    depends_on:
+      control-api:
+        condition: service_healthy
+
   vault-watch:
     <<: *arclink-app
     command: ["./bin/vault-watch.sh"]

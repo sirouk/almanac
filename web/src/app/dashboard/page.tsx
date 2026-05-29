@@ -404,8 +404,36 @@ const CREW_CAPACITY_OPTIONS = [
   { label: "Companionship", value: "companionship" },
 ];
 
-type Tab = "overview" | "crew" | "billing" | "provisioning" | "services" | "vault" | "wrapped" | "comms" | "bots" | "model" | "memory" | "security" | "support";
-const ALL_TABS: Tab[] = ["overview", "crew", "billing", "provisioning", "services", "vault", "wrapped", "comms", "bots", "model", "memory", "security", "support"];
+interface AcademyMajor {
+  program_id?: string;
+  label?: string;
+  summary?: string;
+  source_lanes?: string[];
+  default_depth?: string;
+}
+
+interface AcademyTrainee {
+  trainee_id?: string;
+  program_id?: string;
+  name?: string;
+  status?: string;
+  mode_open?: boolean;
+  depth?: string;
+  forward_maintained?: boolean;
+  staged_manifest_id?: string;
+  adopted_from_trainee_id?: string;
+  program_label?: string;
+  source_lanes?: string[];
+}
+
+interface AcademyState {
+  majors?: AcademyMajor[];
+  graduates?: AcademyTrainee[];
+  trainees?: AcademyTrainee[];
+}
+
+type Tab = "overview" | "crew" | "academy" | "billing" | "provisioning" | "services" | "vault" | "wrapped" | "comms" | "bots" | "model" | "memory" | "security" | "support";
+const ALL_TABS: Tab[] = ["overview", "crew", "academy", "billing", "provisioning", "services", "vault", "wrapped", "comms", "bots", "model", "memory", "security", "support"];
 
 function isGoodStatus(status = "") {
   return ["healthy", "active", "paid", "contacted", "recorded", "complete", "completed", "success", "ready", "running"].includes(status.toLowerCase());
@@ -516,6 +544,12 @@ export default function DashboardPage() {
   const [wrappedUpdating, setWrappedUpdating] = useState(false);
   const [crewError, setCrewError] = useState("");
   const [crewLoading, setCrewLoading] = useState(false);
+  const [academy, setAcademy] = useState<AcademyState | null>(null);
+  const [academyError, setAcademyError] = useState("");
+  const [academyNotice, setAcademyNotice] = useState("");
+  const [academyBusy, setAcademyBusy] = useState("");
+  const [academyProgramId, setAcademyProgramId] = useState("");
+  const [academyTraineeName, setAcademyTraineeName] = useState("");
   const [credentialAckLoading, setCredentialAckLoading] = useState("");
   const [backupActionLoading, setBackupActionLoading] = useState("");
   const [shareActionLoading, setShareActionLoading] = useState("");
@@ -744,6 +778,103 @@ export default function DashboardPage() {
     }
   }
 
+  async function refreshAcademy() {
+    const result = await api.userAcademy();
+    if (result.status === 200) {
+      const state = result.data as AcademyState;
+      setAcademy(state);
+      if (!academyProgramId && state.majors?.[0]?.program_id) {
+        setAcademyProgramId(state.majors[0].program_id);
+      }
+    }
+  }
+
+  async function handleAcademyEnroll(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    setAcademyError("");
+    setAcademyNotice("");
+    if (!academyProgramId) {
+      setAcademyError("Pick a Major to enroll a trainee.");
+      return;
+    }
+    setAcademyBusy("enroll");
+    try {
+      const result = await api.enrollAcademyTrainee({ program_id: academyProgramId, name: academyTraineeName });
+      if (result.status !== 200) {
+        setAcademyError("Could not enroll a trainee. Make sure you have an active ArcPod.");
+        return;
+      }
+      setAcademyTraineeName("");
+      setAcademyNotice("Trainee enrolled. Open Academy Mode to begin curated training.");
+      await refreshAcademy();
+    } catch {
+      setAcademyError("Could not enroll a trainee.");
+    } finally {
+      setAcademyBusy("");
+    }
+  }
+
+  async function handleAcademyOpenMode(traineeId: string) {
+    setAcademyError("");
+    setAcademyNotice("");
+    setAcademyBusy(`open:${traineeId}`);
+    try {
+      const result = await api.openAcademyMode({ trainee_id: traineeId, opened_via: "dashboard" });
+      if (result.status !== 200) {
+        setAcademyError("Could not open Academy Mode.");
+        return;
+      }
+      setAcademyNotice("Academy Mode is open. It stays open until you close it as Captain.");
+      await refreshAcademy();
+    } catch {
+      setAcademyError("Could not open Academy Mode.");
+    } finally {
+      setAcademyBusy("");
+    }
+  }
+
+  async function handleAcademyEndMode(traineeId: string, graduate: boolean) {
+    setAcademyError("");
+    setAcademyNotice("");
+    setAcademyBusy(`${graduate ? "graduate" : "cancel"}:${traineeId}`);
+    try {
+      const result = await api.endAcademyMode({ trainee_id: traineeId, graduate });
+      if (result.status !== 200) {
+        setAcademyError("Could not close Academy Mode.");
+        return;
+      }
+      setAcademyNotice(
+        graduate
+          ? "Graduated. The specialist corpus is staged; the live SOUL apply stays PG-HERMES gated."
+          : "Academy Mode cancelled; the trainee returned to enrolled.",
+      );
+      await refreshAcademy();
+    } catch {
+      setAcademyError("Could not close Academy Mode.");
+    } finally {
+      setAcademyBusy("");
+    }
+  }
+
+  async function handleAcademyAdopt(sourceTraineeId: string) {
+    setAcademyError("");
+    setAcademyNotice("");
+    setAcademyBusy(`adopt:${sourceTraineeId}`);
+    try {
+      const result = await api.adoptAcademyGraduate({ source_trainee_id: sourceTraineeId });
+      if (result.status !== 200) {
+        setAcademyError("Could not adopt this graduate. Make sure you have an active ArcPod.");
+        return;
+      }
+      setAcademyNotice("Adopted graduate into a new specialist Trainee for your Crew.");
+      await refreshAcademy();
+    } catch {
+      setAcademyError("Could not adopt this graduate.");
+    } finally {
+      setAcademyBusy("");
+    }
+  }
+
   async function handleWrappedFrequency(frequency: string) {
     setWrappedError("");
     setWrappedUpdating(true);
@@ -831,6 +962,13 @@ export default function DashboardPage() {
       }),
       api.userCrewRecipe().then((r) => {
         if (mounted && r.status === 200) setCrewRecipe(r.data as CrewRecipeState);
+      }),
+      api.userAcademy().then((r) => {
+        if (mounted && r.status === 200) {
+          const state = r.data as AcademyState;
+          setAcademy(state);
+          if (state.majors?.[0]?.program_id) setAcademyProgramId((current) => current || state.majors![0].program_id || "");
+        }
       }),
     ]).catch(() => {
       if (mounted) setError("Failed to load dashboard.");
@@ -1186,6 +1324,121 @@ export default function DashboardPage() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === "academy" && (
+            <div className="space-y-6">
+              <SectionHeader
+                title="ArcLink Academy"
+                eyebrow="Specialist training"
+                detail="Browse Academy graduates, enroll a Trainee in a Major, and run curated training. Academy Mode stays open until you close it as Captain — graduating stages the specialist corpus; the live SOUL apply stays PG-HERMES gated."
+              />
+              {academyError && <ErrorAlert message={academyError} />}
+              {academyNotice && (
+                <div className="border border-neon-green/30 bg-neon-green/10 p-3 text-sm text-neon-green">{academyNotice}</div>
+              )}
+
+              <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+                <form onSubmit={handleAcademyEnroll} className="space-y-4 border border-border bg-surface/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Enroll a Trainee</p>
+                  <label className="block text-sm">
+                    <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Major</span>
+                    <select
+                      value={academyProgramId}
+                      onChange={(event) => setAcademyProgramId(event.target.value)}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                    >
+                      {(academy?.majors || []).map((major) => (
+                        <option key={major.program_id} value={major.program_id}>{major.label || major.program_id}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block text-sm">
+                    <span className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Trainee name (optional)</span>
+                    <input
+                      value={academyTraineeName}
+                      onChange={(event) => setAcademyTraineeName(event.target.value)}
+                      maxLength={120}
+                      className="mt-1 w-full rounded border border-border bg-carbon px-3 py-2 text-sm text-soft-white outline-none transition focus:border-signal-orange"
+                      placeholder="e.g. Ada"
+                    />
+                  </label>
+                  {(() => {
+                    const selected = (academy?.majors || []).find((major) => major.program_id === academyProgramId);
+                    return selected ? (
+                      <p className="text-xs leading-5 text-soft-white/45">
+                        {selected.summary}
+                        {selected.source_lanes?.length ? <span className="mt-1 block text-soft-white/35">Lanes: {selected.source_lanes.join(", ")}</span> : null}
+                      </p>
+                    ) : null;
+                  })()}
+                  <button type="submit" disabled={academyBusy === "enroll"} className="rounded border border-signal-orange/60 px-4 py-2 text-sm font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
+                    {academyBusy === "enroll" ? "Enrolling..." : "Enroll Trainee"}
+                  </button>
+                </form>
+
+                <div className="space-y-3 border border-border bg-surface/80 p-4">
+                  <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Your Trainees</p>
+                  {(academy?.trainees || []).length === 0 && (
+                    <p className="text-sm text-soft-white/45">No trainees yet. Enroll one to begin.</p>
+                  )}
+                  {(academy?.trainees || []).map((trainee) => (
+                    <div key={trainee.trainee_id} className="space-y-2 border-t border-border/60 pt-3 first:border-t-0 first:pt-0">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-soft-white">{trainee.name || "Trainee"}</span>
+                        <StatusBadge status={trainee.status || "enrolled"} />
+                      </div>
+                      <p className="text-xs text-soft-white/40">{trainee.program_id}{trainee.depth ? ` · ${trainee.depth}` : ""}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {trainee.status === "enrolled" && (
+                          <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyOpenMode(trainee.trainee_id || "")} className="rounded border border-signal-orange/50 px-3 py-1.5 text-xs font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
+                            Enter Academy Mode
+                          </button>
+                        )}
+                        {trainee.status === "in_academy" && (
+                          <>
+                            <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyEndMode(trainee.trainee_id || "", true)} className="rounded border border-neon-green/50 px-3 py-1.5 text-xs font-semibold text-neon-green transition hover:bg-neon-green hover:text-jet disabled:opacity-50">
+                              Graduate (close mode)
+                            </button>
+                            <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyEndMode(trainee.trainee_id || "", false)} className="rounded border border-border px-3 py-1.5 text-xs font-semibold text-soft-white/60 transition hover:border-soft-white/40 disabled:opacity-50">
+                              Cancel
+                            </button>
+                          </>
+                        )}
+                        {trainee.status === "in_academy" && (
+                          <span className="self-center text-xs text-soft-white/35">Mode stays open until you close it.</span>
+                        )}
+                        {trainee.status === "graduated" && (
+                          <span className="self-center text-xs text-neon-green/70">Graduated{trainee.forward_maintained ? " · forward-maintained" : ""}</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border border-border bg-surface/80 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Academy Graduates</p>
+                <p className="mt-1 text-xs text-soft-white/40">Adopt a graduate to clone its specialist Major + staged corpus into a new Trainee for your Crew.</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {(academy?.graduates || []).length === 0 && (
+                    <p className="text-sm text-soft-white/45">No Academy graduates yet.</p>
+                  )}
+                  {(academy?.graduates || []).map((grad) => (
+                    <div key={grad.trainee_id} className="space-y-2 border border-border/60 bg-carbon/40 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-soft-white">{grad.name || "Graduate"}</span>
+                        <span className="text-xs text-soft-white/40">{grad.program_label || grad.program_id}</span>
+                      </div>
+                      {grad.source_lanes?.length ? <p className="text-xs text-soft-white/35">Lanes: {grad.source_lanes.join(", ")}</p> : null}
+                      <button type="button" disabled={!!academyBusy} onClick={() => handleAcademyAdopt(grad.trainee_id || "")} className="rounded border border-signal-orange/50 px-3 py-1.5 text-xs font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
+                        {academyBusy === `adopt:${grad.trainee_id}` ? "Adopting..." : "Adopt graduate"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

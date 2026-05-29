@@ -35,10 +35,11 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
         "backup_write_check",
         "rollout",
         "academy_apply_preview",
+        "academy_apply",
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check", "rollout", "academy_apply_preview"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check", "rollout", "academy_apply_preview", "academy_apply"})
 ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
 ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
     "restart": {
@@ -121,6 +122,15 @@ ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
         "required_adapter": "action worker with control DB access; no executor, filesystem, provider, bot, Docker, SSH, or deploy adapter",
         "live_proof_gate": "PG-HERMES/PG-PROVIDER",
         "local_contract": "queues an audited no-write Academy application preview from a staged Crew Recipe review; real Agent application remains proof-gated",
+    },
+    "academy_apply": {
+        "label": "Academy apply",
+        "worker_support": "wired",
+        "operation_kind": "academy_agent_apply",
+        "target_kinds": ("user", "deployment"),
+        "required_adapter": "action worker with control DB access; live Agent-home writes require a live executor adapter plus ARCLINK_ACADEMY_APPLY_LIVE (PG-HERMES)",
+        "live_proof_gate": "PG-HERMES/PG-PROVIDER",
+        "local_contract": "stages a graduated Trainee's additive SOUL/skills/qmd/vault application plan; record-only adapters stage, live adapters without PG-HERMES authorization fail closed, and authorized runs hand off to the Hermes-home seam",
     },
     "suspend": {
         "label": "Suspend",

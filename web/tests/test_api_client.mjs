@@ -69,6 +69,12 @@ const api = {
   userCrewRecipe: () => request("/user/crew-recipe", {}, "user"),
   previewCrewRecipe: (body) => request("/user/crew-recipe/preview", { method: "POST", body: JSON.stringify(body) }, "user"),
   applyCrewRecipe: (body) => request("/user/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "user"),
+  userAcademy: () => request("/user/academy", {}, "user"),
+  academyModeStatus: (traineeId) => request(`/user/academy/mode-status?trainee_id=${encodeURIComponent(traineeId)}`, {}, "user"),
+  enrollAcademyTrainee: (body) => request("/user/academy/enroll", { method: "POST", body: JSON.stringify(body) }, "user"),
+  openAcademyMode: (body) => request("/user/academy/mode-open", { method: "POST", body: JSON.stringify(body) }, "user"),
+  endAcademyMode: (body) => request("/user/academy/mode-end", { method: "POST", body: JSON.stringify(body) }, "user"),
+  adoptAcademyGraduate: (body) => request("/user/academy/adopt", { method: "POST", body: JSON.stringify(body) }, "user"),
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
   userShareGrants: () => request("/user/share-grants", {}, "user"),
   createShareGrant: (body) => request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -204,6 +210,24 @@ describe("API client route construction", () => {
     assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
     await api.applyCrewRecipe({ role: "founder", mission: "ship", treatment: "peer", preset: "Frontier", capacity: "development" });
     assert.ok(lastFetchUrl.endsWith("/user/crew-recipe/apply"));
+  });
+
+  it("Academy routes use user session and CSRF", async () => {
+    await api.userAcademy();
+    assert.ok(lastFetchUrl.endsWith("/user/academy"));
+    await api.academyModeStatus("atrn_1");
+    assert.ok(lastFetchUrl.endsWith("/user/academy/mode-status?trainee_id=atrn_1"));
+    await api.enrollAcademyTrainee({ program_id: "systems_practice_engineer", name: "Ada" });
+    assert.ok(lastFetchUrl.endsWith("/user/academy/enroll"));
+    assert.equal(lastFetchOpts.method, "POST");
+    assert.equal(lastFetchOpts.headers["X-ArcLink-CSRF-Token"], FAKE_USER_CSRF);
+    await api.openAcademyMode({ trainee_id: "atrn_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/academy/mode-open"));
+    await api.endAcademyMode({ trainee_id: "atrn_1", graduate: true });
+    assert.ok(lastFetchUrl.endsWith("/user/academy/mode-end"));
+    assert.equal(JSON.parse(lastFetchOpts.body).graduate, true);
+    await api.adoptAcademyGraduate({ source_trainee_id: "atrn_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/academy/adopt"));
   });
 
   it("userLinkedResources GETs /user/linked-resources", async () => {

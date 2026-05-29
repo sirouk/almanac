@@ -48,10 +48,16 @@ from arclink_api_auth import (
     accept_user_share_grant_api,
     acknowledge_user_credential_api,
     admin_apply_user_crew_recipe_api,
+    adopt_user_academy_graduate_api,
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
     approve_user_share_grant_api,
     apply_user_crew_recipe_api,
+    enroll_user_academy_trainee_api,
+    end_user_academy_mode_api,
+    open_user_academy_mode_api,
+    read_user_academy_api,
+    read_user_academy_mode_status_api,
     check_arclink_rate_limit,
     create_arclink_admin_login_session_api,
     create_arclink_login_session_api,
@@ -1266,6 +1272,119 @@ def _handle_user_crew_recipe_apply(
         session_token=creds["session_token"],
         csrf_token=csrf,
         **_crew_recipe_body(body),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_read(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_academy_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_mode_status(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    query: Mapping[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_session_credentials(headers, session_kind="user")
+    result = read_user_academy_mode_status_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        trainee_id=str(query.get("trainee_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_enroll(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = enroll_user_academy_trainee_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        program_id=str(body.get("program_id") or ""),
+        name=str(body.get("name") or ""),
+        depth=str(body.get("depth") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_mode_open(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = open_user_academy_mode_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        trainee_id=str(body.get("trainee_id") or ""),
+        opened_via=str(body.get("opened_via") or "dashboard"),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_mode_end(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = end_user_academy_mode_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        trainee_id=str(body.get("trainee_id") or ""),
+        graduate=str(body.get("graduate", "true")).strip().lower() not in {"false", "0", "no", "cancel", "cancelled"},
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_academy_adopt(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = adopt_user_academy_graduate_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        source_trainee_id=str(body.get("source_trainee_id") or ""),
+        name=str(body.get("name") or ""),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -2959,6 +3078,12 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("GET", "/user/crew-recipe"): "user_crew_recipe",
     ("POST", "/user/crew-recipe/preview"): "user_crew_recipe_preview",
     ("POST", "/user/crew-recipe/apply"): "user_crew_recipe_apply",
+    ("GET", "/user/academy"): "user_academy",
+    ("GET", "/user/academy/mode-status"): "user_academy_mode_status",
+    ("POST", "/user/academy/enroll"): "user_academy_enroll",
+    ("POST", "/user/academy/mode-open"): "user_academy_mode_open",
+    ("POST", "/user/academy/mode-end"): "user_academy_mode_end",
+    ("POST", "/user/academy/adopt"): "user_academy_adopt",
     ("GET", "/user/share-grants"): "user_share_grants",
     ("POST", "/user/share-grants"): "user_share_grant_create",
     ("POST", "/user/share-grants/broker"): "user_share_grant_broker_create",
@@ -3059,6 +3184,10 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_wrapped_frequency",
     "user_crew_recipe_preview",
     "user_crew_recipe_apply",
+    "user_academy_enroll",
+    "user_academy_mode_open",
+    "user_academy_mode_end",
+    "user_academy_adopt",
     "user_share_grant_create",
     "user_share_grant_broker_create",
     "user_share_grant_approve",
@@ -3226,6 +3355,18 @@ def route_arclink_hosted_api(
             result = _handle_user_crew_recipe_preview(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_crew_recipe_apply":
             result = _handle_user_crew_recipe_apply(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_academy":
+            result = _handle_user_academy_read(conn, headers, request_id, cfg)
+        elif route_key == "user_academy_mode_status":
+            result = _handle_user_academy_mode_status(conn, headers, clean_query, request_id, cfg)
+        elif route_key == "user_academy_enroll":
+            result = _handle_user_academy_enroll(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_academy_mode_open":
+            result = _handle_user_academy_mode_open(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_academy_mode_end":
+            result = _handle_user_academy_mode_end(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_academy_adopt":
+            result = _handle_user_academy_adopt(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grants":
             result = _handle_user_share_grants_read(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_share_grant_create":

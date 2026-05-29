@@ -94,6 +94,23 @@ export const api = {
   applyCrewRecipe: (body: Record<string, string>) =>
     request("/user/crew-recipe/apply", { method: "POST", body: JSON.stringify(body) }, "user"),
 
+  userAcademy: () => request("/user/academy", {}, "user"),
+
+  academyModeStatus: (traineeId: string) =>
+    request(`/user/academy/mode-status?trainee_id=${encodeURIComponent(traineeId)}`, {}, "user"),
+
+  enrollAcademyTrainee: (body: Record<string, string>) =>
+    request("/user/academy/enroll", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  openAcademyMode: (body: Record<string, string>) =>
+    request("/user/academy/mode-open", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  endAcademyMode: (body: Record<string, unknown>) =>
+    request("/user/academy/mode-end", { method: "POST", body: JSON.stringify(body) }, "user"),
+
+  adoptAcademyGraduate: (body: Record<string, string>) =>
+    request("/user/academy/adopt", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
 
   userShareGrants: () => request("/user/share-grants", {}, "user"),

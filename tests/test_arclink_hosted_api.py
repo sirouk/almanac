@@ -643,6 +643,70 @@ def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
     print("PASS test_user_academy_routes_browse_enroll_sticky_mode_and_graduate")
 
 
+def test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_academy_iso_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_academy_iso_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_academy_iso_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_iso_test")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_hosted_iso_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    a = seed_paid_deployment(control, onboarding, conn, session_id="onb_iso_a", email="iso-a@example.test", prefix="iso-a-1a2b")
+    b = seed_paid_deployment(control, onboarding, conn, session_id="onb_iso_b", email="iso-b@example.test", prefix="iso-b-9z8y")
+
+    # User A graduates a trainee carrying private steer.
+    programs.seed_default_academy_programs(conn)
+    ta = programs.enroll_academy_trainee(
+        conn, program_id="research_analyst", user_id=a["user_id"], deployment_id=a["deployment_id"],
+        name="A-Specialist", captain_steer={"focus": "A-confidential-target-list"},
+    )
+    sa = programs.open_academy_mode(conn, trainee_id=ta["trainee_id"], opened_by=a["user_id"])
+    programs.end_academy_mode(conn, session_id=sa["session"]["session_id"], actor=a["user_id"], graduate=True)
+
+    session_b = api.create_arclink_user_session(conn, user_id=b["user_id"], session_id="usess_iso_b")
+
+    # B's gallery must NOT contain A's graduate or any of A's identity/steer.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/academy", headers=auth_headers(session_b), config=config,
+    )
+    expect(status == 200, f"B academy read got {status}: {payload}")
+    expect(payload["trainees"] == [], "B has no trainees")
+    expect(all(g["trainee_id"] != ta["trainee_id"] for g in payload["graduates"]), "B must not see A's graduate")
+    blob = json.dumps(payload, sort_keys=True)
+    for leak in (a["user_id"], a["deployment_id"], "A-confidential-target-list"):
+        expect(leak not in blob, f"B's academy view must not leak A's {leak}")
+
+    # B cannot adopt A's graduate (owner-scoped) -> blocked (generic 400, not success).
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/adopt",
+        headers=browser_auth_headers(session_b, csrf=True),
+        body=json.dumps({"source_trainee_id": ta["trainee_id"]}), config=config,
+    )
+    expect(status == 400, f"cross-tenant adopt must be blocked, got {status}: {payload}")
+    # confirm no trainee was created for B
+    expect(programs.list_academy_trainees(conn, user_id=b["user_id"]) == [], "no cross-tenant clone created")
+    print("PASS test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant")
+
+
+def test_user_academy_enroll_without_arcpod_returns_clean_no_arcpod() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_academy_noarcpod_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_academy_noarcpod_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_noarcpod_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    # A user with NO deployment.
+    control.upsert_arclink_user(conn, user_id="u_noarcpod", email="noarcpod@example.test", entitlement_state="paid")
+    session = api.create_arclink_user_session(conn, user_id="u_noarcpod", session_id="usess_noarcpod")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/enroll",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({"program_id": "research_analyst"}), config=config,
+    )
+    expect(status == 400 and payload.get("error") == "no_arcpod", f"expected clean no_arcpod 400 got {status}: {payload}")
+    print("PASS test_user_academy_enroll_without_arcpod_returns_clean_no_arcpod")
+
+
 def test_admin_dashboard_requires_admin_session() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_admin_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_admin_test")
@@ -5487,6 +5551,8 @@ def main() -> int:
     test_wrapped_routes_are_scoped_csrf_gated_and_admin_aggregate_only()
     test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
     test_user_academy_routes_browse_enroll_sticky_mode_and_graduate()
+    test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant()
+    test_user_academy_enroll_without_arcpod_returns_clean_no_arcpod()
     test_admin_dashboard_requires_admin_session()
     test_admin_action_requires_csrf_and_mutation_role()
     test_admin_crew_recipe_route_is_admin_csrf_and_audited()

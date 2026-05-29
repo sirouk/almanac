@@ -58,7 +58,10 @@ def run_academy_forward_maintenance(
     seed_default_academy_programs(conn)
     graduates = [t for t in list_academy_trainees(conn, status="graduated") if t.get("forward_maintained")]
     eligible = len(graduates)
-    capped = max(0, int(limit) or 0) or eligible
+    # Explicit cap semantics: limit <= 0 means "process all eligible" (unbounded);
+    # a positive limit caps this run and reports the remainder as deferred.
+    n = int(limit)
+    capped = eligible if n <= 0 else min(n, eligible)
     batch = graduates[:capped]
     deferred = eligible - len(batch)
 

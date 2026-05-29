@@ -20,6 +20,7 @@ acquisition and provider-driven curation stay gated behind ``PG-PROVIDER``.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sqlite3
 from typing import Any, Mapping, Sequence
@@ -55,6 +56,56 @@ PROGRAM_DEPTHS = ("survey", "working", "deep")
 # Real Agent SOUL/skills/qmd/vault writes are gated; this module never performs
 # them. The commit at mode-end records intent + arms forward-maintenance.
 ACADEMY_APPLY_PROOF_GATES = ("PG-PROVIDER", "PG-HERMES")
+
+# Per-account guardrail against unbounded trainee growth (DoS / scheduler load).
+DEFAULT_MAX_TRAINEES_PER_USER = 50
+# Closed/cancelled mode sessions retained per trainee (open/cancel churn bound).
+MODE_SESSION_RETENTION_PER_TRAINEE = 25
+# Fields the cross-account graduate gallery may expose. Identity columns
+# (user_id, deployment_id, agent_id), private Captain steer, and internal staging
+# pointers are intentionally withheld from the browsable gallery.
+_GRADUATE_CARD_FIELDS = (
+    "trainee_id",
+    "name",
+    "status",
+    "depth",
+    "program_id",
+    "program_label",
+    "source_lanes",
+    "forward_maintained",
+    "graduated_at",
+)
+
+
+def _max_trainees_per_user() -> int:
+    raw = str(os.environ.get("ARCLINK_ACADEMY_MAX_TRAINEES_PER_USER") or "").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return DEFAULT_MAX_TRAINEES_PER_USER
+    return n if n > 0 else DEFAULT_MAX_TRAINEES_PER_USER
+
+
+def _enforce_trainee_quota(conn: sqlite3.Connection, user_id: str) -> None:
+    cap = _max_trainees_per_user()
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM academy_trainees WHERE user_id = ? AND status != 'archived'",
+        (str(user_id or "").strip(),),
+    ).fetchone()
+    if row is not None and int(row["n"]) >= cap:
+        raise ArcLinkAcademyProgramError(
+            f"academy trainee limit reached for this account ({cap}); archive a trainee before enrolling another"
+        )
+
+
+def academy_graduate_card(graduate: Mapping[str, Any]) -> dict[str, Any]:
+    """Redacted, owner-safe projection for the browsable graduate gallery.
+
+    Withholds tenant identity (user_id/deployment_id/agent_id), private Captain
+    steer, and internal staging pointers so the gallery never discloses one
+    account's data to another.
+    """
+    return {key: graduate.get(key) for key in _GRADUATE_CARD_FIELDS}
 
 
 def _default_programs() -> tuple[dict[str, Any], ...]:
@@ -145,9 +196,22 @@ def _default_programs() -> tuple[dict[str, Any], ...]:
 
 
 def seed_default_academy_programs(conn: sqlite3.Connection) -> int:
-    """Idempotently upsert the default Majors catalog. Returns the catalog size."""
+    """Idempotently upsert the default Majors catalog. Returns the catalog size.
+
+    Fast-path: if every default Major is already present, this is a single read
+    (no writes/commits), so calling it on hot read paths does not amplify writes
+    against the single-writer control DB.
+    """
+    defaults = _default_programs()
+    placeholders = ",".join("?" for _ in defaults)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM academy_programs WHERE program_id IN ({placeholders})",
+        tuple(str(p["program_id"]) for p in defaults),
+    ).fetchone()
+    if row is not None and int(row["n"]) >= len(defaults):
+        return len(defaults)
     count = 0
-    for program in _default_programs():
+    for program in defaults:
         upsert_academy_program(conn, origin="catalog", **program)
         count += 1
     return count
@@ -272,6 +336,7 @@ def enroll_academy_trainee(
     clean_deployment = str(deployment_id or "").strip()
     if not clean_user or not clean_deployment:
         raise ArcLinkAcademyProgramError("academy trainee requires user_id and deployment_id")
+    _enforce_trainee_quota(conn, clean_user)
     clean_depth = str(depth or "").strip().lower() or str(program.get("default_depth") or "working")
     if clean_depth not in PROGRAM_DEPTHS:
         raise ArcLinkAcademyProgramError(f"unsupported academy depth: {clean_depth}")
@@ -350,6 +415,10 @@ def open_academy_mode(
     Idempotent: if a session is already open for the trainee, the existing open
     session is returned (the mode stays open until the Captain ends it).
     """
+    from arclink_boundary import reject_secret_material
+
+    clean_via = str(opened_via or "command").strip() or "command"
+    reject_secret_material({"opened_via": clean_via})
     trainee = get_academy_trainee(conn, trainee_id)
     if trainee is None:
         raise ArcLinkAcademyProgramError(f"unknown academy trainee: {trainee_id}")
@@ -360,23 +429,32 @@ def open_academy_mode(
         return {"session": existing, "trainee": trainee, "created": False}
     session_id = "asess_" + secrets.token_hex(8)
     now = _now()
-    conn.execute(
-        """
-        INSERT INTO academy_mode_sessions (
-          session_id, trainee_id, deployment_id, program_id, opened_by, opened_via,
-          status, opened_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)
-        """,
-        (
-            session_id,
-            trainee["trainee_id"],
-            str(trainee.get("deployment_id") or ""),
-            str(trainee.get("program_id") or ""),
-            str(opened_by or "").strip() or "captain",
-            str(opened_via or "command").strip() or "command",
-            now,
-        ),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO academy_mode_sessions (
+              session_id, trainee_id, deployment_id, program_id, opened_by, opened_via,
+              status, opened_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?)
+            """,
+            (
+                session_id,
+                trainee["trainee_id"],
+                str(trainee.get("deployment_id") or ""),
+                str(trainee.get("program_id") or ""),
+                str(opened_by or "").strip() or "captain",
+                clean_via,
+                now,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        # The partial unique index (one open session per trainee) lost a race with
+        # a concurrent open. Fail SAFE and idempotently: return the winner's session.
+        conn.rollback()
+        winner = get_open_academy_mode(conn, trainee_id=trainee["trainee_id"])
+        if winner is not None:
+            return {"session": winner, "trainee": trainee, "created": False}
+        raise
     conn.execute(
         "UPDATE academy_trainees SET status = 'in_academy', mode_open = 1, updated_at = ? WHERE trainee_id = ?",
         (now, trainee["trainee_id"]),
@@ -469,14 +547,17 @@ def end_academy_mode(
     # is the PG-HERMES gated academy_apply action.
     if graduate and not resolved_plan and not resolved_manifest:
         try:
-            curated = curate_academy_trainee(conn, trainee_id=trainee["trainee_id"], created_at=now)
+            # commit=False: staging + session-close + graduation are one atomic txn.
+            curated = curate_academy_trainee(conn, trainee_id=trainee["trainee_id"], created_at=now, commit=False)
             resolved_manifest = str(curated.get("manifest_id") or resolved_manifest)
             resolved_plan = str(curated.get("plan_id") or resolved_plan)
             review = curated.get("review") if isinstance(curated.get("review"), Mapping) else {}
             summary.setdefault("review_status", str(review.get("status") or ""))
             summary.setdefault("source_count", int(curated.get("source_count") or 0))
         except Exception as exc:  # noqa: BLE001 - mode end must not crash on curation
-            summary.setdefault("curation_error", str(exc)[:200])
+            from arclink_secrets_regex import redact_then_truncate
+
+            summary.setdefault("curation_error", redact_then_truncate(str(exc), limit=200))
     summary.setdefault("graduated", bool(graduate))
     summary.setdefault("manifest_id", resolved_manifest)
     summary.setdefault("apply_status", "staged" if graduate else "cancelled")
@@ -506,16 +587,44 @@ def end_academy_mode(
             "UPDATE academy_trainees SET status = 'enrolled', mode_open = 0, updated_at = ? WHERE trainee_id = ?",
             (now, trainee["trainee_id"]),
         )
+    # Read the closed session for the response BEFORE pruning, so retention can
+    # never race-delete the row we are about to return.
+    closed_row = conn.execute(
+        "SELECT * FROM academy_mode_sessions WHERE session_id = ?", (session["session_id"],)
+    ).fetchone()
+    closed_session = _session_public(closed_row) if closed_row is not None else session
+    _prune_mode_sessions(conn, trainee["trainee_id"], keep_session_id=session["session_id"])
     conn.commit()
     return {
-        "session": _session_public(conn.execute(
-            "SELECT * FROM academy_mode_sessions WHERE session_id = ?", (session["session_id"],)
-        ).fetchone()),
+        "session": closed_session,
         "trainee": get_academy_trainee(conn, trainee["trainee_id"]),
         "graduated": bool(graduate),
         "mutation_performed": False,
         "workspace_mutation_performed": False,
     }
+
+
+def _prune_mode_sessions(conn: sqlite3.Connection, trainee_id: str, *, keep_session_id: str = "") -> None:
+    """Bound closed/cancelled mode-session growth from open/cancel churn.
+
+    Keeps the most recent MODE_SESSION_RETENTION_PER_TRAINEE non-open sessions per
+    trainee (open sessions are never pruned), and never prunes ``keep_session_id``
+    (the session the caller is finalizing). Runs inside the caller's transaction.
+    """
+    # Order by rowid (monotonic insertion order) so the most recently finalized
+    # session is always retained regardless of equal timestamps.
+    conn.execute(
+        """
+        DELETE FROM academy_mode_sessions
+        WHERE trainee_id = ? AND status != 'open' AND session_id != ? AND rowid NOT IN (
+            SELECT rowid FROM academy_mode_sessions
+            WHERE trainee_id = ? AND status != 'open'
+            ORDER BY rowid DESC
+            LIMIT ?
+        )
+        """,
+        (str(trainee_id), str(keep_session_id or ""), str(trainee_id), MODE_SESSION_RETENTION_PER_TRAINEE),
+    )
 
 
 def browse_academy_graduates(conn: sqlite3.Connection, *, user_id: str | None = None) -> dict[str, Any]:
@@ -543,7 +652,15 @@ def adopt_academy_graduate(
     agent_id: str = "",
     name: str = "",
 ) -> dict[str, Any]:
-    """Fast path: clone a graduate's Major + staged corpus into a new graduated Trainee."""
+    """Fast path: clone a graduate's Major + staged corpus into a new graduated Trainee.
+
+    Ownership of the SOURCE graduate is enforced by the caller (the hosted API
+    scopes the gallery + adopt to the owner). This function still scrubs the
+    caller-supplied name and enforces the per-account trainee quota.
+    """
+    from arclink_boundary import reject_secret_material
+
+    reject_secret_material({"name": name})
     source = get_academy_trainee(conn, source_trainee_id)
     if source is None or source.get("status") != "graduated":
         raise ArcLinkAcademyProgramError("can only adopt a graduated academy trainee")
@@ -551,6 +668,7 @@ def adopt_academy_graduate(
     clean_deployment = str(deployment_id or "").strip()
     if not clean_user or not clean_deployment:
         raise ArcLinkAcademyProgramError("adopt requires user_id and deployment_id")
+    _enforce_trainee_quota(conn, clean_user)
     trainee_id = "atrn_" + secrets.token_hex(8)
     now = _now()
     conn.execute(
@@ -666,21 +784,30 @@ def _compose_trainee_corpus(
     program = get_academy_program(conn, str(trainee.get("program_id") or ""))
     if program is None:
         raise ArcLinkAcademyProgramError("academy trainee has no Major program")
-    src = list(sources) if sources is not None else _fixture_sources_for_program(program, now)
+    # Identity (manifest_id / plan_id) is derived from a STABLE per-trainee
+    # timestamp, not wall-clock `now`, so the same (trainee, Major-state) always
+    # produces the same staged ids. This lets the apply path validate the recomputed
+    # corpus against the Captain-approved staged ids (a Major edit changes the
+    # content -> changes the id -> apply fail-closes). `now` is used only for the
+    # cosmetic review staged_at.
+    stable = str(trainee.get("created_at") or trainee.get("enrolled_at") or now)
+    src = list(sources) if sources is not None else _fixture_sources_for_program(program, stable)
     steer = trainee.get("captain_steer") or {}
     focus = str(steer.get("focus") or "").strip() or str(program.get("topic_map") or program.get("label") or "")
+    quality_floor = program.get("quality_floor")
+    min_score = int(quality_floor) if quality_floor is not None else 70
     manifest = build_academy_corpus(
         role_id=str(program["program_id"]),
         role_title=str(program.get("label") or program["program_id"]),
         topic=focus,
         sources=src,
-        min_source_score=int(program.get("quality_floor") or 70),
-        created_at=now,
+        min_source_score=min_score,
+        created_at=stable,
     )
     plan = build_agent_application_plan(
         manifest,
         agent_id=str(trainee.get("deployment_id") or trainee["trainee_id"]),
-        created_at=now,
+        created_at=stable,
     )
     review = build_academy_review_status(manifest=manifest, application_plan=plan, staged_at=now)
     return {
@@ -701,6 +828,7 @@ def curate_academy_trainee(
     trainee_id: str,
     sources: Sequence[Any] | None = None,
     created_at: str | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     """Curate a Trainee's specialist corpus + curriculum + staged application plan.
 
@@ -710,6 +838,9 @@ def curate_academy_trainee(
     no-write with respect to the Agent: it stages the manifest/plan ids on the
     trainee; real Agent SOUL/skills/qmd/vault writes remain PG-HERMES gated and
     are performed only by the ``academy_apply`` action.
+
+    Pass ``commit=False`` when the caller (e.g. ``end_academy_mode``) wraps the
+    staging in a larger atomic transaction.
     """
     now = str(created_at or _now())
     composed = _compose_trainee_corpus(conn, trainee_id, sources=sources, now=now)
@@ -719,7 +850,8 @@ def curate_academy_trainee(
         "UPDATE academy_trainees SET staged_manifest_id = ?, staged_plan_id = ?, updated_at = ? WHERE trainee_id = ?",
         (manifest_id, plan_id, now, composed["trainee"]["trainee_id"]),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return {
         "trainee_id": composed["trainee"]["trainee_id"],
         "manifest_id": manifest_id,
@@ -739,20 +871,33 @@ def stage_academy_apply(
     live_authorized: bool = False,
     actor: str = "",
     created_at: str | None = None,
+    target_kind: str = "",
+    target_id: str = "",
 ) -> dict[str, Any]:
     """Build the redacted result for the ``academy_apply`` action (fail-closed).
 
-    Resolves a graduated Trainee's staged application plan, extracts the additive
-    imparting intents (SOUL overlay sections / approved skills / qmd memory seeds /
-    vault files), and computes whether live Agent-home writes are enabled.
+    Resolves a graduated Trainee's Captain-APPROVED staged application plan,
+    extracts the additive imparting intents (SOUL overlay sections / approved
+    skills / qmd memory seeds / vault files), and computes whether live Agent-home
+    writes are enabled.
 
-    Live writes require BOTH a live executor adapter AND explicit PG-HERMES
-    authorization (``live_authorized``). When either is missing the result is
-    ``staged`` (record-only adapters) or ``failed_closed`` (live adapter without
-    authorization) and ``writes_enabled`` stays ``False`` — no SOUL/skill/qmd/vault
-    file is written. The real imparting is performed by the PG-HERMES authorized
-    Hermes-home seam (``bin/install-deployment-hermes-home.sh`` chain); this action
-    stages the contract and records the intent.
+    Fail-closed gates (ALL must hold for ``writes_enabled``):
+    - the Trainee is ``graduated`` with Academy Mode closed;
+    - it carries a persisted ``staged_manifest_id``/``staged_plan_id`` (the
+      Captain-approved contract);
+    - the corpus recomputed from the CURRENT Major still matches those staged ids
+      (a Major edited after graduation changes the content -> changes the id ->
+      this fails closed as ``stale_requires_regraduation``, blocking an unreviewed
+      write);
+    - the action target (when supplied) is consistent with the Trainee's owner /
+      deployment;
+    - a live executor adapter is selected AND explicit PG-HERMES authorization
+      (``live_authorized``) is present.
+
+    When any gate fails the result is ``staged`` / ``failed_closed`` /
+    ``stale_requires_regraduation`` / ``not_staged`` with ``writes_enabled=False`` --
+    no SOUL/skill/qmd/vault file is written. The real imparting is performed by the
+    PG-HERMES authorized Hermes-home seam (``bin/install-deployment-hermes-home.sh``).
     """
     now = str(created_at or _now())
     composed = _compose_trainee_corpus(conn, trainee_id, sources=None, now=now)
@@ -761,6 +906,29 @@ def stage_academy_apply(
         raise ArcLinkAcademyProgramError("academy_apply requires a graduated trainee")
     if trainee.get("mode_open"):
         raise ArcLinkAcademyProgramError("academy_apply cannot run while Academy Mode is open")
+
+    trainee_deployment = str(trainee.get("deployment_id") or "")
+    trainee_user = str(trainee.get("user_id") or "")
+    # Target/owner consistency: the action's target must match the Trainee it acts
+    # on, so an apply cannot be bound to a deployment/owner other than the
+    # Trainee's. Mirrors the academy_apply_preview / dns_repair guards.
+    clean_target_kind = str(target_kind or "").strip()
+    clean_target_id = str(target_id or "").strip()
+    if clean_target_id:
+        if clean_target_kind == "deployment" and trainee_deployment and clean_target_id != trainee_deployment:
+            raise ArcLinkAcademyProgramError("academy_apply target deployment does not match the trainee")
+        if clean_target_kind == "user" and trainee_user and clean_target_id != trainee_user:
+            raise ArcLinkAcademyProgramError("academy_apply target user does not match the trainee owner")
+
+    # The Captain-approved contract is the PERSISTED staged identity, not a fresh
+    # recompute. Validate the recomputed corpus against it.
+    staged_manifest = str(trainee.get("staged_manifest_id") or "")
+    staged_plan = str(trainee.get("staged_plan_id") or "")
+    recomputed_manifest = composed["manifest_id"]
+    recomputed_plan = composed["plan_id"]
+    contract_ok = bool(staged_manifest) and bool(staged_plan)
+    contract_fresh = contract_ok and staged_manifest == recomputed_manifest and staged_plan == recomputed_plan
+
     plan = composed["plan"]
     plan_dict = plan.to_dict() if hasattr(plan, "to_dict") else dict(plan)
     intent_counts = {
@@ -773,30 +941,46 @@ def stage_academy_apply(
     review_ready = str(review.get("status") or "") in {"ready_for_review", "live_proof_pending"}
     adapter = str(adapter_name or "fake").strip().lower()
     live_adapter = adapter in {"ssh", "live"}
-    writes_enabled = bool(live_adapter and live_authorized and review_ready)
-    if writes_enabled:
-        # Authorized live path: the real imparting runs through the PG-HERMES
-        # Hermes-home seam, not the control-plane action. We hand off the staged
-        # contract rather than writing SOUL files from here.
-        status = "handoff_to_hermes_home"
+
+    if not contract_ok:
+        status = "not_staged"
+        writes_enabled = False
+        note = "Trainee has no Captain-approved staged plan; re-graduate before applying. No Agent-home write."
+    elif not contract_fresh:
+        status = "stale_requires_regraduation"
+        writes_enabled = False
         note = (
-            "PG-HERMES authorized: staged contract handed to the Hermes-home installer "
+            "Staged plan no longer matches the current Major (the Major changed after graduation); "
+            "re-graduate to re-review. Fail-closed: no Agent-home write."
+        )
+    elif live_adapter and live_authorized and review_ready:
+        status = "handoff_to_hermes_home"
+        writes_enabled = True
+        note = (
+            "PG-HERMES authorized: Captain-approved staged contract handed to the Hermes-home installer "
             "(bin/install-deployment-hermes-home.sh) for the additive SOUL/skills/qmd/vault apply."
         )
     elif live_adapter and not live_authorized:
         status = "failed_closed"
+        writes_enabled = False
         note = "Live adapter without PG-HERMES authorization; no Agent-home write was performed."
     else:
         status = "staged"
+        writes_enabled = False
         note = "Record-only adapter; application plan staged, no Agent-home write was performed."
+
     return {
         "operation_kind": "academy_agent_apply",
         "trainee_id": trainee["trainee_id"],
         "program_id": str(trainee.get("program_id") or ""),
-        "deployment_id": str(trainee.get("deployment_id") or ""),
-        "user_id": str(trainee.get("user_id") or ""),
-        "manifest_id": composed["manifest_id"],
-        "plan_id": composed["plan_id"],
+        "deployment_id": trainee_deployment,
+        "user_id": trainee_user,
+        # Report the Captain-APPROVED staged ids as the authoritative contract.
+        "manifest_id": staged_manifest or recomputed_manifest,
+        "plan_id": staged_plan or recomputed_plan,
+        "recomputed_manifest_id": recomputed_manifest,
+        "recomputed_plan_id": recomputed_plan,
+        "contract_fresh": contract_fresh,
         "adapter": adapter,
         "status": status,
         "note": note,
@@ -835,13 +1019,18 @@ def academy_continuing_education(
     if program is None:
         raise ArcLinkAcademyProgramError("academy trainee has no Major program")
     now = str(created_at or _now())
+    # Fixtures retrieved_at is the stable per-trainee timestamp so the manifest is
+    # deterministic and the weekly freshness window is measured against the
+    # original acquisition time, not the run time (so staleness can actually fire).
+    stable = str(trainee.get("created_at") or trainee.get("enrolled_at") or now)
+    quality_floor = program.get("quality_floor")
     manifest = build_academy_corpus(
         role_id=str(program["program_id"]),
         role_title=str(program.get("label") or program["program_id"]),
         topic=str(program.get("topic_map") or program.get("label") or ""),
-        sources=_fixture_sources_for_program(program, now),
-        min_source_score=int(program.get("quality_floor") or 70),
-        created_at=now,
+        sources=_fixture_sources_for_program(program, stable),
+        min_source_score=int(quality_floor) if quality_floor is not None else 70,
+        created_at=stable,
     )
     # The trainer expects observed_sources keyed by source_id. Accept either a
     # mapping or a list of source dicts (each carrying its own source_id).

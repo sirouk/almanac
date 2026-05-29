@@ -337,7 +337,140 @@ def test_academy_apply_requires_graduated_trainee() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = _graduate(ap, conn, "research_analyst", "u", "dep-drift")
+        staged = ap.get_academy_trainee(conn, t["trainee_id"])
+
+        # Fresh graduate: recomputed contract matches the Captain-approved staged ids.
+        fresh = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
+        expect(fresh["contract_fresh"] is True, str(fresh))
+        expect(fresh["manifest_id"] == staged["staged_manifest_id"], "apply reports the approved staged manifest")
+        expect(fresh["status"] == "handoff_to_hermes_home" and fresh["writes_enabled"] is True, str(fresh))
+
+        # Edit the Major after graduation -> recomputed corpus diverges from the
+        # reviewed staged contract -> apply MUST fail closed (no unreviewed write).
+        ap.upsert_academy_program(
+            conn, program_id="research_analyst", label="Research Analyst",
+            topic_map="ENTIRELY DIFFERENT TOPIC after graduation",
+            source_lanes=["wikimedia", "web_article"], role_template="changed",
+        )
+        stale = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
+        expect(stale["status"] == "stale_requires_regraduation", str(stale))
+        expect(stale["writes_enabled"] is False, "a Major edited post-graduation must NOT enable writes")
+        expect(stale["manifest_id"] == staged["staged_manifest_id"], "still reports the approved staged manifest, not the drifted one")
+        print("PASS test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_apply_rejects_target_owner_mismatch() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = _graduate(ap, conn, "research_analyst", "owner-a", "dep-a")
+        # target deployment that is not the trainee's deployment -> hard fail
+        raised = False
+        try:
+            ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="fake", target_kind="deployment", target_id="dep-SOMEONE-ELSE")
+        except ap.ArcLinkAcademyProgramError:
+            raised = True
+        expect(raised, "apply must reject a target deployment that isn't the trainee's")
+        # matching target is accepted
+        ok = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="fake", target_kind="deployment", target_id="dep-a")
+        expect(ok["status"] == "staged", str(ok))
+        print("PASS test_academy_apply_rejects_target_owner_mismatch")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_trainee_quota_enforced() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        os.environ["ARCLINK_ACADEMY_MAX_TRAINEES_PER_USER"] = "2"
+        ap.seed_default_academy_programs(conn)
+        ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="capped", deployment_id="d")
+        ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="capped", deployment_id="d")
+        raised = False
+        try:
+            ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="capped", deployment_id="d")
+        except ap.ArcLinkAcademyProgramError:
+            raised = True
+        expect(raised, "third enrollment past the cap must be rejected")
+        # a different user is unaffected
+        other = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="other", deployment_id="d")
+        expect(other["status"] == "enrolled", "quota is per-user")
+        print("PASS test_academy_trainee_quota_enforced")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_open_mode_scrubs_opened_via_and_is_idempotent() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="u", deployment_id="d")
+        secretish = False
+        try:
+            ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u", opened_via="api_key=sk-livesecretvalue1234567890")
+        except Exception:
+            secretish = True
+        expect(secretish, "secret-shaped opened_via must be rejected")
+        first = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u", opened_via="dashboard")
+        again = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u", opened_via="dashboard")
+        expect(first["created"] is True and again["created"] is False, "open is idempotent (sticky)")
+        expect(again["session"]["session_id"] == first["session"]["session_id"], "same open session returned")
+        print("PASS test_academy_open_mode_scrubs_opened_via_and_is_idempotent")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_mode_session_growth_is_bounded() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="u", deployment_id="d")
+        for _ in range(ap.MODE_SESSION_RETENTION_PER_TRAINEE + 12):
+            s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u")
+            ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="u", graduate=False)
+        n = conn.execute("SELECT COUNT(*) AS n FROM academy_mode_sessions WHERE trainee_id = ?", (t["trainee_id"],)).fetchone()["n"]
+        expect(int(n) <= ap.MODE_SESSION_RETENTION_PER_TRAINEE, f"closed/cancelled sessions are bounded, got {n}")
+        print("PASS test_academy_mode_session_growth_is_bounded")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_graduate_card_redacts_tenant_identity() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(
+            conn, program_id="research_analyst", user_id="secret-user", deployment_id="secret-dep",
+            agent_id="secret-agent", captain_steer={"focus": "confidential-MnA-target"},
+        )
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="secret-user")
+        ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="secret-user", graduate=True)
+        gallery = ap.browse_academy_graduates(conn, user_id="secret-user")
+        grad = gallery["graduates"][0]
+        card = ap.academy_graduate_card(grad)
+        blob = json.dumps(card, sort_keys=True)
+        for leak in ("secret-user", "secret-dep", "secret-agent", "confidential-MnA-target"):
+            expect(leak not in blob, f"redacted card must not leak {leak}: {blob}")
+        expect(card["trainee_id"] == t["trainee_id"] and "name" in card, "card keeps display fields")
+        print("PASS test_academy_graduate_card_redacts_tenant_identity")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
+    test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
+    test_academy_apply_rejects_target_owner_mismatch()
+    test_academy_trainee_quota_enforced()
+    test_academy_open_mode_scrubs_opened_via_and_is_idempotent()
+    test_academy_mode_session_growth_is_bounded()
+    test_academy_graduate_card_redacts_tenant_identity()
     test_academy_apply_is_fail_closed()
     test_academy_apply_requires_graduated_trainee()
     test_academy_curation_builds_corpus_plan_and_stages()

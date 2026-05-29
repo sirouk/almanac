@@ -63,6 +63,7 @@ from arclink_crew_recipes import (
 )
 from arclink_academy_programs import (
     ArcLinkAcademyProgramError,
+    academy_graduate_card,
     academy_mode_status,
     adopt_academy_graduate,
     browse_academy_graduates,
@@ -1346,15 +1347,22 @@ def read_user_academy_api(
     session_id: str,
     session_token: str,
 ) -> ArcLinkApiResponse:
-    """Owner-scoped Academy overview: Majors catalog, my Trainees, graduate gallery."""
+    """Owner-scoped Academy overview: Majors catalog, my Trainees, my graduate gallery.
+
+    The graduate gallery is scoped to the caller's own graduates AND emitted
+    through a redacted card projection, so no other tenant's identity
+    (user_id/deployment_id/agent_id) or private Captain steer is ever disclosed.
+    A cross-tenant "community" gallery would be a separate, consented + redacted
+    feature; the default is owner-private.
+    """
     user_id = _authenticated_user_id(conn, session_id=session_id, session_token=session_token)
     seed_default_academy_programs(conn)
-    gallery = browse_academy_graduates(conn)
+    gallery = browse_academy_graduates(conn, user_id=user_id)
     return ArcLinkApiResponse(
         status=200,
         payload={
             "majors": gallery.get("programs", []),
-            "graduates": gallery.get("graduates", []),
+            "graduates": [academy_graduate_card(g) for g in gallery.get("graduates", [])],
             "trainees": list_academy_trainees(conn, user_id=user_id),
         },
     )
@@ -1371,12 +1379,18 @@ def enroll_user_academy_trainee_api(
     depth: str = "",
 ) -> ArcLinkApiResponse:
     user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    deployment_id = _primary_deployment_id(conn, user_id)
+    if not deployment_id:
+        return ArcLinkApiResponse(
+            status=400,
+            payload={"error": "no_arcpod", "detail": "Deploy an ArcPod before enrolling an Academy Trainee."},
+        )
     seed_default_academy_programs(conn)
     trainee = enroll_academy_trainee(
         conn,
         program_id=str(program_id or "").strip(),
         user_id=user_id,
-        deployment_id=_primary_deployment_id(conn, user_id),
+        deployment_id=deployment_id,
         name=str(name or "").strip(),
         depth=str(depth or "").strip() or None,
     )
@@ -1452,11 +1466,20 @@ def adopt_user_academy_graduate_api(
     name: str = "",
 ) -> ArcLinkApiResponse:
     user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    # Owner-scoped: a Captain may only adopt a graduate they own (the gallery is
+    # owner-private). This blocks cloning another tenant's private staged corpus.
+    _require_owned_trainee(conn, str(source_trainee_id or "").strip(), user_id)
+    deployment_id = _primary_deployment_id(conn, user_id)
+    if not deployment_id:
+        return ArcLinkApiResponse(
+            status=400,
+            payload={"error": "no_arcpod", "detail": "Deploy an ArcPod before adopting an Academy graduate."},
+        )
     trainee = adopt_academy_graduate(
         conn,
         source_trainee_id=str(source_trainee_id or "").strip(),
         user_id=user_id,
-        deployment_id=_primary_deployment_id(conn, user_id),
+        deployment_id=deployment_id,
         name=str(name or "").strip(),
     )
     return ArcLinkApiResponse(status=200, payload={"trainee": trainee})

@@ -1085,6 +1085,8 @@ def _dispatch_action(
             live_authorized=live_authorized,
             actor=str(metadata.get("actor_id") or "system:action_worker"),
             created_at=utc_now_iso(),
+            target_kind=target_kind,
+            target_id=target_id,
         )
         operation_key = str(metadata.get("idempotency_key") or idempotency_key or action_id)
         _link_action_operation(

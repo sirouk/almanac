@@ -712,8 +712,11 @@ services:
     # live acquisition stays PG-PROVIDER gated and apply stays PG-HERMES gated.
     cap_drop:
       - ALL
+    # Least-privilege: this no-write job needs only DB access via the base env. It
+    # does NOT merge *arclink-control-secret-env (no Stripe/Cloudflare/Chutes/bot
+    # secrets), since run_academy_forward_maintenance reads none of them.
     environment:
-      <<: [*arclink-env, *arclink-control-secret-env]
+      <<: *arclink-env
     volumes:
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state

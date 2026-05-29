@@ -139,7 +139,25 @@ def test_forward_maintenance_caps_and_reports_overflow() -> None:
         cleanup(tmp, old_env)
 
 
+def test_forward_maintenance_limit_zero_processes_all() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        for i in range(3):
+            _graduate(programs, conn, "research_analyst", f"u{i}", f"dep-{i}")
+        # limit <= 0 means "process all eligible" (explicit, documented).
+        result = scheduler.run_academy_forward_maintenance(conn, env={}, limit=0)
+        expect(result["eligible"] == 3 and result["processed"] == 3, str(result))
+        expect(result["deferred_to_next_run"] == 0, str(result))
+        neg = scheduler.run_academy_forward_maintenance(conn, env={}, limit=-5)
+        expect(neg["processed"] == 3, "negative limit also means process all")
+        print("PASS test_forward_maintenance_limit_zero_processes_all")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_forward_maintenance_reviews_graduates_without_writes()
     test_forward_maintenance_caps_and_reports_overflow()
+    test_forward_maintenance_limit_zero_processes_all()
     print("PASS all academy scheduler tests")

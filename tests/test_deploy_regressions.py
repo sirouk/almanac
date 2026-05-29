@@ -3860,6 +3860,29 @@ def test_nextcloud_startup_repairs_persisted_runtime_config() -> None:
     print("PASS test_nextcloud_startup_repairs_persisted_runtime_config")
 
 
+def test_control_install_wires_single_operator_hermes_agent() -> None:
+    deploy_text = DEPLOY_SH.read_text()
+    docker_text = (REPO / "bin" / "arclink-docker.sh").read_text()
+    # Onboarding selects the ArcLink user that owns the operator's one agent.
+    expect("Give the operator a dedicated Hermes agent" in deploy_text,
+           "control onboarding must offer the operator's single Hermes agent")
+    expect("ARCLINK_OPERATOR_AGENT_USER_ID" in deploy_text and "ARCLINK_OPERATOR_AGENT_ENABLED" in deploy_text,
+           "operator agent owner/enable must be collected")
+    expect('write_kv ARCLINK_OPERATOR_AGENT_USER_ID' in deploy_text,
+           "operator agent owner must be persisted to generated config")
+    # Install flow provisions it through the existing arcpod pipeline, idempotently.
+    expect("ensure_control_operator_agent" in deploy_text,
+           "control install flow must ensure the operator agent")
+    expect("run_arclink_docker operator-agent-setup" in deploy_text,
+           "control install must invoke the in-container operator agent setup")
+    # The docker helper runs the idempotent ensure inside the control container.
+    expect("operator-agent-setup)" in docker_text and "docker_operator_agent_setup" in docker_text,
+           "arclink-docker.sh must expose operator-agent-setup")
+    expect("arclink_operator_agent.py ensure --require-enabled" in docker_text,
+           "operator agent setup must call the idempotent, enable-guarded ensure")
+    print("PASS test_control_install_wires_single_operator_hermes_agent")
+
+
 def main() -> int:
     tests = [
         test_bool_env_blank_uses_default,
@@ -3980,6 +4003,7 @@ def main() -> int:
         test_systemd_unit_paths_are_quoted,
         test_deploy_uses_effective_nextcloud_enablement_for_runtime_actions,
         test_nextcloud_startup_repairs_persisted_runtime_config,
+        test_control_install_wires_single_operator_hermes_agent,
     ]
     for test in tests:
         test()

@@ -30,7 +30,10 @@ from arclink_public_bots import (
 )
 from arclink_operator_raven import (
     dispatch_operator_raven_command,
+    operator_approval_code,
+    operator_raven_command_is_mutating,
     operator_raven_command_requested,
+    strip_operator_approval_code,
 )
 from arclink_http import http_request, parse_json_object
 
@@ -109,10 +112,12 @@ ARCLINK_OPERATOR_TELEGRAM_COMMANDS: tuple[dict[str, str], ...] = (
     {"command": "fleet_list", "description": "Operator: fleet and capacity"},
     {"command": "worker_probe", "description": "Operator: worker proof dry run"},
     {"command": "user_lookup", "description": "Operator: find Captain or Pod"},
-    {"command": "pod_repair", "description": "Operator: repair plan dry run"},
+    {"command": "pod_repair", "description": "Operator: repair an ArcPod"},
     {"command": "upgrade_check", "description": "Operator: upgrade state"},
-    {"command": "upgrade_hermes", "description": "Operator: Hermes upgrade check"},
-    {"command": "rollout_plan", "description": "Operator: rollout plan"},
+    {"command": "upgrade", "description": "Operator: apply host/control upgrade"},
+    {"command": "pin_upgrade", "description": "Operator: upgrade a pinned component"},
+    {"command": "rollout", "description": "Operator: plan/queue an ArcPod rollout"},
+    {"command": "action_status", "description": "Operator: track queued actions"},
     {"command": "academy_status", "description": "Operator: Academy status"},
 )
 
@@ -971,18 +976,23 @@ def _operator_raven_intro_reply() -> str:
         "Operator Raven is on the control bridge.\n\n"
         "This chat is configured as an ArcLink operator surface, so I will not "
         "start the Captain checkout/onboarding lane here.\n\n"
-        "Available safe commands now:\n"
-        "- /operator_status - read the control node, fleet, proof gates, and rollout state\n"
-        "- /operator_fleet - list worker capacity and placement readiness\n"
-        "- /worker_probe <host-id> --dry-run - preview a worker probe without mutating state\n"
+        "Read commands:\n"
+        "- /operator_status - control node, fleet, proof gates, rollout, queued actions\n"
+        "- /operator_fleet - worker capacity and placement readiness\n"
+        "- /worker_probe <host-id> --dry-run - preview a worker probe\n"
         "- /user_lookup <query> - inspect Captain/account state without secrets\n"
-        "- /pod_repair <deployment-id> --dry-run - preview repair candidates\n"
-        "- /upgrade_check or /upgrade_hermes - read upgrade state without running an upgrade\n"
-        "- /rollout_plan <target> --dry-run - preview ArcPod rollout batches\n"
+        "- /upgrade_check - read upgrade availability\n"
+        "- /action_status [id] - track queued actions and rollouts\n"
         "- /academy_status <query> - read Academy training state\n\n"
-        "Full mutation from Operator Raven is still intentionally brokered and "
-        "audit-gated; use the deploy/control rails for live changes until those "
-        "commands are widened."
+        "Action commands (queue real, audited intents; add --dry-run to preview first):\n"
+        "- /pod_repair <deployment-id> [restart|reprovision|dns_repair]\n"
+        "- /rollout <target-version> [--batch-size N]\n"
+        "- /upgrade - apply the ArcLink host/control upgrade and repair\n"
+        "- /pin_upgrade <component> - upgrade hermes, qmd, nextcloud, postgres, redis, nvm, or node\n\n"
+        "Live execution honors ARCLINK_EXECUTOR_ADAPTER (fake = record-only) and the "
+        "per-action live proof gate. If an operator approval code is configured, append it "
+        "to action commands, e.g. /upgrade <operator-code>.\n\n"
+        "You can also just talk to me; I route your message to your Hermes operator agent."
     )
 
 
@@ -1032,11 +1042,28 @@ def _handle_operator_telegram_update(
     first = text.split(maxsplit=1)[0] if text else ""
     command = _telegram_command_token(first)
     dispatch_text = text
-    if command in {"/upgrade_hermes", "/hermes_upgrade", "/update"}:
+    if command in {"/upgrade_hermes", "/hermes_upgrade"}:
         dispatch_text = "/upgrade_check"
     if operator_raven_command_requested(dispatch_text):
+        actor_id = f"telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}"
+        message_id = str(parsed.get("message_id") or parsed.get("telegram_message_id") or "").strip()
+        if operator_raven_command_is_mutating(dispatch_text):
+            code_ok, dispatch_text = strip_operator_approval_code(dispatch_text, operator_approval_code(env))
+            if not code_ok:
+                return {
+                    "chat_id": str(parsed.get("chat_id") or ""),
+                    "text": "Operator code required for this action. Append your operator code, e.g. /upgrade <operator-code> or /pod_repair <deployment> restart <operator-code>.",
+                    "reply_markup": None,
+                    "session_id": "",
+                    "action": "operator_raven_code_required",
+                    "channel_identity": f"operator:telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}",
+                    "telegram_message_id": message_id,
+                    "callback_query_id": str(parsed.get("callback_query_id") or ""),
+                    "callback_message_id": str(parsed.get("callback_message_id") or ""),
+                    "command_scope": None,
+                }
         dispatch_command = _telegram_command_token(dispatch_text.split(maxsplit=1)[0])
-        upgrade_commands = {"/upgrade_check", "/upgrade_hermes", "/hermes_upgrade", "/update"}
+        upgrade_commands = {"/upgrade_check", "/upgrade_hermes", "/hermes_upgrade"}
         upgrade_runner = None
         if dispatch_command in upgrade_commands:
             def upgrade_runner() -> dict[str, Any]:
@@ -1047,13 +1074,23 @@ def _handle_operator_telegram_update(
                 dispatch_text,
                 env=env,
                 upgrade_check_runner=upgrade_runner,
+                actor_id=actor_id,
+                idempotency_key=message_id,
             )
             reply = str(result.get("message") or "Operator Raven command returned no output.")
             action = f"operator_raven_{result.get('command') or 'command'}"
         except Exception as exc:  # noqa: BLE001 - never let public webhook mutate/fail open
             reply = f"Operator Raven command failed closed: {exc}"
             action = "operator_raven_failed_closed"
-    elif command in {"/start", "/help", "/raven", "/operator", "/raven_name", "/commands"} or text:
+    elif command in {"/start", "/help", "/raven", "/operator", "/raven_name", "/commands"}:
+        reply = _operator_raven_intro_reply()
+        action = "operator_raven_intro"
+    elif text:
+        # Free-form operator chat routes to the operator's one Hermes agent when
+        # it is live; otherwise fall back to the Raven control help.
+        routed = _route_operator_free_form_to_agent(conn, parsed)
+        if routed is not None:
+            return routed
         reply = _operator_raven_intro_reply()
         action = "operator_raven_intro"
     else:
@@ -1066,6 +1103,49 @@ def _handle_operator_telegram_update(
         "action": action,
         "channel_identity": f"operator:telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}",
         "telegram_message_id": str(parsed.get("message_id") or parsed.get("telegram_message_id") or ""),
+        "callback_query_id": str(parsed.get("callback_query_id") or ""),
+        "callback_message_id": str(parsed.get("callback_message_id") or ""),
+        "command_scope": None,
+    }
+
+
+def _route_operator_free_form_to_agent(
+    conn: sqlite3.Connection,
+    parsed: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Queue an operator's free-form message for their one Hermes agent.
+
+    Returns a short-circuit webhook result (the gateway-bridge worker replies
+    asynchronously) when a live operator agent exists, else None so the caller
+    falls back to the Raven control intro.
+    """
+    try:
+        from arclink_operator_agent import enqueue_operator_agent_turn, operator_conversation_routable
+
+        if not operator_conversation_routable(conn):
+            return None
+        chat_id = str(parsed.get("chat_id") or "")
+        message_id = str(parsed.get("message_id") or parsed.get("telegram_message_id") or "").strip()
+        queued = enqueue_operator_agent_turn(
+            conn,
+            channel="telegram",
+            channel_identity=f"tg:{parsed.get('chat_id') or parsed.get('user_id') or ''}",
+            text=str(parsed.get("text") or ""),
+            reply_to_message_id=message_id,
+            display_name=str(parsed.get("display_name") or "").strip(),
+        )
+        if queued is None:
+            return None
+    except Exception:  # noqa: BLE001 - never let the operator webhook fail open
+        return None
+    return {
+        "chat_id": chat_id,
+        "text": "",
+        "reply_markup": None,
+        "session_id": "",
+        "action": "operator_agent_turn_queued",
+        "channel_identity": f"operator:telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}",
+        "telegram_message_id": message_id,
         "callback_query_id": str(parsed.get("callback_query_id") or ""),
         "callback_message_id": str(parsed.get("callback_message_id") or ""),
         "command_scope": None,

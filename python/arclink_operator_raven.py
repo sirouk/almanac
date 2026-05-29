@@ -1,8 +1,27 @@
 #!/usr/bin/env python3
-"""Read-only and dry-run Operator Raven command surface."""
+"""Operator Raven command surface: read/dry-run previews plus real action queueing.
+
+Read commands (``status``, ``fleet_list``, ``user_lookup``, ``academy_status``,
+``upgrade_check``, ``action_status``) never mutate. The mutation commands
+(``pod_repair``, ``rollout``, ``host_upgrade``, ``pin_upgrade``) behave in three
+ways:
+
+* ``--dry-run`` -> a preview that changes nothing (the historical behavior).
+* no ``--dry-run`` and no operator ``actor_id`` -> fail closed (read-only
+  refusal). The adapter must prove operator identity before a real action runs.
+* no ``--dry-run`` with an operator ``actor_id`` -> QUEUE a real, audited intent
+  that the ArcLink action worker / enrollment provisioner executes
+  asynchronously, honoring the configured ``ARCLINK_EXECUTOR_ADAPTER`` (``fake``
+  records only). Operator Raven never runs Docker/SSH/provider commands inline;
+  it only queues intents. Live mutation stays gated by the executor adapter and
+  the per-action live proof gate.
+"""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
@@ -21,6 +40,7 @@ class OperatorRavenCommand:
     args: tuple[str, ...]
     dry_run: bool
     raw_text: str
+    component: str = ""
 
 
 _COMMAND_ALIASES = {
@@ -46,10 +66,10 @@ _COMMAND_ALIASES = {
     "user_lookup": "user_lookup",
     "userlookup": "user_lookup",
     "user": "user_lookup",
-    "pod_repair": "pod_repair_dry_run",
-    "podrepair": "pod_repair_dry_run",
-    "repair_pod": "pod_repair_dry_run",
-    "repairpod": "pod_repair_dry_run",
+    "pod_repair": "pod_repair",
+    "podrepair": "pod_repair",
+    "repair_pod": "pod_repair",
+    "repairpod": "pod_repair",
     "operator_upgrade_check": "upgrade_check",
     "operatorupgradecheck": "upgrade_check",
     "upgrade_check": "upgrade_check",
@@ -58,18 +78,66 @@ _COMMAND_ALIASES = {
     "upgradehermes": "upgrade_check",
     "hermes_upgrade": "upgrade_check",
     "hermesupgrade": "upgrade_check",
-    "rollout_plan": "rollout_plan",
-    "rolloutplan": "rollout_plan",
-    "upgrade_plan": "rollout_plan",
-    "upgradeplan": "rollout_plan",
-    "arcpod_rollout": "rollout_plan",
-    "arcpodrollout": "rollout_plan",
+    "host_upgrade": "host_upgrade",
+    "hostupgrade": "host_upgrade",
+    "control_upgrade": "host_upgrade",
+    "controlupgrade": "host_upgrade",
+    "self_upgrade": "host_upgrade",
+    "selfupgrade": "host_upgrade",
+    "apply_upgrade": "host_upgrade",
+    "applyupgrade": "host_upgrade",
+    "upgrade": "host_upgrade",
+    "update": "host_upgrade",
+    "pin_upgrade": "pin_upgrade",
+    "pinupgrade": "pin_upgrade",
+    "component_upgrade": "pin_upgrade",
+    "componentupgrade": "pin_upgrade",
+    "upgrade_component": "pin_upgrade",
+    "upgradecomponent": "pin_upgrade",
+    "rollout_plan": "rollout",
+    "rolloutplan": "rollout",
+    "rollout": "rollout",
+    "rollout_execute": "rollout",
+    "rolloutexecute": "rollout",
+    "rollout_apply": "rollout",
+    "rolloutapply": "rollout",
+    "upgrade_plan": "rollout",
+    "upgradeplan": "rollout",
+    "arcpod_rollout": "rollout",
+    "arcpodrollout": "rollout",
+    "action_status": "action_status",
+    "actionstatus": "action_status",
+    "actions": "action_status",
+    "ops_status": "action_status",
+    "opsstatus": "action_status",
+    "jobs": "action_status",
     "academy_status": "academy_status",
     "academystatus": "academy_status",
     "academy": "academy_status",
     "crew_academy": "academy_status",
     "crewacademy": "academy_status",
 }
+
+# Commands that, outside of --dry-run, queue a real audited intent. The adapter
+# must supply an operator actor identity (and clear any configured approval
+# code) before these run for real.
+MUTATING_COMMANDS = frozenset({"pod_repair", "rollout", "host_upgrade", "pin_upgrade"})
+
+# Pinned components the operator can upgrade through Operator Raven. Mirrors the
+# component-upgrade rails in bin/deploy.sh / bin/component-upgrade.sh.
+PIN_UPGRADE_COMPONENTS = (
+    "hermes",
+    "qmd",
+    "nextcloud",
+    "postgres",
+    "redis",
+    "nvm",
+    "node",
+)
+
+_POD_REPAIR_ACTIONS = ("restart", "reprovision", "dns_repair")
+
+_DRY_RUN_TOKENS = {"--dry-run", "--dry_run", "dry-run", "dry_run"}
 
 _SECRETISH_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|authorization|bearer|oauth|webhook[_-]?secret)"
@@ -90,13 +158,82 @@ def parse_operator_raven_command(text: str) -> OperatorRavenCommand | None:
     name = _COMMAND_ALIASES.get(normalized)
     if not name:
         return None
-    dry_run = any(arg.strip().lower() in {"--dry-run", "--dry_run", "dry-run", "dry_run"} for arg in args)
-    clean_args = tuple(arg for arg in args if arg.strip().lower() not in {"--dry-run", "--dry_run", "dry-run", "dry_run"})
-    return OperatorRavenCommand(name=name, args=clean_args, dry_run=dry_run, raw_text=raw)
+    dry_run = any(arg.strip().lower() in _DRY_RUN_TOKENS for arg in args)
+    clean_args = tuple(arg for arg in args if arg.strip().lower() not in _DRY_RUN_TOKENS)
+    component = _infer_pin_component(normalized, clean_args) if name == "pin_upgrade" else ""
+    return OperatorRavenCommand(
+        name=name,
+        args=clean_args,
+        dry_run=dry_run,
+        raw_text=raw,
+        component=component,
+    )
+
+
+def _infer_pin_component(normalized: str, args: Sequence[str]) -> str:
+    # Use the same option-aware scan as rollout so flags like --batch-size N do
+    # not get mistaken for the component name.
+    candidate = _first_non_option_arg(args).strip().lower()
+    if candidate:
+        return candidate
+    # Allow shorthand like /upgrade_hermes -> component "hermes" if it ever maps
+    # here; today those alias to upgrade_check, but keep the inference robust.
+    for component in PIN_UPGRADE_COMPONENTS:
+        if component in normalized:
+            return component
+    return ""
 
 
 def operator_raven_command_requested(text: str) -> bool:
     return parse_operator_raven_command(text) is not None
+
+
+def operator_raven_command_is_mutating(text: str) -> bool:
+    """True when ``text`` would queue a real action (not a --dry-run preview)."""
+    command = parse_operator_raven_command(text)
+    if command is None:
+        return False
+    return command.name in MUTATING_COMMANDS and not command.dry_run
+
+
+_APPROVAL_CODE_KEYS = ("ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE", "ARCLINK_OPERATOR_APPROVAL_CODE")
+
+
+def operator_approval_code(env: Mapping[str, str] | None = None) -> str:
+    """Resolve the configured operator approval code from an env mapping.
+
+    Returns the first non-blank value of ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE
+    or ARCLINK_OPERATOR_APPROVAL_CODE, or "" when no code is configured (no code
+    required).
+    """
+    source = env or {}
+    for key in _APPROVAL_CODE_KEYS:
+        value = str(source.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def strip_operator_approval_code(text: str, code: str) -> tuple[bool, str]:
+    """Verify and strip a trailing operator approval code.
+
+    When ``code`` is blank no code is required and the text passes through. When
+    a code is configured, the last whitespace-delimited token must match it via
+    a constant-time compare; the verified code is then stripped so the command
+    parser never treats it as an argument. Returns ``(ok, cleaned_text)``.
+    """
+    configured = str(code or "").strip()
+    raw = str(text or "")
+    if not configured:
+        return True, raw
+    stripped = raw.strip()
+    if not stripped:
+        return False, raw
+    head, _, tail = stripped.rpartition(" ")
+    supplied = tail.strip()
+    if not head or not supplied or not hmac.compare_digest(supplied, configured):
+        return False, raw
+    return True, head.strip()
 
 
 def dispatch_operator_raven_command(
@@ -105,6 +242,8 @@ def dispatch_operator_raven_command(
     *,
     env: Mapping[str, str] | None = None,
     upgrade_check_runner: UpgradeCheckRunner | None = None,
+    actor_id: str = "",
+    idempotency_key: str = "",
 ) -> dict[str, Any]:
     command = parse_operator_raven_command(text)
     if command is None:
@@ -114,9 +253,12 @@ def dispatch_operator_raven_command(
         "fleet_list": _handle_fleet_list,
         "worker_probe": _handle_worker_probe,
         "user_lookup": _handle_user_lookup,
-        "pod_repair_dry_run": _handle_pod_repair_dry_run,
+        "pod_repair": _handle_pod_repair,
         "upgrade_check": _handle_upgrade_check,
-        "rollout_plan": _handle_rollout_plan,
+        "host_upgrade": _handle_host_upgrade,
+        "pin_upgrade": _handle_pin_upgrade,
+        "rollout": _handle_rollout,
+        "action_status": _handle_action_status,
         "academy_status": _handle_academy_status,
     }
     result = handlers[command.name](
@@ -124,6 +266,8 @@ def dispatch_operator_raven_command(
         command,
         env=env or {},
         upgrade_check_runner=upgrade_check_runner,
+        actor_id=str(actor_id or "").strip(),
+        idempotency_key=str(idempotency_key or "").strip(),
     )
     result.setdefault("handled", True)
     result.setdefault("command", command.name)
@@ -132,12 +276,38 @@ def dispatch_operator_raven_command(
     return result
 
 
+def _require_operator_actor(actor_id: str, command_label: str) -> dict[str, Any] | None:
+    if actor_id:
+        return None
+    return {
+        "message": (
+            f"{command_label} runs a real, audited action and requires a verified operator identity. "
+            f"This call supplied none, so it failed closed. Preview safely with --dry-run, or run it "
+            f"from the configured operator channel."
+        ),
+    }
+
+
+def _executor_adapter(env: Mapping[str, str]) -> str:
+    return str(env.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower() or "disabled"
+
+
+def _action_idempotency_key(provided: str, *, kind: str, target: str) -> str:
+    clean = str(provided or "").strip()
+    if clean:
+        digest = hashlib.sha256(f"{kind}:{target}:{clean}".encode("utf-8")).hexdigest()[:24]
+        return f"opraven-{kind}-{digest}"
+    return f"opraven-{kind}-{secrets.token_hex(8)}"
+
+
 def _handle_status(
     conn: sqlite3.Connection,
     command: OperatorRavenCommand,
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     from arclink_dashboard import admin_action_execution_readiness, control_node_provisioning_readiness
     from arclink_fleet import fleet_capacity_summary
@@ -158,6 +328,8 @@ def _handle_status(
     rollout_counts = _count_by_status(conn, "arclink_rollouts")
     support = readiness.get("action_support") if isinstance(readiness, Mapping) else {}
     queueable = sum(1 for item in (support or {}).values() if bool(item.get("queueable")))
+    adapter = str(readiness.get("executor_adapter") or "disabled")
+    action_counts = _operator_action_status_counts(conn)
     lines = [
         "Operator Raven status",
         f"Provisioning: {provisioning}",
@@ -165,11 +337,12 @@ def _handle_status(
         f"Users: {_format_counts(user_counts)}",
         f"Deployments: {_format_counts(deployment_counts)}",
         f"Rollouts: {_format_counts(rollout_counts)}",
-        f"Admin actions: {queueable} queueable via {readiness.get('executor_adapter', 'disabled')}",
-        "Rollout control: dry-run plans and explicit fake/local batch records only; use /rollout_plan <target-version> --dry-run",
-        "Academy: use /academy_status <user-id|email> for local Crew Training review state",
-        "Live proof still required: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
-        "Next: /operator_fleet, /user_lookup <query>, /academy_status <query>, /pod_repair <deployment> --dry-run, /rollout_plan <target> --dry-run, /upgrade_check",
+        f"Admin actions: {queueable} queueable via {adapter}",
+        f"Queued/running operator actions: {_format_counts(action_counts)}",
+        "Live actions honor ARCLINK_EXECUTOR_ADAPTER (fake = record-only); set it to local/ssh after the live proof gate.",
+        "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component> (add --dry-run to preview)",
+        "Next: /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
+        "Live proof still required for live mutation: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
     ]
     return {
         "message": "\n".join(lines),
@@ -184,6 +357,8 @@ def _handle_fleet_list(
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     from arclink_fleet import list_fleet_hosts
 
@@ -211,6 +386,8 @@ def _handle_worker_probe(
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     if not command.dry_run:
         return {
@@ -238,6 +415,8 @@ def _handle_user_lookup(
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     query = " ".join(command.args).strip()
     if not query:
@@ -270,6 +449,8 @@ def _handle_academy_status(
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     query = " ".join(command.args).strip()
     if not query:
@@ -302,42 +483,104 @@ def _handle_academy_status(
     return {"message": "\n".join(lines), "academy": payloads}
 
 
-def _handle_pod_repair_dry_run(
+def _handle_pod_repair(
     conn: sqlite3.Connection,
     command: OperatorRavenCommand,
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
-    if not command.dry_run:
-        return {
-            "message": "Pod repair is dry-run only in this Operator Raven slice. Use /pod_repair <deployment-id> --dry-run.",
-        }
     deployment_id = command.args[0] if command.args else ""
     if not deployment_id:
-        return {"message": "Use /pod_repair <deployment-id> --dry-run."}
+        return {"message": "Use /pod_repair <deployment-id> [restart|reprovision|dns_repair] (add --dry-run to preview)."}
     deployment = _find_deployment(conn, deployment_id)
     if deployment is None:
-        return {"message": f"Pod repair dry-run: no deployment matched {deployment_id}."}
+        return {"message": f"Pod repair: no deployment matched {deployment_id}."}
+
     from arclink_dashboard import admin_action_execution_readiness
 
     readiness = admin_action_execution_readiness(env=env)
     support = readiness.get("action_support", {})
     candidates = [
-        name for name in ("restart", "reprovision", "dns_repair")
+        name for name in _POD_REPAIR_ACTIONS
         if bool((support.get(name) or {}).get("queueable"))
     ]
-    if not candidates:
-        candidates_text = "no repair actions are queueable until executor probes pass"
-    else:
-        candidates_text = ", ".join(candidates)
+    requested_action = _selected_pod_repair_action(command.args)
+    default_action = requested_action or (candidates[0] if candidates else "restart")
+
+    if command.dry_run:
+        candidates_text = ", ".join(candidates) if candidates else "no repair actions are queueable until executor probes pass"
+        would_queue = default_action if default_action in candidates else f"{default_action} (blocked until executor probes pass)"
+        lines = [
+            "Pod repair dry-run",
+            f"Deployment: {deployment.get('deployment_id')} status={deployment.get('status')} user={deployment.get('user_id')}",
+            f"Candidate local actions: {candidates_text}",
+            f"Would queue: {would_queue}",
+            "No action was queued and no deployment, Docker, DNS, SSH, or provider state was changed.",
+        ]
+        return {"message": "\n".join(lines), "deployment": deployment}
+
+    blocked = _require_operator_actor(actor_id, "Pod repair")
+    if blocked is not None:
+        return blocked
+
+    action_type = default_action
+    if action_type not in _POD_REPAIR_ACTIONS:
+        return {"message": f"Pod repair: unknown action {action_type}. Choose one of {', '.join(_POD_REPAIR_ACTIONS)}."}
+    if action_type not in candidates:
+        gate = str((support.get(action_type) or {}).get("live_proof_gate") or "PG-PROVISION")
+        adapter = _executor_adapter(env)
+        return {
+            "message": (
+                f"Pod repair blocked: {action_type} is not queueable with executor adapter '{adapter}'. "
+                f"Set ARCLINK_EXECUTOR_ADAPTER and clear the {gate} proof gate first. No action was queued."
+            ),
+        }
+
+    target_kind = "deployment"
+    key = _action_idempotency_key(idempotency_key, kind=f"podrepair-{action_type}", target=str(deployment.get("deployment_id")))
+    reason = f"Operator Raven pod_repair {action_type} for {deployment.get('deployment_id')}"
+    already_queued = _admin_action_intent_exists(conn, key)
+    try:
+        from arclink_dashboard import queue_arclink_admin_action
+
+        intent = queue_arclink_admin_action(
+            conn,
+            admin_id=actor_id,
+            action_type=action_type,
+            target_kind=target_kind,
+            target_id=str(deployment.get("deployment_id")),
+            reason=reason,
+            idempotency_key=key,
+            metadata={"source": "operator_raven", "actor_id": actor_id, "requested_by": actor_id},
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed and surface the boundary
+        return {"message": f"Pod repair failed closed: {exc}"}
+    adapter = _executor_adapter(env)
+    record_only = adapter == "fake"
+    queued_note = "already queued (idempotent)" if already_queued else "queued"
     lines = [
-        "Pod repair dry-run",
-        f"Deployment: {deployment.get('deployment_id')} status={deployment.get('status')} user={deployment.get('user_id')}",
-        f"Candidate local actions: {candidates_text}",
-        "No action was queued and no deployment, Docker, DNS, SSH, or provider state was changed.",
+        f"Operator Raven pod repair {queued_note}",
+        f"Deployment: {deployment.get('deployment_id')} action={action_type}",
+        f"Action id: {intent.get('action_id')} status={intent.get('status')}",
+        f"Executor adapter: {adapter}{' (record-only)' if record_only else ''}",
+        "The ArcLink action worker will execute this intent. Track it with /action_status.",
     ]
-    return {"message": "\n".join(lines), "deployment": deployment}
+    return {
+        "message": "\n".join(lines),
+        "mutation_performed": not already_queued,
+        "action_intent": intent,
+    }
+
+
+def _selected_pod_repair_action(args: Sequence[str]) -> str:
+    for arg in args[1:]:
+        value = str(arg or "").strip().lower().replace("-", "_")
+        if value in _POD_REPAIR_ACTIONS:
+            return value
+    return ""
 
 
 def _handle_upgrade_check(
@@ -346,6 +589,8 @@ def _handle_upgrade_check(
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
     if upgrade_check_runner is None:
         return {
@@ -369,36 +614,143 @@ def _handle_upgrade_check(
         lines.append(f"Available: {available[:12]}")
     if note:
         lines.append(f"Note: {note}")
-    lines.append("No upgrade was queued or run.")
+    lines.append("No upgrade was queued or run. Run /upgrade to apply the host upgrade, or /pin_upgrade <component>.")
     return {"message": "\n".join(lines), "upgrade": result}
 
 
-def _handle_rollout_plan(
+def _handle_host_upgrade(
     conn: sqlite3.Connection,
     command: OperatorRavenCommand,
     *,
     env: Mapping[str, str],
     upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
 ) -> dict[str, Any]:
-    if not command.dry_run:
+    if command.dry_run:
         return {
-            "message": "ArcPod rollout planning is dry-run only in this Operator Raven slice. Use /rollout_plan <target-version> --dry-run.",
+            "message": (
+                "Host upgrade dry-run: would queue an operator 'upgrade' action that the root maintenance loop "
+                "executes (git pull + control/docker upgrade + reconcile + health). No action was queued."
+            ),
         }
+    blocked = _require_operator_actor(actor_id, "Host upgrade")
+    if blocked is not None:
+        return blocked
+    # Host/component upgrades use the operator-action queue, which the root
+    # maintenance loop / enrollment provisioner drains through the upgrade
+    # broker -- not ARCLINK_EXECUTOR_ADAPTER. There is no executor-adapter gate
+    # to check here; the action is always queueable and brokered.
+    try:
+        from arclink_control import request_operator_action
+
+        action_row, created = request_operator_action(
+            conn,
+            action_kind="upgrade",
+            requested_by=actor_id,
+            request_source="operator-raven",
+            requested_target="",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"Could not queue ArcLink upgrade: {exc}"}
+    status = str(action_row.get("status") or "pending")
+    if created:
+        message = "Operator Raven queued an ArcLink upgrade/repair. The root maintenance loop will pick it up within about a minute. Track it with /action_status."
+    elif status == "running":
+        message = "ArcLink upgrade is already running. Track it with /action_status."
+    else:
+        message = "ArcLink upgrade is already queued. Track it with /action_status."
+    return {
+        "message": message,
+        "mutation_performed": bool(created),
+        "operator_action": action_row,
+    }
+
+
+def _handle_pin_upgrade(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    component = str(command.component or "").strip().lower()
+    if not component:
+        return {
+            "message": (
+                "Use /pin_upgrade <component>. Components: " + ", ".join(PIN_UPGRADE_COMPONENTS) + "."
+            ),
+        }
+    if component not in PIN_UPGRADE_COMPONENTS:
+        return {
+            "message": (
+                f"Pin upgrade: unknown component '{component}'. Choose one of {', '.join(PIN_UPGRADE_COMPONENTS)}."
+            ),
+        }
+    if command.dry_run:
+        return {
+            "message": (
+                f"Pin upgrade dry-run for {component}: would queue an operator 'pin-upgrade' action that the root "
+                f"maintenance loop applies (config/pins.json bump + component upgrade). No action was queued."
+            ),
+        }
+    blocked = _require_operator_actor(actor_id, "Pin upgrade")
+    if blocked is not None:
+        return blocked
+    try:
+        from arclink_control import request_operator_action
+
+        action_row, created = request_operator_action(
+            conn,
+            action_kind="pin-upgrade",
+            requested_by=actor_id,
+            request_source="operator-raven",
+            requested_target=component,
+            dedupe_by_target=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"Could not queue pinned-component upgrade: {exc}"}
+    status = str(action_row.get("status") or "pending")
+    if created:
+        message = f"Operator Raven queued a pinned-component upgrade for {component}. The root maintenance loop will apply it. Track it with /action_status."
+    elif status == "running":
+        message = f"A {component} pinned-component upgrade is already running. Track it with /action_status."
+    else:
+        message = f"A {component} pinned-component upgrade is already queued. Track it with /action_status."
+    return {
+        "message": message,
+        "mutation_performed": bool(created),
+        "operator_action": action_row,
+    }
+
+
+def _handle_rollout(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
     target_version = _first_non_option_arg(command.args) or str(env.get("ARCLINK_ROLLOUT_TARGET_VERSION") or "").strip()
     if not target_version:
-        return {"message": "Use /rollout_plan <target-version> --dry-run."}
-    from arclink_rollout import ArcLinkRolloutError, plan_arcpod_update_rollout
-
+        return {"message": "Use /rollout <target-version> [--batch-size N] (add --dry-run to preview the batches)."}
     try:
         batch_size = _batch_size_arg(command.args)
     except OperatorRavenError as exc:
         return {
             "message": (
-                "Operator Raven rollout plan dry-run\n"
+                "Operator Raven rollout\n"
                 f"Status: blocked\nTarget: {target_version}\nRepair: {exc}\n"
                 "No rollout or action was queued."
             ),
         }
+
+    from arclink_rollout import ArcLinkRolloutError, plan_arcpod_update_rollout
+
     try:
         plan = plan_arcpod_update_rollout(
             conn,
@@ -409,32 +761,150 @@ def _handle_rollout_plan(
     except ArcLinkRolloutError as exc:
         return {
             "message": (
-                "Operator Raven rollout plan dry-run\n"
+                "Operator Raven rollout\n"
                 f"Status: blocked\nTarget: {target_version}\nRepair: {exc}\n"
                 "No rollout or action was queued."
             ),
         }
-    lines = [
-        "Operator Raven rollout plan dry-run",
-        f"Target: {plan['target_version']}",
-        f"Status: {plan['status']}",
-        f"Candidates: {plan['candidate_count']} ready={plan['ready_count']} blocked={plan['blocked_count']}",
-        f"Batches: {plan['batch_count']} at batch size {plan['batch_size']}",
-        f"Stop on failure: {str(bool(plan['stop_on_failure'])).lower()}",
-        f"Proof gate: {plan['proof_gate']}",
-    ]
+
+    if command.dry_run:
+        lines = [
+            "Operator Raven rollout plan dry-run",
+            f"Target: {plan['target_version']}",
+            f"Status: {plan['status']}",
+            f"Candidates: {plan['candidate_count']} ready={plan['ready_count']} blocked={plan['blocked_count']}",
+            f"Batches: {plan['batch_count']} at batch size {plan['batch_size']}",
+            f"Stop on failure: {str(bool(plan['stop_on_failure'])).lower()}",
+            f"Proof gate: {plan['proof_gate']}",
+        ]
+        if plan["status"] == "blocked":
+            for item in plan.get("repair_summary", [])[:5]:
+                lines.append(f"Repair: {item}")
+        else:
+            for batch in plan.get("batches", [])[:5]:
+                lines.append(f"Batch {batch['batch_index']}: {', '.join(batch['deployment_ids'])}")
+        lines.append("No rollout or action was queued. Re-run without --dry-run to queue the rollout.")
+        return {"message": "\n".join(lines), "rollout_plan": plan}
+
+    blocked = _require_operator_actor(actor_id, "Rollout")
+    if blocked is not None:
+        return blocked
     if plan["status"] == "blocked":
+        lines = [
+            "Operator Raven rollout blocked",
+            f"Target: {plan['target_version']}",
+            f"Candidates: {plan['candidate_count']} ready={plan['ready_count']} blocked={plan['blocked_count']}",
+        ]
         for item in plan.get("repair_summary", [])[:5]:
             lines.append(f"Repair: {item}")
-    else:
-        for batch in plan.get("batches", [])[:5]:
-            lines.append(f"Batch {batch['batch_index']}: {', '.join(batch['deployment_ids'])}")
-    lines.append("No rollout or action was queued.")
-    return {"message": "\n".join(lines), "rollout_plan": plan}
+        lines.append("No rollout or action was queued.")
+        return {"message": "\n".join(lines), "rollout_plan": plan}
+
+    from arclink_dashboard import admin_action_execution_readiness
+
+    readiness = admin_action_execution_readiness(env=env)
+    rollout_support = (readiness.get("action_support", {}) or {}).get("rollout") or {}
+    if not bool(rollout_support.get("queueable")):
+        adapter = _executor_adapter(env)
+        gate = str(rollout_support.get("live_proof_gate") or "PG-UPGRADE/PG-HERMES")
+        return {
+            "message": (
+                f"Rollout blocked: not queueable with executor adapter '{adapter}'. "
+                f"Set ARCLINK_EXECUTOR_ADAPTER and clear the {gate} proof gate first. No rollout was queued."
+            ),
+        }
+
+    execute_local_batch = _has_execute_batch_flag(command.args)
+    key = _action_idempotency_key(idempotency_key, kind="rollout", target=str(target_version))
+    metadata: dict[str, Any] = {
+        "target_version": target_version,
+        "source": "operator_raven",
+        "actor_id": actor_id,
+    }
+    if batch_size is not None:
+        metadata["batch_size"] = batch_size
+    if execute_local_batch:
+        metadata["execute_local_batch"] = True
+    already_queued = _admin_action_intent_exists(conn, key)
+    try:
+        from arclink_dashboard import queue_arclink_admin_action
+
+        intent = queue_arclink_admin_action(
+            conn,
+            admin_id=actor_id,
+            action_type="rollout",
+            target_kind="system",
+            target_id="arcpod-fleet",
+            reason=f"Operator Raven rollout to {target_version}",
+            idempotency_key=key,
+            metadata=metadata,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"Rollout failed closed: {exc}"}
+    adapter = _executor_adapter(env)
+    queued_note = "already queued (idempotent)" if already_queued else "queued"
+    lines = [
+        f"Operator Raven rollout {queued_note}",
+        f"Target: {target_version}",
+        f"Candidates: {plan['candidate_count']} ready={plan['ready_count']} blocked={plan['blocked_count']}",
+        f"Batches: {plan['batch_count']} at batch size {plan['batch_size']}",
+        f"Action id: {intent.get('action_id')} status={intent.get('status')}",
+        f"Executor adapter: {adapter}{' (record-only)' if adapter == 'fake' else ''}",
+        "The ArcLink action worker will materialize the rollout. Live Pod refresh stays PG-UPGRADE gated. Track it with /action_status.",
+    ]
+    return {
+        "message": "\n".join(lines),
+        "mutation_performed": not already_queued,
+        "rollout_plan": plan,
+        "action_intent": intent,
+    }
+
+
+def _handle_action_status(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    target = command.args[0].strip() if command.args else ""
+    lines = ["Operator Raven action status"]
+    intents = _recent_action_intents(conn, action_id=target)
+    operator_actions = _recent_operator_actions(conn)
+    if not intents and not operator_actions:
+        lines.append("No queued action intents or operator actions are on record.")
+        return {"message": "\n".join(lines), "action_intents": [], "operator_actions": []}
+    if intents:
+        lines.append("Admin action intents:")
+        for row in intents:
+            lines.append(
+                f"- {row.get('action_id')}: {row.get('action_type')} {row.get('target_kind')}:{row.get('target_id')} "
+                f"status={row.get('status')} by={row.get('admin_id')}"
+            )
+    if operator_actions:
+        lines.append("Operator actions:")
+        for row in operator_actions:
+            lines.append(
+                f"- #{row.get('id')}: {row.get('action_kind')}"
+                f"{(' ' + str(row.get('requested_target'))) if row.get('requested_target') else ''} "
+                f"status={row.get('status')} by={row.get('requested_by')}"
+            )
+    return {
+        "message": "\n".join(lines),
+        "action_intents": intents,
+        "operator_actions": operator_actions,
+    }
 
 
 def _truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _has_execute_batch_flag(args: Sequence[str]) -> bool:
+    flags = {"--execute", "--execute-batch", "--execute_batch", "--execute-local-batch", "--apply-batch"}
+    return any(str(arg or "").strip().lower() in flags for arg in args)
 
 
 def _first_non_option_arg(args: Sequence[str]) -> str:
@@ -481,6 +951,12 @@ def _safe_call(func: Callable[[], Any], *, default: Any) -> Any:
         return default
 
 
+def _format_counts(counts: Mapping[str, int]) -> str:
+    if not counts:
+        return "none"
+    return ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+
+
 def _count_by_status(conn: sqlite3.Connection, table: str) -> dict[str, int]:
     if table not in {"arclink_users", "arclink_deployments", "arclink_rollouts"}:
         return {}
@@ -491,10 +967,68 @@ def _count_by_status(conn: sqlite3.Connection, table: str) -> dict[str, int]:
     return {str(row["status"] or "unknown"): int(row["count"] or 0) for row in rows}
 
 
-def _format_counts(counts: Mapping[str, int]) -> str:
-    if not counts:
-        return "none"
-    return ", ".join(f"{status}={count}" for status, count in sorted(counts.items()))
+def _operator_action_status_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    try:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM operator_actions WHERE status IN ('pending','running') GROUP BY status ORDER BY status"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(row["status"] or "unknown"): int(row["count"] or 0) for row in rows}
+
+
+def _admin_action_intent_exists(conn: sqlite3.Connection, idempotency_key: str) -> bool:
+    clean = str(idempotency_key or "").strip()
+    if not clean:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM arclink_action_intents WHERE idempotency_key = ? LIMIT 1",
+            (clean,),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _recent_action_intents(conn: sqlite3.Connection, *, action_id: str = "") -> list[dict[str, Any]]:
+    try:
+        if action_id:
+            rows = conn.execute(
+                """
+                SELECT action_id, admin_id, action_type, target_kind, target_id, status
+                FROM arclink_action_intents
+                WHERE action_id = ?
+                """,
+                (action_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT action_id, admin_id, action_type, target_kind, target_id, status
+                FROM arclink_action_intents
+                ORDER BY created_at DESC, action_id DESC
+                LIMIT 8
+                """
+            ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(row) for row in rows]
+
+
+def _recent_operator_actions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, action_kind, requested_target, requested_by, status
+            FROM operator_actions
+            ORDER BY id DESC
+            LIMIT 8
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(row) for row in rows]
 
 
 def _find_fleet_host(conn: sqlite3.Connection, target: str) -> dict[str, Any] | None:

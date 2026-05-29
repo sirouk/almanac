@@ -2123,6 +2123,18 @@ docker_curator_setup() {
   echo "Docker Curator runtime assets refreshed. Curator-profile services were started when their configured credentials allow them to run."
 }
 
+docker_operator_agent_setup() {
+  # Ensure the operator's single outer Hermes agent (one ArcLink arcpod owned by
+  # the operator's selected ArcLink user) exists. Idempotent; --require-enabled
+  # makes it a no-op unless ARCLINK_OPERATOR_AGENT_ENABLED is set. The reserved
+  # arcpod is provisioned and maintained by the same fleet pipeline as Captains.
+  prepare_compose
+  compose up -d --no-build agent-supervisor
+  compose exec -T agent-supervisor env PYTHONPATH=/home/arclink/arclink/python \
+    python3 /home/arclink/arclink/python/arclink_operator_agent.py ensure --require-enabled "$@" || true
+  echo "Operator Hermes agent ensured (one agent; provisioned and maintained like a fleet arcpod)."
+}
+
 docker_rotate_nextcloud_secrets() {
   local new_postgres_password="" new_admin_password="" masked_postgres="" masked_admin="" confirm_text=""
   local pg_user="" pg_db="" admin_user=""
@@ -2365,6 +2377,9 @@ main() {
       ;;
     curator-setup)
       docker_curator_setup "$@"
+      ;;
+    operator-agent-setup)
+      docker_operator_agent_setup "$@"
       ;;
     rotate-nextcloud-secrets)
       docker_rotate_nextcloud_secrets "$@"

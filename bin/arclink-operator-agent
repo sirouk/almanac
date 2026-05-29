@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Manage the operator's single outer Hermes agent (the one ArcLink arcpod the
+# operator gets, maintained like any Captain pod). Thin wrapper around
+# python/arclink_operator_agent.py. Typical use from control onboarding:
+#   arclink-operator-agent ensure --user-id operator --email ops@example.com
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
+
+export PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}"
+PYTHON_BIN="$(resolve_runtime_python)"
+exec "$PYTHON_BIN" "$BOOTSTRAP_DIR/python/arclink_operator_agent.py" "$@"

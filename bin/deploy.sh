@@ -186,6 +186,10 @@ ARCLINK_AUTO_PROVISION_RETRY_BASE_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_BASE_S
 ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS="${ARCLINK_AUTO_PROVISION_RETRY_MAX_SECONDS:-900}"
 OPERATOR_NOTIFY_CHANNEL_PLATFORM="${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
 OPERATOR_NOTIFY_CHANNEL_ID="${OPERATOR_NOTIFY_CHANNEL_ID:-}"
+ARCLINK_OPERATOR_AGENT_ENABLED="${ARCLINK_OPERATOR_AGENT_ENABLED:-0}"
+ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
+ARCLINK_OPERATOR_AGENT_EMAIL="${ARCLINK_OPERATOR_AGENT_EMAIL:-}"
+ARCLINK_OPERATOR_AGENT_DISPLAY_NAME="${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}"
 OPERATOR_GENERAL_CHANNEL_PLATFORM="${OPERATOR_GENERAL_CHANNEL_PLATFORM:-}"
 OPERATOR_GENERAL_CHANNEL_ID="${OPERATOR_GENERAL_CHANNEL_ID:-}"
 TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
@@ -2407,6 +2411,10 @@ emit_runtime_config() {
     write_kv OPERATOR_NOTIFY_CHANNEL_PLATFORM "${OPERATOR_NOTIFY_CHANNEL_PLATFORM:-tui-only}"
     write_kv OPERATOR_NOTIFY_CHANNEL_ID "${OPERATOR_NOTIFY_CHANNEL_ID:-}"
     write_kv ARCLINK_OPERATOR_TELEGRAM_USER_IDS "${ARCLINK_OPERATOR_TELEGRAM_USER_IDS:-}"
+    write_kv ARCLINK_OPERATOR_AGENT_ENABLED "${ARCLINK_OPERATOR_AGENT_ENABLED:-0}"
+    write_kv ARCLINK_OPERATOR_AGENT_USER_ID "${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
+    write_kv ARCLINK_OPERATOR_AGENT_EMAIL "${ARCLINK_OPERATOR_AGENT_EMAIL:-}"
+    write_kv ARCLINK_OPERATOR_AGENT_DISPLAY_NAME "${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}"
     write_kv ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED "${ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED:-}"
     write_kv ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED "${ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED:-}"
     write_kv ARCLINK_ONBOARDING_WINDOW_SECONDS "${ARCLINK_ONBOARDING_WINDOW_SECONDS:-3600}"
@@ -10158,6 +10166,23 @@ collect_control_install_answers() {
     fi
   fi
 
+  # The operator gets exactly one outer Hermes agent: a single ArcLink arcpod,
+  # owned by an ArcLink user selected here, provisioned and maintained like any
+  # Captain pod. The operator talks to it from the operator channel; slash
+  # commands still drive Operator Raven controls.
+  if [[ "$OPERATOR_NOTIFY_CHANNEL_PLATFORM" != "tui-only" ]]; then
+    if [[ "$(ask_yes_no "Give the operator a dedicated Hermes agent (one arcpod, maintained like the fleet)?" "${ARCLINK_OPERATOR_AGENT_ENABLED:-0}")" == "1" ]]; then
+      ARCLINK_OPERATOR_AGENT_ENABLED="1"
+      ARCLINK_OPERATOR_AGENT_USER_ID="$(normalize_optional_answer "$(ask "ArcLink user id that owns the operator Hermes agent" "${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}")")"
+      ARCLINK_OPERATOR_AGENT_USER_ID="${ARCLINK_OPERATOR_AGENT_USER_ID:-operator}"
+      ARCLINK_OPERATOR_AGENT_EMAIL="$(normalize_optional_answer "$(ask "Operator contact email for that user (optional)" "${ARCLINK_OPERATOR_AGENT_EMAIL:-}")")"
+      ARCLINK_OPERATOR_AGENT_DISPLAY_NAME="$(normalize_optional_answer "$(ask "Display name for the operator agent" "${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}")")"
+      ARCLINK_OPERATOR_AGENT_DISPLAY_NAME="${ARCLINK_OPERATOR_AGENT_DISPLAY_NAME:-ArcLink Operator}"
+    else
+      ARCLINK_OPERATOR_AGENT_ENABLED="0"
+    fi
+  fi
+
   write_docker_runtime_config "$docker_env"
   CONFIG_TARGET="$docker_env"
   echo
@@ -10334,9 +10359,23 @@ run_control_install_flow() {
   run_arclink_docker record-release
   run_arclink_docker ports
   run_arclink_docker health
+  ensure_control_operator_agent
   print_control_provisioning_readiness_summary
   finish_deploy_operation
   trap 'arclink_deploy_stable_copy_cleanup' EXIT
+}
+
+ensure_control_operator_agent() {
+  # Provision the operator's single Hermes agent (one ArcLink arcpod) when the
+  # operator opted in during onboarding. Idempotent and best-effort: the reserved
+  # arcpod is then built and maintained by the same fleet pipeline as Captains.
+  if [[ "${ARCLINK_OPERATOR_AGENT_ENABLED:-0}" != "1" ]]; then
+    return 0
+  fi
+  echo "Ensuring the operator's single Hermes agent (one arcpod, maintained like the fleet)..."
+  if ! run_arclink_docker operator-agent-setup; then
+    echo "Operator Hermes agent setup did not complete; re-run 'deploy.sh control upgrade' once the stack is healthy." >&2
+  fi
 }
 
 run_control_reconfigure_flow() {

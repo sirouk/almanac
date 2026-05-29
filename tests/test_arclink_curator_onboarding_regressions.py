@@ -471,8 +471,9 @@ def test_telegram_operator_upgrade_command_queues_upgrade_action() -> None:
             expect(row is not None, "expected /upgrade to queue an operator upgrade action")
             expect(row["requested_target"] == "", str(dict(row)))
             expect(row["requested_by"] == "@operator", str(dict(row)))
-            expect(row["request_source"] == "telegram-command", str(dict(row)))
-            expect(outbound and "Queued ArcLink upgrade/repair" in outbound[0], str(outbound))
+            # /upgrade is now a first-class Operator Raven action on every operator surface.
+            expect(row["request_source"] == "operator-raven", str(dict(row)))
+            expect(outbound and "queued an ArcLink upgrade/repair" in outbound[0], str(outbound))
             print("PASS test_telegram_operator_upgrade_command_queues_upgrade_action")
         finally:
             os.environ.clear()

@@ -43,7 +43,10 @@ from arclink_onboarding_flow import (
 )
 from arclink_operator_raven import (
     dispatch_operator_raven_command,
+    operator_approval_code,
+    operator_raven_command_is_mutating,
     operator_raven_command_requested,
+    strip_operator_approval_code,
 )
 
 
@@ -255,10 +258,29 @@ async def main() -> None:
             return False
         return True
 
-    def _operator_raven_response(content: str) -> str:
+    def _operator_raven_response(content: str, *, actor_id: str = "", message_id: str = "") -> str:
         try:
+            dispatch_text = content
+            if operator_raven_command_is_mutating(content):
+                if not actor_id:
+                    return (
+                        "This Operator Raven action runs for real and must come from the operator channel "
+                        "with an identified operator. It was refused."
+                    )
+                code_ok, dispatch_text = strip_operator_approval_code(content, operator_approval_code(os.environ))
+                if not code_ok:
+                    return (
+                        "Operator code required for this action. Append your operator code, "
+                        "e.g. /upgrade <operator-code> or /pod_repair <deployment> restart <operator-code>."
+                    )
             with connect_db(cfg) as conn:
-                result = dispatch_operator_raven_command(conn, content, env=os.environ)
+                result = dispatch_operator_raven_command(
+                    conn,
+                    dispatch_text,
+                    env=os.environ,
+                    actor_id=actor_id,
+                    idempotency_key=message_id,
+                )
             return str(result.get("message") or "Operator Raven command returned no output.")
         except Exception as exc:  # noqa: BLE001
             return f"Operator Raven command failed closed: {exc}"
@@ -373,15 +395,18 @@ async def main() -> None:
         parts = content.strip().split(maxsplit=2)
         command = parts[0].lower() if parts else ""
         if operator_raven_command_requested(content):
-            await message.channel.send(_operator_raven_response(content))
-            return True
-
-        if command == "/upgrade":
-            actor = _format_actor_label(message.author)
             await message.channel.send(
-                _queue_upgrade_operator_action(actor=actor, request_source="discord-command")
+                _operator_raven_response(
+                    content,
+                    actor_id=_format_actor_label(message.author),
+                    message_id=str(getattr(message, "id", "") or ""),
+                )
             )
             return True
+
+        # /upgrade is now a first-class Operator Raven command (host_upgrade)
+        # handled by the operator_raven_command_requested branch above. The
+        # registered /upgrade slash command still uses the operator-action queue.
 
         if command in {"/retry-contact", "/retry_contact"}:
             retry_parts = content.strip().split(maxsplit=1)
@@ -402,6 +427,34 @@ async def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 await message.channel.send(f"Could not retry contact: {exc}")
             return True
+
+        if not content.startswith("/"):
+            # Free-form operator chat routes to the operator's one Hermes agent
+            # when it is live; the gateway-bridge worker replies asynchronously.
+            try:
+                from arclink_operator_agent import (
+                    enqueue_operator_agent_turn,
+                    operator_conversation_routable,
+                )
+
+                with connect_db(cfg) as conn:
+                    if operator_conversation_routable(conn):
+                        queued = enqueue_operator_agent_turn(
+                            conn,
+                            channel="discord",
+                            channel_identity=f"discord:{getattr(message.author, 'id', '')}",
+                            text=content,
+                            reply_to_message_id=str(getattr(message, "id", "") or ""),
+                            display_name=_format_actor_label(message.author),
+                            discord_channel_id=str(getattr(message.channel, "id", "") or ""),
+                            discord_user_id=str(getattr(message.author, "id", "") or ""),
+                            discord_chat_type="guild" if getattr(message, "guild", None) is not None else "dm",
+                        )
+                        if queued is not None:
+                            return True
+            except Exception:  # noqa: BLE001 - never let the operator channel fail open
+                pass
+            return False
 
         if command not in {"/approve", "/deny"}:
             return False

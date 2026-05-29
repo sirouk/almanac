@@ -49,7 +49,9 @@ from arclink_onboarding_flow import (
 )
 from arclink_operator_raven import (
     dispatch_operator_raven_command,
+    operator_raven_command_is_mutating,
     operator_raven_command_requested,
+    strip_operator_approval_code,
 )
 from arclink_telegram import (
     telegram_answer_callback_query,
@@ -310,41 +312,35 @@ def _handle_operator_command(
     command = _telegram_command_token(parts[0] if parts else "")
     operator_chat_id = str((message.get("chat") or {}).get("id") or "")
     if operator_raven_command_requested(text):
+        actor = _format_actor_label(message)
+        message_id = str((message.get("message_id") or "")).strip()
+        dispatch_text = text
+        if operator_raven_command_is_mutating(text):
+            code_ok, dispatch_text = strip_operator_approval_code(text, _operator_approval_code())
+            if not code_ok:
+                send_text(
+                    bot_token,
+                    operator_chat_id,
+                    "Operator code required for this action. Append your operator code, e.g. /upgrade <operator-code> or /pod_repair <deployment> restart <operator-code>.",
+                )
+                return
         try:
             with connect_db(cfg) as conn:
-                result = dispatch_operator_raven_command(conn, text, env=os.environ)
+                result = dispatch_operator_raven_command(
+                    conn,
+                    dispatch_text,
+                    env=os.environ,
+                    actor_id=actor,
+                    idempotency_key=message_id,
+                )
             send_text(bot_token, operator_chat_id, str(result.get("message") or "Operator Raven command returned no output."))
         except Exception as exc:  # noqa: BLE001
             send_text(bot_token, operator_chat_id, f"Operator Raven command failed closed: {exc}")
         return
 
-    if command == "/upgrade":
-        if not _operator_command_code_ok(command=command, text=text, bot_token=bot_token, operator_chat_id=operator_chat_id):
-            return
-        actor = _format_actor_label(message)
-        try:
-            with connect_db(cfg) as conn:
-                action_row, created = request_operator_action(
-                    conn,
-                    action_kind="upgrade",
-                    requested_by=actor,
-                    request_source="telegram-command",
-                    requested_target="",
-                )
-            status = str(action_row.get("status") or "pending")
-            if created:
-                send_text(
-                    bot_token,
-                    operator_chat_id,
-                    "Queued ArcLink upgrade/repair. The root maintenance loop will pick it up within about a minute.",
-                )
-            elif status == "running":
-                send_text(bot_token, operator_chat_id, "ArcLink upgrade is already running.")
-            else:
-                send_text(bot_token, operator_chat_id, "ArcLink upgrade is already queued.")
-        except Exception as exc:  # noqa: BLE001
-            send_text(bot_token, operator_chat_id, f"Could not queue ArcLink upgrade: {exc}")
-        return
+    # /upgrade is now a first-class Operator Raven command (host_upgrade) handled
+    # by the operator_raven_command_requested branch above, so it routes through
+    # the same actor + approval-code gate as every other operator action.
 
     if command in {"/retry-contact", "/retry_contact"}:
         retry_parts = text.strip().split(maxsplit=2)

@@ -165,7 +165,9 @@ def test_operator_raven_status_is_read_only_and_truthful() -> None:
         expect(before_actions == after_actions, "status command must not queue an action")
         expect("Operator Raven status" in text, text)
         expect("ready to provision ArcPods" in text, text)
-        expect("Rollouts:" in text and "fake/local batch records only" in text, text)
+        expect("Rollouts:" in text and "honor ARCLINK_EXECUTOR_ADAPTER" in text, text)
+        expect("Queued/running operator actions:" in text, text)
+        expect("/pod_repair" in text and "/rollout" in text and "/upgrade" in text, text)
         expect(result["provisioning_readiness"]["state"] == "ready_to_provision", str(result["provisioning_readiness"]))
         expect(result["provisioning_readiness"]["live_proof_required"] is True, str(result["provisioning_readiness"]))
         expect("PG-PROD" in text and "PG-UPGRADE" in text, text)
@@ -206,10 +208,12 @@ def test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secret
         expect("secret://" not in user["message"], user["message"])
 
         before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        # No --dry-run and no operator actor identity must fail closed and queue nothing.
         blocked = raven.dispatch_operator_raven_command(conn, "/pod_repair dep-alex")
         after_blocked = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
-        expect("dry-run only" in blocked["message"], blocked["message"])
-        expect(before_actions == after_blocked, "blocked pod repair must not queue")
+        expect("requires a verified operator identity" in blocked["message"], blocked["message"])
+        expect(blocked["mutation_performed"] is False, str(blocked))
+        expect(before_actions == after_blocked, "actorless pod repair must not queue")
 
         dry_run = raven.dispatch_operator_raven_command(
             conn,
@@ -264,7 +268,8 @@ def test_operator_raven_rollout_plan_is_dry_run_only() -> None:
         before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
 
         blocked = raven.dispatch_operator_raven_command(conn, "/rollout_plan v2.0.0")
-        expect("dry-run only" in blocked["message"], blocked["message"])
+        expect("requires a verified operator identity" in blocked["message"], blocked["message"])
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_rollouts").fetchone()["n"] == before_rollouts, "actorless rollout must not queue rows")
 
         result = raven.dispatch_operator_raven_command(
             conn,
@@ -344,6 +349,171 @@ def test_operator_raven_academy_status_is_read_only_and_proof_gated() -> None:
         cleanup_db(tmp, old_env)
 
 
+def test_operator_raven_pod_repair_queues_real_intent_with_actor() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        before = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        result = raven.dispatch_operator_raven_command(
+            conn,
+            "/pod_repair dep-alex restart",
+            env={"ARCLINK_EXECUTOR_ADAPTER": "fake"},
+            actor_id="telegram:42",
+            idempotency_key="msg-1001",
+        )
+        after = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        text = result["message"]
+        expect("Operator Raven pod repair queued" in text, text)
+        expect("action=restart" in text, text)
+        expect("Executor adapter: fake (record-only)" in text, text)
+        expect(result["mutation_performed"] is True, str(result))
+        expect(after == before + 1, "pod repair with actor must queue exactly one intent")
+        row = conn.execute(
+            "SELECT action_type, target_kind, target_id, admin_id, status FROM arclink_action_intents ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        expect(row["action_type"] == "restart", dict(row))
+        expect(row["target_kind"] == "deployment" and row["target_id"] == "dep-alex", dict(row))
+        expect(row["admin_id"] == "telegram:42", dict(row))
+        expect(row["status"] == "queued", dict(row))
+
+        # Re-dispatch with the same idempotency key must dedupe (no second row)
+        # and must report mutation_performed=False (nothing new was queued).
+        repeat = raven.dispatch_operator_raven_command(
+            conn,
+            "/pod_repair dep-alex restart",
+            env={"ARCLINK_EXECUTOR_ADAPTER": "fake"},
+            actor_id="telegram:42",
+            idempotency_key="msg-1001",
+        )
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before + 1, "idempotent pod repair must not double-queue")
+        expect(repeat["mutation_performed"] is False, str(repeat))
+        expect("already queued (idempotent)" in repeat["message"], repeat["message"])
+
+        # Adapter disabled => not queueable => blocked, no new row.
+        blocked = raven.dispatch_operator_raven_command(
+            conn,
+            "/pod_repair dep-alex restart",
+            env={"ARCLINK_EXECUTOR_ADAPTER": "disabled"},
+            actor_id="telegram:42",
+            idempotency_key="msg-1002",
+        )
+        expect("Pod repair blocked" in blocked["message"], blocked["message"])
+        expect(blocked["mutation_performed"] is False, str(blocked))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before + 1, "blocked pod repair must not queue")
+        print("PASS test_operator_raven_pod_repair_queues_real_intent_with_actor")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        before = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+        # Dry-run must not queue.
+        preview = raven.dispatch_operator_raven_command(conn, "/upgrade --dry-run", actor_id="telegram:42")
+        expect("Host upgrade dry-run" in preview["message"], preview["message"])
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "dry-run host upgrade must not queue")
+
+        # Actorless must fail closed.
+        actorless = raven.dispatch_operator_raven_command(conn, "/upgrade")
+        expect("requires a verified operator identity" in actorless["message"], actorless["message"])
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "actorless host upgrade must not queue")
+
+        result = raven.dispatch_operator_raven_command(conn, "/upgrade", actor_id="telegram:42")
+        expect("queued an ArcLink upgrade" in result["message"], result["message"])
+        expect(result["mutation_performed"] is True, str(result))
+        row = conn.execute("SELECT action_kind, requested_by, status FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
+        expect(row["action_kind"] == "upgrade", dict(row))
+        expect(row["requested_by"] == "telegram:42", dict(row))
+
+        pin = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes", actor_id="telegram:42")
+        expect("pinned-component upgrade for hermes" in pin["message"], pin["message"])
+        expect(pin["mutation_performed"] is True, str(pin))
+        pin_row = conn.execute("SELECT action_kind, requested_target FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
+        expect(pin_row["action_kind"] == "pin-upgrade" and pin_row["requested_target"] == "hermes", dict(pin_row))
+
+        bad = raven.dispatch_operator_raven_command(conn, "/pin_upgrade not-a-component", actor_id="telegram:42")
+        expect("unknown component" in bad["message"], bad["message"])
+        print("PASS test_operator_raven_host_and_pin_upgrade_queue_operator_actions")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_rollout_queues_real_admin_action_with_actor() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        before = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        result = raven.dispatch_operator_raven_command(
+            conn,
+            "/rollout v2.0.0 --batch-size=1",
+            env={"ARCLINK_EXECUTOR_ADAPTER": "fake"},
+            actor_id="telegram:42",
+            idempotency_key="msg-2001",
+        )
+        text = result["message"]
+        expect("Operator Raven rollout queued" in text, text)
+        expect("Target: v2.0.0" in text, text)
+        expect(result["mutation_performed"] is True, str(result))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before + 1, "rollout must queue one admin action")
+        row = conn.execute("SELECT action_type, target_kind, target_id FROM arclink_action_intents ORDER BY created_at DESC LIMIT 1").fetchone()
+        expect(row["action_type"] == "rollout" and row["target_kind"] == "system", dict(row))
+        expect("secret://" not in text, text)
+        expect("/arcdata/" not in text, text)
+        print("PASS test_operator_raven_rollout_queues_real_admin_action_with_actor")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_action_status_reads_both_queues() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        raven.dispatch_operator_raven_command(
+            conn,
+            "/pod_repair dep-alex restart",
+            env={"ARCLINK_EXECUTOR_ADAPTER": "fake"},
+            actor_id="telegram:42",
+            idempotency_key="msg-3001",
+        )
+        raven.dispatch_operator_raven_command(conn, "/upgrade", actor_id="telegram:42")
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        result = raven.dispatch_operator_raven_command(conn, "/action_status")
+        text = result["message"]
+        expect("Operator Raven action status" in text, text)
+        expect("Admin action intents:" in text, text)
+        expect("restart" in text and "dep-alex" in text, text)
+        expect("Operator actions:" in text and "upgrade" in text, text)
+        expect(result["mutation_performed"] is False, str(result))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "action_status must not queue")
+        print("PASS test_operator_raven_action_status_reads_both_queues")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_mutation_helpers_and_approval_code() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    raven = load_module(OPERATOR_RAVEN_PY, "arclink_operator_raven_helpers_test")
+    expect(raven.operator_raven_command_is_mutating("/pod_repair dep-alex restart") is True, "pod_repair is mutating")
+    expect(raven.operator_raven_command_is_mutating("/pod_repair dep-alex --dry-run") is False, "dry-run pod_repair is not mutating")
+    expect(raven.operator_raven_command_is_mutating("/operator_status") is False, "status is not mutating")
+    expect(raven.operator_raven_command_is_mutating("/rollout v2.0.0") is True, "rollout is mutating")
+    expect(raven.operator_raven_command_is_mutating("/upgrade") is True, "upgrade is mutating")
+    expect(raven.operator_raven_command_is_mutating("/upgrade_check") is False, "upgrade_check is read-only")
+
+    # Component inference must skip option-value pairs, not return the flag value.
+    parsed = raven.parse_operator_raven_command("/pin_upgrade --batch-size 2 hermes")
+    expect(parsed is not None and parsed.component == "hermes", str(parsed))
+    parsed_plain = raven.parse_operator_raven_command("/pin_upgrade qmd")
+    expect(parsed_plain is not None and parsed_plain.component == "qmd", str(parsed_plain))
+
+    ok, cleaned = raven.strip_operator_approval_code("/upgrade s3cr3t", "s3cr3t")
+    expect(ok is True and cleaned == "/upgrade", (ok, cleaned))
+    bad, raw = raven.strip_operator_approval_code("/upgrade wrong", "s3cr3t")
+    expect(bad is False, (bad, raw))
+    no_code_ok, passthrough = raven.strip_operator_approval_code("/upgrade", "")
+    expect(no_code_ok is True and passthrough == "/upgrade", (no_code_ok, passthrough))
+    print("PASS test_operator_raven_mutation_helpers_and_approval_code")
+
+
 def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -380,5 +550,10 @@ if __name__ == "__main__":
     test_operator_raven_upgrade_check_is_injected_and_fail_closed()
     test_operator_raven_rollout_plan_is_dry_run_only()
     test_operator_raven_academy_status_is_read_only_and_proof_gated()
+    test_operator_raven_pod_repair_queues_real_intent_with_actor()
+    test_operator_raven_host_and_pin_upgrade_queue_operator_actions()
+    test_operator_raven_rollout_queues_real_admin_action_with_actor()
+    test_operator_raven_action_status_reads_both_queues()
+    test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
-    print("PASS all 7 Operator Raven tests")
+    print("PASS all 12 Operator Raven tests")

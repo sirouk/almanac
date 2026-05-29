@@ -8,7 +8,7 @@
     "hermes-agent": {
       "kind": "git-commit",
       "repo": "https://github.com/NousResearch/hermes-agent.git",
-      "ref": "49c3c2e0d37c96dc593a807a5e81fdf4f0aa3d85",
+      "ref": "a618789dbabf396a00fb061a491f54e12f536a45",
       "ref_kind": "commit",
       "branch": "main",
       "extras": [
@@ -23,7 +23,7 @@
     "hermes-docs": {
       "kind": "git-commit",
       "repo": "https://github.com/NousResearch/hermes-agent.git",
-      "ref": "49c3c2e0d37c96dc593a807a5e81fdf4f0aa3d85",
+      "ref": "a618789dbabf396a00fb061a491f54e12f536a45",
       "ref_kind": "commit",
       "branch": "main",
       "subdir": "website/docs",
@@ -33,7 +33,7 @@
     "nvm": {
       "kind": "git-tag",
       "repo": "https://github.com/nvm-sh/nvm",
-      "tag": "v0.40.3",
+      "tag": "v0.40.4",
       "installer_url_template": "https://raw.githubusercontent.com/nvm-sh/nvm/{tag}/install.sh",
       "description": "Node Version Manager installer. Pinned tag is fetched from raw.githubusercontent.com and piped to bash during userland bootstrap."
     },
@@ -54,7 +54,7 @@
     "qmd": {
       "kind": "npm",
       "package": "@tobilu/qmd",
-      "version": "2.1.0",
+      "version": "2.5.2",
       "description": "qmd retrieval CLI + MCP server. Explicit semver pin keeps recall/index semantics stable across host bootstraps and upgrades."
     },
     "nextcloud": {

@@ -123,6 +123,7 @@ def deliver_telegram(
     chat_id: str,
     reply_markup: dict[str, Any] | None = None,
     parse_mode: str = "",
+    entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     reply_to_message_id: int | None = None,
 ) -> str | None:
     if not bot_token:
@@ -130,14 +131,17 @@ def deliver_telegram(
     if not chat_id:
         return "telegram chat_id is empty"
     try:
-        telegram_send_message(
-            bot_token=bot_token,
-            chat_id=chat_id,
-            text=message,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            reply_to_message_id=reply_to_message_id,
-        )
+        kwargs: dict[str, Any] = {
+            "bot_token": bot_token,
+            "chat_id": chat_id,
+            "text": message,
+            "reply_markup": reply_markup,
+            "parse_mode": parse_mode,
+            "reply_to_message_id": reply_to_message_id,
+        }
+        if entities:
+            kwargs["entities"] = entities
+        telegram_send_message(**kwargs)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown telegram delivery error"
     return None
@@ -1278,6 +1282,9 @@ def _deliver_public_bot_user(
         if not isinstance(reply_markup, dict):
             reply_markup = None
         parse_mode = str(extra.get("telegram_parse_mode") or "")
+        entities = extra.get("telegram_entities")
+        if not isinstance(entities, list):
+            entities = None
         reply_to_message_id = None
         try:
             reply_to_message_id = int(str(extra.get("telegram_reply_to_message_id") or "").strip() or "0") or None
@@ -1288,27 +1295,33 @@ def _deliver_public_bot_user(
             edit_message_id = _provisioning_message_ref(conn, session_id=session_id, channel="telegram").get("message_id", "")
         if edit_existing and edit_message_id:
             try:
-                telegram_edit_message_text(
-                    bot_token=bot_token,
-                    chat_id=chat_id,
-                    message_id=int(edit_message_id),
-                    text=message,
-                    reply_markup=reply_markup,
-                    parse_mode=parse_mode,
-                )
+                kwargs: dict[str, Any] = {
+                    "bot_token": bot_token,
+                    "chat_id": chat_id,
+                    "message_id": int(edit_message_id),
+                    "text": message,
+                    "reply_markup": reply_markup,
+                    "parse_mode": parse_mode,
+                }
+                if entities:
+                    kwargs["entities"] = entities
+                telegram_edit_message_text(**kwargs)
                 return None
             except Exception as exc:  # noqa: BLE001 - fall back to a fresh ready hub.
                 if not bool(extra.get("edit_fallback_to_send", True)):
                     return str(exc).strip() or "unknown telegram edit error"
         try:
-            sent = telegram_send_message(
-                bot_token=bot_token,
-                chat_id=chat_id,
-                text=message,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                reply_to_message_id=reply_to_message_id,
-            )
+            kwargs = {
+                "bot_token": bot_token,
+                "chat_id": chat_id,
+                "text": message,
+                "reply_markup": reply_markup,
+                "parse_mode": parse_mode,
+                "reply_to_message_id": reply_to_message_id,
+            }
+            if entities:
+                kwargs["entities"] = entities
+            sent = telegram_send_message(**kwargs)
             if capture and session_id and conn is not None:
                 _store_provisioning_message_ref(
                     conn,

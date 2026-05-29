@@ -629,6 +629,8 @@ class ArcLinkPublicBotTurn:
     deployment_id: str = ""
     bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     buttons: tuple[ArcLinkPublicBotButton, ...] = ()
+    telegram_reply: str = ""
+    telegram_entities: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -1060,6 +1062,33 @@ def _reply(
     )
 
 
+def _telegram_utf16_offset(text: str, index: int) -> int:
+    return len(text[:index].encode("utf-16-le")) // 2
+
+
+def _telegram_code_entities(text: str, values: tuple[str, ...]) -> tuple[dict[str, Any], ...]:
+    entities: list[dict[str, Any]] = []
+    search_from = 0
+    for value in values:
+        if not value:
+            continue
+        index = text.find(value, search_from)
+        if index < 0:
+            index = text.find(value)
+        if index < 0:
+            continue
+        end = index + len(value)
+        entities.append(
+            {
+                "type": "code",
+                "offset": _telegram_utf16_offset(text, index),
+                "length": _telegram_utf16_offset(text, end) - _telegram_utf16_offset(text, index),
+            }
+        )
+        search_from = end
+    return tuple(entities)
+
+
 def _package_prompt_reply(
     session: Mapping[str, Any],
     *,
@@ -1256,6 +1285,8 @@ def _turn(
     deployment: Mapping[str, Any] | None = None,
     bot_display_name: str = ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
     buttons: tuple[ArcLinkPublicBotButton, ...] = (),
+    telegram_reply: str = "",
+    telegram_entities: tuple[dict[str, Any], ...] = (),
 ) -> ArcLinkPublicBotTurn:
     session = dict(session or {})
     deployment = dict(deployment or {})
@@ -1272,6 +1303,8 @@ def _turn(
         deployment_id=str(deployment.get("deployment_id") or session.get("deployment_id") or ""),
         bot_display_name=bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
         buttons=buttons,
+        telegram_reply=telegram_reply,
+        telegram_entities=telegram_entities,
     )
 
 
@@ -3310,6 +3343,21 @@ def _credentials_reply(
     ]
     if helm:
         lines.extend(["", f"Helm: {helm}"])
+    telegram_lines = [
+        "Dashboard credential handoff.",
+        "",
+        "Use this exact Helm username and password. This same pair opens each of your ArcLink agent dashboards.",
+        "",
+        f"Username: {username}",
+        "",
+        "Password:",
+        raw_secret,
+        "",
+        "Copy both into your password manager now. After you confirm storage, ArcLink removes the handoff from future responses.",
+    ]
+    if helm:
+        telegram_lines.extend(["", f"Helm: {helm}"])
+    telegram_reply = "\n".join(telegram_lines)
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -3326,6 +3374,8 @@ def _credentials_reply(
             )
             if button is not None
         ),
+        telegram_reply=telegram_reply,
+        telegram_entities=_telegram_code_entities(telegram_reply, (username, raw_secret)),
     )
 
 

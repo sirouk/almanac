@@ -170,6 +170,7 @@ def telegram_send_message(
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
     parse_mode: str = "",
+    entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -181,6 +182,8 @@ def telegram_send_message(
         payload["reply_markup"] = reply_markup
     if parse_mode:
         payload["parse_mode"] = parse_mode
+    elif entities:
+        payload["entities"] = list(entities)
     return _request_json(
         _telegram_url(bot_token, "sendMessage"),
         method="POST",
@@ -273,6 +276,7 @@ def telegram_edit_message_text(
     text: str,
     reply_markup: dict[str, Any] | None = None,
     parse_mode: str = "",
+    entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "chat_id": chat_id,
@@ -283,6 +287,8 @@ def telegram_edit_message_text(
         payload["reply_markup"] = reply_markup
     if parse_mode:
         payload["parse_mode"] = parse_mode
+    elif entities:
+        payload["entities"] = list(entities)
     return _request_json(
         _telegram_url(bot_token, "editMessageText"),
         method="POST",
@@ -1302,7 +1308,8 @@ def handle_telegram_update(
             logger.warning("telegram_command_scope_refresh_failed action=%s error=%s", turn.action, str(exc)[:160])
     return {
         "chat_id": parsed["chat_id"],
-        "text": turn.reply,
+        "text": turn.telegram_reply or turn.reply,
+        "entities": [dict(entity) for entity in (turn.telegram_entities or ())],
         "reply_markup": arclink_public_bot_turn_telegram_reply_markup(turn),
         "session_id": turn.session_id,
         "action": turn.action,
@@ -1338,10 +1345,18 @@ class LiveTelegramTransport:
             logger.error("telegram_api_error method=%s status=%d body=%s", method, exc.code, body[:200])
             raise ArcLinkTelegramError(f"Telegram API error {exc.code}: {body[:200]}") from exc
 
-    def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
+    def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    ) -> dict[str, Any]:
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if entities:
+            payload["entities"] = list(entities)
         result = self._call("sendMessage", payload)
         return result.get("result", {})
 
@@ -1375,10 +1390,13 @@ class LiveTelegramTransport:
         message_id: int,
         text: str,
         reply_markup: dict[str, Any] | None = None,
+        entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"chat_id": chat_id, "message_id": int(message_id), "text": text}
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
+        if entities:
+            payload["entities"] = list(entities)
         result = self._call("editMessageText", payload)
         return result.get("result", {})
 
@@ -1400,10 +1418,18 @@ class FakeTelegramTransport:
         self.message_reactions: list[dict[str, Any]] = []
         self.updates_queue: list[dict[str, Any]] = []
 
-    def send_message(self, chat_id: str, text: str, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
+    def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        reply_markup: dict[str, Any] | None = None,
+        entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    ) -> dict[str, Any]:
         msg = {"chat_id": chat_id, "text": text, "message_id": len(self.sent_messages) + 1}
         if reply_markup is not None:
             msg["reply_markup"] = reply_markup
+        if entities:
+            msg["entities"] = list(entities)
         self.sent_messages.append(msg)
         return msg
 
@@ -1426,10 +1452,13 @@ class FakeTelegramTransport:
         message_id: int,
         text: str,
         reply_markup: dict[str, Any] | None = None,
+        entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     ) -> dict[str, Any]:
         msg = {"chat_id": chat_id, "message_id": int(message_id), "text": text}
         if reply_markup is not None:
             msg["reply_markup"] = reply_markup
+        if entities:
+            msg["entities"] = list(entities)
         self.edited_messages.append(msg)
         return msg
 
@@ -1518,7 +1547,12 @@ def run_telegram_polling(
                             logger.exception("telegram_fast_agent_ack_failed chat_id=%s", result["chat_id"])
                     reply_text = str(result.get("text") or "").strip()
                     if reply_text:
-                        transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+                        transport.send_message(
+                            result["chat_id"],
+                            result["text"],
+                            reply_markup=result.get("reply_markup"),
+                            entities=result.get("entities") or None,
+                        )
                     logger.info("telegram_reply chat_id=%s action=%s", result["chat_id"], result["action"])
             except Exception:
                 logger.exception("telegram_update_error update_id=%s", update_id)

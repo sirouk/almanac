@@ -115,6 +115,7 @@ ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS = frozenset(
     }
 )
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
+ARCLINK_PUBLIC_BOT_LEARN_COMMANDS = frozenset({"/learn", "learn", "tour", "/tour", "how this works"})
 ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop"})
 ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents", "agent roster"})
 ARCLINK_PUBLIC_BOT_RETIRE_AGENT_COMMANDS = (
@@ -469,6 +470,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         description="Open your ArcLink crew manifest",
     ),
     ArcLinkPublicBotAction(
+        key="learn",
+        telegram_command="learn",
+        discord_command="learn",
+        description="Learn how ArcLink surfaces fit together",
+    ),
+    ArcLinkPublicBotAction(
         key="train_crew",
         telegram_command="train_crew",
         discord_command="train-crew",
@@ -674,6 +681,8 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
     tail = rest_parts[1].strip() if len(rest_parts) > 1 else ""
     if not verb or verb in {"help", "commands", "menu"}:
         return "/help"
+    if verb in {"learn", "tour", "tutorial", "guide"}:
+        return "/learn"
     if verb.startswith("agent_") and len(verb) > len("agent_"):
         return f"/agent-{verb[len('agent_'):]}"
     if verb == "agent" and tail:
@@ -1315,10 +1324,15 @@ def _active_raven_callback_command(command: str) -> str:
     mapping = {
         "/help": "/raven help",
         "/commands": "/raven help",
+        "/learn": "/raven learn",
+        "/tour": "/raven learn",
         "/status": "/raven status",
         "/agents": "/raven agents",
         "/train-crew": "/raven train_crew",
         "/train_crew": "/raven train_crew",
+        "/academy": "/raven academy",
+        "/quick-training": "/raven academy",
+        "/quick_training": "/raven academy",
         "/whats-changed": "/raven whats_changed",
         "/whats_changed": "/raven whats_changed",
         "/top-up": "/raven refuel",
@@ -4519,8 +4533,9 @@ def _crew_training_start_reply(
         channel_identity=channel_identity,
         action="crew_training_prompt_role",
         reply=(
-            f"Crew Training is open. I see {count_label} on this ArcPod.\n\n"
+            f"Crew Training is open. I see {count_label} in your Crew.\n\n"
             "I will ask a few short questions, then shape Agent names, roles, personalities, and the additive SOUL.md overlay. "
+            "After that, Quick Training can take any Agent into the Academy lane for specialist source maps, curriculum, practice tasks, and continuing review. "
             "You can send `cancel` at any time.\n\n"
             "What is your role? Send one line, for example `founder building a startup`."
         ),
@@ -5467,6 +5482,52 @@ def _help_reply(
     )
 
 
+def _learn_reply(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None = None,
+    deployment: Mapping[str, Any] | None = None,
+) -> ArcLinkPublicBotTurn:
+    ready = bool(deployment and str(deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES)
+    if not ready:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="learn_before_launch",
+            reply=(
+                "ArcLink brings up a private ArcPod for your Agent, then Raven hands you the controls here.\n\n"
+                "After launch, one Helm login opens the Agent dashboard. Drive, Code, Terminal, memory, model fuel, Notion setup, and Crew controls all hang off that governed workspace."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Take Me Aboard", command="/packages"),),
+        )
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="learn",
+        reply=(
+            "Quick tour:\n\n"
+            "- Raven is this bridge: roster, credentials, Notion, backups, billing, and setup.\n"
+            "- Each Agent lives in an ArcPod with its own Hermes dashboard, memory, Drive, Code, Terminal, model lane, and health checks.\n"
+            "- Show My Crew lists every Agent and Helm link; use it to switch who owns bare chat.\n"
+            "- Login Credentials reveals the shared dashboard login until you confirm it is stored.\n"
+            "- Crew Training shapes names, roles, tone, mission, and SOUL overlays.\n"
+            "- Quick Training is the Academy lane: pick one Agent or train all, with Skip available, to stage specialist source maps, curriculum, practice tasks, and continuing review.\n\n"
+            "Start with Show My Crew, Login Credentials, or Crew Training."
+        ),
+        session=session,
+        deployment=deployment,
+        buttons=(
+            _button("Show My Crew", command="/agents", style="secondary"),
+            _button("Login Credentials", command="/credentials", style="secondary"),
+            _button("Crew Training", command="/train-crew", style="secondary"),
+            _button("Quick Training", command="/academy", style="secondary"),
+        ),
+    )
+
+
 def _upgrade_hermes_reply(
     *,
     channel: str,
@@ -5637,6 +5698,15 @@ def handle_arclink_public_bot_turn(
     if command in ARCLINK_PUBLIC_BOT_HELP_COMMANDS:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         return _help_reply(
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    if command in ARCLINK_PUBLIC_BOT_LEARN_COMMANDS:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _learn_reply(
             channel=clean_channel,
             channel_identity=clean_identity,
             session=session,

@@ -186,11 +186,10 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     targets = {(item["channel_kind"], item["target_id"]) for item in notifications}
     expect(targets == {("discord", "200"), ("telegram", "100")}, str(notifications))
     notification = next(item for item in notifications if item["channel_kind"] == "telegram")
-    expect("Agent #1234 online" in notification["message"], str(notification["message"]))
-    expect("Stage 4 complete: Agent #1234 - ArcLink Agent is ready" in notification["message"], str(notification["message"]))
-    expect("Helm: https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
-    expect("Drive, Code, and Terminal are inside that Helm" in notification["message"], str(notification["message"]))
-    expect("Use /credentials or tap Credentials" in notification["message"], str(notification["message"]))
+    expect("Agent #1234 is online" in notification["message"], str(notification["message"]))
+    expect("Your ArcPod is ready" in notification["message"], str(notification["message"]))
+    expect("https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
+    expect("Use Show My Crew to switch Agents" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
     expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
     telegram_buttons = [
@@ -199,9 +198,12 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
         for button in row
     ]
     expect(any(button.get("text") == "Open Helm" and button.get("url") for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Learn" and button.get("callback_data") == "arclink:/raven learn" for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Crew Training" and button.get("callback_data") == "arclink:/raven train_crew" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Credentials" and button.get("callback_data") == "arclink:/raven credentials dep_1" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Show My Crew" and button.get("callback_data") == "arclink:/raven agents" for button in telegram_buttons), str(extra))
-    expect(any(button.get("text") == "Link Channel" and button.get("callback_data") == "arclink:/raven link-channel" for button in telegram_buttons), str(extra))
+    expect(extra.get("edit_existing_message") is True, str(extra))
+    expect(extra.get("onboarding_session_id") == "onb_worker_1", str(extra))
     session = conn.execute("SELECT status, current_step, metadata_json FROM arclink_onboarding_sessions WHERE session_id = 'onb_worker_1'").fetchone()
     expect(session["status"] == "first_contacted" and session["current_step"] == "first_agent_contact", str(dict(session)))
     session_meta = json.loads(session["metadata_json"])
@@ -782,7 +784,8 @@ def test_sovereign_worker_recovers_succeeded_job_without_handoff() -> None:
     queued = conn.execute("SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()["c"]
     expect(int(queued) == 1, f"expected recovered handoff notification, got {queued}")
     note = conn.execute("SELECT message FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()
-    expect("Helm: https://cached.example.test" in note["message"], note["message"])
+    expect("https://cached.example.test" in note["message"], note["message"])
+    expect("Your ArcPod is ready" in note["message"], note["message"])
     refreshed = fleet.get_fleet_host(conn, host_id=host["host_id"])
     expect(int(refreshed["observed_load"]) == 1, str(refreshed))
     print("PASS test_sovereign_worker_recovers_succeeded_job_without_handoff")

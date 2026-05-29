@@ -1993,6 +1993,7 @@ def test_public_bot_train_crew_flow_and_whats_changed() -> None:
 
     start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/train-crew")
     expect(start.action == "crew_training_prompt_role", str(start))
+    expect("Quick Training can take any Agent into the Academy lane" in start.reply, start.reply)
     mission = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="founder building a tool")
     expect(mission.action == "crew_training_prompt_mission", str(mission))
     treatment = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="ship the launch")
@@ -2080,6 +2081,10 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     expect(len(academy["agents"]) == 2, str(academy))
     audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
     expect("crew_academy_agent_training_staged" in audit_actions, str(audit_actions))
+
+    learn = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/learn")
+    expect(learn.action == "learn", str(learn))
+    expect("Quick Training is the Academy lane" in learn.reply, learn.reply)
     print("PASS test_public_bot_academy_training_walks_crew_with_skip")
 
 

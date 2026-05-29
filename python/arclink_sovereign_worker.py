@@ -1537,37 +1537,71 @@ def _public_bot_target_for_session(session: Mapping[str, Any]) -> tuple[str, str
     return None
 
 
-def _vessel_online_message(*, deployment: Mapping[str, Any], urls: Mapping[str, Any]) -> str:
-    dashboard = str(urls.get("dashboard") or "").strip()
+def _deployment_dashboard_url(deployment: Mapping[str, Any], *, fallback_urls: Mapping[str, Any] | None = None) -> str:
     metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+    access_urls = metadata.get("access_urls") if isinstance(metadata.get("access_urls"), Mapping) else {}
+    dashboard = str((access_urls or {}).get("dashboard") or (access_urls or {}).get("hermes") or "").strip()
+    if not dashboard and fallback_urls:
+        dashboard = str(fallback_urls.get("dashboard") or fallback_urls.get("hermes") or "").strip()
+    return dashboard
+
+
+def _vessel_online_message(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    urls: Mapping[str, Any],
+) -> str:
     label = str(deployment.get("agent_name") or "").strip() or f"Agent #{str(deployment.get('prefix') or '').rsplit('-', 1)[-1]}"
     title = str(deployment.get("agent_title") or "").strip() or "ArcLink Agent"
-    theme = str(metadata.get("theme_label") or "").strip()
-    theme_line = f"Theme: {theme}" if theme else ""
+    user_id = str(deployment.get("user_id") or "").strip()
+    crew_rows = []
+    if user_id:
+        crew_rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT *
+                FROM arclink_deployments
+                WHERE user_id = ?
+                  AND status NOT IN ('cancelled', 'teardown_complete', 'torn_down')
+                ORDER BY created_at ASC, deployment_id ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        ]
+    if not crew_rows:
+        crew_rows = [dict(deployment)]
+    crew_lines: list[str] = []
+    for index, item in enumerate(crew_rows, start=1):
+        item_label = str(item.get("agent_name") or "").strip() or f"Agent #{str(item.get('prefix') or index).rsplit('-', 1)[-1]}"
+        item_title = str(item.get("agent_title") or "").strip() or "ArcLink Agent"
+        status = str(item.get("status") or "pending").replace("_", " ")
+        dashboard = _deployment_dashboard_url(
+            item,
+            fallback_urls=urls if str(item.get("deployment_id") or "") == str(deployment.get("deployment_id") or "") else None,
+        )
+        link = f" - {dashboard}" if dashboard else ""
+        crew_lines.append(f"- {item_label}: {item_title} ({status}){link}")
+    crew_word = "ArcPod is" if len(crew_rows) == 1 else "ArcPods are"
     lines = [
-        f"{label} online.",
+        f"{label} is online.",
         "",
-        f"Stage 4 complete: {label} - {title} is ready. Drive, Code, Terminal, memory, and deployment health are lit.",
+        f"Your {crew_word} ready.",
         "",
+        *crew_lines,
     ]
-    if theme_line:
-        lines.append(theme_line)
-    if dashboard:
-        lines.append(f"Helm: {dashboard}")
     lines.extend(
         [
             "",
-            "Drive, Code, and Terminal are inside that Helm as Hermes dashboard plugins. One dashboard credential works across the Crew control interfaces.",
-            "",
-            "Raven keeps the credential handoff in this chat until you store it. Use /credentials or tap Credentials, then confirm with /credentials-stored.",
-            "",
-            "Use Train My Crew to curate the roster, or Show My Crew for every Agent and Helm link. Bare slash commands belong to your active agent.",
+            "Use Show My Crew to switch Agents. The same Helm login opens each Agent dashboard.",
+            "Use Learn when you want the tour; use Crew Training when you are ready to shape the Crew.",
         ]
     )
     return "\n".join(lines)
 
 
-def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any]) -> dict[str, Any]:
+def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any], session_id: str = "") -> dict[str, Any]:
     dashboard = str(urls.get("dashboard") or "").strip()
     credential_command = f"/raven credentials {str(deployment_id or '').strip()}".strip()
     telegram_row: list[dict[str, str]] = []
@@ -1577,24 +1611,34 @@ def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any]) -> di
         discord_buttons.append({"type": 2, "label": "Open Helm", "style": 5, "url": dashboard})
     telegram_row.extend(
         [
+            {"text": "Learn", "callback_data": "arclink:/raven learn"},
+            {"text": "Crew Training", "callback_data": "arclink:/raven train_crew"},
             {"text": "Credentials", "callback_data": f"arclink:{credential_command}"[:64]},
-            {"text": "Train My Crew", "callback_data": "arclink:/raven train_crew"},
             {"text": "Show My Crew", "callback_data": "arclink:/raven agents"},
-            {"text": "Link Channel", "callback_data": "arclink:/raven link-channel"},
         ]
     )
     discord_buttons.extend(
         [
+            {"type": 2, "label": "Learn", "style": 2, "custom_id": "arclink:/learn"},
+            {"type": 2, "label": "Crew Training", "style": 2, "custom_id": "arclink:/train-crew"},
             {"type": 2, "label": "Credentials", "style": 2, "custom_id": f"arclink:{credential_command}"[:100]},
-            {"type": 2, "label": "Train My Crew", "style": 2, "custom_id": "arclink:/train-crew"},
             {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
-            {"type": 2, "label": "Link Channel", "style": 2, "custom_id": "arclink:/link-channel"},
         ]
     )
-    return {
+    extra = {
         "telegram_reply_markup": {"inline_keyboard": [telegram_row[:2], telegram_row[2:]] if len(telegram_row) > 2 else [telegram_row]},
         "discord_components": [{"type": 1, "components": discord_buttons[:5]}],
     }
+    if session_id:
+        extra.update(
+            {
+                "edit_existing_message": True,
+                "edit_existing_session_id": session_id,
+                "onboarding_session_id": session_id,
+                "edit_fallback_to_send": True,
+            }
+        )
+    return extra
 
 
 def _focus_public_bot_session_on_deployment(
@@ -1668,8 +1712,7 @@ def _queue_vessel_online_notifications(
     ).fetchall()
     seen: set[tuple[str, str]] = set()
     queued = 0
-    message = _vessel_online_message(deployment=dict(deployment), urls=urls)
-    extra = _vessel_online_actions(deployment_id=deployment_id, urls=urls)
+    message = _vessel_online_message(conn, deployment=dict(deployment), urls=urls)
     for row in rows:
         session = dict(row)
         target = _public_bot_target_for_session(session)
@@ -1682,6 +1725,11 @@ def _queue_vessel_online_notifications(
         if key in seen:
             continue
         seen.add(key)
+        extra = _vessel_online_actions(
+            deployment_id=deployment_id,
+            urls=urls,
+            session_id=str(session.get("session_id") or ""),
+        )
         _focus_public_bot_session_on_deployment(conn, session=session, deployment=dict(deployment))
         queue_notification(
             conn,

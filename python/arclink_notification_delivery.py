@@ -39,9 +39,9 @@ from arclink_control import (
     utc_after_seconds_iso,
     utc_now_iso,
 )
-from arclink_discord import discord_create_dm_channel, discord_send_message
+from arclink_discord import discord_create_dm_channel, discord_edit_message, discord_send_message
 from arclink_http import http_request
-from arclink_telegram import telegram_send_message
+from arclink_telegram import telegram_edit_message_text, telegram_send_message
 
 
 def _http_post_json(url: str, payload: dict, headers: dict[str, str] | None = None, timeout: int = 10) -> tuple[int, str]:
@@ -141,6 +141,79 @@ def deliver_telegram(
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown telegram delivery error"
     return None
+
+
+def _provisioning_message_ref(conn: Any, *, session_id: str, channel: str) -> dict[str, str]:
+    clean_session_id = str(session_id or "").strip()
+    clean_channel = str(channel or "").strip().lower()
+    if not clean_session_id or clean_channel not in {"telegram", "discord"}:
+        return {}
+    try:
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+            (clean_session_id,),
+        ).fetchone()
+    except Exception:  # noqa: BLE001 - delivery fallback should still send.
+        return {}
+    if row is None:
+        return {}
+    try:
+        metadata = json.loads(str(row["metadata_json"] or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    if not isinstance(metadata, dict):
+        return {}
+    refs = metadata.get("public_bot_provisioning_messages")
+    if not isinstance(refs, dict):
+        return {}
+    ref = refs.get(clean_channel)
+    if not isinstance(ref, dict):
+        return {}
+    return {str(key): str(value) for key, value in ref.items() if str(value or "").strip()}
+
+
+def _store_provisioning_message_ref(
+    conn: Any,
+    *,
+    session_id: str,
+    channel: str,
+    message_id: str,
+    channel_id: str = "",
+) -> None:
+    clean_session_id = str(session_id or "").strip()
+    clean_channel = str(channel or "").strip().lower()
+    clean_message_id = str(message_id or "").strip()
+    if not clean_session_id or clean_channel not in {"telegram", "discord"} or not clean_message_id:
+        return
+    try:
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+            (clean_session_id,),
+        ).fetchone()
+        if row is None:
+            return
+        metadata = json.loads(str(row["metadata_json"] or "{}"))
+        if not isinstance(metadata, dict):
+            metadata = {}
+    except (TypeError, json.JSONDecodeError):
+        metadata = {}
+    refs = metadata.get("public_bot_provisioning_messages")
+    if not isinstance(refs, dict):
+        refs = {}
+    ref = {"message_id": clean_message_id, "updated_at": utc_now_iso()}
+    if channel_id:
+        ref["channel_id"] = str(channel_id)
+    refs[clean_channel] = ref
+    metadata["public_bot_provisioning_messages"] = refs
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET metadata_json = ?, updated_at = ?
+        WHERE session_id = ?
+        """,
+        (json.dumps(metadata, sort_keys=True), utc_now_iso(), clean_session_id),
+    )
+    conn.commit()
 
 
 def _read_env_file_value(path: Path, key: str) -> str:
@@ -1189,7 +1262,11 @@ def _deliver_public_bot_user(
     target_id: str,
     message: str,
     extra: dict[str, Any],
+    conn: Any | None = None,
 ) -> str | None:
+    session_id = str(extra.get("onboarding_session_id") or extra.get("edit_existing_session_id") or "").strip()
+    capture = bool(extra.get("capture_provisioning_message"))
+    edit_existing = bool(extra.get("edit_existing_message") or extra.get("edit_existing_provisioning_message"))
     if channel_kind == "telegram":
         bot_token = config_env_value("TELEGRAM_BOT_TOKEN", "").strip()
         chat_id = _strip_public_channel_prefix(target_id, "tg")
@@ -1206,14 +1283,43 @@ def _deliver_public_bot_user(
             reply_to_message_id = int(str(extra.get("telegram_reply_to_message_id") or "").strip() or "0") or None
         except ValueError:
             reply_to_message_id = None
-        return deliver_telegram(
-            message,
-            bot_token=bot_token,
-            chat_id=chat_id,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            reply_to_message_id=reply_to_message_id,
-        )
+        edit_message_id = str(extra.get("telegram_edit_message_id") or "").strip()
+        if edit_existing and not edit_message_id and session_id and conn is not None:
+            edit_message_id = _provisioning_message_ref(conn, session_id=session_id, channel="telegram").get("message_id", "")
+        if edit_existing and edit_message_id:
+            try:
+                telegram_edit_message_text(
+                    bot_token=bot_token,
+                    chat_id=chat_id,
+                    message_id=int(edit_message_id),
+                    text=message,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode,
+                )
+                return None
+            except Exception as exc:  # noqa: BLE001 - fall back to a fresh ready hub.
+                if not bool(extra.get("edit_fallback_to_send", True)):
+                    return str(exc).strip() or "unknown telegram edit error"
+        try:
+            sent = telegram_send_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=message,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                reply_to_message_id=reply_to_message_id,
+            )
+            if capture and session_id and conn is not None:
+                _store_provisioning_message_ref(
+                    conn,
+                    session_id=session_id,
+                    channel="telegram",
+                    message_id=str(sent.get("message_id") or ""),
+                    channel_id=chat_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return str(exc).strip() or "unknown telegram delivery error"
+        return None
     if channel_kind == "discord":
         bot_token = config_env_value("DISCORD_BOT_TOKEN", "").strip()
         user_id = _strip_public_channel_prefix(target_id, "discord")
@@ -1224,12 +1330,41 @@ def _deliver_public_bot_user(
         discord_components = extra.get("discord_components")
         if not isinstance(discord_components, list):
             discord_components = None
-        return deliver_discord_user(
-            message,
-            bot_token=bot_token,
-            user_id=user_id,
-            components=discord_components,
-        )
+        ref: dict[str, str] = {}
+        if session_id and conn is not None:
+            ref = _provisioning_message_ref(conn, session_id=session_id, channel="discord")
+        edit_channel_id = str(extra.get("discord_edit_channel_id") or ref.get("channel_id") or "").strip()
+        edit_message_id = str(extra.get("discord_edit_message_id") or ref.get("message_id") or "").strip()
+        if edit_existing and edit_channel_id and edit_message_id:
+            try:
+                discord_edit_message(
+                    bot_token=bot_token,
+                    channel_id=edit_channel_id,
+                    message_id=edit_message_id,
+                    text=message,
+                    components=discord_components,
+                )
+                return None
+            except Exception as exc:  # noqa: BLE001 - fall back to a fresh ready hub.
+                if not bool(extra.get("edit_fallback_to_send", True)):
+                    return str(exc).strip() or "unknown discord edit error"
+        try:
+            dm = discord_create_dm_channel(bot_token=bot_token, recipient_id=user_id)
+            channel_id = str(dm.get("id") or "").strip()
+            if not channel_id:
+                return "discord DM channel response did not include an id"
+            sent = discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=discord_components)
+            if capture and session_id and conn is not None:
+                _store_provisioning_message_ref(
+                    conn,
+                    session_id=session_id,
+                    channel="discord",
+                    message_id=str(sent.get("id") or sent.get("message_id") or ""),
+                    channel_id=channel_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return str(exc).strip() or "unknown discord user delivery error"
+        return None
     return f"public-bot-user delivery for channel_kind={channel_kind!r} not implemented yet"
 
 
@@ -1452,7 +1587,7 @@ def run_public_agent_turns_once(
     return summary
 
 
-def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
+def deliver_row(cfg: Config, row: dict[str, Any], conn: Any | None = None) -> str | None:
     target_kind = (row.get("target_kind") or "").lower()
     extra_raw = str(row.get("extra_json") or "").strip()
     try:
@@ -1520,6 +1655,7 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
             target_id=str(row.get("target_id") or ""),
             message=str(row.get("message") or ""),
             extra=extra,
+            conn=conn,
         )
 
     if target_kind == "captain-wrapped":
@@ -1543,6 +1679,7 @@ def deliver_row(cfg: Config, row: dict[str, Any]) -> str | None:
             target_id=target_id,
             message=str(row.get("message") or ""),
             extra=extra,
+            conn=conn,
         )
 
     if target_kind == "public-agent-turn":
@@ -1638,7 +1775,7 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                     )
                 continue
             try:
-                error = deliver_row(cfg, row)
+                error = deliver_row(cfg, row, conn=conn)
             except Exception as exc:  # noqa: BLE001
                 error = f"exception: {exc}"
 

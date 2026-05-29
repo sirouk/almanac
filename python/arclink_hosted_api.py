@@ -753,31 +753,17 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
         return None
     name = str(row["display_name_hint"] or "").strip()
     greeting = f"Captain {name}, " if name else ""
-    deployments = conn.execute(
-        """
-        SELECT agent_name, agent_title, prefix, status, metadata_json
-        FROM arclink_deployments
-        WHERE user_id = ?
-          AND status NOT IN ('cancelled', 'teardown_complete', 'torn_down')
-        ORDER BY created_at ASC, deployment_id ASC
-        """,
-        (str(user_id or "").strip(),),
-    ).fetchall()
-    roster_lines: list[str] = []
-    for index, deployment in enumerate(deployments, start=1):
-        metadata = json_loads_safe(str(deployment["metadata_json"] or "{}"))
-        label = str(deployment["agent_name"] or "").strip() or f"Agent #{str(deployment['prefix'] or index).rsplit('-', 1)[-1]}"
-        title = str(deployment["agent_title"] or "").strip() or "ArcLink Agent"
-        theme = str(metadata.get("theme_label") or "").strip()
-        theme_suffix = f" ({theme})" if theme else ""
-        roster_lines.append(f"- {label}: {title}{theme_suffix}")
-    roster_block = "\n".join(roster_lines) if roster_lines else "- Crew roster is being reserved."
     message = (
         f"{greeting}payment cleared.\n\n"
-        "Stripe confirmed the handoff. Your initial Crew roster is reserved:\n\n"
-        f"{roster_block}\n\n"
-        "Stage 3 is starting now: I am preparing ArcLink resources, wiring the Agent control lanes, and checking deployment health.\n\n"
-        "Next step: Train My Crew to curate names, roles, personalities, and SOUL.md overlays, or Show My Crew to see the roster and Helm links as they come online."
+        "Raven has the launch key. I am bringing your ArcPod online now and will update this message when the Crew is ready."
+    )
+    extra = _public_bot_ping_actions()
+    extra.update(
+        {
+            "capture_provisioning_message": True,
+            "onboarding_session_id": session_id,
+            "provisioning_message_purpose": "payment_cleared",
+        }
     )
     nid = queue_notification(
         conn,
@@ -785,7 +771,7 @@ def _queue_paid_ping(conn: sqlite3.Connection, *, user_id: str, request_id: str)
         target_id=target_id,
         channel_kind=channel,
         message=message,
-        extra=_public_bot_ping_actions(),
+        extra=extra,
     )
     if session_id:
         append_arclink_event(
@@ -866,27 +852,7 @@ def _public_bot_target_id(*, channel: str, channel_identity: str) -> str:
 
 
 def _public_bot_ping_actions() -> dict[str, Any]:
-    return {
-        "telegram_reply_markup": {
-            "inline_keyboard": [
-                [
-                    {"text": "Check Status", "callback_data": "arclink:/raven status"},
-                    {"text": "Train My Crew", "callback_data": "arclink:/raven train_crew"},
-                    {"text": "Show My Crew", "callback_data": "arclink:/raven agents"},
-                ],
-            ],
-        },
-        "discord_components": [
-            {
-                "type": 1,
-                "components": [
-                    {"type": 2, "label": "Check Status", "style": 2, "custom_id": "arclink:/status"},
-                    {"type": 2, "label": "Train My Crew", "style": 2, "custom_id": "arclink:/train-crew"},
-                    {"type": 2, "label": "Show My Crew", "style": 2, "custom_id": "arclink:/agents"},
-                ],
-            }
-        ],
-    }
+    return {}
 
 
 def _handle_admin_login(

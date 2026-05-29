@@ -522,6 +522,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [activeDeploymentId, setActiveDeploymentId] = useState("");
   const router = useRouter();
 
   async function handleLogout() {
@@ -839,6 +840,21 @@ export default function DashboardPage() {
     return () => { mounted = false; };
   }, [router]);
 
+  const deployments = orderedDeployments(data?.deployments ?? []);
+  const deploymentIds = deployments.map((item) => item.deployment_id).join("|");
+  const firstDeploymentId = deployments[0]?.deployment_id || "";
+  const activeDeploymentStillExists = !!activeDeploymentId && deployments.some((item) => item.deployment_id === activeDeploymentId);
+
+  useEffect(() => {
+    if (!deploymentIds) {
+      if (activeDeploymentId) setActiveDeploymentId("");
+      return;
+    }
+    if (!activeDeploymentId || !activeDeploymentStillExists) {
+      setActiveDeploymentId(firstDeploymentId);
+    }
+  }, [activeDeploymentId, activeDeploymentStillExists, deploymentIds, firstDeploymentId]);
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -847,8 +863,7 @@ export default function DashboardPage() {
     );
   }
 
-  const deployments = orderedDeployments(data?.deployments ?? []);
-  const activeDeployment = deployments[0];
+  const activeDeployment = deployments.find((item) => item.deployment_id === activeDeploymentId) || deployments[0];
   const health = healthSummary(deployments);
   const entitlementState = data?.entitlement?.state || billing?.entitlement?.state || "unknown";
   const academyTraining = crewRecipe?.academy_training || crewRecipe?.current?.soul_overlay?.academy_training;
@@ -888,6 +903,9 @@ export default function DashboardPage() {
               </button>
             ))}
           </nav>
+          <Link href="/onboarding" className="mt-6 block border border-border px-3 py-2 text-center text-sm font-semibold text-soft-white/60 transition hover:border-signal-orange/60 hover:text-signal-orange">
+            Add Agent
+          </Link>
         </aside>
 
         <main className="flex-1 overflow-x-hidden p-4 md:p-6">
@@ -906,10 +924,31 @@ export default function DashboardPage() {
                   Your private agent workspace, service links, model lane, memory rail, billing state, and launch health in one place.
                 </p>
               </div>
-              <div className="grid grid-cols-3 gap-2 text-right sm:min-w-[26rem]">
-                <ConsoleMetric label="Agents" value={deployments.length} />
-                <ConsoleMetric label="Services" value={health.total} />
-                <ConsoleMetric label="Attention" value={health.attention} tone={health.attention ? "warn" : "good"} />
+              <div className="w-full space-y-3 lg:max-w-md">
+                <label className="block text-left">
+                  <span className="text-[10px] uppercase tracking-[0.2em] text-soft-white/35">Active Agent</span>
+                  <div className="relative mt-1">
+                    <select
+                      value={activeDeployment?.deployment_id || ""}
+                      onChange={(event) => setActiveDeploymentId(event.target.value)}
+                      className="w-full appearance-none rounded border border-signal-orange/45 bg-carbon px-3 py-2 pr-9 text-sm font-semibold text-soft-white outline-none transition focus:border-signal-orange"
+                    >
+                      {deployments.length ? deployments.map((deployment) => (
+                        <option key={deployment.deployment_id} value={deployment.deployment_id}>
+                          {deploymentTitle(deployment)}
+                        </option>
+                      )) : (
+                        <option value="">No active agent</option>
+                      )}
+                    </select>
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-signal-orange">⌄</span>
+                  </div>
+                </label>
+                <div className="grid grid-cols-3 gap-2 text-right">
+                  <ConsoleMetric label="Agents" value={deployments.length} />
+                  <ConsoleMetric label="Services" value={health.total} />
+                  <ConsoleMetric label="Attention" value={health.attention} tone={health.attention ? "warn" : "good"} />
+                </div>
               </div>
             </div>
             <div className="mt-5 grid gap-3 md:grid-cols-3">

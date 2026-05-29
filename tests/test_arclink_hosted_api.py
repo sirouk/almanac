@@ -3133,7 +3133,7 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
 
     row = conn.execute(
         """
-        SELECT target_kind, target_id, channel_kind, message
+        SELECT target_kind, target_id, channel_kind, message, extra_json
         FROM notification_outbox
         WHERE target_kind = 'public-bot-user'
           AND channel_kind = 'telegram'
@@ -3144,6 +3144,10 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
     expect(row["target_kind"] == "public-bot-user", str(row["target_kind"]))
     expect("payment cleared" in str(row["message"]).lower(), str(row["message"]))
     expect("Captain Hera" in str(row["message"]), str(row["message"]))
+    expect("bringing your ArcPod online" in str(row["message"]), str(row["message"]))
+    extra = json.loads(row["extra_json"])
+    expect(extra.get("capture_provisioning_message") is True, str(extra))
+    expect(extra.get("onboarding_session_id") == session["session_id"], str(extra))
 
     # Replay must NOT re-queue (entitlement transition is idempotent)
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -3220,8 +3224,10 @@ def test_stripe_webhook_queues_paid_ping_for_discord_user() -> None:
     ).fetchone()
     expect(row is not None, "expected a paid-ping queued for the Discord user")
     expect("payment cleared" in str(row["message"]).lower(), str(row["message"]))
+    expect("will update this message" in str(row["message"]), str(row["message"]))
     extra = json.loads(row["extra_json"])
-    expect("discord_components" in extra, str(extra))
+    expect(extra.get("capture_provisioning_message") is True, str(extra))
+    expect("discord_components" not in extra, str(extra))
     print("PASS test_stripe_webhook_queues_paid_ping_for_discord_user")
 
 

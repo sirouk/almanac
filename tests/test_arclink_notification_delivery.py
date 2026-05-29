@@ -2134,6 +2134,95 @@ def test_public_agent_bridge_drains_telegram_batch_tasks_before_done() -> None:
     print("PASS test_public_agent_bridge_drains_telegram_batch_tasks_before_done")
 
 
+def test_public_bot_ready_hub_edits_payment_message_when_available() -> None:
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_edit_ready_test")
+    onboarding = load_module(PYTHON_DIR / "arclink_onboarding.py", "arclink_onboarding_notification_delivery_edit_ready_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_edit_ready_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                onboarding.create_or_resume_arclink_onboarding_session(
+                    conn,
+                    channel="telegram",
+                    channel_identity="tg:123",
+                    session_id="onb_edit_ready",
+                )
+                control.queue_notification(
+                    conn,
+                    target_kind="public-bot-user",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="Payment cleared.",
+                    extra={"capture_provisioning_message": True, "onboarding_session_id": "onb_edit_ready"},
+                )
+                control.queue_notification(
+                    conn,
+                    target_kind="public-bot-user",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="ArcPod ready.",
+                    extra={
+                        "edit_existing_message": True,
+                        "onboarding_session_id": "onb_edit_ready",
+                        "telegram_reply_markup": {"inline_keyboard": [[{"text": "Learn", "callback_data": "arclink:/raven learn"}]]},
+                    },
+                )
+
+            sent: list[dict[str, object]] = []
+            edited: list[dict[str, object]] = []
+
+            def fake_send(*, bot_token, chat_id, text, reply_to_message_id=None, reply_markup=None, parse_mode=""):
+                sent.append({"bot_token": bot_token, "chat_id": chat_id, "text": text, "reply_markup": reply_markup})
+                return {"message_id": 777}
+
+            def fake_edit(*, bot_token, chat_id, message_id, text, reply_markup=None, parse_mode=""):
+                edited.append({"bot_token": bot_token, "chat_id": chat_id, "message_id": message_id, "text": text, "reply_markup": reply_markup})
+                return {"ok": True}
+
+            delivery.telegram_send_message = fake_send
+            delivery.telegram_edit_message_text = fake_edit
+            summary = delivery.run_once(cfg)
+            with control.connect_db(cfg) as conn:
+                session = conn.execute(
+                    "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = 'onb_edit_ready'"
+                ).fetchone()
+            metadata = json.loads(session["metadata_json"])
+            expect(summary["delivered"] == 2, str(summary))
+            expect(len(sent) == 1 and sent[0]["text"] == "Payment cleared.", str(sent))
+            expect(len(edited) == 1 and edited[0]["message_id"] == 777 and edited[0]["text"] == "ArcPod ready.", str(edited))
+            expect(metadata["public_bot_provisioning_messages"]["telegram"]["message_id"] == "777", str(metadata))
+            print("PASS test_public_bot_ready_hub_edits_payment_message_when_available")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_notification_due_now_normalizes_z_and_offset_timestamps() -> None:
     delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_due_timestamp_test")
     fixed_now = datetime(2026, 5, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -2174,6 +2263,7 @@ def main() -> int:
     test_public_agent_bridge_defaults_to_streaming_progress_without_reasoning()
     test_public_agent_bridge_persists_telegram_approval_button_state()
     test_public_agent_bridge_drains_telegram_batch_tasks_before_done()
+    test_public_bot_ready_hub_edits_payment_message_when_available()
     test_notification_due_now_normalizes_z_and_offset_timestamps()
     print("PASS all notification delivery regression tests")
     return 0

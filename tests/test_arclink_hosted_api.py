@@ -3791,6 +3791,89 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
     print("PASS test_telegram_webhook_acknowledges_button_callbacks")
 
 
+def test_operator_telegram_callback_preserves_native_update_and_triggers_bridge() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_operator_tg_callback_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_operator_tg_callback_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_operator_tg_callback_test")
+    operator_agent = load_module("arclink_operator_agent.py", "arclink_operator_agent_hosted_callback_test")
+    conn = memory_db(control)
+    operator_agent.ensure_operator_agent_user(conn, user_id="operator")
+    operator_agent.ensure_operator_agent_deployment(conn, user_id="operator", status="active")
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "TELEGRAM_WEBHOOK_SECRET": "tg_secret",
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "telegram",
+        "OPERATOR_NOTIFY_CHANNEL_ID": "42",
+        "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+    })
+
+    class CaptureTransport:
+        def __init__(self) -> None:
+            self.answered_callbacks = []
+
+        def answer_callback_query(self, callback_query_id: str, text: str = ""):
+            self.answered_callbacks.append({"callback_query_id": callback_query_id, "text": text})
+            return {"ok": True}
+
+    live_triggers = []
+    fast_acks = []
+
+    def fake_live_trigger(**kwargs):
+        live_triggers.append(kwargs)
+        return True
+
+    def fake_fast_ack(**kwargs):
+        fast_acks.append(kwargs)
+        return True
+
+    old_live = hosted._kick_public_agent_live_trigger
+    old_fast = hosted._kick_telegram_fast_agent_ack
+    hosted._kick_public_agent_live_trigger = fake_live_trigger
+    hosted._kick_telegram_fast_agent_ack = fake_fast_ack
+    transport = CaptureTransport()
+    update = {
+        "update_id": 222,
+        "callback_query": {
+            "id": "cb_allow_always",
+            "from": {"id": 99},
+            "message": {"message_id": 313, "chat": {"id": 42, "type": "private"}},
+            "data": "ea:always:1",
+        },
+    }
+    try:
+        status, payload, _ = hosted._handle_telegram_webhook(
+            conn,
+            update,
+            "req_operator_tg_callback",
+            config,
+            adapters.FakeStripeClient(),
+            telegram_transport=transport,
+            headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
+        )
+    finally:
+        hosted._kick_public_agent_live_trigger = old_live
+        hosted._kick_telegram_fast_agent_ack = old_fast
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload.get("action") == "operator_agent_turn_queued", str(payload))
+    expect(payload.get("callback_acknowledged") is True, str(payload))
+    expect(payload.get("fast_acknowledged") is True, str(payload))
+    expect(payload.get("live_triggered") is True, str(payload))
+    expect(transport.answered_callbacks == [{"callback_query_id": "cb_allow_always", "text": ""}], str(transport.answered_callbacks))
+    expect(len(fast_acks) == 1 and fast_acks[0]["message_id"] == "313", str(fast_acks))
+    expect(len(live_triggers) == 1 and live_triggers[0]["target_id"] == "tg:42", str(live_triggers))
+    row = conn.execute(
+        "SELECT target_id, message, extra_json FROM notification_outbox WHERE target_kind = 'public-agent-turn' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(row is not None and row["target_id"] == "tg:42", str(dict(row) if row else None))
+    expect(row["message"] == "ea:always:1", str(dict(row)))
+    extra = json.loads(str(row["extra_json"] or "{}"))
+    expect(extra.get("operator_turn") is True, str(extra))
+    expect(extra.get("telegram_native_callback") is True, str(extra))
+    raw_update = json.loads(str(extra.get("telegram_update_json") or "{}"))
+    expect(raw_update.get("callback_query", {}).get("data") == "ea:always:1", str(raw_update))
+    print("PASS test_operator_telegram_callback_preserves_native_update_and_triggers_bridge")
+
+
 def test_telegram_credential_ack_edits_original_secret_message() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_tg_credential_ack_edit_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_credential_ack_edit_test")
@@ -5355,6 +5438,7 @@ def main() -> int:
     test_telegram_fast_ack_backpressure_is_cosmetic()
     test_public_agent_live_trigger_auto_mode_defers_without_docker_socket()
     test_telegram_webhook_acknowledges_button_callbacks()
+    test_operator_telegram_callback_preserves_native_update_and_triggers_bridge()
     test_telegram_credential_ack_edits_original_secret_message()
     test_discord_webhook_route()
     test_health_endpoint_requires_no_auth()
@@ -5389,7 +5473,7 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 82 ArcLink hosted API tests")
+    print("PASS all 83 ArcLink hosted API tests")
     return 0
 
 

@@ -288,6 +288,7 @@ def test_telegram_operator_native_callback_routes_to_hermes_bridge() -> None:
         result = telegram.handle_telegram_update(conn, update, env=env)
         expect(result is not None and result.get("action") == "operator_agent_turn_queued", str(result))
         expect(result.get("callback_query_id") == "cb_approval", str(result))
+        expect(result.get("agent_turn_target_id") == "tg:42", str(result))
         row = conn.execute(
             "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox ORDER BY id DESC LIMIT 1"
         ).fetchone()

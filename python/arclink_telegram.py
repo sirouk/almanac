@@ -1221,6 +1221,7 @@ def _route_operator_free_form_to_agent(
         "session_id": "",
         "action": "operator_agent_turn_queued",
         "channel_identity": f"operator:telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}",
+        "agent_turn_target_id": f"tg:{chat_id}",
         "telegram_message_id": message_id,
         "callback_query_id": str(parsed.get("callback_query_id") or ""),
         "callback_message_id": str(parsed.get("callback_message_id") or ""),

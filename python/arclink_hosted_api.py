@@ -2251,7 +2251,7 @@ def _handle_telegram_webhook(
                 except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     live_triggered = False
-    if str(result.get("action") or "") == "agent_message_queued":
+    if str(result.get("action") or "") in {"agent_message_queued", "operator_agent_turn_queued"}:
         fast_acknowledged = _kick_telegram_fast_agent_ack(
             config=config,
             telegram_config=telegram_config,
@@ -2263,7 +2263,7 @@ def _handle_telegram_webhook(
         live_triggered = _kick_public_agent_live_trigger(
             config=config,
             channel_kind="telegram",
-            target_id=str(result.get("channel_identity") or ""),
+            target_id=str(result.get("agent_turn_target_id") or result.get("channel_identity") or ""),
             request_id=request_id,
         )
     return _json_response(

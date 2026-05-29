@@ -306,6 +306,7 @@ services:
     environment:
       <<: *arclink-operator-env
       ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+      ARCLINK_SQLITE_JOURNAL_MODE: MEMORY
     command: ["./bin/install-operator-hermes-home.sh"]
     volumes:
       - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator

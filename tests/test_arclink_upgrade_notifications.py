@@ -130,7 +130,12 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
                 "SELECT message, extra_json FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
             ).fetchall()
             expect(len(operator_rows) == 1, operator_rows)
-            expect("ArcLink update available" in str(operator_rows[0]["message"] or ""), operator_rows)
+            operator_message = str(operator_rows[0]["message"] or "")
+            expect("ArcLink update available" in operator_message, operator_message)
+            expect("tap Install" in operator_message, operator_message)
+            expect("send /upgrade in Operator Raven" in operator_message, operator_message)
+            expect("./deploy.sh upgrade" in operator_message, operator_message)
+            expect("./deploy.sh control upgrade" in operator_message, operator_message)
             operator_extra = json.loads(str(operator_rows[0]["extra_json"] or "{}"))
             buttons = operator_extra.get("telegram_reply_markup", {}).get("inline_keyboard", [[]])[0]
             expect([button.get("text") for button in buttons] == ["Dismiss", "Install"], str(operator_extra))

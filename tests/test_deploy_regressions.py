@@ -3879,6 +3879,11 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "operator services must include own files/vault and memory lanes")
     expect("install-operator-hermes-home.sh" in compose_text,
            "operator Hermes services must seed their own Hermes home")
+    operator_install_text = (REPO / "bin" / "install-operator-hermes-home.sh").read_text()
+    expect("ensure_llm_router_key(" in operator_install_text and "generate_llm_router_raw_key()" in operator_install_text,
+           "operator Hermes must provision its own ArcLink LLM router key")
+    expect('export ARCLINK_CHUTES_API_KEY_FILE="$operator_router_key_file"' in operator_install_text,
+           "operator Hermes must send the router key to the internal LLM router, not the upstream provider key")
     expect("/opt/arclink/runtime/hermes-venv/bin/hermes gateway run --replace" in compose_text,
            "operator Hermes gateway must execute the pinned runtime hermes directly")
     expect("ARCLINK_CONFIG_FILE: /home/arclink/arclink/arclink-priv/state/operator/config/operator.env" in compose_text,

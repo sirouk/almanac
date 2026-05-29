@@ -22,7 +22,72 @@ mkdir -p "$HERMES_HOME_TARGET/state" "$OPERATOR_SECRET_DIR"
 (
   flock 9
 
-  if [[ -n "${CHUTES_API_KEY:-}" && -z "${ARCLINK_CHUTES_API_KEY_FILE:-}" ]]; then
+  operator_router_key_file="${ARCLINK_OPERATOR_LLM_ROUTER_API_KEY_FILE:-$OPERATOR_SECRET_DIR/llm_router_api_key}"
+  operator_router_key_ref="${ARCLINK_OPERATOR_LLM_ROUTER_API_KEY_REF:-secret://arclink/llm-router/operator/api-key}"
+  operator_use_router="${ARCLINK_OPERATOR_USE_LLM_ROUTER:-1}"
+  chutes_base="${ARCLINK_CHUTES_BASE_URL:-}"
+  if [[ -z "${ARCLINK_OPERATOR_USE_LLM_ROUTER:-}" && "$chutes_base" != *"control-llm-router"* ]]; then
+    operator_use_router="0"
+  fi
+
+  if [[ "$operator_use_router" != "0" ]]; then
+    "$PYTHON_BIN" - "$operator_router_key_file" "$operator_router_key_ref" <<'PY'
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+repo_dir = Path(os.environ.get("ARCLINK_REPO_DIR", "/home/arclink/arclink"))
+sys.path.insert(0, str(repo_dir / "python"))
+
+from arclink_control import Config, connect_db, ensure_llm_router_key, generate_llm_router_raw_key  # noqa: E402
+
+key_path = Path(sys.argv[1])
+secret_ref = str(sys.argv[2] or "").strip() or "secret://arclink/llm-router/operator/api-key"
+key_path.parent.mkdir(parents=True, exist_ok=True)
+key_path.parent.chmod(0o700)
+
+raw_key = ""
+if key_path.exists():
+    raw_key = key_path.read_text(encoding="utf-8").strip()
+if not raw_key:
+    raw_key = generate_llm_router_raw_key()
+    fd, tmp_name = tempfile.mkstemp(dir=str(key_path.parent), prefix=f".{key_path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(raw_key + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_name, 0o600)
+        os.replace(tmp_name, key_path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+key_path.chmod(0o600)
+
+cfg = Config.from_env()
+with connect_db(cfg) as conn:
+    model = (
+        os.environ.get("ARCLINK_LLM_ROUTER_DEFAULT_MODEL")
+        or os.environ.get("ARCLINK_CHUTES_DEFAULT_MODEL")
+        or ""
+    ).strip()
+    ensure_llm_router_key(
+        conn,
+        deployment_id=os.environ.get("ARCLINK_DEPLOYMENT_ID", "operator") or "operator",
+        user_id=os.environ.get("ARCLINK_USER_ID", "operator") or "operator",
+        secret_ref=secret_ref,
+        raw_key=raw_key,
+        allowed_models=[model] if model else None,
+        metadata={"source": "operator_hermes_home", "runtime": "control-stack"},
+    )
+PY
+    export ARCLINK_CHUTES_API_KEY_FILE="$operator_router_key_file"
+  elif [[ -n "${CHUTES_API_KEY:-}" && -z "${ARCLINK_CHUTES_API_KEY_FILE:-}" ]]; then
     umask 077
     printf '%s' "$CHUTES_API_KEY" >"$OPERATOR_SECRET_DIR/chutes_api_key"
     export ARCLINK_CHUTES_API_KEY_FILE="$OPERATOR_SECRET_DIR/chutes_api_key"

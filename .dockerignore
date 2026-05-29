@@ -33,3 +33,6 @@ __pycache__
 .DS_Store
 HUMAN_INSTRUCTIONS.md
 PROMPT_*.md
+analyze_vuln.md
+*_vuln.md
+*vulnerability*.md

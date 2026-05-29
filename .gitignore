@@ -19,6 +19,11 @@ coverage/
 htmlcov/
 evidence/
 
+# Local security audit scratch files
+analyze_vuln.md
+*_vuln.md
+*vulnerability*.md
+
 # Next.js
 web/node_modules/
 web/.next/

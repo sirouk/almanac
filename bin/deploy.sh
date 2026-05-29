@@ -10576,6 +10576,84 @@ EOF
   esac
 }
 
+confirm_control_operator_runtime_reset() {
+  local scope="${1:-sandbox}"
+  local answer="" phrase="" requested=""
+
+  CONTROL_RESET_OPERATOR_STATE="preserve"
+  requested="${ARCLINK_RESET_OPERATOR_STATE:-${ARCLINK_CONTROL_RESET_OPERATOR_STATE:-}}"
+  requested="$(printf '%s' "$requested" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+
+  case "$requested" in
+    ""|preserve|keep|captains|captains-only|users|users-only|no|0|false)
+      if [[ ! -t 0 ]]; then
+        echo "Operator Raven and Operator Hermes state: preserving (set ARCLINK_RESET_OPERATOR_STATE=wipe and ARCLINK_CONFIRM_OPERATOR_RESET='RESET OPERATOR' to wipe non-interactively)."
+      fi
+      return 0
+      ;;
+    wipe|wipe-operator|reset-operator|operator|all)
+      if [[ "${ARCLINK_CONFIRM_OPERATOR_RESET:-}" == "RESET OPERATOR" ]]; then
+        CONTROL_RESET_OPERATOR_STATE="wipe-operator"
+        return 0
+      fi
+      if [[ ! -t 0 ]]; then
+        echo "Refusing to wipe Operator Raven/Hermes without explicit operator confirmation." >&2
+        echo "Set ARCLINK_RESET_OPERATOR_STATE=wipe and ARCLINK_CONFIRM_OPERATOR_RESET='RESET OPERATOR' to run non-interactively." >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "Unknown ARCLINK_RESET_OPERATOR_STATE value: $requested" >&2
+      echo "Use preserve or wipe." >&2
+      return 2
+      ;;
+  esac
+
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+
+  cat <<EOF
+
+Operator Raven / Operator Hermes reset choice
+
+The ${scope} reset is already confirmed. Now choose what happens to the
+platform Operator's own state.
+
+Default: preserve Operator state and reset only Captain/customer data:
+  - keep Operator Raven action history and operator chat delivery rows
+  - keep the in-stack Operator Hermes home, sessions, memory, vault, dashboard credentials
+  - keep operator-scoped router keys and secret refs
+
+Dangerous option: wipe Operator state too and make it anew:
+  - delete Operator Raven action history and operator action logs
+  - delete arclink-priv/state/operator (Hermes home, sessions, memory, vault, workspace, Nextcloud state)
+  - delete operator-scoped secret refs and router keys
+  - recreate the single in-stack Operator Hermes agent after the reset
+
+Choose carefully. Backups are created first either way.
+EOF
+  read -r -p "Preserve Operator Raven/Hermes state? [Y/n]: " answer
+  case "${answer:-Y}" in
+    y|Y|yes|YES|"")
+      CONTROL_RESET_OPERATOR_STATE="preserve"
+      return 0
+      ;;
+    n|N|no|NO)
+      read -r -p "Type RESET OPERATOR to wipe Operator Raven/Hermes too (blank cancels): " phrase
+      if [[ "$phrase" != "RESET OPERATOR" ]]; then
+        return 1
+      fi
+      CONTROL_RESET_OPERATOR_STATE="wipe-operator"
+      return 0
+      ;;
+    *)
+      echo "Please answer yes or no." >&2
+      return 1
+      ;;
+  esac
+}
+
 stop_control_runtime_writers() {
   local -a containers=(
     arclink-control-api-1
@@ -10595,6 +10673,26 @@ stop_control_runtime_writers() {
     arclink-pdf-ingest-1
     arclink-memory-synth-1
     arclink-hermes-docs-sync-1
+  )
+
+  if command -v docker >/dev/null 2>&1; then
+    docker stop "${containers[@]}" >/dev/null 2>&1 || true
+  fi
+}
+
+stop_control_operator_runtime_containers() {
+  local -a containers=(
+    arclink-control-operator-hermes-gateway-1
+    arclink-control-operator-hermes-dashboard-1
+    arclink-control-operator-hermes-setup-1
+    arclink-control-operator-qmd-mcp-1
+    arclink-control-operator-dashboard-1
+    arclink-control-operator-vault-watch-1
+    arclink-control-operator-memory-synth-1
+    arclink-control-operator-nextcloud-1
+    arclink-control-operator-nextcloud-db-1
+    arclink-control-operator-nextcloud-redis-1
+    arclink-control-operator-arclink-wrapped-1
   )
 
   if command -v docker >/dev/null 2>&1; then
@@ -10703,6 +10801,40 @@ remove_control_generated_secret_refs() {
   find "$secret_root" -mindepth 1 -maxdepth 1 -type d \( -name 'arcdep_*' -o -name 'dep_*' -o -name 'users' \) -exec rm -rf {} +
 }
 
+remove_control_operator_runtime_state() {
+  local host_priv="" state_root=""
+  local -a paths=()
+  local path=""
+
+  host_priv="$(control_host_priv_dir)"
+  state_root="$host_priv/state"
+  if [[ -z "$state_root" || "$state_root" == "/" || "$state_root" != */state ]]; then
+    echo "Refusing to wipe Operator state with unsafe state root: ${state_root:-blank}" >&2
+    return 1
+  fi
+
+  paths=(
+    "$state_root/operator"
+    "$state_root/operator-actions"
+    "$state_root/sovereign-secrets/operator"
+  )
+
+  for path in "${paths[@]}"; do
+    case "$path" in
+      "$state_root"/operator|"$state_root"/operator-actions|"$state_root"/sovereign-secrets/operator)
+        if [[ -e "$path" ]]; then
+          echo "Removing Operator reset target: $path"
+          rm -rf "$path"
+        fi
+        ;;
+      *)
+        echo "Refusing unsafe Operator reset target: $path" >&2
+        return 1
+        ;;
+    esac
+  done
+}
+
 reset_control_telegram_active_command_scopes() {
   local db_path="$1"
 
@@ -10765,20 +10897,25 @@ PY
 
 reset_control_runtime_database() {
   local db_path="$1"
+  local operator_mode="${2:-preserve}"
 
   if [[ ! -f "$db_path" ]]; then
     echo "Control database not found, skipping row reset: $db_path"
     return 0
   fi
 
-python3 - "$db_path" <<'PY'
+python3 - "$db_path" "$operator_mode" <<'PY'
+import json
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 db_path = Path(sys.argv[1])
-tables = [
+operator_mode = (sys.argv[2] if len(sys.argv) > 2 else "preserve").strip()
+wipe_operator = operator_mode == "wipe-operator"
+
+base_tables = [
     "arclink_channel_pairing_codes",
     "arclink_credential_handoffs",
     "arclink_onboarding_events",
@@ -10806,7 +10943,6 @@ tables = [
     "bootstrap_tokens",
     "onboarding_sessions",
     "onboarding_update_failures",
-    "operator_actions",
     "notion_identity_claims",
     "notion_identity_overrides",
     "notion_index_documents",
@@ -10818,9 +10954,22 @@ tables = [
     "refresh_jobs",
     "arclink_users",
 ]
+operator_wipe_tables = [
+    "operator_actions",
+]
 
 def quote(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
+
+def placeholders(values) -> str:
+    return ",".join("?" for _ in values)
+
+def parse_json(raw: str) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
 
 conn = sqlite3.connect(str(db_path))
 try:
@@ -10828,13 +10977,159 @@ try:
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
+    operator_users = {"operator"}
+    operator_deployments = {"operator"}
+    if "arclink_deployments" in existing:
+        for row in conn.execute("SELECT deployment_id, user_id, metadata_json FROM arclink_deployments"):
+            deployment_id = str(row[0] or "")
+            user_id = str(row[1] or "")
+            metadata = parse_json(str(row[2] or "{}"))
+            if (
+                deployment_id == "operator"
+                or user_id == "operator"
+                or metadata.get("operator_agent") is True
+                or metadata.get("operator_agent_runtime") == "control-stack"
+            ):
+                if deployment_id:
+                    operator_deployments.add(deployment_id)
+                if user_id:
+                    operator_users.add(user_id)
+
+    operator_user_values = sorted(operator_users)
+    operator_deployment_values = sorted(operator_deployments)
+    cleared = []
+    partial = []
+
+    def delete_all(table: str) -> None:
+        if table not in existing:
+            return
+        conn.execute(f"DELETE FROM {quote(table)}")
+        cleared.append(table)
+
+    def delete_where(table: str, clause: str, params=()) -> None:
+        if table not in existing:
+            return
+        conn.execute(f"DELETE FROM {quote(table)} WHERE {clause}", tuple(params))
+        partial.append(table)
+
+    def delete_non_operator_user(table: str, column: str = "user_id") -> None:
+        delete_where(table, f"{quote(column)} NOT IN ({placeholders(operator_user_values)})", operator_user_values)
+
+    def delete_non_operator_deployment(table: str, column: str = "deployment_id") -> None:
+        delete_where(table, f"{quote(column)} NOT IN ({placeholders(operator_deployment_values)})", operator_deployment_values)
+
+    def delete_notification_outbox() -> None:
+        if "notification_outbox" not in existing:
+            return
+        delete_ids = []
+        for row in conn.execute("SELECT id, target_kind, target_id, extra_json FROM notification_outbox"):
+            row_id = row[0]
+            target_kind = str(row[1] or "")
+            target_id = str(row[2] or "")
+            extra = parse_json(str(row[3] or "{}"))
+            keep = (
+                target_kind == "operator"
+                or target_id in operator_users
+                or target_id in operator_deployments
+                or extra.get("operator_turn") is True
+                or extra.get("source_kind") == "operator_chat"
+                or str(extra.get("deployment_id") or "") in operator_deployments
+            )
+            if wipe_operator or not keep:
+                delete_ids.append(row_id)
+        for row_id in delete_ids:
+            conn.execute("DELETE FROM notification_outbox WHERE id = ?", (row_id,))
+        partial.append("notification_outbox")
+
+    def delete_arclink_events() -> None:
+        if "arclink_events" not in existing:
+            return
+        delete_ids = []
+        for row in conn.execute("SELECT event_id, subject_kind, subject_id, metadata_json FROM arclink_events"):
+            event_id = str(row[0] or "")
+            subject_kind = str(row[1] or "")
+            subject_id = str(row[2] or "")
+            metadata = parse_json(str(row[3] or "{}"))
+            keep = (
+                "operator" in subject_kind.lower()
+                or subject_id in operator_users
+                or subject_id in operator_deployments
+                or str(metadata.get("actor") or metadata.get("actor_id") or "").startswith("operator")
+                or str(metadata.get("source") or "").startswith("operator")
+            )
+            if wipe_operator or not keep:
+                delete_ids.append(event_id)
+        for event_id in delete_ids:
+            conn.execute("DELETE FROM arclink_events WHERE event_id = ?", (event_id,))
+        partial.append("arclink_events")
+
+    def delete_arclink_audit_log() -> None:
+        if "arclink_audit_log" not in existing:
+            return
+        delete_ids = []
+        for row in conn.execute("SELECT audit_id, actor_id, target_kind, target_id, metadata_json FROM arclink_audit_log"):
+            audit_id = str(row[0] or "")
+            actor_id = str(row[1] or "")
+            target_kind = str(row[2] or "")
+            target_id = str(row[3] or "")
+            metadata = parse_json(str(row[4] or "{}"))
+            keep = (
+                actor_id.startswith("operator")
+                or "operator" in target_kind.lower()
+                or target_id in operator_users
+                or target_id in operator_deployments
+                or str(metadata.get("source") or "").startswith("operator")
+            )
+            if wipe_operator or not keep:
+                delete_ids.append(audit_id)
+        for audit_id in delete_ids:
+            conn.execute("DELETE FROM arclink_audit_log WHERE audit_id = ?", (audit_id,))
+        partial.append("arclink_audit_log")
+
     conn.execute("PRAGMA foreign_keys=OFF")
     conn.execute("BEGIN IMMEDIATE")
-    cleared = []
-    for table in tables:
-        if table in existing:
-            conn.execute(f"DELETE FROM {quote(table)}")
-            cleared.append(table)
+    for table in base_tables:
+        if table in {
+            "arclink_users",
+            "arclink_user_sessions",
+            "arclink_subscriptions",
+            "arclink_credential_handoffs",
+        }:
+            if wipe_operator:
+                delete_all(table)
+            else:
+                delete_non_operator_user(table)
+        elif table in {
+            "arclink_provisioning_jobs",
+            "arclink_deployment_placements",
+            "arclink_deployments",
+            "arclink_dns_records",
+            "arclink_service_health",
+        }:
+            if wipe_operator:
+                delete_all(table)
+            else:
+                delete_non_operator_deployment(table)
+        elif table == "notification_outbox":
+            delete_notification_outbox()
+        elif table == "arclink_events":
+            delete_arclink_events()
+        elif table == "arclink_audit_log":
+            delete_arclink_audit_log()
+        else:
+            delete_all(table)
+    if "arclink_llm_router_keys" in existing:
+        if wipe_operator:
+            delete_all("arclink_llm_router_keys")
+        else:
+            delete_where(
+                "arclink_llm_router_keys",
+                f"deployment_id NOT IN ({placeholders(operator_deployment_values)}) AND user_id NOT IN ({placeholders(operator_user_values)})",
+                operator_deployment_values + operator_user_values,
+            )
+    for table in operator_wipe_tables:
+        if wipe_operator:
+            delete_all(table)
     if "sqlite_sequence" in existing and cleared:
         placeholders = ",".join("?" for _ in cleared)
         conn.execute(f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})", cleared)
@@ -10857,6 +11152,9 @@ try:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("VACUUM")
     print("Cleared runtime tables: " + (", ".join(cleared) if cleared else "none"))
+    if partial:
+        print("Partially cleared runtime tables: " + ", ".join(partial))
+    print("Operator reset mode: " + ("wiped Operator Raven/Hermes rows" if wipe_operator else "preserved Operator Raven/Hermes rows"))
 finally:
     conn.close()
 PY
@@ -10902,6 +11200,7 @@ run_control_runtime_reset() {
   local backup_dir="" db_path="" docker_env=""
 
   confirm_control_runtime_reset "$scope"
+  confirm_control_operator_runtime_reset "$scope"
 
   begin_deploy_operation "control-reset-$scope" "$state_dir"
   trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
@@ -10914,6 +11213,10 @@ run_control_runtime_reset() {
   stop_control_runtime_writers
   echo "Stopping generated ArcPod containers before reset backup..."
   stop_control_generated_pod_containers
+  if [[ "${CONTROL_RESET_OPERATOR_STATE:-preserve}" == "wipe-operator" ]]; then
+    echo "Stopping Operator Hermes containers before reset backup..."
+    stop_control_operator_runtime_containers
+  fi
 
   backup_dir="$(new_control_runtime_backup_dir)"
   create_control_runtime_backup "$backup_dir"
@@ -10922,6 +11225,12 @@ run_control_runtime_reset() {
   remove_control_generated_pods
   echo "Removing generated per-deployment secret-store directories..."
   remove_control_generated_secret_refs
+  if [[ "${CONTROL_RESET_OPERATOR_STATE:-preserve}" == "wipe-operator" ]]; then
+    echo "Removing Operator Raven/Hermes state after backup..."
+    remove_control_operator_runtime_state
+  else
+    echo "Preserving Operator Raven/Hermes state; resetting Captain/customer runtime only."
+  fi
   echo "Resetting Telegram active-agent command scopes..."
   reset_control_telegram_active_command_scopes "$db_path"
   if [[ "$scope" == "production" ]]; then
@@ -10929,7 +11238,7 @@ run_control_runtime_reset() {
   else
     echo "Clearing sandbox/test user runtime rows from control database..."
   fi
-  reset_control_runtime_database "$db_path"
+  reset_control_runtime_database "$db_path" "${CONTROL_RESET_OPERATOR_STATE:-preserve}"
   echo "Runtime counts after reset:"
   print_control_runtime_counts "$db_path"
 
@@ -10941,6 +11250,7 @@ run_control_runtime_reset() {
   run_arclink_docker record-release
   run_arclink_docker ports
   run_arclink_docker health
+  ensure_control_operator_agent
 
   echo "ArcLink Sovereign $scope runtime reset complete."
   echo "Backup kept at: $backup_dir"

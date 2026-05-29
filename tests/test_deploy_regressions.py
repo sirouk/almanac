@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -2214,6 +2215,7 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     text = DEPLOY_SH.read_text()
     reset = extract(text, "run_control_runtime_reset() {", "control_command_from_mode() {")
     backup = extract(text, "create_control_runtime_backup() {", "run_control_runtime_backup() {")
+    operator_confirm = extract(text, "confirm_control_operator_runtime_reset() {", "stop_control_runtime_writers() {")
     expect("create_control_runtime_backup" in reset, "expected reset to create a backup before clearing data")
     expect(
         reset.index("create_control_runtime_backup") < reset.index("reset_control_runtime_database"),
@@ -2226,10 +2228,26 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     )
     expect("confirm_control_runtime_reset" in reset, "expected reset to require confirmation")
     expect('confirm_control_runtime_reset "$scope"' in reset, "expected reset confirmation to receive sandbox/production scope")
+    expect('confirm_control_operator_runtime_reset "$scope"' in reset, "expected reset to separately ask about Operator state")
+    expect("CONTROL_RESET_OPERATOR_STATE" in reset, "expected reset to carry explicit Operator preservation/wipe mode")
+    expect(
+        "Preserving Operator Raven/Hermes state; resetting Captain/customer runtime only." in reset,
+        "expected default reset to preserve Operator state",
+    )
+    expect("remove_control_operator_runtime_state" in reset, "expected explicit Operator wipe to delete Operator state after backup")
+    expect("ensure_control_operator_agent" in reset, "expected reset to recreate the single Operator Hermes agent")
     expect("ARCLINK_CONFIRM_RUNTIME_RESET" in text, "expected reset to support explicit non-interactive confirmation")
     expect("ARCLINK_CONFIRM_SANDBOX_RESET" in text, "expected sandbox reset to support explicit non-interactive confirmation")
     expect("ARCLINK_CONFIRM_PRODUCTION_RESET" in text, "expected production reset to support explicit non-interactive confirmation")
     expect("ARCLINK_CONFIRM_PRODUCTION_RESET_HOST" in text, "expected production reset to require host-specific confirmation")
+    expect("ARCLINK_RESET_OPERATOR_STATE=wipe" in operator_confirm,
+           "expected non-interactive Operator wipe to require an explicit mode")
+    expect("ARCLINK_CONFIRM_OPERATOR_RESET='RESET OPERATOR'" in operator_confirm,
+           "expected non-interactive Operator wipe to require the Operator phrase")
+    expect("Preserve Operator Raven/Hermes state? [Y/n]" in operator_confirm,
+           "expected interactive reset to default to preserving Operator Raven/Hermes")
+    expect("Type RESET OPERATOR to wipe Operator Raven/Hermes too" in operator_confirm,
+           "expected Operator wipe to need a typed phrase")
     expect("Type RESET SANDBOX to continue" in text, "expected sandbox reset prompt to require a typed acknowledgement")
     expect("First type RESET PRODUCTION" in text, "expected production reset prompt to require a production acknowledgement")
     expect("down --remove-orphans --volumes" in text, "expected reset to remove generated pod stacks and named volumes")
@@ -2247,12 +2265,160 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     print("PASS test_control_runtime_reset_is_backup_first_and_guarded")
 
 
+def test_control_runtime_reset_preserves_operator_state_by_default() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "reset_control_runtime_database() {", "print_control_runtime_counts() {")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE arclink_users (user_id TEXT PRIMARY KEY);
+                CREATE TABLE arclink_deployments (
+                  deployment_id TEXT PRIMARY KEY,
+                  user_id TEXT NOT NULL,
+                  metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE operator_actions (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  requested_by TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE notification_outbox (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  target_kind TEXT NOT NULL,
+                  target_id TEXT NOT NULL,
+                  extra_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE arclink_llm_router_keys (
+                  key_id TEXT PRIMARY KEY,
+                  deployment_id TEXT NOT NULL,
+                  user_id TEXT NOT NULL
+                );
+                """
+            )
+            conn.executemany("INSERT INTO arclink_users (user_id) VALUES (?)", [("operator",), ("captain",)])
+            conn.executemany(
+                "INSERT INTO arclink_deployments (deployment_id, user_id, metadata_json) VALUES (?, ?, ?)",
+                [
+                    ("operator", "operator", '{"operator_agent": true, "operator_agent_runtime": "control-stack"}'),
+                    ("arcdep_1", "captain", "{}"),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO operator_actions (requested_by) VALUES (?)",
+                [("telegram:operator",), ("discord:operator",)],
+            )
+            conn.executemany(
+                "INSERT INTO notification_outbox (target_kind, target_id, extra_json) VALUES (?, ?, ?)",
+                [
+                    ("operator", "operator", "{}"),
+                    ("public-agent-turn", "operator", '{"operator_turn": true, "deployment_id": "operator"}'),
+                    ("public-bot-user", "captain", '{"deployment_id": "arcdep_1"}'),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO arclink_llm_router_keys (key_id, deployment_id, user_id) VALUES (?, ?, ?)",
+                [("op-key", "operator", "operator"), ("captain-key", "arcdep_1", "captain")],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = bash(f"set -euo pipefail\n{snippet}\nreset_control_runtime_database {shlex.quote(str(db_path))} preserve")
+        expect(result.returncode == 0, result.stderr or result.stdout)
+        expect("Operator reset mode: preserved Operator Raven/Hermes rows" in result.stdout, result.stdout)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            users = {row[0] for row in conn.execute("SELECT user_id FROM arclink_users")}
+            deployments = {row[0] for row in conn.execute("SELECT deployment_id FROM arclink_deployments")}
+            keys = {row[0] for row in conn.execute("SELECT key_id FROM arclink_llm_router_keys")}
+            outbox = {
+                (row[0], row[1])
+                for row in conn.execute("SELECT target_kind, target_id FROM notification_outbox")
+            }
+            operator_action_count = conn.execute("SELECT COUNT(*) FROM operator_actions").fetchone()[0]
+        finally:
+            conn.close()
+        expect(users == {"operator"}, str(users))
+        expect(deployments == {"operator"}, str(deployments))
+        expect(keys == {"op-key"}, str(keys))
+        expect(operator_action_count == 2, f"operator actions should be preserved, got {operator_action_count}")
+        expect(("operator", "operator") in outbox and ("public-agent-turn", "operator") in outbox, str(outbox))
+        expect(("public-bot-user", "captain") not in outbox, str(outbox))
+    print("PASS test_control_runtime_reset_preserves_operator_state_by_default")
+
+
+def test_control_runtime_reset_can_explicitly_wipe_operator_state() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "reset_control_runtime_database() {", "print_control_runtime_counts() {")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE arclink_users (user_id TEXT PRIMARY KEY);
+                CREATE TABLE arclink_deployments (
+                  deployment_id TEXT PRIMARY KEY,
+                  user_id TEXT NOT NULL,
+                  metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE operator_actions (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  requested_by TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE notification_outbox (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  target_kind TEXT NOT NULL,
+                  target_id TEXT NOT NULL,
+                  extra_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE arclink_llm_router_keys (
+                  key_id TEXT PRIMARY KEY,
+                  deployment_id TEXT NOT NULL,
+                  user_id TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute("INSERT INTO arclink_users (user_id) VALUES ('operator')")
+            conn.execute(
+                "INSERT INTO arclink_deployments (deployment_id, user_id, metadata_json) VALUES ('operator', 'operator', ?)",
+                ('{"operator_agent": true}',),
+            )
+            conn.execute("INSERT INTO operator_actions (requested_by) VALUES ('telegram:operator')")
+            conn.execute(
+                "INSERT INTO notification_outbox (target_kind, target_id, extra_json) VALUES ('operator', 'operator', '{}')"
+            )
+            conn.execute(
+                "INSERT INTO arclink_llm_router_keys (key_id, deployment_id, user_id) VALUES ('op-key', 'operator', 'operator')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        result = bash(f"set -euo pipefail\n{snippet}\nreset_control_runtime_database {shlex.quote(str(db_path))} wipe-operator")
+        expect(result.returncode == 0, result.stderr or result.stdout)
+        expect("Operator reset mode: wiped Operator Raven/Hermes rows" in result.stdout, result.stdout)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            for table in ("arclink_users", "arclink_deployments", "operator_actions", "notification_outbox", "arclink_llm_router_keys"):
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                expect(count == 0, f"{table} should be empty after explicit Operator wipe, got {count}")
+        finally:
+            conn.close()
+    print("PASS test_control_runtime_reset_can_explicitly_wipe_operator_state")
+
+
 def test_control_reset_modes_have_separate_confirmations() -> None:
     text = DEPLOY_SH.read_text()
     chooser = extract(text, "choose_control_mode() {", "detect_tailscale() {")
     commands = extract(text, "control_command_from_mode() {", "run_control_deploy_flow() {")
     dispatch = extract(text, "run_control_deploy_flow() {", "run_docker_reconfigure_flow() {")
     confirm = extract(text, "confirm_control_runtime_reset() {", "stop_control_runtime_writers() {")
+    operator_confirm = extract(text, "confirm_control_operator_runtime_reset() {", "stop_control_runtime_writers() {")
     expect('CONTROL_DEPLOY_COMMAND="reset-sandbox"' in chooser, "menu should route sandbox reset explicitly")
     expect('CONTROL_DEPLOY_COMMAND="reset-production"' in chooser, "menu should route production reset explicitly")
     expect('control-reset-runtime) printf' in commands and '"reset-runtime"' in commands, "legacy reset-runtime alias should remain")
@@ -2264,6 +2430,7 @@ def test_control_reset_modes_have_separate_confirmations() -> None:
     expect("RESET SANDBOX" in confirm, "sandbox reset should require the sandbox phrase")
     expect("RESET PRODUCTION" in confirm, "production reset should require the production phrase")
     expect("control_runtime_reset_host_name" in text, "production reset should use a concrete host confirmation")
+    expect("RESET OPERATOR" in operator_confirm, "operator wipe should require its own confirmation phrase")
     print("PASS test_control_reset_modes_have_separate_confirmations")
 
 
@@ -4003,6 +4170,8 @@ def main() -> int:
         test_control_reconfigure_autoregisters_local_starter_worker,
         test_control_install_collects_trusted_host_acknowledgement_before_build,
         test_control_runtime_reset_is_backup_first_and_guarded,
+        test_control_runtime_reset_preserves_operator_state_by_default,
+        test_control_runtime_reset_can_explicitly_wipe_operator_state,
         test_control_reset_modes_have_separate_confirmations,
         test_control_fleet_worker_registration_is_first_class,
         test_control_inventory_submenu_and_aliases_are_first_class,

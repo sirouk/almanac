@@ -492,7 +492,7 @@ commit_and_push_pins() {
 
 reexec_upgrade() {
   if [[ "${ARCLINK_COMPONENT_UPGRADE_MODE:-}" == "docker" ]]; then
-    note "Re-exec ./deploy.sh docker upgrade to apply the new pin to the Docker stack..."
+    note "Re-exec ./deploy.sh upgrade to apply the new pin through the Control Node..."
     exec env \
       ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-}" \
       ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}" \
@@ -500,7 +500,7 @@ reexec_upgrade() {
       ARCLINK_UPSTREAM_DEPLOY_KEY_USER="${ARCLINK_UPSTREAM_DEPLOY_KEY_USER:-}" \
       ARCLINK_UPSTREAM_DEPLOY_KEY_PATH="${ARCLINK_UPSTREAM_DEPLOY_KEY_PATH:-}" \
       ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-}" \
-      "$REPO_DIR/deploy.sh" docker upgrade
+      "$REPO_DIR/deploy.sh" upgrade
   fi
 
   # Discover config from operator artifact breadcrumb before hardcoding default

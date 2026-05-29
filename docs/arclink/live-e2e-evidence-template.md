@@ -34,8 +34,8 @@ Template for recording live journey evidence. Fill in after a credentialed run.
 Run `bin/arclink-live-proof --live --json` and paste the evidence JSON here after
 a live hosted run, or use `bin/arclink-live-proof --journey workspace --live
 --json` for native Drive, Code, and Terminal TLS proof. The workspace live run
-executes `deploy.sh docker upgrade`, `deploy.sh docker health`, then Playwright
-desktop/mobile browser checks for the native Drive, Code, and Terminal plugin
+executes `deploy.sh control upgrade`, `deploy.sh control health`, then
+Playwright desktop/mobile browser checks for the native Drive, Code, and Terminal plugin
 routes. Browser proof records redacted JSON plus sanitized screenshot
 references under `evidence/workspace-screenshots/`; do not paste raw command
 output, terminal scrollback, local filesystem paths, or credential values. Copy
@@ -70,8 +70,8 @@ the artifact from the `evidence/` directory:
 
 | # | Step | Status | Duration (ms) | Notes |
 |---|------|--------|---------------|-------|
-| 1 | workspace_docker_upgrade_reconcile | pending | - | Requires ARCLINK_E2E_DOCKER |
-| 2 | workspace_docker_health | pending | - | Requires ARCLINK_E2E_DOCKER |
+| 1 | workspace_control_upgrade | pending | - | Requires ARCLINK_E2E_DOCKER |
+| 2 | workspace_control_health | pending | - | Requires ARCLINK_E2E_DOCKER |
 | 3 | drive_tls_desktop_proof | pending | - | Requires TLS dashboard access |
 | 4 | drive_tls_mobile_proof | pending | - | Requires TLS dashboard access |
 | 5 | code_tls_desktop_proof | pending | - | Requires TLS dashboard access |

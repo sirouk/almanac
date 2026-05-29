@@ -4,9 +4,9 @@ This file is the first-read map for coding agents working in this repository.
 It exists so future agents notice the operational handles before improvising.
 
 ArcLink is not just a library checkout. It is the public half of a live
-shared-host system for Hermes agents, with a private nested state repo,
-systemd services, per-user Unix accounts, chat gateways, qmd retrieval, Notion
-SSOT rails, and deploy keys.
+Sovereign Control Node system for Hermes-powered ArcPods, with a private nested
+state repo, Docker control services, fleet inventory, chat gateways, qmd
+retrieval, Notion SSOT rails, deploy keys, Academy, and inference routing.
 
 Vocabulary split: Captain-facing surfaces use Raven for the guide, ArcPod or
 Pod for a provisioned deployment, Agent for the Hermes-powered occupant,
@@ -35,7 +35,8 @@ reserved for platform/admin/deploy surfaces and backend runbooks.
 
 ## Canonical Host Layout
 
-Default deployed layout:
+Legacy Shared Host layout (retired as a public install lane, retained for
+state migration and host-side Operator workbench development):
 
 ```text
 /home/arclink/
@@ -57,7 +58,7 @@ Default deployed layout:
         runtime/hermes-venv/       shared Hermes runtime
 ```
 
-Per enrolled user:
+Legacy per-enrolled-user layout:
 
 ```text
 /home/<user>/
@@ -82,18 +83,24 @@ From the repo root:
 
 ```bash
 ./deploy.sh                         # interactive menu
-./deploy.sh install                 # install/repair from this checkout
-./deploy.sh upgrade                 # upgrade deployed host from configured upstream
-./deploy.sh health                  # full host health check
-./deploy.sh curator-setup           # repair Curator only
-./deploy.sh notion-ssot             # configure shared Notion SSOT
-./deploy.sh notion-migrate          # guided migration to a new Notion workspace
-./deploy.sh notion-transfer         # back up or restore a Notion page subtree
-./deploy.sh enrollment-status
-./deploy.sh enrollment-trace --unix-user <user>
-./deploy.sh enrollment-align
-./deploy.sh enrollment-reset
-./deploy.sh rotate-nextcloud-secrets
+./deploy.sh install                 # shortcut for control install
+./deploy.sh upgrade                 # shortcut for control upgrade
+./deploy.sh health                  # shortcut for control health
+./deploy.sh control install         # idempotent control-plane bootstrap + build + up + health
+./deploy.sh control upgrade         # rebuild/recreate from current checkout + health
+./deploy.sh control reconfigure     # refresh generated control config/ports only
+./deploy.sh control health
+./deploy.sh control logs [SERVICE]
+./deploy.sh control ps
+./deploy.sh control ports
+./deploy.sh control down
+./deploy.sh control backup
+./deploy.sh control reset-runtime
+./deploy.sh control fleet-key
+./deploy.sh control register-worker
+./deploy.sh control inventory list
+./deploy.sh control inventory health --json
+./deploy.sh control inventory probe-all --json
 ./bin/arclink-ctl upgrade check
 ./bin/arclink-ctl org-profile build
 ./bin/arclink-ctl org-profile validate
@@ -103,63 +110,19 @@ From the repo root:
 ./bin/arclink-ctl onboarding retry-contact <unixusername|discordname>
 ```
 
-Docker mode is also routed through `deploy.sh` so the operator keeps one
-control center:
-
-```bash
-./deploy.sh docker                  # Docker submenu
-./deploy.sh docker install          # bootstrap, operator config, build, up, Curator setup, reconcile, release state, health, smoke
-./deploy.sh docker upgrade          # rebuild/recreate from current checkout + reconcile, health, smoke
-./deploy.sh docker reconfigure      # refresh generated config and ports
-./deploy.sh docker reconcile        # apply profile and restart Docker agent supervisor
-./deploy.sh docker health
-./deploy.sh docker live-smoke
-./deploy.sh docker ports
-./deploy.sh docker ps
-./deploy.sh docker logs [SERVICE]
-./deploy.sh docker notion-ssot
-./deploy.sh docker notion-migrate
-./deploy.sh docker notion-transfer
-./deploy.sh docker down
-./deploy.sh docker teardown
-./deploy.sh docker remove           # alias for Docker teardown
-./deploy.sh docker pins-check
-./deploy.sh docker <component>-upgrade-check
-./deploy.sh docker <component>-upgrade [--tag/--version/--ref ...]
-```
-
-Docker mode is expected to preserve the baremetal operator contract. Shared
-services are Compose services, and enrolled user agents are reconciled by
-`agent-supervisor` through `bin/docker-agent-supervisor.sh` instead of per-user
-systemd units. The Docker install/upgrade path applies the private operating
-profile when present, records the release state, runs strict Docker health, and
-runs the live agent tool smoke. Persistent Docker agent homes live under
-`arclink-priv/state/docker/users/`.
-
 `deploy.sh` is a thin wrapper around `bin/deploy.sh`.
 
 Sovereign Control Node mode is the Dockerized paid self-serve control-plane
-path. It is separate from the operator-led Shared Host path and from Shared
-Host Docker validation. Use it for public web/API onboarding, Stripe
-entitlements, public bot webhooks, domain-or-Tailscale ingress intent, fleet
-placement, provisioning jobs, and user/admin dashboards:
+path and the only public product install lane. Use it for public web/API
+onboarding, Stripe entitlements, public bot webhooks, domain-or-Tailscale
+ingress intent, fleet placement, provisioning jobs, Academy, inference routing,
+and user/admin dashboards.
 
-```bash
-./deploy.sh control install        # idempotent control-plane bootstrap + build + up + health
-./deploy.sh control upgrade        # rebuild/recreate from current checkout + health
-./deploy.sh control reconfigure    # refresh generated control config/ports only
-./deploy.sh control health
-./deploy.sh control logs [SERVICE]
-./deploy.sh control ps
-./deploy.sh control ports
-./deploy.sh control down
-./deploy.sh control backup
-./deploy.sh control reset-runtime
-```
-
-Do not use `./deploy.sh docker ...` for paid ArcPod control work. That
-menu is for the containerized Shared Host substrate. Do not use bare
-`./deploy.sh install` for Control Node work; bare install is Shared Host mode.
+The old Shared Host/systemd lane and the public Shared Host Docker menu are
+retired. Do not reintroduce `./deploy.sh docker ...` as an operator-facing
+mode. Control Node internals still use Docker Compose through
+`./deploy.sh control ...`, and ArcPods remain Docker deployments across the
+registered fleet.
 
 Organization profile ingestion is the operator-owned path for aligning agent
 baseline, roles, teams, boundaries, and per-agent context. The private source

@@ -2,10 +2,10 @@
 
 This document is the source-grounded dream shape for ArcLink's Sovereign
 Control Node path. It describes how the product should feel and operate when
-complete, while keeping the current evidence honest. Shared Host and Shared
-Host Docker remain maintained substrates, but the product trajectory here is
-the Sovereign Control Node: one control plane, one operator universe, many
-isolated ArcPods.
+complete, while keeping the current evidence honest. The old Shared Host and
+Shared Host Docker public modes are retired; the product trajectory here is the
+Sovereign Control Node: one control plane, one operator universe, many isolated
+ArcPods.
 
 ## Ground Truth Boundary
 
@@ -988,9 +988,8 @@ checks: exact, calm, reversible, and proud of the system it is bringing online.
 
 The golden path should provide:
 
-- A first menu that makes Sovereign Control Node, Shared Host, and Shared Host
-  Docker choices obvious, while keeping Sovereign Control Node first for the
-  paid product path.
+- A first menu that exposes the Sovereign Control Node as the only public
+  install lane, with retired legacy-mode guardrails for old commands.
 - Preflight checks that explain missing Docker, network, ports, DNS, Tailscale,
   Stripe, provider, bot, and worker prerequisites before half-building the
   stack.

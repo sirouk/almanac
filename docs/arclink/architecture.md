@@ -1,8 +1,8 @@
 # ArcLink Architecture
 
-ArcLink is a self-serve AI deployment SaaS built as an additive layer on top of
-the shared-host substrate. This document describes the current module
-map, data flow, and integration boundaries.
+ArcLink is a self-serve AI deployment SaaS built around the Sovereign Control
+Node, registered fleet workers, and isolated Docker ArcPods. This document
+describes the current module map, data flow, and integration boundaries.
 
 ## Module Map
 
@@ -148,12 +148,12 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 
 ## Integration Boundaries
 
-### ArcLink Substrate (existing, unchanged)
+### ArcLink Substrate
 
-ArcLink reuses the shared-host Docker Compose orchestration, Hermes runtime, qmd
-retrieval, vault watching, memory synthesis, Nextcloud, dashboard plugins, Curator,
-notification delivery, and health monitoring. These services run inside
-per-deployment containers rendered by the ArcLink provisioning layer.
+ArcLink reuses Docker Compose orchestration, Hermes runtime, qmd retrieval,
+vault watching, memory synthesis, Nextcloud, dashboard plugins, Raven bridges,
+notification delivery, and health monitoring. These services run inside the
+Control Node and per-deployment containers rendered by the provisioning layer.
 
 ### Hermes Workspace Plugins
 

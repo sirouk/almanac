@@ -6,10 +6,10 @@ operations.
 
 ## Current Boundary
 
-ArcLink remains additive on top of the shared-host substrate. New product
-surfaces use `ARCLINK_*` configuration, `arclink_*` database tables, and
-`python/arclink_*.py` helpers while existing deploy, onboarding, Hermes, qmd,
-vault, memory, Notion, and health paths keep their current names.
+ArcLink's public product lane is the Sovereign Control Node. Product surfaces
+use `ARCLINK_*` configuration, `arclink_*` database tables, and
+`python/arclink_*.py` helpers while lower-level Hermes, qmd, vault, memory,
+Notion, Docker, and health primitives remain reusable internals.
 
 The current provisioning layer records and validates intent. Public onboarding
 has no-secret durable session and checkout contracts. The Sovereign Control
@@ -27,7 +27,8 @@ inference, live Notion verification, or production-host proof.
 ## Assumptions
 
 - Docker Compose remains the MVP deployment substrate.
-- The existing shared-host Docker path is the operational base for ArcLink work.
+- The Control Node's Docker Compose substrate is the operational base for
+  ArcLink work; the old public Shared Host Docker menu is retired.
 - Unit and regression tests must not require live Stripe, Cloudflare, Tailscale,
   model provider, Telegram, Discord, Notion, or host provisioning secrets.
 - Secret material is represented by `secret://...` references or Compose
@@ -130,9 +131,9 @@ ArcLink owns:
 - Telegram runtime adapter in `python/arclink_telegram.py`.
 - Discord runtime adapter in `python/arclink_discord.py`.
 
-ArcLink continues to own the live shared-host substrate: deploy/install/upgrade
-scripts, Docker orchestration wrappers, Hermes runtime installation, qmd,
-vault, memory synthesis, Notion SSOT, notifications, Curator, and user-agent
+ArcLink continues to own the live Control Node substrate: deploy/install/upgrade
+scripts, Docker orchestration wrappers, Hermes runtime installation, qmd, vault,
+memory synthesis, Notion SSOT, notifications, Raven bridges, and ArcPod
 refresh/gateway rails.
 
 ## Current Behavior

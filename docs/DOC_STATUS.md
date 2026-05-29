@@ -18,9 +18,9 @@ tests as truth, then update the closest canonical doc.
 
 | Path | Status | Notes |
 | --- | --- | --- |
-| `AGENTS.md` | Canonical | First-read operator and coding-agent guide for Shared Host, Shared Host Docker, and Sovereign Control Node boundaries. |
+| `AGENTS.md` | Canonical | First-read operator and coding-agent guide for the Sovereign Control Node, fleet ArcPods, and retired legacy-mode boundaries. |
 | `README.md` | Canonical | Top-level product, deploy-mode, and validation entrypoint. |
-| `docs/docker.md` | Canonical | Shared Host Docker operations and trusted-host Docker boundary. |
+| `docs/docker.md` | Canonical | Retired Shared Host Docker notice plus Control Node Docker-substrate boundary. |
 | `docs/API_REFERENCE.md` | Canonical | Hosted API route and config reference; OpenAPI remains in `docs/openapi/`. |
 | `docs/org-profile.md` | Canonical | Organization profile ingestion and private-state source guidance. |
 | `docs/arclink/architecture.md` | Canonical | Current module map, route catalog, and integration boundaries. |
@@ -28,7 +28,7 @@ tests as truth, then update the closest canonical doc.
 | `docs/arclink/foundation-runbook.md` | Canonical | Repair and validation runbook for foundation behavior. |
 | `docs/arclink/operations-runbook.md` | Canonical | Operator runbook for hosted/control operations and workspace plugins. |
 | `docs/arclink/llm-router.md` | Canonical | Source-level Control Node LLM Router behavior, ownership, config, policy, and proof boundary. |
-| `docs/arclink/data-safety.md` | Canonical | State, secret, and teardown safety across Shared Host, Docker, and Control Node modes. |
+| `docs/arclink/data-safety.md` | Canonical | State, secret, and teardown safety across Control Node ArcPods and legacy migration state. |
 | `docs/arclink/vocabulary.md` | Canonical | User-facing ArcPod/Captain/Crew/Raven vocabulary and Operator/backend boundary rules. |
 | `docs/arclink/wrapped.md` | Canonical | ArcLink Wrapped ownership, privacy boundary, scheduler/delivery behavior, and novelty-score rationale. |
 | `docs/arclink/first-day-user-guide.md` | Canonical | First-day customer/operator-user guide. |

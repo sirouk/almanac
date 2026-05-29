@@ -143,7 +143,7 @@ x-arclink-job: &arclink-job
 x-nextcloud-db-env: &nextcloud-db-env
   POSTGRES_DB: ${POSTGRES_DB:-nextcloud}
   POSTGRES_USER: ${POSTGRES_USER:-nextcloud}
-  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./deploy.sh docker bootstrap first}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./deploy.sh control bootstrap first}
 
 services:
   arclink-app:
@@ -193,7 +193,7 @@ services:
       <<: *nextcloud-db-env
       POSTGRES_HOST: postgres
       NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
-      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh docker bootstrap first}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh control bootstrap first}
       REDIS_HOST: redis
       NEXTCLOUD_TRUSTED_DOMAINS: localhost 127.0.0.1 ${NEXTCLOUD_TRUSTED_DOMAIN:-localhost}
       OVERWRITEPROTOCOL: ${NEXTCLOUD_OVERWRITEPROTOCOL:-http}
@@ -339,7 +339,7 @@ services:
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_DEPLOYMENT_EXEC_BROKER_HOST: 0.0.0.0
       ARCLINK_DEPLOYMENT_EXEC_BROKER_PORT: 8912
     group_add:
@@ -368,7 +368,7 @@ services:
     environment:
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN: ${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN: ${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_MIGRATION_CAPTURE_HELPER_HOST: 0.0.0.0
       ARCLINK_MIGRATION_CAPTURE_HELPER_PORT: 8914
     volumes:
@@ -387,7 +387,7 @@ services:
     environment:
       <<: [*arclink-env, *arclink-control-secret-env]
       ARCLINK_DEPLOYMENT_EXEC_BROKER_URL: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_URL:-http://deployment-exec-broker:8912}
-      ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
     volumes:
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
@@ -424,9 +424,9 @@ services:
     environment:
       <<: [*arclink-env, *arclink-control-secret-env]
       ARCLINK_DEPLOYMENT_EXEC_BROKER_URL: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_URL:-http://deployment-exec-broker:8912}
-      ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_MIGRATION_CAPTURE_HELPER_URL: ${ARCLINK_MIGRATION_CAPTURE_HELPER_URL:-http://migration-capture-helper:8914}
-      ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN: ${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN: ${ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE: ${ARCLINK_ACTION_WORKER_ALLOW_ROOT_MIGRATION_CAPTURE:-0}
     volumes:
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
@@ -477,7 +477,7 @@ services:
       ARCLINK_DOCKER_HOST_PRIV_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:-}
       ARCLINK_DOCKER_CONTAINER_PRIV_DIR: /home/arclink/arclink/arclink-priv
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_SUPERVISOR_BROKER_HOST: 0.0.0.0
       ARCLINK_AGENT_SUPERVISOR_BROKER_PORT: 8913
     group_add:
@@ -515,7 +515,7 @@ services:
       ARCLINK_DOCKER_CONTAINER_PRIV_DIR: /home/arclink/arclink/arclink-priv
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_OPERATOR_UPGRADE_BROKER_HOST: 0.0.0.0
       ARCLINK_OPERATOR_UPGRADE_BROKER_PORT: 8917
     group_add:
@@ -556,7 +556,7 @@ services:
       ARCLINK_DOCKER_MODE: "1"
       ARCLINK_DOCKER_AGENT_HOME_ROOT: /home/arclink/arclink/arclink-priv/state/docker/users
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_USER_HELPER_HOST: 0.0.0.0
       ARCLINK_AGENT_USER_HELPER_PORT: 8915
     volumes:
@@ -589,7 +589,7 @@ services:
       ARCLINK_DOCKER_AGENT_HOME_ROOT: /home/arclink/arclink/arclink-priv/state/docker/users
       RUNTIME_DIR: /opt/arclink/runtime
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_PROCESS_HELPER_HOST: 0.0.0.0
       ARCLINK_AGENT_PROCESS_HELPER_PORT: 8916
     volumes:
@@ -618,13 +618,13 @@ services:
       ARCLINK_CONTAINER_RUNTIME: docker
       ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor
       ARCLINK_AGENT_USER_HELPER_URL: ${ARCLINK_AGENT_USER_HELPER_URL:-http://agent-user-helper:8915}
-      ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_PROCESS_HELPER_URL: ${ARCLINK_AGENT_PROCESS_HELPER_URL:-http://agent-process-helper:8916}
-      ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_AGENT_SUPERVISOR_BROKER_URL: ${ARCLINK_AGENT_SUPERVISOR_BROKER_URL:-http://agent-supervisor-broker:8913}
-      ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_OPERATOR_UPGRADE_BROKER_URL: ${ARCLINK_OPERATOR_UPGRADE_BROKER_URL:-http://operator-upgrade-broker:8917}
-      ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
     volumes:
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
@@ -666,7 +666,7 @@ services:
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
-      ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_GATEWAY_EXEC_BROKER_HOST: 0.0.0.0
       ARCLINK_GATEWAY_EXEC_BROKER_PORT: 8911
     group_add:
@@ -692,7 +692,7 @@ services:
     environment:
       <<: [*arclink-env, *arclink-control-secret-env]
       ARCLINK_GATEWAY_EXEC_BROKER_URL: ${ARCLINK_GATEWAY_EXEC_BROKER_URL:-http://gateway-exec-broker:8911}
-      ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}
+      ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
     volumes:
       - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
       - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state

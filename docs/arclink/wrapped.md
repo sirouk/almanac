@@ -74,9 +74,9 @@ For Docker-mode proof, verify the named service is present and inspect it
 through the canonical Docker control path:
 
 ```bash
-./deploy.sh docker ps
-./deploy.sh docker logs arclink-wrapped
-./deploy.sh docker health
+./deploy.sh control ps
+./deploy.sh control logs arclink-wrapped
+./deploy.sh control health
 ```
 
 Live Telegram/Discord delivery and production deploy/upgrade remain

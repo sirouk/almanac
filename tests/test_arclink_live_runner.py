@@ -271,8 +271,8 @@ class TestWorkspaceProofJourney(unittest.TestCase):
         self.assertEqual(result.status, "live_executed")
         self.assertEqual(result.exit_code, 0)
         called_args = [call["args"] for call in calls]
-        self.assertIn(["./deploy.sh", "docker", "upgrade"], called_args)
-        self.assertIn(["./deploy.sh", "docker", "health"], called_args)
+        self.assertIn(["./deploy.sh", "control", "upgrade"], called_args)
+        self.assertIn(["./deploy.sh", "control", "health"], called_args)
         browser_calls = [args for args in called_args if args and args[0] == "node"]
         self.assertEqual(len(browser_calls), 6)
         web_root = os.path.realpath(str(live_runner_mod._REPO_ROOT / "web"))
@@ -302,8 +302,8 @@ class TestWorkspaceProofJourney(unittest.TestCase):
     def test_workspace_default_browser_runner_rejects_non_tls_target(self):
         bad_env = {**_WORKSPACE_ENV, "ARCLINK_WORKSPACE_PROOF_TLS_URL": "http://dashboard.example.test"}
         runners = {
-            "workspace_docker_upgrade_reconcile": lambda _step: {"ok": True},
-            "workspace_docker_health": lambda _step: {"ok": True},
+            "workspace_control_upgrade": lambda _step: {"ok": True},
+            "workspace_control_health": lambda _step: {"ok": True},
             "drive_tls_desktop_proof": lambda _step: live_runner_mod._browser_proof_runner("drive_tls_desktop_proof", bad_env),
         }
         result = run_live_proof(

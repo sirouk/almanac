@@ -82,7 +82,7 @@ class TestBuildJourney(unittest.TestCase):
     def test_workspace_journey_targets_native_plugin_tls_proof(self):
         steps = journey_mod.build_journey("workspace")
         names = [step.name for step in steps]
-        self.assertEqual(names[0], "workspace_docker_upgrade_reconcile")
+        self.assertEqual(names[0], "workspace_control_upgrade")
         self.assertIn("drive_tls_desktop_proof", names)
         self.assertIn("drive_tls_mobile_proof", names)
         self.assertIn("code_tls_desktop_proof", names)
@@ -106,14 +106,14 @@ class TestBuildJourney(unittest.TestCase):
         self.assertEqual(names[0], "web_onboarding_start")
         self.assertIn("tailscale_ingress_health_check", names)
         self.assertIn("chutes_oauth_connect_proof", names)
-        self.assertIn("workspace_docker_upgrade_reconcile", names)
+        self.assertIn("workspace_control_upgrade", names)
         self.assertLess(
             names.index("discord_bot_check"),
             names.index("chutes_oauth_connect_proof"),
         )
         self.assertLess(
             names.index("chutes_oauth_connect_proof"),
-            names.index("workspace_docker_upgrade_reconcile"),
+            names.index("workspace_control_upgrade"),
         )
 
     def test_external_journey_contains_opt_in_provider_proofs(self):

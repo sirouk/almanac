@@ -520,6 +520,9 @@ usage() {
   cat <<'EOF'
 Usage:
   deploy.sh                # interactive menu
+  deploy.sh install        # shortcut for control install
+  deploy.sh upgrade        # shortcut for control upgrade
+  deploy.sh health         # shortcut for control health
   deploy.sh control install
   deploy.sh control upgrade
   deploy.sh control health
@@ -532,21 +535,6 @@ Usage:
   deploy.sh control register-worker
   deploy.sh control enrollment [mint|list|revoke|rotate-secret]
   deploy.sh control inventory [list|health|probe|probe-all|add|drain|remove|rotate-key|re-attest|set-strategy]
-  deploy.sh install
-  deploy.sh upgrade
-  deploy.sh notion-ssot
-  deploy.sh notion-migrate
-  deploy.sh notion-transfer
-  deploy.sh enrollment-status
-  deploy.sh enrollment-trace [--unix-user USER | --session-id onb_xxx | --request-id req_xxx]
-  deploy.sh enrollment-align
-  deploy.sh enrollment-reset
-  deploy.sh curator-setup
-  deploy.sh rotate-nextcloud-secrets
-  deploy.sh agent-payload
-  deploy.sh write-config
-  deploy.sh remove
-  deploy.sh health
 
 Sovereign Control Node:
   deploy.sh control install       # idempotent control-plane bootstrap + build + up + health
@@ -572,32 +560,7 @@ Sovereign Control Node:
   deploy.sh control inventory probe-all --json
   deploy.sh control inventory rotate-key --json
 
-Shared Host Docker control center:
-  deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
-  deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
-  deploy.sh docker reconfigure    # refresh generated Docker config/ports only
-  deploy.sh docker health
-  deploy.sh docker ports
-  deploy.sh docker logs [SERVICE]
-  deploy.sh docker ps
-  deploy.sh docker notion-ssot
-  deploy.sh docker notion-migrate
-  deploy.sh docker notion-transfer
-  deploy.sh docker enrollment-status
-  deploy.sh docker enrollment-trace --unix-user <user>
-  deploy.sh docker enrollment-align
-  deploy.sh docker enrollment-reset --unix-user <user>
-  deploy.sh docker curator-setup
-  deploy.sh docker rotate-nextcloud-secrets
-  deploy.sh docker agent-payload
-  deploy.sh docker pins-show
-  deploy.sh docker pins-check
-  deploy.sh docker <component>-upgrade-check
-  deploy.sh docker <component>-upgrade [--tag/--version/--ref ...]
-  deploy.sh docker down
-  deploy.sh docker teardown
-
-Control and Docker shortcut aliases:
+Control shortcut aliases:
   deploy.sh control-install
   deploy.sh control-upgrade
   deploy.sh control-reconfigure
@@ -611,12 +574,6 @@ Control and Docker shortcut aliases:
   deploy.sh control-register-worker
   deploy.sh control-enrollment
   deploy.sh control-inventory
-  deploy.sh docker-install
-  deploy.sh docker-upgrade
-  deploy.sh docker-reconfigure
-  deploy.sh docker-enrollment-status
-  deploy.sh docker-health
-  deploy.sh docker-ports
 
 Pinned-component upgrades (config/pins.json is the source of truth):
   deploy.sh pins-show                          # pretty-print every pinned component
@@ -639,7 +596,43 @@ Pinned-component upgrades (config/pins.json is the source of truth):
 
 Compatibility:
   deploy.sh --write-config-only   # helper-only; not a full host deployment path
+
+Retired public modes:
+  The old Shared Host/systemd lane and the public Shared Host Docker menu are retired.
+  Use the Sovereign Control Node plus registered fleet workers for ArcPod deployments.
+  Internal Compose helpers remain available through `deploy.sh control ...`.
 EOF
+}
+
+retired_shared_host_mode() {
+  cat >&2 <<'EOF'
+ArcLink Shared Host mode is retired.
+
+Use the Sovereign Control Node path instead:
+  ./deploy.sh control install
+  ./deploy.sh control upgrade
+  ./deploy.sh control health
+
+Fleet machines and ArcPod Docker deployments are managed from the control node
+through `./deploy.sh control inventory ...` and `./deploy.sh control register-worker`.
+EOF
+  return 2
+}
+
+retired_shared_host_docker_mode() {
+  cat >&2 <<'EOF'
+ArcLink Shared Host Docker mode is retired as a public install path.
+
+Use the Sovereign Control Node path instead:
+  ./deploy.sh control install
+  ./deploy.sh control upgrade
+  ./deploy.sh control health
+
+The control node still uses Docker Compose internally; those internals are
+reached through `./deploy.sh control ...`, not the old `./deploy.sh docker ...`
+menu.
+EOF
+  return 2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -668,8 +661,22 @@ while [[ $# -gt 0 ]]; do
       CONTROL_DEPLOY_ARGS=("$@")
       break
       ;;
+    install|upgrade|health)
+      MODE="control"
+      CONTROL_DEPLOY_COMMAND="$1"
+      shift
+      CONTROL_DEPLOY_ARGS=("$@")
+      break
+      ;;
+    menu)
+      MODE="control"
+      CONTROL_DEPLOY_COMMAND="menu"
+      shift
+      CONTROL_DEPLOY_ARGS=("$@")
+      break
+      ;;
     docker)
-      MODE="$1"
+      MODE="legacy-docker"
       shift
       if [[ $# -gt 0 ]]; then
         case "$1" in
@@ -687,12 +694,17 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
-      MODE="$1"
+      MODE="legacy-docker"
       shift
       DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
-    install|upgrade|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove|health|menu|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
+    notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove)
+      MODE="legacy-shared-host"
+      shift
+      break
+      ;;
+    pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
       MODE="$1"
       shift
       ;;
@@ -1126,53 +1138,7 @@ require_notion_subtree_ack() {
 }
 
 choose_shared_host_mode() {
-  local answer=""
-
-  cat <<'EOF'
-ArcLink Shared Host control center
-
-  1) Install / repair from current checkout
-  2) Upgrade from configured upstream
-  3) Write config only
-  4) Notion SSOT setup / test
-  5) Notion workspace migration
-  6) Notion page backup / restore
-  7) Enrollment status
-  8) Enrollment trace
-  9) Enrollment align / repair
- 10) Enrollment reset / cleanup
- 11) Curator setup / repair
- 12) Rotate Nextcloud secrets
- 13) Print agent payload
- 14) Health check
- 15) Remove / teardown
- 16) Back
- 17) Exit
-EOF
-
-  while true; do
-    read -r -p "Choose Shared Host action [1]: " answer
-    case "${answer:-1}" in
-      1) MODE="install"; return 0 ;;
-      2) MODE="upgrade"; return 0 ;;
-      3) MODE="write-config"; return 0 ;;
-      4) MODE="notion-ssot"; return 0 ;;
-      5) MODE="notion-migrate"; return 0 ;;
-      6) MODE="notion-transfer"; return 0 ;;
-      7) MODE="enrollment-status"; return 0 ;;
-      8) MODE="enrollment-trace"; return 0 ;;
-      9) MODE="enrollment-align"; return 0 ;;
-      10) MODE="enrollment-reset"; return 0 ;;
-      11) MODE="curator-setup"; return 0 ;;
-      12) MODE="rotate-nextcloud-secrets"; return 0 ;;
-      13) MODE="agent-payload"; return 0 ;;
-      14) MODE="health"; return 0 ;;
-      15) MODE="remove"; return 0 ;;
-      16) return 1 ;;
-      17) exit 0 ;;
-      *) echo "Please choose 1 through 17." ;;
-    esac
-  done
+  retired_shared_host_mode
 }
 
 choose_mode() {
@@ -1182,16 +1148,13 @@ choose_mode() {
     cat <<'EOF'
 ArcLink deploy menu
 
-  Choose one operating mode. Each mode has its own install, health, repair,
-  upgrade, and teardown lane.
+  ArcLink now exposes one public install lane. The Sovereign Control Node runs
+  the hosted product, Operator Raven, fleet inventory, Academy, inference hub,
+  and Docker ArcPod provisioning across registered workers.
 
-  1) Sovereign Control Node control center (Dockerized billing, bots, fleet, provisioning)
-     Product path: paid self-serve control plane and ArcPod provisioning
-  2) Shared Host mode control center (operator-led)
-     Systemd path: Curator, enrolled Unix users, and shared host services
-  3) Shared Host Docker control center (operator-led shared services, not ArcPods)
-     Compose path: containerized Shared Host substrate and validation
-  4) Exit
+  1) Sovereign Control Node control center
+     Dockerized control plane, bots, fleet, ArcPods, Academy, inference, dashboards
+  2) Exit
 EOF
 
     read -r -p "Choose ArcLink mode [1]: " answer
@@ -1202,20 +1165,10 @@ EOF
         return 0
         ;;
       2)
-        if choose_shared_host_mode; then
-          return 0
-        fi
-        ;;
-      3)
-        MODE="docker"
-        DOCKER_DEPLOY_COMMAND="menu"
-        return 0
-        ;;
-      4)
         exit 0
         ;;
       *)
-        echo "Please choose 1 through 4."
+        echo "Please choose 1 or 2."
         ;;
     esac
   done
@@ -1280,100 +1233,11 @@ EOF
 }
 
 docker_usage() {
-  cat <<'EOF'
-Usage:
-  deploy.sh docker install        # idempotent bootstrap + operator config + build + up + Curator setup + health + smoke
-  deploy.sh docker upgrade        # rebuild/recreate from current checkout + reconcile + health + smoke
-  deploy.sh docker reconfigure    # refresh generated Docker config/ports only
-  deploy.sh docker bootstrap
-  deploy.sh docker config [-q]
-  deploy.sh docker build [SERVICE...]
-  deploy.sh docker up [SERVICE...]
-  deploy.sh docker reconcile
-  deploy.sh docker down
-  deploy.sh docker ps
-  deploy.sh docker ports
-  deploy.sh docker logs [SERVICE]
-  deploy.sh docker health
-  deploy.sh docker record-release
-  deploy.sh docker live-smoke
-  deploy.sh docker notion-ssot
-  deploy.sh docker notion-migrate
-  deploy.sh docker notion-transfer
-  deploy.sh docker enrollment-status
-  deploy.sh docker enrollment-trace --unix-user <user>
-  deploy.sh docker enrollment-align
-  deploy.sh docker enrollment-reset --unix-user <user>
-  deploy.sh docker curator-setup
-  deploy.sh docker rotate-nextcloud-secrets
-  deploy.sh docker agent-payload
-  deploy.sh docker pins-show
-  deploy.sh docker pins-check
-  deploy.sh docker <component>-upgrade-check
-  deploy.sh docker <component>-upgrade [--tag/--version/--ref ...]
-  deploy.sh docker teardown
-  deploy.sh docker remove
-
-Shortcut aliases:
-  deploy.sh docker-install
-  deploy.sh docker-upgrade
-  deploy.sh docker-reconfigure
-  deploy.sh docker-enrollment-status
-  deploy.sh docker-health
-  deploy.sh docker-ports
-EOF
+  retired_shared_host_docker_mode
 }
 
 choose_docker_mode() {
-  local answer=""
-
-  cat <<'EOF'
-ArcLink Shared Host Docker control center
-  Operator-led shared services only; for Dockerized paid ArcPods use
-  Sovereign Control Node mode.
-
-  1) Install / repair Docker stack from current checkout
-  2) Upgrade / rebuild Docker stack from current checkout
-  3) Reconfigure Docker generated config and ports
-  4) Docker health check
-  5) Show Docker ports
-  6) Show Docker service state
-  7) Notion workspace migration
-  8) Notion page backup / restore
-  9) Enrollment status
- 10) Enrollment align / repair
- 11) Curator setup
- 12) Rotate Nextcloud secrets
- 13) Show Docker logs
- 14) Stop Docker stack
- 15) Teardown Docker stack and named volumes
- 16) Back
- 17) Exit
-EOF
-
-  while true; do
-    read -r -p "Choose Shared Host Docker action [1]: " answer
-    case "${answer:-1}" in
-      1) DOCKER_DEPLOY_COMMAND="install"; return 0 ;;
-      2) DOCKER_DEPLOY_COMMAND="upgrade"; return 0 ;;
-      3) DOCKER_DEPLOY_COMMAND="reconfigure"; return 0 ;;
-      4) DOCKER_DEPLOY_COMMAND="health"; return 0 ;;
-      5) DOCKER_DEPLOY_COMMAND="ports"; return 0 ;;
-      6) DOCKER_DEPLOY_COMMAND="ps"; return 0 ;;
-      7) DOCKER_DEPLOY_COMMAND="notion-migrate"; return 0 ;;
-      8) DOCKER_DEPLOY_COMMAND="notion-transfer"; return 0 ;;
-      9) DOCKER_DEPLOY_COMMAND="enrollment-status"; return 0 ;;
-      10) DOCKER_DEPLOY_COMMAND="enrollment-align"; return 0 ;;
-      11) DOCKER_DEPLOY_COMMAND="curator-setup"; return 0 ;;
-      12) DOCKER_DEPLOY_COMMAND="rotate-nextcloud-secrets"; return 0 ;;
-      13) DOCKER_DEPLOY_COMMAND="logs"; return 0 ;;
-      14) DOCKER_DEPLOY_COMMAND="down"; return 0 ;;
-      15) DOCKER_DEPLOY_COMMAND="teardown"; return 0 ;;
-      16) return 1 ;;
-      17) exit 0 ;;
-      *) echo "Please choose 1 through 17." ;;
-    esac
-  done
+  retired_shared_host_docker_mode
 }
 
 choose_control_mode() {
@@ -11374,50 +11238,22 @@ case "$MODE" in
   control|control-install|control-upgrade|control-reconfigure|control-bootstrap|control-config|control-build|control-up|control-down|control-ps|control-ports|control-logs|control-health|control-backup|control-reset-runtime|control-reset-sandbox|control-reset-production|control-fleet-key|control-show-fleet-key|control-register-worker|control-register-fleet-worker|control-fleet-add|control-enrollment|control-enrollment-mint|control-enrollment-list|control-enrollment-revoke|control-enrollment-rotate-secret|control-inventory|control-inventory-list|control-inventory-health|control-inventory-probe|control-inventory-probe-all|control-inventory-add|control-inventory-drain|control-inventory-remove|control-inventory-rotate-key|control-inventory-re-attest|control-inventory-reattest|control-inventory-set-strategy|control-teardown|control-write-config|control-remove)
     run_control_deploy_flow
     ;;
+  install|upgrade|health)
+    CONTROL_DEPLOY_COMMAND="$MODE"
+    MODE="control"
+    run_control_deploy_flow
+    ;;
+  legacy-shared-host)
+    retired_shared_host_mode
+    ;;
+  legacy-docker)
+    retired_shared_host_docker_mode
+    ;;
   docker|docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
-    run_docker_deploy_flow
+    retired_shared_host_docker_mode
     ;;
-  install|write-config)
-    run_install_flow
-    ;;
-  upgrade)
-    run_upgrade_flow
-    ;;
-  notion-ssot)
-    run_notion_ssot_setup
-    ;;
-  notion-migrate)
-    run_notion_migrate_flow
-    ;;
-  notion-transfer)
-    run_notion_transfer_flow
-    ;;
-  enrollment-status)
-    run_enrollment_status
-    ;;
-  enrollment-trace)
-    run_enrollment_trace
-    ;;
-  enrollment-align)
-    run_enrollment_align
-    ;;
-  enrollment-reset)
-    run_enrollment_reset
-    ;;
-  curator-setup)
-    run_curator_setup_flow
-    ;;
-  rotate-nextcloud-secrets)
-    run_rotate_nextcloud_secrets
-    ;;
-  agent-payload|agent)
-    run_agent_payload
-    ;;
-  remove)
-    run_remove_flow
-    ;;
-  health)
-    run_health_check
+  write-config|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|remove)
+    retired_shared_host_mode
     ;;
   pins-show)
     run_pins_show

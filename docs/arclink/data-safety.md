@@ -2,16 +2,16 @@
 
 ## State Models By Mode
 
-ArcLink has three operating modes with different state boundaries.
+ArcLink has one public operating mode. Legacy Shared Host state may still exist
+on old hosts or in migration tests, but it is not the product install lane.
 
 | Mode | State Model | Notes |
 | --- | --- | --- |
-| Shared Host | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; enrolled users have private Hermes homes under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Operator-led, systemd-backed, per-user Unix accounts. |
-| Shared Host Docker | Same private state contract, bind-mounted into Compose from `arclink-priv/`; Docker agent homes live under `arclink-priv/state/docker/users/`. | Trusted-host containerization of the shared-host substrate. |
 | Sovereign Control Node | Dockerized product control plane with per-ArcPod state roots, Compose projects, and secret references rendered from control-plane rows. Current ArcPod state defaults are under the configured deployment state root, commonly `/arcdata/deployments`. | Paid self-serve control surface; provisioning and admin action workers are enabled by default, but live provider/account mutation still fails closed unless the operator configures the executor and external credentials. |
+| Legacy Shared Host State | Public repo plus nested private state under `/home/arclink/arclink/arclink-priv/`; legacy enrolled-user Hermes homes may exist under `/home/<user>/.local/share/arclink-agent/hermes-home`. | Retired public install lane. Keep for migration, archival recovery, and host-side Operator workbench development only. |
 
-Do not apply a path from one mode to another without checking the generated
-config and control-plane metadata.
+Do not apply a legacy path to the Control Node or an ArcPod without checking
+generated config and control-plane metadata.
 
 ## Per-Deployment Isolation
 
@@ -33,7 +33,7 @@ ArcLink intentionally gives each Captain and Agent broad access to their own
 ArcPod home, vault, workspace, and dashboard tools. This should feel like SSH
 into that Captain's isolated Agent environment, not like a narrow file picker.
 The boundary is not "hide the Captain's own files"; the boundary is "do not
-expose the operator control plane, another Captain, or shared host secrets."
+expose the operator control plane, another Captain, or legacy host secrets."
 
 Dashboard Drive, Code, and Terminal plugins therefore allow normal Captain-owned
 files, including ordinary `.env` files inside the Captain's own Vault/Workspace,
@@ -70,8 +70,8 @@ ArcPod Docker volumes follow the naming convention:
 - Compose secrets are mounted at `/run/secrets/{name}` inside containers.
 - Images supporting `_FILE` env vars (Postgres, Nextcloud) read from mounted files.
 - No plaintext secret values in database, logs, API responses, or Compose intent.
-- Shared Host and Shared Host Docker secrets belong in private `arclink-priv/`
-  config/state, not public docs or git history.
+- Legacy host secrets belong in private `arclink-priv/` config/state, not
+  public docs or git history.
 - Docker socket writers are trusted-host services. In Docker mode,
   non-root socket services drop all Linux capabilities and receive only the
   host Docker socket group. This reduces container process privileges but does

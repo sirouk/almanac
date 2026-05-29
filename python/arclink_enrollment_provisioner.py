@@ -220,8 +220,6 @@ def _operator_action_repo_dir(cfg: Config) -> Path:
 
 def _operator_action_deploy_args(cfg: Config) -> tuple[list[str], Path]:
     repo_dir = _operator_action_repo_dir(cfg)
-    if _docker_mode():
-        return [str(repo_dir / "deploy.sh"), "docker", "upgrade"], repo_dir
     return [str(repo_dir / "deploy.sh"), "upgrade"], repo_dir
 
 

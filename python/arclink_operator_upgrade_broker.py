@@ -343,7 +343,7 @@ def _run_operator_upgrade(request_body: dict[str, Any]) -> dict[str, Any]:
     with log_path.open("w", encoding="utf-8") as handle:
         result = _run_logged_command(
             handle,
-            [str(deploy), "docker", "upgrade"],
+            [str(deploy), "upgrade"],
             cwd=repo_dir,
             env=env,
             timeout_seconds=timeout_seconds,
@@ -393,7 +393,7 @@ def _run_pin_upgrade(request_body: dict[str, Any]) -> dict[str, Any]:
                 return {"returncode": int(last_result.returncode)}
         last_result = _run_logged_command(
             handle,
-            [str(deploy), "docker", "upgrade"],
+            [str(deploy), "upgrade"],
             cwd=repo_dir,
             env=env,
             timeout_seconds=timeout_seconds,

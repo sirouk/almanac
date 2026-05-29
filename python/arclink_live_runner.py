@@ -131,8 +131,8 @@ _BROWSER_STEP_SPECS: dict[str, dict[str, Any]] = {
 
 
 def _redacted_command_label(args: list[str]) -> str:
-    if args[:2] == ["./deploy.sh", "docker"] and len(args) >= 3:
-        return "deploy.sh docker " + args[2]
+    if args[:2] == ["./deploy.sh", "control"] and len(args) >= 3:
+        return "deploy.sh control " + args[2]
     if args[:1] == ["npx"]:
         return "npx playwright workspace-proof"
     return Path(args[0]).name if args else "command"
@@ -197,14 +197,14 @@ def _run_redacted_command(
     return payload
 
 
-def _docker_upgrade_reconcile_runner(env: Mapping[str, str]) -> dict[str, Any]:
+def _control_upgrade_runner(env: Mapping[str, str]) -> dict[str, Any]:
     timeout = _command_timeout(env, "ARCLINK_WORKSPACE_PROOF_DOCKER_TIMEOUT_SECONDS", 45 * 60)
-    return _run_redacted_command(["./deploy.sh", "docker", "upgrade"], env=env, timeout=timeout)
+    return _run_redacted_command(["./deploy.sh", "control", "upgrade"], env=env, timeout=timeout)
 
 
-def _docker_health_runner(env: Mapping[str, str]) -> dict[str, Any]:
+def _control_health_runner(env: Mapping[str, str]) -> dict[str, Any]:
     timeout = _command_timeout(env, "ARCLINK_WORKSPACE_PROOF_HEALTH_TIMEOUT_SECONDS", 15 * 60)
-    return _run_redacted_command(["./deploy.sh", "docker", "health"], env=env, timeout=timeout)
+    return _run_redacted_command(["./deploy.sh", "control", "health"], env=env, timeout=timeout)
 
 
 def _workspace_proof_url(base_url: str, plugin: str) -> str:
@@ -485,10 +485,10 @@ def _browser_proof_runner(step_name: str, env: Mapping[str, str]) -> dict[str, A
 
 
 def build_workspace_live_runners(env: Mapping[str, str]) -> dict[str, Any]:
-    """Build real no-secret workspace live runners for Docker and TLS proof."""
+    """Build real no-secret workspace live runners for Control Node and TLS proof."""
     runners: dict[str, Any] = {
-        "workspace_docker_upgrade_reconcile": lambda _step: _docker_upgrade_reconcile_runner(env),
-        "workspace_docker_health": lambda _step: _docker_health_runner(env),
+        "workspace_control_upgrade": lambda _step: _control_upgrade_runner(env),
+        "workspace_control_health": lambda _step: _control_health_runner(env),
     }
     for step_name in _BROWSER_STEP_SPECS:
         runners[step_name] = lambda _step, name=step_name: _browser_proof_runner(name, env)

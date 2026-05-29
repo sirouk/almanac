@@ -35,7 +35,7 @@ without claiming production router deployment.
 
 | File | Verdict |
 | --- | --- |
-| `AGENTS.md` | Still aligned on Control Node versus Shared Host boundaries, private-state safety, and deploy/live-proof gates |
+| `AGENTS.md` | Still aligned on Control Node, fleet ArcPods, retired legacy-mode boundaries, private-state safety, and deploy/live-proof gates |
 | `IMPLEMENTATION_PLAN.md` | Current steering source for the LLM Router phases and remaining Compose/provisioning/live-proof tasks |
 | `research/RALPHIE_ARCLINK_LLM_ROUTER_STEERING.md` | Matched the product contract and security rationale for per-deployment router keys |
 | `research/BUILD_COMPLETION_NOTES.md` and `mission_status.md` | Current fleet handoff notes remain separate; they do not document the router surface |

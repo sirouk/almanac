@@ -750,7 +750,7 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
   component-upgrade apply/final-upgrade execution through
   `operator-upgrade-broker`. The enrollment provisioner fails closed without
   `ARCLINK_OPERATOR_UPGRADE_BROKER_URL` and token. The broker rejects raw
-  command fields, reconstructs only `deploy.sh docker upgrade` or allowlisted
+  command fields, reconstructs only `deploy.sh upgrade` or allowlisted
   `component-upgrade.sh ... --skip-upgrade` commands from the configured host
   repo, and confines logs to private `state/operator-actions`. The broker's
   socket and live host checkout mount remain trusted-host residual risk.
@@ -763,7 +763,7 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
   trusted-host authority with the Docker socket.
 - `GAP-019-AI` narrows the same operator broker's executable lookup. Any
   preserved `ARCLINK_DOCKER_BINARY` value must resolve to a trusted absolute
-  Docker CLI path before `deploy.sh docker upgrade` or allowlisted
+  Docker CLI path before `deploy.sh upgrade` or allowlisted
   component-upgrade children are invoked; unsafe, missing, non-executable,
   non-Docker, relative, or PATH-injected values fail closed before
   `subprocess.run`.
@@ -1399,11 +1399,11 @@ Docker reconcile and health call helper paths that:
 4. Recreate `hermes-dashboard` so plugin changes are loaded.
 5. Refresh `arclink_service_health` rows from `docker compose ps --format json`.
 
-Use the canonical Docker path rather than editing generated Compose by hand:
+Use the canonical Control Node path rather than editing generated Compose by hand:
 
 ```bash
-./deploy.sh docker reconcile
-./deploy.sh docker health
+./deploy.sh control reconfigure
+./deploy.sh control health
 ```
 
 ## Crew Training

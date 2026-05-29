@@ -39,14 +39,10 @@ The app runtime stays Dockerized in this mode. Host-level work is limited to
 bootstrap and ingress duties such as Docker Compose, optional Tailscale
 Funnel/Serve publication, and SSH key handoff for fleet workers.
 
-The inherited containerized Shared Host path remains available at:
-
-```bash
-./deploy.sh docker install
-```
-
-That path is for operator-led shared-host validation and the containerized
-Curator/enrollment substrate, not for the paid Sovereign control surface.
+The inherited public Shared Host and Shared Host Docker modes are retired.
+Do not use `./deploy.sh docker ...` as an operator-facing install lane. The
+Control Node still uses Docker Compose internally, and ArcPods remain Docker
+deployments across registered fleet workers.
 
 ## End-To-End Logic Trace
 
@@ -164,9 +160,9 @@ Curator/enrollment substrate, not for the paid Sovereign control surface.
 
 ## Pod Comms
 
-Control Node Comms uses the same broker as Shared Host:
-`python/arclink_pod_comms.py`. Same-Captain Pods may message by default;
-cross-Captain Pod Comms requires an accepted, unexpired `pod_comms` share grant.
+Control Node Comms uses `python/arclink_pod_comms.py`. Same-Captain Pods may
+message by default; cross-Captain Pod Comms requires an accepted, unexpired
+`pod_comms` share grant.
 Messages are rate-limited per sender deployment, audited as
 `pod_message_sent`, `pod_message_delivered`, and `pod_message_redacted`, and
 delivered through `notification_outbox`. Attachments are Drive/Code share-grant

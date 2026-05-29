@@ -88,7 +88,7 @@ Commands:
   <component>-upgrade-check
               Check a pinned component, for example qmd-upgrade-check
   <component>-upgrade
-              Bump a pinned component and re-apply with deploy.sh docker upgrade
+              Bump a pinned component and re-apply with deploy.sh control upgrade
   teardown    Stop the stack and remove Compose volumes
   remove      Alias for teardown
 
@@ -625,7 +625,7 @@ health() {
   running="$(compose ps --status running --services 2>/dev/null || true)"
   if [[ -z "$running" ]]; then
     echo "FAIL Docker Compose config is valid, but no ArcLink services are running." >&2
-    echo "Run: ./deploy.sh docker install"
+    echo "Run: ./deploy.sh control install"
     return 1
   fi
 

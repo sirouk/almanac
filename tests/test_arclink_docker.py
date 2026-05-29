@@ -466,12 +466,12 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ARCLINK_UID: ${ARCLINK_DOCKER_UID:-1000}" in body, body)
     expect("ARCLINK_GID: ${ARCLINK_DOCKER_GID:-1000}" in body, body)
     expect("ARCLINK_HEALTH_WATCH_HEALTH_CMD: ./bin/docker-health.sh" in body, body)
-    expect("POSTGRES_PASSWORD:?run ./deploy.sh docker bootstrap first" in body, body)
-    expect("NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh docker bootstrap first" in body, body)
-    expect("ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first" in body, body)
-    expect("ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first" in body, body)
-    expect("ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first" in body, body)
-    expect("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first" in body, body)
+    expect("POSTGRES_PASSWORD:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("NEXTCLOUD_ADMIN_PASSWORD:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
+    expect("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh control bootstrap first" in body, body)
     expect("POSTGRES_PASSWORD:-change-me" not in body, body)
     expect("NEXTCLOUD_ADMIN_PASSWORD:-change-me" not in body, body)
     for service in (
@@ -2553,7 +2553,7 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
 
         expect(ok is True, str(payload))
         expect(isinstance(payload, dict) and payload.get("returncode") == 0, str(payload))
-        expect(captured and captured[0]["args"] == [str(repo / "deploy.sh"), "docker", "upgrade"], str(captured))
+        expect(captured and captured[0]["args"] == [str(repo / "deploy.sh"), "upgrade"], str(captured))
         env = captured[0]["env"]
         expect(isinstance(env, dict), str(captured))
         expect(env.get("ARCLINK_COMPONENT_UPGRADE_MODE") == "docker", str(env))
@@ -2576,7 +2576,7 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
         ):
             expect(forbidden not in env, f"operator broker child env leaked {forbidden}: {env}")
         log_text = log_path.read_text(encoding="utf-8")
-        expect("$ " in log_text and "deploy.sh docker upgrade" in log_text and "fake upgrade output" in log_text, log_text)
+        expect("$ " in log_text and "deploy.sh upgrade" in log_text and "fake upgrade output" in log_text, log_text)
         expect(not requested_log_path.exists(), "container-style operator log path should be mapped to the host private bind")
     print("PASS test_operator_upgrade_broker_runs_allowlisted_operator_upgrade")
 
@@ -2604,7 +2604,7 @@ def test_operator_upgrade_broker_rejects_raw_or_unsafe_requests() -> None:
             ok, error = broker.run_operator_upgrade_request(
                 {
                     "operation": "run_operator_upgrade",
-                    "command": [str(repo / "deploy.sh"), "docker", "upgrade"],
+                    "command": [str(repo / "deploy.sh"), "upgrade"],
                     "log_path": str(priv / "state" / "operator-actions" / "upgrade.log"),
                 }
             )
@@ -2900,7 +2900,7 @@ def test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_befo
                 upgrade_request(key_path=str(safe_key), known_hosts=str(safe_known_hosts))
             )
             expect(ok is True and isinstance(payload, dict), str(payload))
-            expect(captured and captured[0]["args"] == [str(repo / "deploy.sh"), "docker", "upgrade"], str(captured))
+            expect(captured and captured[0]["args"] == [str(repo / "deploy.sh"), "upgrade"], str(captured))
             env = captured[0]["env"]
             expect(isinstance(env, dict), str(captured))
             expect(env.get("ARCLINK_UPSTREAM_DEPLOY_KEY_PATH") == str(safe_key), str(env))
@@ -6098,12 +6098,12 @@ def test_docker_operator_commands_are_present() -> None:
     )
     expect("docker_component_upgrade_apply()" in body, body)
     expect("ARCLINK_COMPONENT_UPGRADE_MODE=docker" in body, body)
-    expect("deploy.sh docker enrollment-status" in deploy, deploy)
+    expect("retired_shared_host_docker_mode()" in deploy and "legacy-docker" in deploy, deploy)
     expect("deploy.sh control install" in deploy and "control-install" in deploy and "control-provision-once" in deploy, deploy)
     expect("docker-enrollment-status" in deploy and "docker-rotate-nextcloud-secrets" in deploy, deploy)
     expect("qmd-upgrade-check" in deploy and "node-upgrade" in deploy, deploy)
     expect('ARCLINK_COMPONENT_UPGRADE_MODE:-}" == "docker"' in component_upgrade, component_upgrade)
-    expect('"$REPO_DIR/deploy.sh" docker upgrade' in component_upgrade, component_upgrade)
+    expect('"$REPO_DIR/deploy.sh" upgrade' in component_upgrade, component_upgrade)
     expect('os.environ.get("ARCLINK_DOCKER_MODE") == "1"' in ctl and '["docker", "rm", "-f", container_name]' in ctl, ctl)
     expect("docker health passed" not in body.lower() or "Docker health passed." in body, body)
     expect("redact_output" in job_loop and 'cat "$output_file"' not in job_loop, "Docker job loop must redact failure output before logs/state")
@@ -7026,28 +7026,23 @@ def test_docker_docs_cover_socket_and_private_state_boundaries() -> None:
 
 def test_readme_keeps_canonical_host_layout_root() -> None:
     body = read("README.md")
-    expect("/home/arclink/" in body, body)
-    expect("  arclink/                 # public repo" in body, body)
+    expect("Sovereign Control Node" in body, body)
+    expect("ArcPods as Docker deployments on registered fleet workers" in body, body)
     print("PASS test_readme_keeps_canonical_host_layout_root")
 
 
 def test_readme_distinguishes_control_shared_host_and_docker_paths() -> None:
     body = read("README.md")
-    expect("## Deployment Paths" in body, body)
-    expect("| **Sovereign Control Node Mode** |" in body, body)
-    expect("| **Shared Host Mode** |" in body, body)
-    expect("| **Shared Host Docker Mode** |" in body, body)
-    expect("top-level default is Sovereign Control Node Mode." in body, body)
-    expect("## Shared Host Mode" in body and "### Shared Host Quick Start" in body, body)
-    expect("## Sovereign Control Node Mode" in body and "### Sovereign Control Node Quick Start" in body, body)
-    expect("## Shared Host Docker Mode" in body and "### Shared Host Docker Quick Start" in body, body)
-    expect("control menu and are the Dockerized paid-ArcPod path" in body, body)
-    expect("not ArcPods" in body, body)
-    expect("own Notion callback surface" in body, body)
-    expect("./deploy.sh control install" in body and "./deploy.sh install" in body and "./deploy.sh docker install" in body, body)
-    expect("./deploy.sh docker enrollment-status" in body, body)
-    expect("./deploy.sh docker rotate-nextcloud-secrets" in body, body)
-    expect("Pinned-component Docker upgrades re-enter `./deploy.sh docker upgrade`" in body, body)
+    expect("## Current Architecture" in body, body)
+    expect("| Sovereign Control Node |" in body, body)
+    expect("| Fleet Inventory |" in body, body)
+    expect("| ArcPods |" in body, body)
+    expect("The public install surface is now one lane" in body, body)
+    expect("./deploy.sh control install" in body and "./deploy.sh install     # control install" in body, body)
+    expect("./deploy.sh docker install" not in body, body)
+    expect("The old Shared Host/systemd installer and the public Shared Host Docker menu" in body, body)
+    expect("Fleet growth now happens by registering worker machines" in body, body)
+    expect("Component apply commands commit/push the pin change" in body, body)
     print("PASS test_readme_distinguishes_control_shared_host_and_docker_paths")
 
 

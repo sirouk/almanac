@@ -26,10 +26,10 @@ branch upstream, and fast-forwards before rebuilding. Use
 `ARCLINK_CONTROL_UPGRADE_SKIP_UPSTREAM_SYNC=1` only for an intentional local
 build window.
 
-Shared Host commands such as `./deploy.sh install` are the operator-led
-systemd/shared-user path. Shared Host Docker commands such as
-`./deploy.sh docker install` validate the shared-host substrate, not paid
-ArcPods.
+The old operator-led Shared Host/systemd path and public Shared Host Docker
+menu are retired. Bare `./deploy.sh install`, `./deploy.sh upgrade`, and
+`./deploy.sh health` are Control Node shortcuts; use explicit
+`./deploy.sh control ...` commands in runbooks.
 
 ## Credential Checklist
 

@@ -1449,53 +1449,47 @@ def test_deploy_menu_defaults_to_sovereign_control_node() -> None:
     shared_snippet = extract(text, "choose_shared_host_mode() {", "choose_mode() {")
     mode_snippet = extract(text, "choose_mode() {", "control_usage() {")
     expect(
-        "ArcLink Shared Host control center" in shared_snippet,
-        "expected Shared Host actions to live in their own submenu",
+        "retired_shared_host_mode" in shared_snippet,
+        "expected Shared Host submenu to be retired",
     )
     expect(
-        "Install / repair from current checkout" in shared_snippet,
-        "expected Shared Host install action to live inside the Shared Host submenu",
+        "Install / repair from current checkout" not in shared_snippet,
+        "Shared Host install action should no longer be exposed",
     )
     expect(
-        "Shared Host mode control center (operator-led)" in mode_snippet,
-        "expected top-level menu to expose Shared Host mode",
+        "Shared Host mode control center" not in mode_snippet,
+        "top-level menu must not expose Shared Host mode",
     )
     expect(
-        "Sovereign Control Node control center (Dockerized billing, bots, fleet, provisioning)" in mode_snippet,
+        "Sovereign Control Node control center" in mode_snippet,
         "expected top-level menu to expose Sovereign Control Node mode",
     )
     expect(
-        "Choose one operating mode. Each mode has its own install, health, repair," in mode_snippet,
-        "expected top-level menu to explain the mode split",
+        "one public install lane" in mode_snippet,
+        "expected top-level menu to explain the single-mode contract",
     )
     expect(
-        "Shared Host Docker control center (operator-led shared services, not ArcPods)" in mode_snippet,
-        "expected top-level menu to expose Shared Host Docker mode",
-    )
-    sovereign_index = mode_snippet.index("1) Sovereign Control Node control center")
-    shared_index = mode_snippet.index("2) Shared Host mode control center")
-    docker_index = mode_snippet.index("3) Shared Host Docker control center")
-    expect(
-        sovereign_index < shared_index < docker_index,
-        "expected top-level menu to list Sovereign first, then Shared Host, then Shared Host Docker",
+        "Shared Host Docker control center" not in mode_snippet,
+        "top-level menu must not expose Shared Host Docker mode",
     )
     expect('read -r -p "Choose ArcLink mode [1]: "' in mode_snippet, "expected top-level default to be Sovereign Control Node mode")
     expect('case "${answer:-1}"' in mode_snippet, "expected blank top-level selection to choose Sovereign Control Node mode")
     expect('MODE="control"' in mode_snippet and 'CONTROL_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Sovereign Control Node mode to route to its submenu")
-    expect('MODE="docker"' in mode_snippet and 'DOCKER_DEPLOY_COMMAND="menu"' in mode_snippet, "expected Shared Host Docker mode to route to its submenu")
+    expect('MODE="docker"' not in mode_snippet and 'DOCKER_DEPLOY_COMMAND="menu"' not in mode_snippet, "Shared Host Docker must not route from the main menu")
     print("PASS test_deploy_menu_defaults_to_sovereign_control_node")
 
 
 def test_baremetal_install_banner_points_to_docker_first_path() -> None:
     text = DEPLOY_SH.read_text()
-    snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
+    usage_snippet = extract(text, "usage() {", "retired_shared_host_mode() {")
+    dispatch_snippet = extract(text, 'case "$MODE" in', "esac")
     expect(
-        "ArcLink deploy: Shared Host mode install / repair from current checkout" in snippet,
-        "expected Shared Host install heading to be explicit",
+        "deploy.sh install        # shortcut for control install" in usage_snippet,
+        "expected bare install to be documented as a control install shortcut",
     )
     expect(
-        "For Sovereign Control Node mode, use: ./deploy.sh control install" in snippet,
-        "expected Shared Host path to point operators to Sovereign Control Node install",
+        "install|upgrade|health)" in dispatch_snippet and 'MODE="control"' in dispatch_snippet,
+        "expected bare install/upgrade/health to route through Sovereign Control Node",
     )
     print("PASS test_baremetal_install_banner_points_to_docker_first_path")
 
@@ -2028,6 +2022,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
     control_menu = extract(text, "choose_control_mode() {", "detect_tailscale() {")
     docker_menu = extract(text, "choose_docker_mode() {", "choose_control_mode() {")
+    usage_snippet = extract(text, "usage() {", "retired_shared_host_mode() {")
     expect("deploy.sh control install" in text, "expected Sovereign Control Node install command in deploy usage")
     expect("deploy.sh control backup" in text, "expected Sovereign Control Node runtime backup command in deploy usage")
     expect("deploy.sh control reset-runtime" in text, "expected Sovereign Control Node runtime reset command in deploy usage")
@@ -2104,13 +2099,11 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("write_kv ARCLINK_LLM_ROUTER_DEFAULT_MODEL" in text, "expected runtime config to persist router default model")
     expect("write_kv ARCLINK_LLM_ROUTER_ALLOWED_MODELS" in text, "expected runtime config to persist router allowed models")
     expect("write_kv ARCLINK_LLM_ROUTER_FALLBACK_MODELS" in text, "expected runtime config to persist router fallback models")
-    expect("deploy.sh docker install" in text, "expected Docker install command in deploy usage")
-    expect("ArcLink Shared Host Docker control center" in text, "expected Shared Host Docker submenu")
-    expect("16) Back" in docker_menu and "17) Exit" in docker_menu, "expected Docker submenu to return to the mode chooser")
-    expect('MODE="docker"' in text and 'DOCKER_DEPLOY_COMMAND="menu"' in text, "expected main menu to route to Shared Host Docker submenu")
-    expect('DOCKER_DEPLOY_COMMAND="notion-migrate"' in text, "expected Docker submenu to route to Notion workspace migration")
-    expect('DOCKER_DEPLOY_COMMAND="notion-transfer"' in text, "expected Docker submenu to route to Notion page backup/restore")
-    expect("docker-install|docker-upgrade|docker-reconfigure" in text, "expected Docker shortcut aliases")
+    expect("deploy.sh docker install" not in usage_snippet, "Shared Host Docker install must not be advertised in deploy usage")
+    expect("Shared Host Docker control center" not in docker_menu, "Shared Host Docker submenu should be retired")
+    expect("retired_shared_host_docker_mode" in docker_menu, "Shared Host Docker function should fail closed through the retired-mode helper")
+    expect('MODE="docker"' not in text and 'DOCKER_DEPLOY_COMMAND="menu"' not in text, "main menu must not route to Shared Host Docker")
+    expect("docker-install|docker-upgrade|docker-reconfigure" in text, "parser should still recognize retired Docker shortcut aliases")
     expect('local helper="$BOOTSTRAP_DIR/bin/arclink-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
     expect("run_docker_install_flow()" in text, "expected idempotent Docker install flow")
     expect("run_docker_reconfigure_flow()" in text, "expected Docker reconfigure flow")
@@ -2394,7 +2387,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "fresh Docker config generation should include the gateway exec broker token",
     )
     expect(
-        "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        "ARCLINK_GATEWAY_EXEC_BROKER_TOKEN: ${ARCLINK_GATEWAY_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}"
         in compose,
         "Compose should require the gateway exec broker token before starting the broker/client split",
     )
@@ -2412,7 +2405,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "fresh Docker config generation should include the deployment exec broker token",
     )
     expect(
-        "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}"
         in compose,
         "Compose should require the deployment exec broker token before starting the broker/client split",
     )
@@ -2430,7 +2423,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "fresh Docker config generation should include the agent supervisor broker token",
     )
     expect(
-        "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN: ${ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}"
         in compose,
         "Compose should require the agent supervisor broker token before starting the broker/client split",
     )
@@ -2448,7 +2441,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "fresh Docker config generation should include the operator upgrade broker token",
     )
     expect(
-        "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}"
         in compose,
         "Compose should require the operator upgrade broker token before starting the broker/client split",
     )
@@ -2466,7 +2459,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "fresh Docker config generation should include the agent user helper token",
     )
     expect(
-        "ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        "ARCLINK_AGENT_USER_HELPER_TOKEN: ${ARCLINK_AGENT_USER_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}"
         in compose,
         "Compose should require the agent user helper token before starting the helper/client split",
     )
@@ -2484,7 +2477,7 @@ def test_control_docker_bootstrap_seeds_session_hash_pepper_and_gateway_broker_t
         "fresh Docker config generation should include the agent process helper token",
     )
     expect(
-        "ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh docker bootstrap first}"
+        "ARCLINK_AGENT_PROCESS_HELPER_TOKEN: ${ARCLINK_AGENT_PROCESS_HELPER_TOKEN:?run ./deploy.sh control bootstrap first}"
         in compose,
         "Compose should require the agent process helper token before starting the helper/client split",
     )
@@ -2651,12 +2644,13 @@ def test_control_install_wires_prereq_auto_installation_with_skip_opt_out() -> N
 
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
+    usage_snippet = extract(text, "usage() {", "retired_shared_host_mode() {")
     cleanup = extract(text, "notion_migration_clear_workspace_state() {", "run_notion_migrate_flow() {")
     migration = extract(text, "run_notion_migrate_flow() {", "run_curator_setup_flow() {")
     notion_setup = extract(text, "run_notion_ssot_setup() {", "notion_migration_pause() {")
-    expect("deploy.sh notion-migrate" in text, "expected direct notion migration command in usage")
-    expect("deploy.sh docker notion-migrate" in text, "expected Docker notion migration command in usage")
-    expect("Notion workspace migration" in text, "expected guided Notion migration submenu")
+    expect("deploy.sh notion-migrate" not in usage_snippet, "retired Shared Host Notion migration must not be advertised in usage")
+    expect("deploy.sh docker notion-migrate" not in usage_snippet, "retired Shared Host Docker Notion migration must not be advertised in usage")
+    expect("Notion workspace migration" in text, "expected guided Notion migration helper to remain available for internal repair/migration work")
     expect("Retry last migration index sync" in text, "expected migration submenu to offer a recovery path for failed index syncs")
     expect("Type MIGRATE NOTION to continue" in migration, "expected explicit typed migration acknowledgement")
     expect("notion_migration_backup_state" in migration, "expected migration to create private backups")
@@ -2688,10 +2682,11 @@ def test_deploy_sh_guides_notion_workspace_migration() -> None:
 
 def test_deploy_sh_guides_notion_page_transfer() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
+    usage_snippet = extract(text, "usage() {", "retired_shared_host_mode() {")
     transfer = extract(text, "notion_transfer_prepare_context() {", "run_curator_setup_flow() {")
-    expect("deploy.sh notion-transfer" in text, "expected direct Notion page transfer command in usage")
-    expect("deploy.sh docker notion-transfer" in text, "expected Docker Notion page transfer command in usage")
-    expect("Notion page backup / restore" in text, "expected main menu Notion page backup/restore entry")
+    expect("deploy.sh notion-transfer" not in usage_snippet, "retired Shared Host Notion transfer must not be advertised in usage")
+    expect("deploy.sh docker notion-transfer" not in usage_snippet, "retired Shared Host Docker Notion transfer must not be advertised in usage")
+    expect("Notion page backup / restore" in text, "expected Notion transfer helper to remain available for internal repair/migration work")
     expect("Back up then restore" in text, "expected transfer submenu to offer one-pass backup then restore")
     expect("Source root page URL or ID to back up" in text, "expected transfer flow to ask for the source root page")
     expect("Destination parent/root page URL or ID" in text, "expected transfer flow to ask for the destination root/parent page")

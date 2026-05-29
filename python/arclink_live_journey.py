@@ -163,13 +163,13 @@ _WORKSPACE_PROOF_ENV = [
 
 _WORKSPACE_JOURNEY_STEPS: list[dict[str, Any]] = [
     {
-        "name": "workspace_docker_upgrade_reconcile",
-        "description": "Run Docker upgrade/reconcile for the target deployment",
+        "name": "workspace_control_upgrade",
+        "description": "Run Control Node upgrade for the target deployment",
         "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_E2E_DOCKER"],
     },
     {
-        "name": "workspace_docker_health",
-        "description": "Verify Docker health before workspace browser proof",
+        "name": "workspace_control_health",
+        "description": "Verify Control Node health before workspace browser proof",
         "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_E2E_DOCKER"],
     },
     {

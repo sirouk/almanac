@@ -123,9 +123,9 @@ URLs for SSH hostnames.
 
 ## Per-Deployment Notion Callback
 
-ArcPods reserve a Captain-specific Notion callback endpoint in the
-rendered provisioning intent. This is separate from the operator-led shared-host
-Notion webhook used by Shared Host and Shared Host Docker modes.
+ArcPods reserve a Captain-specific Notion callback endpoint in the rendered
+provisioning intent. This is separate from any legacy operator-host Notion
+webhook state left behind during migration.
 
 - Domain mode: `https://u-{prefix}.{base_domain}/notion/webhook`
 - Tailscale path mode:

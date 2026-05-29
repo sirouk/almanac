@@ -306,11 +306,18 @@ services:
     environment:
       <<: *arclink-operator-env
       ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
-      ARCLINK_SQLITE_JOURNAL_MODE: MEMORY
     command: ["./bin/install-operator-hermes-home.sh"]
     volumes:
       - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
-      - ./arclink-priv/state/arclink-control.sqlite3:/home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
+      # This one-shot registers the operator LLM router key in the control DB.
+      # The control DB runs in WAL mode, so a writer must share the DB directory
+      # (including the -wal/-shm sidecars) to be visible to the router. A
+      # single-file bind mount silently loses the write, so the operator key was
+      # never registered and the router rejected it (invalid_router_key). The
+      # directory mount matches control-api/provisioner; this is a trusted
+      # one-shot with no Terminal/chat/injection surface, unlike the long-running
+      # gateway/dashboard which stay scoped to operator state only.
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
 
   control-operator-qmd-mcp:
     <<: *arclink-app

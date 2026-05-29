@@ -3904,10 +3904,12 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
                f"interactive operator runtime must not receive the control DB path\n{runtime_block}")
         expect("./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator" in runtime_block,
                f"interactive operator runtime must mount only operator state\n{runtime_block}")
-    expect("./arclink-priv/state/arclink-control.sqlite3:/home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in setup_block,
-           "one-shot setup may touch the control DB to register the operator LLM router key")
+    expect("./arclink-priv/state:/home/arclink/arclink/arclink-priv/state" in setup_block,
+           "one-shot setup must mount the control state DIRECTORY so its router-key write shares the WAL/-shm the router reads (a single-file mount silently loses the write)")
     expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in setup_block,
            "one-shot setup must scope the control DB env to setup only")
+    expect("ARCLINK_SQLITE_JOURNAL_MODE: MEMORY" not in setup_block,
+           "one-shot setup must not force MEMORY journal; it shares the control DB's WAL like control-api")
     expect("condition: service_completed_successfully" in gateway_block and "condition: service_completed_successfully" in dashboard_block,
            "interactive operator runtime must wait for setup instead of touching the DB on each start")
     # The docker helper runs the idempotent ensure inside the control container.

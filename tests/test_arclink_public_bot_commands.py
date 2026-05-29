@@ -95,6 +95,7 @@ def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
         [
             {"command": "model", "description": "Switch model"},
             {"command": "provider", "description": "Provider alias"},
+            {"command": "agents", "description": "Hermes internal agent tasks"},
             {"command": "update", "description": "Unsafe direct update"},
         ],
         "arclink-control-operator-hermes-gateway-1",
@@ -116,9 +117,10 @@ def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
     operator_scopes = result["telegram"]["operator_scopes"]
     expect(operator_scopes["agent_command_source"] == "arclink-control-operator-hermes-gateway-1", str(operator_scopes))
     registered = set(operator_scopes["registered"])
-    expect("operator_status" in registered and "upgrade" in registered, str(registered))
+    expect("operator_status" in registered and "agents" in registered and "upgrade" in registered, str(registered))
     expect("model" in registered and "provider" in registered, str(registered))
     expect("update" not in registered, str(registered))
+    expect("agents" in operator_scopes["agent_conflicts"], str(operator_scopes))
     exact_names = {item["command"] for call in calls for item in call["commands"]}
     expect("model" in exact_names and "operator_status" in exact_names, str(calls))
     print("PASS test_register_public_bot_commands_gives_operator_hermes_scope")

@@ -587,6 +587,12 @@ async def main() -> None:
             return
         await interaction.response.send_message(_operator_raven_response("/operator_status"))
 
+    @tree.command(name="operator-agents", description="Show ArcLink Captain Agents and ArcPods.")
+    async def operator_agents_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/agents"))
+
     @tree.command(name="operator-fleet", description="List Sovereign fleet workers.")
     async def operator_fleet_command(interaction) -> None:  # type: ignore[no-untyped-def]
         if not await _ensure_operator_channel(interaction):

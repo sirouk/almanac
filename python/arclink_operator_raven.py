@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
@@ -52,6 +53,14 @@ _COMMAND_ALIASES = {
     "controlstatus": "status",
     "op_status": "status",
     "opstatus": "status",
+    "operator_agents": "agents",
+    "operatoragents": "agents",
+    "agents": "agents",
+    "agent_roster": "agents",
+    "agentroster": "agents",
+    "crew": "agents",
+    "pods": "agents",
+    "arcpods": "agents",
     "operator_fleet": "fleet_list",
     "operatorfleet": "fleet_list",
     "fleet": "fleet_list",
@@ -250,6 +259,7 @@ def dispatch_operator_raven_command(
         return {"handled": False, "message": "", "mutation_performed": False}
     handlers = {
         "status": _handle_status,
+        "agents": _handle_agents,
         "fleet_list": _handle_fleet_list,
         "worker_probe": _handle_worker_probe,
         "user_lookup": _handle_user_lookup,
@@ -348,6 +358,70 @@ def _handle_status(
         "message": "\n".join(lines),
         "readiness": provisioning,
         "provisioning_readiness": provisioning_readiness,
+    }
+
+
+def _handle_agents(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    rows = _deployment_rows(conn)
+    operator_rows = [row for row in rows if _deployment_is_operator(row)]
+    captain_rows = [row for row in rows if not _deployment_is_operator(row)]
+    active_captains = [row for row in captain_rows if str(row.get("status") or "") == "active"]
+    captain_counts: dict[str, int] = {}
+    for row in captain_rows:
+        status = str(row.get("status") or "unknown")
+        captain_counts[status] = captain_counts.get(status, 0) + 1
+    legacy_active = _legacy_agent_count(conn)
+    lines = [
+        "Operator Raven ArcLink agents",
+        f"Captain ArcPods: {len(captain_rows)} total ({_format_counts(captain_counts)}), {len(active_captains)} active",
+        f"Operator Hermes: {_operator_agent_line(operator_rows)}",
+        f"Legacy Shared-Host agent rows: {legacy_active} active (not the Sovereign ArcPod roster)",
+        "",
+        "Active Captain Agents:",
+    ]
+    if active_captains:
+        for row in active_captains[:12]:
+            deployment_id = str(row.get("deployment_id") or "")
+            prefix = str(row.get("prefix") or "")
+            label = _deployment_label(row)
+            health = _deployment_health_summary(conn, deployment_id)
+            lines.append(
+                f"- {label}: {deployment_id} prefix={prefix or 'unset'} user={row.get('user_id') or 'unknown'} "
+                f"status={row.get('status') or 'unknown'} health={health}"
+            )
+        if len(active_captains) > 12:
+            lines.append(f"... {len(active_captains) - 12} more active Captain Agent(s) omitted.")
+    else:
+        lines.append("- none")
+    non_active = [row for row in captain_rows if str(row.get("status") or "") != "active"]
+    if non_active:
+        lines.append("")
+        lines.append("Non-active ArcPods:")
+        for row in non_active[:8]:
+            lines.append(
+                f"- {_deployment_label(row)}: {row.get('deployment_id')} status={row.get('status') or 'unknown'} "
+                f"user={row.get('user_id') or 'unknown'}"
+            )
+    lines.extend(
+        [
+            "",
+            "Note: Hermes /agents means internal helper/task agents. On Operator surfaces, /agents now reports ArcLink Captain Agents and ArcPods.",
+            "Use /operator_fleet for worker capacity, /user_lookup <query> for account detail, and /action_status for queued work.",
+        ]
+    )
+    return {
+        "message": "\n".join(lines),
+        "deployments": [_deployment_public(row) for row in captain_rows],
+        "operator_agents": [_deployment_public(row) for row in operator_rows],
+        "legacy_active_agents": legacy_active,
     }
 
 
@@ -975,6 +1049,102 @@ def _operator_action_status_counts(conn: sqlite3.Connection) -> dict[str, int]:
     except sqlite3.Error:
         return {}
     return {str(row["status"] or "unknown"): int(row["count"] or 0) for row in rows}
+
+
+def _deployment_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT deployment_id, user_id, prefix, status, agent_id, agent_title,
+                   metadata_json, updated_at
+            FROM arclink_deployments
+            ORDER BY
+              CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+              updated_at DESC,
+              deployment_id
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(row) for row in rows]
+
+
+def _deployment_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
+    raw = str(row.get("metadata_json") or "{}")
+    try:
+        loaded = json.loads(raw)
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _deployment_is_operator(row: Mapping[str, Any]) -> bool:
+    metadata = _deployment_metadata(row)
+    return bool(metadata.get("operator_agent")) or str(row.get("deployment_id") or "") == "operator"
+
+
+def _deployment_label(row: Mapping[str, Any]) -> str:
+    metadata = _deployment_metadata(row)
+    for key in ("agent_label", "agent_name", "display_name", "name"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    for key in ("agent_title", "prefix", "deployment_id"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return "unnamed"
+
+
+def _deployment_public(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "deployment_id": str(row.get("deployment_id") or ""),
+        "user_id": str(row.get("user_id") or ""),
+        "prefix": str(row.get("prefix") or ""),
+        "status": str(row.get("status") or ""),
+        "label": _deployment_label(row),
+        "operator_agent": _deployment_is_operator(row),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def _operator_agent_line(rows: Sequence[Mapping[str, Any]]) -> str:
+    if not rows:
+        return "missing"
+    row = rows[0]
+    status = str(row.get("status") or "unknown")
+    deployment_id = str(row.get("deployment_id") or "operator")
+    if len(rows) == 1:
+        return f"{status} ({deployment_id})"
+    return f"{status} ({deployment_id}); WARNING {len(rows)} operator rows found"
+
+
+def _legacy_agent_count(conn: sqlite3.Connection) -> int:
+    try:
+        row = conn.execute("SELECT COUNT(*) AS count FROM agents WHERE status = 'active'").fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row["count"] or 0) if row is not None else 0
+
+
+def _deployment_health_summary(conn: sqlite3.Connection, deployment_id: str) -> str:
+    if not deployment_id:
+        return "unknown"
+    try:
+        rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM arclink_service_health
+            WHERE deployment_id = ?
+            GROUP BY status
+            ORDER BY status
+            """,
+            (deployment_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        return "unknown"
+    counts = {str(row["status"] or "unknown"): int(row["count"] or 0) for row in rows}
+    return _format_counts(counts)
 
 
 def _admin_action_intent_exists(conn: sqlite3.Connection, idempotency_key: str) -> bool:

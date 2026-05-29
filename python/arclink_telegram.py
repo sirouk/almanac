@@ -109,6 +109,7 @@ ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES = frozenset(
 )
 ARCLINK_OPERATOR_TELEGRAM_COMMANDS: tuple[dict[str, str], ...] = (
     {"command": "operator_status", "description": "Operator: control-node status"},
+    {"command": "agents", "description": "Operator: ArcLink Agents and ArcPods"},
     {"command": "fleet_list", "description": "Operator: fleet and capacity"},
     {"command": "worker_probe", "description": "Operator: worker proof dry run"},
     {"command": "user_lookup", "description": "Operator: find Captain or Pod"},
@@ -1049,6 +1050,7 @@ def _operator_raven_intro_reply() -> str:
         "start the Captain checkout/onboarding lane here.\n\n"
         "Read commands:\n"
         "- /operator_status - control node, fleet, proof gates, rollout, queued actions\n"
+        "- /agents - ArcLink Captain Agents and ArcPods (Operator view)\n"
         "- /operator_fleet - worker capacity and placement readiness\n"
         "- /worker_probe <host-id> --dry-run - preview a worker probe\n"
         "- /user_lookup <query> - inspect Captain/account state without secrets\n"

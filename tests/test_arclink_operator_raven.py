@@ -178,6 +178,40 @@ def test_operator_raven_status_is_read_only_and_truthful() -> None:
         cleanup_db(tmp, old_env)
 
 
+def test_operator_raven_agents_reports_arclink_arcpods_not_hermes_tasks() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_deployments (
+              deployment_id, user_id, prefix, base_domain, agent_id, agent_title,
+              status, metadata_json, created_at, updated_at
+            ) VALUES (
+              'operator', 'operator', 'operator-helm', 'example.test',
+              'operator-agent', 'Operator Hermes', 'active', ?, '2026-05-29T00:00:00+00:00',
+              '2026-05-29T00:00:00+00:00'
+            )
+            """,
+            (json.dumps({"operator_agent": True, "dashboard_password": "secret://operator/password"}),),
+        )
+        conn.commit()
+
+        result = raven.dispatch_operator_raven_command(conn, "/agents")
+        text = result["message"]
+        expect(result.get("command") == "agents", str(result))
+        expect("Operator Raven ArcLink agents" in text, text)
+        expect("Captain ArcPods: 3 total" in text and "2 active" in text, text)
+        expect("dep-rollout-1" in text and "dep-rollout-2" in text, text)
+        expect("Operator Hermes: active (operator)" in text, text)
+        expect("Hermes /agents means internal helper/task agents" in text, text)
+        expect("secret://" not in text and "dashboard_password" not in json.dumps(result), str(result))
+        alias = raven.dispatch_operator_raven_command(conn, "/operator_agents")
+        expect(alias.get("command") == "agents", str(alias))
+        print("PASS test_operator_raven_agents_reports_arclink_arcpods_not_hermes_tasks")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
 def test_operator_raven_fleet_and_worker_probe_are_dry_run_only() -> None:
     tmp, old_env, conn, raven = with_seeded_db()
     try:
@@ -528,6 +562,7 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
         try:
             cfg = control.Config.from_env()
             expect(telegram._operator_command_requested("/operator_status"), "Telegram should recognize Operator Raven commands")
+            expect(telegram._operator_command_requested("/agents"), "Telegram operator /agents should resolve to Operator Raven, not Hermes internals")
             allowed = {"chat": {"id": "42", "type": "private"}, "from": {"id": "42"}}
             denied = {"chat": {"id": "99", "type": "private"}, "from": {"id": "99"}}
             expect(telegram.operator_message_allowed(cfg, allowed), "configured operator channel should be allowed")
@@ -539,12 +574,14 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
     discord_text = CURATOR_DISCORD_PY.read_text(encoding="utf-8")
     expect("operator_raven_command_requested" in discord_text, "Discord adapter should use shared Operator Raven parser")
     expect("@tree.command(name=\"operator-status\"" in discord_text, "Discord should expose an operator status command")
+    expect("@tree.command(name=\"operator-agents\"" in discord_text, "Discord should expose an operator ArcLink agents command")
     expect("_ensure_operator_channel" in discord_text, "Discord operator commands must keep channel authorization")
     print("PASS test_operator_raven_chat_adapters_preserve_authorization_boundaries")
 
 
 if __name__ == "__main__":
     test_operator_raven_status_is_read_only_and_truthful()
+    test_operator_raven_agents_reports_arclink_arcpods_not_hermes_tasks()
     test_operator_raven_fleet_and_worker_probe_are_dry_run_only()
     test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secrets()
     test_operator_raven_upgrade_check_is_injected_and_fail_closed()
@@ -556,4 +593,4 @@ if __name__ == "__main__":
     test_operator_raven_action_status_reads_both_queues()
     test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
-    print("PASS all 12 Operator Raven tests")
+    print("PASS all 13 Operator Raven tests")

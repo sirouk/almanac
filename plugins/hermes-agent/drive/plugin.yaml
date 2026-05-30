@@ -1,7 +1,9 @@
 name: drive
 version: 1.0.0
-description: Adds Drive to the Hermes dashboard.
-provides_tools: false
+description: Adds Drive to the Hermes Dashboard as an ArcLink file manager plugin.
+author: ArcLink
+kind: standalone
+provides_tools: []
 provides_hooks: []
 provides_commands: []
 requires_env: []

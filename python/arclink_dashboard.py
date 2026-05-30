@@ -911,7 +911,7 @@ def _control_notion_webhook_public_url() -> str:
     ).strip().lower().strip(".")
     if not host:
         return ""
-    # This is the shared control-node callback, not a deployment Helm/dashboard
+    # This is the shared control-node callback, not a deployment Hermes Dashboard
     # URL. TAILSCALE_SERVE_PORT can be a per-agent app port such as 8444.
     port = str(
         os.environ.get("ARCLINK_TAILSCALE_HTTPS_PORT")

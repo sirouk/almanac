@@ -51,7 +51,7 @@ Onboarding surfaces share the same state machine:
 
 Per-pod services:
 
-- Hermes agent runtime and Hermes dashboard
+- Hermes Agent runtime and Hermes Dashboard
 - qmd vault index/retrieval
 - Vault watcher
 - Memory synthesis and hot memory stubs through managed context
@@ -310,9 +310,9 @@ Update Name
 ```text
 Comms are open.
 
-I will keep this simple until your first agent is live. I can help you pick Sovereign or Scale, open checkout, or read the board.
+I will keep this simple until your first Hermes Agent is live. I can help you pick Sovereign or Scale, open checkout, or read the board.
 
-After launch, I reveal the working controls: your crew, Notion, private backups, channel pairing, files, code, and health.
+After launch, I reveal the working controls: your Crew, Notion, private backups, channel pairing, Hermes Dashboard, Drive, Code, Terminal, and health.
 ```
 
 Buttons:
@@ -442,7 +442,7 @@ Hire Founders
 ```text
 Control panel is open.
 
-Your first agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If this is an active Telegram chat, use `/raven agents`, `/raven status`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, or `/raven cancel` for ArcLink controls. Bare slash commands belong to the agent at the helm.
+Your first Hermes Agent is aboard, so I can show more of the machinery now. Use the buttons for the common work. If this is an active Telegram chat, use `/raven agents`, `/raven status`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, or `/raven cancel` for ArcLink controls. Bare slash commands belong to the Hermes Agent at the helm.
 
 Pick one lane and I will keep the steps tight.
 ```
@@ -458,7 +458,7 @@ Set Up Backup
 ### Crew Roster
 
 Triggered by `/agents` before the active Telegram command scope is refreshed,
-or by `/raven agents` after the active agent owns the bare Telegram slash
+or by `/raven agents` after the active Hermes Agent owns the bare Telegram slash
 namespace.
 
 ```text
@@ -473,14 +473,14 @@ I keep this roster personal. Every agent here has its own pod, memory rail, tool
 Dynamic buttons:
 
 ```text
-Take Helm: {Agent Label}
+Switch Hermes Agent: {Agent Label}
 Add Agent
 ```
 
 ### No Agent Yet
 
 ```text
-I do not see your first agent yet. Choose Founders for $149/month, Sovereign for $199/month, or Scale for $275/month. Once an agent is active, Agentic Expansion adds agents for $99/month on Sovereign or $79/month on Scale.
+I do not see your first Hermes Agent yet. Choose Founders for $149/month, Sovereign for $199/month, or Scale for $275/month. Once a Hermes Agent is active, Agentic Expansion adds Agents for $99/month on Sovereign or $79/month on Scale.
 ```
 
 Button:
@@ -649,13 +649,13 @@ I found your pod in `{status}`. I can continue once it reaches active.
 Workflow attempted before any pod exists:
 
 ```text
-I can run that lane once your first agent is awake aboard ArcLink. Send `/start` and I will get you aboard, or finish checkout if your launch is already moving.
+I can run that lane once your first Hermes Agent is awake aboard ArcLink. Send `/start` and I will get you aboard, or finish checkout if your launch is already moving.
 ```
 
 ## Command And Button Inventory
 
 Registered public Telegram commands before an active Telegram chat receives its
-per-chat active-agent scope:
+per-chat Hermes command scope:
 
 | Command | Description |
 | --- | --- |
@@ -664,7 +664,7 @@ per-chat active-agent scope:
 | `/status` | Check onboarding or pod status |
 | `/name <display_name>` | Name your ArcLink workspace |
 | `/plan <sovereign\|operator\|scale>` | Choose sovereign, operator, or scale |
-| `/checkout` | Hire your first ArcLink agent |
+| `/checkout` | Hire your first Hermes Agent |
 | `/agents` | Open your ArcLink crew manifest |
 | `/raven_name` | Set Raven's ArcLink-message display name for this channel or account |
 | `/connect_notion` | Connect Notion to your live pod |
@@ -673,11 +673,11 @@ per-chat active-agent scope:
 | `/cancel` | Close the active setup workflow |
 
 In active Telegram chats, the visible command menu changes to one Raven
-control command, normally `/raven`, plus the active agent's current Hermes
+control command, normally `/raven`, plus the active Hermes Agent's current Hermes
 commands. Use `/raven agents`, `/raven status`, `/raven connect_notion`,
 `/raven config_backup`, `/raven link_channel`, or `/raven cancel` for ArcLink
-controls there. Bare slash commands belong to the active agent. Discord keeps
-global slash commands and uses `/agent <message-or-command>` for active-agent
+controls there. Bare slash commands belong to the active Hermes Agent. Discord keeps
+global slash commands and uses `/agent <message-or-command>` for active Hermes Agent
 commands.
 
 Hidden/account-state actions:
@@ -685,7 +685,7 @@ Hidden/account-state actions:
 | Action | Description |
 | --- | --- |
 | `/add-agent` | Hire Agentic Expansion for the active account |
-| `/agent-<slug>` | Switch active agent |
+| `/agent-<slug>` | Switch active Hermes Agent |
 
 Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Limited 100 Founders, Sovereign, and Scale.
 
@@ -703,7 +703,7 @@ Hire Sovereign - $199/month
 Hire Scale - $275/month
 Change Package
 Show My Crew
-Take Helm: {Agent Label}
+Switch Hermes Agent: {Agent Label}
 Add Agent
 Hire Additional Agent
 Back To My Crew

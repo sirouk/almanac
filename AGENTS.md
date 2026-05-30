@@ -9,9 +9,10 @@ state repo, Docker control services, fleet inventory, chat gateways, qmd
 retrieval, Notion SSOT rails, deploy keys, Academy, and inference routing.
 
 Vocabulary split: Captain-facing surfaces use Raven for the guide, ArcPod or
-Pod for a provisioned deployment, Agent for the Hermes-powered occupant,
-Captain for the paying owner, and Crew for that Captain's Agents. Operator is
-reserved for platform/admin/deploy surfaces and backend runbooks.
+Pod for a provisioned deployment, Hermes Agent for the Hermes-powered occupant
+with ArcLink skills, Captain for the paying owner, and Crew for that Captain's
+Hermes Agents. Operator is reserved for platform/admin/deploy surfaces and
+backend runbooks.
 
 ## Prime Directives
 
@@ -473,15 +474,15 @@ working when useful, but register menu commands as `/retry_contact`,
 also expose `/upgrade` to queue an idempotent host upgrade/repair. Curator
 startup refreshes Telegram command menus, and Discord startup syncs app
 commands.
-Public Raven Telegram chats are different from per-user agent bots: after a
-Telegram public channel has an active ArcLink deployment, the active agent owns
+Public Raven Telegram chats are different from per-user Hermes Agent bots: after a
+Telegram public channel has an active ArcLink deployment, the active Hermes Agent owns
 the bare slash command menu and Raven controls move behind a selected Raven
 control command, normally `/raven`. The public bot command registration helper
 refreshes active per-chat Telegram scopes after control install/upgrade,
-records the active-agent command names in session metadata, suppresses direct
+records the active Hermes Agent command names in session metadata, suppresses direct
 `/update`, and queues an operator notification if plugin, skill, or Hermes
 upgrade drift creates command collisions. Do not reintroduce active public
-menus where Raven and the selected agent share the same bare slash command
+menus where Raven and the selected Hermes Agent share the same bare slash command
 names.
 Discord contact retries must reuse the stored Curator confirmation code from
 the onboarding session; do not mint a fresh code during retry outreach.
@@ -506,7 +507,7 @@ New and refreshed agents should get these defaults from the outset:
 - `drive`, `code`, and `terminal` dashboard plugins installed and enabled
   so Hermes shows `Drive`, `Code`, and `Terminal` sidebar tabs without
   ArcLink patching Hermes core dashboard code.
-- Per-agent Hermes dashboard access is gated by
+- Per-agent Hermes Dashboard access is gated by
   `python/arclink_dashboard_auth_proxy.py`, which uses the generated
   `state/arclink-web-access.json` username/password plus a signed, expiring
   session cookie. Do not reintroduce browser-facing Basic Auth for dashboard,

@@ -20,7 +20,7 @@ the Operator term.
 | **Raven** | The guide to ArcLink and the Curator of the Console. The public bot persona, the onboarding voice, the dashboard guide voice. | Web hero, onboarding page, public bot replies, completion bundles, Wrapped emails, dashboard guide copy. | Admin/operator screens. |
 | **ArcPod** | A single Captain's provisioned deployment. Renames the old "Sovereign Pod" / "deployment" on Captain-facing surfaces. | All Captain-facing copy. First occurrence on a page should be "ArcPod"; later occurrences may use "Pod". | Module names, table names, env-var names, route names. |
 | **Pod** | Short form of ArcPod, used after the first occurrence. | Fluent Captain-facing copy. | Operator screens. |
-| **Agent** | The Hermes-powered occupant of one ArcPod. One Agent per Pod. The Agent has a Name and a Title (e.g. "Bob, the know-it-all"). | Everywhere a Captain or Operator refers to the running assistant. | n/a — same word both surfaces. |
+| **Hermes Agent** | The Hermes-powered occupant of one ArcPod. One Hermes Agent per Pod. The Hermes Agent has a Name and a Title (e.g. "Bob, the know-it-all"), ArcLink skills, and Drive, Code, and Terminal in the Hermes Dashboard. "Agent" is acceptable after the first mention when the context is already clear. | Everywhere a Captain or Operator refers to the running assistant. | n/a — same word both surfaces. |
 | **Captain** | A user who owns one or more ArcPods. All paying users are Captains. Founders / Sovereign / Scale plans all make a user a Captain. Captains see "Captain &lt;name&gt;" in formal greetings. | Public bot copy, web pages, dashboard greetings, completion bundles, Wrapped reports, share-grant copy. | Backend audit reasons (use `user_id`), admin operator screens (use "user"). |
 | **Crew** | The inventory of Agents managed by one Captain. Sovereign / Founders is a Crew of one. Scale is a Crew of three. Agentic Expansion grows the Crew. | Captain-facing copy: "Show My Crew", "Train Your Crew", "your Crew member &lt;name&gt;". | n/a |
 | **Comms** | Inter-Pod messages within a Captain's Crew, and (in the Operator view) across Captains. | Captain Comms tab, Operator Comms Console, agent tooling, audit reasons surfaced to Captains. | n/a |
@@ -63,7 +63,7 @@ though the underlying queue rows are keyed on technical identifiers.
 2. Captain-facing strings that say "user" or "buyer" become "Captain" where the
    reference is to the human paying for the service. Operator-facing strings stay as
    "user."
-3. Bot copy "your bot" / "the agent" stays as "Agent" with a Name and Title where the
+3. Bot copy "your bot" / "the agent" becomes "Hermes Agent" with a Name and Title where the
    identity is known. Use the Captain-supplied Name and Title in greetings, in
    completion bundles, and in Wrapped reports.
 4. Multi-Pod Captains hear about their "Crew" and their "Crew members," not their
@@ -77,9 +77,9 @@ though the underlying queue rows are keyed on technical identifiers.
 
 ## Examples
 
-- Web onboarding hero: "Name your Agent. Raven runs the rest."
+- Web onboarding hero: "Name your Hermes Agent. Raven runs the rest."
 - Paid ping: "Captain Atlas, payment cleared. I'm provisioning your ArcPod now."
-- Vessel-online ping: "Captain Atlas, your Pod is live. Open Helm."
+- Vessel-online ping: "Captain Atlas, your Pod is live. Open the Hermes Dashboard."
 - Low-fuel ping: "ArcPod fuel is running low. Raven can open ArcPod Refueling."
 - Share-grant: "Approve sharing this Drive folder with Captain Vega's Crew?"
 - Wrapped greeting: "Captain Atlas — this week your Crew shipped 14 commits and Bob, the know-it-all, answered 47 inbound questions."

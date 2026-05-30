@@ -290,7 +290,7 @@ def test_public_bot_scale_checkout_uses_scale_price_and_reserves_three_agents() 
         conn, channel="telegram", channel_identity="tg:scale", text="scale",
     )
     expect("3X Scale Plan is locked" in planned.reply, planned.reply)
-    expect("Three Agents live on ArcLink with Federation" in planned.reply, planned.reply)
+    expect("Three Hermes Agents live on ArcLink with Federation" in planned.reply, planned.reply)
 
     checkout = bots.handle_arclink_public_bot_turn(
         conn,
@@ -637,7 +637,7 @@ def test_public_bot_credentials_reveal_and_ack_dashboard_password() -> None:
             expect("Username: `arc-credpod@example.test`" not in revealed.telegram_reply, revealed.telegram_reply)
             expect("Password:\narc_public_bot_dashboard_password" in revealed.telegram_reply, revealed.telegram_reply)
             expect([entity.get("type") for entity in revealed.telegram_entities] == ["code", "code"], str(revealed.telegram_entities))
-            expect("same pair opens each of your ArcLink agent dashboards" in revealed.reply, revealed.reply)
+            expect("same pair opens each Hermes Dashboard for your Crew" in revealed.reply, revealed.reply)
             expect("I Stored It" in [button.label for button in revealed.buttons], str(revealed.buttons))
             telegram_markup = bots.arclink_public_bot_turn_telegram_reply_markup(revealed)
             flat_telegram_buttons = [
@@ -877,7 +877,7 @@ def test_public_bot_workflow_commands_do_not_create_blank_onboarding_sessions() 
         text="/connect-notion",
     )
     expect(turn.action == "connect_notion_unavailable", str(turn))
-    expect("once your first agent is awake aboard ArcLink" in turn.reply, turn.reply)
+    expect("once your first Hermes Agent is awake aboard ArcLink" in turn.reply, turn.reply)
     count = conn.execute("SELECT COUNT(*) AS n FROM arclink_onboarding_sessions").fetchone()["n"]
     expect(count == 0, f"workflow command should not create an onboarding session, got {count}")
 
@@ -930,7 +930,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     )
     expect(roster.action == "show_agents", str(roster))
     expect("Agent #prime - Mission Operator" in roster.reply, roster.reply)
-    expect("Helm: https://control.example.ts.net/u/arc-prime" in roster.reply, roster.reply)
+    expect("Hermes Dashboard: https://control.example.ts.net/u/arc-prime/hermes" in roster.reply, roster.reply)
     expect(any(button.command == "/add-agent" for button in roster.buttons), str(roster.buttons))
 
     upgrade = bots.handle_arclink_public_bot_turn(
@@ -1103,7 +1103,7 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     )
     expect(status.action == "show_status", str(status))
     expect(status.deployment_id == "arcdep_bob", str(status))
-    expect("Agent at the helm: Bob" in status.reply, status.reply)
+    expect("Hermes Agent at the helm: Bob" in status.reply, status.reply)
     expect("onboarding only" not in status.reply.lower(), status.reply)
     with temp_env({"ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None, "ARCLINK_TAILSCALE_CONTROL_URL": None}):
         notion = bots.handle_arclink_public_bot_turn(
@@ -2157,12 +2157,12 @@ def test_public_bot_aboard_freeform_queues_agent_turn_not_onboarding() -> None:
         metadata={"telegram_message_id": "4321"},
     )
     expect(freeform.action == "agent_message_queued", f"expected agent_message_queued got {freeform.action}")
-    expect("From now on, your normal messages in this channel will be routed to your active agent" in freeform.reply, freeform.reply)
+    expect("From now on, your normal messages in this channel will be routed to your active Hermes Agent" in freeform.reply, freeform.reply)
     expect("I am routing" not in freeform.reply, freeform.reply)
     expect("onboarding only" not in freeform.reply.lower(), freeform.reply)
     expect("Stripe collects" not in freeform.reply, "must not show onboarding copy to a paid user")
     expect("Send `/name" not in freeform.reply, "must not prompt for /name to a paid user")
-    expect(any(b.label == "Open Helm" and b.url for b in freeform.buttons), "expected Open Helm URL button")
+    expect(any(b.label == "Open Hermes Dashboard" and b.url for b in freeform.buttons), "expected Open Hermes Dashboard URL button")
     expect(any(b.command == "/agents" for b in freeform.buttons), "expected Show My Crew button")
     queued = conn.execute(
         "SELECT target_kind, target_id, channel_kind, message, extra_json FROM notification_outbox WHERE target_kind = 'public-agent-turn'"

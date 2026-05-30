@@ -16,9 +16,9 @@ Use the chat channel where onboarding completed.
 
 ## Dashboard
 
-The dashboard links are sent at completion and shown in the user dashboard.
+The Hermes Dashboard links are sent at completion and shown in the user dashboard.
 Sovereign users get one dashboard username, normally their email, and one
-dashboard password for their ArcLink console and Hermes dashboards. Dashboard
+dashboard password for their ArcLink console and Hermes Dashboards. Dashboard
 access is protected by ArcLink's generated web-access credential and session
 proxy. Do not send dashboard passwords or session material in shared channels.
 
@@ -27,7 +27,7 @@ manager and then acknowledge storage in the user session. After acknowledgement,
 the user API hides that handoff from future responses; reissue requires an
 operator rotation or recovery action.
 
-The dashboard includes:
+The Hermes Dashboard includes ArcLink skills and these plugins:
 
 - **Drive:** browse and manage vault files inside the allowed vault/workspace
   root. Accepted linked resources appear under a read-only `Linked` root when

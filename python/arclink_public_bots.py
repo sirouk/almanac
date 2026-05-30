@@ -355,12 +355,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="agent_name",
         telegram_command="agent_name",
         discord_command="agent-name",
-        description="Name your Agent",
+        description="Name your Hermes Agent",
         discord_options=(
             {
                 "type": 3,
                 "name": "name",
-                "description": "Agent name",
+                "description": "Hermes Agent name",
                 "required": True,
             },
         ),
@@ -369,12 +369,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="agent_title",
         telegram_command="agent_title",
         discord_command="agent-title",
-        description="Set your Agent title",
+        description="Set your Hermes Agent title",
         discord_options=(
             {
                 "type": 3,
                 "name": "title",
-                "description": "Agent title",
+                "description": "Hermes Agent title",
                 "required": True,
             },
         ),
@@ -383,7 +383,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="agent_identity",
         telegram_command="agent_identity",
         discord_command="agent-identity",
-        description="Set Agent name and title",
+        description="Set Hermes Agent name and title",
         discord_options=(
             {
                 "type": 3,
@@ -397,12 +397,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="rename_agent",
         telegram_command="rename_agent",
         discord_command="rename-agent",
-        description="Rename your active Agent",
+        description="Rename your active Hermes Agent",
         discord_options=(
             {
                 "type": 3,
                 "name": "name",
-                "description": "New Agent name",
+                "description": "New Hermes Agent name",
                 "required": True,
             },
         ),
@@ -411,12 +411,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="retitle_agent",
         telegram_command="retitle_agent",
         discord_command="retitle-agent",
-        description="Retitle your active Agent",
+        description="Retitle your active Hermes Agent",
         discord_options=(
             {
                 "type": 3,
                 "name": "title",
-                "description": "New Agent title",
+                "description": "New Hermes Agent title",
                 "required": True,
             },
         ),
@@ -463,7 +463,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="checkout",
         telegram_command="checkout",
         discord_command="checkout",
-        description="Hire your first ArcLink agent",
+        description="Hire your first Hermes Agent",
     ),
     ArcLinkPublicBotAction(
         key="agents",
@@ -487,7 +487,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="academy",
         telegram_command="academy",
         discord_command="academy",
-        description="Stage Academy specialist training for your Agents",
+        description="Stage Academy training for Hermes Agents",
     ),
     ArcLinkPublicBotAction(
         key="whats_changed",
@@ -513,12 +513,12 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="agent",
         telegram_command="agent",
         discord_command="agent",
-        description="Take the helm of one of your Agents by name",
+        description="Take the helm of one Hermes Agent by name",
         discord_options=(
             {
                 "type": 3,
                 "name": "name",
-                "description": "Agent name from your Crew roster",
+                "description": "Hermes Agent name from your Crew roster",
                 "required": True,
             },
         ),
@@ -1108,11 +1108,11 @@ def _package_prompt_reply(
             action="prompt_package",
             reply=(
                 f"{header}\n\n"
-                "Choose how many Agents to bring live on ArcLink.\n\n"
-                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: one Agent live on ArcLink.\n"
-                f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: three Agents live on ArcLink with Federation.\n\n"
-                f"Agentic Expansion after launch: Sovereign agents are ${SOVEREIGN_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each; "
-                f"Scale agents are ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each."
+                "Choose how many Hermes Agents to bring live on ArcLink.\n\n"
+                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month: one Hermes Agent live on ArcLink.\n"
+                f"Scale is ${SCALE_MONTHLY_DOLLARS}/month: three Hermes Agents live on ArcLink with Federation.\n\n"
+                f"Agentic Expansion after launch: Sovereign Hermes Agents are ${SOVEREIGN_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each; "
+                f"Scale Hermes Agents are ${SCALE_AGENT_EXPANSION_MONTHLY_DOLLARS}/month each."
             ),
             buttons=(
                 _button(f"Sovereign - ${SOVEREIGN_MONTHLY_DOLLARS}/month", command="/plan sovereign"),
@@ -1125,11 +1125,11 @@ def _package_prompt_reply(
         action="prompt_package",
         reply=(
             f"{header}\n\n"
-            "ArcLink brings a private ArcPod online for you: Agent memory, files, code workspace, tool lanes, model access, and a live Hermes dashboard under one governed identity. "
-            "Raven stays on the bridge while your Crew wakes up; the Agents do the work once the Pod is lit.\n\n"
+            "ArcLink brings a private ArcPod online for you: Hermes Agent memory, ArcLink skills, Drive, Code, Terminal, model access, and a live Hermes Dashboard under one governed identity. "
+            "Raven stays on the bridge while your Crew wakes up; the Hermes Agents do the work once the Pod is lit.\n\n"
             "Choose your launch lane.\n\n"
             f"Founders Offer is ${FOUNDERS_MONTHLY_DOLLARS}/mo: one ArcPod for the first 100 Captains.\n"
-            f"3X Scale Plan is ${SCALE_MONTHLY_DOLLARS}/mo: three Agents live on ArcLink with Federation.\n\n"
+            f"3X Scale Plan is ${SCALE_MONTHLY_DOLLARS}/mo: three Hermes Agents live on ArcLink with Federation.\n\n"
             "Tap a lane to open secure Stripe checkout. After payment clears, I will show your initial Crew roster and give you Train My Crew or Show My Crew as the next clean step."
         ),
         buttons=checkout_buttons or (
@@ -1155,8 +1155,8 @@ def _agent_name_prompt_reply(
         updated,
         action="prompt_agent_name",
         reply=(
-            "Name your Agent.\n\n"
-            "Send the Agent name as plain text, or use `/agent-name Atlas`. Keep it to 40 characters."
+            "Name your Hermes Agent.\n\n"
+            "Send the Hermes Agent name as plain text, or use `/agent-name Atlas`. Keep it to 40 characters."
         ),
         buttons=(_button("Cancel", command="/cancel", style="secondary"),),
         bot_display_name=bot_display_name,
@@ -1180,7 +1180,7 @@ def _agent_title_prompt_reply(
         updated,
         action="prompt_agent_title",
         reply=(
-            f"Give your Agent{name_line} a title.\n\n"
+            f"Give your Hermes Agent{name_line} a title.\n\n"
             "Send the title as plain text, or use `/agent-title the right hand`. Keep it to 80 characters."
         ),
         buttons=(_button("Cancel", command="/cancel", style="secondary"),),
@@ -2036,7 +2036,7 @@ def _parse_refuel_amount_cents(value: str) -> int:
 def _refuel_quote_lines(pricing: Mapping[str, Any]) -> list[str]:
     currency = str(pricing.get("currency") or "usd")
     lines = [
-        "ArcPod fuel is prepaid model budget for your active Agent.",
+        "ArcPod fuel is prepaid model budget for your active Hermes Agent.",
         "Raven opens ArcPod Refueling, then the Control Node spends fuel at the selected model's current catalog price.",
         "",
         "| Refuel | Model fuel added | Reference capacity |",
@@ -2331,9 +2331,9 @@ def _crew_roster_lines_and_buttons(
         suffix = f" - {marker}" if marker not in {"ready", "at helm"} else ""
         lines.append(f"- {label} - {title} ({theme}){suffix}")
         if include_links and str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
-            dashboard = str(_deployment_access(item).get("dashboard") or "").strip()
+            dashboard = _hermes_dashboard_url(_deployment_access(item))
             if dashboard:
-                lines.append(f"  Helm: {dashboard}")
+                lines.append(f"  Hermes Dashboard: {dashboard}")
                 buttons.append(_button(f"Open {label}"[:80], url=dashboard, style="secondary"))
     return lines, buttons
 
@@ -3092,6 +3092,10 @@ def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     )
 
 
+def _hermes_dashboard_url(access: Mapping[str, str]) -> str:
+    return str(access.get("hermes") or access.get("dashboard") or "").rstrip("/")
+
+
 def _normalize_dashboard_username(value: str) -> str:
     clean = str(value or "").strip().lower()
     return "".join(ch for ch in clean if ch.isalnum() or ch in "@._-").strip(".-_") or ""
@@ -3151,9 +3155,9 @@ def _control_notion_webhook_public_url() -> str:
     ).strip().lower().strip(".")
     if not host:
         return ""
-    # This is the shared control-node callback, not an agent Helm/dashboard URL.
+    # This is the shared control-node callback, not a Hermes Dashboard URL.
     # TAILSCALE_SERVE_PORT belongs to per-app Tailscale Serve publishing and can
-    # point at the Hermes dashboard port (for example 8444); never let it leak
+    # point at the Hermes Dashboard port (for example 8444); never let it leak
     # into the Notion webhook URL.
     port = str(
         os.environ.get("ARCLINK_TAILSCALE_HTTPS_PORT")
@@ -3274,7 +3278,7 @@ def _credentials_reply(
             deployment=deployment,
             buttons=tuple(
                 button for button in (
-                    _button("Open Helm", url=str(access.get("dashboard") or "")) if access.get("dashboard") else None,
+                    _button("Open Hermes Dashboard", url=_hermes_dashboard_url(access)) if _hermes_dashboard_url(access) else None,
                     _button("Check Status", command="/status", style="secondary"),
                 )
                 if button is not None
@@ -3330,12 +3334,12 @@ def _credentials_reply(
     )
     conn.commit()
     access = _deployment_access(deployment)
-    helm = str(access.get("dashboard") or "").rstrip("/")
+    helm = _hermes_dashboard_url(access)
     username = _dashboard_username(conn, deployment)
     lines = [
         "Dashboard credential handoff.",
         "",
-        "Use this exact Helm username and password. This same pair opens each of your ArcLink agent dashboards.",
+        "Use this exact dashboard username and password. This same pair opens each Hermes Dashboard for your Crew.",
         "",
         f"Username: `{username}`",
         "",
@@ -3344,11 +3348,11 @@ def _credentials_reply(
         "Copy both into your password manager now. After you confirm storage, ArcLink removes the handoff from future responses.",
     ]
     if helm:
-        lines.extend(["", f"Helm: {helm}"])
+        lines.extend(["", f"Hermes Dashboard: {helm}"])
     telegram_lines = [
         "Dashboard credential handoff.",
         "",
-        "Use this exact Helm username and password. This same pair opens each of your ArcLink agent dashboards.",
+        "Use this exact dashboard username and password. This same pair opens each Hermes Dashboard for your Crew.",
         "",
         f"Username: {username}",
         "",
@@ -3358,7 +3362,7 @@ def _credentials_reply(
         "Copy both into your password manager now. After you confirm storage, ArcLink removes the handoff from future responses.",
     ]
     if helm:
-        telegram_lines.extend(["", f"Helm: {helm}"])
+        telegram_lines.extend(["", f"Hermes Dashboard: {helm}"])
     telegram_reply = "\n".join(telegram_lines)
     return _turn(
         channel=channel,
@@ -3372,7 +3376,7 @@ def _credentials_reply(
                 _button("Copy Username", copy_text=username),
                 _button("Copy Password", copy_text=raw_secret),
                 _button("I Stored It", command="/credentials-stored"),
-                _button("Open Helm", url=helm) if helm else None,
+                _button("Open Hermes Dashboard", url=helm) if helm else None,
             )
             if button is not None
         ),
@@ -3447,7 +3451,7 @@ def _credentials_stored_reply(
         action="credentials_stored",
         reply=(
             "Locked in. I removed that dashboard credential handoff from future ArcLink responses.\n\n"
-            "Next clean moves: open Helm, wire Notion, or set private backups."
+            "Next clean moves: open the Hermes Dashboard, wire Notion, or set private backups."
         ),
         session=session,
         deployment=deployment,
@@ -3502,7 +3506,7 @@ def _credential_handoff_required_turn(
     summary: Mapping[str, Any],
 ) -> ArcLinkPublicBotTurn:
     access = _deployment_access(deployment)
-    helm = str(access.get("dashboard") or "").rstrip("/")
+    helm = _hermes_dashboard_url(access)
     pending = [item for item in summary.get("pending", []) if str(item).strip()]
     pending_line = ", ".join(str(item) for item in pending) if pending else "credential handoff"
     lines = [
@@ -3515,11 +3519,11 @@ def _credential_handoff_required_turn(
         "This keeps Notion setup on the dashboard/operator verification rail. No Notion tokens or API keys belong in chat.",
     ]
     if helm:
-        lines.insert(3, f"Helm: {helm}")
+        lines.insert(3, f"Hermes Dashboard: {helm}")
         lines.insert(4, "")
     buttons: list[ArcLinkPublicBotButton] = []
     if helm:
-        buttons.append(_button("Open Helm", url=helm))
+        buttons.append(_button("Open Hermes Dashboard", url=helm))
     buttons.append(_button("Credentials", command="/credentials", style="secondary"))
     return _turn(
         channel=channel,
@@ -3552,7 +3556,7 @@ def _aboard_freeform_reply(
     label = _agent_label(deployment, index=0, conn=conn)
     raven = bot_display_name or ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME
     access = _deployment_access(deployment)
-    helm = str(access.get("dashboard") or "").rstrip("/")
+    helm = _hermes_dashboard_url(access)
     if conn is not None:
         extra = {
             "deployment_id": str(deployment.get("deployment_id") or ""),
@@ -3603,22 +3607,22 @@ def _aboard_freeform_reply(
     if include_bridge_intro:
         lines.extend(
             [
-                f"From now on, your normal messages in this channel will be routed to your active agent, **{label}**.",
-                "Use `/raven` any time for ArcLink controls and agent selection. Bare slash commands belong to the agent at the helm.",
+                f"From now on, your normal messages in this channel will be routed to your active Hermes Agent, **{label}**.",
+                "Use `/raven` any time for ArcLink controls and Hermes Agent selection. Bare slash commands belong to the Hermes Agent at the helm.",
                 "",
             ]
         )
     if include_bridge_intro:
         lines.extend(
             [
-                "Your active agent replies here. Raven controls stay behind `/raven`; bare slash commands belong to the agent at the helm.",
+                "Your active Hermes Agent replies here. Raven controls stay behind `/raven`; bare slash commands belong to the Hermes Agent at the helm.",
             ]
         )
         if helm:
-            lines.extend(["", f"Helm stays open too: {helm}"])
+            lines.extend(["", f"The Hermes Dashboard stays open too: {helm}"])
     buttons: list[ArcLinkPublicBotButton] = []
     if include_bridge_intro and helm:
-        buttons.append(_button("Open Helm", url=helm))
+        buttons.append(_button("Open Hermes Dashboard", url=helm))
     if include_bridge_intro:
         buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
     return _turn(
@@ -3635,7 +3639,7 @@ def _aboard_freeform_reply(
 
 def _need_finished_onboarding_reply() -> str:
     return (
-        "That lane opens once your first agent is awake aboard ArcLink. Send `/start` and I will walk you through onboarding, "
+        "That lane opens once your first Hermes Agent is awake aboard ArcLink. Send `/start` and I will walk you through onboarding, "
         "or finish checkout if your launch is already in motion."
     )
 
@@ -3908,8 +3912,9 @@ def _pair_channel_reply(
         )
     buttons: list[ArcLinkPublicBotButton] = [_button("Show My Crew", command="/agents", style="secondary")]
     access = _deployment_access(linked_deployment or {}) if linked_deployment else {}
-    if access.get("dashboard"):
-        buttons.insert(0, _button("Open Helm", url=str(access["dashboard"])))
+    hermes_dashboard = _hermes_dashboard_url(access)
+    if hermes_dashboard:
+        buttons.insert(0, _button("Open Hermes Dashboard", url=hermes_dashboard))
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -3990,7 +3995,7 @@ def _connect_notion_reply(
         "",
         "Drop this shared control-node callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
-        "Do not add a Helm, Drive, Code, or Agent port/path to it.",
+        "Do not add a Hermes Dashboard, Drive, Code, Terminal, or Hermes Agent port/path to it.",
         "",
         "Then share the page or database with the ArcLink integration. Email sharing alone is not treated as proof of API access. No tokens in chat - when I need a secret, the secure dashboard field is the only door.",
         "",
@@ -4078,7 +4083,7 @@ def _agents_reply(
             action="agents_unavailable",
             reply=(
                 f"No crew on your manifest yet. Limited 100 Founders brings single-ArcPod access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
-                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month. Scale launches three agents with Federation for ${SCALE_MONTHLY_DOLLARS}/month."
+                f"Sovereign is ${SOVEREIGN_MONTHLY_DOLLARS}/month. Scale launches three Hermes Agents with Federation for ${SCALE_MONTHLY_DOLLARS}/month."
             ),
             session=session,
             buttons=(
@@ -4098,8 +4103,8 @@ def _agents_reply(
     lines.extend(
         [
             "",
-            "Each Agent has one Helm link. Drive, Code, and Terminal live inside that Hermes dashboard as plugins; you do not need separate control links.",
-            "Your dashboard username/password works across the Crew control interfaces. Use `/credentials` if you need the handoff again.",
+            "Each Hermes Agent has one Hermes Dashboard link. ArcLink skills, Drive, Code, and Terminal live inside that dashboard as plugins; you do not need separate control links.",
+            "Your dashboard username/password works across the Crew's Hermes Dashboards. Use `/credentials` if you need the handoff again.",
             "",
             "Use `/train-crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/academy` to stage subject-matter specialist training for one Agent or the whole Crew. Use `/name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
         ]
@@ -4161,7 +4166,7 @@ def _switch_agent_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="switch_agent",
-            reply=f"Focus moved. {label} is at the helm. Notion, backup, status, and Agent messages will route there until you choose another.",
+            reply=f"Focus moved. {label} is at the helm. Notion, backup, status, and Hermes Agent messages will route there until you choose another.",
             session=updated,
             deployment=item,
             buttons=(
@@ -5562,8 +5567,8 @@ def _help_reply(
             action="show_help",
             reply=(
                 "Comms are open.\n\n"
-                "I will keep this simple until your first agent is live. I can help you pick Founders, Sovereign, or Scale, open checkout, or read the board.\n\n"
-                "After launch, I reveal the working controls: credentials, your crew, Notion, private backups, channel pairing, files, code, and health."
+                "I will keep this simple until your first Hermes Agent is live. I can help you pick Founders, Sovereign, or Scale, open checkout, or read the board.\n\n"
+                "After launch, I reveal the working controls: credentials, your Crew, Notion, private backups, channel pairing, the Hermes Dashboard, Drive, Code, Terminal, and health."
             ),
             session=session,
             buttons=(
@@ -5577,7 +5582,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven retire_agent`, or `/raven cancel`.\n\n"
+            "Your first Hermes Agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven retire_agent`, or `/raven cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -5603,8 +5608,8 @@ def _learn_reply(
             channel_identity=channel_identity,
             action="learn_before_launch",
             reply=(
-                "ArcLink brings up a private ArcPod for your Agent, then Raven hands you the controls here.\n\n"
-                "After launch, one Helm login opens the Agent dashboard. Drive, Code, Terminal, memory, model fuel, Notion setup, and Crew controls all hang off that governed workspace."
+                "ArcLink brings up a private ArcPod for your Hermes Agent, then Raven hands you the controls here.\n\n"
+                "After launch, one login opens the Hermes Dashboard. ArcLink skills, Drive, Code, Terminal, memory, model fuel, Notion setup, and Crew controls all hang off that governed workspace."
             ),
             session=session,
             deployment=deployment,
@@ -5617,11 +5622,11 @@ def _learn_reply(
         reply=(
             "Quick tour:\n\n"
             "- Raven is this bridge: roster, credentials, Notion, backups, billing, and setup.\n"
-            "- Each Agent lives in an ArcPod with its own Hermes dashboard, memory, Drive, Code, Terminal, model lane, and health checks.\n"
-            "- Show My Crew lists every Agent and Helm link; use it to switch who owns bare chat.\n"
+            "- Each Hermes Agent lives in an ArcPod with ArcLink skills, memory, model lane, health checks, and a Hermes Dashboard with Drive, Code, and Terminal plugins.\n"
+            "- Show My Crew lists every Hermes Agent and Hermes Dashboard link; use it to switch who owns bare chat.\n"
             "- Login Credentials reveals the shared dashboard login until you confirm it is stored.\n"
             "- Crew Training shapes names, roles, tone, mission, and SOUL overlays.\n"
-            "- Quick Training is the Academy lane: pick one Agent or train all, with Skip available, to stage specialist source maps, curriculum, practice tasks, and continuing review.\n\n"
+            "- Quick Training is the Academy lane: pick one Hermes Agent or train all, with Skip available, to stage specialist source maps, curriculum, practice tasks, and continuing review.\n\n"
             "Start with Show My Crew, Login Credentials, or Crew Training."
         ),
         session=session,
@@ -5650,7 +5655,7 @@ def _upgrade_hermes_reply(
             action="upgrade_hermes_unavailable",
             reply=(
                 "Hermes upgrades stay on ArcLink-managed rails.\n\n"
-                "I cannot run an unmanaged `hermes update` from public chat. Once your first agent is live, I can show the active agent and status; operators use ArcLink deploy/control upgrade checks for runtime changes."
+                "I cannot run an unmanaged `hermes update` from public chat. Once your first Hermes Agent is live, I can show the active Hermes Agent and status; operators use ArcLink deploy/control upgrade checks for runtime changes."
             ),
             session=session,
             deployment=deployment,
@@ -5665,7 +5670,7 @@ def _upgrade_hermes_reply(
         action="upgrade_hermes_controlled",
         reply=(
             "Hermes is pinned and upgraded through ArcLink, not direct `hermes update` commands.\n\n"
-            "For this agent, use the operator-controlled upgrade rails: component pin checks, ArcLink deploy upgrade, and the post-upgrade health/smoke path. I will keep user chat on status, agents, Notion, backups, channels, files, code, and health."
+            "For this Hermes Agent, use the operator-controlled upgrade rails: component pin checks, ArcLink deploy upgrade, and the post-upgrade health/smoke path. I will keep user chat on status, agents, Notion, backups, channels, Drive, Code, Terminal, and health."
         ),
         session=session,
         deployment=deployment,
@@ -5691,15 +5696,16 @@ def _status_reply(
         f"Reading the board.\n\n{phrase}",
     ]
     if deployment_label:
-        lines.append(f"Agent at the helm: {deployment_label}.")
+        lines.append(f"Hermes Agent at the helm: {deployment_label}.")
     lines.append(
         f"\n_session `{session['session_id']}` · state `{live_status_code or 'unknown'}` · "
         f"step `{session.get('current_step') or 'started'}`_"
     )
     buttons: list[ArcLinkPublicBotButton] = [_button("Show My Crew", command="/agents", style="secondary")]
     access = _deployment_access(deployment or {}) if deployment else {}
-    if access.get("dashboard"):
-        buttons.append(_button("Open Helm", url=str(access["dashboard"])))
+    hermes_dashboard = _hermes_dashboard_url(access)
+    if hermes_dashboard:
+        buttons.append(_button("Open Hermes Dashboard", url=hermes_dashboard))
     else:
         buttons.append(_button("Choose Package", command="/packages", style="secondary"))
     return _turn(
@@ -6230,7 +6236,7 @@ def handle_arclink_public_bot_turn(
     # Routing law: if the user is already aboard with a live pod, every
     # remaining branch below this point would re-trigger onboarding copy
     # ("Stripe collects your email", "Send /name Your Name") that makes no
-    # sense for a paying customer. Hand them a clean Helm pointer instead.
+    # sense for a paying customer. Hand them a clean Hermes Dashboard pointer instead.
     aboard_session, aboard_deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
     if aboard_deployment and str(aboard_deployment.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
         if command in {"/start", "start", "restart"} or _is_raven_launch_command(message, command):
@@ -6408,19 +6414,19 @@ def handle_arclink_public_bot_turn(
         if plan == "scale":
             plan_reply = (
                 "3X Scale Plan is locked.\n\n"
-                f"Three Agents live on ArcLink with Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
+                f"Three Hermes Agents live on ArcLink with Federation for ${SCALE_MONTHLY_DOLLARS}/month. "
                 "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
         elif plan == "founders":
             plan_reply = (
                 "Founders Offer is locked.\n\n"
                 f"Single-ArcPod access for ${FOUNDERS_MONTHLY_DOLLARS}/month. "
-                "One Agent lives on ArcLink while the Founders cohort is open."
+                "One Hermes Agent lives on ArcLink while the Founders cohort is open."
             )
         else:
             plan_reply = (
                 "Sovereign is locked.\n\n"
-                f"One Agent lives on ArcLink for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
+                f"One Hermes Agent lives on ArcLink for ${SOVEREIGN_MONTHLY_DOLLARS}/month. "
                 "Stripe handles the handoff, then I move onboarding into the launch queue and report back here."
             )
         if stripe_client is not None:
@@ -6466,7 +6472,7 @@ def handle_arclink_public_bot_turn(
         reply=(
             f"I read you. {raven} on the line.\n\n"
             "Use Take Me Aboard to choose Founders Offer or 3X Scale Plan, Update Name to change what your Crew calls you, or `/status` to read the board. "
-            "Once an Agent is live, I open the deeper controls: credentials, Crew, Notion, backup, Drive, Code, Terminal, model lane, and health."
+            "Once a Hermes Agent is live, I open the deeper controls: credentials, Crew, Notion, backup, Hermes Dashboard, Drive, Code, Terminal, model lane, and health."
         ),
         buttons=(
             _button("Take Me Aboard", command="/packages"),

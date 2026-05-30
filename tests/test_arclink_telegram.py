@@ -455,7 +455,7 @@ def test_telegram_status_reports_selected_agent_label() -> None:
         {"update_id": 11, "message": {"message_id": 2, "chat": {"id": 42}, "from": {"id": 99}, "text": "/raven status"}},
     )
     expect(status is not None and status["action"] == "show_status", str(status))
-    expect("Agent at the helm: Bob" in status["text"], status["text"])
+    expect("Hermes Agent at the helm: Bob" in status["text"], status["text"])
     expect("onboarding only" not in status["text"].lower(), status["text"])
     print("PASS test_telegram_status_reports_selected_agent_label")
 

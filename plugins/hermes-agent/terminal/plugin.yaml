@@ -1,7 +1,9 @@
 name: terminal
 version: 0.2.0
-description: Adds Terminal to the Hermes dashboard.
-provides_tools: false
+description: Adds Terminal to the Hermes Dashboard as an ArcLink managed-pty plugin.
+author: ArcLink
+kind: standalone
+provides_tools: []
 provides_hooks: []
 provides_commands: []
 requires_env: []

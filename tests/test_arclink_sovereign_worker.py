@@ -186,10 +186,11 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     targets = {(item["channel_kind"], item["target_id"]) for item in notifications}
     expect(targets == {("discord", "200"), ("telegram", "100")}, str(notifications))
     notification = next(item for item in notifications if item["channel_kind"] == "telegram")
-    expect("Agent #1234 is online" in notification["message"], str(notification["message"]))
+    expect("Agent #1234 is online as a Hermes Agent" in notification["message"], str(notification["message"]))
     expect("Your ArcPod is ready" in notification["message"], str(notification["message"]))
-    expect("https://u-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
-    expect("Use Show My Crew to switch Agents" in notification["message"], str(notification["message"]))
+    expect("https://hermes-amber-vault-1234.example.test" in notification["message"], str(notification["message"]))
+    expect("Use Show My Crew to switch Hermes Agents" in notification["message"], str(notification["message"]))
+    expect("ArcLink skills, Drive, Code, and Terminal" in notification["message"], str(notification["message"]))
     extra = json.loads(notification["extra_json"])
     expect("telegram_reply_markup" in extra and "discord_components" in extra, str(extra))
     telegram_buttons = [
@@ -197,7 +198,7 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
         for row in extra["telegram_reply_markup"]["inline_keyboard"]
         for button in row
     ]
-    expect(any(button.get("text") == "Open Helm" and button.get("url") for button in telegram_buttons), str(extra))
+    expect(any(button.get("text") == "Open Hermes Dashboard" and button.get("url") for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Learn" and button.get("callback_data") == "arclink:/raven learn" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Crew Training" and button.get("callback_data") == "arclink:/raven train_crew" for button in telegram_buttons), str(extra))
     expect(any(button.get("text") == "Credentials" and button.get("callback_data") == "arclink:/raven credentials dep_1" for button in telegram_buttons), str(extra))

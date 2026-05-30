@@ -492,7 +492,7 @@ def arclink_public_bot_telegram_active_command_plan(
 ) -> dict[str, Any]:
     """Build a conflict-free active-chat Telegram command plan.
 
-    In active chats the active agent owns the bare slash namespace. Raven gets
+    In active chats the active Hermes Agent owns the bare slash namespace. Raven gets
     one safe control command whose name is selected after the agent command
     inventory is known, so an upstream Hermes/plugin/skill command cannot
     accidentally steal or shadow Raven's visible control entry.

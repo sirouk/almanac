@@ -33,6 +33,30 @@ LEGACY_PLUGIN_NAMES = (
 )
 START_HOOK_DIR = REPO / "hooks" / "hermes-agent" / "arclink-telegram-start"
 CONTROL_PY = REPO / "python" / "arclink_control.py"
+SUPPORTED_DASHBOARD_ICONS = {
+    "Activity",
+    "BarChart3",
+    "Clock",
+    "Code",
+    "Cpu",
+    "Database",
+    "Eye",
+    "FileText",
+    "Globe",
+    "Heart",
+    "KeyRound",
+    "MessageSquare",
+    "Package",
+    "Puzzle",
+    "Settings",
+    "Shield",
+    "Sparkles",
+    "Star",
+    "Terminal",
+    "Users",
+    "Wrench",
+    "Zap",
+}
 
 
 def expect(condition: bool, message: str) -> None:
@@ -119,6 +143,10 @@ def _assert_default_plugins_installed(hermes_home: Path) -> None:
         expect((installed_dir / "plugin.yaml").is_file(), f"expected installed plugin manifest at {installed_dir / 'plugin.yaml'}")
         expect((installed_dir / "__init__.py").is_file(), f"expected installed plugin module at {installed_dir / '__init__.py'}")
         expect(f"  - {plugin_name}" in config_body, config_body)
+        plugin_yaml = (installed_dir / "plugin.yaml").read_text(encoding="utf-8")
+        expect("kind: standalone" in plugin_yaml, plugin_yaml)
+        expect("author: ArcLink" in plugin_yaml, plugin_yaml)
+        expect("provides_tools: false" not in plugin_yaml, plugin_yaml)
 
     theme_file = hermes_home / "dashboard-themes" / "arclink.yaml"
     expect(theme_file.is_file(), f"expected ArcLink dashboard theme at {theme_file}")
@@ -135,6 +163,14 @@ def _assert_default_plugins_installed(hermes_home: Path) -> None:
     for plugin_name in ("code", "drive", "terminal"):
         dashboard_dir = hermes_home / "plugins" / plugin_name / "dashboard"
         expect((dashboard_dir / "manifest.json").is_file(), f"expected dashboard manifest at {dashboard_dir / 'manifest.json'}")
+        manifest = json.loads((dashboard_dir / "manifest.json").read_text(encoding="utf-8"))
+        expect(manifest.get("name") == plugin_name, str(manifest))
+        expect(manifest.get("slots") == [], str(manifest))
+        expect(manifest.get("icon") in SUPPORTED_DASHBOARD_ICONS, str(manifest))
+        expect(manifest.get("entry") == "dist/index.js", str(manifest))
+        expect(manifest.get("css") == "dist/style.css", str(manifest))
+        expect(manifest.get("api") == "plugin_api.py", str(manifest))
+        expect(str(manifest.get("tab", {}).get("path") or "") == f"/{plugin_name}", str(manifest))
         expect((dashboard_dir / "plugin_api.py").is_file(), f"expected dashboard API at {dashboard_dir / 'plugin_api.py'}")
         expect((dashboard_dir / "dist" / "index.js").is_file(), f"expected dashboard JS at {dashboard_dir / 'dist' / 'index.js'}")
         expect((dashboard_dir / "dist" / "style.css").is_file(), f"expected dashboard CSS at {dashboard_dir / 'dist' / 'style.css'}")
@@ -212,6 +248,13 @@ def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_de
         hermes_home.mkdir(parents=True, exist_ok=True)
         (hermes_home / "config.yaml").write_text(
             "model: gpt-5.4\n"
+            "dashboard:\n"
+            "  hidden_plugins:\n"
+            "  - drive\n"
+            "  - code\n"
+            "  - terminal\n"
+            "  - noisy-dashboard-plugin\n"
+            "  - example\n"
             "plugins:\n"
             "  disabled:\n"
             "  - arclink-managed-context\n"
@@ -237,6 +280,12 @@ def test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_de
         expect("mcp_servers:\n  arclink-mcp:" in config_body, config_body)
         expect("  - existing-plugin" in config_body, config_body)
         expect("  - noisy-plugin" in config_body, config_body)
+        hidden_block = config_body.split("  hidden_plugins:\n", 1)[1].split("plugins:\n", 1)[0]
+        expect("drive" not in hidden_block, config_body)
+        expect("code" not in hidden_block, config_body)
+        expect("terminal" not in hidden_block, config_body)
+        expect("  - noisy-dashboard-plugin" in hidden_block, config_body)
+        expect("  - example" in hidden_block, config_body)
         disabled_block = config_body.split("  disabled:\n", 1)[1].split("  enabled:\n", 1)[0]
         expect("arclink-managed-context" not in disabled_block, config_body)
         print("PASS test_install_arclink_plugins_preserves_existing_plugin_config_and_enables_default")

@@ -1,6 +1,6 @@
 # Raven Public Bot
 
-Raven is the guide to ArcLink and Curator of the Console. Raven should introduce herself in first person and invite the Captain to onboard an Agent into an ArcPod, not recite a product catalog. The Captain should feel like a capable console guide has opened a private channel and is ready to bring an Agent online.
+Raven is the guide to ArcLink and Curator of the Console. Raven should introduce herself in first person and invite the Captain to onboard a Hermes Agent into an ArcPod, not recite a product catalog. The Captain should feel like a capable console guide has opened a private channel and is ready to bring a Hermes Agent online.
 
 The voice should feel like a clear, fast, technically proud launch guide: calm under pressure and excited to get the user's agent online. Keep the ArcLink story original; do not imitate show dialogue, quote protected material, or imply the product is affiliated with any show.
 
@@ -10,38 +10,39 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
 - ArcLink is the agentic harness.
 - Agents occupy ArcPods.
 - The customer chooses a mission path.
-- Checkout hires the first agent and moves onboarding into the launch queue.
+- Checkout hires the first Hermes Agent and moves onboarding into the launch queue.
 - Status checks are concrete status views, not theatrical filler.
 - Notion and backup are setup lanes for the active account. Notion setup stays
   behind the credential handoff: Raven can record the setup intent only after
-  the user stores and acknowledges the secure completion bundle in Helm.
+  the user stores and acknowledges the secure completion bundle for the Hermes
+  Dashboard.
 - After onboarding, Raven remains the public control conduit, but the active
-  agent owns the normal slash namespace wherever the platform can support it.
+  Hermes Agent owns the normal slash namespace wherever the platform can support it.
   The first normal post-onboarding message in a linked channel explains that
-  normal messages now route to the active agent. After that, normal messages
-  are queued as selected-agent turns and Raven brings the agent's reply back
+  normal messages now route to the active Hermes Agent. After that, normal messages
+  are queued as selected-agent turns and Raven brings the Hermes Agent's reply back
   to the same linked Telegram or Discord channel.
 - Public selected-agent turns default to final-message delivery. The bridge is
   a short-lived synthetic gateway rather than a long-running Hermes platform
   adapter, so `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1` is an operator opt-in
   only after that runtime path has been validated.
 - In active Telegram chats, Raven refreshes a per-chat command scope with one
-  Raven control command, normally `/raven`, plus the active agent's current
+  Raven control command, normally `/raven`, plus the active Hermes Agent's current
   Hermes command menu. Bare slash commands such as `/agents`, `/status`,
-  `/model`, `/provider`, and `/reload_mcp` belong to the active agent when
-  they appear in that active-agent inventory. Raven control actions move
+  `/model`, `/provider`, and `/reload_mcp` belong to the active Hermes Agent when
+  they appear in that Hermes command inventory. Raven control actions move
   behind `/raven`, for example `/raven agents`, `/raven status`,
   `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, and
   `/raven link_channel`.
 - If a future plugin, skill, or Hermes upgrade collides with `/raven`, ArcLink
   chooses a fallback Raven control command such as `/arclink` or
   `/arclink_control` and queues an operator alert after command refresh. Direct
-  `/update` remains suppressed from active-agent command menus and routes to
+  `/update` remains suppressed from active Hermes Agent command menus and routes to
   ArcLink's managed upgrade rail.
-- Discord global slash commands cannot be per-user active-agent command menus.
+- Discord global slash commands cannot be per-user Hermes command menus.
   Discord keeps the registered Raven controls and exposes `/agent
-  <message-or-command>` as the active-agent slash bridge. Helm remains the
-  direct dashboard path for the richest agent surface.
+  <message-or-command>` as the active Hermes Agent slash bridge. The Hermes Dashboard
+  remains the direct dashboard path for the richest Hermes Agent surface.
 
 ## Voice Rules
 
@@ -54,7 +55,7 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
 
 Strong:
 
-> I'm Raven. Give me an Agent name and a mission tier, and I will bring your ArcPod online: model rails, memory, tools, files, and health checks already wired in.
+> I'm Raven. Give me a Hermes Agent name and a mission tier, and I will bring your ArcPod online: ArcLink skills, Drive, Code, Terminal, model rails, memory, and health checks already wired in.
 
 Weak:
 
@@ -63,8 +64,8 @@ Weak:
 ## Default Offer
 
 - Limited 100 Founders: $149/month for single-ArcPod access for the first 100 Captains.
-- Sovereign: $199/month: Agent onboard ArcLink.
-- Scale: $275/month: Agents onboard ArcLink with Federation.
+- Sovereign: $199/month: one Hermes Agent onboard ArcLink.
+- Scale: $275/month: three Hermes Agents onboard ArcLink with Federation.
 - Agentic Expansion: $99/month per additional Sovereign agent, or $79/month per additional Scale agent.
 - Stripe Checkout collects customer email. Chat onboarding should not ask for email.
 - Chutes remains the baked-in primary inference rail unless the user brings another provider.
@@ -123,8 +124,8 @@ Hidden/account-state actions:
 
 - `/pair-channel` and `/pair_channel` remain backward-compatible aliases for `/link-channel` and `/link_channel`.
 - `/add-agent` is accepted only after the account has an active first deployment. It is surfaced as an `/agents` button, not as a global registered command.
-- `/agent-{slug}` switches the active agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
-- `/share-approve {grant_id}` and `/share-deny {grant_id}` are backward-compatible owner actions for read-only Drive/Code share grants. Active Telegram approval buttons use `/raven approve {grant_id}` and `/raven deny {grant_id}` so they cannot collide with the active agent's slash namespace. Raven only honors either form from a public channel linked to the share owner.
+- `/agent-{slug}` switches the active Hermes Agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
+- `/share-approve {grant_id}` and `/share-deny {grant_id}` are backward-compatible owner actions for read-only Drive/Code share grants. Active Telegram approval buttons use `/raven approve {grant_id}` and `/raven deny {grant_id}` so they cannot collide with the active Hermes Agent's slash namespace. Raven only honors either form from a public channel linked to the share owner.
 - `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, and `/update` is intercepted too. Neither path runs direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
 - `/raven-name` remains accepted as the Discord-friendly alias for
   `/raven_name`.
@@ -142,15 +143,16 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 - `Show My Crew` opens the account-aware `/agents` roster.
 - `Link Channel` opens the `/link-channel` pairing-code lane.
 - `Add Agent` opens Agentic Expansion checkout after the first deployment exists.
-- `Take Helm: {agent}` switches the active agent target.
-- `Check Status` returns status for onboarding or the active agent.
+- `Open Hermes Dashboard` opens the active Hermes Agent's dashboard.
+- `Take Helm: {agent}` remains a legacy switch label only where old clients still render it; new copy should prefer `Switch Hermes Agent: {agent}`.
+- `Check Status` returns status for onboarding or the active Hermes Agent.
 - `Update Name` asks for the user's preferred manifest name.
-- `Back To My Crew` returns to the agent roster.
+- `Back To My Crew` returns to the Hermes Agent roster.
 - Share approval notifications use `Approve` and `Deny` buttons. Approving lets the recipient accept the resource as read-only under `Linked`; denying leaves the share closed.
 
-Telegram uses inline keyboard buttons. Discord uses message components. The default public command catalog remains intentionally small because global slash commands cannot reflect each individual account state. Once a Telegram chat has an active ArcLink deployment, Raven refreshes that chat's Telegram command scope with one Raven control command plus active-agent Hermes commands such as `/agents`, `/status`, `/help`, `/model`, `/provider`, `/reload_mcp`, `/reload_skills`, `/usage`, and `/stop`. This scope is refreshed after public bot command registration during control install/upgrade, and Telegram webhook handling also refreshes the active chat scope when the user interacts. The refresh writes the observed active-agent command names into session metadata and queues an operator notification when it sees a legacy Raven-name collision, a hard Raven control collision, a policy-suppressed command such as `/update`, or hidden commands caused by Telegram's command-menu cap.
+Telegram uses inline keyboard buttons. Discord uses message components. The default public command catalog remains intentionally small because global slash commands cannot reflect each individual account state. Once a Telegram chat has an active ArcLink deployment, Raven refreshes that chat's Telegram command scope with one Raven control command plus the current Hermes command menu from the active Hermes Agent, such as `/agents`, `/status`, `/help`, `/model`, `/provider`, `/reload_mcp`, `/reload_skills`, `/usage`, and `/stop`. This scope is refreshed after public bot command registration during control install/upgrade, and Telegram webhook handling also refreshes the active chat scope when the user interacts. The refresh writes the observed active Hermes Agent command names into session metadata and queues an operator notification when it sees a legacy Raven-name collision, a hard Raven control collision, a policy-suppressed command such as `/update`, or hidden commands caused by Telegram's command-menu cap.
 
-Raven buttons in active Telegram chats are rewritten to the Raven namespace so taps continue to reach Raven even when the bare slash command belongs to the active agent. For example, `Show My Crew` becomes `/raven agents` and `Check Status` becomes `/raven status`.
+Raven buttons in active Telegram chats are rewritten to the Raven namespace so taps continue to reach Raven even when the bare slash command belongs to the active Hermes Agent. For example, `Show My Crew` becomes `/raven agents` and `Check Status` becomes `/raven status`.
 
 Telegram webhook registration must include `callback_query` in `allowed_updates`; otherwise inline buttons render but Telegram never delivers taps to ArcLink. `deploy.sh control install|upgrade` registers the public webhook at `/api/v1/webhooks/telegram` and refreshes command buttons so Raven can acknowledge taps and send the next turn.
 

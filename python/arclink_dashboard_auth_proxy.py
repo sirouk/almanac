@@ -614,7 +614,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 <body>
   <form method="post" action="{html.escape(login_action, quote=True)}">
     <h1>{html.escape(self.realm)}</h1>
-    <p>Sign in to open this Hermes dashboard.</p>
+    <p>Sign in to open this Hermes Dashboard.</p>
     {error_html}
     <input type="hidden" name="next" value="{html.escape(public_next, quote=True)}">
     <label for="username">Username</label>
@@ -688,7 +688,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     def _backend_session_token(self, *, force_refresh: bool = False) -> str:
         """Read Hermes' loopback-only dashboard token from the local backend.
 
-        ArcLink's proxy is the public auth boundary. The Hermes dashboard behind
+        ArcLink's proxy is the public auth boundary. The Hermes Dashboard behind
         it still protects /api/* with an ephemeral in-process session token so
         first-party plugin fetches need that header. The proxy learns the token
         from the backend's own index HTML and forwards it only after the ArcLink

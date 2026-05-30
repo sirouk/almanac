@@ -329,7 +329,7 @@ def completion_message_bundle(
         notion_status_line,
         "",
         "Temporary shared password:",
-        "This password unlocks your Hermes dashboard and the Drive, Code, and Terminal tools inside it.",
+        "This password unlocks your Hermes Dashboard and the Drive, Code, and Terminal plugins inside it.",
         "Save this password now.",
     ]
     if agent_backup_verified:
@@ -351,7 +351,7 @@ def completion_message_bundle(
         *handoff_lines,
         "",
         "Web access:",
-        f"- Hermes dashboard: {access.get('dashboard_url')}",
+        f"- Hermes Dashboard: {access.get('dashboard_url')}",
         f"- Dashboard username: {access.get('username')}",
         f"- Code plugin: {access.get('code_url')}",
         "",

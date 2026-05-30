@@ -1495,7 +1495,7 @@ cd web && npm test && npm run lint && npm run build
 When `ARCLINK_INGRESS_MODE=tailscale` and
 `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY=path`, Docker health/reconcile
 assigns stable tailnet HTTPS ports starting at
-`ARCLINK_TAILNET_SERVICE_PORT_BASE` for per-deployment Helm/Hermes. It stores
+`ARCLINK_TAILNET_SERVICE_PORT_BASE` for per-deployment Hermes Dashboard access. It stores
 those ports and root-mounted `access_urls` in deployment metadata, then calls
 `tailscale serve --https=<port>` to publish the local dashboard proxy when the
 host has the Tailscale CLI. Drive, Code, and Terminal are dashboard-native tabs

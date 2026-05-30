@@ -37,15 +37,15 @@ arclink_evidence.py         Evidence collection and template helpers for live pr
 plugins/hermes-agent/
   arclink-theme/     No-tab ArcLink dashboard theme plugin
   arclink-managed-context/  Managed agent context and ArcLink MCP bootstrap injection
-  drive/            Hermes dashboard file manager for vault/workspace access
-  code/             Hermes dashboard native code workspace and git surface
+  drive/            Hermes Dashboard file manager for vault/workspace access
+  code/             Hermes Dashboard native code workspace and git surface
   terminal/         Managed-pty persistent-session terminal surface
 ```
 
 Python modules live under `python/` and import from `arclink_control.py` for
 database access through ArcLink-owned `arclink_*` tables in the shared
 SQLite/Postgres schema.
-Hermes dashboard plugins live under `plugins/hermes-agent/` and are installed
+Hermes Dashboard plugins live under `plugins/hermes-agent/` and are installed
 into each target Hermes home by ArcLink wrapper scripts.
 
 ## Data Flow
@@ -186,8 +186,10 @@ core patches:
 
 `bin/install-arclink-plugins.sh` installs Drive, Code, Terminal, and managed
 context by default, removes legacy dashboard plugin aliases, and enables the
-plugins in the target Hermes config. Docker reconcile/health paths repair
-Hermes dashboard mounts and rerun the managed plugin installer for existing
+plugins in the target Hermes config. It also removes Drive, Code, and Terminal
+from `dashboard.hidden_plugins` so a stale user-hidden state cannot suppress
+the left-sidebar entries after refresh. Docker reconcile/health paths repair
+Hermes Dashboard mounts and rerun the managed plugin installer for existing
 deployment stacks before recreating `hermes-dashboard`.
 
 The rationale is to keep ArcLink-specific workspace behavior additive and

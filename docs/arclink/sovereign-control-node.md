@@ -104,7 +104,7 @@ deployments across registered fleet workers.
    - In `tailscale` mode, Cloudflare DNS is skipped. The control host is
      published with Tailscale Funnel on `ARCLINK_TAILSCALE_HTTPS_PORT`, default
      `443`. Control-plane callbacks stay path-based under the worker Tailscale
-     FQDN, while published per-pod Helm/Hermes URLs use a stable tailnet HTTPS
+     FQDN, while published per-pod Hermes Dashboard URLs use a stable tailnet HTTPS
      port such as `https://worker.tailnet.ts.net:8443/` so Hermes can run at
      the root path. Tailscale mode is path-based; use `domain` ingress with
      wildcard DNS when ArcPods need per-Captain subdomains.

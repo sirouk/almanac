@@ -442,7 +442,7 @@ def handle_discord_interaction(
         # Freeform Discord gateway support should eventually use the same
         # native Hermes bridge as Telegram; until then, keep the interaction
         # valid without reintroducing a Raven routing preamble.
-        content = "Sent to your active agent."
+        content = "Sent to your active Hermes Agent."
     data: dict[str, Any] = {
         "content": content,
     }

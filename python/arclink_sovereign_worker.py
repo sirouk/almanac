@@ -1540,9 +1540,9 @@ def _public_bot_target_for_session(session: Mapping[str, Any]) -> tuple[str, str
 def _deployment_dashboard_url(deployment: Mapping[str, Any], *, fallback_urls: Mapping[str, Any] | None = None) -> str:
     metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
     access_urls = metadata.get("access_urls") if isinstance(metadata.get("access_urls"), Mapping) else {}
-    dashboard = str((access_urls or {}).get("dashboard") or (access_urls or {}).get("hermes") or "").strip()
+    dashboard = str((access_urls or {}).get("hermes") or (access_urls or {}).get("dashboard") or "").strip()
     if not dashboard and fallback_urls:
-        dashboard = str(fallback_urls.get("dashboard") or fallback_urls.get("hermes") or "").strip()
+        dashboard = str(fallback_urls.get("hermes") or fallback_urls.get("dashboard") or "").strip()
     return dashboard
 
 
@@ -1585,7 +1585,7 @@ def _vessel_online_message(
         crew_lines.append(f"- {item_label}: {item_title} ({status}){link}")
     crew_word = "ArcPod is" if len(crew_rows) == 1 else "ArcPods are"
     lines = [
-        f"{label} is online.",
+        f"{label} is online as a Hermes Agent.",
         "",
         f"Your {crew_word} ready.",
         "",
@@ -1594,7 +1594,8 @@ def _vessel_online_message(
     lines.extend(
         [
             "",
-            "Use Show My Crew to switch Agents. The same Helm login opens each Agent dashboard.",
+            "Use Show My Crew to switch Hermes Agents. The same dashboard login opens each Hermes Dashboard.",
+            "ArcLink skills, Drive, Code, and Terminal are installed there as Hermes Dashboard plugins.",
             "Use Learn when you want the tour; use Crew Training when you are ready to shape the Crew.",
         ]
     )
@@ -1602,13 +1603,13 @@ def _vessel_online_message(
 
 
 def _vessel_online_actions(*, deployment_id: str, urls: Mapping[str, Any], session_id: str = "") -> dict[str, Any]:
-    dashboard = str(urls.get("dashboard") or "").strip()
+    dashboard = str(urls.get("hermes") or urls.get("dashboard") or "").strip()
     credential_command = f"/raven credentials {str(deployment_id or '').strip()}".strip()
     telegram_row: list[dict[str, str]] = []
     discord_buttons: list[dict[str, Any]] = []
     if dashboard:
-        telegram_row.append({"text": "Open Helm", "url": dashboard})
-        discord_buttons.append({"type": 2, "label": "Open Helm", "style": 5, "url": dashboard})
+        telegram_row.append({"text": "Open Hermes Dashboard", "url": dashboard})
+        discord_buttons.append({"type": 2, "label": "Open Hermes Dashboard", "style": 5, "url": dashboard})
     telegram_row.extend(
         [
             {"text": "Learn", "callback_data": "arclink:/raven learn"},

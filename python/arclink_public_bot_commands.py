@@ -293,7 +293,7 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
                 )
             message = (
                 "ArcLink Telegram command scope drift detected after command refresh.\n\n"
-                "Raven kept the visible active-chat menu conflict-free by moving ArcLink controls behind the Raven command and letting the active agent own the bare slash namespace. Telegram command menus are capped, so hidden counts mean some active-agent commands remain reachable by typing them or through Helm even though Telegram cannot show them all.\n\n"
+                "Raven kept the visible active-chat menu conflict-free by moving ArcLink controls behind the Raven command and letting the active Hermes Agent own the bare slash namespace. Telegram command menus are capped, so hidden counts mean some Hermes commands remain reachable by typing them or through the Hermes Dashboard even though Telegram cannot show them all.\n\n"
                 + "\n".join(f"- {line}" for line in snippets)
             )
             queue_notification(

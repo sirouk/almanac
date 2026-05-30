@@ -134,6 +134,7 @@ ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="${ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:-
 ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}"
 ARCLINK_EDGE_TARGET="${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
 ARCLINK_STATE_ROOT_BASE="${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
+ARCLINK_FLEET_SHARE_HUB_ROOT="${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}"
 ARCLINK_SECRET_STORE_DIR="${ARCLINK_SECRET_STORE_DIR:-}"
 ARCLINK_REGISTER_LOCAL_FLEET_HOST="${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
 ARCLINK_LOCAL_FLEET_HOSTNAME="${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
@@ -2169,6 +2170,7 @@ emit_runtime_config() {
     write_kv ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}"
     write_kv ARCLINK_EDGE_TARGET "${ARCLINK_EDGE_TARGET:-edge.arclink.online}"
     write_kv ARCLINK_STATE_ROOT_BASE "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}"
+    write_kv ARCLINK_FLEET_SHARE_HUB_ROOT "${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}"
     write_kv ARCLINK_SECRET_STORE_DIR "${ARCLINK_SECRET_STORE_DIR:-$STATE_DIR/sovereign-secrets}"
     write_kv ARCLINK_REGISTER_LOCAL_FLEET_HOST "${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}"
     write_kv ARCLINK_LOCAL_FLEET_HOSTNAME "${ARCLINK_LOCAL_FLEET_HOSTNAME:-}"
@@ -8907,7 +8909,7 @@ ensure_local_fleet_ssh_access() {
   local user="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
   local host="${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}"
   local pub_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}.pub"
-  local pub_key="" user_home="" user_group="" ssh_dir="" authorized_keys=""
+  local pub_key="" user_home="" user_group="" ssh_dir="" authorized_keys="" fleet_share_hub_root=""
 
   if ! is_local_fleet_ssh_host "$host"; then
     echo "Local fleet SSH bootstrap only manages this machine; '$host' looks remote." >&2
@@ -8954,6 +8956,11 @@ ensure_local_fleet_ssh_access() {
   if [[ -n "${ARCLINK_STATE_ROOT_BASE:-}" ]]; then
     mkdir -p "$ARCLINK_STATE_ROOT_BASE"
     chown "$user:$user_group" "$ARCLINK_STATE_ROOT_BASE" || true
+  fi
+  fleet_share_hub_root="${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}"
+  if [[ -n "$fleet_share_hub_root" && "$fleet_share_hub_root" == /* && "$fleet_share_hub_root" != "/" ]]; then
+    mkdir -p "$fleet_share_hub_root"
+    chown "$user:$user_group" "$fleet_share_hub_root" || true
   fi
   install_local_fleet_probe_wrapper
   echo "Prepared local fleet SSH access for $user@$host."

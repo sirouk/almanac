@@ -80,6 +80,7 @@ x-arclink-app: &arclink-app
     ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST: ${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}
     ARCLINK_EDGE_TARGET: ${ARCLINK_EDGE_TARGET:-edge.arclink.online}
     ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+    ARCLINK_FLEET_SHARE_HUB_ROOT: ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}
     ARCLINK_SECRET_STORE_DIR: ${ARCLINK_SECRET_STORE_DIR:-/home/arclink/arclink/arclink-priv/state/sovereign-secrets}
     ARCLINK_REGISTER_LOCAL_FLEET_HOST: ${ARCLINK_REGISTER_LOCAL_FLEET_HOST:-0}
     ARCLINK_LOCAL_FLEET_HOSTNAME: ${ARCLINK_LOCAL_FLEET_HOSTNAME:-}
@@ -584,6 +585,7 @@ services:
       - ALL
     environment:
       ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+      ARCLINK_FLEET_SHARE_HUB_ROOT: ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}
       ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
       ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN: ${ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
@@ -593,6 +595,7 @@ services:
       - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+      - ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}:${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}
       # Intentional trusted-host broker boundary: local deployment apply and
       # lifecycle requests are reconstructed here from a small operation
       # allowlist before Docker Compose receives them.
@@ -645,6 +648,7 @@ services:
       - ./arclink-priv/secrets/ssh:/home/arclink/arclink/arclink-priv/secrets/ssh
       - arclink-qmd:/home/arclink/.qmd
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+      - ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}:${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}
       - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
     command:
       - ./bin/docker-job-loop.sh
@@ -684,6 +688,7 @@ services:
       - ./arclink-priv/secrets/container:/home/arclink/arclink/arclink-priv/secrets
       - ./arclink-priv/secrets/ssh:/home/arclink/arclink/arclink-priv/secrets/ssh
       - ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}
+      - ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}:${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}
       - ./arclink-priv/secrets/ssh:/home/arclink/.ssh
     command:
       - ./bin/docker-job-loop.sh

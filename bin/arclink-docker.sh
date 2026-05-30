@@ -283,6 +283,7 @@ bootstrap() {
   ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST ""
   ensure_env_file_value ARCLINK_EDGE_TARGET "edge.arclink.online"
   ensure_env_file_value ARCLINK_STATE_ROOT_BASE "/arcdata/deployments"
+  ensure_env_file_value ARCLINK_FLEET_SHARE_HUB_ROOT "/arcdata/captains"
   ensure_env_file_value ARCLINK_SECRET_STORE_DIR "$REPO_DIR/arclink-priv/state/sovereign-secrets"
   ensure_env_file_value ARCLINK_REGISTER_LOCAL_FLEET_HOST "0"
   ensure_env_file_value ARCLINK_LOCAL_FLEET_HOSTNAME ""

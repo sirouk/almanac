@@ -2067,6 +2067,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("ARCLINK_LOCAL_FLEET_SSH_USER:-arclink" in text, "expected local fleet SSH user to default to arclink")
     expect("Create/repair local fleet Unix user and authorize this key now" in text, "expected local fleet bootstrap helper prompt")
     expect("ensure_local_fleet_ssh_access()" in text, "expected idempotent local fleet authorized_keys helper")
+    expect("ARCLINK_FLEET_SHARE_HUB_ROOT" in text and "/arcdata/captains" in text, "expected Captain fleet-share hub root to be a first-class control config default")
     expect("test_local_fleet_ssh_access()" in text, "expected local fleet SSH smoke test helper")
     expect("install_local_fleet_probe_wrapper()" in text, "expected local starter bootstrap to install the fleet probe wrapper")
     expect("/usr/local/bin/arclink-fleet-probe-wrapper" in text, "expected local starter probe wrapper to be installed into PATH")
@@ -2170,6 +2171,7 @@ normalize_operator_primary_channel none
 def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
     text = DEPLOY_SH.read_text()
     helper = extract(text, "ensure_control_local_fleet_worker_registered() {", "run_control_enrollment() {")
+    local_helper = extract(text, "ensure_local_fleet_ssh_access() {", "test_local_fleet_ssh_access() {")
     install_flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
     reconfigure_flow = extract(text, "run_control_reconfigure_flow() {", "control_host_priv_dir() {")
     expect("ARCLINK_REGISTER_LOCAL_FLEET_HOST" in helper, "helper should honor the local starter flag")
@@ -2178,6 +2180,7 @@ def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
     expect("tags={\"starter\": True, \"local\": True}" in helper, "helper should tag the local starter worker")
     expect("ensure_control_fleet_ssh_key" in helper, "helper should resolve host-side fleet SSH key paths before local starter repair")
     expect("ensure_local_fleet_ssh_access" in helper, "helper should repair local starter SSH/probe access during install and upgrade")
+    expect("fleet_share_hub_root" in local_helper and "mkdir -p \"$fleet_share_hub_root\"" in local_helper, "local starter repair should create the Captain fleet-share hub root")
     expect("test_local_fleet_ssh_access" in helper, "helper should verify local starter probe access during install and upgrade")
     expect(
         install_flow.index("ensure_control_local_fleet_worker_registered") < install_flow.index("print_control_provisioning_readiness_summary"),

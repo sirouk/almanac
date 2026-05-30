@@ -586,6 +586,7 @@ def test_compose_defines_full_stack_services() -> None:
         body,
     )
     expect("${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}" in body, body)
+    expect("${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}:${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}" in body, body)
     expect("ARCLINK_AGENT_SERVICE_MANAGER: docker-supervisor" in body, body)
     expect("ARCLINK_DOCKER_NETWORK: ${ARCLINK_DOCKER_NETWORK:-arclink_default}" in body, body)
     expect("ARCLINK_DOCKER_SOCKET_GID: ${ARCLINK_DOCKER_SOCKET_GID:-0}" in body, body)
@@ -1360,6 +1361,7 @@ def test_deployment_exec_broker_compose_boundary_minimizes_env_and_private_mount
         expect(forbidden_mount not in block, f"deployment-exec-broker leaked broad private mount {forbidden_mount}\n{block}")
     for required_line in (
         "ARCLINK_STATE_ROOT_BASE: ${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}",
+        "ARCLINK_FLEET_SHARE_HUB_ROOT: ${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}",
         "ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}",
         "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN:",
         "ARCLINK_DEPLOYMENT_EXEC_BROKER_HOST: 0.0.0.0",
@@ -1369,6 +1371,10 @@ def test_deployment_exec_broker_compose_boundary_minimizes_env_and_private_mount
     expect(
         "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}:${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}" in block,
         f"deployment-exec-broker must keep deployment state-root bind for rendered Compose files\n{block}",
+    )
+    expect(
+        "${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}:${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}" in block,
+        f"deployment-exec-broker must keep Captain fleet-share hub bind for local hub-backed ArcPods\n{block}",
     )
 
     inventory = docker_authority_inventory()
@@ -1383,6 +1389,7 @@ def test_deployment_exec_broker_compose_boundary_minimizes_env_and_private_mount
     assert isinstance(boundary, dict)
     expect(boundary.get("private_state_mounts") is False, f"deployment-exec-broker must not overclaim broad private-state mounts: {boundary}")
     expect(boundary.get("deployment_state_root_mount") is True, f"deployment-exec-broker must record deployment state-root bind: {boundary}")
+    expect(boundary.get("fleet_share_hub_root_mount") is True, f"deployment-exec-broker must record fleet-share hub root bind: {boundary}")
     expect(boundary.get("global_container_secrets_mount") is False, f"deployment-exec-broker must not mount global container secrets: {boundary}")
     expect(boundary.get("inherits_broad_app_env") is False, f"deployment-exec-broker must not inherit broad app env: {boundary}")
     controls = row.get("gap_019_aa_controls")
@@ -1397,11 +1404,13 @@ def test_deployment_exec_broker_compose_boundary_minimizes_env_and_private_mount
     expect(
         isinstance(preserved, list)
         and "ARCLINK_STATE_ROOT_BASE" in preserved
+        and "ARCLINK_FLEET_SHARE_HUB_ROOT" in preserved
         and "ARCLINK_DOCKER_BINARY" in preserved
         and "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN" in preserved,
         controls,
     )
     expect("deployment state-root bind" in str(controls.get("preserved_mounts") or ""), controls)
+    expect("fleet-share hub root bind" in str(controls.get("preserved_mounts") or ""), controls)
     expect("writeable Docker socket" in str(controls.get("remaining_gate") or ""), controls)
     print("PASS test_deployment_exec_broker_compose_boundary_minimizes_env_and_private_mounts")
 

@@ -465,6 +465,7 @@
         "container_user": "arclink",
         "private_state_mounts": false,
         "deployment_state_root_mount": true,
+        "fleet_share_hub_root_mount": true,
         "global_container_secrets_mount": false,
         "inherits_broad_app_env": false,
         "linux_capabilities": "all_dropped",
@@ -583,6 +584,7 @@
         "removed_environment": "removed broad *arclink-env inheritance from deployment-exec-broker",
         "preserved_service_env": [
           "ARCLINK_STATE_ROOT_BASE",
+          "ARCLINK_FLEET_SHARE_HUB_ROOT",
           "ARCLINK_DOCKER_BINARY",
           "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN",
           "ARCLINK_DEPLOYMENT_EXEC_BROKER_HOST",
@@ -590,6 +592,7 @@
         ],
         "preserved_mounts": [
           "deployment state-root bind for rendered config/arclink.env and config/compose.yaml",
+          "Captain fleet-share hub root bind for local per-Captain bare git repos",
           "writeable Docker socket"
         ],
         "excluded_environment_classes": [

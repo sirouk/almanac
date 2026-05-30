@@ -326,8 +326,16 @@ ensure_docker_app_bind_permissions() {
   if [[ -d "$REPO_DIR/arclink-priv/state" ]]; then
     find "$REPO_DIR/arclink-priv/state" -mindepth 1 \
       -path "$REPO_DIR/arclink-priv/state/nextcloud" -prune \
+      -o -path "$REPO_DIR/arclink-priv/state/operator/nextcloud" -prune \
       -o -exec chown -h "$uid:$gid" {} + 2>/dev/null || true
   fi
+
+  # The operator Nextcloud stack uses official images, not the ArcLink app UID:
+  # nextcloud:apache runs as www-data (33) and postgres:alpine as postgres (70).
+  [[ -d "$REPO_DIR/arclink-priv/state/operator/nextcloud/html" ]] \
+    && chown -R 33:33 "$REPO_DIR/arclink-priv/state/operator/nextcloud/html" 2>/dev/null || true
+  [[ -d "$REPO_DIR/arclink-priv/state/operator/nextcloud/db" ]] \
+    && chown -R 70:70 "$REPO_DIR/arclink-priv/state/operator/nextcloud/db" 2>/dev/null || true
 }
 
 env_file_value() {

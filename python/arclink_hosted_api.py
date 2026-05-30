@@ -104,6 +104,7 @@ from arclink_api_auth import (
     update_user_wrapped_frequency_api,
     user_update_agent_identity_api,
 )
+from arclink_academy_programs import ArcLinkAcademyProgramError
 from arclink_dashboard import _deployment_urls, build_operator_snapshot, build_scale_operations_snapshot
 from arclink_discord import (
     ArcLinkDiscordError,
@@ -3474,6 +3475,19 @@ def route_arclink_hosted_api(
         )
         cors = _cors_headers(cfg)
         return _json_response(400, {"error": str(exc), "request_id": request_id}, request_id=request_id, extra_headers=cors)
+    except ArcLinkAcademyProgramError as exc:
+        elapsed = time.monotonic() - start
+        logger.warning(
+            "api_academy_validation_error method=%s path=%s route=%s error=%s elapsed=%.3fs request_id=%s",
+            clean_method, route_path, route_key, str(exc), elapsed, request_id,
+        )
+        cors = _cors_headers(cfg)
+        return _json_response(
+            400,
+            {"error": GENERIC_ARCLINK_API_ERROR, "request_id": request_id},
+            request_id=request_id,
+            extra_headers=cors,
+        )
     except KeyError:
         cors = _cors_headers(cfg)
         return _json_response(404, {"error": "not_found", "request_id": request_id}, request_id=request_id, extra_headers=cors)

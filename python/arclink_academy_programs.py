@@ -198,23 +198,60 @@ def _default_programs() -> tuple[dict[str, Any], ...]:
 def seed_default_academy_programs(conn: sqlite3.Connection) -> int:
     """Idempotently upsert the default Majors catalog. Returns the catalog size.
 
-    Fast-path: if every default Major is already present, this is a single read
-    (no writes/commits), so calling it on hot read paths does not amplify writes
-    against the single-writer control DB.
+    Fast-path: if every default Major is already present *and current*, this is
+    a single read (no writes/commits), so calling it on hot read paths does not
+    amplify writes against the single-writer control DB. If a future ArcLink
+    release changes a seeded Major's definition, the drift is repaired.
     """
     defaults = _default_programs()
     placeholders = ",".join("?" for _ in defaults)
-    row = conn.execute(
-        f"SELECT COUNT(*) AS n FROM academy_programs WHERE program_id IN ({placeholders})",
+    rows = conn.execute(
+        f"SELECT * FROM academy_programs WHERE program_id IN ({placeholders})",
         tuple(str(p["program_id"]) for p in defaults),
-    ).fetchone()
-    if row is not None and int(row["n"]) >= len(defaults):
+    ).fetchall()
+    current_by_id = {str(row["program_id"]): row for row in rows}
+    if len(current_by_id) >= len(defaults) and all(
+        _program_row_matches_default(current_by_id.get(str(program["program_id"])), program)
+        for program in defaults
+    ):
         return len(defaults)
     count = 0
     for program in defaults:
-        upsert_academy_program(conn, origin="catalog", **program)
+        upsert_academy_program(conn, origin="catalog", commit=False, **program)
         count += 1
+    conn.commit()
     return count
+
+
+def _program_row_matches_default(row: sqlite3.Row | None, program: Mapping[str, Any]) -> bool:
+    if row is None:
+        return False
+    lanes = _validate_source_lanes(program.get("source_lanes") or ())
+    skills = [str(s).strip() for s in (program.get("required_skills") or ()) if str(s).strip()]
+    try:
+        quality_floor = _clean_quality_floor(program.get("quality_floor", 70))
+    except ArcLinkAcademyProgramError:
+        return False
+    return (
+        str(row["program_id"] or "") == _slug(str(program.get("program_id") or ""))
+        and str(row["label"] or "") == str(program.get("label") or "").strip()
+        and str(row["summary"] or "") == str(program.get("summary") or "").strip()
+        and str(row["topic_map"] or "") == str(program.get("topic_map") or "").strip()
+        and str(row["source_lanes_json"] or "") == _dumps(lanes)
+        and str(row["role_template"] or "") == str(program.get("role_template") or "").strip()
+        and str(row["boundaries"] or "") == str(program.get("boundaries") or "").strip()
+        and str(row["default_depth"] or "") == str(program.get("default_depth") or "working").strip().lower()
+        and int(row["quality_floor"]) == quality_floor
+        and str(row["required_skills_json"] or "") == _dumps(skills)
+    )
+
+
+def _clean_quality_floor(value: Any) -> int:
+    try:
+        floor = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ArcLinkAcademyProgramError("academy quality_floor must be an integer") from exc
+    return max(0, min(100, floor))
 
 
 def upsert_academy_program(
@@ -231,6 +268,7 @@ def upsert_academy_program(
     quality_floor: int = 70,
     required_skills: Sequence[str] | None = None,
     origin: str = "custom",
+    commit: bool = True,
 ) -> dict[str, Any]:
     """Create or update a Major. New trainee TYPES are added with this, as data."""
     from arclink_boundary import reject_secret_material
@@ -285,14 +323,15 @@ def upsert_academy_program(
             str(role_template or "").strip(),
             str(boundaries or "").strip(),
             depth,
-            int(quality_floor),
+            _clean_quality_floor(quality_floor),
             _dumps(skills),
             str(origin or "custom").strip() or "custom",
             created_at,
             now,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_academy_program(conn, clean_id) or {}
 
 
@@ -654,9 +693,9 @@ def adopt_academy_graduate(
 ) -> dict[str, Any]:
     """Fast path: clone a graduate's Major + staged corpus into a new graduated Trainee.
 
-    Ownership of the SOURCE graduate is enforced by the caller (the hosted API
-    scopes the gallery + adopt to the owner). This function still scrubs the
-    caller-supplied name and enforces the per-account trainee quota.
+    The source graduate must belong to the target user. A future cross-tenant
+    marketplace/adoption path should be a separate consented helper with a
+    redacted public card, not this private-corpus clone.
     """
     from arclink_boundary import reject_secret_material
 
@@ -668,6 +707,8 @@ def adopt_academy_graduate(
     clean_deployment = str(deployment_id or "").strip()
     if not clean_user or not clean_deployment:
         raise ArcLinkAcademyProgramError("adopt requires user_id and deployment_id")
+    if str(source.get("user_id") or "") != clean_user:
+        raise ArcLinkAcademyProgramError("can only adopt an academy graduate owned by this account")
     _enforce_trainee_quota(conn, clean_user)
     trainee_id = "atrn_" + secrets.token_hex(8)
     now = _now()

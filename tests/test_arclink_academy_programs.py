@@ -172,7 +172,7 @@ def test_academy_browse_graduates_and_adopt() -> None:
         expect(grad["program_label"] == "Systems-Practice Engineer" and grad["source_lanes"], str(grad))
         expect(len(gallery["programs"]) >= 5, "gallery includes the Major catalog")
 
-        adopted = ap.adopt_academy_graduate(conn, source_trainee_id=t["trainee_id"], user_id="u2", deployment_id="dep-b", name="Grace II")
+        adopted = ap.adopt_academy_graduate(conn, source_trainee_id=t["trainee_id"], user_id="u1", deployment_id="dep-b", name="Grace II")
         expect(adopted["status"] == "graduated" and adopted["adopted_from_trainee_id"] == t["trainee_id"], str(adopted))
         expect(adopted["program_id"] == "systems_practice_engineer" and adopted["staged_manifest_id"] == "mani-xyz", str(adopted))
         expect(adopted["forward_maintained"] is True, "adopted graduate is forward-maintained")
@@ -464,6 +464,56 @@ def test_academy_graduate_card_redacts_tenant_identity() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_seed_refreshes_default_catalog_drift() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        conn.execute(
+            "UPDATE academy_programs SET label = 'Stale Label', quality_floor = 999 WHERE program_id = 'domain_tutor'"
+        )
+        conn.commit()
+
+        ap.seed_default_academy_programs(conn)
+        program = ap.get_academy_program(conn, "domain_tutor")
+        expect(program["label"] == "Domain Tutor", str(program))
+        expect(program["quality_floor"] == 66, str(program))
+        print("PASS test_academy_seed_refreshes_default_catalog_drift")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_adopt_helper_blocks_cross_owner_clone() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = _graduate(ap, conn, "systems_practice_engineer", "owner-a", "dep-a")
+
+        raised = False
+        try:
+            ap.adopt_academy_graduate(
+                conn,
+                source_trainee_id=t["trainee_id"],
+                user_id="owner-b",
+                deployment_id="dep-b",
+                name="Cross Owner Clone",
+            )
+        except ap.ArcLinkAcademyProgramError:
+            raised = True
+        expect(raised, "low-level adopt helper must block cross-owner clone attempts")
+
+        own_copy = ap.adopt_academy_graduate(
+            conn,
+            source_trainee_id=t["trainee_id"],
+            user_id="owner-a",
+            deployment_id="dep-a-2",
+            name="Owned Clone",
+        )
+        expect(own_copy["adopted_from_trainee_id"] == t["trainee_id"], str(own_copy))
+        print("PASS test_academy_adopt_helper_blocks_cross_owner_clone")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
     test_academy_apply_rejects_target_owner_mismatch()
@@ -471,6 +521,8 @@ if __name__ == "__main__":
     test_academy_open_mode_scrubs_opened_via_and_is_idempotent()
     test_academy_mode_session_growth_is_bounded()
     test_academy_graduate_card_redacts_tenant_identity()
+    test_academy_seed_refreshes_default_catalog_drift()
+    test_academy_adopt_helper_blocks_cross_owner_clone()
     test_academy_apply_is_fail_closed()
     test_academy_apply_requires_graduated_trainee()
     test_academy_curation_builds_corpus_plan_and_stages()

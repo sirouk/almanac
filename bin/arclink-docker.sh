@@ -1414,13 +1414,28 @@ docker_refresh_deployment_managed_plugins() {
 import json
 import sqlite3
 import sys
+import time
 
 db_path, deployment_id = sys.argv[1], sys.argv[2]
-with sqlite3.connect(db_path) as conn:
-    row = conn.execute(
-        "SELECT status, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
-        (deployment_id,),
-    ).fetchone()
+row = None
+last_error = ""
+for attempt in range(6):
+    try:
+        with sqlite3.connect(db_path, timeout=10) as conn:
+            conn.execute("PRAGMA busy_timeout = 10000")
+            row = conn.execute(
+                "SELECT status, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchone()
+        last_error = ""
+        break
+    except sqlite3.OperationalError as exc:
+        last_error = str(exc)
+        if attempt < 5:
+            time.sleep(min(5, attempt + 1))
+if last_error:
+    print("lookup_error")
+    raise SystemExit(0)
 if not row:
     print("")
     raise SystemExit(0)
@@ -1448,6 +1463,9 @@ PY
       active|first_contacted|provisioning|provisioning_ready)
         ;;
       *)
+        if [[ "$deployment_status" == lookup_error ]]; then
+          echo "Skipping deployment plugin refresh for $deployment_id: deployment status lookup failed." >&2
+        fi
         continue
         ;;
     esac

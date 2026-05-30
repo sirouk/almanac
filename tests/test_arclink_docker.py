@@ -6073,6 +6073,9 @@ def test_docker_operator_commands_are_present() -> None:
     expect(
         "deployment_status" in refresh_block
         and "operator_agent" in refresh_block
+        and "PRAGMA busy_timeout = 10000" in refresh_block
+        and "lookup_error" in refresh_block
+        and "deployment status lookup failed" in refresh_block
         and "down --remove-orphans </dev/null >/dev/null 2>&1" in refresh_block
         and "torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed" in refresh_block,
         "deployment plugin refresh must skip and stop retiring or retired ArcPods and the in-stack operator identity\n" + refresh_block,

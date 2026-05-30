@@ -2274,6 +2274,36 @@ def test_control_runtime_reset_is_backup_first_and_guarded() -> None:
     print("PASS test_control_runtime_reset_is_backup_first_and_guarded")
 
 
+def test_runtime_backup_tar_honors_pruned_reset_backups() -> None:
+    text = DEPLOY_SH.read_text()
+    snippet = extract(text, "tar_tree_without_sockets() {", "create_control_runtime_backup() {")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        output = root / "arclink-priv" / "state" / "reset-backups" / "new" / "arclink-priv.tgz"
+        (root / "arclink-priv" / "config").mkdir(parents=True)
+        (root / "arclink-priv" / "state" / "reset-backups" / "old").mkdir(parents=True)
+        output.parent.mkdir(parents=True)
+        (root / "arclink-priv" / "config" / "live.env").write_text("live=1\n", encoding="utf-8")
+        (root / "arclink-priv" / "state" / "reset-backups" / "old" / "stale.txt").write_text(
+            "must-not-be-packed\n",
+            encoding="utf-8",
+        )
+        script = f"""
+set -euo pipefail
+{snippet}
+tar_tree_without_sockets {shlex.quote(str(output))} {shlex.quote(str(root))} arclink-priv arclink-priv/state/reset-backups
+tar -tzf {shlex.quote(str(output))} > {shlex.quote(str(root / "listing.txt"))}
+if grep -q 'reset-backups' {shlex.quote(str(root / "listing.txt"))}; then
+  cat {shlex.quote(str(root / "listing.txt"))}
+  exit 1
+fi
+grep -q '^arclink-priv/config/live.env$' {shlex.quote(str(root / "listing.txt"))}
+"""
+        result = bash(script)
+        expect(result.returncode == 0, result.stderr or result.stdout)
+    print("PASS test_runtime_backup_tar_honors_pruned_reset_backups")
+
+
 def test_control_runtime_reset_preserves_operator_state_by_default() -> None:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "reset_control_runtime_database() {", "print_control_runtime_counts() {")
@@ -4179,6 +4209,7 @@ def main() -> int:
         test_control_reconfigure_autoregisters_local_starter_worker,
         test_control_install_collects_trusted_host_acknowledgement_before_build,
         test_control_runtime_reset_is_backup_first_and_guarded,
+        test_runtime_backup_tar_honors_pruned_reset_backups,
         test_control_runtime_reset_preserves_operator_state_by_default,
         test_control_runtime_reset_can_explicitly_wipe_operator_state,
         test_control_reset_modes_have_separate_confirmations,

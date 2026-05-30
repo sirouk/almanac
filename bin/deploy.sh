@@ -10379,7 +10379,7 @@ tar_tree_without_sockets() {
       find "$relative_root" -path "$exclude_root" -prune -o ! -type s -print0
     else
       find "$relative_root" ! -type s -print0
-    fi | tar --null -czf "$output" -T -
+    fi | tar --no-recursion --null -czf "$output" -T -
   )
 }
 

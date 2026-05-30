@@ -220,6 +220,18 @@
   white-space: nowrap;
 }
 
+.hermes-drive-tree-name {
+  flex: 1 1 auto;
+}
+
+.hermes-drive-tree-count {
+  color: color-mix(in srgb, var(--midground-base) 62%, transparent);
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  line-height: 1;
+  margin-left: auto;
+}
+
 .hermes-drive-fileicon {
   --file-accent: color-mix(in srgb, var(--midground-base) 70%, transparent);
   display: inline-block;

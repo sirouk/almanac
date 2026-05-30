@@ -353,7 +353,7 @@ cookies = http.cookies.SimpleCookie()
 for header in login_response.headers.get_all("Set-Cookie", []):
     cookies.load(header)
 cookie_header = "; ".join(f"{name}={morsel.value}" for name, morsel in cookies.items())
-if "arclink_dash_session" not in cookies:
+if not any(name == "arclink_dash_session" or name.startswith("arclink_dash_session_") for name in cookies):
     raise SystemExit("expected dashboard proxy to mint a session cookie")
 
 with urllib.request.urlopen(

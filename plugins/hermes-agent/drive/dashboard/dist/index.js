@@ -1555,10 +1555,24 @@
       );
     }
 
+    function treeChildCount(rootId, path, fallback) {
+      const children = state.treeNodes[treeKey(rootId, path)];
+      if (Array.isArray(children)) return children.length;
+      if (typeof fallback === "number") return fallback;
+      return 0;
+    }
+
+    function treeCountLabel(rootId, path, fallback, truncated) {
+      const count = treeChildCount(rootId, path, fallback);
+      if (!count) return "";
+      return String(count) + (truncated ? "+" : "");
+    }
+
     function renderTreeNode(item, depth) {
       const rootId = itemRoot(item);
       const selectedTree = state.root === rootId && state.path === item.path && item.kind === "folder" && state.location !== "trash" && !state.query;
       const selectedItem = state.selected && itemRoot(state.selected) === rootId && state.selected.path === item.path;
+      const childCount = item.kind === "folder" ? treeCountLabel(rootId, item.path, item.child_count, item.child_count_truncated) : "";
       return h(
         "div",
         { key: rootId + item.path, className: "hermes-drive-tree-node-wrap" },
@@ -1599,7 +1613,8 @@
           },
           renderCaret(rootId, item, depth),
           renderFileIcon(item),
-          h("span", { className: "hermes-drive-tree-name" }, item.name)
+          h("span", { className: "hermes-drive-tree-name" }, item.name),
+          h("span", { className: "hermes-drive-tree-count" }, childCount)
         ),
         item.kind === "folder" ? renderTreeChildren(rootId, item.path, depth) : null
       );
@@ -1627,7 +1642,8 @@
           },
           renderCaret(rootId, null, 0),
           renderFileIcon({ kind: "folder", name: root.label || rootId }),
-          h("span", { className: "hermes-drive-tree-name" }, root.label || rootId)
+          h("span", { className: "hermes-drive-tree-name" }, root.label || rootId),
+          h("span", { className: "hermes-drive-tree-count" }, treeCountLabel(rootId, "/", root.child_count, root.child_count_truncated))
         ),
         renderTreeChildren(rootId, "/", 0)
       );

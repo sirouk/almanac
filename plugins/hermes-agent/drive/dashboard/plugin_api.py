@@ -132,6 +132,7 @@ _SENSITIVE_FILE_NAMES = {
 }
 _MAX_TEXT_BYTES = 1_000_000
 _SEARCH_LIMIT = 300
+_MAX_CHILD_COUNT = 999
 _SHARE_REQUEST_BROKER_TOKEN_HEADER = "X-ArcLink-Share-Request-Broker-Token"
 
 
@@ -478,12 +479,15 @@ def _root_descriptor(
     share_request_enabled: bool = False,
 ) -> dict[str, Any]:
     available = root is not None
+    child_count, child_count_truncated = _visible_child_count(root_id, root, root) if root is not None else (0, False)
     return {
         "id": root_id,
         "label": label,
         "available": available,
         "backend": "local" if available else "unavailable",
         "path": str(root) if root else "",
+        "child_count": child_count,
+        "child_count_truncated": child_count_truncated,
         "read_only": read_only,
         "capabilities": _root_capabilities(
             available=available,
@@ -853,6 +857,23 @@ def _safe_child_relative(root: Path, path: Path, *, root_id: str = "") -> str | 
         return None
 
 
+def _visible_child_count(root_id: str, root: Path, path: Path, *, limit: int = _MAX_CHILD_COUNT) -> tuple[int, bool]:
+    try:
+        children = path.iterdir()
+    except OSError:
+        return 0, False
+    count = 0
+    for child in children:
+        if _should_skip(child):
+            continue
+        if _safe_child_relative(root, child, root_id=root_id) is None:
+            continue
+        count += 1
+        if count > limit:
+            return limit, True
+    return count, False
+
+
 def _trash_root(root: Path) -> Path:
     return (root / _TRASH_DIR_NAME).resolve(strict=False)
 
@@ -893,6 +914,7 @@ def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, m
     is_dir = path.is_dir()
     mime = "inode/directory" if is_dir else (mimetypes.guess_type(str(path))[0] or "application/octet-stream")
     display = _display_path(relative_path)
+    child_count, child_count_truncated = _visible_child_count(root_id, root, path) if is_dir else (0, False)
     return {
         "name": path.name or "Drive",
         "root": root_id,
@@ -903,6 +925,8 @@ def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, m
         "mime": mime,
         "favorite": bool(_root_meta(meta, "favorites", root_id).get(display)),
         "text": bool((not is_dir) and _is_text_item(path) and stat.st_size <= _MAX_TEXT_BYTES),
+        "child_count": child_count,
+        "child_count_truncated": child_count_truncated,
     }
 
 

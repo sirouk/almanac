@@ -32,6 +32,7 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
 }
 SESSION_COOKIE_NAME = "arclink_dash_session"
+SESSION_COOKIE_NAME_PREFIX = f"{SESSION_COOKIE_NAME}_"
 SESSION_TOKEN_AUDIENCE = "hermes-dashboard"
 SESSION_TOKEN_TTL_SECONDS = 12 * 60 * 60
 PLUGIN_DEEPLINK_PATHS = {"/drive", "/code", "/terminal"}
@@ -95,6 +96,8 @@ def load_access(path: Path) -> dict[str, str]:
         "username": str(data.get("username") or ""),
         "password": str(data.get("password") or ""),
         "session_secret": str(data.get("session_secret") or ""),
+        "deployment_id": str(data.get("deployment_id") or ""),
+        "prefix": str(data.get("prefix") or ""),
     }
 
 
@@ -320,6 +323,21 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     backend_session_token_target: str = ""
     backend_session_token_lock = threading.Lock()
 
+    def _session_cookie_name(self, access: dict[str, str]) -> str:
+        scope = "\0".join(
+            [
+                "arclink-dashboard-cookie-v1",
+                str(self.realm or ""),
+                str(self.target or ""),
+                str(access.get("deployment_id") or ""),
+                str(access.get("prefix") or ""),
+                str(access.get("session_secret") or ""),
+                str(access.get("username") or ""),
+            ]
+        )
+        digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
+        return f"{SESSION_COOKIE_NAME_PREFIX}{digest}"
+
     def _make_token(self, username: str) -> str:
         now = int(time.time())
         header = _json_b64({"alg": "HS256", "typ": "JWT"})
@@ -342,7 +360,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return False
         cookie = SimpleCookie()
         cookie.load(header)
-        morsel = cookie.get(SESSION_COOKIE_NAME)
+        morsel = cookie.get(self._session_cookie_name(access))
         if morsel is None:
             return False
         token = str(morsel.value or "")
@@ -387,17 +405,26 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return None
         cookie = SimpleCookie()
         cookie.load(header)
-        if SESSION_COOKIE_NAME in cookie:
-            del cookie[SESSION_COOKIE_NAME]
+        for name in list(cookie):
+            if name == SESSION_COOKIE_NAME or name.startswith(SESSION_COOKIE_NAME_PREFIX):
+                del cookie[name]
         pairs = [f"{morsel.key}={morsel.value}" for morsel in cookie.values()]
         return "; ".join(pairs) or None
 
-    def _session_cookie_header(self, username: str) -> str:
+    def _session_cookie_header(self, access: dict[str, str], username: str) -> str:
         value = self._make_token(username)
-        return f"{SESSION_COOKIE_NAME}={value}; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure"
+        return f"{self._session_cookie_name(access)}={value}; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure"
 
-    def _clear_session_cookie_header(self) -> str:
-        return f"{SESSION_COOKIE_NAME}=; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure; Max-Age=0"
+    def _clear_cookie_header(self, name: str) -> str:
+        return f"{name}=; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure; Max-Age=0"
+
+    def _clear_session_cookie_headers(self, access: dict[str, str] | None = None) -> list[str]:
+        names = [SESSION_COOKIE_NAME]
+        if access is not None:
+            scoped = self._session_cookie_name(access)
+            if scoped not in names:
+                names.append(scoped)
+        return [self._clear_cookie_header(name) for name in names]
 
     def _mount_prefix(self) -> str:
         return _safe_mount_prefix(
@@ -659,14 +686,18 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         self.send_response(303)
         self.send_header("Location", next_path)
-        self.send_header("Set-Cookie", self._session_cookie_header(access_username))
+        for cookie_header in self._clear_session_cookie_headers(None):
+            self.send_header("Set-Cookie", cookie_header)
+        self.send_header("Set-Cookie", self._session_cookie_header(access, access_username))
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def _handle_logout(self) -> None:
+        access = load_access(self.access_file)
         self.send_response(303)
         self.send_header("Location", self._public_path(LOGIN_PATH))
-        self.send_header("Set-Cookie", self._clear_session_cookie_header())
+        for cookie_header in self._clear_session_cookie_headers(access):
+            self.send_header("Set-Cookie", cookie_header)
         self.send_header("Content-Length", "0")
         self.end_headers()
 

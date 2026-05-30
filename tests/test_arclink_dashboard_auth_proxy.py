@@ -195,6 +195,14 @@ def stop_proxy(backend, backend_thread, proxy, proxy_thread) -> None:
     backend_thread.join(timeout=5)
 
 
+def cookie_pair(cookie_header: str) -> str:
+    return str(cookie_header or "").split(";", 1)[0]
+
+
+def cookie_name(cookie_header: str) -> str:
+    return cookie_pair(cookie_header).split("=", 1)[0]
+
+
 def login(port: int, *, username: str = "alex", password: str = "test-password") -> str:
     body = urlencode({"username": username, "password": password, "next": "/"})
     status, headers, _body = request(
@@ -206,7 +214,7 @@ def login(port: int, *, username: str = "alex", password: str = "test-password")
     )
     expect(status == 303, f"expected login redirect, saw {status} {headers}")
     cookie = headers.get("Set-Cookie") or ""
-    expect(cookie.startswith("arclink_dash_session="), headers)
+    expect(cookie_name(cookie).startswith("arclink_dash_session_"), headers)
     return cookie
 
 
@@ -313,6 +321,69 @@ def test_proxy_login_normalizes_email_username_and_copied_password_whitespace() 
             print("PASS test_proxy_login_normalizes_email_username_and_copied_password_whitespace")
         finally:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
+def test_proxy_scopes_session_cookie_per_dashboard_instance() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_scoped_cookie_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        access_one = root / "one" / "arclink-web-access.json"
+        access_two = root / "two" / "arclink-web-access.json"
+        access_one.parent.mkdir(parents=True, exist_ok=True)
+        access_two.parent.mkdir(parents=True, exist_ok=True)
+        access_one.write_text(
+            json.dumps(
+                {
+                    "username": "captain@example.test",
+                    "password": "shared-dashboard-password",
+                    "session_secret": "session-secret-one",
+                    "deployment_id": "arcdep_one",
+                    "prefix": "one-agent",
+                }
+            ),
+            encoding="utf-8",
+        )
+        access_two.write_text(
+            json.dumps(
+                {
+                    "username": "captain@example.test",
+                    "password": "shared-dashboard-password",
+                    "session_secret": "session-secret-two",
+                    "deployment_id": "arcdep_two",
+                    "prefix": "two-agent",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        backend_one, backend_thread_one, proxy_one, proxy_thread_one = start_proxy(proxy_mod, access_one)
+        backend_two, backend_thread_two, proxy_two, proxy_thread_two = start_proxy(proxy_mod, access_two)
+        try:
+            first_cookie = login(
+                proxy_one.server_port,
+                username="captain@example.test",
+                password="shared-dashboard-password",
+            )
+            second_cookie = login(
+                proxy_two.server_port,
+                username="captain@example.test",
+                password="shared-dashboard-password",
+            )
+            expect(cookie_name(first_cookie) != cookie_name(second_cookie), f"expected scoped cookie names, got {first_cookie} and {second_cookie}")
+            browser_cookie_header = f"{cookie_pair(first_cookie)}; {cookie_pair(second_cookie)}"
+
+            status, headers, body = request(proxy_one.server_port, "/", headers={"Cookie": browser_cookie_header})
+            expect(status == 200, f"expected first dashboard to stay logged in, saw {status} {headers} {body!r}")
+            status, headers, body = request(proxy_two.server_port, "/", headers={"Cookie": browser_cookie_header})
+            expect(status == 200, f"expected second dashboard to stay logged in, saw {status} {headers} {body!r}")
+            expect(
+                TestBackend.last_cookie in (None, ""),
+                f"expected dashboard session cookies to stay at proxy, saw backend cookie {TestBackend.last_cookie!r}",
+            )
+            print("PASS test_proxy_scopes_session_cookie_per_dashboard_instance")
+        finally:
+            stop_proxy(backend_one, backend_thread_one, proxy_one, proxy_thread_one)
+            stop_proxy(backend_two, backend_thread_two, proxy_two, proxy_thread_two)
 
 
 def test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper() -> None:
@@ -591,13 +662,14 @@ def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_bridges_arclink_session_to_backend_hermes_api_token()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
+    test_proxy_scopes_session_cookie_per_dashboard_instance()
     test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
     test_proxy_can_run_dashboard_helpers_without_auth()
     test_proxy_rejects_cross_origin_dashboard_mutations()
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 9 dashboard-auth-proxy regression tests")
+    print("PASS all 10 dashboard-auth-proxy regression tests")
     return 0
 
 

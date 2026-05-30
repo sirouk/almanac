@@ -478,7 +478,9 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(knowledge["backend"] == "local-roots", str(knowledge))
             expect(knowledge["default_root"] == "vault", str(knowledge))
             root_map = {item["id"]: item for item in knowledge["roots"]}
-            expect(set(root_map) == {"vault", "workspace", "linked"}, str(knowledge))
+            expect(set(root_map) == {"vault", "workspace", "fleet", "linked"}, str(knowledge))
+            expect(root_map["fleet"]["label"] == "Fleet", str(root_map["fleet"]))
+            expect(root_map["fleet"]["read_only"] is False, str(root_map["fleet"]))
             expect(root_map["vault"]["label"] == "Vault", str(root_map["vault"]))
             expect(root_map["workspace"]["label"] == "Workspace", str(root_map["workspace"]))
             expect(root_map["linked"]["label"] == "Linked", str(root_map["linked"]))
@@ -511,7 +513,9 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(code["url"] == "", str(code))
             expect(code["full_ide_available"] is False, str(code))
             code_root_map = {item["id"]: item for item in code["roots"]}
-            expect(set(code_root_map) == {"workspace", "vault", "linked"}, str(code))
+            expect(set(code_root_map) == {"workspace", "vault", "fleet", "linked"}, str(code))
+            expect(code_root_map["fleet"]["label"] == "Fleet", str(code_root_map["fleet"]))
+            expect(code_root_map["fleet"]["read_only"] is False, str(code_root_map["fleet"]))
             expect(code_root_map["linked"]["label"] == "Linked", str(code_root_map["linked"]))
             expect(code_root_map["linked"]["available"] is True, str(code_root_map["linked"]))
             expect(code_root_map["linked"]["read_only"] is True, str(code_root_map["linked"]))
@@ -809,20 +813,14 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
 
             drive_body = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
             code_body = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
-            expect("Request Share" in drive_body, "Drive UI should expose brokered request-share copy")
-            expect("Request Share" in code_body, "Code UI should expose brokered request-share copy")
+            expect("/arclink_share_accept" in drive_body, "Drive UI should expose the share-nonce accept command copy")
+            expect("/arclink_share_accept" in code_body, "Code UI should expose the share-nonce accept command copy")
             for body, label in ((drive_body, "Drive"), (code_body, "Code")):
                 expect("Generate share link" not in body, f"{label} UI must not imply direct share-link generation")
                 expect("Create share link" not in body, f"{label} UI must not imply direct share-link generation")
                 expect('"/share/request"' in body, f"{label} UI should call the brokered request-share route")
 
             validation_cases = [
-                (
-                    "drive missing recipient",
-                    drive_api.share_request,
-                    {"root": "vault", "path": "/brief.md"},
-                    400,
-                ),
                 (
                     "drive linked root",
                     drive_api.share_request,
@@ -840,12 +838,6 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
                     drive_api.share_request,
                     {"root": "vault", "path": "/brief.md", "recipient": "crew@example.test"},
                     503,
-                ),
-                (
-                    "code missing recipient",
-                    code_api.share_request,
-                    {"root": "workspace", "path": "/app.py"},
-                    400,
                 ),
                 (
                     "code linked root",
@@ -881,13 +873,17 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
 
             def fake_submit(_url: str, body: dict, auth_headers: dict) -> dict:
                 submitted.append({"url": _url, "payload": dict(body), "headers": dict(auth_headers)})
+                nonce = "asn_" + "0" * 48
                 return {
                     "ok": True,
-                    "grant": {
-                        "grant_id": "share_test",
-                        "status": "pending_owner_approval",
-                        "reshare_allowed": False,
-                    },
+                    "mode": "claim_nonce",
+                    "broker": "arclink-share-grants",
+                    "nonce": nonce,
+                    "accept_command": f"/arclink_share_accept {nonce}",
+                    "copy_text": f"A share request is available for review by Raven:\n/arclink_share_accept {nonce}",
+                    "expires_at": "2026-05-29T12:00:00+00:00",
+                    "expires_in_hours": 12,
+                    "reshare_allowed": False,
                 }
 
             drive_api._submit_share_request_to_broker = fake_submit
@@ -959,7 +955,6 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
                         {
                             "root": "vault",
                             "path": "/brief.md",
-                            "recipient": "crew@example.test",
                             "display_name": "Launch Brief",
                         }
                     )
@@ -971,13 +966,15 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
                         {
                             "root": "workspace",
                             "path": "/app.py",
-                            "recipient": "crew@example.test",
                         }
                     )
                 )
             )
-            expect(drive_result["status"] == "pending_owner_approval", str(drive_result))
-            expect(code_result["status"] == "pending_owner_approval", str(code_result))
+            for result, label in ((drive_result, "Drive"), (code_result, "Code")):
+                expect(result["mode"] == "claim_nonce", str(result))
+                expect(result["nonce"].startswith("asn_"), str(result))
+                expect(result["expires_in_hours"] == 12, str(result))
+                expect("/arclink_share_accept " + result["nonce"] in result["copy_text"], str(result))
             expect(auth_value not in json.dumps(drive_result, sort_keys=True), "Drive response leaked broker auth material")
             expect(auth_value not in json.dumps(code_result, sort_keys=True), "Code response leaked broker auth material")
             source_plugins = [record["payload"]["source_plugin"] for record in submitted]
@@ -993,10 +990,10 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
                 expect(auth_value not in json.dumps(payload, sort_keys=True), "broker payload leaked auth material")
                 expect(payload["contract"] == "arclink-share-grants", str(payload))
                 expect(payload["owner_deployment_id"] == "arcdep_share_request_owner", str(payload))
-                expect(payload["recipient"] == "crew@example.test", str(payload))
+                expect("recipient" not in payload, f"claim-nonce share must not name a recipient up front: {payload}")
                 expect(payload["requested_access"] == "read", str(payload))
                 expect(payload["reshare_allowed"] is False, str(payload))
-                expect(payload["share_mode"] == "owner_approval", str(payload))
+                expect(payload["share_mode"] == "claim_nonce", str(payload))
                 expect("share_link" not in json.dumps(payload, sort_keys=True), str(payload))
             expect(
                 submitted[0]["payload"]["resource_root"] == "vault"

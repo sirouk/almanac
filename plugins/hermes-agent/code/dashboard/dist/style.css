@@ -1131,3 +1131,24 @@
     border-right: 0;
   }
 }
+
+.hermes-code-share .hermes-code-share-copy {
+  background: color-mix(in srgb, var(--background-base) 90%, #fff);
+  border: 1px solid color-mix(in srgb, var(--midground-base) 26%, transparent);
+  border-radius: 6px;
+  color: var(--midground);
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0.85rem 0 0;
+  padding: 0.7rem 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.hermes-code-share .hermes-code-share-expiry {
+  color: color-mix(in srgb, var(--midground-base) 60%, transparent);
+  font-size: 0.76rem;
+  margin-top: 0.5rem;
+}

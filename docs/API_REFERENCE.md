@@ -127,10 +127,12 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/user/crew-recipe/apply` | Confirm Crew Training and apply the additive SOUL overlay (CSRF) |
 | GET | `/user/share-grants` | Share approval inbox for the authenticated owner or recipient, including pending owner approval, recipient acceptance waits, and no-channel recovery state |
 | POST | `/user/share-grants` | Request a read-only Drive/Code share grant (CSRF). Same-account agent-to-agent shares require `owner_deployment_id` plus a different `recipient_deployment_id` and auto-accept into the target agent's Linked root. |
-| POST | `/user/share-grants/broker` | Internal Drive/Code Request Share broker route. Requires `X-ArcLink-Share-Request-Broker-Token`; derives the owner from the token-bound `owner_deployment_id` and does not accept browser session cookies as a substitute. |
+| POST | `/user/share-grants/broker` | Internal Drive/Code Request Share broker route. Requires `X-ArcLink-Share-Request-Broker-Token`; derives the owner from the token-bound `owner_deployment_id` and does not accept browser session cookies as a substitute. With `share_mode="claim_nonce"` (the default for Drive/Code right-click Share) it mints a single-use, 12-hour ephemeral nonce instead of resolving a recipient up front, returning `{nonce, accept_command, copy_text, expires_at, expires_in_hours}`. |
 | POST | `/user/share-grants/approve` | Owner-approve a pending share grant (CSRF) |
 | POST | `/user/share-grants/deny` | Owner-deny a pending share grant (CSRF) |
 | POST | `/user/share-grants/accept` | Recipient accepts an approved share grant (CSRF) |
+| POST | `/user/share-grants/claim` | Recipient claims a read-only share by its ephemeral nonce (CSRF). The Raven equivalent is `/arclink_share_accept <nonce>`. The single-use nonce is consumed and the resource is materialized into the recipient's read-only Linked root. |
+| POST | `/user/share-grants/nonce/revoke` | Owner revokes a minted-but-unclaimed ephemeral share nonce by `nonce_id` (CSRF); idempotent, and a claimed/expired nonce is not revocable. |
 | POST | `/user/share-grants/revoke` | Owner revokes a share grant and removes accepted linked-resource visibility (CSRF) |
 | POST | `/user/share-grants/retry-notification` | Retry queueing the current owner-approval or recipient-acceptance Raven prompt to the local notification outbox; returns `queued=false` with recovery guidance when no linked public channel exists (CSRF) |
 | GET | `/user/linked-resources` | Accepted linked resources for the authenticated user |

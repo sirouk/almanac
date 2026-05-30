@@ -273,6 +273,7 @@
       sourcePickerPath: "/",
       sourcePickerMessage: "",
       previewFullscreen: false,
+      shareDialog: null,
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -841,26 +842,102 @@
       return !!(root.available && !root.read_only && capabilities.share_request);
     }
 
+    function copyShareText(text) {
+      function markCopied() {
+        patch(function (current) {
+          return current.shareDialog ? { shareDialog: Object.assign({}, current.shareDialog, { copied: true }) } : {};
+        });
+      }
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(markCopied, function () {});
+          return;
+        }
+      } catch (error) {
+        // Fall through to the legacy clipboard path below.
+      }
+      try {
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "readonly");
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        document.body.removeChild(area);
+        markCopied();
+      } catch (error) {
+        // Clipboard access can be blocked; the share text stays visible to copy by hand.
+      }
+    }
+
     function requestShare(item) {
-      const recipient = (window.prompt("Recipient email, handle, or user id") || "").trim();
-      if (!recipient) return;
-      patch({ busy: true, errorMessage: "" });
+      const name = item.name || basename(item.path);
+      patch({ busy: true, errorMessage: "", contextMenu: null });
       fetchJSON(api("/share/request"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           root: itemRoot(item),
           path: item.path,
-          recipient: recipient,
-          display_name: item.name || basename(item.path),
+          display_name: name,
         }),
       })
-        .then(function () {
-          patch({ busy: false, contextMenu: null });
+        .then(function (data) {
+          if (!data || !data.nonce) {
+            patch({ busy: false });
+            return;
+          }
+          const acceptCommand = data.accept_command || "/arclink_share_accept " + data.nonce;
+          patch({
+            busy: false,
+            shareDialog: {
+              nonce: data.nonce,
+              acceptCommand: acceptCommand,
+              copyText: data.copy_text || "A share request is available for review by Raven:\n" + acceptCommand,
+              expiresInHours: data.expires_in_hours || 12,
+              name: data.display_name || name,
+              copied: false,
+            },
+          });
         })
         .catch(function (error) {
-          patch({ busy: false, contextMenu: null, errorMessage: error.message || "Share request failed" });
+          patch({ busy: false, errorMessage: error.message || "Share request failed" });
         });
+    }
+
+    function renderShareDialog() {
+      const dialog = state.shareDialog;
+      if (!dialog) return null;
+      return h(
+        "div",
+        {
+          className: "hermes-code-modal-backdrop hermes-code-share-backdrop",
+          role: "presentation",
+          onClick: function () { patch({ shareDialog: null }); },
+        },
+        h(
+          "section",
+          {
+            className: "hermes-code-modal hermes-code-share",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Share " + (dialog.name || "item"),
+            onClick: function (event) { event.stopPropagation(); },
+          },
+          h("h2", null, "Share " + (dialog.name || "item")),
+          h("p", null, "Send this to anyone on ArcLink. Their Raven adds it as a read-only Linked resource when they run the command."),
+          h("pre", { className: "hermes-code-share-copy", onClick: function () { copyShareText(dialog.copyText); } }, dialog.copyText),
+          h("p", { className: "hermes-code-share-expiry" }, "This share link expires in " + dialog.expiresInHours + " hours and can only be claimed once."),
+          h(
+            "div",
+            { className: "hermes-code-modal-actions hermes-code-share-actions" },
+            h("button", { type: "button", onClick: function () { patch({ shareDialog: null }); } }, "Close"),
+            h("button", { type: "button", className: "primary", onClick: function () { copyShareText(dialog.copyText); } }, dialog.copied ? "Copied" : "Copy")
+          )
+        )
+      );
     }
 
     function openContextMenu(event, item) {
@@ -893,7 +970,7 @@
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { renameItem(item); }); } }, "Rename"),
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { moveItem(item); }); } }, "Move"),
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { duplicateItem(item); }); } }, "Duplicate"),
-        itemCanRequestShare(item) ? h("button", { type: "button", onClick: function () { closeThen(function () { requestShare(item); }); } }, "Request Share") : null,
+        itemCanRequestShare(item) ? h("button", { type: "button", onClick: function () { closeThen(function () { requestShare(item); }); } }, "Share") : null,
         h("button", { type: "button", disabled: isRoot, onClick: function () { closeThen(function () { trashItem(item); }); } }, "Trash")
       );
     }
@@ -1688,6 +1765,18 @@
       };
     }, [state.dirty]);
 
+    useEffect(function () {
+      function closeDismissables(event) {
+        if (event.key === "Escape") {
+          patch({ shareDialog: null, contextMenu: null, sourcePickerOpen: false });
+        }
+      }
+      window.addEventListener("keydown", closeDismissables);
+      return function () {
+        window.removeEventListener("keydown", closeDismissables);
+      };
+    }, []);
+
     const status = state.status || {};
     const openFile = state.openFile;
 
@@ -1840,6 +1929,7 @@
           )
         : h("div", { className: "hermes-code-empty full" }, "Code is not available"),
       renderSourcePicker(),
+      renderShareDialog(),
       renderFullscreenPreview()
     );
   }

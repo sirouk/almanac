@@ -1012,6 +1012,24 @@ services:
       - arclink-qmd:/home/arclink/.qmd
     command: ["./bin/docker-job-loop.sh", "fleet-inventory-worker", "30", "python3", "python/arclink_fleet_inventory_worker.py", "--once", "--json", "--notify"]
 
+  # Control-plane membership convergence for Captain fleet shared folders: enrols
+  # newly-active agents and deregisters torn-down ones. The actual read-write git
+  # sync runs in-pod per agent (arclink_fleet_share sync-local) where each working
+  # copy physically lives; this job only touches the control DB.
+  fleet-share-reconcile:
+    <<: *arclink-app
+    cap_drop:
+      - ALL
+    environment:
+      <<: *arclink-env
+    volumes:
+      - ./arclink-priv/config:/home/arclink/arclink/arclink-priv/config
+      - ./arclink-priv/state:/home/arclink/arclink/arclink-priv/state
+    command: ["./bin/docker-job-loop.sh", "fleet-share-reconcile", "120", "python3", "python/arclink_fleet_share.py", "reconcile", "--all"]
+    depends_on:
+      control-api:
+        condition: service_healthy
+
   curator-refresh:
     <<: *arclink-job
     cap_drop:

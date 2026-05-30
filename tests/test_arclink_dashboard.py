@@ -217,7 +217,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
         {
             "ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None,
             "ARCLINK_TAILSCALE_CONTROL_URL": None,
-            "ARCLINK_TAILSCALE_DNS_NAME": "s1396.tail77f45e.ts.net",
+            "ARCLINK_TAILSCALE_DNS_NAME": "control.example.ts.net",
             "ARCLINK_TAILSCALE_NOTION_PATH": "/notion/webhook",
             "ARCLINK_TAILSCALE_HTTPS_PORT": None,
             "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT": None,
@@ -226,7 +226,7 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     ):
         tailnet_view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
     tailnet_callback = tailnet_view["deployments"][0]["notion_setup"]["callback_url"]
-    expect(tailnet_callback == "https://s1396.tail77f45e.ts.net/notion/webhook", tailnet_callback)
+    expect(tailnet_callback == "https://control.example.ts.net/notion/webhook", tailnet_callback)
     expect(":8444/notion/webhook" not in tailnet_callback, tailnet_callback)
     expect(deployment["notion_setup"]["verification"]["live_workspace"] == "proof_gated", str(deployment["notion_setup"]))
     expect(deployment["freshness"]["qmd"]["status"] == "healthy", str(deployment["freshness"]))

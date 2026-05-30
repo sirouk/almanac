@@ -46,6 +46,8 @@ from arclink_api_auth import (
     ArcLinkRateLimitError,
     _header as _api_header,
     accept_user_share_grant_api,
+    claim_user_share_nonce_api,
+    revoke_user_share_nonce_api,
     acknowledge_user_credential_api,
     admin_apply_user_crew_recipe_api,
     adopt_user_academy_graduate_api,
@@ -1546,6 +1548,44 @@ def _handle_user_share_grant_accept(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_share_grant_claim(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = claim_user_share_nonce_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        nonce=str(body.get("nonce") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
+def _handle_user_share_nonce_revoke(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = revoke_user_share_nonce_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        nonce_id=str(body.get("nonce_id") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_user_share_grant_revoke(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -2754,7 +2794,7 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "resource_path": {"type": "string"},
             "display_name": {"type": "string"},
             "requested_access": {"type": "string", "enum": ["read"]},
-            "share_mode": {"type": "string", "enum": ["owner_approval"]},
+            "share_mode": {"type": "string", "enum": ["owner_approval", "claim_nonce"]},
             "reshare_allowed": {"type": "boolean"},
         }, required=["contract", "source_plugin", "owner_deployment_id", "resource_kind", "resource_root", "resource_path"]),
         "responses": {"201": {"description": "Share grant requested"}, "401": {"description": "Missing or invalid broker token"}},
@@ -2776,6 +2816,24 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "tags": ["user"],
         "requestBody": _openapi_json_body({"grant_id": {"type": "string"}}, required=["grant_id"]),
         "responses": {"200": {"description": "Share accepted"}, "401": {"description": "Unauthorized or missing CSRF"}},
+    },
+    "user_share_grant_claim": {
+        "summary": "Claim a read-only share by its ephemeral nonce (/arclink_share_accept)",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"nonce": {"type": "string"}}, required=["nonce"]),
+        "responses": {
+            "200": {"description": "Share claimed and materialized as a read-only Linked resource"},
+            "401": {"description": "Unauthorized or missing CSRF"},
+        },
+    },
+    "user_share_nonce_revoke": {
+        "summary": "Owner-revoke a minted-but-unclaimed ephemeral share nonce",
+        "tags": ["user"],
+        "requestBody": _openapi_json_body({"nonce_id": {"type": "string"}}, required=["nonce_id"]),
+        "responses": {
+            "200": {"description": "Nonce revoked (or already revoked); it can no longer be claimed"},
+            "401": {"description": "Unauthorized or missing CSRF"},
+        },
     },
     "user_share_grant_revoke": {
         "summary": "Owner-revoke a share grant",
@@ -3091,6 +3149,8 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/user/share-grants/approve"): "user_share_grant_approve",
     ("POST", "/user/share-grants/deny"): "user_share_grant_deny",
     ("POST", "/user/share-grants/accept"): "user_share_grant_accept",
+    ("POST", "/user/share-grants/claim"): "user_share_grant_claim",
+    ("POST", "/user/share-grants/nonce/revoke"): "user_share_nonce_revoke",
     ("POST", "/user/share-grants/revoke"): "user_share_grant_revoke",
     ("POST", "/user/share-grants/retry-notification"): "user_share_grant_retry_notification",
     ("GET", "/user/linked-resources"): "user_linked_resources",
@@ -3194,6 +3254,8 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_share_grant_approve",
     "user_share_grant_deny",
     "user_share_grant_accept",
+    "user_share_grant_claim",
+    "user_share_nonce_revoke",
     "user_share_grant_revoke",
     "user_share_grant_retry_notification",
     "admin_action",
@@ -3380,6 +3442,10 @@ def route_arclink_hosted_api(
             result = _handle_user_share_grant_deny(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_accept":
             result = _handle_user_share_grant_accept(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_grant_claim":
+            result = _handle_user_share_grant_claim(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_share_nonce_revoke":
+            result = _handle_user_share_nonce_revoke(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_revoke":
             result = _handle_user_share_grant_revoke(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grant_retry_notification":

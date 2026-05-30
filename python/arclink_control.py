@@ -1068,6 +1068,59 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
           updated_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS arclink_share_claim_nonces (
+          nonce_id TEXT PRIMARY KEY,
+          nonce_hash TEXT NOT NULL,
+          owner_user_id TEXT NOT NULL,
+          owner_deployment_id TEXT NOT NULL DEFAULT '',
+          resource_kind TEXT NOT NULL,
+          resource_root TEXT NOT NULL,
+          resource_path TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          access_mode TEXT NOT NULL DEFAULT 'read',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'expired', 'revoked')),
+          claimed_grant_id TEXT NOT NULL DEFAULT '',
+          claimed_by_user_id TEXT NOT NULL DEFAULT '',
+          expires_at TEXT NOT NULL,
+          claimed_at TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_fleet_shares (
+          share_id TEXT PRIMARY KEY,
+          owner_user_id TEXT NOT NULL UNIQUE,
+          hub_ref TEXT NOT NULL DEFAULT '',
+          folder_label TEXT NOT NULL DEFAULT 'Fleet',
+          access_mode TEXT NOT NULL DEFAULT 'read-write',
+          status TEXT NOT NULL CHECK (status IN ('active', 'paused', 'removed')),
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS arclink_fleet_share_members (
+          member_id TEXT PRIMARY KEY,
+          share_id TEXT NOT NULL,
+          owner_user_id TEXT NOT NULL,
+          deployment_id TEXT NOT NULL,
+          working_path TEXT NOT NULL DEFAULT '',
+          role TEXT NOT NULL DEFAULT 'member',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'active', 'removed')),
+          last_synced_at TEXT NOT NULL DEFAULT '',
+          last_sync_status TEXT NOT NULL DEFAULT '',
+          last_sync_commit TEXT NOT NULL DEFAULT '',
+          last_sync_detail TEXT NOT NULL DEFAULT '',
+          joined_at TEXT NOT NULL DEFAULT '',
+          removed_at TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (share_id, deployment_id)
+        );
+
         CREATE TABLE IF NOT EXISTS arclink_provisioning_jobs (
           job_id TEXT PRIMARY KEY,
           deployment_id TEXT NOT NULL,
@@ -1787,6 +1840,30 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_arclink_share_grants_recipient_status
         ON arclink_share_grants (recipient_user_id, status, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_share_claim_nonces_hash
+        ON arclink_share_claim_nonces (nonce_hash)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_share_claim_nonces_owner_status
+        ON arclink_share_claim_nonces (owner_user_id, status, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_fleet_share_members_share_status
+        ON arclink_fleet_share_members (share_id, status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_arclink_fleet_share_members_deployment
+        ON arclink_fleet_share_members (deployment_id, status)
         """
     )
     conn.execute(
@@ -2675,6 +2752,9 @@ ARCLINK_REFUEL_CREDIT_STATUSES = {"active", "exhausted", "revoked"}
 ARCLINK_SESSION_STATUSES = {"active", "revoked"}
 ARCLINK_CREDENTIAL_HANDOFF_STATUSES = {"available", "removed", "expired"}
 ARCLINK_SHARE_GRANT_STATUSES = {"pending_owner_approval", "approved", "accepted", "revoked", "denied", "expired"}
+ARCLINK_SHARE_CLAIM_NONCE_STATUSES = {"pending", "claimed", "expired", "revoked"}
+ARCLINK_FLEET_SHARE_STATUSES = {"active", "paused", "removed"}
+ARCLINK_FLEET_SHARE_MEMBER_STATUSES = {"pending", "active", "removed"}
 ARCLINK_DEPLOYMENT_STATUSES = {
     "reserved",
     "entitlement_required",
@@ -4521,6 +4601,38 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
             "arclink_deployments",
             "deployment_id",
         ),
+        (
+            "share_claim_nonce_owner_missing",
+            "arclink_share_claim_nonces",
+            "nonce_id",
+            "owner_user_id",
+            "arclink_users",
+            "user_id",
+        ),
+        (
+            "fleet_share_owner_missing",
+            "arclink_fleet_shares",
+            "share_id",
+            "owner_user_id",
+            "arclink_users",
+            "user_id",
+        ),
+        (
+            "fleet_share_member_share_missing",
+            "arclink_fleet_share_members",
+            "member_id",
+            "share_id",
+            "arclink_fleet_shares",
+            "share_id",
+        ),
+        (
+            "fleet_share_member_deployment_missing",
+            "arclink_fleet_share_members",
+            "member_id",
+            "deployment_id",
+            "arclink_deployments",
+            "deployment_id",
+        ),
     ]
     status_checks = [
         ("user_status_invalid", "arclink_users", "user_id", "status", ARCLINK_USER_STATUSES),
@@ -4529,6 +4641,9 @@ def arclink_drift_checks(conn: sqlite3.Connection) -> list[dict[str, str]]:
         ("refuel_credit_status_invalid", "arclink_refuel_credits", "credit_id", "status", ARCLINK_REFUEL_CREDIT_STATUSES),
         ("handoff_status_invalid", "arclink_credential_handoffs", "handoff_id", "status", ARCLINK_CREDENTIAL_HANDOFF_STATUSES),
         ("share_grant_status_invalid", "arclink_share_grants", "grant_id", "status", ARCLINK_SHARE_GRANT_STATUSES),
+        ("share_claim_nonce_status_invalid", "arclink_share_claim_nonces", "nonce_id", "status", ARCLINK_SHARE_CLAIM_NONCE_STATUSES),
+        ("fleet_share_status_invalid", "arclink_fleet_shares", "share_id", "status", ARCLINK_FLEET_SHARE_STATUSES),
+        ("fleet_share_member_status_invalid", "arclink_fleet_share_members", "member_id", "status", ARCLINK_FLEET_SHARE_MEMBER_STATUSES),
         ("provisioning_job_status_invalid", "arclink_provisioning_jobs", "job_id", "status", ARCLINK_PROVISIONING_JOB_STATUSES),
         ("user_session_status_invalid", "arclink_user_sessions", "session_id", "status", ARCLINK_SESSION_STATUSES),
         ("admin_session_status_invalid", "arclink_admin_sessions", "session_id", "status", ARCLINK_SESSION_STATUSES),

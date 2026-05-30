@@ -512,6 +512,7 @@ def test_compose_defines_full_stack_services() -> None:
         "arclink-wrapped:",
         "health-watch:",
         "fleet-inventory-worker:",
+        "fleet-share-reconcile:",
         "curator-refresh:",
         "qmd-refresh:",
         "pdf-ingest:",
@@ -748,6 +749,13 @@ def test_compose_defines_full_stack_services() -> None:
     expect("/var/run/docker.sock" not in wrapped_block, wrapped_block)
     fleet_inventory_block = extract(body, "  fleet-inventory-worker:", "\n\n")
     expect("/var/run/docker.sock" not in fleet_inventory_block, fleet_inventory_block)
+    fleet_share_reconcile_block = extract(body, "  fleet-share-reconcile:", "\n\n")
+    expect("cap_drop:\n      - ALL" in fleet_share_reconcile_block, fleet_share_reconcile_block)
+    expect("/var/run/docker.sock" not in fleet_share_reconcile_block, fleet_share_reconcile_block)
+    expect("group_add:" not in fleet_share_reconcile_block, fleet_share_reconcile_block)
+    expect("arclink-priv/secrets/container" not in fleet_share_reconcile_block, fleet_share_reconcile_block)
+    expect("arclink-priv/vault" not in fleet_share_reconcile_block, fleet_share_reconcile_block)
+    expect("*arclink-control-secret-env" not in fleet_share_reconcile_block, fleet_share_reconcile_block)
     llm_router_block = extract(body, "  control-llm-router:", "\n\n")
     expect("/var/run/docker.sock" not in llm_router_block and "group_add:" not in llm_router_block, llm_router_block)
     expect(

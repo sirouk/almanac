@@ -1773,7 +1773,7 @@ def test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port() 
         channel="telegram",
         channel_identity="tg:notion-port",
         prefix="arc-notion-port",
-        base_domain="s1396.tail77f45e.ts.net",
+        base_domain="control.example.ts.net",
     )
     seed_credential_handoffs(control, conn, seeded)
     conn.execute(
@@ -1786,7 +1786,7 @@ def test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port() 
             json.dumps(
                 {
                     "ingress_mode": "tailscale",
-                    "tailscale_dns_name": "s1396.tail77f45e.ts.net",
+                    "tailscale_dns_name": "control.example.ts.net",
                     "tailscale_host_strategy": "path",
                     "tailnet_service_ports": {"hermes": 8444},
                     "tailnet_app_publication": {"status": "published", "successful_roles": ["hermes"]},
@@ -1802,7 +1802,7 @@ def test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port() 
         {
             "ARCLINK_NOTION_WEBHOOK_PUBLIC_URL": None,
             "ARCLINK_TAILSCALE_CONTROL_URL": None,
-            "ARCLINK_TAILSCALE_DNS_NAME": "s1396.tail77f45e.ts.net",
+            "ARCLINK_TAILSCALE_DNS_NAME": "control.example.ts.net",
             "ARCLINK_TAILSCALE_NOTION_PATH": "/notion/webhook",
             "ARCLINK_TAILSCALE_HTTPS_PORT": None,
             "TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT": None,
@@ -1816,7 +1816,7 @@ def test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port() 
             text="/connect-notion",
         )
     expect(notion.action == "connect_notion", str(notion))
-    expect("https://s1396.tail77f45e.ts.net/notion/webhook" in notion.reply, notion.reply)
+    expect("https://control.example.ts.net/notion/webhook" in notion.reply, notion.reply)
     expect(":8444/notion/webhook" not in notion.reply, notion.reply)
     expect("/u/arc-notion-port/notion/webhook" not in notion.reply, notion.reply)
     print("PASS test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port")

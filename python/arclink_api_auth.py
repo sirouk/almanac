@@ -88,6 +88,10 @@ ARCLINK_SHARE_ACCESS_MODES = frozenset({"read"})
 ARCLINK_SHARE_STATUSES = ARCLINK_SHARE_GRANT_STATUSES
 ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS = 7 * 24 * 60 * 60
 ARCLINK_SHARE_GRANT_TTL_SECONDS = 7 * 24 * 60 * 60
+# Ephemeral, single-use claim nonces hand a scoped read share to whoever the owner
+# gives the code to. Twelve hours mirrors the dashboard session TTL the user already sees.
+ARCLINK_SHARE_CLAIM_NONCE_TTL_SECONDS = 12 * 60 * 60
+ARCLINK_SHARE_CLAIM_NONCE_PREFIX = "asn_"
 ARCLINK_LINKED_RESOURCE_MANIFEST = ".arclink-linked-resources.json"
 ARCLINK_SESSION_ID_HEADER = "x-arclink-session-id"
 ARCLINK_SESSION_TOKEN_HEADER = "x-arclink-session-token"
@@ -1896,9 +1900,23 @@ def expire_revealable_user_material(conn: sqlite3.Connection, *, commit: bool = 
         """,
         (now, now, now),
     )
+    nonce_cursor = conn.execute(
+        """
+        UPDATE arclink_share_claim_nonces
+        SET status = 'expired', updated_at = ?
+        WHERE status = 'pending'
+          AND expires_at != ''
+          AND expires_at <= ?
+        """,
+        (now, now),
+    )
     if commit:
         conn.commit()
-    return {"credential_handoffs": handoff_cursor.rowcount, "share_grants": share_cursor.rowcount}
+    return {
+        "credential_handoffs": handoff_cursor.rowcount,
+        "share_grants": share_cursor.rowcount,
+        "share_claim_nonces": nonce_cursor.rowcount,
+    }
 
 
 def _public_credential_handoff(row: Mapping[str, Any], *, raw_secret: str = "") -> dict[str, Any]:
@@ -2793,6 +2811,8 @@ def _materialize_share_projection(
         "entry_path": "",
         "read_only": True,
     }
+    linked_root: Path | None = None
+    projection_root: Path | None = None
     try:
         owner_roots = _deployment_state_roots_for_user(conn, owner_user, deployment_id=owner_deployment)
         recipient_roots = _deployment_state_roots_for_user(conn, recipient_user, deployment_id=recipient_deployment)
@@ -2895,6 +2915,11 @@ def _materialize_share_projection(
         )
         return metadata
     except (OSError, ArcLinkApiAuthError, ValueError):
+        if linked_root is not None and projection_root is not None:
+            try:
+                _remove_projection_path(linked_root, projection_root)
+            except (OSError, ArcLinkApiAuthError, ValueError):
+                pass
         projection.update({"status": "pending_materialization", "reason": "materialization_failed"})
         metadata["projection"] = projection
         append_arclink_event(
@@ -3247,8 +3272,9 @@ def create_user_share_grant_from_broker_api(
 ) -> ArcLinkApiResponse:
     if str(contract or "").strip() != "arclink-share-grants":
         raise ArcLinkApiAuthError("ArcLink share-request broker contract is invalid")
-    if str(share_mode or "owner_approval").strip() not in {"", "owner_approval"}:
-        raise ArcLinkApiAuthError("ArcLink share-request broker only supports owner approval")
+    clean_share_mode = str(share_mode or "owner_approval").strip() or "owner_approval"
+    if clean_share_mode not in {"owner_approval", "claim_nonce"}:
+        raise ArcLinkApiAuthError("ArcLink share-request broker only supports owner approval or claim nonce")
     if bool(reshare_allowed):
         raise ArcLinkApiAuthError("ArcLink share grants cannot be reshared")
     source = str(source_plugin or "").strip().lower()
@@ -3260,12 +3286,6 @@ def create_user_share_grant_from_broker_api(
         broker_token=broker_token,
     )
     clean_owner_deployment = str(owner["deployment_id"] or "")
-    recipient_user = _resolve_share_recipient_user_id(
-        conn,
-        recipient_user_id=recipient_user_id,
-        recipient_identity=recipient,
-        recipient_deployment_id=recipient_deployment_id,
-    )
     raw_kind = str(resource_kind or "").strip().lower()
     clean_item_kind = str(item_kind or "").strip().lower()
     if raw_kind in {"file", "directory"} and not clean_item_kind:
@@ -3276,6 +3296,28 @@ def create_user_share_grant_from_broker_api(
     if clean_item_kind and clean_item_kind not in {"file", "directory"}:
         raise ArcLinkApiAuthError("ArcLink share-request broker item kind is unsupported")
     clean_access = str(access_mode or requested_access or "read").strip().lower()
+    if clean_share_mode == "claim_nonce":
+        nonce_metadata = dict(metadata or {})
+        if clean_item_kind:
+            nonce_metadata["item_kind"] = clean_item_kind
+        return mint_share_claim_nonce_for_owner(
+            conn,
+            owner_user_id=str(owner["user_id"] or ""),
+            owner_deployment_id=clean_owner_deployment,
+            resource_kind=clean_resource_kind,
+            resource_root=resource_root,
+            resource_path=resource_path,
+            display_name=display_name,
+            access_mode=clean_access,
+            source_plugin=source,
+            metadata=nonce_metadata,
+        )
+    recipient_user = _resolve_share_recipient_user_id(
+        conn,
+        recipient_user_id=recipient_user_id,
+        recipient_identity=recipient,
+        recipient_deployment_id=recipient_deployment_id,
+    )
     broker_metadata = dict(metadata or {})
     broker_metadata.update(
         {
@@ -3300,6 +3342,457 @@ def create_user_share_grant_from_broker_api(
         access_mode=clean_access,
         metadata=broker_metadata,
     )
+
+
+def _validate_drive_code_share(resource_kind: str, resource_root: str, resource_path: str) -> tuple[str, str, str]:
+    kind = str(resource_kind or "").strip().lower()
+    root = str(resource_root or "").strip().lower()
+    if kind not in {"drive", "code"}:
+        raise ArcLinkApiAuthError("ArcLink claim-nonce shares support only Drive and Code resources")
+    if root not in ARCLINK_SHARE_RESOURCE_ROOTS:
+        raise ArcLinkApiAuthError("ArcLink share cannot originate from linked or unknown roots")
+    return kind, root, _clean_share_path(resource_path)
+
+
+def _generate_share_claim_nonce() -> str:
+    return f"{ARCLINK_SHARE_CLAIM_NONCE_PREFIX}{secrets.token_hex(24)}"
+
+
+def _share_claim_accept_command(nonce: str) -> str:
+    return f"/arclink_share_accept {nonce}"
+
+
+def _share_claim_copy_text(nonce: str) -> str:
+    return "A share request is available for review by Raven:\n" + _share_claim_accept_command(nonce)
+
+
+def _public_share_claim_nonce(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Sanitized view of a claim nonce. Never includes the nonce value or its hash."""
+    return {
+        "nonce_id": str(row.get("nonce_id") or ""),
+        "owner_user_id": str(row.get("owner_user_id") or ""),
+        "owner_deployment_id": str(row.get("owner_deployment_id") or ""),
+        "resource_kind": str(row.get("resource_kind") or ""),
+        "resource_root": str(row.get("resource_root") or ""),
+        "resource_path": str(row.get("resource_path") or ""),
+        "display_name": str(row.get("display_name") or ""),
+        "access_mode": str(row.get("access_mode") or ""),
+        "status": str(row.get("status") or ""),
+        "expires_at": str(row.get("expires_at") or ""),
+        "claimed_by_user_id": str(row.get("claimed_by_user_id") or ""),
+        "claimed_grant_id": str(row.get("claimed_grant_id") or ""),
+        "claimed_at": str(row.get("claimed_at") or ""),
+        "revoked_at": str(row.get("revoked_at") or ""),
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+def mint_share_claim_nonce_for_owner(
+    conn: sqlite3.Connection,
+    *,
+    owner_user_id: str,
+    resource_kind: str,
+    resource_root: str,
+    resource_path: str,
+    owner_deployment_id: str = "",
+    display_name: str = "",
+    access_mode: str = "read",
+    source_plugin: str = "",
+    metadata: Mapping[str, Any] | None = None,
+    requested_by_agent_id: str = "",
+) -> ArcLinkApiResponse:
+    """Mint a single-use, 12h read-only share claim nonce.
+
+    Minting *is* the owner's approval: whoever the owner hands the nonce to can
+    claim a read-only Linked resource by running ``/arclink_share_accept <nonce>``.
+    """
+    owner_user = str(owner_user_id or "").strip()
+    if not owner_user:
+        raise ArcLinkApiAuthError("ArcLink claim-nonce share requires an owner user")
+    if conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ?", (owner_user,)).fetchone() is None:
+        raise KeyError(owner_user)
+    owner_deployment = str(owner_deployment_id or "").strip()
+    if owner_deployment:
+        _share_deployment_user(conn, owner_deployment, expected_user_id=owner_user, label="owner")
+    kind, root, clean_path = _validate_drive_code_share(resource_kind, resource_root, resource_path)
+    mode = str(access_mode or "read").strip().lower()
+    if mode not in ARCLINK_SHARE_ACCESS_MODES:
+        raise ArcLinkApiAuthError("ArcLink share grants are read-only")
+    safe_metadata = dict(metadata or {})
+    if source_plugin:
+        safe_metadata["source_plugin"] = str(source_plugin).strip().lower()
+    safe_metadata["requested_via"] = "claim_nonce"
+    safe_metadata["share_mode"] = "claim_nonce"
+    safe_metadata["reshare_allowed"] = False
+    clean_agent = str(requested_by_agent_id or "").strip()
+    if clean_agent:
+        safe_metadata["requested_by_agent_id"] = clean_agent
+    _reject_secret_material(safe_metadata)
+    now = utc_now_iso()
+    expires_at = utc_after_seconds_iso(ARCLINK_SHARE_CLAIM_NONCE_TTL_SECONDS)
+    nonce = _generate_share_claim_nonce()
+    nonce_id = _new_id("snonce")
+    display = str(display_name or "").strip()[:160]
+    conn.execute(
+        """
+        INSERT INTO arclink_share_claim_nonces (
+          nonce_id, nonce_hash, owner_user_id, owner_deployment_id, resource_kind, resource_root,
+          resource_path, display_name, access_mode, status, expires_at, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+        """,
+        (
+            nonce_id,
+            _hash_proof_token(nonce),
+            owner_user,
+            owner_deployment,
+            kind,
+            root,
+            clean_path,
+            display,
+            mode,
+            expires_at,
+            _json(safe_metadata),
+            now,
+            now,
+        ),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_claim_nonce_minted",
+        actor_id=owner_user,
+        target_kind="share_claim_nonce",
+        target_id=nonce_id,
+        reason="owner minted single-use read-only share claim nonce",
+        metadata={
+            "resource_kind": kind,
+            "resource_root": root,
+            "resource_path": clean_path,
+            "owner_deployment_id": owner_deployment,
+            "expires_at": expires_at,
+        },
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_claim_nonce",
+        subject_id=nonce_id,
+        event_type="share_claim_nonce_minted",
+        metadata={"owner_user_id": owner_user, "resource_kind": kind, "resource_root": root},
+        commit=False,
+    )
+    conn.commit()
+    return ArcLinkApiResponse(
+        status=201,
+        payload={
+            "ok": True,
+            "mode": "claim_nonce",
+            "broker": "arclink-share-grants",
+            "nonce": nonce,
+            "nonce_id": nonce_id,
+            "accept_command": _share_claim_accept_command(nonce),
+            "copy_text": _share_claim_copy_text(nonce),
+            "expires_at": expires_at,
+            "expires_in_seconds": ARCLINK_SHARE_CLAIM_NONCE_TTL_SECONDS,
+            "expires_in_hours": ARCLINK_SHARE_CLAIM_NONCE_TTL_SECONDS // 3600,
+            "resource_kind": kind,
+            "resource_root": root,
+            "resource_path": clean_path,
+            "display_name": display,
+            "access_mode": mode,
+            "reshare_allowed": False,
+        },
+    )
+
+
+def _insert_accepted_share_grant(
+    conn: sqlite3.Connection,
+    *,
+    grant_id: str,
+    owner_user: str,
+    recipient_user: str,
+    resource_kind: str,
+    resource_root: str,
+    resource_path: str,
+    display_name: str,
+    access_mode: str,
+    metadata: Mapping[str, Any],
+    now: str,
+    actor_id: str,
+    audit_reason: str,
+) -> dict[str, Any]:
+    """Insert an already-accepted read-only share grant and materialize its projection.
+
+    Used by the claim-nonce flow, where minting the nonce was the owner's approval.
+    """
+    kind, root, clean_path = _validate_drive_code_share(resource_kind, resource_root, resource_path)
+    mode = str(access_mode or "read").strip().lower()
+    if mode not in ARCLINK_SHARE_ACCESS_MODES:
+        raise ArcLinkApiAuthError("ArcLink share grants are read-only")
+    safe_metadata = dict(metadata or {})
+    _reject_secret_material(safe_metadata)
+    conn.execute(
+        """
+        INSERT INTO arclink_share_grants (
+          grant_id, owner_user_id, recipient_user_id, resource_kind, resource_root,
+          resource_path, display_name, access_mode, status, expires_at, approved_at, accepted_at,
+          metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            grant_id,
+            owner_user,
+            recipient_user,
+            kind,
+            root,
+            clean_path,
+            str(display_name or "").strip()[:160],
+            mode,
+            utc_after_seconds_iso(ARCLINK_SHARE_GRANT_TTL_SECONDS),
+            now,
+            now,
+            _json(safe_metadata),
+            now,
+            now,
+        ),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_grant_requested",
+        actor_id=owner_user,
+        target_kind="share_grant",
+        target_id=grant_id,
+        reason="claim-nonce read-only linked resource share created",
+        metadata={
+            "recipient_user_id": recipient_user,
+            "resource_kind": kind,
+            "resource_root": root,
+            "resource_path": clean_path,
+        },
+        commit=False,
+    )
+    grant = rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone())
+    updated_metadata = _materialize_share_projection(conn, grant=grant, now=now)
+    conn.execute(
+        "UPDATE arclink_share_grants SET metadata_json = ?, updated_at = ? WHERE grant_id = ?",
+        (_json(updated_metadata), now, grant_id),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_grant_accepted",
+        actor_id=str(actor_id or recipient_user).strip(),
+        target_kind="share_grant",
+        target_id=grant_id,
+        reason=audit_reason,
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_grant",
+        subject_id=grant_id,
+        event_type="share_grant_accepted",
+        metadata={"recipient_user_id": recipient_user, "via": "claim_nonce"},
+        commit=False,
+    )
+    return rowdict(conn.execute("SELECT * FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone())
+
+
+def claim_share_nonce_for_recipient(
+    conn: sqlite3.Connection,
+    *,
+    recipient_user_id: str,
+    nonce: str,
+    recipient_deployment_id: str = "",
+    actor_id: str = "",
+    reason: str = "recipient claimed read-only linked resource via share nonce",
+    commit: bool = True,
+) -> dict[str, Any]:
+    recipient = str(recipient_user_id or "").strip()
+    if not recipient:
+        raise ArcLinkApiAuthError("ArcLink share claim requires a recipient user")
+    clean_nonce = str(nonce or "").strip()
+    invalid = ArcLinkApiAuthError("ArcLink share link is invalid or has expired")
+    if not clean_nonce.startswith(ARCLINK_SHARE_CLAIM_NONCE_PREFIX):
+        raise invalid
+    row = conn.execute(
+        "SELECT * FROM arclink_share_claim_nonces WHERE nonce_hash = ?",
+        (_hash_proof_token(clean_nonce),),
+    ).fetchone()
+    if row is None:
+        raise invalid
+    nonce_row = rowdict(row)
+    now = utc_now_iso()
+    status = str(nonce_row.get("status") or "")
+    expires_at = parse_utc_iso(str(nonce_row.get("expires_at") or ""))
+    now_dt = parse_utc_iso(now)
+    if status == "pending" and expires_at is not None and now_dt is not None and expires_at <= now_dt:
+        conn.execute(
+            "UPDATE arclink_share_claim_nonces SET status = 'expired', updated_at = ? WHERE nonce_id = ? AND status = 'pending'",
+            (now, str(nonce_row.get("nonce_id") or "")),
+        )
+        conn.commit()
+        raise invalid
+    if status != "pending":
+        raise invalid
+    if conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ?", (recipient,)).fetchone() is None:
+        raise KeyError(recipient)
+    recipient_deployment = str(recipient_deployment_id or "").strip()
+    if recipient_deployment:
+        resolved = _share_deployment_user(conn, recipient_deployment, expected_user_id=recipient, label="recipient")
+        recipient = recipient or resolved
+    owner_user = str(nonce_row.get("owner_user_id") or "")
+    owner_deployment = str(nonce_row.get("owner_deployment_id") or "")
+    nonce_metadata = json_loads_safe(str(nonce_row.get("metadata_json") or "{}"))
+    grant_metadata: dict[str, Any] = {
+        "requested_via": "claim_nonce",
+        "share_mode": "claim_nonce",
+        "reshare_allowed": False,
+        "claim_nonce_id": str(nonce_row.get("nonce_id") or ""),
+    }
+    if str(nonce_metadata.get("source_plugin") or ""):
+        grant_metadata["source_plugin"] = str(nonce_metadata.get("source_plugin") or "")
+    if str(nonce_metadata.get("item_kind") or ""):
+        grant_metadata["item_kind"] = str(nonce_metadata.get("item_kind") or "")
+    if owner_deployment:
+        grant_metadata["owner_deployment_id"] = owner_deployment
+        grant_metadata.setdefault("deployment_id", owner_deployment)
+    if recipient_deployment:
+        grant_metadata["recipient_deployment_id"] = recipient_deployment
+    grant_id = _new_id("share")
+    # Claim the nonce atomically before creating the grant so it can only be spent once.
+    claimed = conn.execute(
+        """
+        UPDATE arclink_share_claim_nonces
+        SET status = 'claimed', claimed_grant_id = ?, claimed_by_user_id = ?, claimed_at = ?, updated_at = ?
+        WHERE nonce_id = ? AND status = 'pending'
+        """,
+        (grant_id, recipient, now, now, str(nonce_row.get("nonce_id") or "")),
+    )
+    if claimed.rowcount != 1:
+        raise invalid
+    try:
+        grant = _insert_accepted_share_grant(
+            conn,
+            grant_id=grant_id,
+            owner_user=owner_user,
+            recipient_user=recipient,
+            resource_kind=str(nonce_row.get("resource_kind") or ""),
+            resource_root=str(nonce_row.get("resource_root") or ""),
+            resource_path=str(nonce_row.get("resource_path") or ""),
+            display_name=str(nonce_row.get("display_name") or ""),
+            access_mode=str(nonce_row.get("access_mode") or "read"),
+            metadata=grant_metadata,
+            now=now,
+            actor_id=str(actor_id or recipient),
+            audit_reason=reason,
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="share_claim_nonce",
+            subject_id=str(nonce_row.get("nonce_id") or ""),
+            event_type="share_claim_nonce_claimed",
+            metadata={"recipient_user_id": recipient, "grant_id": grant_id},
+            commit=False,
+        )
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    return _public_share_grant(grant)
+
+
+def claim_user_share_nonce_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    nonce: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
+    recipient = str(session["user_id"] or "")
+    grant = claim_share_nonce_for_recipient(conn, recipient_user_id=recipient, nonce=nonce, actor_id=recipient)
+    return ArcLinkApiResponse(status=200, payload={"grant": grant})
+
+
+def revoke_share_claim_nonce_for_owner(
+    conn: sqlite3.Connection,
+    *,
+    owner_user_id: str,
+    nonce_id: str,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Owner-revoke a minted-but-unclaimed share nonce so it can no longer be claimed.
+
+    Gives the owner recourse inside the 12h window (mistaken mint / wrong person).
+    Idempotent for an already-revoked nonce; a claimed/expired nonce is not revocable.
+    """
+    owner = str(owner_user_id or "").strip()
+    clean_nonce_id = str(nonce_id or "").strip()
+    if not owner or not clean_nonce_id:
+        raise ArcLinkApiAuthError("ArcLink share nonce revoke requires an owner and nonce id")
+    row = conn.execute(
+        "SELECT * FROM arclink_share_claim_nonces WHERE nonce_id = ?",
+        (clean_nonce_id,),
+    ).fetchone()
+    if row is None or str(row["owner_user_id"] or "") != owner:
+        raise ArcLinkApiAuthError("ArcLink user cannot revoke this share nonce")
+    status = str(row["status"] or "")
+    if status == "revoked":
+        return _public_share_claim_nonce(rowdict(row))
+    if status != "pending":
+        raise ArcLinkApiAuthError("ArcLink share nonce is not revocable")
+    now = utc_now_iso()
+    conn.execute(
+        """
+        UPDATE arclink_share_claim_nonces
+        SET status = 'revoked',
+            revoked_at = CASE WHEN revoked_at = '' THEN ? ELSE revoked_at END,
+            updated_at = ?
+        WHERE nonce_id = ? AND owner_user_id = ? AND status = 'pending'
+        """,
+        (now, now, clean_nonce_id, owner),
+    )
+    append_arclink_audit(
+        conn,
+        action="share_claim_nonce_revoked",
+        actor_id=owner,
+        target_kind="share_claim_nonce",
+        target_id=clean_nonce_id,
+        reason="owner revoked an unclaimed share nonce",
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="share_claim_nonce",
+        subject_id=clean_nonce_id,
+        event_type="share_claim_nonce_revoked",
+        metadata={"owner_user_id": owner},
+        commit=False,
+    )
+    if commit:
+        conn.commit()
+    return _public_share_claim_nonce(rowdict(conn.execute("SELECT * FROM arclink_share_claim_nonces WHERE nonce_id = ?", (clean_nonce_id,)).fetchone()))
+
+
+def revoke_user_share_nonce_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    nonce_id: str,
+) -> ArcLinkApiResponse:
+    session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
+    require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="user")
+    expire_revealable_user_material(conn)
+    owner = str(session["user_id"] or "")
+    nonce = revoke_share_claim_nonce_for_owner(conn, owner_user_id=owner, nonce_id=nonce_id)
+    return ArcLinkApiResponse(status=200, payload={"nonce": nonce})
 
 
 def approve_user_share_grant_api(

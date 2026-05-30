@@ -14,6 +14,7 @@ from urllib.parse import urlencode
 from arclink_api_auth import (
     ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS,
     accept_share_grant_for_recipient,
+    claim_share_nonce_for_recipient,
     check_arclink_rate_limit,
     _dashboard_password_ref_for_handoff,
     expire_revealable_user_material,
@@ -272,6 +273,7 @@ ARCLINK_PUBLIC_BOT_ADD_AGENT_ANCHOR_STATUSES = (
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny|accept)\s+(share_[0-9a-f]{32})$")
+ARCLINK_PUBLIC_BOT_SHARE_CLAIM_RE = re.compile(r"^/(?:arclink_share_accept|share-claim|share_claim)\s+(asn_[0-9a-f]{48})$")
 ARCLINK_PUBLIC_BOT_CREDENTIAL_TARGET_PREFIXES = (
     "/credentials ",
     "/credential ",
@@ -4464,6 +4466,61 @@ def _share_grant_action_reply(
     )
 
 
+def _share_claim_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    nonce: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if not session or not str(session.get("user_id") or "").strip():
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_claim_unavailable",
+            reply="I cannot accept a shared resource from this channel until it is linked to your ArcLink account.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Link Channel", command="/link-channel", style="secondary"),),
+        )
+    recipient_user = str(session.get("user_id") or "").strip()
+    recipient_deployment = str((deployment or {}).get("deployment_id") or "").strip()
+    try:
+        grant = claim_share_nonce_for_recipient(
+            conn,
+            recipient_user_id=recipient_user,
+            nonce=nonce,
+            recipient_deployment_id=recipient_deployment,
+            actor_id=recipient_user,
+            reason="recipient claimed read-only linked resource via Raven nonce",
+        )
+    except Exception:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_claim_invalid",
+            reply="That share link is invalid or has expired. Share links expire 12 hours after they are created and can only be claimed once.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource")
+    projection = grant.get("projection") if isinstance(grant, Mapping) else {}
+    linked_path = str((projection or {}).get("linked_path") or "").strip()
+    location = f" at `{linked_path}`" if linked_path else ""
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="share_claim_accepted",
+        reply=f"Accepted. `{label}` is now available as a read-only Linked resource{location}. It cannot be reshared.",
+        session=session,
+        deployment=deployment,
+        buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+    )
+
+
 def _crew_training_data(session: Mapping[str, Any] | None) -> dict[str, Any]:
     payload = _metadata(session)
     data = payload.get("crew_training")
@@ -6034,6 +6091,18 @@ def handle_arclink_public_bot_turn(
             channel_identity=clean_identity,
             requested_action=share_match.group(1),
             grant_id=share_match.group(2),
+            session=session,
+            deployment=deployment,
+        )
+
+    share_claim_match = ARCLINK_PUBLIC_BOT_SHARE_CLAIM_RE.match(command)
+    if share_claim_match:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _share_claim_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            nonce=share_claim_match.group(1),
             session=session,
             deployment=deployment,
         )

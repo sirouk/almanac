@@ -169,18 +169,71 @@ manifest, owner revoke removes the projection and manifest entry, and Drive/Code
 allow recipient copy/duplicate into the recipient's own Vault or Workspace
 without allowing reshare from the `Linked` source. Direct right-click browser
 share-link generation remains disabled. Drive and Code can expose a brokered
-`Request Share` action only when `ARCLINK_SHARE_REQUEST_BROKER_URL` or the
+`Share` action only when `ARCLINK_SHARE_REQUEST_BROKER_URL` or the
 plugin-specific broker URL is configured together with
 `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE` or the matching plugin-specific token
 file and an owner deployment identity. Control-node provisioning points the
 plugins at the hosted `/api/v1/user/share-grants/broker` route, mounts the
 broker token as an ArcPod runtime secret, and stores only the token hash in the
-deployment metadata. The local plugin route rejects `Linked` roots, missing
-recipients, and sensitive paths before dispatching to that broker, sends the
-token only as the `X-ArcLink-Share-Request-Broker-Token` broker header, and the
-hosted broker derives the owner from the token-bound `owner_deployment_id`.
+deployment metadata. The local plugin route rejects `Linked` roots and sensitive
+paths before dispatching to that broker, sends the token only as the
+`X-ArcLink-Share-Request-Broker-Token` broker header, and the hosted broker
+derives the owner from the token-bound `owner_deployment_id`.
 Production workspace/browser proof, live bot delivery, and any approved
 Nextcloud-backed adapter remain credential- or policy-gated.
+
+**Ephemeral share nonces (right-click Share):** The Drive/Code right-click
+`Share` action sends `share_mode="claim_nonce"` to the broker, which mints a
+single-use, 12-hour nonce (`asn_…`) in `arclink_share_claim_nonces` instead of
+naming a recipient up front. Minting *is* the owner's approval. The plugin shows
+a copyable block — `A share request is available for review by Raven:` followed
+by `/arclink_share_accept <nonce>` — and tells the user it expires in 12 hours.
+The owner hands that to anyone on ArcLink; their Raven (or `POST
+/api/v1/user/share-grants/claim`) consumes the nonce and materializes a
+read-only Linked resource. Only the HMAC hash of the nonce is stored; expiry is
+enforced on read (status flips to `expired`) and swept in batch by
+`expire_revealable_user_material`; a claimed/expired/unknown nonce fails with a
+single generic "invalid or has expired" message so nonce state is not leaked. The
+new Raven command `/arclink_share_accept <nonce>` is dispatched in
+`python/arclink_public_bots.py` alongside the existing `/share-accept`
+button-callback path. An owner can **revoke** a minted-but-unclaimed nonce inside
+the 12h window via `POST /api/v1/user/share-grants/nonce/revoke` (CSRF), which
+flips it to `revoked` so it can no longer be claimed. Nonce hashing uses the
+session pepper, so rotating `ARCLINK_SESSION_HASH_PEPPER` invalidates any
+in-flight nonces (acceptable given the 12h TTL).
+
+**Fleet shared folder:** Every agent across a Captain's fleet can use one
+read-write shared folder, synced across machines, backed by git
+(`python/arclink_fleet_share.py`). The canonical content lives in a
+Captain-scoped *bare hub* repo (`ARCLINK_FLEET_SHARE_HUB_URL` with `{user}`, or
+per-Captain under `ARCLINK_FLEET_SHARE_HUB_ROOT`, default
+`/arcdata/captains/{user}/fleet-shared.git`) that is independent of any single
+agent, so the Captain can remove any agent — even the first — without orphaning
+the folder. Each active agent gets a read-write working clone at
+`ARCLINK_FLEET_SHARED_ROOT` (provisioned at `<state_root>/fleet-shared`,
+mounted at `/fleet-shared`) that the Drive/Code `Fleet` root surfaces.
+Sync is **two-tier**, because each agent's working copy lives on the agent's own
+host/pod (not on the control node): (1) the control plane runs membership
+convergence on a schedule — the `fleet-share-reconcile` compose job
+(`python3 python/arclink_fleet_share.py reconcile --all`, every 120s) enrols
+newly-active agents and deregisters torn-down ones (hub untouched, so removing
+any agent is safe); (2) each generated agent compose includes a
+`fleet-share-sync` job loop (`python3 python/arclink_fleet_share.py sync-local`,
+every 120s), with `ARCLINK_FLEET_SHARE_HUB_URL` resolved for that Captain and a
+local hub bind-mounted at `/fleet-share-hub.git` when the hub is a filesystem
+path. That job commits local edits, `git pull --rebase`, and pushes. Concurrent
+conflicting edits are surfaced as `last_sync_status='conflict'` and the local
+edit is preserved (the rebase is aborted, never clobbered; git's own
+`.git/index.lock` serializes concurrent git ops). A working copy whose `.git` is
+corrupted is quarantined aside and re-cloned on the next sync rather than
+wedging. The git transport is injectable (`SubprocessGitRunner` by default) so
+the engine is unit-tested without live hosts. `run_fleet_share_cycle` (CLI
+`sync`) is the co-located/single-host convenience that reconciles + syncs in one
+process. **Durability boundary:** the hub is a single bare repo; host it on
+durable/replicated storage (or a git host via `ARCLINK_FLEET_SHARE_HUB_URL`) —
+losing the hub host loses the folder. Cross-host hub transport credentials (SSH
+keys/known_hosts or HTTPS credentials) remain infra-gated when a remote git hub
+is configured.
 
 If the owner has no linked Telegram or Discord channel, share creation still
 persists the grant as `pending_owner_approval`, but no Raven notification is

@@ -47,6 +47,7 @@ ARCLINK_PROVISIONING_SERVICE_NAMES = (
     "notification-delivery",
     "arclink-wrapped",
     "health-watch",
+    "fleet-share-sync",
     "managed-context-install",
 )
 
@@ -56,6 +57,8 @@ CONTAINER_VAULT_DIR = "/srv/vault"
 CONTAINER_MEMORY_STATE_DIR = "/srv/memory"
 CONTAINER_CODE_WORKSPACE_DIR = "/workspace"
 CONTAINER_LINKED_RESOURCES_DIR = "/linked-resources"
+CONTAINER_FLEET_SHARED_DIR = "/fleet-shared"
+CONTAINER_FLEET_SHARE_HUB_DIR = "/fleet-share-hub.git"
 IDENTITY_STATE_FILENAME = "arclink-identity-context.json"
 
 
@@ -95,6 +98,20 @@ def _safe_segment(value: str) -> str:
     if not segment:
         raise ArcLinkProvisioningError("ArcLink provisioning path segment cannot be empty")
     return segment
+
+
+def _clean_git_ref(value: str, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ArcLinkProvisioningError(f"ArcLink {label} cannot be empty")
+    if text.startswith("-") or any(char in text for char in "\x00\r\n"):
+        raise ArcLinkProvisioningError(f"ArcLink {label} contains unsafe git reference characters")
+    return text
+
+
+def _is_remote_git_ref(value: str) -> bool:
+    text = str(value or "").strip()
+    return "://" in text or "@" in text.split("/", 1)[0]
 
 
 def _postgres_db_name(*, prefix: str, deployment_id: str) -> str:
@@ -398,6 +415,7 @@ def render_arclink_state_roots(
         "nextcloud_db": f"{root}/state/nextcloud/db",
         "nextcloud_redis": f"{root}/state/nextcloud/redis",
         "code_workspace": f"{root}/workspace",
+        "fleet_shared": f"{root}/fleet-shared",
         "logs": f"{root}/logs",
     }
 
@@ -437,6 +455,24 @@ def _share_request_broker_url(env: Mapping[str, str] | None) -> str:
     if value.endswith("/api/v1/user/share-grants/broker"):
         return value
     return f"{value}/api/v1/user/share-grants/broker"
+
+
+def _fleet_share_hub_host_ref(env: Mapping[str, str] | None, *, user_id: str) -> str:
+    source = env or {}
+    clean_user = _safe_segment(user_id)
+    template = str(source.get("ARCLINK_FLEET_SHARE_HUB_URL") or "").strip()
+    if template:
+        ref = template.replace("{user}", clean_user) if "{user}" in template else f"{template.rstrip('/')}/{clean_user}/fleet-shared.git"
+        return _clean_git_ref(ref, label="fleet-share hub ref")
+    root = str(source.get("ARCLINK_FLEET_SHARE_HUB_ROOT") or "/arcdata/captains").strip().rstrip("/") or "/arcdata/captains"
+    return _clean_git_ref(f"{root}/{clean_user}/fleet-shared.git", label="fleet-share hub ref")
+
+
+def _fleet_share_hub_container_ref(host_ref: str) -> str:
+    clean_ref = _clean_git_ref(host_ref, label="fleet-share hub ref")
+    if _is_remote_git_ref(clean_ref):
+        return clean_ref
+    return CONTAINER_FLEET_SHARE_HUB_DIR
 
 
 def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
@@ -697,6 +733,7 @@ ARCLINK_DEFAULT_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "notification-delivery":   _resource_limit("128M", "0.25"),
     "arclink-wrapped":         _resource_limit("128M", "0.25"),
     "health-watch":            _resource_limit("128M", "0.25"),
+    "fleet-share-sync":        _resource_limit("128M", "0.25"),
     "managed-context-install": _resource_limit("128M", "0.25"),
 }
 
@@ -716,6 +753,7 @@ def _render_services(
     env: Mapping[str, str],
     labels: Mapping[str, Mapping[str, str]],
     compose_secrets: Mapping[str, Mapping[str, str]],
+    fleet_share_hub_host_ref: str = "",
     tailnet_service_ports: Mapping[str, int] | None = None,
 ) -> dict[str, dict[str, Any]]:
     app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
@@ -730,6 +768,30 @@ def _render_services(
         "target": CONTAINER_LINKED_RESOURCES_DIR,
         "read_only": True,
     }
+    fleet_shared_volume = {
+        "source": roots["fleet_shared"],
+        "target": CONTAINER_FLEET_SHARED_DIR,
+    }
+    fleet_share_hub_volume = None
+    if fleet_share_hub_host_ref and not _is_remote_git_ref(fleet_share_hub_host_ref):
+        fleet_share_hub_volume = {
+            "source": fleet_share_hub_host_ref,
+            "target": CONTAINER_FLEET_SHARE_HUB_DIR,
+        }
+    fleet_share_sync_env = {
+        key: str(env[key])
+        for key in (
+            "ARCLINK_DEPLOYMENT_ID",
+            "ARCLINK_USER_ID",
+            "ARCLINK_PREFIX",
+            "ARCLINK_FLEET_SHARE_HUB_URL",
+            "ARCLINK_FLEET_SHARED_ROOT",
+        )
+        if key in env
+    }
+    fleet_share_sync_volumes = [fleet_shared_volume]
+    if fleet_share_hub_volume is not None:
+        fleet_share_sync_volumes.append(fleet_share_hub_volume)
     hermes_host_ports: list[str] = []
     if (
         str(env.get("ARCLINK_INGRESS_MODE") or "").strip().lower() == "tailscale"
@@ -762,6 +824,7 @@ def _render_services(
                 memory_volume,
                 workspace_volume,
                 linked_resources_volume,
+                fleet_shared_volume,
             ],
             depends_on=["qmd-mcp", "managed-context-install"],
             secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
@@ -778,6 +841,7 @@ def _render_services(
                 memory_volume,
                 workspace_volume,
                 linked_resources_volume,
+                fleet_shared_volume,
             ],
             ports=hermes_host_ports,
             labels=labels["hermes"],
@@ -899,6 +963,14 @@ def _render_services(
             environment=env,
             volumes=[vault_volume, memory_volume],
             deploy=_limits("health-watch"),
+        ),
+        "fleet-share-sync": _service(
+            image=app_image,
+            command=["./bin/docker-job-loop.sh", "fleet-share-sync", "120", "python3", "python/arclink_fleet_share.py", "sync-local"],
+            environment=fleet_share_sync_env,
+            volumes=fleet_share_sync_volumes,
+            depends_on=["managed-context-install"],
+            deploy=_limits("fleet-share-sync"),
         ),
         "managed-context-install": _service(
             image=app_image,
@@ -1063,6 +1135,8 @@ def render_arclink_provisioning_intent(
         tailscale_host_strategy=clean_tailscale_strategy,
         tailnet_service_ports=tailnet_service_ports,
     )
+    fleet_share_hub_host_ref = _fleet_share_hub_host_ref(source_env, user_id=str(deployment["user_id"]))
+    fleet_share_hub_container_ref = _fleet_share_hub_container_ref(fleet_share_hub_host_ref)
     notion_callback_path = _notion_callback_path(
         prefix,
         ingress_mode=clean_ingress_mode,
@@ -1134,6 +1208,10 @@ def render_arclink_provisioning_intent(
         "DRIVE_LINKED_ROOT": CONTAINER_LINKED_RESOURCES_DIR,
         "CODE_LINKED_ROOT": CONTAINER_LINKED_RESOURCES_DIR,
         "ARCLINK_LINKED_RESOURCES_ROOT": CONTAINER_LINKED_RESOURCES_DIR,
+        "ARCLINK_FLEET_SHARE_HUB_URL": fleet_share_hub_container_ref,
+        "ARCLINK_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
+        "DRIVE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
+        "CODE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
         "TERMINAL_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
         "ARCLINK_DRIVE_ROOT": CONTAINER_VAULT_DIR,
@@ -1185,6 +1263,7 @@ def render_arclink_provisioning_intent(
         env=deployment_env,
         labels=labels,
         compose_secrets=compose_secrets,
+        fleet_share_hub_host_ref=fleet_share_hub_host_ref,
         tailnet_service_ports=tailnet_service_ports,
     )
     nextcloud_hostport = _url_hostport(access_urls["files"])

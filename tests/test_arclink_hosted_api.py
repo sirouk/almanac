@@ -1944,6 +1944,7 @@ def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
         prefix="share-broker-other",
     )
     owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_broker_owner")
+    recipient_session = api.create_arclink_user_session(conn, user_id=recipient["user_id"], session_id="usess_share_broker_recipient")
     broker_token = "share-broker-local-token"
     other_broker_token = "share-broker-other-token"
 
@@ -2055,6 +2056,77 @@ def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
     expect(metadata["source_plugin"] == "drive", str(metadata))
     expect(metadata["item_kind"] == "file", str(metadata))
     expect("token" not in json.dumps(metadata, sort_keys=True).lower(), str(metadata))
+
+    claim_body = dict(body)
+    claim_body.pop("recipient", None)
+    claim_body["share_mode"] = "claim_nonce"
+    before_claim_nonce = grant_count()
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/broker",
+        headers=broker_headers,
+        body=json.dumps(claim_body),
+        config=config,
+    )
+    expect(status == 201, f"claim-nonce broker mint expected 201 got {status}: {payload}")
+    expect(payload["mode"] == "claim_nonce" and payload["nonce"].startswith("asn_"), str(payload))
+    expect(grant_count() == before_claim_nonce, "claim-nonce mint must not create a share grant before recipient claim")
+    nonce = payload["nonce"]
+    nonce_id = payload["nonce_id"]
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/claim",
+        headers=browser_auth_headers(recipient_session, csrf=True),
+        body=json.dumps({"nonce": nonce}),
+        config=config,
+    )
+    expect(status == 200, f"claim-nonce recipient claim expected 200 got {status}: {payload}")
+    expect(payload["grant"]["status"] == "accepted", str(payload))
+    expect(payload["grant"]["recipient_user_id"] == recipient["user_id"], str(payload))
+    expect(payload["grant"]["reshare_allowed"] is False, str(payload))
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/claim",
+        headers=browser_auth_headers(recipient_session, csrf=True),
+        body=json.dumps({"nonce": nonce}),
+        config=config,
+    )
+    expect(status == 401, f"spent claim nonce should fail generically got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/broker",
+        headers=broker_headers,
+        body=json.dumps(claim_body),
+        config=config,
+    )
+    expect(status == 201, f"second claim-nonce broker mint expected 201 got {status}: {payload}")
+    revoke_nonce = payload["nonce"]
+    revoke_nonce_id = payload["nonce_id"]
+    expect(revoke_nonce_id != nonce_id, "each mint must produce a distinct nonce row")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/nonce/revoke",
+        headers=browser_auth_headers(owner_session, csrf=True),
+        body=json.dumps({"nonce_id": revoke_nonce_id}),
+        config=config,
+    )
+    expect(status == 200 and payload["nonce"]["status"] == "revoked", f"owner revoke expected 200 revoked got {status}: {payload}")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/claim",
+        headers=browser_auth_headers(recipient_session, csrf=True),
+        body=json.dumps({"nonce": revoke_nonce}),
+        config=config,
+    )
+    expect(status == 401, f"revoked claim nonce should fail generically got {status}: {payload}")
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -4932,6 +5004,22 @@ def test_openapi_onboarding_proof_tokens_are_required() -> None:
     print("PASS test_openapi_onboarding_proof_tokens_are_required")
 
 
+def test_openapi_share_broker_documents_claim_nonce_mode() -> None:
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_share_nonce_test")
+    dynamic_spec = hosted.build_arclink_openapi_spec()
+    static_path = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "arclink-v1.openapi.json"
+    static_spec = json.loads(static_path.read_text(encoding="utf-8"))
+
+    for spec_name, spec in (("dynamic", dynamic_spec), ("static", static_spec)):
+        broker_schema = spec["paths"]["/api/v1/user/share-grants/broker"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        share_mode = broker_schema.get("properties", {}).get("share_mode", {})
+        modes = set(share_mode.get("enum", []))
+        expect({"owner_approval", "claim_nonce"} <= modes, f"{spec_name} broker share_mode enum is incomplete: {share_mode}")
+        expect("/api/v1/user/share-grants/claim" in spec["paths"], f"{spec_name} spec missing claim-nonce route")
+
+    print("PASS test_openapi_share_broker_documents_claim_nonce_mode")
+
+
 def test_openapi_spec_matches_static_copy() -> None:
     import os
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_openapi_static_test")
@@ -5619,6 +5707,7 @@ def main() -> int:
     test_login_rejects_unknown_email()
     test_openapi_spec_route_serves_valid_contract()
     test_openapi_onboarding_proof_tokens_are_required()
+    test_openapi_share_broker_documents_claim_nonce_mode()
     test_openapi_spec_matches_static_copy()
     test_rate_limit_returns_429_with_headers()
     test_rate_limit_onboarding_returns_429()

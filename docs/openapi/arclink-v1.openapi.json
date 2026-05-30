@@ -2217,7 +2217,8 @@
                   },
                   "share_mode": {
                     "enum": [
-                      "owner_approval"
+                      "owner_approval",
+                      "claim_nonce"
                     ],
                     "type": "string"
                   },
@@ -2262,6 +2263,45 @@
         ]
       }
     },
+    "/api/v1/user/share-grants/claim": {
+      "post": {
+        "operationId": "user_share_grant_claim",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "nonce": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "nonce"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Share claimed and materialized as a read-only Linked resource"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Claim a read-only share by its ephemeral nonce (/arclink_share_accept)",
+        "tags": [
+          "user"
+        ]
+      }
+    },
     "/api/v1/user/share-grants/deny": {
       "post": {
         "operationId": "user_share_grant_deny",
@@ -2296,6 +2336,45 @@
           }
         ],
         "summary": "Owner-deny a pending share grant",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/v1/user/share-grants/nonce/revoke": {
+      "post": {
+        "operationId": "user_share_nonce_revoke",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "nonce_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "nonce_id"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Nonce revoked (or already revoked); it can no longer be claimed"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Owner-revoke a minted-but-unclaimed ephemeral share nonce",
         "tags": [
           "user"
         ]

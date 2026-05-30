@@ -40,7 +40,7 @@ names, or other recognizable proper nouns. Example prefix shape:
 Tailscale mode is the safe starter path when the control node or worker nodes
 are reached through a Tailscale DNS name. `deploy.sh control install` asks for:
 
-- `ARCLINK_TAILSCALE_DNS_NAME`, for example `s1396.tailnet.ts.net`.
+- `ARCLINK_TAILSCALE_DNS_NAME`, for example `control.example.ts.net`.
 - `ARCLINK_TAILSCALE_HTTPS_PORT`, default `443`.
 - `ARCLINK_TAILSCALE_NOTION_PATH`, default `/notion/webhook`.
 - `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY`, fixed to `path`.

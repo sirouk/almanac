@@ -107,6 +107,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         "notification-delivery",
         "arclink-wrapped",
         "health-watch",
+        "fleet-share-sync",
         "managed-context-install",
     }
     expect(set(services) == expected_services, sorted(services))
@@ -132,6 +133,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["execution"]["ready"], str(intent["execution"]))
     expect(intent["state_roots"]["root"] == "/arcdata/deployments/dep_1-amber-vault-1a2b", str(intent["state_roots"]))
     expect(intent["state_roots"]["linked_resources"].endswith("/linked-resources"), str(intent["state_roots"]))
+    expect(intent["state_roots"]["fleet_shared"].endswith("/fleet-shared"), str(intent["state_roots"]))
     expect(intent["state_roots"]["nextcloud"].endswith("/state/nextcloud"), str(intent["state_roots"]))
     expect(intent["state_roots"]["nextcloud_db"].endswith("/state/nextcloud/db"), str(intent["state_roots"]))
     expect(intent["state_roots"]["nextcloud_redis"].endswith("/state/nextcloud/redis"), str(intent["state_roots"]))
@@ -159,6 +161,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["DRIVE_LINKED_ROOT"] == "/linked-resources", str(intent["environment"]))
     expect(intent["environment"]["CODE_LINKED_ROOT"] == "/linked-resources", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_LINKED_RESOURCES_ROOT"] == "/linked-resources", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_FLEET_SHARE_HUB_URL"] == "/fleet-share-hub.git", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_FLEET_SHARED_ROOT"] == "/fleet-shared", str(intent["environment"]))
+    expect(intent["environment"]["DRIVE_FLEET_SHARED_ROOT"] == "/fleet-shared", str(intent["environment"]))
+    expect(intent["environment"]["CODE_FLEET_SHARED_ROOT"] == "/fleet-shared", str(intent["environment"]))
     expect(intent["environment"]["TERMINAL_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
     expect(intent["environment"]["TERMINAL_TUI_COMMAND"] == "/opt/arclink/runtime/hermes-venv/bin/hermes", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
@@ -232,8 +238,19 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/workspace"] == intent["state_roots"]["code_workspace"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["hermes-dashboard"]))
+    expect(hermes_dashboard_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(services["hermes-dashboard"]))
     linked_volume = next(item for item in services["hermes-dashboard"]["volumes"] if item["target"] == "/linked-resources")
     expect(linked_volume["read_only"] is True, str(linked_volume))
+    fleet_sync = services["fleet-share-sync"]
+    expect(
+        fleet_sync["command"] == ["./bin/docker-job-loop.sh", "fleet-share-sync", "120", "python3", "python/arclink_fleet_share.py", "sync-local"],
+        str(fleet_sync),
+    )
+    expect(fleet_sync["environment"]["ARCLINK_FLEET_SHARE_HUB_URL"] == "/fleet-share-hub.git", str(fleet_sync))
+    expect(fleet_sync["environment"]["ARCLINK_FLEET_SHARED_ROOT"] == "/fleet-shared", str(fleet_sync))
+    fleet_sync_volumes = {item["target"]: item["source"] for item in fleet_sync["volumes"]}
+    expect(fleet_sync_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(fleet_sync))
+    expect(fleet_sync_volumes["/fleet-share-hub.git"] == "/arcdata/captains/user_1/fleet-shared.git", str(fleet_sync))
     expect(
         {"source": "share_request_broker_token", "target": "/run/secrets/share_request_broker_token"}
         in services["hermes-dashboard"]["secrets"],
@@ -627,13 +644,18 @@ def test_rendered_services_include_resource_limits_and_healthchecks() -> None:
         expect("test" in hc and "interval" in hc, f"{name} healthcheck incomplete: {hc}")
 
     # App-only services should NOT have healthcheck
-    for name in ("dashboard", "vault-watch", "notion-webhook", "notification-delivery", "health-watch", "managed-context-install"):
+    for name in ("dashboard", "vault-watch", "notion-webhook", "notification-delivery", "health-watch", "fleet-share-sync", "managed-context-install"):
         expect("healthcheck" not in services[name], f"{name} should not have healthcheck")
 
-    # Volume isolation: each service's volumes only reference its own deployment root
+    # Volume isolation: each service's volumes reference its own deployment root,
+    # except the Captain-scoped fleet hub, which is intentionally shared by the
+    # Captain's deployments and mounted only into the fleet sync worker.
     dep_root = intent["state_roots"]["root"]
     for name, svc in services.items():
         for vol in svc["volumes"]:
+            if name == "fleet-share-sync" and vol["target"] == "/fleet-share-hub.git":
+                expect(vol["source"] == "/arcdata/captains/user_1/fleet-shared.git", str(vol))
+                continue
             expect(vol["source"].startswith(dep_root), f"{name} volume {vol['source']} not under {dep_root}")
 
     print("PASS test_rendered_services_include_resource_limits_and_healthchecks")
@@ -749,6 +771,24 @@ def test_dashboard_theme_falls_back_to_agent_index_variant() -> None:
     print("PASS test_dashboard_theme_falls_back_to_agent_index_variant")
 
 
+def test_fleet_share_remote_hub_uses_resolved_url_without_local_bind() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_fleet_remote_hub_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_fleet_remote_hub_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        env={"ARCLINK_FLEET_SHARE_HUB_URL": "ssh://hub.example/{user}/fleet-shared.git"},
+    )
+    sync = intent["compose"]["services"]["fleet-share-sync"]
+    expect(sync["environment"]["ARCLINK_FLEET_SHARE_HUB_URL"] == "ssh://hub.example/user_1/fleet-shared.git", str(sync))
+    volume_targets = {item["target"] for item in sync["volumes"]}
+    expect("/fleet-share-hub.git" not in volume_targets, str(sync))
+    expect("/fleet-shared" in volume_targets, str(sync))
+    print("PASS test_fleet_share_remote_hub_uses_resolved_url_without_local_bind")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso()
@@ -764,7 +804,8 @@ def main() -> int:
     test_tailscale_ingress_renders_path_urls_and_no_cloudflare_dns()
     test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
     test_dashboard_theme_falls_back_to_agent_index_variant()
-    print("PASS all 14 ArcLink provisioning tests")
+    test_fleet_share_remote_hub_uses_resolved_url_without_local_bind()
+    print("PASS all 15 ArcLink provisioning tests")
     return 0
 
 

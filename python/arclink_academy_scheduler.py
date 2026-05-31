@@ -28,11 +28,13 @@ from arclink_control import (
     append_arclink_audit,
     append_arclink_event,
     connect_db,
+    queue_notification,
     utc_now_iso,
 )
 from arclink_academy_programs import (
     academy_continuing_education,
     list_academy_trainees,
+    refresh_specialist_capsule,
     seed_default_academy_programs,
 )
 
@@ -67,6 +69,7 @@ def run_academy_forward_maintenance(
 
     reviews: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    notify_targets: list[dict[str, str]] = []
     for trainee in batch:
         trainee_id = str(trainee.get("trainee_id") or "")
         try:
@@ -76,7 +79,9 @@ def run_academy_forward_maintenance(
             continue
         review = {
             "trainee_id": trainee_id,
+            "user_id": str(trainee.get("user_id") or ""),
             "deployment_id": str(trainee.get("deployment_id") or ""),
+            "name": str(trainee.get("name") or ""),
             "manifest_id": str(plan.get("manifest_id") or ""),
             "status": str(plan.get("status") or ""),
             "agent_update_status": str(plan.get("agent_update_status") or ""),
@@ -106,7 +111,61 @@ def run_academy_forward_maintenance(
             metadata={**review, "no_write": True, "writes_enabled": False},
             commit=False,
         )
+        if review["user_id"]:
+            notify_targets.append(review)
+
+    # "Living academy": refresh the central specialist capsules each week (derived
+    # notes only; the live LLM Trainer enrichment + Agent-side observed-source sweep
+    # layer on top behind PG-PROVIDER) and bump only when content actually changed.
+    capsules_refreshed = 0
+    specialist_uids = [
+        str(row["specialist_uid"])
+        for row in conn.execute(
+            "SELECT DISTINCT specialist_uid FROM academy_corpus_specialists "
+            "WHERE status = 'active' AND share_scope = 'redacted_public'"
+        ).fetchall()
+    ]
+    for specialist_uid in specialist_uids:
+        try:
+            result = refresh_specialist_capsule(
+                conn, specialist_uid=specialist_uid, actor="system:academy_scheduler",
+                only_if_changed=True, commit=False,
+            )
+            if result.get("changed"):
+                capsules_refreshed += 1
+        except Exception as exc:  # noqa: BLE001 - one bad specialist must not abort the run
+            errors.append({"specialist_uid": specialist_uid, "error": str(exc)[:200]})
     conn.commit()
+
+    # Notify each Captain of their weekly review (vision: "notifies the Captain").
+    # queue_notification commits per row, so it runs AFTER the batch commit above.
+    notified = 0
+    for review in notify_targets:
+        try:
+            label = review["name"] or review["deployment_id"] or review["trainee_id"]
+            queue_notification(
+                conn,
+                target_kind="user",
+                target_id=review["user_id"],
+                channel_kind="academy",
+                message=(
+                    f"Academy weekly review for {label}: "
+                    f"{review['review_needed_count']} source(s) to review, "
+                    f"{review['blocked_source_count']} blocked. Next review {review['next_review_at'] or 'TBD'}."
+                ),
+                extra={
+                    "kind": "academy_forward_maintenance",
+                    "trainee_id": review["trainee_id"],
+                    "deployment_id": review["deployment_id"],
+                    "review_needed_count": review["review_needed_count"],
+                    "blocked_source_count": review["blocked_source_count"],
+                    "agent_update_status": review["agent_update_status"],
+                    "next_review_at": review["next_review_at"],
+                },
+            )
+            notified += 1
+        except Exception as exc:  # noqa: BLE001 - notification failure must not abort the run
+            errors.append({"trainee_id": review.get("trainee_id", ""), "error": f"notify: {str(exc)[:160]}"})
     return {
         "status": "ok",
         "eligible": eligible,
@@ -114,6 +173,8 @@ def run_academy_forward_maintenance(
         "deferred_to_next_run": deferred,
         "errors": errors,
         "reviews": reviews,
+        "captains_notified": notified,
+        "central_capsules_refreshed": capsules_refreshed,
         "no_write": True,
         "writes_enabled": False,
         "proof_gates": ["PG-PROVIDER", "PG-HERMES"],

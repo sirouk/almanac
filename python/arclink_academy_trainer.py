@@ -641,6 +641,26 @@ def default_source_lane_registry() -> dict[str, SourceLanePolicy]:
     return {lane.lane_id: lane for lane in lanes}
 
 
+# Lanes whose Trainer-screened, redacted derived notes are eligible for the
+# CENTRAL cross-captain shared corpus. organization_private is NEVER share-eligible
+# -- Captain/operator-supplied private material stays per-tenant (Captain's chosen
+# policy: "public lanes only"). Cross-tenant promotion of any other lane still
+# passes the secret-screen + raw-content + license checks in the promotion path.
+SHARE_INELIGIBLE_SOURCE_LANES = frozenset({"organization_private"})
+
+
+def share_eligible_source_lanes(
+    registry: Mapping[str, SourceLanePolicy] | None = None,
+) -> frozenset[str]:
+    """Return the lane ids whose redacted derived notes may join the central corpus.
+
+    Everything in the governed registry except the always-private lanes in
+    :data:`SHARE_INELIGIBLE_SOURCE_LANES`.
+    """
+    lanes = dict(registry or default_source_lane_registry())
+    return frozenset(lane for lane in lanes if lane not in SHARE_INELIGIBLE_SOURCE_LANES)
+
+
 def fake_academy_source(
     *,
     source_id: str,

@@ -7,33 +7,51 @@ education rhythm. It is not a one-shot "pick a role" preview.
 
 ## The Model: a Skill -> a Sticky Mode -> Commit -> Forward-Maintain
 
-The Academy is a **skill every ArcPod Agent ships with** (`arclink-academy`) with
-two faces:
+The Academy is a **Hermes skill bundle every ArcPod Agent ships with**
+(`arclink-academy`, installed from `skills/arclink-academy/SKILL.md`) with two
+faces. Note: `arclink-academy` ships as an installed *skill* (named in the
+deployment Hermes-home skill list in `arclink_headless_hermes_setup.py` and in
+`bin/install-arclink-skills.sh`/`bin/init.sh`/`bin/deploy.sh`), **not** as a
+native `plugins/hermes-agent/` plugin -- the native plugins are `arclink-drive`,
+`arclink-code`, `arclink-terminal`, and `arclink-managed-context`. Treat the
+skill as "named and shipped; live plugin/runtime presence unverified
+(`PG-HERMES`)."
 
 1. **Academy Mode (interactive, Captain-controlled).** The Captain (or the Agent)
    opens it from a **button or `/academy`**. This flips the Agent into a
    **sticky Academy Mode** -- a session that **does not end until the Captain
-   ends it**. It is not a single turn. Inside the mode, an **LLM Trainer** (routed
-   through the central ArcLink router) and the **Captain** co-curate: the Trainer
-   proposes a topic map, pulls and ranks sources from the governed lanes the
-   Captain authorizes, drafts a curriculum, lesson cards, a SOUL overlay, and
-   skill picks; the Captain steers role, depth, focus, and which lanes are
-   allowed. Everything in the mode is **staged/draft -- no live SOUL/skill
-   writes**.
+   ends it**. It is not a single turn. Inside the mode, an **LLM Trainer** and the
+   **Captain** co-curate: the Trainer proposes a topic map, pulls and ranks
+   sources from the governed lanes the Captain authorizes, drafts a curriculum,
+   lesson cards, a SOUL overlay, and skill picks; the Captain steers role, depth,
+   focus, and which lanes are allowed. **Today this curation is deterministic
+   builders + lane-valid local fixtures** (`curate_academy_trainee` /
+   `_compose_trainee_corpus`); the live "LLM Trainer" routed through the central
+   ArcLink router is **proof-gated behind `PG-PROVIDER`** and not yet wired into
+   the Academy path. Everything in the mode is **staged/draft -- no live
+   SOUL/skill writes**.
 
 2. **Forward-maintenance (autonomous, scheduled).** Once a graduate exists, the
-   same skill keeps it fresh on a weekly cadence: it routinely sweeps its lanes,
-   refreshes the corpus, re-synthesizes lesson cards, re-evaluates, and
-   **self-maintains its SOUL.md + skills** with deltas -- so graduates stay
-   ready for Captains always.
+   weekly `control-academy-ce` job keeps its review fresh on a weekly cadence: it
+   classifies each watched source (`unchanged/changed/stale/superseded/removed/
+   tombstoned`) and **produces a no-write weekly continuing-education review**
+   (`run_academy_forward_maintenance` returns `no_write=True`,
+   `writes_enabled=False`, `mutation_performed=False`). It does **not**
+   self-maintain SOUL.md or skills: any SOUL/skill deltas apply **only** through
+   the proof-gated apply path (`stage_academy_apply`, `PG-HERMES`). The scheduler
+   records intent and arms the next review; it never writes to the Agent.
 
 **Commit ("everything put in its place").** When the **Captain ends the mode**,
 the staged plan is applied: the learning is written into the Agent
 **additively** -- SOUL overlay section, vault `Academy/{role}/` curriculum, qmd
 index, memory seeds, approved skills -- and the trainee becomes a **graduate**
 with weekly forward-maintenance armed. Real Agent writes are gated behind
-`PG-HERMES`; live source acquisition and provider curation behind `PG-PROVIDER`
-(`GAP-034`).
+`PG-HERMES`; live source acquisition and provider curation behind `PG-PROVIDER`.
+This is `GAP-034`: its source-level sub-items A-E landed locally (no-write,
+no-network), and it remains OPEN only for externally-gated work -- live source
+acquisition per lane (`PG-PROVIDER`), live Trainer synthesis (`PG-PROVIDER`), real
+Agent writes (`PG-HERMES`), and source-governance policy. See `GAPS.md` for the
+authoritative gap taxonomy.
 
 ## The Captain Experience
 
@@ -85,14 +103,96 @@ Control-plane scaffolding (now built, no-write):
   (`survey`/`working`/`deep`), `quality_floor`, `required_skills`. **New trainee
   types are rows, not code.**
 - **Trainee** -- `academy_trainees` table; binds a Major to an Agent
-  (`deployment_id`) plus the Captain's steer (`enroll_academy_trainee`). Status:
-  `enrolled` -> `in_academy` -> `graduated` (`archived`).
+  (`deployment_id`) plus the Captain's steer (`enroll_academy_trainee`). Trainee
+  id `atrn_<hex>`. Status (`TRAINEE_STATUSES`):
+  `enrolled` -> `in_academy` -> `graduated` (`archived`). A **per-account quota**
+  caps non-archived trainees at `DEFAULT_MAX_TRAINEES_PER_USER=50` (override
+  `ARCLINK_ACADEMY_MAX_TRAINEES_PER_USER`), enforced by `_enforce_trainee_quota`
+  on enroll/adopt.
 - **Academy Mode session** -- `academy_mode_sessions` table; the **sticky** mode
-  (`open_academy_mode`, `academy_mode_status`, `end_academy_mode`). A unique
-  index guarantees one open session per trainee; the mode closes only when the
-  Captain ends it.
+  (`open_academy_mode`, `academy_mode_status`, `end_academy_mode`). Statuses
+  `MODE_SESSION_STATUSES=("open","closed","cancelled")`. A partial unique index
+  (`idx_academy_mode_sessions_open_trainee WHERE status='open'`) guarantees one
+  open session per trainee; the mode closes only when the Captain ends it. Closed
+  and cancelled sessions are pruned to the most recent
+  `MODE_SESSION_RETENTION_PER_TRAINEE=25` per trainee (`_prune_mode_sessions`);
+  open sessions are never pruned.
+- **Resource proposal** -- `academy_resource_proposals` table; the Agent ->
+  ArcLink handoff for source candidates discovered during Academy Mode
+  (`record_academy_resource_proposal`, MCP tool `academy.propose-resource`).
+  Proposal id `aprop_<sha256[:16]>` over `trainee|origin_url-or-title`. Submits
+  **only source metadata/citations/derived notes -- never raw crawled content**.
+  Status enum `('proposed','review_pending','accepted','rejected','deduped')`. A
+  partial unique index (`idx_academy_resource_proposals_trainee_origin WHERE
+  origin_url != ''`) deduplicates per `(trainee_id, origin_url)`; an
+  `ON CONFLICT` path stamps the duplicate `deduped`. Requires an **open** Academy
+  Mode for the deployment; absent-mode submissions and secret-looking material
+  are rejected.
 - **Graduate** -- a trainee with `status='graduated'`; `browse_academy_graduates`
-  is the gallery; `adopt_academy_graduate` clones one onto another Agent.
+  is the gallery; `academy_graduate_card` is a **redacted owner-safe projection**
+  (withholds `user_id`/`deployment_id`/`agent_id`, private Captain steer, and
+  staging pointers); `adopt_academy_graduate` clones one onto another Agent,
+  **owner-scoped** (source graduate must belong to the target Captain --
+  cross-tenant adoption is a future consented helper, not this clone).
+
+### Central shared specialist corpus (cross-captain, deduplicated)
+
+The per-trainee tables above are the **intake** layer. The Academy's core promise --
+*centralized, deduplicated subject-matter-experts whose resources any captain and
+crew can reuse* -- lives in five **central** tables in `arclink_control.py`,
+populated by `python/arclink_academy_programs.py`:
+
+- **`academy_sources`** -- the **globally-deduplicated** canonical source registry.
+  `source_uid` = `sha256(canonical_url)` (URL normalized: lowercased host, stripped
+  fragment/tracking params, trimmed slash) or `sha256(specialist|title)` for offline
+  sources. Holds **derived notes only, never raw content**; the same source proposed
+  by any number of captains collapses to one row (`_canonical_url` + a unique index
+  on `canonical_url`). "Review once, store once, reuse everywhere."
+- **`academy_corpus_specialists`** -- the **deduplicated SME registry**.
+  `specialist_uid` = `sha256(program_id|normalized-topic)`, so all captains training
+  the same Major+topic resolve to **one shared specialist**. Carries the
+  **replaceable `compressed_soul_capsule`** (the knowledge section that accompanies
+  the SOUL) and `capsule_version`.
+- **`academy_specialist_sources`** -- junction (specialist <- canonical sources).
+- **`academy_source_provenance`** -- **consent + revocation + audit**: the only place
+  a central source is tied to a contributing tenant (`share_consent`,
+  `redaction_applied`, `revoked_at`). Never exposed cross-tenant.
+- **`academy_specialist_subscriptions`** -- which trainees consume a central
+  specialist; drives weekly fan-out and the central-vs-trainee staleness check.
+
+**Promotion (`promote_proposals_to_central`, Trainer step at graduation).** Sharing
+is **opt-out** (Captain policy): every proposal on a **public lane** (all governed
+lanes *except* `organization_private`; `share_eligible_source_lanes`) that passes the
+secret-screen (`reject_secret_material`) and the raw-content screen
+(`_looks_like_raw_content`) is promoted as `redacted_public` -- **unless** the Captain
+set `steer['share']` to a private value. `organization_private` and any
+secret/raw-looking material are **never** promoted; they stay per-tenant. Promotion
+copies a **whitelist only** (title, canonical_url, lane, derived notes, citations) --
+never the Captain's steer, identity, or raw content. `captain_count` is the distinct
+consenting-contributor count.
+
+**Reuse (`subscribe_trainee_to_specialist`, called on enroll).** When a Captain
+enrolls in a Major that already has a shared specialist, the new trainee
+**auto-subscribes** and `_resolve_trainee_sources` feeds the inherited central sources
+into its corpus -- so Captain B reuses Captain A's curated, deduped corpus instead of
+re-gathering. `academy_specialist_public_card` / `list_central_specialists` expose a
+**redacted gallery** (role, topic, per-lane source counts, freshness, capsule version,
+captain count) with **no contributor identity**, mirroring `academy_graduate_card`.
+
+**Replaceable capsule (`refresh_specialist_capsule`).** The Trainer composes the
+specialist's `compressed_soul_capsule` from its redacted central sources (role +
+topic + per-source derived notes + citations), versioned and **idempotent**
+(`only_if_changed` skips no-op weekly churn). This is the replaceable section the
+apply path renders into the Agent SOUL behind `PG-HERMES`; live LLM
+enrichment/compression by the Academy Trainer (same inference model) layers on top
+behind `PG-PROVIDER`. The weekly `control-academy-ce` job refreshes capsules and
+**queues a Captain notification** per graduate (`queue_notification`, channel
+`academy`).
+
+**Cross-OPERATOR sharing gate.** Within one ArcLink instance the `redacted_public`
+corpus is shared across the operator's captains/crew. A future cross-*operator*
+marketplace read/promotion is gated behind **`PG-CONSENT`**
+(`ACADEMY_CROSS_TENANT_PROOF_GATE`).
 
 Curation/training entities (defined, proof-gated execution) live in
 `python/arclink_academy_trainer.py`: `SourceLanePolicy`, `AcademySource`,
@@ -108,10 +208,14 @@ phased plan below.
 - **Data model** (P0, done): `academy_programs`, `academy_trainees`,
   `academy_mode_sessions` in `arclink_control.py`; lifecycle in
   `arclink_academy_programs.py`.
-- **The Academy skill** (P0/P3): an `arclink-academy` Hermes skill bundled into
-  every ArcPod home (`bin/install-arclink-skills.sh` / deployment Hermes-home
-  install) that teaches the Agent how to run Academy Mode and which brokered
-  tools to use; the managed-context plugin surfaces "Academy Mode active."
+- **The Academy skill** (P0/P3): an `arclink-academy` Hermes **skill** bundled
+  into every ArcPod home (`skills/arclink-academy/SKILL.md`, installed via
+  `bin/install-arclink-skills.sh` / `bin/init.sh` / deployment Hermes-home install,
+  named in the skill list in `arclink_headless_hermes_setup.py`) that teaches the
+  Agent how to run Academy Mode and which brokered tools to use; the
+  `arclink-managed-context` plugin surfaces "Academy Mode active." It is a skill,
+  not a native `plugins/hermes-agent/` plugin; its live runtime presence inside a
+  Hermes container is unverified (`PG-HERMES`).
 - **Sticky mode state** (P0, done): open/status/end, one-open-per-trainee,
   Captain-ends-only semantics.
 - **Captain chat surface** (P1, done): `/academy` in `arclink_public_bots.py`
@@ -126,9 +230,11 @@ phased plan below.
 - **Operator Raven** (P1, done): read-only `academy_roster` command in
   `arclink_operator_raven.py` (fleet-wide or per-user graduates + in-academy +
   enrolled), alongside the existing per-user `academy_status`.
-- **Hosted API** (P1, done): `GET /user/academy`, `GET /user/academy/mode-status`,
-  `POST /user/academy/{enroll,mode-open,mode-end,adopt}` -- owner-scoped, CSRF on
-  mutations, no secrets, in the OpenAPI spec.
+- **Hosted API** (P1, done): the six owner-scoped Academy routes (`GET /user/academy`,
+  `GET /user/academy/mode-status`, `POST /user/academy/{enroll,mode-open,mode-end,adopt}`)
+  -- CSRF on mutations, no secrets. See the route catalog in
+  `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` (authoritative)
+  rather than re-enumerating here.
 - **Resource proposal rail** (P1, done): Agents in Academy Mode use the
   `arclink-academy` skill and `academy.propose-resource` MCP tool to submit
   compressed source candidates back to ArcLink. Proposals are central,
@@ -267,12 +373,16 @@ dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
 **Phased plan to the real deal:**
 
 - **P0 (done)** -- experience scaffolding as data + sticky mode (no gate).
-- **P1 (mostly done)** -- curation engine composes corpus/plan/review locally and
+- **P1 (done)** -- curation engine composes corpus/plan/review locally and
   on graduation (`curate_academy_trainee`); **hosted API**, **dashboard Academy
-  tab**, and **Operator Raven `academy_roster`** surfaces are built and tested.
-  *Remaining:* live LLM-Trainer synthesis via the central router (`PG-PROVIDER`)
-  and the Captain in-chat browse/adopt/enroll/mode flow (the legacy crew-recipe
-  `/academy` chat flow is untouched).
+  tab**, **Operator Raven `academy_roster`**, and the **Captain in-chat sticky-mode
+  `/academy` flow** are built and tested. The `/academy` chat flow
+  (`_handle_academy_training_workflow` / `_academy_open_mode_reply` in
+  `arclink_public_bots.py`) selects one Agent, gathers steer over multiple turns,
+  opens the **real** sticky `academy_mode_sessions` record via
+  `enroll_academy_trainee` + `open_academy_mode`, and graduates/cancels via
+  `end_academy_mode`. *Remaining:* live LLM-Trainer synthesis via the central
+  router, proof-gated behind `PG-PROVIDER`.
 - **P2 (`PG-PROVIDER`, per-lane policy)** -- live source acquisition, one lane at
   a time (lowest-risk first: `wikimedia` -> `github` -> `scholarly` -> `web` ->
   `video`+ASR -> `reddit` -> `skills` -> `organization_private`).

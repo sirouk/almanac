@@ -612,7 +612,148 @@ def test_academy_adopt_helper_blocks_cross_owner_clone() -> None:
         cleanup(tmp, old_env)
 
 
+def _propose(ap, conn, deployment_id, *, lane_id, title, origin_url, summary, citations=None):
+    return ap.record_academy_resource_proposal(
+        conn,
+        deployment_id=deployment_id,
+        lane_id=lane_id,
+        title=title,
+        origin_url=origin_url,
+        summary=summary,
+        citations=citations or ([origin_url] if origin_url else []),
+        proposed_by="agent-x",
+    )
+
+
+def test_academy_proposals_feed_corpus_not_fixtures() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="u", deployment_id="dep-pf")
+        ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u")
+        _propose(ap, conn, "dep-pf", lane_id="web_article", title="Routing notes",
+                 origin_url="https://example.test/routing", summary="Compressed derived routing notes.")
+
+        # read_academy_proposals is no longer a write-only dead table.
+        proposals = ap.read_academy_proposals(conn, trainee_id=t["trainee_id"])
+        expect(len(proposals) == 1, str(proposals))
+
+        # The corpus now reflects the single proposed source, NOT the 3 lane fixtures.
+        curated = ap.curate_academy_trainee(conn, trainee_id=t["trainee_id"])
+        expect(curated["source_count"] == 1, f"proposals should feed the corpus, got {curated['source_count']}")
+        print("PASS test_academy_proposals_feed_corpus_not_fixtures")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_graduation_promotes_public_sources_and_skips_private_and_raw() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-a", deployment_id="dep-prom")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-a")
+        _propose(ap, conn, "dep-prom", lane_id="github_repository", title="Reference repo",
+                 origin_url="https://example.test/repo", summary="Compressed architecture patterns derived from the repo.")
+        _propose(ap, conn, "dep-prom", lane_id="organization_private", title="Private bundle",
+                 origin_url="", summary="Captain-only private notes that must never go central.")
+        _propose(ap, conn, "dep-prom", lane_id="web_article", title="Raw page",
+                 origin_url="https://example.test/raw", summary="<html><div><span>raw markup</span></div></html> not derived notes")
+
+        ended = ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-a", graduate=True)
+        cs = ended["session"]["commit_summary"]
+        expect(cs["central_sources_promoted"] == 1, f"only the public derived source promotes: {cs}")
+        expect(cs["central_share_scope"] == "redacted_public", str(cs))
+
+        # academy_sources holds exactly the one public, derived, non-private source.
+        rows = conn.execute("SELECT lane_id, canonical_url FROM academy_sources").fetchall()
+        expect(len(rows) == 1 and rows[0]["lane_id"] == "github_repository", str([dict(r) for r in rows]))
+        # organization_private never reaches the central corpus.
+        org = conn.execute("SELECT COUNT(*) AS n FROM academy_sources WHERE lane_id = 'organization_private'").fetchone()
+        expect(int(org["n"]) == 0, "organization_private must stay per-tenant")
+
+        # A redacted, identity-free public card is browsable.
+        spec_uid = cs["central_specialist_uid"]
+        card = ap.academy_specialist_public_card(conn, specialist_uid=spec_uid)
+        expect(card is not None and card["source_count"] == 1, str(card))
+        expect("user_id" not in card and "contributor_user_id" not in card, "public card must not leak tenant identity")
+        expect(card["captain_count"] == 1, str(card))
+
+        # The replaceable compressed-knowledge capsule is composed and versioned.
+        expect(cs["central_capsule_version"] >= 1, str(cs))
+        spec_row = conn.execute(
+            "SELECT compressed_soul_capsule, capsule_version FROM academy_corpus_specialists WHERE specialist_uid = ?",
+            (spec_uid,),
+        ).fetchone()
+        capsule = str(spec_row["compressed_soul_capsule"])
+        expect("Academy specialist" in capsule and "Reference repo" in capsule, "capsule carries derived knowledge")
+        expect("<html" not in capsule and "raw markup" not in capsule, "capsule never contains raw content")
+        print("PASS test_academy_graduation_promotes_public_sources_and_skips_private_and_raw")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_opt_out_keeps_specialist_private() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="capt-x", deployment_id="dep-opt",
+                                      captain_steer={"share": "private"})
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-x")
+        _propose(ap, conn, "dep-opt", lane_id="web_article", title="Tutor source",
+                 origin_url="https://example.test/tutor", summary="Compressed tutor notes.")
+        ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-x", graduate=True)
+        rows = conn.execute("SELECT COUNT(*) AS n FROM academy_sources").fetchone()
+        expect(int(rows["n"]) == 0, "opt-out Captain shares nothing centrally")
+        subs = conn.execute("SELECT COUNT(*) AS n FROM academy_specialist_subscriptions").fetchone()
+        expect(int(subs["n"]) == 0, "opt-out Captain creates no subscription")
+        print("PASS test_academy_opt_out_keeps_specialist_private")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_central_specialist_shared_and_deduped_across_captains() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        # Captain A trains + graduates a shared specialist with one public source.
+        a = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-a", deployment_id="dep-a")
+        sa = ap.open_academy_mode(conn, trainee_id=a["trainee_id"], opened_by="capt-a")
+        _propose(ap, conn, "dep-a", lane_id="github_repository", title="Shared repo",
+                 origin_url="https://example.test/shared-repo", summary="Derived patterns A gathered.")
+        ap.end_academy_mode(conn, session_id=sa["session"]["session_id"], actor="capt-a", graduate=True)
+
+        spec_uid, _ = ap.specialist_uid_for_program(ap.get_academy_program(conn, "systems_practice_engineer"))
+
+        # Captain B enrolls the SAME Major and inherits the shared corpus on enroll.
+        b = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-b", deployment_id="dep-b")
+        inherited = ap.read_central_specialist_sources(conn, trainee_id=b["trainee_id"])
+        expect(len(inherited) == 1 and inherited[0]["lane_id"] == "github_repository",
+               f"Captain B should inherit A's shared source: {inherited}")
+        # B's curated corpus is non-empty WITHOUT B gathering anything (reuse, not re-train).
+        curated_b = ap.curate_academy_trainee(conn, trainee_id=b["trainee_id"])
+        expect(curated_b["source_count"] == 1, f"B reuses the central corpus: {curated_b}")
+
+        # B proposes the SAME canonical URL + graduates -> global dedup to ONE row.
+        sb = ap.open_academy_mode(conn, trainee_id=b["trainee_id"], opened_by="capt-b")
+        _propose(ap, conn, "dep-b", lane_id="github_repository", title="Shared repo (B's take)",
+                 origin_url="https://example.test/shared-repo", summary="Derived patterns B also gathered.")
+        ap.end_academy_mode(conn, session_id=sb["session"]["session_id"], actor="capt-b", graduate=True)
+        n_sources = conn.execute("SELECT COUNT(*) AS n FROM academy_sources").fetchone()
+        expect(int(n_sources["n"]) == 1, "same canonical source from two captains dedupes to one central row")
+        card = ap.academy_specialist_public_card(conn, specialist_uid=spec_uid)
+        expect(card["captain_count"] == 2, f"two distinct captains contributed: {card}")
+        gallery = ap.list_central_specialists(conn)
+        expect(any(c["specialist_uid"] == spec_uid for c in gallery), "shared specialist appears in the central gallery")
+        print("PASS test_academy_central_specialist_shared_and_deduped_across_captains")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
+    test_academy_proposals_feed_corpus_not_fixtures()
+    test_academy_graduation_promotes_public_sources_and_skips_private_and_raw()
+    test_academy_opt_out_keeps_specialist_private()
+    test_academy_central_specialist_shared_and_deduped_across_captains()
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
     test_academy_apply_rejects_target_owner_mismatch()
     test_academy_trainee_quota_enforced()

@@ -1584,6 +1584,98 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON academy_resource_proposals (trainee_id, origin_url)
         WHERE origin_url != '';
 
+        -- Academy: the CENTRAL, globally-deduplicated source registry. Derived notes
+        -- only -- never raw crawled content. A source proposed by any number of
+        -- captains/trainees collapses to one canonical row keyed by source_uid
+        -- (sha256 of the canonical URL, or specialist+title when there is no URL).
+        -- This is the shared corpus the weekly continuing-education loop refreshes
+        -- once per source for everyone. Only public-lane, Trainer-screened,
+        -- redacted material reaches this table; organization_private never does.
+        CREATE TABLE IF NOT EXISTS academy_sources (
+          source_uid TEXT PRIMARY KEY,
+          canonical_url TEXT NOT NULL DEFAULT '',
+          lane_id TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL DEFAULT '',
+          derived_notes TEXT NOT NULL DEFAULT '',
+          citations_json TEXT NOT NULL DEFAULT '[]',
+          content_hash TEXT NOT NULL DEFAULT '',
+          license_status TEXT NOT NULL DEFAULT '',
+          enrichment_json TEXT NOT NULL DEFAULT '{}',
+          quality_score INTEGER NOT NULL DEFAULT 0,
+          share_scope TEXT NOT NULL DEFAULT 'redacted_public' CHECK (share_scope IN ('redacted_public', 'private')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'stale', 'superseded', 'removed', 'quarantined')),
+          first_seen_at TEXT NOT NULL DEFAULT '',
+          last_reviewed_at TEXT NOT NULL DEFAULT '',
+          last_observed_at TEXT NOT NULL DEFAULT '',
+          freshness_days INTEGER NOT NULL DEFAULT 7,
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_academy_sources_canonical_url
+        ON academy_sources (canonical_url)
+        WHERE canonical_url != '';
+
+        -- Academy: the DEDUPLICATED subject-matter-expert registry. Two captains
+        -- training the same Major on the same topic resolve to ONE specialist row,
+        -- sharing its curated source set and compressed (replaceable) SOUL capsule.
+        CREATE TABLE IF NOT EXISTS academy_corpus_specialists (
+          specialist_uid TEXT PRIMARY KEY,
+          program_id TEXT NOT NULL DEFAULT '',
+          role_title TEXT NOT NULL DEFAULT '',
+          topic_fingerprint TEXT NOT NULL DEFAULT '',
+          compressed_soul_capsule TEXT NOT NULL DEFAULT '',
+          capsule_version INTEGER NOT NULL DEFAULT 0,
+          enrichment_json TEXT NOT NULL DEFAULT '{}',
+          captain_count INTEGER NOT NULL DEFAULT 0,
+          share_scope TEXT NOT NULL DEFAULT 'redacted_public' CHECK (share_scope IN ('redacted_public', 'private')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+          first_seen_at TEXT NOT NULL DEFAULT '',
+          last_enriched_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+
+        -- Academy: junction -- which canonical sources belong to a specialist. Lets
+        -- the Trainer review a source ONCE and attach it to a specialist reused by
+        -- N captains ("review once, store once, reuse everywhere").
+        CREATE TABLE IF NOT EXISTS academy_specialist_sources (
+          specialist_uid TEXT NOT NULL DEFAULT '',
+          source_uid TEXT NOT NULL DEFAULT '',
+          weight INTEGER NOT NULL DEFAULT 0,
+          added_at TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (specialist_uid, source_uid)
+        );
+
+        -- Academy: consent + provenance + audit for cross-tenant sharing. The ONLY
+        -- place a central source is tied to a contributing tenant; supports
+        -- revocation. Contributor identity is never exposed in the public card.
+        CREATE TABLE IF NOT EXISTS academy_source_provenance (
+          provenance_id TEXT PRIMARY KEY,
+          source_uid TEXT NOT NULL DEFAULT '',
+          contributor_user_id TEXT NOT NULL DEFAULT '',
+          contributor_trainee_id TEXT NOT NULL DEFAULT '',
+          share_consent TEXT NOT NULL DEFAULT 'redacted_public' CHECK (share_consent IN ('none', 'redacted_public', 'full')),
+          redaction_applied INTEGER NOT NULL DEFAULT 1,
+          consented_at TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_academy_source_provenance_source_contrib
+        ON academy_source_provenance (source_uid, contributor_trainee_id);
+
+        -- Academy: which trainees consume a central specialist -- drives the weekly
+        -- central->per-trainee fan-out and the central-vs-trainee staleness check.
+        CREATE TABLE IF NOT EXISTS academy_specialist_subscriptions (
+          specialist_uid TEXT NOT NULL DEFAULT '',
+          trainee_id TEXT NOT NULL DEFAULT '',
+          user_id TEXT NOT NULL DEFAULT '',
+          subscribed_at TEXT NOT NULL DEFAULT '',
+          last_applied_capsule_version INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (specialist_uid, trainee_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_academy_specialist_subscriptions_specialist
+        ON academy_specialist_subscriptions (specialist_uid);
+
         CREATE TABLE IF NOT EXISTS arclink_wrapped_reports (
           report_id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,

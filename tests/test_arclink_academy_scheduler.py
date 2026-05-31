@@ -156,8 +156,44 @@ def test_forward_maintenance_limit_zero_processes_all() -> None:
         cleanup(tmp, old_env)
 
 
+def _graduate_with_public_source(programs, conn, program_id, user_id, deployment_id):
+    t = programs.enroll_academy_trainee(conn, program_id=program_id, user_id=user_id, deployment_id=deployment_id)
+    s = programs.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by=user_id)
+    programs.record_academy_resource_proposal(
+        conn, deployment_id=deployment_id, lane_id="web_article", title="Weekly source",
+        origin_url="https://example.test/weekly", summary="Compressed derived notes for the weekly source.",
+        proposed_by="agent-x",
+    )
+    programs.end_academy_mode(conn, session_id=s["session"]["session_id"], actor=user_id, graduate=True)
+    return t
+
+
+def test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        _graduate_with_public_source(programs, conn, "research_analyst", "capt-w", "dep-w")
+
+        result = scheduler.run_academy_forward_maintenance(conn, env={})
+        expect(result["captains_notified"] == 1, f"the Captain is notified weekly: {result}")
+        # The capsule was already composed at graduation; weekly content is unchanged
+        # for stable sources, so the version is NOT churned.
+        expect(result["central_capsules_refreshed"] == 0, "idempotent capsule refresh does not churn versions")
+        expect(result["no_write"] is True and result["writes_enabled"] is False, "weekly job never writes the Agent")
+
+        notes = conn.execute(
+            "SELECT target_kind, target_id, channel_kind, extra_json FROM notification_outbox WHERE channel_kind = 'academy'"
+        ).fetchall()
+        expect(len(notes) == 1 and notes[0]["target_id"] == "capt-w", str([dict(n) for n in notes]))
+        expect("academy_forward_maintenance" in str(notes[0]["extra_json"]), str(notes[0]["extra_json"]))
+        print("PASS test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_forward_maintenance_reviews_graduates_without_writes()
     test_forward_maintenance_caps_and_reports_overflow()
     test_forward_maintenance_limit_zero_processes_all()
+    test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently()
     print("PASS all academy scheduler tests")

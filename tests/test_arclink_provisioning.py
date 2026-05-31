@@ -233,6 +233,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(qmd_mcp_volumes[intent["environment"]["QMD_STATE_DIR"]] == intent["state_roots"]["qmd"], str(services["qmd-mcp"]))
     expect(qmd_mcp_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["qmd-mcp"]))
     expect(services["qmd-mcp"]["environment"]["QMD_INDEX_NAME"] == "vault-dep_1", str(services["qmd-mcp"]))
+    hermes_gateway_volumes = {item["target"]: item["source"] for item in services["hermes-gateway"]["volumes"]}
+    expect(hermes_gateway_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["hermes-gateway"]))
+    gateway_linked_volume = next(item for item in services["hermes-gateway"]["volumes"] if item["target"] == "/linked-resources")
+    expect(gateway_linked_volume.get("read_only") is not True, str(gateway_linked_volume))
     hermes_dashboard_volumes = {item["target"]: item["source"] for item in services["hermes-dashboard"]["volumes"]}
     expect(hermes_dashboard_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))

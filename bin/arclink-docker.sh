@@ -1216,18 +1216,26 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
                 if env.get(key) != desired_url:
                     env[key] = desired_url
                     service_changed = True
+    deployment_root = compose_file.parents[1]
     gateway = services.get("hermes-gateway")
     if isinstance(gateway, dict):
         gateway_env = gateway.get("environment") if isinstance(gateway.get("environment"), dict) else {}
         prefix = str(gateway_env.get("ARCLINK_PREFIX") or compose_file.parents[1].name.split("-", 1)[-1])
         service_changed = ensure_control_network(gateway, prefix=prefix, service_name="hermes-gateway") or service_changed
+        gateway_volumes = gateway.setdefault("volumes", [])
+        if isinstance(gateway_volumes, list):
+            service_changed = ensure_volume(
+                gateway_volumes,
+                source=str(deployment_root / "linked-resources"),
+                target="/linked-resources",
+                read_only=False,
+            ) or service_changed
     service = services.get("hermes-dashboard")
     if not isinstance(service, dict):
         if service_changed:
             compose_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             changed += 1
         continue
-    deployment_root = compose_file.parents[1]
     dashboard_command = ["./bin/run-hermes-dashboard-proxy.sh"]
     if service.get("command") != dashboard_command:
         service["command"] = dashboard_command

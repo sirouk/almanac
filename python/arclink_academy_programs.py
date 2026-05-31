@@ -1324,15 +1324,23 @@ def promote_proposals_to_central(
         existing_src = conn.execute("SELECT * FROM academy_sources WHERE source_uid = ?", (suid,)).fetchone()
         if existing_src is not None:
             merged = list(dict.fromkeys((_loads(existing_src["citations_json"], default=[]) or []) + citations))[:30]
+            # Central source body is trainer-governed shared material. A later
+            # captain can add provenance/citations, but cannot silently replace the
+            # already accepted shared notes for everyone subscribed to this source.
+            retained_title = str(existing_src["title"] or "").strip() or title
+            retained_notes = str(existing_src["derived_notes"] or "").strip() or notes
+            retained_hash = str(existing_src["content_hash"] or "").strip() or hashlib.sha256(
+                retained_notes.encode("utf-8")
+            ).hexdigest()[:32]
+            retained_lane = str(existing_src["lane_id"] or "").strip() or lane
             conn.execute(
                 """
                 UPDATE academy_sources
                 SET title = ?, derived_notes = ?, citations_json = ?, content_hash = ?,
-                    lane_id = ?, last_reviewed_at = ?, updated_at = ?, status = 'active'
+                    lane_id = ?, last_observed_at = ?, updated_at = ?, status = 'active'
                 WHERE source_uid = ?
                 """,
-                (title or str(existing_src["title"]), notes or str(existing_src["derived_notes"]),
-                 _dumps(merged), content_hash, lane, now, now, suid),
+                (retained_title, retained_notes, _dumps(merged), retained_hash, retained_lane, now, now, suid),
             )
             deduped.append(suid)
         else:
@@ -2126,16 +2134,17 @@ def academy_continuing_education(
     if program is None:
         raise ArcLinkAcademyProgramError("academy trainee has no Major program")
     now = str(created_at or _now())
-    # Fixtures retrieved_at is the stable per-trainee timestamp so the manifest is
-    # deterministic and the weekly freshness window is measured against the
-    # original acquisition time, not the run time (so staleness can actually fire).
+    # Sources use the stable per-trainee timestamp so the manifest is deterministic
+    # and the weekly freshness window is measured against the original acquisition
+    # time, not the run time (so staleness can actually fire).
     stable = str(trainee.get("created_at") or trainee.get("enrolled_at") or now)
+    sources = _resolve_trainee_sources(conn, trainee, program, stable)
     quality_floor = program.get("quality_floor")
     manifest = build_academy_corpus(
         role_id=str(program["program_id"]),
         role_title=str(program.get("label") or program["program_id"]),
         topic=str(program.get("topic_map") or program.get("label") or ""),
-        sources=_fixture_sources_for_program(program, stable),
+        sources=sources,
         min_source_score=int(quality_floor) if quality_floor is not None else 70,
         created_at=stable,
     )

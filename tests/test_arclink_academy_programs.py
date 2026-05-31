@@ -736,10 +736,16 @@ def test_academy_central_specialist_shared_and_deduped_across_captains() -> None
         # B proposes the SAME canonical URL + graduates -> global dedup to ONE row.
         sb = ap.open_academy_mode(conn, trainee_id=b["trainee_id"], opened_by="capt-b")
         _propose(ap, conn, "dep-b", lane_id="github_repository", title="Shared repo (B's take)",
-                 origin_url="https://example.test/shared-repo", summary="Derived patterns B also gathered.")
+                 origin_url="https://example.test/shared-repo", summary="Derived patterns B also gathered.",
+                 citations=["https://example.test/shared-repo", "https://example.test/shared-repo#capt-b"])
         ap.end_academy_mode(conn, session_id=sb["session"]["session_id"], actor="capt-b", graduate=True)
         n_sources = conn.execute("SELECT COUNT(*) AS n FROM academy_sources").fetchone()
         expect(int(n_sources["n"]) == 1, "same canonical source from two captains dedupes to one central row")
+        central = conn.execute("SELECT derived_notes, citations_json FROM academy_sources").fetchone()
+        expect("Derived patterns A gathered." in str(central["derived_notes"]), "first accepted central notes are retained")
+        expect("Derived patterns B also gathered." not in str(central["derived_notes"]), "dedupe must not let later captains overwrite shared notes")
+        citations = json.loads(str(central["citations_json"]))
+        expect("https://example.test/shared-repo#capt-b" in citations, f"later captains can still add provenance citations: {citations}")
         card = ap.academy_specialist_public_card(conn, specialist_uid=spec_uid)
         expect(card["captain_count"] == 2, f"two distinct captains contributed: {card}")
         gallery = ap.list_central_specialists(conn)
@@ -837,6 +843,26 @@ def test_academy_apply_stages_replaceable_soul_section() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_continuing_education_uses_real_sources() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="capt-ce", deployment_id="dep-ce")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-ce")
+        _propose(ap, conn, "dep-ce", lane_id="web_article", title="Weekly real source",
+                 origin_url="https://example.test/weekly-real", summary="Compressed weekly source notes.")
+        ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-ce", graduate=True)
+
+        weekly = ap.academy_continuing_education(conn, trainee_id=t["trainee_id"], created_at="2026-05-31T00:00:00Z")
+        refreshes = weekly["source_refreshes"]
+        expect(len(refreshes) == 1, f"weekly review should revisit the real Academy source, not fixtures: {weekly}")
+        expect(refreshes[0]["lane_id"] == "web_article", str(refreshes))
+        expect(weekly["mutation_performed"] is False and weekly["no_write"] is True, "weekly review remains no-write")
+        print("PASS test_academy_continuing_education_uses_real_sources")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_academy_proposals_feed_corpus_not_fixtures()
     test_academy_graduation_promotes_public_sources_and_skips_private_and_raw()
@@ -846,6 +872,7 @@ if __name__ == "__main__":
     test_academy_apply_stages_replaceable_soul_section()
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
     test_academy_apply_rejects_target_owner_mismatch()
+    test_academy_continuing_education_uses_real_sources()
     test_academy_trainee_quota_enforced()
     test_academy_open_mode_scrubs_opened_via_and_is_idempotent()
     test_academy_mode_session_growth_is_bounded()

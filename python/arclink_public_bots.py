@@ -4352,7 +4352,7 @@ def _share_grant_action_reply(
                 recipient_user_id=session_user,
                 grant_id=grant_id,
                 actor_id=session_user,
-                reason="recipient accepted read-only linked resource via Raven",
+                reason="recipient accepted linked resource via Raven",
             )
         except Exception:
             return _turn(
@@ -4367,11 +4367,12 @@ def _share_grant_action_reply(
         projection = accepted.get("projection") if isinstance(accepted, Mapping) else {}
         linked_path = str((projection or {}).get("linked_path") or "").strip()
         location = f" at `{linked_path}`" if linked_path else ""
+        access_label = "read/write Linked resource" if str(grant.get("resource_kind") or "").strip().lower() in {"drive", "code"} else "read-only Linked resource"
         return _turn(
             channel=channel,
             channel_identity=channel_identity,
             action="share_grant_accepted",
-            reply=f"Accepted. `{label}` is now available as a read-only Linked resource{location}. It cannot be reshared.",
+            reply=f"Accepted. `{label}` is now available as a {access_label}{location}. It cannot be reshared.",
             session=session,
             deployment=deployment,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -4408,8 +4409,9 @@ def _share_grant_action_reply(
         """
         params = (now, now, grant_id, owner_user)
         audit_action = "share_grant_approved"
+        access_label = "read/write Linked resource" if str(grant.get("resource_kind") or "").strip().lower() in {"drive", "code"} else "read-only Linked resource"
         reply = (
-            f"Approved. `{label}` is ready for the recipient to accept as a read-only Linked resource. "
+            f"Approved. `{label}` is ready for the recipient to accept as a {access_label}. "
             "They still cannot reshare it from their account."
         )
         turn_action = "share_grant_approved"
@@ -4499,7 +4501,7 @@ def _share_claim_reply(
             nonce=nonce,
             recipient_deployment_id=recipient_deployment,
             actor_id=recipient_user,
-            reason="recipient claimed read-only linked resource via Raven nonce",
+            reason="recipient claimed linked resource via Raven nonce",
         )
     except Exception:
         return _turn(
@@ -4515,11 +4517,12 @@ def _share_claim_reply(
     projection = grant.get("projection") if isinstance(grant, Mapping) else {}
     linked_path = str((projection or {}).get("linked_path") or "").strip()
     location = f" at `{linked_path}`" if linked_path else ""
+    access_label = "read/write Linked resource" if str(grant.get("resource_kind") or "").strip().lower() in {"drive", "code"} else "read-only Linked resource"
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="share_claim_accepted",
-        reply=f"Accepted. `{label}` is now available as a read-only Linked resource{location}. It cannot be reshared.",
+        reply=f"Accepted. `{label}` is now available as a {access_label}{location}. It cannot be reshared.",
         session=session,
         deployment=deployment,
         buttons=(_button("Show My Crew", command="/agents", style="secondary"),),

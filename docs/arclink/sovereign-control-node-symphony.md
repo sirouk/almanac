@@ -298,8 +298,8 @@ The complete sharing shape is:
 - The owner receives a clear approve/deny prompt on Raven, dashboard, or both.
 - The recipient sees a pending or accepted state in dashboard and Raven.
 - Shared roots appear as Linked resources in Drive and Code.
-- Linked roots are read-only for writes/git mutations unless a future policy
-  deliberately grants write access.
+- Linked roots allow writes inside accepted Drive/Code shared folders while
+  keeping git mutations blocked from Linked.
 - Copy/duplicate into owned roots is allowed and clearly labeled.
 - Resharing a Linked root is refused unless a future delegation policy exists.
 - Broken notification delivery should not silently strand the share; dashboard
@@ -545,10 +545,10 @@ The complete ArcPod dashboard should make Hermes feel like a real workstation:
 
 - Drive: browse Workspace, Vault, and Linked roots; upload files and folders;
   preview common content; create, rename, move, delete, restore, search, and
-  request shares; clearly mark read-only Linked roots.
+  request shares; clearly mark writable accepted shared folders under Linked.
 - Code: edit workspace files, browse repos, preview content, inspect git
   status, stage/unstage/commit through safe rails, request shares, and prevent
-  Linked-root mutation.
+  Linked git mutation while allowing shared-folder file saves.
 - Terminal: provide persistent managed sessions, bounded scrollback, SSE with
   polling fallback, safe lifecycle controls, root guardrails, and clear failure
   display.

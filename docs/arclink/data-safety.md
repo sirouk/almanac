@@ -44,9 +44,10 @@ instead of inheriting operator/service secrets from the dashboard process.
 
 Accepted ArcLink shares are mounted as a separate Linked root in Drive and
 Code. Linked resources are scoped to the accepted file or directory, are
-read-only from the receiver's share root, cannot be reshared from that root,
-and may be copied into the receiver's own Vault/Workspace only through the
-receiver's normal user boundary.
+read/write for accepted Drive/Code folders from the receiver's share root,
+cannot be reshared from that root, keep git mutations disabled from Linked, and
+may be copied into the receiver's own Vault/Workspace only through the
+receiver's normal user boundary. The Linked root itself stays system-managed.
 
 ## Volume Layout
 

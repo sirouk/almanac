@@ -135,6 +135,24 @@ def _linked_manifest_entry(root: Path, path: Path) -> dict[str, Any] | None:
     return entry if isinstance(entry, dict) else None
 
 
+def _manifest_bool(value: Any, *, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"0", "false", "no", "off"}:
+        return False
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
+def _linked_entry_writable(entry: dict[str, Any]) -> bool:
+    access_mode = str(entry.get("access_mode") or "").strip().lower().replace("-", "_")
+    return access_mode == "read_write" and not _manifest_bool(entry.get("read_only"), default=True)
+
+
 def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
     entry = _linked_manifest_entry(root, path)
     if not entry:
@@ -143,6 +161,33 @@ def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
     if not str(source):
         return False
     return resolved == source or source in resolved.parents
+
+
+def _assert_linked_writable_path(root_ctx: dict[str, Any], target: Path, relative: str, *, allow_share_root: bool = False) -> None:
+    if str(root_ctx.get("id") or "").strip().lower() != "linked":
+        return
+    if not relative:
+        raise HTTPException(status_code=403, detail="Choose a shared folder before writing to Linked")
+    root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
+    entry = _linked_manifest_entry(root, root / relative)
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=403, detail="Linked writes are limited to accepted shared folders")
+    if not _linked_entry_writable(entry):
+        raise HTTPException(status_code=403, detail="Linked resource is read-only")
+    source = Path(str(entry.get("source_path") or "")).expanduser().resolve(strict=False)
+    resource_kind = str(entry.get("resource_kind") or "").strip().lower()
+    resolved = target.resolve(strict=False)
+    if resource_kind == "directory":
+        if not source.is_dir():
+            raise HTTPException(status_code=404, detail="Shared folder source is not available")
+        if resolved == source and not allow_share_root:
+            raise HTTPException(status_code=403, detail="The shared folder itself is system-managed")
+        if resolved == source or source in resolved.parents:
+            return
+    elif resource_kind == "file":
+        if resolved == source:
+            return
+    raise HTTPException(status_code=403, detail="Path is outside the accepted shared folder")
 
 
 def _allowed_linked_symlink(root_ctx: dict[str, Any], root: Path, path: Path) -> bool:
@@ -379,7 +424,7 @@ def _root_descriptors() -> list[dict[str, Any]]:
         "preview": True,
         "search": True,
         "duplicate": True,
-        "write": False,
+        "write": True,
         "git_read": True,
         "git_mutation": False,
         "share_request": False,
@@ -425,7 +470,7 @@ def _root_descriptors() -> list[dict[str, Any]]:
             "path": str(linked or ""),
             "display_path": "/",
             "available": bool(linked and linked.is_dir()),
-            "read_only": True,
+            "read_only": False,
             "capabilities": linked_capabilities,
         },
     ]
@@ -444,8 +489,8 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
 
 
 def _assert_writable_root(root_ctx: dict[str, Any]) -> None:
-    if bool(root_ctx.get("read_only")) or str(root_ctx.get("id") or "").strip().lower() == "linked":
-        raise HTTPException(status_code=403, detail="Linked resources are read-only")
+    if bool(root_ctx.get("read_only")):
+        raise HTTPException(status_code=403, detail="Selected Code root is read-only")
 
 
 def _share_item_kind(path: Path) -> str:
@@ -470,7 +515,7 @@ def _share_request_payload(payload: dict[str, Any], root_ctx: dict[str, Any], ta
         "resource_kind": "code",
         "item_kind": _share_item_kind(target),
         "display_name": display_name,
-        "requested_access": "read",
+        "requested_access": "read_write",
         "share_mode": "claim_nonce",
         "reshare_allowed": False,
     }
@@ -589,6 +634,7 @@ def _require_operable_path(raw_path: Any, raw_root: Any = None) -> tuple[Path, s
     _assert_writable_root(root_ctx)
     if not relative:
         raise HTTPException(status_code=400, detail="Workspace root cannot be changed by this operation")
+    _assert_linked_writable_path(root_ctx, target, relative)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Workspace path does not exist")
     return target, relative, root_ctx
@@ -599,11 +645,12 @@ def _require_destination(raw_path: Any, raw_root: Any = None, *, overwrite: bool
     _assert_writable_root(root_ctx)
     if not relative:
         raise HTTPException(status_code=400, detail="Workspace root is not a valid destination")
+    _assert_linked_writable_path(root_ctx, target, relative, allow_share_root=True)
     if target.exists() and not overwrite:
         raise HTTPException(status_code=409, detail="Destination already exists")
     parent = target.parent.resolve(strict=False)
     root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
-    if parent != root and root not in parent.parents:
+    if parent != root and root not in parent.parents and not _linked_target_allowed(root, target, target.resolve(strict=False)):
         raise HTTPException(status_code=403, detail="Destination parent is outside Code")
     parent.mkdir(parents=True, exist_ok=True)
     return target, relative, root_ctx
@@ -856,6 +903,8 @@ def _resolve_repo(raw_repo: Any, raw_root: Any = None) -> tuple[Path, str, dict[
 def _resolve_writable_repo(raw_repo: Any, raw_root: Any = None) -> tuple[Path, str, dict[str, Any]]:
     repo, relative, root_ctx = _resolve_repo(raw_repo, raw_root)
     _assert_writable_root(root_ctx)
+    if str(root_ctx.get("id") or "").strip().lower() == "linked":
+        raise HTTPException(status_code=403, detail="Git mutations are disabled for Linked resources")
     return repo, relative, root_ctx
 
 
@@ -1528,6 +1577,7 @@ async def save(request: Request) -> dict[str, Any]:
     payload = await request.json()
     target, relative, root_ctx = _resolve(payload.get("path"), payload.get("root") or payload.get("root_id"))
     _assert_writable_root(root_ctx)
+    _assert_linked_writable_path(root_ctx, target, relative)
     if target.exists() and not target.is_file():
         raise HTTPException(status_code=400, detail="Workspace path is not a file")
     expected_hash = str(payload.get("expected_hash") or payload.get("hash") or "").strip()
@@ -1550,6 +1600,7 @@ async def mkdir(request: Request) -> dict[str, Any]:
     payload = await request.json()
     target, relative, root_ctx = _resolve(payload.get("path"), payload.get("root") or payload.get("root_id"))
     _assert_writable_root(root_ctx)
+    _assert_linked_writable_path(root_ctx, target, relative)
     target.mkdir(parents=True, exist_ok=True)
     return {"ok": True, "root": str(root_ctx["id"]), "path": _display_path(relative)}
 

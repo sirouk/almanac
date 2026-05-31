@@ -123,7 +123,7 @@ The production API boundary is `arclink_hosted_api.py`, dispatching under
 | `POST /user/credentials/acknowledge` | User + CSRF | Confirm credential storage and hide future handoff visibility |
 | `GET /user/wrapped` | User session | Captain ArcLink Wrapped report history with redacted renders |
 | `POST /user/wrapped-frequency` | User + CSRF | Set Wrapped cadence to daily, weekly, or monthly |
-| `POST /user/share-grants` | User + CSRF | Request a read-only Drive/Code share grant |
+| `POST /user/share-grants` | User + CSRF | Request a Drive/Code share grant |
 | `POST /user/share-grants/approve` | User + CSRF | Owner-approve a pending share grant |
 | `POST /user/share-grants/deny` | User + CSRF | Owner-deny a pending share grant |
 | `POST /user/share-grants/accept` | User + CSRF | Recipient accepts an approved share grant |
@@ -164,19 +164,21 @@ core patches:
   local vault, can use sanitized Nextcloud WebDAV access state when available,
   and exposes browse, bounded preview, download, upload, folder creation,
   rename, move, trash, and restore contracts for writable roots. It also exposes
-  a read-only `Linked` root when the linked-resource projection exists. Linked
-  resources can be listed, searched, previewed, downloaded, and copied or
-  duplicated into an owned Vault or Workspace destination, but cannot be
-  uploaded to, renamed, moved, deleted, restored, or reshared from the plugin.
+  a `Linked` root when the linked-resource projection exists. Accepted shared
+  folders can be listed, searched, previewed, downloaded, uploaded to, renamed,
+  moved, deleted, restored, and copied or duplicated into an owned Vault or
+  Workspace destination while the Linked root itself stays system-managed.
+  Linked resources cannot be reshared from the plugin.
   The local backend keeps trash recoverable under `.drive-trash`; WebDAV delete
   is direct provider delete and must remain UI-confirmed.
 - `code` owns the native code workspace. It uses
   `CODE_WORKSPACE_ROOT`, guards text saves with a SHA-256 expected hash,
   scans bounded workspace depth for git repositories, and exposes source
   control status, stage, unstage, confirmed discard, and commit operations on
-  writable Workspace/Vault roots. Its read-only `Linked` root allows file reads,
-  previews, duplicate/copy into owned roots, repository discovery, git status,
-  and git diff, while rejecting saves, reshare, and git mutations. It remains a
+  writable Workspace/Vault roots. Its `Linked` root allows file reads, saves
+  inside accepted shared folders, previews, duplicate/copy into owned roots,
+  repository discovery, git status, and git diff, while rejecting reshare and
+  git mutations. It remains a
   lightweight native editor, not a full Monaco/VS Code workbench.
 - `terminal` owns the native terminal surface. It uses a managed pty backend
   with stable session ids, persisted metadata,

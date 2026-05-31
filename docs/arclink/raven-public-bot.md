@@ -125,7 +125,7 @@ Hidden/account-state actions:
 - `/pair-channel` and `/pair_channel` remain backward-compatible aliases for `/link-channel` and `/link_channel`.
 - `/add-agent` is accepted only after the account has an active first deployment. It is surfaced as an `/agents` button, not as a global registered command.
 - `/agent-{slug}` switches the active Hermes Agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
-- `/share-approve {grant_id}` and `/share-deny {grant_id}` are backward-compatible owner actions for read-only Drive/Code share grants. Active Telegram approval buttons use `/raven approve {grant_id}` and `/raven deny {grant_id}` so they cannot collide with the active Hermes Agent's slash namespace. Raven only honors either form from a public channel linked to the share owner.
+- `/share-approve {grant_id}` and `/share-deny {grant_id}` are backward-compatible owner actions for Drive/Code share grants. Active Telegram approval buttons use `/raven approve {grant_id}` and `/raven deny {grant_id}` so they cannot collide with the active Hermes Agent's slash namespace. Raven only honors either form from a public channel linked to the share owner.
 - `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, and `/update` is intercepted too. Neither path runs direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
 - `/raven-name` remains accepted as the Discord-friendly alias for
   `/raven_name`.
@@ -148,7 +148,7 @@ Raven should prefer buttons over typed pseudo-actions whenever the platform supp
 - `Check Status` returns status for onboarding or the active Hermes Agent.
 - `Update Name` asks for the user's preferred manifest name.
 - `Back To My Crew` returns to the Hermes Agent roster.
-- Share approval notifications use `Approve` and `Deny` buttons. Approving lets the recipient accept the resource as read-only under `Linked`; denying leaves the share closed.
+- Share approval notifications use `Approve` and `Deny` buttons. Approving lets the recipient accept Drive/Code shared folders as writable resources under `Linked`; denying leaves the share closed.
 
 Telegram uses inline keyboard buttons. Discord uses message components. The default public command catalog remains intentionally small because global slash commands cannot reflect each individual account state. Once a Telegram chat has an active ArcLink deployment, Raven refreshes that chat's Telegram command scope with one Raven control command plus the current Hermes command menu from the active Hermes Agent, such as `/agents`, `/status`, `/help`, `/model`, `/provider`, `/reload_mcp`, `/reload_skills`, `/usage`, and `/stop`. This scope is refreshed after public bot command registration during control install/upgrade, and Telegram webhook handling also refreshes the active chat scope when the user interacts. The refresh writes the observed active Hermes Agent command names into session metadata and queues an operator notification when it sees a legacy Raven-name collision, a hard Raven control collision, a policy-suppressed command such as `/update`, or hidden commands caused by Telegram's command-menu cap.
 

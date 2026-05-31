@@ -927,7 +927,7 @@
             onClick: function (event) { event.stopPropagation(); },
           },
           h("h2", null, "Share " + (dialog.name || "item")),
-          h("p", null, "Send this to anyone on ArcLink. Their Raven adds it as a read-only Linked resource when they run the command."),
+          h("p", null, "Send this to anyone on ArcLink. Their Raven adds Drive and Code folders as writable Linked resources when they run the command."),
           h("pre", { className: "hermes-code-share-copy", onClick: function () { copyShareText(dialog.copyText); } }, dialog.copyText),
           h("p", { className: "hermes-code-share-expiry" }, "This share link expires in " + dialog.expiresInHours + " hours and can only be claimed once."),
           h(

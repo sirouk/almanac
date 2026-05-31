@@ -221,10 +221,10 @@ def test_hot_tool_descriptions_carry_when_to_call_guidance() -> None:
         "knowledge.search": ("both vault/PDF and shared Notion", "source is unclear"),
         "knowledge.search-and-fetch": ("vault/PDF and shared Notion", "files, PDFs, cloned docs, or shared Notion pages"),
         "shares.request": (
-            "read-only Drive/Code share",
+            "read/write Drive/Code shared folder",
             "pending for owner approval",
             "never shares Linked resources",
-            "copied only into owned Vault or Workspace roots",
+            "Linked git mutations disabled",
         ),
     }
     for tool, needles in expectations.items():
@@ -360,13 +360,14 @@ def test_agent_share_request_tool_creates_scoped_pending_grant() -> None:
     expect(result["linked_root"] == "Linked", str(result))
     expect(result["reshare_allowed"] is False, str(result))
     expect(
-        result["copy_duplicate_policy"] == "accepted_linked_resources_copy_to_owned_vault_or_workspace_only",
+        result["copy_duplicate_policy"] == "accepted_linked_resources_writable_in_place_without_reshare_or_git_mutation",
         str(result),
     )
     expect(result["copy_duplicate_destination_roots"] == ["vault", "workspace"], str(result))
     expect(grant["owner_user_id"] == "arcusr_share_owner", str(grant))
     expect(grant["recipient_user_id"] == "arcusr_share_recipient", str(grant))
     expect(grant["resource_root"] == "vault" and grant["resource_path"] == "/Projects/brief.md", str(grant))
+    expect(grant["access_mode"] == "read_write", str(grant))
     expect(grant["status"] == "pending_owner_approval", str(grant))
     expect(grant["reshare_allowed"] is False, str(grant))
     stored = conn.execute("SELECT metadata_json FROM arclink_share_grants WHERE grant_id = ?", (grant["grant_id"],)).fetchone()

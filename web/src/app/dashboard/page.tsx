@@ -930,10 +930,10 @@ export default function DashboardPage() {
           setLinkedResources(r.data as LinkedResourcesData);
           setLinkedResourcesError("");
         } else {
-          setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shares read-only when the API is available.");
+          setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shared folders available when the API is available.");
         }
       }).catch(() => {
-        if (mounted) setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shares read-only when the API is available.");
+        if (mounted) setLinkedResourcesError("Linked resources could not be loaded. Drive and Code will still keep accepted shared folders available when the API is available.");
       }),
       api.userShareGrants().then((r) => {
         if (!mounted) return;
@@ -2044,7 +2044,7 @@ function WorkspaceReadinessGrid({
     {
       label: "Linked",
       value: linkedCount ? "available" : "clear",
-      detail: linkedCount ? `${linkedCount} read-only resource(s).` : "No accepted linked resources.",
+      detail: linkedCount ? `${linkedCount} linked resource(s).` : "No accepted linked resources.",
       tab: "vault" as Tab,
     },
     {
@@ -2544,7 +2544,7 @@ function LinkedResourcesPanel({ resources, loadError = "" }: { resources: Linked
     <div className="rounded-lg border border-border bg-surface p-4">
       <h3 className="mb-3 font-display font-semibold">Linked Resources</h3>
       <p className="mb-3 text-sm text-soft-white/60">
-        Accepted shares appear as a read-only Linked root in Drive and Code. They cannot be reshared from this account.
+        Accepted Drive and Code folders appear as writable Linked resources. They cannot be reshared from this account.
       </p>
       {linked.length ? (
         <div className="grid gap-3">

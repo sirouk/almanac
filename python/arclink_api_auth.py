@@ -84,7 +84,7 @@ ARCLINK_CREDENTIAL_HANDOFF_KINDS = frozenset({"dashboard_password", "chutes_api_
 ARCLINK_SHARE_RESOURCE_KINDS = frozenset({"drive", "code", "pod_comms", "notion"})
 ARCLINK_SHARE_RESOURCE_ROOTS = frozenset({"vault", "workspace"})
 ARCLINK_SHARE_NOTION_ROOTS = frozenset({"notion", "ssot"})
-ARCLINK_SHARE_ACCESS_MODES = frozenset({"read"})
+ARCLINK_SHARE_ACCESS_MODES = frozenset({"read", "read_write"})
 ARCLINK_SHARE_STATUSES = ARCLINK_SHARE_GRANT_STATUSES
 ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS = 7 * 24 * 60 * 60
 ARCLINK_SHARE_GRANT_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -2329,6 +2329,17 @@ def _chmod_read_only(path: Path) -> None:
         pass
 
 
+def _clean_share_access_mode(value: str, *, default: str = "read_write") -> str:
+    mode = str(value or default).strip().lower().replace("-", "_")
+    return mode or default
+
+
+def _share_projection_read_only(access_mode: str, resource_kind: str = "") -> bool:
+    mode = _clean_share_access_mode(access_mode)
+    kind = str(resource_kind or "").strip().lower()
+    return not (mode == "read_write" and kind in {"drive", "code"})
+
+
 def _linked_manifest_path(linked_root: Path) -> Path:
     return linked_root / ARCLINK_LINKED_RESOURCE_MANIFEST
 
@@ -2376,6 +2387,8 @@ def _upsert_linked_manifest_entry(
     entry_path: str,
     resource_kind: str,
     owner_user_id: str,
+    read_only: bool,
+    access_mode: str,
     updated_at: str,
 ) -> None:
     payload = _load_linked_manifest(linked_root)
@@ -2387,7 +2400,8 @@ def _upsert_linked_manifest_entry(
         "entry_path": entry_path,
         "resource_kind": resource_kind,
         "owner_user_id": owner_user_id,
-        "read_only": True,
+        "read_only": bool(read_only),
+        "access_mode": access_mode,
         "projection_mode": "living_symlink",
         "updated_at": updated_at,
     }
@@ -2493,6 +2507,7 @@ def _share_projection_public(metadata: Mapping[str, Any]) -> dict[str, Any]:
             "owner_deployment_id": str(metadata.get("owner_deployment_id") or metadata.get("deployment_id") or ""),
             "recipient_deployment_id": str(metadata.get("recipient_deployment_id") or ""),
             "read_only": True,
+            "access_mode": "read",
         }
     return {
         "status": str(projection.get("status") or "not_materialized"),
@@ -2506,7 +2521,8 @@ def _share_projection_public(metadata: Mapping[str, Any]) -> dict[str, Any]:
         "materialized_at": str(projection.get("materialized_at") or ""),
         "removed_at": str(projection.get("removed_at") or ""),
         "reason": str(projection.get("reason") or ""),
-        "read_only": True,
+        "read_only": bool(projection.get("read_only", True)),
+        "access_mode": str(projection.get("access_mode") or metadata.get("access_mode") or ""),
         "inherited_subpages": bool(projection.get("inherited_subpages") or metadata.get("inherit_subpages") or False),
         "skipped_sensitive_count": int(projection.get("skipped_sensitive_count") or 0),
     }
@@ -2662,14 +2678,17 @@ def _queue_share_grant_owner_notification(
     target = str(channel_status["target_id"])
 
     resource_label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource").strip()
+    resource_kind = str(grant.get("resource_kind") or "").strip().lower()
+    access_label = "read/write" if resource_kind in {"drive", "code"} else "read-only"
+    accept_label = "read/write Linked resource" if resource_kind in {"drive", "code"} else "read-only Linked resource"
     resource_root = str(grant.get("resource_root") or "").strip()
     resource_path = str(grant.get("resource_path") or "").strip()
     recipient = str(grant.get("recipient_user_id") or "").strip()
     message = (
         "Raven share approval requested.\n\n"
-        f"Recipient `{recipient}` is asking for read-only access to `{resource_label}` "
+        f"Recipient `{recipient}` is asking for {access_label} access to `{resource_label}` "
         f"from `{resource_root}:{resource_path}`.\n\n"
-        "Approve to let the recipient accept it as a read-only Linked resource. "
+        f"Approve to let the recipient accept it as a {accept_label}. "
         "Deny leaves the share closed. Accepted Linked resources cannot be reshared."
     )
     notification_id = queue_notification(
@@ -2714,13 +2733,15 @@ def queue_share_grant_recipient_notification(
 
     resource_label = str(grant.get("display_name") or grant.get("resource_path") or "linked resource").strip()
     resource_kind = str(grant.get("resource_kind") or "").strip().lower()
+    access_label = "read/write" if resource_kind in {"drive", "code"} else "read-only"
+    linked_label = "Accepted Drive/Code shares are writable" if resource_kind in {"drive", "code"} else "Linked resources stay read-only"
     resource_root = str(grant.get("resource_root") or "").strip()
     resource_path = str(grant.get("resource_path") or "").strip()
     inherited = " with inherited subpages" if resource_kind == "notion" else ""
     message = (
         "Raven share ready.\n\n"
-        f"The owner approved read-only access to `{resource_label}` from `{resource_root}:{resource_path}`{inherited}.\n\n"
-        "Accept to add it to your Linked resources. Linked resources stay read-only and cannot be reshared."
+        f"The owner approved {access_label} access to `{resource_label}` from `{resource_root}:{resource_path}`{inherited}.\n\n"
+        f"Accept to add it to your Linked resources. {linked_label} and cannot be reshared."
     )
     notification_id = queue_notification(
         conn,
@@ -2758,6 +2779,8 @@ def _materialize_share_projection(
     recipient_user = str(grant.get("recipient_user_id") or "").strip()
     resource_root = str(grant.get("resource_root") or "").strip().lower()
     resource_kind = str(grant.get("resource_kind") or "").strip().lower()
+    access_mode = _clean_share_access_mode(str(grant.get("access_mode") or ""), default="read")
+    projection_read_only = _share_projection_read_only(access_mode, resource_kind)
     source_key = "vault" if resource_root == "vault" else "code_workspace"
     metadata = json_loads_safe(str(grant.get("metadata_json") or "{}"))
     if resource_kind == "pod_comms":
@@ -2809,7 +2832,8 @@ def _materialize_share_projection(
         "linked_root": "linked",
         "linked_path": "",
         "entry_path": "",
-        "read_only": True,
+        "read_only": projection_read_only,
+        "access_mode": access_mode,
     }
     linked_root: Path | None = None
     projection_root: Path | None = None
@@ -2858,7 +2882,8 @@ def _materialize_share_projection(
             projection_root.mkdir(parents=True, exist_ok=True)
             entry_path = projection_root / source.name
             os.symlink(str(source), str(entry_path), target_is_directory=False)
-            _chmod_read_only(projection_root)
+            if projection_read_only:
+                _chmod_read_only(projection_root)
             linked_path = "/" + slug
             entry_display = f"/{slug}/{source.name}"
             resource_kind = "file"
@@ -2880,6 +2905,8 @@ def _materialize_share_projection(
             entry_path=entry_display,
             resource_kind=resource_kind,
             owner_user_id=owner_user,
+            read_only=projection_read_only,
+            access_mode=access_mode,
             updated_at=now,
         )
 
@@ -2895,6 +2922,8 @@ def _materialize_share_projection(
                 "materialized_at": now,
                 "skipped_sensitive_count": 0,
                 "reason": "",
+                "read_only": projection_read_only,
+                "access_mode": access_mode,
             }
         )
         metadata["projection"] = projection
@@ -3036,7 +3065,7 @@ def create_user_share_grant_for_owner(
     owner_deployment_id: str = "",
     recipient_deployment_id: str = "",
     display_name: str = "",
-    access_mode: str = "read",
+    access_mode: str = "",
     metadata: Mapping[str, Any] | None = None,
     requested_by_agent_id: str = "",
 ) -> ArcLinkApiResponse:
@@ -3070,7 +3099,7 @@ def create_user_share_grant_for_owner(
             raise ArcLinkApiAuthError("ArcLink same-account share requires different owner and recipient deployments")
     kind = str(resource_kind or "").strip().lower()
     root = str(resource_root or "").strip().lower()
-    mode = str(access_mode or "read").strip().lower()
+    mode = _clean_share_access_mode(access_mode, default="read_write" if kind in {"drive", "code"} else "read")
     if kind not in ARCLINK_SHARE_RESOURCE_KINDS:
         raise ArcLinkApiAuthError("ArcLink share requires a supported resource kind")
     if kind == "pod_comms":
@@ -3090,7 +3119,9 @@ def create_user_share_grant_for_owner(
     else:
         clean_path = _clean_share_path(resource_path)
     if mode not in ARCLINK_SHARE_ACCESS_MODES:
-        raise ArcLinkApiAuthError("ArcLink share grants are read-only")
+        raise ArcLinkApiAuthError("ArcLink share grants support read or read_write access")
+    if mode == "read_write" and kind not in {"drive", "code"}:
+        raise ArcLinkApiAuthError("ArcLink read_write shares are limited to Drive and Code")
     safe_metadata = dict(metadata or {})
     if owner_deployment:
         safe_metadata["owner_deployment_id"] = owner_deployment
@@ -3158,7 +3189,7 @@ def create_user_share_grant_for_owner(
         actor_id=owner_user,
         target_kind="share_grant",
         target_id=grant_id,
-        reason="read-only linked resource share requested",
+        reason="linked resource share requested",
         metadata=audit_metadata,
         commit=False,
     )
@@ -3229,7 +3260,7 @@ def create_user_share_grant_api(
     owner_deployment_id: str = "",
     recipient_deployment_id: str = "",
     display_name: str = "",
-    access_mode: str = "read",
+    access_mode: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_user_session(conn, session_id=session_id, session_token=session_token)
@@ -3295,7 +3326,7 @@ def create_user_share_grant_from_broker_api(
         raise ArcLinkApiAuthError("ArcLink share-request broker source and resource kind do not match")
     if clean_item_kind and clean_item_kind not in {"file", "directory"}:
         raise ArcLinkApiAuthError("ArcLink share-request broker item kind is unsupported")
-    clean_access = str(access_mode or requested_access or "read").strip().lower()
+    clean_access = _clean_share_access_mode(access_mode or requested_access)
     if clean_share_mode == "claim_nonce":
         nonce_metadata = dict(metadata or {})
         if clean_item_kind:
@@ -3397,15 +3428,15 @@ def mint_share_claim_nonce_for_owner(
     resource_path: str,
     owner_deployment_id: str = "",
     display_name: str = "",
-    access_mode: str = "read",
+    access_mode: str = "read_write",
     source_plugin: str = "",
     metadata: Mapping[str, Any] | None = None,
     requested_by_agent_id: str = "",
 ) -> ArcLinkApiResponse:
-    """Mint a single-use, 12h read-only share claim nonce.
+    """Mint a single-use, 12h share claim nonce.
 
     Minting *is* the owner's approval: whoever the owner hands the nonce to can
-    claim a read-only Linked resource by running ``/arclink_share_accept <nonce>``.
+    claim a Linked resource by running ``/arclink_share_accept <nonce>``.
     """
     owner_user = str(owner_user_id or "").strip()
     if not owner_user:
@@ -3416,9 +3447,11 @@ def mint_share_claim_nonce_for_owner(
     if owner_deployment:
         _share_deployment_user(conn, owner_deployment, expected_user_id=owner_user, label="owner")
     kind, root, clean_path = _validate_drive_code_share(resource_kind, resource_root, resource_path)
-    mode = str(access_mode or "read").strip().lower()
+    mode = _clean_share_access_mode(access_mode)
     if mode not in ARCLINK_SHARE_ACCESS_MODES:
-        raise ArcLinkApiAuthError("ArcLink share grants are read-only")
+        raise ArcLinkApiAuthError("ArcLink share grants support read or read_write access")
+    if mode == "read_write" and kind not in {"drive", "code"}:
+        raise ArcLinkApiAuthError("ArcLink read_write shares are limited to Drive and Code")
     safe_metadata = dict(metadata or {})
     if source_plugin:
         safe_metadata["source_plugin"] = str(source_plugin).strip().lower()
@@ -3463,7 +3496,7 @@ def mint_share_claim_nonce_for_owner(
         actor_id=owner_user,
         target_kind="share_claim_nonce",
         target_id=nonce_id,
-        reason="owner minted single-use read-only share claim nonce",
+        reason="owner minted single-use share claim nonce",
         metadata={
             "resource_kind": kind,
             "resource_root": root,
@@ -3521,14 +3554,16 @@ def _insert_accepted_share_grant(
     actor_id: str,
     audit_reason: str,
 ) -> dict[str, Any]:
-    """Insert an already-accepted read-only share grant and materialize its projection.
+    """Insert an already-accepted share grant and materialize its projection.
 
     Used by the claim-nonce flow, where minting the nonce was the owner's approval.
     """
     kind, root, clean_path = _validate_drive_code_share(resource_kind, resource_root, resource_path)
-    mode = str(access_mode or "read").strip().lower()
+    mode = _clean_share_access_mode(access_mode)
     if mode not in ARCLINK_SHARE_ACCESS_MODES:
-        raise ArcLinkApiAuthError("ArcLink share grants are read-only")
+        raise ArcLinkApiAuthError("ArcLink share grants support read or read_write access")
+    if mode == "read_write" and kind not in {"drive", "code"}:
+        raise ArcLinkApiAuthError("ArcLink read_write shares are limited to Drive and Code")
     safe_metadata = dict(metadata or {})
     _reject_secret_material(safe_metadata)
     conn.execute(
@@ -3562,7 +3597,7 @@ def _insert_accepted_share_grant(
         actor_id=owner_user,
         target_kind="share_grant",
         target_id=grant_id,
-        reason="claim-nonce read-only linked resource share created",
+        reason="claim-nonce linked resource share created",
         metadata={
             "recipient_user_id": recipient_user,
             "resource_kind": kind,
@@ -3604,7 +3639,7 @@ def claim_share_nonce_for_recipient(
     nonce: str,
     recipient_deployment_id: str = "",
     actor_id: str = "",
-    reason: str = "recipient claimed read-only linked resource via share nonce",
+    reason: str = "recipient claimed linked resource via share nonce",
     commit: bool = True,
 ) -> dict[str, Any]:
     recipient = str(recipient_user_id or "").strip()
@@ -3884,7 +3919,7 @@ def accept_share_grant_for_recipient(
     recipient_user_id: str,
     grant_id: str,
     actor_id: str = "",
-    reason: str = "recipient accepted read-only linked resource",
+    reason: str = "recipient accepted linked resource",
     commit: bool = True,
 ) -> dict[str, Any]:
     recipient = str(recipient_user_id or "").strip()

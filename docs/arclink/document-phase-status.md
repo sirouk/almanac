@@ -271,10 +271,10 @@ transcripts, or machine-only evidence were added.
 | `docs/API_REFERENCE.md` | Lists credential, share-grant, linked-resource, billing lifecycle, sanitized Chutes provider-state routes, local provider-budget credit posture, and remaining continuation-policy gates |
 | `docs/openapi/arclink-v1.openapi.json` | Already includes the current hosted API route catalog |
 | `docs/arclink/architecture.md` | Reflects credential/share routes, current user dashboard API wiring, and Drive/Code `Linked` root boundaries |
-| `docs/arclink/first-day-user-guide.md` | Already describes credential acknowledgement and read-only linked resources for users |
+| `docs/arclink/first-day-user-guide.md` | Already describes credential acknowledgement and writable accepted Drive/Code linked folders for users |
 | `docs/arclink/raven-public-bot.md` | Documents `/raven` active Telegram controls, `/raven_name`, `/link_channel`, `/connect_notion`, share approval callbacks, command-scope conflict alerts, upgrade-rail guidance, and Raven-mediated selected-agent chat |
 | `docs/arclink/notion-human-guide.md` | Already names shared-root membership as the canonical SSOT sharing model and keeps user-owned OAuth/email-share paths non-default |
-| `plugins/hermes-agent/drive/README.md` and `plugins/hermes-agent/code/README.md` | Document `Linked` root discovery, read-only behavior, no reshare, owned copy/duplicate from linked content, and the disabled browser share-link gate |
+| `plugins/hermes-agent/drive/README.md` and `plugins/hermes-agent/code/README.md` | Document `Linked` root discovery, writable accepted shared-folder behavior, no reshare, owned copy/duplicate from linked content, and the disabled browser share-link gate |
 | `plugins/hermes-agent/arclink-managed-context/README.md` | Already documents recall budget tiers and sibling conversational-memory boundaries |
 | `docs/arclink/control-node-production-runbook.md` and `docs/arclink/sovereign-control-node.md` | Already document deployment-style selection and keep live production proof credential-gated |
 

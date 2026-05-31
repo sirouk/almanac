@@ -30,10 +30,11 @@ operator rotation or recovery action.
 The Hermes Dashboard includes ArcLink skills and these plugins:
 
 - **Drive:** browse and manage vault files inside the allowed vault/workspace
-  root. Accepted linked resources appear under a read-only `Linked` root when
-  the projection is available.
+  root. Accepted linked resources appear under `Linked` when the projection is
+  available, and accepted Drive/Code folders are writable there.
 - **Code:** edit files and inspect git status inside the configured workspace.
-  Linked resources are readable but not writable or reshareable.
+  Linked shared folders are writable, not reshareable, and still block git
+  mutations from Linked.
 - **Terminal:** managed pty sessions with bounded scrollback, same-origin SSE
   streaming, polling fallback, and confirmation-gated close.
 

@@ -766,7 +766,6 @@ def _render_services(
     linked_resources_volume = {
         "source": roots["linked_resources"],
         "target": CONTAINER_LINKED_RESOURCES_DIR,
-        "read_only": True,
     }
     fleet_shared_volume = {
         "source": roots["fleet_shared"],

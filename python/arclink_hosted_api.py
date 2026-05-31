@@ -1455,7 +1455,7 @@ def _handle_user_share_grant_create(
         owner_deployment_id=str(body.get("owner_deployment_id") or body.get("deployment_id") or ""),
         recipient_deployment_id=str(body.get("recipient_deployment_id") or ""),
         display_name=str(body.get("display_name") or ""),
-        access_mode=str(body.get("access_mode") or "read"),
+        access_mode=str(body.get("access_mode") or ""),
         metadata=body.get("metadata"),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
@@ -2764,7 +2764,7 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "responses": {"200": {"description": "Share grant inbox"}, "401": {"description": "Unauthorized"}},
     },
     "user_share_grant_create": {
-        "summary": "Request a read-only Drive/Code share grant",
+        "summary": "Request a Drive/Code share grant",
         "tags": ["user"],
         "requestBody": _openapi_json_body({
             "recipient_user_id": {"type": "string"},
@@ -2774,12 +2774,12 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "resource_root": {"type": "string", "enum": ["vault", "workspace"]},
             "resource_path": {"type": "string"},
             "display_name": {"type": "string"},
-            "access_mode": {"type": "string", "enum": ["read"]},
+            "access_mode": {"type": "string", "enum": ["read", "read_write"]},
         }, required=["resource_kind", "resource_root", "resource_path"]),
         "responses": {"201": {"description": "Share grant requested"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "user_share_grant_broker_create": {
-        "summary": "Request a read-only Drive/Code share grant from a deployment-scoped broker",
+        "summary": "Request a Drive/Code share grant from a deployment-scoped broker",
         "tags": ["user", "workspace"],
         "requestBody": _openapi_json_body({
             "contract": {"type": "string", "enum": ["arclink-share-grants"]},
@@ -2793,7 +2793,7 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "resource_root": {"type": "string", "enum": ["vault", "workspace"]},
             "resource_path": {"type": "string"},
             "display_name": {"type": "string"},
-            "requested_access": {"type": "string", "enum": ["read"]},
+            "requested_access": {"type": "string", "enum": ["read", "read_write"]},
             "share_mode": {"type": "string", "enum": ["owner_approval", "claim_nonce"]},
             "reshare_allowed": {"type": "boolean"},
         }, required=["contract", "source_plugin", "owner_deployment_id", "resource_kind", "resource_root", "resource_path"]),
@@ -2818,11 +2818,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         "responses": {"200": {"description": "Share accepted"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "user_share_grant_claim": {
-        "summary": "Claim a read-only share by its ephemeral nonce (/arclink_share_accept)",
+        "summary": "Claim a share by its ephemeral nonce (/arclink_share_accept)",
         "tags": ["user"],
         "requestBody": _openapi_json_body({"nonce": {"type": "string"}}, required=["nonce"]),
         "responses": {
-            "200": {"description": "Share claimed and materialized as a read-only Linked resource"},
+            "200": {"description": "Share claimed and materialized as a Linked resource"},
             "401": {"description": "Unauthorized or missing CSRF"},
         },
     },

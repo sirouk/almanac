@@ -36,10 +36,11 @@ Hermes `v2026.4.30` or newer.
   header. Without a configured broker URL, token file, and owner deployment
   identity, share requests fail closed before any external call. Linked roots
   never expose the action.
-- Linked is read-only: file reads, previews, repository discovery, git status,
-  and git diff are allowed; saves, sharing, and git mutations are rejected.
-  Duplicate from Linked writes a new owned copy into Workspace or Vault and does
-  not grant resharing on the original linked resource.
+- Linked accepts file saves and folder creation inside accepted shared folders
+  while keeping the Linked root itself system-managed. File reads, previews,
+  repository discovery, git status, and git diff are allowed; sharing and git
+  mutations from Linked are rejected. Duplicate from Linked can still write a
+  new owned copy into Workspace or Vault without granting reshare.
 - Text, Markdown, PDF, image, audio, and video previews can open in tabs and
   full-screen preview mode when browser-supported.
 

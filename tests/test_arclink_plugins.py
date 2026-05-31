@@ -541,11 +541,11 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(root_map["workspace"]["label"] == "Workspace", str(root_map["workspace"]))
             expect(root_map["linked"]["label"] == "Linked", str(root_map["linked"]))
             expect(root_map["linked"]["available"] is True, str(root_map["linked"]))
-            expect(root_map["linked"]["read_only"] is True, str(root_map["linked"]))
+            expect(root_map["linked"]["read_only"] is False, str(root_map["linked"]))
             expect(root_map["vault"]["capabilities"]["sharing"] is False, str(root_map["vault"]))
-            expect(root_map["linked"]["capabilities"]["upload"] is False, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["upload"] is True, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["folder_upload"] is True, str(root_map["workspace"]))
-            expect(root_map["linked"]["capabilities"]["folder_upload"] is False, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["folder_upload"] is True, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["trash"] is True, str(root_map["workspace"]))
             expect(root_map["vault"]["child_count"] == 2, str(root_map["vault"]))
             expect(root_map["vault"]["child_count_truncated"] is False, str(root_map["vault"]))
@@ -580,11 +580,11 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(code_root_map["fleet"]["read_only"] is False, str(code_root_map["fleet"]))
             expect(code_root_map["linked"]["label"] == "Linked", str(code_root_map["linked"]))
             expect(code_root_map["linked"]["available"] is True, str(code_root_map["linked"]))
-            expect(code_root_map["linked"]["read_only"] is True, str(code_root_map["linked"]))
+            expect(code_root_map["linked"]["read_only"] is False, str(code_root_map["linked"]))
             expect(code_root_map["workspace"]["capabilities"]["sharing"] is False, str(code_root_map["workspace"]))
             expect(code_root_map["vault"]["capabilities"]["sharing"] is False, str(code_root_map["vault"]))
             expect(code_root_map["linked"]["capabilities"]["sharing"] is False, str(code_root_map["linked"]))
-            expect(code_root_map["linked"]["capabilities"]["write"] is False, str(code_root_map["linked"]))
+            expect(code_root_map["linked"]["capabilities"]["write"] is True, str(code_root_map["linked"]))
             expect(code["workspace_root"].endswith("/home/alex"), str(code))
             code_items = asyncio.run(code_api.items(path="/", root="workspace"))
             expect(any(item["name"] == "hello.py" for item in code_items["items"]), str(code_items))
@@ -625,7 +625,7 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             os.environ.update(old_env)
 
 
-def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
+def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         hermes_home = root / "hermes-home"
@@ -644,6 +644,10 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
         (source_live / "overview.md").write_text("# Live Brief\n\nFirst version.\n", encoding="utf-8")
         (source_live / ".env").write_text("TOKEN=hidden\n", encoding="utf-8")
         os.symlink(source_live, linked / "live-brief", target_is_directory=True)
+        source_legacy = root / "owner-source" / "legacy-brief"
+        source_legacy.mkdir(parents=True, exist_ok=True)
+        (source_legacy / "overview.md").write_text("# Legacy Brief\n\nRead-only legacy share.\n", encoding="utf-8")
+        os.symlink(source_legacy, linked / "legacy-brief", target_is_directory=True)
         (linked / ".arclink-linked-resources.json").write_text(
             json.dumps(
                 {
@@ -654,6 +658,16 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
                             "source_path": str(source_live.resolve(strict=False)),
                             "linked_path": "/live-brief",
                             "entry_path": "/live-brief",
+                            "resource_kind": "directory",
+                            "read_only": False,
+                            "access_mode": "read_write",
+                            "projection_mode": "living_symlink",
+                        },
+                        "legacy-brief": {
+                            "grant_id": "share_legacy",
+                            "source_path": str(source_legacy.resolve(strict=False)),
+                            "linked_path": "/legacy-brief",
+                            "entry_path": "/legacy-brief",
                             "resource_kind": "directory",
                             "read_only": True,
                             "projection_mode": "living_symlink",
@@ -690,21 +704,50 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
             drive_status = asyncio.run(drive_api.status())
             drive_roots = {item["id"]: item for item in drive_status["roots"]}
             expect(drive_roots["linked"]["available"] is True, str(drive_roots["linked"]))
-            expect(drive_roots["linked"]["read_only"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["read_only"] is False, str(drive_roots["linked"]))
             expect(drive_roots["linked"]["capabilities"]["preview"] is True, str(drive_roots["linked"]))
-            expect(drive_roots["linked"]["capabilities"]["delete"] is False, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["capabilities"]["delete"] is True, str(drive_roots["linked"]))
             linked_items = asyncio.run(drive_api.items(root="linked", path="/"))
             expect(any(item["name"] == "shared-note.md" for item in linked_items["items"]), str(linked_items))
             expect(any(item["name"] == "live-brief" for item in linked_items["items"]), str(linked_items))
+            expect(any(item["name"] == "legacy-brief" for item in linked_items["items"]), str(linked_items))
             linked_content = asyncio.run(drive_api.content(root="linked", path="/shared-note.md"))
             expect("Linked root proof" in linked_content["content"], str(linked_content))
             live_content = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
             expect("First version" in live_content["content"], str(live_content))
+            legacy_content = asyncio.run(drive_api.content(root="linked", path="/legacy-brief/overview.md"))
+            expect("Read-only legacy share" in legacy_content["content"], str(legacy_content))
             (source_live / "overview.md").write_text("# Live Brief\n\nSecond version.\n", encoding="utf-8")
             live_content_updated = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
             expect("Second version" in live_content_updated["content"], str(live_content_updated))
             live_listing = asyncio.run(drive_api.items(root="linked", path="/live-brief"))
             expect(any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
+            linked_mkdir = asyncio.run(drive_api.mkdir(JsonRequest({"root": "linked", "path": "/live-brief", "name": "Notes"})))
+            expect(linked_mkdir["path"] == "/live-brief/Notes", str(linked_mkdir))
+            expect((source_live / "Notes").is_dir(), "linked Drive mkdir should write into the shared source folder")
+            linked_new = asyncio.run(
+                drive_api.new_file(
+                    JsonRequest(
+                        {
+                            "root": "linked",
+                            "path": "/live-brief/Notes",
+                            "name": "recipient.md",
+                            "content": "# Recipient note\n",
+                        }
+                    )
+                )
+            )
+            expect(linked_new["path"] == "/live-brief/Notes/recipient.md", str(linked_new))
+            expect((source_live / "Notes" / "recipient.md").read_text(encoding="utf-8") == "# Recipient note\n", str(linked_new))
+            linked_upload = asyncio.run(
+                drive_api.upload(
+                    path="/live-brief",
+                    root="linked",
+                    files=[MemoryUpload("upload.md", b"# Uploaded from recipient\n")],
+                )
+            )
+            expect(linked_upload["uploaded"][0]["path"] == "/live-brief/upload.md", str(linked_upload))
+            expect((source_live / "upload.md").read_text(encoding="utf-8") == "# Uploaded from recipient\n", str(linked_upload))
             copied_from_linked = asyncio.run(
                 drive_api.copy(
                     JsonRequest(
@@ -726,18 +769,44 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
                 raise AssertionError("expected Drive linked delete to fail")
             except Exception as exc:
                 expect(getattr(exc, "status_code", None) == 403, f"expected linked Drive delete guard, got {exc!r}")
+            try:
+                asyncio.run(drive_api.mkdir(JsonRequest({"root": "linked", "path": "/legacy-brief", "name": "blocked"})))
+                raise AssertionError("expected Drive legacy linked mkdir to fail")
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected linked Drive legacy guard, got {exc!r}")
 
             code_status = asyncio.run(code_api.status())
             code_roots = {item["id"]: item for item in code_status["roots"]}
             expect(code_roots["linked"]["available"] is True, str(code_roots["linked"]))
-            expect(code_roots["linked"]["read_only"] is True, str(code_roots["linked"]))
+            expect(code_roots["linked"]["read_only"] is False, str(code_roots["linked"]))
+            expect(code_roots["linked"]["capabilities"]["write"] is True, str(code_roots["linked"]))
             code_items = asyncio.run(code_api.items(path="/", root="linked"))
             expect(any(item["name"] == "shared-note.md" for item in code_items["items"]), str(code_items))
             expect(any(item["name"] == "live-brief" for item in code_items["items"]), str(code_items))
+            expect(any(item["name"] == "legacy-brief" for item in code_items["items"]), str(code_items))
             code_file = asyncio.run(code_api.file(path="/shared-note.md", root="linked"))
             expect("Linked root proof" in code_file["content"], str(code_file))
             code_live_file = asyncio.run(code_api.file(path="/live-brief/overview.md", root="linked"))
             expect("Second version" in code_live_file["content"], str(code_live_file))
+            code_legacy_file = asyncio.run(code_api.file(path="/legacy-brief/overview.md", root="linked"))
+            expect("Read-only legacy share" in code_legacy_file["content"], str(code_legacy_file))
+            code_saved = asyncio.run(
+                code_api.save(
+                    JsonRequest(
+                        {
+                            "root": "linked",
+                            "path": "/live-brief/overview.md",
+                            "content": "# Live Brief\n\nSaved from Code.\n",
+                            "expected_hash": code_live_file["hash"],
+                        }
+                    )
+                )
+            )
+            expect(code_saved["path"] == "/live-brief/overview.md", str(code_saved))
+            expect("Saved from Code" in (source_live / "overview.md").read_text(encoding="utf-8"), str(code_saved))
+            code_mkdir = asyncio.run(code_api.mkdir(JsonRequest({"root": "linked", "path": "/live-brief/code-notes"})))
+            expect(code_mkdir["path"] == "/live-brief/code-notes", str(code_mkdir))
+            expect((source_live / "code-notes").is_dir(), "linked Code mkdir should write into the shared source folder")
             code_duplicate = asyncio.run(
                 code_api.duplicate_item(
                     JsonRequest(
@@ -751,7 +820,7 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
                 )
             )
             expect(code_duplicate["root"] == "workspace", str(code_duplicate))
-            expect((workspace / "live-brief-copy.md").read_text(encoding="utf-8").startswith("# Live Brief"), str(code_duplicate))
+            expect("Saved from Code" in (workspace / "live-brief-copy.md").read_text(encoding="utf-8"), str(code_duplicate))
             code_repos = asyncio.run(code_api.repos())
             expect(
                 any(item["root_id"] == "linked" and item["path"] == "/" for item in code_repos["repos"]),
@@ -780,6 +849,22 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
                 raise AssertionError("expected Code linked save to fail")
             except Exception as exc:
                 expect(getattr(exc, "status_code", None) == 403, f"expected linked Code save guard, got {exc!r}")
+            try:
+                asyncio.run(
+                    code_api.save(
+                        JsonRequest(
+                            {
+                                "root": "linked",
+                                "path": "/legacy-brief/overview.md",
+                                "content": "blocked",
+                                "expected_hash": code_legacy_file["hash"],
+                            }
+                        )
+                    )
+                )
+                raise AssertionError("expected Code legacy linked save to fail")
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 403, f"expected linked Code legacy guard, got {exc!r}")
 
             git_write_cases = [
                 ("stage", code_api.git_stage, {"root": "linked", "repo": "/", "path": "shared-note.md"}),
@@ -811,7 +896,7 @@ def test_arclink_drive_and_code_expose_read_only_linked_root() -> None:
             expect(" M shared-note.md" in linked_status_output, linked_status_output)
             expect("?? linked-untracked.md" in linked_status_output, linked_status_output)
             expect(not (linked / ".gitignore").exists(), "linked Git ignore must not mutate .gitignore")
-            print("PASS test_arclink_drive_and_code_expose_read_only_linked_root")
+            print("PASS test_arclink_drive_and_code_expose_writable_linked_shared_folders")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -1055,7 +1140,7 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
                 expect(payload["contract"] == "arclink-share-grants", str(payload))
                 expect(payload["owner_deployment_id"] == "arcdep_share_request_owner", str(payload))
                 expect("recipient" not in payload, f"claim-nonce share must not name a recipient up front: {payload}")
-                expect(payload["requested_access"] == "read", str(payload))
+                expect(payload["requested_access"] == "read_write", str(payload))
                 expect(payload["reshare_allowed"] is False, str(payload))
                 expect(payload["share_mode"] == "claim_nonce", str(payload))
                 expect("share_link" not in json.dumps(payload, sort_keys=True), str(payload))
@@ -3392,7 +3477,7 @@ def test_arclink_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             )
             expect(isinstance(share_turn, dict) and "- shares.request:" in share_turn.get("context", ""), f"expected shares.request recipe, got {share_turn!r}")
             expect(
-                "copy/duplicate accepted Linked resources only into the recipient's owned Vault or Workspace roots"
+                "Accepted Drive/Code shared folders are writable in place"
                 in share_turn["context"],
                 share_turn["context"],
             )
@@ -3863,7 +3948,7 @@ def main() -> int:
     test_install_arclink_plugins_excludes_generated_artifacts()
     test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases()
     test_arclink_dashboard_plugins_expose_sanitized_access_state()
-    test_arclink_drive_and_code_expose_read_only_linked_root()
+    test_arclink_drive_and_code_expose_writable_linked_shared_folders()
     test_arclink_drive_local_backend_file_operations_are_recoverable()
     test_arclink_drive_api_hardens_roots_uploads_and_batch_failures()
     test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore()

@@ -1513,7 +1513,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
         recipient_linked = state_root / "recipient" / "linked-resources"
         shared_dir = owner_vault / "Projects" / "brief"
         shared_dir.mkdir(parents=True, exist_ok=True)
-        (shared_dir / "overview.md").write_text("# Project Brief\n\nShared read-only context.\n", encoding="utf-8")
+        (shared_dir / "overview.md").write_text("# Project Brief\n\nShared writable context.\n", encoding="utf-8")
         (shared_dir / ".env").write_text("TOKEN=do-not-project\n", encoding="utf-8")
         for deployment, roots in (
             (
@@ -1586,6 +1586,7 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
         grant = payload["grant"]
         grant_id = grant["grant_id"]
         expect(grant["status"] == "pending_owner_approval", str(grant))
+        expect(grant["access_mode"] == "read_write", str(grant))
         expect(grant["expires_at"], str(grant))
         expect(grant["reshare_allowed"] is False, str(grant))
         expect(grant["projection"]["status"] == "not_materialized", str(grant))
@@ -1637,16 +1638,22 @@ def test_user_share_grants_create_approved_accepted_linked_resources() -> None:
         expect(projection["linked_root"] == "linked", str(projection))
         expect(projection["linked_path"].startswith(f"/{grant_id}"), str(projection))
         expect(projection["projection_mode"] == "living_symlink", str(projection))
-        expect(projection["read_only"] is True, str(projection))
+        expect(projection["read_only"] is False, str(projection))
+        expect(projection["access_mode"] == "read_write", str(projection))
         projected_dir = recipient_linked / projection["linked_path"].strip("/")
         expect(projected_dir.is_symlink(), "accepted linked directory should be a living link")
         expect((projected_dir / "overview.md").read_text(encoding="utf-8").startswith("# Project Brief"), str(projection))
         (shared_dir / "overview.md").write_text("# Project Brief\n\nUpdated at source.\n", encoding="utf-8")
         expect("Updated at source" in (projected_dir / "overview.md").read_text(encoding="utf-8"), "linked projection should stay live")
+        (projected_dir / "recipient-note.md").write_text("# Recipient note\n", encoding="utf-8")
+        expect((shared_dir / "recipient-note.md").read_text(encoding="utf-8") == "# Recipient note\n", "linked projection should allow recipient writes into shared folder")
         manifest = recipient_linked / ".arclink-linked-resources.json"
         expect(manifest.is_file(), "linked resource manifest should be written")
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
         expect(projection["linked_path"].strip("/") in manifest_payload["entries"], str(manifest_payload))
+        manifest_entry = manifest_payload["entries"][projection["linked_path"].strip("/")]
+        expect(manifest_entry["read_only"] is False, str(manifest_entry))
+        expect(manifest_entry["access_mode"] == "read_write", str(manifest_entry))
 
         status, payload, _ = hosted.route_arclink_hosted_api(
             conn,
@@ -1978,7 +1985,7 @@ def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
         "resource_root": "vault",
         "resource_path": "/Projects/brief.md",
         "display_name": "Brokered Brief",
-        "requested_access": "read",
+        "requested_access": "read_write",
         "share_mode": "owner_approval",
         "reshare_allowed": False,
     }

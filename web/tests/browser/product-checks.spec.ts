@@ -136,10 +136,10 @@ const MOCK_USER_LINKED_RESOURCES = {
         linked_root: "linked",
         linked_path: "/share_001-project-brief",
         entry_path: "/share_001-project-brief/brief.md",
-        read_only: true,
+        read_only: false,
       },
       display_name: "Project Brief",
-      access_mode: "read",
+      access_mode: "read_write",
       status: "accepted",
       reshare_allowed: false,
     },
@@ -546,7 +546,7 @@ test.describe("Route smoke", () => {
     await expect(page.getByText("Billing is current for this deployment.")).toBeVisible();
     await page.locator('button:has-text("vault"):visible').first().click();
     await expect(page.getByText("Linked Resources")).toBeVisible();
-    await expect(page.getByText("Accepted shares appear as a read-only Linked root in Drive and Code.")).toBeVisible();
+    await expect(page.getByText("Accepted Drive and Code folders appear as writable Linked resources.")).toBeVisible();
     await expect(page.getByText("Project Brief")).toBeVisible();
     await expect(page.getByText("Linked: linked:/share_001-project-brief")).toBeVisible();
     await expect(page.getByText("materialized")).toBeVisible();

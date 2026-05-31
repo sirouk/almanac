@@ -2012,7 +2012,8 @@
                 "properties": {
                   "access_mode": {
                     "enum": [
-                      "read"
+                      "read",
+                      "read_write"
                     ],
                     "type": "string"
                   },
@@ -2069,7 +2070,7 @@
             "sessionAuth": []
           }
         ],
-        "summary": "Request a read-only Drive/Code share grant",
+        "summary": "Request a Drive/Code share grant",
         "tags": [
           "user"
         ]
@@ -2191,7 +2192,8 @@
                   },
                   "requested_access": {
                     "enum": [
-                      "read"
+                      "read",
+                      "read_write"
                     ],
                     "type": "string"
                   },
@@ -2256,7 +2258,7 @@
             "shareRequestBrokerAuth": []
           }
         ],
-        "summary": "Request a read-only Drive/Code share grant from a deployment-scoped broker",
+        "summary": "Request a Drive/Code share grant from a deployment-scoped broker",
         "tags": [
           "user",
           "workspace"
@@ -2285,7 +2287,7 @@
         },
         "responses": {
           "200": {
-            "description": "Share claimed and materialized as a read-only Linked resource"
+            "description": "Share claimed and materialized as a Linked resource"
           },
           "401": {
             "description": "Unauthorized or missing CSRF"
@@ -2296,7 +2298,7 @@
             "sessionAuth": []
           }
         ],
-        "summary": "Claim a read-only share by its ephemeral nonce (/arclink_share_accept)",
+        "summary": "Claim a share by its ephemeral nonce (/arclink_share_accept)",
         "tags": [
           "user"
         ]

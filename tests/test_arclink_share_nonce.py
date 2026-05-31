@@ -103,7 +103,7 @@ def test_mint_returns_single_use_12h_nonce_and_stores_only_hash() -> None:
     print("PASS test_mint_returns_single_use_12h_nonce_and_stores_only_hash")
 
 
-def test_claim_materializes_read_only_linked_resource_and_is_single_use() -> None:
+def test_claim_materializes_writable_linked_resource_and_is_single_use() -> None:
     control = load_module("arclink_control.py", "arclink_control_nonce_claim_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_nonce_claim_test")
     conn, _owner_root, rcp_root = _setup(control)
@@ -127,16 +127,20 @@ def test_claim_materializes_read_only_linked_resource_and_is_single_use() -> Non
     expect(grant["status"] == "accepted", grant["status"])
     expect(grant["recipient_user_id"] == "user_rcp", grant["recipient_user_id"])
     expect(grant["owner_user_id"] == "user_owner", grant["owner_user_id"])
-    expect(grant["access_mode"] == "read", grant["access_mode"])
+    expect(grant["access_mode"] == "read_write", grant["access_mode"])
     expect(grant["reshare_allowed"] is False, str(grant))
     expect(grant["projection"]["status"] == "materialized", str(grant["projection"]))
-    expect(grant["projection"]["read_only"] is True, str(grant["projection"]))
+    expect(grant["projection"]["read_only"] is False, str(grant["projection"]))
+    expect(grant["projection"]["access_mode"] == "read_write", str(grant["projection"]))
 
     manifest = json.loads((rcp_root / "linked-resources" / ".arclink-linked-resources.json").read_text(encoding="utf-8"))
     entries = manifest["entries"]
     expect(len(entries) == 1, str(entries))
     slug = next(iter(entries))
     expect((rcp_root / "linked-resources" / slug).exists(), "projection path should exist for recipient")
+    projected_note = rcp_root / "linked-resources" / slug / "notes.md"
+    projected_note.write_text("# Recipient update\n", encoding="utf-8")
+    expect("Recipient update" in (_owner_root / "vault" / "Projects" / "notes.md").read_text(encoding="utf-8"), "linked projection should be writable")
 
     after = conn.execute("SELECT status, claimed_by_user_id, claimed_grant_id FROM arclink_share_claim_nonces").fetchone()
     expect(after["status"] == "claimed", after["status"])
@@ -151,7 +155,7 @@ def test_claim_materializes_read_only_linked_resource_and_is_single_use() -> Non
         expect("invalid or has expired" in str(exc), str(exc))
     grant_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_share_grants").fetchone()["n"]
     expect(grant_count == 1, f"expected exactly one grant, got {grant_count}")
-    print("PASS test_claim_materializes_read_only_linked_resource_and_is_single_use")
+    print("PASS test_claim_materializes_writable_linked_resource_and_is_single_use")
 
 
 def test_expired_nonce_is_rejected_and_marked_expired() -> None:
@@ -275,7 +279,7 @@ def test_raven_claim_command_accepts_nonce_and_rejects_garbage() -> None:
         deployment=deployment,
     )
     expect(turn.action == "share_claim_accepted", turn.action)
-    expect("read-only Linked resource" in turn.reply, turn.reply)
+    expect("read/write Linked resource" in turn.reply, turn.reply)
 
     bad_turn = bots._share_claim_reply(
         conn,
@@ -431,7 +435,7 @@ def test_materialization_failure_cleans_partial_projection() -> None:
 
 def main() -> int:
     test_mint_returns_single_use_12h_nonce_and_stores_only_hash()
-    test_claim_materializes_read_only_linked_resource_and_is_single_use()
+    test_claim_materializes_writable_linked_resource_and_is_single_use()
     test_expired_nonce_is_rejected_and_marked_expired()
     test_unknown_and_malformed_nonces_are_rejected_generically()
     test_broker_claim_nonce_mode_mints_without_recipient()

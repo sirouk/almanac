@@ -153,8 +153,9 @@ contract behavior only; local/SSH adapter results count as live mutation proof
 only when the recorded executor result is live, succeeded, and tied to the
 matching proof gate.
 
-**Linked resources:** Cross-user Drive/Code sharing is modeled as read-only
-share grants. A user session creates a pending grant for a recipient, Raven
+**Linked resources:** Cross-user Drive/Code sharing is modeled as share grants
+whose accepted folders are writable from the recipient's Linked root. A user
+session creates a pending grant for a recipient, Raven
 queues an owner approval notification when the owner has a linked Telegram or
 Discord channel, and the owner can approve or deny it with button callbacks.
 Active Telegram buttons use `/raven approve {grant_id}` and `/raven deny
@@ -162,12 +163,13 @@ Active Telegram buttons use `/raven approve {grant_id}` and `/raven deny
 the backward-compatible `/share-approve {grant_id}` and `/share-deny
 {grant_id}` forms remain owner-scoped. The recipient accepts an approved grant with their own user
 session, and accepted resources are listed at
-`GET /api/v1/user/linked-resources`. Drive and Code expose a read-only `Linked`
-root when `ARCLINK_LINKED_RESOURCES_ROOT` or the plugin fallback projection
-exists. Accepted grants create living linked-resource projections backed by a
-manifest, owner revoke removes the projection and manifest entry, and Drive/Code
-allow recipient copy/duplicate into the recipient's own Vault or Workspace
-without allowing reshare from the `Linked` source. Direct right-click browser
+`GET /api/v1/user/linked-resources`. Drive and Code expose a `Linked` root when
+`ARCLINK_LINKED_RESOURCES_ROOT` or the plugin fallback projection exists.
+Accepted grants create living linked-resource projections backed by a manifest,
+owner revoke removes the projection and manifest entry, and Drive/Code allow
+recipient writes inside accepted shared folders plus copy/duplicate into the
+recipient's own Vault or Workspace without allowing reshare from the `Linked`
+source. Linked git mutations remain blocked. Direct right-click browser
 share-link generation remains disabled. Drive and Code can expose a brokered
 `Share` action only when `ARCLINK_SHARE_REQUEST_BROKER_URL` or the
 plugin-specific broker URL is configured together with
@@ -190,7 +192,7 @@ a copyable block — `A share request is available for review by Raven:` followe
 by `/arclink_share_accept <nonce>` — and tells the user it expires in 12 hours.
 The owner hands that to anyone on ArcLink; their Raven (or `POST
 /api/v1/user/share-grants/claim`) consumes the nonce and materializes a
-read-only Linked resource. Only the HMAC hash of the nonce is stored; expiry is
+Linked resource. Only the HMAC hash of the nonce is stored; expiry is
 enforced on read (status flips to `expired`) and swept in batch by
 `expire_revealable_user_material`; a claimed/expired/unknown nonce fails with a
 single generic "invalid or has expired" message so nonce state is not leaked. The

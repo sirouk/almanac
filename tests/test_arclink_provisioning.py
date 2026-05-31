@@ -240,7 +240,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(services["hermes-dashboard"]))
     linked_volume = next(item for item in services["hermes-dashboard"]["volumes"] if item["target"] == "/linked-resources")
-    expect(linked_volume["read_only"] is True, str(linked_volume))
+    expect(linked_volume.get("read_only") is not True, str(linked_volume))
     fleet_sync = services["fleet-share-sync"]
     expect(
         fleet_sync["command"] == ["./bin/docker-job-loop.sh", "fleet-share-sync", "120", "python3", "python/arclink_fleet_share.py", "sync-local"],

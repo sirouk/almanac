@@ -39,10 +39,11 @@ Hermes `v2026.4.30` or newer.
   header. Without a configured broker URL, token file, and owner deployment
   identity, share requests fail closed before any external call. Linked roots
   never expose the action.
-- Linked is read-only: browse, search, preview, and download are allowed;
-  upload, rename, move, delete, restore, and sharing are disabled. Copy and
-  duplicate from Linked create a new owned copy in Vault or Workspace and do not
-  grant resharing on the original linked resource.
+- Linked accepts writes inside accepted shared folders while keeping the Linked
+  root itself system-managed. Browse, search, preview, download, upload, folder
+  creation, rename, move, delete, and restore are confined to the accepted
+  folder source. Sharing from Linked stays disabled, and copy/duplicate can
+  still create owned copies in Vault or Workspace without granting reshare.
 - Delete moves local files into `.drive-trash`.
 - Text, Markdown, JSON, CSV/TSV, PDF, image, audio, video, and browser-native
   file previews render in place when browser-supported.

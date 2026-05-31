@@ -168,6 +168,24 @@ def _linked_manifest_entry(root: Path, path: Path) -> dict[str, Any] | None:
     return entry if isinstance(entry, dict) else None
 
 
+def _manifest_bool(value: Any, *, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"0", "false", "no", "off"}:
+        return False
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
+def _linked_entry_writable(entry: dict[str, Any]) -> bool:
+    access_mode = str(entry.get("access_mode") or "").strip().lower().replace("-", "_")
+    return access_mode == "read_write" and not _manifest_bool(entry.get("read_only"), default=True)
+
+
 def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
     entry = _linked_manifest_entry(root, path)
     if not entry:
@@ -176,6 +194,46 @@ def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
     if not str(source):
         return False
     return resolved == source or source in resolved.parents
+
+
+def _linked_writable_source(root: Path, raw_path: Any, *, allow_share_root: bool = False) -> tuple[Path, str, Path, str]:
+    root_resolved = root.resolve(strict=False)
+    relative = _clean_relative_path(raw_path)
+    if not relative:
+        raise HTTPException(status_code=403, detail="Choose a shared folder before writing to Linked")
+    slug, _separator, remainder = relative.partition("/")
+    entry = _linked_manifest(root_resolved).get(slug)
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=403, detail="Linked writes are limited to accepted shared folders")
+    if not _linked_entry_writable(entry):
+        raise HTTPException(status_code=403, detail="Linked resource is read-only")
+    if str(entry.get("resource_kind") or "").strip().lower() != "directory":
+        raise HTTPException(status_code=403, detail="Only shared folders are writable from Linked")
+    source = Path(str(entry.get("source_path") or "")).expanduser().resolve(strict=False)
+    if not source.is_dir():
+        raise HTTPException(status_code=404, detail="Shared folder source is not available")
+    if not remainder and not allow_share_root:
+        raise HTTPException(status_code=403, detail="The shared folder itself is system-managed")
+    target, source_relative = _resolve_local(source, remainder, root_id="")
+    return target, source_relative, source, slug
+
+
+def _resolve_writable_local(
+    root_id: str,
+    root: Path,
+    raw_path: Any,
+    *,
+    allow_share_root: bool = False,
+) -> tuple[Path, str, Path, str]:
+    if str(root_id or "").strip().lower() != "linked":
+        target, relative = _resolve_local(root, raw_path, root_id=root_id)
+        return target, relative, root.resolve(strict=False), ""
+    target, relative, source, slug = _linked_writable_source(root, raw_path, allow_share_root=allow_share_root)
+    return target, relative, source, slug
+
+
+def _linked_display_path(slug: str, relative: str) -> str:
+    return _display_path(posixpath.join(slug, relative) if relative else slug)
 
 
 def _clean_url(value: Any) -> str:
@@ -525,7 +583,6 @@ def _local_root_descriptors(webdav_available: bool = False, share_request_enable
             "linked",
             "Linked",
             _first_existing_dir(_candidate_linked_roots()),
-            read_only=True,
         ),
     ]
 
@@ -555,7 +612,7 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
 
 def _assert_writable_root(root_id: str) -> None:
     if str(root_id or "").strip().lower() == "linked":
-        raise HTTPException(status_code=403, detail="Linked resources are read-only")
+        return
 
 
 def _share_item_kind(path: Path) -> str:
@@ -580,7 +637,7 @@ def _share_request_payload(payload: dict[str, Any], ctx: dict[str, Any], target:
         "resource_kind": "drive",
         "item_kind": _share_item_kind(target),
         "display_name": display_name,
-        "requested_access": "read",
+        "requested_access": "read_write",
         "share_mode": "claim_nonce",
         "reshare_allowed": False,
     }
@@ -991,11 +1048,18 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
 
 def _move_local(root_id: str, root: Path, source_path: Any, destination_path: Any) -> dict[str, Any]:
     _assert_writable_root(root_id)
-    source, source_relative = _resolve_local(root, source_path, root_id=root_id)
-    destination, destination_relative = _resolve_local(root, destination_path, root_id=root_id)
+    source, source_relative, source_root, source_slug = _resolve_writable_local(root_id, root, source_path)
+    destination, destination_relative, destination_root, destination_slug = _resolve_writable_local(
+        root_id,
+        root,
+        destination_path,
+        allow_share_root=True,
+    )
+    if source_root != destination_root:
+        raise HTTPException(status_code=400, detail="Move between shared folders is not supported")
     if not source.exists():
         raise HTTPException(status_code=404, detail="Drive source path does not exist")
-    if source == root:
+    if source == source_root:
         raise HTTPException(status_code=400, detail="Cannot move the Drive root")
     if destination.exists():
         raise HTTPException(status_code=409, detail="Destination already exists")
@@ -1005,8 +1069,8 @@ def _move_local(root_id: str, root: Path, source_path: Any, destination_path: An
     shutil.move(str(source), str(destination))
     meta = _load_meta()
     favorites = _root_meta(meta, "favorites", root_id)
-    source_display = _display_path(source_relative)
-    destination_display = _display_path(destination_relative)
+    source_display = _linked_display_path(source_slug, source_relative) if source_slug else _display_path(source_relative)
+    destination_display = _linked_display_path(destination_slug, destination_relative) if destination_slug else _display_path(destination_relative)
     for favorite_path in list(favorites):
         if favorite_path == source_display or favorite_path.startswith(source_display + "/"):
             favorites[destination_display + favorite_path[len(source_display) :]] = favorites.pop(favorite_path)
@@ -1085,24 +1149,31 @@ def _copy_confined(source: Path, destination: Path) -> None:
 
 def _copy_local(root_id: str, root: Path, source_path: Any, destination_path: Any, *, conflict: str = "reject") -> dict[str, Any]:
     _assert_writable_root(root_id)
-    source, source_relative = _resolve_local(root, source_path, root_id=root_id)
-    destination, destination_relative = _resolve_local(root, destination_path, root_id=root_id)
+    source, source_relative, source_root, source_slug = _resolve_writable_local(root_id, root, source_path)
+    destination, destination_relative, destination_root, destination_slug = _resolve_writable_local(
+        root_id,
+        root,
+        destination_path,
+        allow_share_root=True,
+    )
+    if source_root != destination_root:
+        raise HTTPException(status_code=400, detail="Copy between shared folders is not supported")
     if not source.exists():
         raise HTTPException(status_code=404, detail="Drive source path does not exist")
-    if source == root:
+    if source == source_root:
         raise HTTPException(status_code=400, detail="Cannot copy the Drive root")
     if source.is_dir() and (destination == source or source in destination.parents):
         raise HTTPException(status_code=400, detail="Cannot copy a folder into itself")
-    _assert_no_symlink_escape(root, source)
+    _assert_no_symlink_escape(source_root, source)
     destination = _resolve_conflict_destination(destination, conflict=conflict)
-    destination_relative = destination.relative_to(root).as_posix()
+    destination_relative = destination.relative_to(destination_root).as_posix()
     destination.parent.mkdir(parents=True, exist_ok=True)
     _copy_confined(source, destination)
     return {
         "ok": True,
         "root": root_id,
-        "path": _display_path(source_relative),
-        "destination": _display_path(destination_relative),
+        "path": _linked_display_path(source_slug, source_relative) if source_slug else _display_path(source_relative),
+        "destination": _linked_display_path(destination_slug, destination_relative) if destination_slug else _display_path(destination_relative),
     }
 
 
@@ -1493,9 +1564,9 @@ async def mkdir(request: Request) -> dict[str, Any]:
     if root_id:
         ctx = _root_context(root_id)
         _assert_writable_root(ctx["id"])
-        target, relative = _resolve_local(Path(ctx["path"]), path, root_id=ctx["id"])
+        target, relative, _effective_root, slug = _resolve_writable_local(ctx["id"], Path(ctx["path"]), path)
         target.mkdir(parents=True, exist_ok=True)
-        return {"ok": True, "root": ctx["id"], "path": _display_path(relative)}
+        return {"ok": True, "root": ctx["id"], "path": _linked_display_path(slug, relative) if slug else _display_path(relative)}
     backend = _backend()
     if backend["name"] == "local-vault":
         target, relative = _resolve_local(backend["root"], path, root_id="vault")
@@ -1594,16 +1665,16 @@ async def delete(request: Request) -> dict[str, Any]:
 
 def _delete_local(root_id: str, root: Path, raw_path: Any) -> dict[str, Any]:
     _assert_writable_root(root_id)
-    target, relative = _resolve_local(root, raw_path, root_id=root_id)
+    target, relative, effective_root, slug = _resolve_writable_local(root_id, root, raw_path)
     if not target.exists():
         raise HTTPException(status_code=404, detail="Drive path does not exist")
-    if target == root:
+    if target == effective_root:
         raise HTTPException(status_code=400, detail="Cannot delete the Drive root")
-    trash_target = _next_trash_path(root, relative)
+    trash_target = _next_trash_path(effective_root, relative)
     shutil.move(str(target), str(trash_target))
-    display = _display_path(relative)
-    trash_relative = trash_target.relative_to(root).as_posix()
-    trash_display = _display_path(trash_relative)
+    display = _linked_display_path(slug, relative) if slug else _display_path(relative)
+    trash_relative = trash_target.relative_to(effective_root).as_posix()
+    trash_display = _linked_display_path(slug, trash_relative) if slug else _display_path(trash_relative)
     meta = _load_meta()
     favorites = _root_meta(meta, "favorites", root_id)
     for favorite_path in list(favorites):
@@ -1671,15 +1742,23 @@ def _restore_local(root_id: str, root_path: Path, raw_path: Any) -> dict[str, An
                 break
     if not record:
         raise HTTPException(status_code=404, detail="Trash record does not exist")
-    trash_target, _trash_relative = _resolve_local(root_path, requested, root_id=root_id)
-    destination, destination_relative = _resolve_local(root_path, record.get("original_path"), root_id=root_id)
+    trash_target, _trash_relative, effective_root, slug = _resolve_writable_local(root_id, root_path, requested)
+    destination, destination_relative, destination_root, destination_slug = _resolve_writable_local(
+        root_id,
+        root_path,
+        record.get("original_path"),
+        allow_share_root=True,
+    )
+    if effective_root != destination_root:
+        raise HTTPException(status_code=400, detail="Restore between shared folders is not supported")
     if destination.exists():
         raise HTTPException(status_code=409, detail="Original path already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(trash_target), str(destination))
     trash_records.pop(requested, None)
     _save_meta(meta)
-    return {"ok": True, "root": root_id, "path": _display_path(destination_relative)}
+    display_slug = destination_slug or slug
+    return {"ok": True, "root": root_id, "path": _linked_display_path(display_slug, destination_relative) if display_slug else _display_path(destination_relative)}
 
 
 @router.post("/upload")
@@ -1720,16 +1799,32 @@ async def upload(
     if not uploaded_paths and not directory_paths:
         raise HTTPException(status_code=400, detail="Upload is empty")
     if ctx is not None:
+        effective_target_dir = target_dir_path
+        effective_root_path = Path(ctx["path"])
+        linked_slug = ""
+        if ctx["id"] == "linked":
+            target_dir, effective_target_dir, effective_root_path, linked_slug = _resolve_writable_local(
+                ctx["id"],
+                Path(ctx["path"]),
+                target_dir_path,
+                allow_share_root=True,
+            )
+            if not target_dir.is_dir():
+                raise HTTPException(status_code=400, detail="Upload target must be a shared folder")
         uploaded_paths, directory_paths = _rewrite_keep_both_folder_uploads(
-            Path(ctx["path"]),
-            target_dir_path,
+            effective_root_path,
+            effective_target_dir,
             uploaded_paths,
             directory_paths,
             policy=policy,
-            root_id=ctx["id"],
+            root_id="" if ctx["id"] == "linked" else ctx["id"],
         )
         for directory_path in directory_paths:
-            target, _relative = _resolve_local(Path(ctx["path"]), _join_display(target_dir_path, directory_path), root_id=ctx["id"])
+            target, _relative = _resolve_local(
+                effective_root_path,
+                _join_display(effective_target_dir, directory_path),
+                root_id="" if ctx["id"] == "linked" else ctx["id"],
+            )
             target.mkdir(parents=True, exist_ok=True)
     elif backend["name"] == "local-vault":
         uploaded_paths, directory_paths = _rewrite_keep_both_folder_uploads(
@@ -1752,12 +1847,19 @@ async def upload(
         display = _join_display(target_dir_path, relative_upload_path)
         content_bytes = await upload_file.read()
         if ctx is not None:
-            target, relative = _resolve_local(Path(ctx["path"]), display, root_id=ctx["id"])
+            if ctx["id"] == "linked":
+                target, relative = _resolve_local(effective_root_path, _join_display(effective_target_dir, relative_upload_path), root_id="")
+            else:
+                target, relative = _resolve_local(Path(ctx["path"]), display, root_id=ctx["id"])
             target = _resolve_conflict_destination(target, conflict=policy)
-            relative = target.relative_to(Path(ctx["path"])).as_posix()
+            relative = target.relative_to(effective_root_path if ctx["id"] == "linked" else Path(ctx["path"])).as_posix()
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content_bytes)
-            uploaded.append({"root": ctx["id"], "path": _display_path(relative), "size": len(content_bytes)})
+            uploaded.append({
+                "root": ctx["id"],
+                "path": _linked_display_path(linked_slug, relative) if ctx["id"] == "linked" else _display_path(relative),
+                "size": len(content_bytes),
+            })
         elif backend["name"] == "local-vault":
             target, relative = _resolve_local(backend["root"], display, root_id="vault")
             target = _resolve_conflict_destination(target, conflict=policy)
@@ -1783,14 +1885,18 @@ async def new_file(request: Request) -> dict[str, Any]:
     _assert_writable_root(ctx["id"])
     parent = payload.get("path") or "/"
     name = _sanitized_name(payload.get("name"))
-    target, relative = _resolve_local(Path(ctx["path"]), _join_display(str(parent), name), root_id=ctx["id"])
+    target, relative, _effective_root, slug = _resolve_writable_local(
+        ctx["id"],
+        Path(ctx["path"]),
+        _join_display(str(parent), name),
+    )
     if target.exists():
         raise HTTPException(status_code=409, detail="File already exists")
     if target.suffix.lower() not in _TEXT_EXTENSIONS:
         raise HTTPException(status_code=400, detail="New file is limited to text-like file extensions")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(str(payload.get("content") or ""), encoding="utf-8")
-    return {"ok": True, "root": ctx["id"], "path": _display_path(relative)}
+    return {"ok": True, "root": ctx["id"], "path": _linked_display_path(slug, relative) if slug else _display_path(relative)}
 
 
 @router.post("/copy")

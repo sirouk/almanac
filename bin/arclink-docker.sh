@@ -1089,17 +1089,22 @@ def load_deployment_identities() -> dict[str, dict[str, str]]:
 deployment_identities = load_deployment_identities()
 
 
-def ensure_volume(volumes: list[dict[str, Any]], *, source: str, target: str) -> bool:
+def ensure_volume(volumes: list[dict[str, Any]], *, source: str, target: str, read_only: bool | None = None) -> bool:
     for item in volumes:
         if str(item.get("target") or "") != target:
             continue
         new_item = {**item, "source": source, "target": target, "type": "bind"}
+        if read_only is not None:
+            new_item["read_only"] = read_only
         if new_item != item:
             item.clear()
             item.update(new_item)
             return True
         return False
-    volumes.append({"source": source, "target": target, "type": "bind"})
+    new_item = {"source": source, "target": target, "type": "bind"}
+    if read_only is not None:
+        new_item["read_only"] = read_only
+    volumes.append(new_item)
     return True
 
 
@@ -1259,6 +1264,12 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         ) or service_changed
         service_changed = ensure_volume(volumes, source=str(deployment_root / "vault"), target="/srv/vault") or service_changed
         service_changed = ensure_volume(volumes, source=str(deployment_root / "workspace"), target="/workspace") or service_changed
+        service_changed = ensure_volume(
+            volumes,
+            source=str(deployment_root / "linked-resources"),
+            target="/linked-resources",
+            read_only=False,
+        ) or service_changed
     memory_synth = services.get("memory-synth")
     if isinstance(memory_synth, dict):
         memory_volumes = memory_synth.setdefault("volumes", [])

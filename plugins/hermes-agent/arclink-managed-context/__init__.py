@@ -318,16 +318,16 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
             "send this file to",
             "give access to",
             "grant access to",
-            "read-only share",
+            "share this writable folder",
             "share from my vault",
             "share from my workspace",
         ),
         (
-            "shares.request - governed read-only Drive/Code share request. The plugin injects token automatically; omit token. "
+            "shares.request - governed read/write Drive/Code shared-folder request. The plugin injects token automatically; omit token. "
             "Required: resource_kind drive|code, resource_root vault|workspace, resource_path. Also pass recipient_user_id or recipient_email. "
             "Use only for the current user's named Vault or Workspace file/directory; Linked resources cannot be reshared. "
-            "The call creates pending_owner_approval; the owner must approve and the recipient must accept before it appears under the recipient's read-only Linked root. "
-            "reshare is false; copy/duplicate accepted Linked resources only into the recipient's owned Vault or Workspace roots."
+            "The call creates pending_owner_approval; the owner must approve and the recipient must accept before it appears under the recipient's Linked root. "
+            "Accepted Drive/Code shared folders are writable in place; reshare is false and Linked git mutations stay blocked."
         ),
     ),
     (

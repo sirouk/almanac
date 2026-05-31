@@ -33,6 +33,11 @@ Secondary accents:
 - Electric Blue: `#2075FE`
 - Neon Green: `#1AC153`
 
+These six values are mechanically verified: the local product-surface prototype
+(`python/arclink_product_surface.py`, `_layout()`) sets `--jet:#080808`,
+`--carbon:#0F0F0E`, `--soft:#E7E6E6`, `--signal:#FB5005`, `--blue:#2075FE`, and
+`--green:#1AC153`, matching this palette exactly.
+
 Usage rules:
 
 - Black and carbon are the default surfaces.
@@ -46,6 +51,10 @@ Usage rules:
 - Body and UI: Satoshi, or Inter when Satoshi is not available.
 - Use clean type, generous spacing, and direct hierarchy.
 - Avoid oversized hero typography inside dashboards, control panels, or dense operational surfaces.
+
+The product-surface prototype sets headings to `"Space Grotesk", Inter` and body
+to `Inter, Satoshi, system-ui` (Satoshi declared as a webfont fallback), matching
+this intent.
 
 ## Logo System
 
@@ -83,6 +92,14 @@ Prefer:
 - "Private AI agents that run your business."
 - "Built once. Runs forever."
 - "Clean. Modern. Built to scale."
+
+Shipped-copy note: the live local product-surface prototype
+(`python/arclink_product_surface.py`, the no-secret WSGI prototype — not the
+production Next.js `web/` app) leads with the hero line **"Your AI workforce.
+Deployed."** under the **"Private AI infrastructure"** tag. It does **not** use
+the short promise "Built once. Runs forever." anywhere in shipped copy. Treat
+"Your AI workforce. Deployed." as the proven, in-product lead; "Built once.
+Runs forever." remains brand canon but is currently unshipped.
 
 Avoid:
 

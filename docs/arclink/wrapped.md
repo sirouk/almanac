@@ -33,11 +33,39 @@ daily/weekly/monthly reports, retries failed reports on the next eligible
 cycle, and queues persistent failures to the Operator without Captain
 narrative. The service does not need the Docker socket.
 
+`list_due_wrapped_captains` only enqueues a Captain when there is something
+worth wrapping. A Captain is considered for the current period when no report
+exists yet, or when the latest report for that period is `failed` (a retry).
+For the missing-report case, an eligibility signal gate (`_has_wrapped_signal`)
+must also pass: the Captain must have at least one active Pod and at least one
+real signal — a scoped event, audit action, same-Captain Pod Comms message, or
+memory synthesis card — in the period. A bare deployment row is inventory, not a
+signal, so fresh onboarding or add-Pod activity alone never produces an empty
+report. The active Pod set excludes the Operator's in-stack agent
+(`_is_operator_deployment`: `deployment_id == "operator"` or a deployment whose
+metadata marks `operator_agent`) and excludes terminal deployments
+(`cancelled`, `teardown_complete`, `torn_down`).
+
+Each generation runs inside the scheduler's per-Captain try/except. On failure
+the scheduler records a `failed` report row for the period (`INSERT OR REPLACE`,
+keyed by Captain and period) and increments a per-period failure attempt count.
+When attempts reach the persistent-failure threshold (3), it queues a single
+`notification_outbox` row with `target_kind='operator'` and
+`channel_kind='tui-only'`. That operator notice carries only the Captain id and
+period for triage — never any Captain narrative, report text, Markdown, or
+ledger.
+
 Captain delivery uses `notification_outbox` rows with
 `target_kind='captain-wrapped'`. Rows resolve to the Captain's known
-Telegram/Discord home channel when available, carry only safe metadata in
-`extra_json`, and set `next_attempt_at` after supported quiet-hours windows
-such as `22:00-08:00`.
+Telegram/Discord home channel (read from `arclink_onboarding_sessions`, with the
+identity normalized to a `tg:` or `discord:` target) when available, carry only
+safe metadata in `extra_json`, and set `next_attempt_at` after supported
+quiet-hours windows such as `22:00-08:00`. When no eligible home channel is
+known, no outbox row is queued; instead the report's `delivery_channel` is set
+to `unavailable` so the report is not lost or silently retried as if delivery
+were pending. Actual delivery over Telegram/Discord is proof-gated behind
+PG-BOTS (see the Runbook below); scoring, enqueue, and the `unavailable`
+outcome are all implemented and tested locally.
 
 `python/arclink_notification_delivery.py` owns final delivery of queued
 `captain-wrapped` rows and marks the matching report delivered only after the
@@ -79,9 +107,10 @@ through the canonical Docker control path:
 ./deploy.sh control health
 ```
 
-Live Telegram/Discord delivery and production deploy/upgrade remain
-operator-gated. Build validation should exercise pure handler/API paths and
-outbox rows without mutating live command menus or webhooks.
+Live Telegram/Discord delivery is proof-gated behind PG-BOTS, and production
+deploy/upgrade remains operator-gated. Build validation should exercise pure
+handler/API paths and outbox rows without mutating live command menus or
+webhooks.
 
 ## Novelty Score
 

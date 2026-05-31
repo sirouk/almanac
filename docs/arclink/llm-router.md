@@ -19,7 +19,14 @@ fake-upstream tests exist locally. Live Chutes proof remains operator-gated.
 | ArcPod provider rendering | `python/arclink_provisioning.py`, `python/arclink_sovereign_worker.py` |
 | Compose service | `compose.yaml` service `control-llm-router` |
 | Runtime dependencies | `Dockerfile`, `requirements-dev.txt` |
+| Chutes account/usage/key/introspect adapter (TEST-ONLY, UNWIRED) | `python/arclink_chutes_live.py` |
+| Chutes OAuth connect/callback/disconnect helpers (TEST-ONLY, UNWIRED) | `python/arclink_chutes_oauth.py` |
 | Focused tests | `tests/test_arclink_llm_router.py`, hosted provider-state tests |
+
+`python/arclink_chutes_live.py` and `python/arclink_chutes_oauth.py` are present
+in the tree but are **not wired into the running router** — see
+[Provider-Connection Adapters](#provider-connection-adapters-test-only-unwired)
+below for what they are and what proof gate blocks them.
 
 The router is intentionally separate from `control-api`. `control-api` remains
 the hosted WSGI API under `/api/v1`; the router is an OpenAI-compatible ASGI
@@ -142,7 +149,11 @@ summary for each deployment plus aggregate counts in `chutes_summary`. Those
 payloads expose only credential counts, open reservation cents, request counts,
 token counts, estimated/actual cents, status counts, and the budget/quota view.
 They do not return raw router keys, central Chutes credentials, secret refs,
-prompts, or completions.
+prompts, or completions. These two routes are part of the hosted WSGI API under
+`/api/v1`; for their full request/response contract, auth, and CORS rules see
+[docs/API_REFERENCE.md](../API_REFERENCE.md) and the generated
+[OpenAPI spec](../openapi/arclink-v1.openapi.json) rather than duplicating the
+route catalog here.
 
 ## ArcPod Defaults
 
@@ -185,7 +196,7 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_KEY_REQUESTS_PER_MINUTE` | `60` | Per-key request limit |
 | `ARCLINK_LLM_ROUTER_DEPLOYMENT_REQUESTS_PER_MINUTE` | `120` | Per-deployment request limit |
 | `ARCLINK_LLM_ROUTER_USER_REQUESTS_PER_MINUTE` | `300` | Per-Captain request limit |
-| `ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS` | `0` | Router-side Chutes budget fallback |
+| `ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS` | `0` (router code default) / `2500` (Compose `control-llm-router` service default) | Router-side Chutes budget fallback. `load_router_config` floors this at `0` in code; the deployed `control-llm-router` Compose service overrides it to `2500`, so a Pod without an explicit configured budget inherits a `$25` fallback. Always treat the per-deployment configured budget as authoritative. |
 | `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS` | `95` | Fallback input-token cost estimate for the default Kimi lane |
 | `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS` | `400` | Fallback output-token cost estimate for the default Kimi lane |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
@@ -214,7 +225,11 @@ fallback before any upstream chunks have been emitted. Once a streaming response
 has started, the router does not pretend it can safely replay the request; it
 emits explicit router metadata that streaming fallback is unavailable after the
 stream has started, settles the reservation, and records the failed stream
-without prompt or chunk text. Live provider proof remains tracked by `GAP-031`.
+without prompt or chunk text. The local `GAP-031-A` slice landed this sanitized
+fallback audit, pre-stream fallback retry, no-replay-after-stream labeling,
+fallback-aware reservation pricing, and final-model settlement pricing. Only the
+authorized live overload proof remains, tracked by `GAP-031` behind the
+`PG-PROVIDER` proof gate.
 
 Fallback attempts are audited as sanitized `llm_router:fallback_attempt` events.
 Usage and reservation rows include metadata for requested, primary, final,
@@ -222,6 +237,25 @@ reservation-pricing, and usage-pricing models so cost-different fallbacks are
 visible. When catalog prices are available, the request reservation accounts for
 the highest configured fallback candidate cost and settlement uses the final
 model actually used.
+
+Streaming fallback is deliberately split into a pre-stream lane and a
+post-stream lane so the router never silently replays a partially-delivered
+response. Sanitized usage/audit metadata records a `streaming_fallback` value
+drawn from this fixed taxonomy:
+
+| `streaming_fallback` value | Meaning |
+| --- | --- |
+| `pre_stream` | The upstream returned a retryable status before any chunk was emitted; the router advanced to the next fallback candidate and emitted a leading `arclink_router` SSE metadata frame. |
+| `not_available` | A pre-stream failure occurred but no further fallback candidate remained; the stream failed without replay. |
+| `unavailable_after_stream_started` | The first chunk had already been yielded when a later upstream error occurred; the router refuses to replay, emits a sanitized error SSE frame, and settles the reservation. |
+| `failed_after_stream_started` | The recorded outcome label for a stream that errored after chunks were yielded (paired with `unavailable_after_stream_started`). |
+
+The same no-replay invariant applies to non-streaming fallback only in that it
+never reuses an already-emitted response: non-streaming requests retry the next
+candidate cleanly because nothing was sent to the Captain yet. Live provider
+proof of this cascade remains tracked by `GAP-031` behind the `PG-PROVIDER`
+proof gate; the local fallback semantics above are implemented and tested
+locally with the fake async upstream transport.
 
 ## Model Catalog And Promotion
 
@@ -244,6 +278,45 @@ Promotion policy is centralized in the router:
 - The Captain/Agent can keep requesting the old allowed model id; the router
   records and bills the resolved upstream model. This lets the Operator move a
   whole fleet from Kimi K2.6 to K2.7 without rewriting every ArcPod immediately.
+
+## Provider-Connection Adapters (TEST-ONLY, UNWIRED)
+
+ArcLink carries two provider-connection modules that model a richer Chutes
+account relationship than the running router uses today. Neither is imported by
+the router, the hosted API, provisioning, or entitlements — they exist only with
+their own focused tests and the public-repo hygiene test, and every live effect
+is proof-gated. State both halves honestly: the code shape is implemented and
+tested locally, but no live OAuth-backed or account-API path runs.
+
+- **`python/arclink_chutes_live.py` (`ChutesLiveAdapter`)** is a secret-ref
+  boundary over the Chutes account, usage, key, and OAuth-introspection APIs
+  (account profile, subscription usage, per-user usage, quotas, discounts, price
+  overrides, API-key create/delete, scope listing, token introspection, balance
+  transfer). It ships a `FakeChutesLiveTransport` with fixtures for tests. Read
+  calls run against the injected transport; every mutation
+  (`create_api_key`, `delete_api_key`, `transfer_balance`) is refused unless
+  `allow_live_mutation=True`, raising a `ChutesLiveAdapterError` that states the
+  operation is "proof-gated until operator authorizes live mutation." This
+  adapter is **not wired into the running router** and has no production caller.
+- **`python/arclink_chutes_oauth.py`** holds PKCE (`S256`) connect/callback/
+  disconnect helpers backed by in-memory state/token stores and a
+  `FakeChutesOAuthCodeExchanger`. `ChutesOAuthConnectPlan.to_public()` reports
+  `connect_status: "proof_gated_until_authorized_oauth_client_is_configured"`,
+  and `disconnect_chutes_oauth(revoke_live=True)` is proof-gated. There is no
+  live OAuth client configured and no callback route mounted on the router or
+  the hosted API.
+
+The Chutes deployment boundary in `python/arclink_chutes.py` recognizes a
+`per_user_chutes_account_oauth` isolation mode and a matching
+`account_oauth_required` credential state (surfaced when
+`ARCLINK_CHUTES_PER_KEY_METERING_AVAILABLE` /
+`ARCLINK_CHUTES_KEY_METERING_AVAILABLE` indicate per-key metering is
+unavailable). This is a **posture/label only**: there is no code path that
+performs OAuth-backed inference, so an ArcPod cannot today route inference
+through a Captain's own Chutes account. Treat both the isolation mode and the
+credential state as proof-gated and unwired until a live OAuth-backed lane is
+built and proven. The live-relay proof itself is tracked by `GAP-031` behind the
+`PG-PROVIDER` proof gate (see [GAPS.md](../../GAPS.md) for the gap taxonomy).
 
 ## Proof Boundary
 

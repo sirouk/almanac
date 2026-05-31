@@ -27,6 +27,14 @@ the current code shape:
 | `u-{prefix}.{base_domain}` | User dashboard with Drive and Code plugin routes |
 | `hermes-{prefix}.{base_domain}` | Hermes agent gateway |
 
+Only these two roles get DNS records and Traefik routers, because
+`ARCLINK_HOST_ROLES` in `python/arclink_ingress.py` is `("dashboard", "hermes")`
+and `desired_arclink_ingress_records()` filters to it. Note that
+`arclink_hostnames()` (in `python/arclink_adapters.py`) also computes
+`files-{prefix}` and `code-{prefix}` hostnames, but those are **not provisioned
+as subdomains** — Files and Code are dashboard plugin routes behind the `u-`
+dashboard, so they receive no Cloudflare record and no Traefik router.
+
 `ARCLINK_BASE_DOMAIN` sets the base domain. `ARCLINK_EDGE_TARGET` sets the
 Cloudflare CNAME target, usually the control edge or worker edge host.
 

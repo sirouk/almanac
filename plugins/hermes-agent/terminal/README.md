@@ -10,12 +10,17 @@ terminal emulator.
 
 Copy this directory to `~/.hermes/plugins/terminal` and enable `terminal` under
 `plugins.enabled` in `config.yaml`. The dashboard plugin surface requires
-Hermes `v2026.4.30` or newer.
+Hermes `v2026.4.30` or newer (`minimum_hermes_version` in `plugin.yaml`).
+
+Version note: `plugin.yaml` carries `version: 0.2.0`, while the `/status`
+payload reports `version: "0.3.0"` (the running surface). Treat `0.3.0` as the
+current behavior level described below; the `plugin.yaml` pin is stale and not
+yet reconciled.
 
 ## Runtime
 
-- Workspace defaults to `$HOME`, `TERMINAL_WORKSPACE_ROOT`, or
-  `CODE_WORKSPACE_ROOT` when set.
+- Workspace uses `TERMINAL_WORKSPACE_ROOT`, `CODE_WORKSPACE_ROOT`, or
+  `DRIVE_WORKSPACE_ROOT` when set, otherwise `$HERMES_HOME/workspace`.
 - Shell defaults to `$SHELL`, `/bin/bash`, then `/bin/sh`; set
   `TERMINAL_SHELL` to override.
 - Root execution is blocked unless `TERMINAL_ALLOW_ROOT=1`.
@@ -41,8 +46,10 @@ Hermes `v2026.4.30` or newer.
   xterm.js and the terminal pty API.
 - Cached browser terminals are caught up before they are revealed again, so
   switching back to a TUI session does not visibly replay already-buffered text.
-- The `+SSH` button opens the machine shell without asking for a remote target;
-  `+TUI` opens the configured Hermes TUI command.
+- The `+SSH` button opens a shell on the local machine (the ArcPod's own host)
+  without asking for a remote target; despite the `ssh` mode name the session is
+  created with an empty `target`, so it is never a remote dial-out. `+TUI` opens
+  the configured Hermes TUI command.
 
 ## Check
 

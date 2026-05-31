@@ -1,5 +1,56 @@
 # ArcLink Changelog
 
+## Ground-Truth Documentation Alignment (2026-05-30)
+
+Documentation-only alignment pass reconciling project-facing docs against the
+canonical `research/ARCLINK_GROUND_TRUTH_BRIEF.md`. No code, schema, or live
+behavior changed; no live-proof claims were added.
+
+- **Module map**: rebuilt the `python/arclink_*.py` inventory to the current 84
+  modules, adding the previously undocumented public Agent gateway / exec-broker
+  / pod-comms / agent-supervisor family, `arclink_operator_raven` /
+  `arclink_operator_agent`, the Academy modules, `arclink_memory_synthesizer`,
+  `arclink_fleet_share`, and `arclink_pod_migration`.
+- **Tables**: corrected the stale "23 tables" figure to 44 `arclink_*` tables
+  plus 9 non-prefixed `academy_*` tables: the original Academy mode/proposal
+  rows and the central corpus rows (`academy_sources`,
+  `academy_corpus_specialists`, `academy_specialist_sources`,
+  `academy_source_provenance`, `academy_specialist_subscriptions`). Schema
+  remains idempotent `ensure_schema()` (not a versioned migration ledger).
+- **Operator Raven**: corrected the stale "read-only/dry-run" framing (GAP-029);
+  it queues real, audited, identity- and approval-code-gated mutations
+  (`pod_repair`, `rollout`, `host_upgrade`, `pin_upgrade`) plus a single in-stack
+  operator Hermes agent with a free-form bridge. `rollout` is wired/queueable
+  (GAP-032), not "pending/disabled".
+- **New doc**: added `docs/arclink/public-agent-gateway.md` for the public Agent
+  gateway and trusted-host broker/helper family (per-turn `docker exec` via
+  `gateway-exec-broker`; service/port/header/socket table; GAP-019 invariants).
+- **Fleet shared folder** (2026-05-29): documented `arclink_fleet_share`
+  (per-Captain bare git hub, multi-writer rebase, conflict-surfacing-not-clobber)
+  as the writable **Fleet** root in Drive/Code and in the data-safety story.
+- **Backup/restore**: corrected state-root/volume paths to
+  `/arcdata/deployments/{id}` (`config/vault/state/nextcloud/published/`) and
+  documented the two backup scripts, two-phase `configure-agent-backup.sh`
+  pending->verify->activate, per-user key separation, public-repo refusal, and
+  the `deployment-exec-broker` lifecycle owner (GAP-013 / PG-BACKUP kept).
+- **Alert candidates**: replaced the external-pager framing with the in-product
+  rail (health-watch edge-triggered notifications -> `notification_outbox` ->
+  operator channel, deploy-window suppression, `arclink_service_health`).
+- **Finish gate**: the professional finish-gate doc now names the executable gate
+  `python/arclink_surface_contract.py` + `tests/test_arclink_surface_contract.py`
+  (audience/channel/state taxonomy, Captain-vocabulary lint, secret/traceback
+  refusal, blocked-copy "next action" rule). GAP-033 remains open / proof-gated.
+- **Academy follow-up**: reconciled this pass with the later Academy corpus/apply
+  code: the central SME corpus is cross-Captain and deduplicated, weekly CE uses
+  real trainee/central sources before fixture fallback, and authorized
+  `academy_apply` materializes the replaceable Academy SOUL section plus a
+  private receipt. Mode-end and weekly CE still do not auto-write Agent files;
+  vault/qmd/skill deltas remain future/proof-gated.
+
+Proof gates stay named in copy; GAP-019 stays acknowledged-only and not
+tenant-safe. Source-level work for the active DoD is complete; remaining work is
+operator-authorized live/proof.
+
 ## Native Hermes Workspace Plugins (2026-05-05)
 
 - **Drive**: `plugins/hermes-agent/drive/` is now documented as

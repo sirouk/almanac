@@ -39,7 +39,16 @@ Shipped today:
 - Applied profiles also feed `[managed:org-profile]`,
   `[managed:user-responsibilities]`, and `[managed:team-map]` through plugin
   state, plus a durable `SOUL.md` overlay for matched agents after their
-  refresh runs.
+  refresh runs. The same plugin-managed context also carries a separate
+  `[managed:today-plate]` involvement snapshot (composed by the control plane in
+  `arclink_control.py`, not by the org-profile builder); it is mentioned here
+  only so the slice list is complete.
+- Agents that do not match a profile person still receive a baseline slice.
+  `build_managed_sections_for_agent` falls back to
+  `org_baseline_context_for_agent` (operating mode `org_member_unmatched`), which
+  shares organization/baseline context but explicitly instructs the agent not to
+  infer that user's role, authority, team, or identity from the roster. See the
+  "Unmatched-Agent Baseline" section below.
 - During chat onboarding, Curator can offer safe, non-secret profile-person
   choices for unapplied roster entries when the applied profile privacy policy
   allows it. The user-selected link is stored separately from bot and Unix
@@ -148,7 +157,51 @@ people:
 ```
 
 Operators can deepen the file over time with groups/teams, household circles,
-relationships, responsibilities, identity hints, work surfaces, and policies.
+relationships, responsibilities, identity hints, work surfaces, an
+`agent_lineage` baseline, and `policies`.
+
+## Schema Top-Level Sections
+
+`config/org-profile.schema.json` accepts these top-level sections: `$schema`,
+`version`, `organization`, `roles`, `people`, `teams`, `relationships`,
+`agent_lineage`, `work_surfaces`, `authority`, `identity_verification`,
+`distribution`, `workflows`, `automations`, `benchmarks`, `policies`,
+`references`, and `metadata`. Two of these drive privacy and lineage behavior
+described below.
+
+### Agent Lineage
+
+`agent_lineage` is the reusable baseline and module-layering contract used to
+shape new agents from a shared starting point. It can carry a `purpose`, a
+`prototype_agent`, a `baseline` block (doctrine, product facts, fact caveats,
+source-of-truth discipline, security rules, communication style, tool-use
+expectations), department/function/human-owner/agent modules, and
+`seed_sources`.
+
+Each `seed_sources` entry may declare a `path`, `canonical_initial_seed`, and an
+`expected_sha256`. During validation, when `cfg` is available and the seed path
+exists, ArcLink computes the file's sha256 and compares it against
+`expected_sha256`. A mismatch is a **hard error**; a missing or unreadable seed
+path is a **warning**. This lets operators pin the exact source material an
+agent was seeded from. The baseline block also feeds the matched-agent
+`SOUL.md` overlay and `[managed:org-profile]` slice as shared doctrine.
+
+### Policies
+
+`policies` carries cross-agent behavior, privacy, escalation, and decision
+policy. The privacy sub-section is load-bearing for the vault render:
+`policies.privacy.default_people_visibility` (enum
+`org_visible | group_visible | team_visible | household_visible | operator_only
+| private`, default `operator_only`) gates whether the generated vault doc may
+include direct per-person details.
+
+The render only emits full per-person/per-team detail when **all** of these
+hold: the profile's vault `generated_outputs` entry is `audience: all_agents`
+with `sensitivity` `public` or `internal`, **and**
+`default_people_visibility` is `org_visible` or `household_visible`. Otherwise
+the vault doc emits counts plus a "details kept in matched-agent/private
+context slices" note and states the current privacy mode. `policies.agent_behavior`
+is also projected into per-agent context as a global agent policy.
 
 ## Ingestion Commands
 
@@ -203,9 +256,13 @@ Semantic validation should catch:
 - People referencing teams that do not exist.
 - Teams referencing members or leads that do not exist.
 - Relationships whose subject/object look like missing known ids.
-- Agent `serves` values that do not match the containing person.
-- Work-surface paths that point outside expected shared locations.
+- Agent `serves` values that do not match the containing person (for
+  `personal_delegate`/`operator_delegate` modes).
+- Work-surface paths that point outside expected shared locations (the generated
+  vault path is rejected if it is absolute or traverses outside the vault).
 - Sensitive identity hints being routed to public render targets.
+- `agent_lineage.seed_sources` whose `expected_sha256` does not match the
+  on-disk seed file (a hard error; a missing/unreadable seed path is a warning).
 
 Invalid schema blocks apply. Semantic warnings can be split into hard failures
 and warnings. Identity mismatch, unknown roles, unknown teams, and impossible
@@ -319,10 +376,17 @@ Plugin-managed context receives compact, refreshable operational slices:
   authority, and agent boundaries
 - `[managed:team-map]`: teams and teammate coordination context
 
+These three slices come from the applied operating profile. A separate
+`[managed:today-plate]` slice (a compact user-scoped involvement snapshot) is
+composed independently by the control plane (`arclink_control.py`), not by the
+org-profile apply path; it travels through the same plugin-managed context but is
+not part of the operating-profile contract.
+
 These should be small enough to inject without drowning the agent, but precise
 enough to prevent authority confusion. Dynamic `[managed:*]` slices, including
-vault/Notion landmark maps and today-plate recall, are not written into Hermes
-`MEMORY.md`; `SOUL.md` remains the durable identity and orientation artifact.
+vault/Notion landmark maps and the `[managed:today-plate]` recall, are not written
+into Hermes `MEMORY.md`; `SOUL.md` remains the durable identity and orientation
+artifact.
 
 ### Vault Render
 
@@ -359,6 +423,32 @@ name matches. A match can prefill or orient:
 Hints and user-selected profile links are not verification by themselves.
 Operator approval still controls provisioning, and Notion identity still goes
 through the existing claim/verification path.
+
+## Unmatched-Agent Baseline
+
+Not every active agent maps to a profile person. When
+`build_managed_sections_for_agent` cannot resolve a person (by
+`org_profile_person_id`, then `unix_user`, then a unique display/preferred/agent
+name or alias), it does not leave the agent context-less and it does not guess.
+It falls back to `org_baseline_context_for_agent`, which produces a baseline
+slice with operating mode `org_member_unmatched`.
+
+That baseline slice shares safe, non-personal context only: the operating-context
+name/mission/scope, the `agent_lineage` baseline doctrine, global authority
+rules, and globally-scoped workflows/automations/benchmarks. It carries no
+person id, role, team, responsibilities, or decision authority. The
+`[managed:user-responsibilities]` and `SOUL.md` overlay text for an unmatched
+agent state explicitly that the org-profile person slice is **not linked** and
+instruct the agent to use shared organization rails and first-contact/user-provided
+preferences and to **not infer the user's role, authority, team, or identity from
+the org roster**.
+
+At apply time, agents that resolve to a person get a written
+`state/org-profile/agent-context/<agent_id>.json` slice and are reported as
+`matched_agents`; agents that do not are reported as `unmatched_active_agents`
+and any stale slice file is removed. The `org_member_unmatched` baseline is
+assembled on demand for managed context rather than written as a persisted
+per-agent slice.
 
 ## Authority Rules
 

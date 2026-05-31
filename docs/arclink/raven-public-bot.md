@@ -81,12 +81,26 @@ allowed operator user IDs still route to Operator Raven, while group chats stay
 on the safe Captain/public contract. `/start`, `/help`, `/raven`,
 `/raven_name`, and free-form text show the Operator Raven bridge instead of
 checkout copy.
-Operator commands such as `/operator_status`, `/operator_fleet`,
-`/worker_probe <host-id> --dry-run`, `/user_lookup <query>`,
-`/pod_repair <deployment-id> --dry-run`, `/upgrade_check`, `/upgrade_hermes`,
-`/rollout_plan <target> --dry-run`, and `/academy_status <query>` route to the
-read-only/dry-run Operator Raven surface. Non-operator Telegram users continue
-through the Captain public bot contract.
+The Operator Telegram command set is the registered
+`ARCLINK_OPERATOR_TELEGRAM_COMMANDS` in `arclink_telegram.py`:
+`/operator_status`, `/agents`, `/fleet_list`, `/worker_probe`, `/user_lookup`,
+`/pod_repair`, `/upgrade_check`, `/upgrade`, `/pin_upgrade`, `/rollout`,
+`/action_status`, and `/academy_status`. These dispatch through
+`dispatch_operator_raven_command` in `arclink_operator_raven.py`. Read commands
+(`operator_status`, `fleet_list`, `user_lookup`, `academy_status`,
+`upgrade_check`, `action_status`, and `worker_probe`, which is dry-run only)
+never mutate. The mutating commands (`pod_repair`, `rollout`, `upgrade`/host
+upgrade, `pin_upgrade`) are NOT read-only: they use a three-mode contract where
+`--dry-run` previews, no-dry-run without an operator actor fails closed, and
+no-dry-run with the operator actor queues a real, audited, identity-gated action
+intent. Every mutating command requires the operator approval code
+(`strip_operator_approval_code`, constant-time compare), and live execution
+still honors `ARCLINK_EXECUTOR_ADAPTER` (fake adapter = record-only). Live
+delivery of these surfaces is proof-gated behind `PG-BOTS`; per-action live
+effect rolls up to the relevant proof gate (for example rollout is
+`PG-UPGRADE`/`PG-HERMES`). For the authoritative operator action matrix and the
+trust-boundary (GAP-019) rules see `docs/arclink/operations-runbook.md`.
+Non-operator Telegram users continue through the Captain public bot contract.
 During public bot registration, ArcLink also writes chat-scoped Telegram
 command menus for configured operator Telegram chats so the Operator sees the
 operator command set rather than only the Captain menu.
@@ -125,10 +139,37 @@ Hidden/account-state actions:
 - `/pair-channel` and `/pair_channel` remain backward-compatible aliases for `/link-channel` and `/link_channel`.
 - `/add-agent` is accepted only after the account has an active first deployment. It is surfaced as an `/agents` button, not as a global registered command.
 - `/agent-{slug}` switches the active Hermes Agent target for the account. It is surfaced as an `/agents` manifest button, not as a global registered command.
-- `/share-approve {grant_id}` and `/share-deny {grant_id}` are backward-compatible owner actions for Drive/Code share grants. Active Telegram approval buttons use `/raven approve {grant_id}` and `/raven deny {grant_id}` so they cannot collide with the active Hermes Agent's slash namespace. Raven only honors either form from a public channel linked to the share owner.
+- `/share-approve {grant_id}`, `/share-deny {grant_id}`, and `/share-accept {grant_id}` are backward-compatible owner/recipient actions for Drive/Code share grants (grant ids match `share_[0-9a-f]{32}`). Owner approve/deny moves the grant from `pending_owner_approval` to `approved`/`denied`; recipient accept claims an approved grant. Active Telegram approval buttons use `/raven approve {grant_id}`, `/raven deny {grant_id}`, and `/raven accept {grant_id}` so they cannot collide with the active Hermes Agent's slash namespace. Raven only honors the owner forms from a public channel linked to the share owner.
+- `/share-claim {nonce}` (also `/share_claim` and `/arclink_share_accept`, nonce matching `asn_[0-9a-f]{48}`) claims an ephemeral share invite for the recipient. Share links expire 12 hours after they are created and can only be claimed once.
 - `/upgrade-hermes` remains accepted as the Discord-friendly alias for `/upgrade_hermes`, and `/update` is intercepted too. Neither path runs direct `hermes update`; Raven points users to ArcLink-managed upgrade rails.
 - `/raven-name` remains accepted as the Discord-friendly alias for
   `/raven_name`.
+
+## Post-Launch Account Actions
+
+After an account has a ready ArcPod, Raven owns a set of post-launch Captain
+commands beyond the registered pre-launch menu. They are implemented in
+`arclink_public_bots.py` and each maps to `/raven <verb>` in active Telegram
+chats so they survive the active Hermes Agent owning the bare slash namespace.
+This doc scopes to the command surface; the workflows themselves live in their
+own subsystem docs.
+
+- `/train-crew` (Crew Training) opens the multi-step Crew Recipe workflow
+  (role, mission, treatment, preset, capacity, review). It applies an additive
+  SOUL.md overlay through `apply_crew_recipe`; memories and sessions are not
+  rewritten.
+- `/academy` (Academy Mode) opens one-Agent-at-a-time specialist training
+  (select Agent, Major, focus, sources, then sticky Academy Mode). Graduation
+  stages the specialist corpus locally and explicitly states that live
+  provider/Hermes proof is still required before calling the Agent graduated
+  (`PG-HERMES`).
+- `/retire-agent` retires an Agent behind a typed-name confirmation
+  (`/confirm-retire-agent` / `/cancel-retire-agent`) and is audited.
+- `/refuel` (also `/top-up`, `/credits`) quotes an ArcPod Fuel top-up. Refuel is
+  local budget accounting only until live provider proof; live checkout is
+  `PG-STRIPE` and live provider-balance application is `PG-PROVIDER`.
+- `/wrapped-frequency` sets the ArcLink Wrapped delivery cadence for the account.
+- `/rename-agent` and `/retitle-agent` update an Agent's manifest name and title.
 
 ## Button Strategy
 

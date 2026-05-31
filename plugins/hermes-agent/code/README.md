@@ -12,19 +12,29 @@ Hermes `v2026.4.30` or newer.
 
 ## Roots
 
-- Workspace defaults to `$HOME`, or `CODE_WORKSPACE_ROOT` when set.
+- Workspace uses `CODE_WORKSPACE_ROOT` or `DRIVE_WORKSPACE_ROOT` when set,
+  otherwise `$HERMES_HOME/workspace`.
 - Vault uses `CODE_VAULT_ROOT`, `DRIVE_ROOT`,
   `KNOWLEDGE_VAULT_ROOT`, `VAULT_DIR`, `~/Vault`, or `$HERMES_HOME/Vault`.
+- Fleet (the git-synced fleet shared folder) uses the first existing directory
+  from `CODE_FLEET_SHARED_ROOT`, `ARCLINK_FLEET_SHARED_ROOT`, or
+  `$HERMES_HOME/fleet-shared`.
 - Linked resources use the first existing directory from `CODE_LINKED_ROOT`,
   `ARCLINK_LINKED_RESOURCES_ROOT`, or `$HERMES_HOME/linked`.
 
 ## Behavior
 
-- Workspace, Vault, and Linked are browsable as sibling roots when available.
+- Workspace, Vault, Fleet, and Linked are browsable as sibling roots when
+  available.
 - Search is inline above the tree.
 - File clicks open a rotating preview tab; double-click pins a tab.
 - Saves are explicit and protected by disk-hash conflict checks.
-- Source control is allowlisted to repo-confined `git` operations.
+- Source control is allowlisted to repo-confined `git` operations. Read
+  operations (status, commits, diff) are allowed on every root. Mutating git
+  operations require a writable root: `git pull` (run as `pull --ff-only`) and
+  `git push` both require `confirm: true` in the request body and are rejected
+  otherwise. Git mutations are blocked on the Linked root (returns
+  `403 Git mutations are disabled for Linked resources`).
 - Direct share-link creation is not exposed from Code. When
   `CODE_SHARE_REQUEST_BROKER_URL` or `ARCLINK_SHARE_REQUEST_BROKER_URL` is
   configured together with `CODE_SHARE_REQUEST_BROKER_TOKEN_FILE` or

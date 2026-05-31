@@ -26,10 +26,12 @@ skill as "named and shipped; live plugin/runtime presence unverified
    lesson cards, a SOUL overlay, and skill picks; the Captain steers role, depth,
    focus, and which lanes are allowed. **Today this curation is deterministic
    builders + lane-valid local fixtures** (`curate_academy_trainee` /
-   `_compose_trainee_corpus`); the live "LLM Trainer" routed through the central
-   ArcLink router is **proof-gated behind `PG-PROVIDER`** and not yet wired into
-   the Academy path. Everything in the mode is **staged/draft -- no live
-   SOUL/skill writes**.
+   `_compose_trainee_corpus`), then the central corpus/trainer-review layer
+   deduplicates accepted public sources into a shared SME capsule. The live "LLM
+   Trainer" routed through the central ArcLink router is **proof-gated behind
+   `PG-PROVIDER`** and not yet wired into the Academy path. Everything in the
+   mode is **staged/draft -- no Agent-file write happens until the separate
+   `academy_apply` action**.
 
 2. **Forward-maintenance (autonomous, scheduled).** Once a graduate exists, the
    weekly `control-academy-ce` job keeps its review fresh on a weekly cadence: it
@@ -37,21 +39,22 @@ skill as "named and shipped; live plugin/runtime presence unverified
    tombstoned`) and **produces a no-write weekly continuing-education review**
    (`run_academy_forward_maintenance` returns `no_write=True`,
    `writes_enabled=False`, `mutation_performed=False`). It does **not**
-   self-maintain SOUL.md or skills: any SOUL/skill deltas apply **only** through
-   the proof-gated apply path (`stage_academy_apply`, `PG-HERMES`). The scheduler
-   records intent and arms the next review; it never writes to the Agent.
+   self-maintain SOUL.md or skills: any Agent update applies **only** through
+   the proof-gated `academy_apply` path. Today that authorized path materializes
+   the marker-bounded Academy SOUL section and a private receipt; broader
+   vault/qmd/skill deltas remain planned/proof-gated. The scheduler records
+   intent and arms the next review; it never writes to the Agent.
 
 **Commit ("everything put in its place").** When the **Captain ends the mode**,
-the staged plan is applied: the learning is written into the Agent
-**additively** -- SOUL overlay section, vault `Academy/{role}/` curriculum, qmd
-index, memory seeds, approved skills -- and the trainee becomes a **graduate**
-with weekly forward-maintenance armed. Real Agent writes are gated behind
-`PG-HERMES`; live source acquisition and provider curation behind `PG-PROVIDER`.
-This is `GAP-034`: its source-level sub-items A-E landed locally (no-write,
-no-network), and it remains OPEN only for externally-gated work -- live source
-acquisition per lane (`PG-PROVIDER`), live Trainer synthesis (`PG-PROVIDER`), real
-Agent writes (`PG-HERMES`), and source-governance policy. See `GAPS.md` for the
-authoritative gap taxonomy.
+the staged plan is sealed and the trainee becomes a **graduate** with weekly
+forward-maintenance armed. Mode-end itself writes no Agent files
+(`mutation_performed=false`). Canon application is the separate queued
+`academy_apply` action: with PG-HERMES authorization it writes the replaceable
+Academy SOUL overlay section and `state/arclink-academy-apply.json` receipt into
+the deployment Hermes home. Vault `Academy/{role}/`, qmd, memory-seed, and
+approved-skill deltas are still staged/planned intents, not implemented file
+writes. Live source acquisition and provider curation remain behind
+`PG-PROVIDER`. See `GAPS.md` for the authoritative gap taxonomy.
 
 ## The Captain Experience
 
@@ -82,14 +85,15 @@ BROWSE majors / graduates
         corpus assembly -> curriculum -> lesson cards -> evaluation   (staged, no-write)
   -> CAPTAIN ENDS MODE -> TRAINER DEEP DIVE (dedupe, enrich, compress, review)
   -> graduation/apply gate (PG-PROVIDER + PG-HERMES)
-  -> COMMIT: apply replaceable Academy section additively (SOUL overlay, vault, qmd, memory, skills)
+  -> COMMIT: authorized academy_apply merges replaceable Academy SOUL section + receipt
   -> GRADUATE (durable) -> FORWARD-MAINTAIN (weekly continuing education) --- loops
 ```
 
 The fail-closed posture is structural: the local layer never emits
-"graduated/trained" content writes; it stages and records intent, and the
-control-plane mode/graduate state is real while the Agent-mutating apply waits
-on proof.
+"graduated/trained" content writes at mode-end; it stages and records intent,
+and the control-plane mode/graduate state is real. The Agent-mutating apply is
+isolated in the PG-HERMES-gated `academy_apply` action and currently writes only
+the Academy SOUL overlay plus apply receipt.
 
 ## Entities And Data Model
 
@@ -205,8 +209,13 @@ provides `BEGIN/END_ACADEMY_MARKER` + `render_academy_overlay` /
 `merge_academy_overlay` / `remove_academy_overlay` -- a **separate marker pair** from
 the org-profile overlay, so the Academy capsule renders as a self-contained,
 swappable section that never touches the human SOUL body or the org-profile block.
-`stage_academy_apply` stages the rendered `academy_soul_section` for the PG-HERMES
-Hermes-home installer to merge additively; the control plane writes nothing itself.
+`stage_academy_apply` stages the rendered `academy_soul_section`. The
+`academy_apply` action worker materializes it only when `writes_enabled=True`
+(adapter `local`/`ssh`/`live`, `ARCLINK_ACADEMY_APPLY_LIVE=1`, fresh staged
+contract, deployment target): it merges the section into `SOUL.md`, writes
+`state/arclink-academy-apply.json` mode `0600`, and updates the trainee's
+`last_applied_capsule_version`. Unauthorized/record-only runs keep
+`mutation_performed=false`.
 
 **Cross-OPERATOR sharing gate.** Within one ArcLink instance the `redacted_public`
 corpus is shared across the operator's captains/crew. A future cross-*operator*
@@ -224,8 +233,11 @@ Curation/training entities (defined, proof-gated execution) live in
 Delivering the complete experience touches these surfaces. P-tags map to the
 phased plan below.
 
-- **Data model** (P0, done): `academy_programs`, `academy_trainees`,
-  `academy_mode_sessions` in `arclink_control.py`; lifecycle in
+- **Data model** (P0/P3, done): `academy_programs`, `academy_trainees`,
+  `academy_mode_sessions`, `academy_resource_proposals`, and the central corpus
+  tables (`academy_sources`, `academy_corpus_specialists`,
+  `academy_specialist_sources`, `academy_source_provenance`,
+  `academy_specialist_subscriptions`) in `arclink_control.py`; lifecycle in
   `arclink_academy_programs.py`.
 - **The Academy skill** (P0/P3): an `arclink-academy` Hermes **skill** bundled
   into every ArcPod home (`skills/arclink-academy/SKILL.md`, installed via
@@ -266,10 +278,13 @@ phased plan below.
 - **Live source lanes** (P2, `PG-PROVIDER`, per-lane policy): real adapters
   behind the existing `acquire_*` boundary, one lane at a time.
 - **Commit / apply** (P3, done, `PG-HERMES` gated): the `academy_apply` action in
-  `arclink_action_worker.py` (`stage_academy_apply`) stages the additive SOUL /
-  vault / qmd / skills application plan. It is fail-closed: record-only adapters
-  stage, live adapters without `ARCLINK_ACADEMY_APPLY_LIVE` fail closed, and
-  authorized runs hand off to the deployment Hermes-home seam.
+  `arclink_action_worker.py` (`stage_academy_apply` +
+  `_materialize_academy_apply`) validates the Captain-approved staged contract,
+  stages additive SOUL/vault/qmd/skill intents, and on authorized
+  `local`/`ssh`/`live` runs materializes the replaceable Academy SOUL section and
+  private apply receipt into the deployment Hermes home. It is fail-closed:
+  record-only adapters stage, live adapters without `ARCLINK_ACADEMY_APPLY_LIVE`
+  fail closed, and stale Major/corpus contracts require re-graduation.
 - **Forward-maintenance scheduler** (P4, done): the weekly `control-academy-ce`
   compose job runs `arclink_academy_scheduler.py` (`run_academy_forward_maintenance`),
   a no-write weekly continuing-education review per graduate; live lane sweeps +
@@ -317,25 +332,32 @@ Practice_Tasks/, Evaluation/, Skills/, Continuing_Education/}`.
 
 ## Imparting Learning (the real write-path)
 
-Commit wires the staged `AgentApplicationPlan` into the existing deployment
-Hermes-home chain (`bin/install-deployment-hermes-home.sh`), **additively**:
+The target write-path wires the staged `AgentApplicationPlan` into the
+deployment Hermes home **additively**. The current implemented slice is narrower
+and explicit:
 
-- **SOUL.md**: render the role/expertise/boundaries overlay into a marked
-  Academy subsection (`arclink_org_profile`/`arclink_headless_hermes_setup` SOUL
-  render); never overwrite the human-authored body or personal memory.
-- **Skills**: add approved role skills via `bin/install-arclink-skills.sh` /
-  bundled-skills sync; never remove existing skills.
-- **qmd**: `bin/qmd-refresh.sh` re-indexes the vault after files land.
-- **Vault**: write only under `Academy/<role>/` (additive namespace).
-- **Memory**: seed `arclink_memory_synthesizer` candidates; its dedup path keeps
-  personal memory intact.
+- **SOUL.md**: implemented. `academy_apply` merges the role/expertise/boundaries
+  capsule into a marked Academy subsection (`arclink_org_profile` Academy
+  markers); it never overwrites the human-authored body or the org-profile block.
+- **Apply receipt**: implemented. `academy_apply` writes
+  `state/arclink-academy-apply.json` with the applied trainee/program/manifest/
+  plan/specialist/capsule version.
+- **Skills**: staged/planned only. Future installer work should add approved
+  role skills via `bin/install-arclink-skills.sh` / bundled-skills sync and never
+  remove existing skills.
+- **qmd**: staged/planned only. Future writes should re-index via
+  `bin/qmd-refresh.sh` after files land.
+- **Vault**: staged/planned only. Future writes should stay under
+  `Academy/<role>/` (additive namespace).
+- **Memory**: staged/planned only. Future seeds should route through
+  `arclink_memory_synthesizer` candidates so personal memory remains intact.
 - **Managed context**: surface the active Major through the managed-context
   plugin.
 
-Mechanically this is a new `academy_apply` action (parallel to the no-write
-`academy_apply_preview`) with `writes_enabled=True` + executor dispatch
-(`bin/refresh-agent-install.sh`-style), idempotent and audited through the
-action worker. `PG-HERMES` gated.
+Mechanically this is `academy_apply` (parallel to the no-write
+`academy_apply_preview`) with `writes_enabled=True` + PG-HERMES authorization,
+idempotent merge behavior, and audit/action-operation links through the action
+worker.
 
 ## Continuing Education / Forward-Maintenance
 
@@ -377,14 +399,21 @@ dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
 
 **Shipped (P0, local, no-write, no proof gate):**
 
-- `academy_programs` / `academy_trainees` / `academy_mode_sessions` tables
-  (`arclink_control.py`) and the lifecycle module `arclink_academy_programs.py`:
-  a seeded catalog of Majors, enroll-trainee, the **sticky Academy Mode**
-  (open/status/end, one-open-per-trainee, Captain-ends-only), graduate gallery,
-  and graduate adoption. Commit at mode-end records intent + arms
+- `academy_programs` / `academy_trainees` / `academy_mode_sessions` /
+  `academy_resource_proposals` tables (`arclink_control.py`) and the lifecycle
+  module `arclink_academy_programs.py`: a seeded catalog of Majors,
+  enroll-trainee, the **sticky Academy Mode** (open/status/end,
+  one-open-per-trainee, Captain-ends-only), graduate gallery, graduate adoption,
+  and Agent resource proposals. Commit at mode-end records intent + arms
   forward-maintenance; it performs **no** Agent SOUL/skills/qmd/vault writes
   (`mutation_performed=False`). Covered by
   `tests/test_arclink_academy_programs.py`.
+- Central shared corpus tables (`academy_sources`, `academy_corpus_specialists`,
+  `academy_specialist_sources`, `academy_source_provenance`,
+  `academy_specialist_subscriptions`) dedupe public-lane derived sources across
+  Captains, preserve first accepted canonical notes, add later provenance/
+  citations without overwriting the shared body, version the compressed
+  specialist capsule, and track the last capsule version applied per trainee.
 - The pre-existing governed source-lane registry, fake acquisition, quality
   scoring, curriculum/evaluation/graduation gates, no-write application plan, and
   weekly continuing-education classification in `arclink_academy_trainer.py`.
@@ -406,11 +435,12 @@ dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
   a time (lowest-risk first: `wikimedia` -> `github` -> `scholarly` -> `web` ->
   `video`+ASR -> `reddit` -> `skills` -> `organization_private`).
 - **P3 (done, code path; `PG-HERMES` gated)** -- the `academy_apply` action
-  (`stage_academy_apply`) stages the additive SOUL overlay/vault/qmd/skills plan
-  and is fail-closed: record-only adapters stage, live adapters without
-  `ARCLINK_ACADEMY_APPLY_LIVE` fail closed, authorized runs hand off to the
-  deployment Hermes-home seam. The live write itself awaits an authorized
-  `PG-HERMES` proof window.
+  (`stage_academy_apply` + `_materialize_academy_apply`) stages the additive
+  SOUL overlay/vault/qmd/skills plan and is fail-closed: record-only adapters
+  stage, live adapters without `ARCLINK_ACADEMY_APPLY_LIVE` fail closed, stale
+  staged contracts require re-graduation, and authorized `local`/`ssh`/`live`
+  runs materialize the marker-bounded Academy SOUL section plus a private apply
+  receipt. Vault/qmd/skill writes remain future/proof-gated.
 - **P4 (done, no-write; live sweep `PG-PROVIDER` gated)** -- the weekly
   `control-academy-ce` compose job runs `arclink_academy_scheduler.py`'s no-write
   continuing-education review per graduate.

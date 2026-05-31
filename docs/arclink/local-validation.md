@@ -39,6 +39,34 @@ install smoke for legacy host primitives. Treat that path, or a narrower
 authorized `sudo bin/ci-install-smoke.sh` run, as a host-mutation proof only;
 do not run it in unattended local passes because it mutates the host.
 
+### Host Readiness And Provider Diagnostics
+
+Two no-secret, no-mutation preflight CLIs print JSON and are safe to run in
+unattended local passes. Neither prints secret values; both report missing
+variable names only.
+
+```bash
+python3 -m arclink_host_readiness
+python3 -m arclink_diagnostics
+```
+
+`arclink_host_readiness` checks Docker, `docker compose version`, the writable
+state root (`ARCLINK_STATE_ROOT` or `/arcdata`), the required env vars
+(`ARCLINK_PRODUCT_NAME`, `ARCLINK_BASE_DOMAIN`, `ARCLINK_PRIMARY_PROVIDER`),
+presence-only secret env vars, the ingress strategy, and the local ingress
+ports. Missing optional secrets do not flip `ready` to false; the `secret_*`
+checks are excluded from the `ready` computation. Flags: `--state-root`,
+`--docker-binary`, `--skip-ports`, `--ports` (default `80,443,8080`). Exit code
+is `0` when `ready`, `1` otherwise.
+
+`arclink_diagnostics` runs credential-presence checks for stripe, ingress
+(cloudflare, or tailscale when `ARCLINK_INGRESS_MODE=tailscale`), the model
+provider, telegram, discord, and docker. `--live` is reserved for future credentialed
+connectivity probing and is a no-op today (presence-only). Flags:
+`--docker-binary`, `--live`. Exit code is `0` when all checks pass, `1`
+otherwise. These checks are presence-only; passing diagnostics is not live
+provider proof.
+
 ## Web And Playwright
 
 The web app has its own Node dependency set:

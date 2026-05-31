@@ -33,7 +33,9 @@ The current repository already contains the main Control Node spine:
 The remaining dream work must not be described as complete until its gap rows
 close. The highest-signal open product gaps are:
 
-- `GAP-029`: Operator Raven is not yet a full-service chat-native control plane.
+- `GAP-029`: Operator Raven already queues real, audited, identity- and
+  approval-code-gated mutations, but is not yet a single full-service chat-native
+  control plane (breadth, unified policy, and live proof remain).
 - `GAP-030`: Control Node product readiness can still be reached without a
   verified worker-capacity proof.
 - `GAP-031`: the router has local fallback semantics, but not live provider
@@ -190,12 +192,28 @@ Operator Raven must be powerful but fenced:
   must cross into system mutation only through the same audited broker/action
   rails as dashboards and CLIs.
 
-Current source has operator notifications, approval flows, admin actions,
-upgrade notifications, operator-channel hooks, and a first local read-only/
-dry-run Operator Raven command layer for status, fleet list, worker probe
-dry-run, user lookup, pod repair dry-run, and injected upgrade check. It does
-not yet have a single full-service Operator Raven control plane. That is
-`GAP-029`.
+Current source already does more than a read-only preview. `arclink_operator_raven.py`
+ships a real-but-fenced operator command layer with a broad read surface
+(`status`, `agents`, `fleet_list`, `worker_probe` dry-run, `user_lookup`,
+`academy_status`, `academy_roster`, `upgrade_check`, `action_status`) AND a real
+mutation layer. The mutating commands (`pod_repair`, `rollout`, `host_upgrade`,
+`pin_upgrade`, the `MUTATING_COMMANDS` set) follow a three-mode contract: a
+`--dry-run` preview changes nothing; a real run with no operator actor fails
+closed (read-only refusal); a real run with a proven operator actor QUEUES a
+real, audited intent. `pod_repair` and `rollout` queue into `arclink_action_intents`
+(drained by `arclink_action_worker.py`); `host_upgrade` and `pin_upgrade` queue
+into `operator_actions` (drained by the enrollment-provisioner root maintenance
+loop). All mutating commands additionally require the operator approval code
+(`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`/`ARCLINK_OPERATOR_APPROVAL_CODE`,
+constant-time compare) on the originating channel. The operator also gets exactly
+one in-stack Hermes agent (`arclink_operator_agent.py`, one-agent invariant,
+`control-stack` runtime) with a free-form chat bridge that routes operator
+messages to that Hermes through the `public-agent-turn` worker. Live mutation is
+still gated by `ARCLINK_EXECUTOR_ADAPTER` (`fake` records only) and the per-action
+proof gates (`PG-PROVISION`, `PG-INGRESS`, `PG-UPGRADE`/`PG-HERMES`, `PG-PROVIDER`,
+`PG-STRIPE`, `PG-BACKUP`). What remains under `GAP-029` is breadth (fleet
+drain/admit/rotate, billing refuel from chat), one unified Raven/action policy,
+and authorized live proof — not a "read-only" limitation.
 
 ## Admin Dashboard, API, And CLI Control
 
@@ -222,8 +240,10 @@ The finished control stack should behave like this:
   pending, running, failed, blocked by policy, blocked by proof, or complete.
 
 Current source has hosted API/admin/dashboard/action-worker foundations plus a
-first shared Operator Raven schema, local readiness surfaces, and a
-cross-surface copy contract. The remaining product layer is broader
+shared Operator Raven command surface that already queues the same typed actions
+(via `queue_arclink_admin_action` into `arclink_action_intents` and
+`request_operator_action` into `operator_actions`), local readiness surfaces, and
+a cross-surface copy contract. The remaining product layer is broader
 policy-backed Operator Raven mutation and authorized live proof that chat,
 browser, workspace, and upgrade surfaces render and execute correctly. That
 work remains under `GAP-029`, `GAP-030`, `GAP-032`, and `GAP-033`.
@@ -302,11 +322,26 @@ The complete sharing shape is:
   keeping git mutations blocked from Linked.
 - Copy/duplicate into owned roots is allowed and clearly labeled.
 - Resharing a Linked root is refused unless a future delegation policy exists.
+- A Captain's own fleet shares one writable **Fleet** folder across every Agent,
+  with multi-writer convergence and conflict surfacing rather than silent loss.
 - Broken notification delivery should not silently strand the share; dashboard
   inbox and retry notification rails should keep the request recoverable.
 
-Current source has the local broker/plugin/API contracts. Live browser/bot proof
-and no-channel behavior remain tracked under `GAP-014`, `GAP-015`, and
+Current source has the local broker/plugin/API contracts, plus the **fleet
+shared folder** (added 2026-05-29, `arclink_fleet_share.py` +
+`arclink_fleet_shares`/`arclink_fleet_share_members`). The fleet folder is a
+real git-sync engine: a Captain-scoped *bare hub* repo
+(`/arcdata/captains/<user>/fleet-shared.git`, durable independent of any single
+Agent) plus a per-Agent read-write working clone that the Drive/Code **Fleet**
+root surfaces. Each sync pass commits local edits, runs `git pull --rebase`, and
+pushes, so every machine converges; unresolvable rebases are surfaced as conflicts
+(never clobbered) and a corrupt working copy is quarantined and re-cloned. The
+per-Agent `fleet-share-sync` job is rendered into the ArcPod for the in-pod git
+sync, while the control-node `fleet-share-reconcile` compose job runs DB-only
+membership convergence (`reconcile --all`, every 120s) — enrolling newly-active
+agents and deregistering torn-down ones without touching the hub. Live
+browser/bot proof, no-channel behavior, and remote
+(`ssh`/`https`) hub transport remain tracked under `GAP-014`, `GAP-015`, and
 `GAP-016`.
 
 ## Cross-Surface Experience Standard
@@ -372,7 +407,11 @@ audited with sanitized events, and usage/reservation metadata distinguishes the
 requested, primary, final, reservation-pricing, and usage-pricing models.
 Catalog-backed reservations account for the most expensive configured fallback
 candidate, while settlement uses the final model actually used.
-Live provider proof remains under `GAP-031`.
+Live Chutes account/usage/key and PKCE-OAuth adapters (`arclink_chutes_live.py`,
+`arclink_chutes_oauth.py`) are present but **TEST-ONLY and unwired** — no live
+OAuth-backed inference path exists, and the `per_user_chutes_account_oauth`
+isolation lane is a posture label only. Live provider proof remains under
+`GAP-031`.
 
 ## Pods, Isolation, And SOUL
 
@@ -402,7 +441,17 @@ rewriting historical memory. Agents should receive hot injected, versioned,
 grounded context from SOUL, organization profile, subscribed vaults, Notion,
 SSOT, recall stubs, and the current day plate.
 
-The root/Docker authority risk is already tracked by `GAP-019`. The SOUL and
+The root/Docker authority risk is already tracked by `GAP-019`. The command path
+is now substantially built: seven trusted-host services (gateway/deployment/
+agent-supervisor exec brokers plus the migration-capture, agent-user,
+agent-process, and operator-upgrade helpers) front the Docker socket and root
+operations with raw-command rejection, HMAC tokens, internal networks, trusted
+Docker-binary pins, path/symlink validation, and redacted rejection incidents.
+But each socket broker still owns a writeable Docker socket and each root helper
+still runs as root, so `GAP-019` is narrowed yet **open and acknowledged-only,
+not tenant-safe** — the whole family is risk-accepted behind
+`ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted`. The authoritative
+trust-boundary entries live in `docs/arclink/operations-runbook.md`. The SOUL and
 Crew Recipe projection paths exist locally; live generation remains provider
 proof under `GAP-022`.
 
@@ -414,11 +463,14 @@ Agent into a **sticky Academy Mode** that stays open until the Captain ends it.
 Inside the mode an **LLM Trainer** (routed through the central router) and the
 **Captain** co-curate a specialist corpus and curriculum from the governed
 source lanes; the Captain steers role, depth, focus, and lane authorization.
-When the Captain **ends the mode**, the staged plan is committed ("everything
-put in its place") -- the learning is written additively into the Agent's
-SOUL.md, skills, qmd, memory, and vault -- and the trainee becomes a **graduate**
-with weekly **forward-maintenance** (continuing education) armed to keep its
-SOUL/skills current. Captains can **browse Academy graduates** (ready
+When the Captain **ends the mode**, the staged plan is sealed for review and the
+trainee becomes a **graduate** with weekly **forward-maintenance** (continuing
+education) armed. Mode-end itself still writes no Agent files. The separate
+`academy_apply` action is the PG-HERMES write path: when authorized, it merges
+the replaceable, marker-bounded Academy SOUL section into the deployment Hermes
+home and records a private apply receipt. Broader vault/qmd/skill deltas remain
+future/proof-gated; weekly maintenance refreshes review/capsule state and does
+not self-write the Agent. Captains can **browse Academy graduates** (ready
 specialists) and adopt one, or **enroll a new Trainee** against a **Major**
 (specialist Program). Majors are pure data, so new trainee types are added as
 rows, not code. Crew Training still curates the roster/roles/personality and the
@@ -466,22 +518,27 @@ policy requires it, replace weaker materials with stronger current ones,
 rebuild lesson cards/indexes/memory stubs, run evaluations, and produce a
 Captain/Operator report before updating the Agent.
 
-The control-plane experience scaffolding now exists in source (P0, no-write, no
-proof gate): `academy_programs`, `academy_trainees`, and `academy_mode_sessions`
-tables (`python/arclink_control.py`) plus `python/arclink_academy_programs.py`,
-which own the browsable catalog of **Majors** (a seeded specialist catalog;
-extensible as data), **Trainee** enrollment, the **sticky Academy Mode**
+The control-plane experience scaffolding now exists in source. The mode/proposal
+tables (`academy_programs`, `academy_trainees`, `academy_mode_sessions`,
+`academy_resource_proposals`) and the central shared corpus tables
+(`academy_sources`, `academy_corpus_specialists`, `academy_specialist_sources`,
+`academy_source_provenance`, `academy_specialist_subscriptions`) are owned by
+`python/arclink_control.py` plus `python/arclink_academy_programs.py`. Together
+they own the browsable catalog of **Majors** (a seeded specialist catalog;
+extensible as data), **Trainee** enrollment, sticky **Academy Mode**
 (open/status/end, one open session per trainee, Captain-ends-only), the
-**graduate gallery**, and **graduate adoption**. Mode-end records the commit
-intent and arms forward-maintenance but performs no Agent SOUL/skills/qmd/vault
-writes (`mutation_performed=False`), covered by
-`tests/test_arclink_academy_programs.py`. The curation/training core remains in
-`python/arclink_academy_trainer.py`, which defines the no-network Academy
-schemas, default governed source-lane registry,
-fake acquisition reports, fake corpus manifests, deterministic quality scoring,
-curriculum/evaluation records, no-write SOUL/vault/qmd/memory/skill
-application plans, a no-write `academy_apply_preview` action-worker boundary,
-and weekly Continuing Education review/gate persistence. It fails closed for
+**graduate gallery**, graduate adoption, cross-Captain deduped SME corpus
+promotion, capsule refresh, and per-trainee subscriptions. Mode-end records the
+commit intent and arms forward-maintenance but performs no Agent write
+(`mutation_performed=False`), covered by `tests/test_arclink_academy_programs.py`.
+The curation/training core remains in `python/arclink_academy_trainer.py`, which
+defines the no-network Academy schemas, default governed source-lane registry,
+fake acquisition reports, deterministic quality scoring, curriculum/evaluation
+records, no-write application plans, a no-write `academy_apply_preview`
+action-worker boundary, and weekly Continuing Education review/gate persistence.
+The separate `academy_apply` action now materializes the Academy SOUL overlay and
+receipt for a deployment only when PG-HERMES authorization is present; record-only
+or unauthorized adapters stage/fail closed. It fails closed for
 disabled lanes, unsupported lanes, requested live actions, missing
 license/permission or required lane metadata, raw-storage violations,
 unreviewed public skills, secret-looking fixture material, deletion/tombstone
@@ -498,9 +555,10 @@ refresh rails over a turn-by-turn Raven bootstrap, and open a real sticky
 Academy Mode. The Agent uses the `arclink-academy` skill to search approved
 rails and submit compressed resources through `academy.propose-resource`; the
 Captain closes the mode to queue the Academy Trainer deep dive. Canonical
-application to the Agent remains blocked until Trainer review, dedupe,
-provider-assisted generation, workspace application proof, real Agent writes,
-and source-governance decisions pass under `GAP-034`.
+application to the Agent is split: the marker-bounded SOUL overlay apply is
+implemented behind the PG-HERMES action gate, while live source acquisition,
+provider-assisted generation, vault/qmd/skill deltas, and source-governance
+decisions remain under `GAP-034`.
 
 This is larger than the current Crew Recipe system. The current source locally
 supports deterministic recipe/SOUL projection and proof-gated live recipe
@@ -844,9 +902,15 @@ The finished migration contract is:
   release/evidence record after activation.
 
 ArcLink already has release state, pin checks, config generation, local schema
-tests, and OpenAPI truth checks. Rolling migrations and broad compatibility
-fixtures should expand as `GAP-032` and the Operator Raven/action model become
-real.
+tests, and OpenAPI truth checks. The schema mechanism today is a single
+idempotent `ensure_schema()` in `arclink_control.py` — `CREATE TABLE IF NOT EXISTS`
+for every table plus a few in-place rebuild migrations (`*__new` table copy +
+`RENAME`). It is idempotent and create-if-absent, but there is **no version
+ledger and no numbered/reversible migration history yet**; the "reversible where
+practical, versioned, old-state-fixture" contract above is the target shape, not
+the current state. Rolling migrations, a release/version detector, and broad
+compatibility fixtures should expand as `GAP-032` and the Operator Raven/action
+model become real.
 
 ## Observability, SLOs, Capacity, And Scale
 
@@ -1210,5 +1274,5 @@ The symphony is complete as a document only when it names every major motion:
 
 The product is complete only when those document motions are implemented,
 tested, and either locally proven or live-proofed under the matching `PG-*`
-gate. Until then, this document is the score Ralphie follows and `GAPS.md`
+gate. Until then, this document is the score the implementation follows and `GAPS.md`
 remains the conductor's ledger.

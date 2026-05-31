@@ -11,10 +11,17 @@ Hermes `v2026.4.30` or newer.
 
 ## Roots
 
-- Workspace defaults to `$HOME`.
+Drive exposes four sibling tree roots in this order: Vault, Workspace, Fleet,
+and Linked. The default selected root is Vault, then Workspace.
+
 - Vault uses the first existing directory from `DRIVE_ROOT`,
   `KNOWLEDGE_VAULT_ROOT`, `AGENT_VAULT_DIR`, `VAULT_DIR`, `~/Vault`, or
   `$HERMES_HOME/Vault`.
+- Workspace uses the first existing directory from `DRIVE_WORKSPACE_ROOT`,
+  `CODE_WORKSPACE_ROOT`, or `$HERMES_HOME/workspace`.
+- Fleet (the read-write git-synced fleet shared folder) uses the first existing
+  directory from `DRIVE_FLEET_SHARED_ROOT`, `ARCLINK_FLEET_SHARED_ROOT`, or
+  `$HERMES_HOME/fleet-shared`.
 - Linked resources use the first existing directory from `DRIVE_LINKED_ROOT`,
   `ARCLINK_LINKED_RESOURCES_ROOT`, or `$HERMES_HOME/linked`.
 - Drive uses local roots only; legacy Nextcloud/WebDAV browser access is not
@@ -22,7 +29,9 @@ Hermes `v2026.4.30` or newer.
 
 ## Behavior
 
-- Workspace, Vault, and Linked are sibling tree roots when available.
+- Vault, Workspace, Fleet, and Linked are sibling tree roots when available.
+  Workspace and Fleet are writable; the Fleet root is the git-synced fleet
+  shared folder. Linked is system-managed (see below).
 - Search traverses available roots.
 - Single-click selects and previews files; double-click opens folders.
 - Drag/drop upload targets the current folder.

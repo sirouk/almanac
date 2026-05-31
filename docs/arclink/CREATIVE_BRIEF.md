@@ -290,12 +290,16 @@ Telegram and Discord use the same state machine and should preserve the same con
 
 Triggered by `/start`, empty message, `start`, or `restart`.
 
+The live first-contact header (the on-the-line greeting, see Package Prompt) is
+`{raven} on the line, Captain.`; the sample below is the creative target for the
+prelaunch greeting body. Live default lanes are Founders Offer and 3X Scale Plan.
+
 ```text
-Raven here. ArcLink is in range.
+{raven} on the line, Captain.
 
 I bring private agents online with memory, files, code workspace, model access, and dashboard visibility. No bot-building. No server chores.
 
-Tap Take Me Aboard to pick Founders or Scale. Tap Update Name and just tell me what to call you.
+Tap Take Me Aboard to pick Founders Offer or 3X Scale Plan. Tap Update Name and just tell me what to call you.
 ```
 
 Buttons:
@@ -348,25 +352,35 @@ I do not need your email in chat. Stripe handles that securely at checkout. Tap 
 Triggered by `Take Me Aboard`, `/packages`, or `/name <Your Name>` after the
 name is captured.
 
+The live header (built in `_package_prompt_reply`,
+`python/arclink_public_bots.py`) opens with Raven's first-contact line:
+`{raven} on the line, Captain.` when no Captain name is known yet, or
+`Captain {name}, {raven} on the line.` once a name is captured. The block below
+is the creative target; the live default lane copy names the Founders Offer and
+3X Scale Plan lanes.
+
 ```text
-Welcome aboard, {Name}.
+{raven} on the line, Captain.
 
-Choose your ArcLink onboarding lane.
+ArcLink brings a private ArcPod online for you: Hermes Agent memory, ArcLink skills, Drive, Code, Terminal, model access, and a live Hermes Dashboard under one governed identity.
 
-Founders is $149/mo: single-ArcPod access for the first 100 Captains.
-Scale is $275/mo: three agents onboard ArcLink with Federation.
+Choose your launch lane.
+
+Founders Offer is $149/mo: one ArcPod for the first 100 Captains.
+3X Scale Plan is $275/mo: three Hermes Agents live on ArcLink with Federation.
 
 Tap a lane to open secure Stripe checkout. I will report back here once payment clears and provisioning starts.
-
-Agentic Expansion after launch starts at $79/month on Scale and $99/month on Sovereign.
 ```
 
-Buttons:
+Buttons (live default lane):
 
 ```text
-Founders $149/mo
-Scale $275/mo
+Founders Offer $149/mo
+3X Scale Plan $275/mo
 ```
+
+The standard Sovereign/Scale lane is reached via `/packages standard`
+(see Standard Package Prompt below).
 
 ### Standard Package Prompt
 
@@ -439,6 +453,10 @@ Hire Founders
 
 ### Help - Postlaunch
 
+The live postlaunch help header is `Bridge is open.` (prelaunch is
+`Comms are open.`). The block below is the creative target; treat the header line
+as creative direction and the live strings above as the shipped copy.
+
 ```text
 Control panel is open.
 
@@ -454,6 +472,31 @@ Show My Crew
 Wire Notion
 Set Up Backup
 ```
+
+### Crew Training And Academy Mode
+
+These are shipped postlaunch Crew-shaping surfaces, not roadmap items. They are
+implemented and tested locally in `python/arclink_public_bots.py`; the live
+provider/Hermes write paths behind them stay proof-gated (`PG-PROVIDER` for
+source acquisition and Trainer synthesis, `PG-HERMES` for real Agent writes).
+
+Crew Training (`/train-crew`, button label `Train My Crew`) is the multi-step
+lane that recurates a Hermes Agent's name, role, personality, and SOUL.md
+overlay through a Crew Recipe preset (Frontier, Concourse, Salvage, Vanguard).
+It applies an additive SOUL overlay and tells the Captain that "Memories and
+sessions were not rewritten." Local-real today; no Agent SOUL/skills write
+happens in this path until the `PG-HERMES` apply seam runs.
+
+Academy Mode (`/academy`, button label `Academy`) is the sticky,
+one-Agent-at-a-time specialist training experience: select Agent, choose a
+Major, set focus, set sources, then open Academy Mode. The Agent is told to use
+the `arclink-academy` skill for governed search, retrieval, lesson-card
+drafting, and evaluation. Graduation (`graduate`) stages a specialist corpus
+locally only and must keep the live honesty line:
+`Live provider/Hermes proof is still required before calling the Agent graduated.`
+
+Keep both surfaces in the creative map. Voice stays Raven (Captain lore); the
+proof-gate line above is mandatory copy, not optional polish.
 
 ### Crew Roster
 
@@ -689,23 +732,26 @@ Hidden/account-state actions:
 
 Discord commands mirror the same set and include a top-level `/arclink message:<text>` for freeform conversation. Discord plan selection uses choices for Limited 100 Founders, Sovereign, and Scale.
 
-Canonical button labels:
+Canonical button labels. The default prelaunch lane labels and the per-plan
+hire labels below match the live strings in `python/arclink_public_bots.py`
+(`_package_prompt_reply`, `_plan_checkout_label`, `_plan_label`).
 
 ```text
 Take Me Aboard
 Update Name
-Founders $149/mo
-Scale $275/mo
+Founders Offer $149/mo
+3X Scale Plan $275/mo
 Sovereign - $199/month
 Scale - $275/month
-Hire Founders - $149/month
+Fire Up Founders Offer - $149/month
+Fire Up 3X Scale Plan - $275/month
 Hire Sovereign - $199/month
-Hire Scale - $275/month
 Change Package
 Show My Crew
 Switch Hermes Agent: {Agent Label}
 Add Agent
-Hire Additional Agent
+Train My Crew
+Academy
 Back To My Crew
 Wire Notion
 Set Up Backup

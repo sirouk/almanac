@@ -2079,7 +2079,7 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
         conn,
         channel="telegram",
         channel_identity="tg:academy",
-        text="https://docs.chutes.ai and https://github.com/NousResearch/hermes-agent",
+        text="model provider docs at https://docs.chutes.ai and https://github.com/NousResearch/hermes-agent",
     )
     expect(opened.action == "academy_mode_opened", opened.reply)
     expect("Academy Mode is open for Beacon" in opened.reply, opened.reply)

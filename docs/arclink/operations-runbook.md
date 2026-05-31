@@ -88,6 +88,20 @@ Telegram operator approvals can require a typed second factor by setting
 and `/retry_contact` commands must include the code, and approval/install
 buttons are refused with guidance to use the typed command.
 
+The same operator code is mandatory for **every** Operator Raven mutating
+command. `python/arclink_operator_raven.py` defines
+`MUTATING_COMMANDS = {pod_repair, rollout, host_upgrade, pin_upgrade}`, and
+`python/arclink_telegram.py` calls `strip_operator_approval_code` (a
+constant-time `hmac.compare_digest` on the trailing token) for any command that
+`operator_raven_command_is_mutating` reports before dispatch. A missing or wrong
+code fails closed with "Operator code required for this action." and queues
+nothing. The code must be appended to the originating channel message, for
+example `/pod_repair <deployment> restart <operator-code>` or `/rollout
+<target-version> <operator-code>`. Read-only Operator Raven commands (`status`,
+`agents`, `fleet_list`, `worker_probe`, `user_lookup`, `action_status`,
+`upgrade_check`, `academy_status`, `academy_roster`) never require the code and
+never mutate.
+
 Discord Curator operator actions are currently gated by the configured
 operator channel. That is a channel-permission authority model, not parity with
 Telegram's typed approval code. Keep the Discord operator channel tightly
@@ -147,6 +161,15 @@ stays disabled with a fail-closed reason. The local matrix currently maps:
 | `rotate_chutes_key` | `chutes_key_apply` | Executor plus Chutes key client for mutation | `PG-PROVIDER` |
 | `refund` / `cancel` | `stripe_action_apply` | Executor plus Stripe action client for mutation | `PG-STRIPE` |
 | `comp` | `control_db_comp` | Action worker with control DB access | `LOCAL-CONTROL-DB` |
+| `rollout` | `arcpod_update_rollout` | Action worker with control DB access; explicit `fake`/`local` record-only execution contract for bounded batch execution | `PG-UPGRADE/PG-HERMES` |
+
+The `rollout` row is `worker_support="wired"` in
+`python/arclink_dashboard.py` (`ARCLINK_ADMIN_ACTION_SUPPORT`) and queueable
+today: it stages audited local ArcPod-update rollout rows from a ready dry-run
+preflight plan and can record one bounded `fake`/`local` batch. Live per-Pod
+refresh/apply and multi-Pod health/smoke proof remain gated behind
+`PG-UPGRADE/PG-HERMES` (`GAP-032`). Earlier runbook wording that listed
+`rollout` as "pending/disabled" is stale.
 
 This matrix is local readiness, not live evidence. Fake adapter results prove
 contract behavior only; local/SSH adapter results count as live mutation proof
@@ -1107,7 +1130,11 @@ POST /api/v1/admin/actions
 Requires admin session with mutation role.
 
 **Safety:**
-- Rollback never deletes volumes without explicit `destructive: true` flag.
+- Rollback never deletes volumes implicitly. Compose volume deletion is gated by
+  `metadata.teardown.remove_volumes` (default off; volumes are preserved), and
+  destructive state-root/vault deletes are separately gated by
+  `_is_destructive_state_delete` and audit-logged. There is no `destructive:true`
+  flag in the executor.
 - All rollback intents are audit-logged with operator, reason, and timestamp.
 - Failed rollback is idempotent: retry with same key resumes, not restarts.
 
@@ -1218,12 +1245,62 @@ docker compose -p arclink-{deployment_id} up -d
 ## 10. Scale Operations
 
 **Modules:** `python/arclink_fleet.py`, `python/arclink_action_worker.py`,
-`python/arclink_rollout.py`, `python/arclink_dashboard.py`
+`python/arclink_rollout.py`, `python/arclink_dashboard.py`,
+`python/arclink_operator_raven.py`, `python/arclink_operator_agent.py`,
+`python/arclink_enrollment_provisioner.py`
 
 Scale operations cover fleet capacity, deployment placement, queued admin
 action execution, rollout waves, and operator visibility. The design is
 SQLite-first and fake-by-default so operators can inspect and rehearse the
 workflow without live provider credentials.
+
+**Two action queues:** ArcLink drains two distinct queues, not one. Keep them
+separate when reasoning about which worker executes an action:
+
+| Queue table | Drained by | Operator Raven writers | Other writers |
+| --- | --- | --- | --- |
+| `arclink_action_intents` (+ `arclink_action_attempts`) | `python/arclink_action_worker.py` | `pod_repair`, `rollout` (via `queue_arclink_admin_action`) | Admin dashboard/API actions |
+| `operator_actions` | enrollment-provisioner root maintenance loop (`_run_pending_operator_actions` in `python/arclink_enrollment_provisioner.py`) | `host_upgrade` → `action_kind="upgrade"`, `pin_upgrade` → `action_kind="pin-upgrade"` (via `request_operator_action`) | Pin-upgrade detector Install-button tokens |
+
+The action worker consumes `arclink_action_intents`
+(`restart`, `reprovision`, `dns_repair`, `rotate_chutes_key`, `refund`,
+`cancel`, `comp`, `backup_write_check`, `rollout`,
+`academy_apply_preview`/`academy_apply`). The root maintenance loop consumes
+`operator_actions` and, in Docker mode
+(`ARCLINK_COMPONENT_UPGRADE_MODE=docker`), routes `upgrade`/`pin-upgrade` work
+through `operator-upgrade-broker` (see the executor section's `GAP-019-J`
+entry). `action_status` in Operator Raven reads both tables.
+
+**Operator Raven as a real mutation entry point:** Operator Raven
+(`python/arclink_operator_raven.py`) is not read-only/dry-run. Mutating commands
+(`pod_repair`, `rollout`, `host_upgrade`, `pin_upgrade`) use a three-mode
+contract: `--dry-run` previews and changes nothing; no `--dry-run` with no
+operator actor fails closed; no `--dry-run` with an operator actor queues a
+real, audited, idempotent intent into the matching queue above. All four require
+the operator approval code (see the Hosted API section). Live mutation stays
+gated by `ARCLINK_EXECUTOR_ADAPTER` (`fake` = record-only) plus the per-action
+proof gate (`PG-PROVISION` restart/reprovision, `PG-INGRESS` dns_repair,
+`PG-UPGRADE/PG-HERMES` rollout, `PG-PROVIDER` chutes, `PG-STRIPE` refund/cancel,
+`PG-BACKUP` backup_write_check). Read commands (`status`, `agents`,
+`fleet_list`, `worker_probe` dry-run only, `user_lookup`, `action_status`,
+`upgrade_check`, `academy_status`, `academy_roster`) never mutate. The residual
+of `GAP-029` is breadth and unified policy plus authorized live proof, not a
+read-only limitation.
+
+**Operator Hermes agent and free-form bridge:** The operator gets exactly one
+in-stack Hermes agent (`python/arclink_operator_agent.py`,
+`DEFAULT_OPERATOR_AGENT_DEPLOYMENT_ID="operator"`,
+`DEFAULT_OPERATOR_AGENT_RUNTIME="control-stack"`). It is a first-class
+Control Node Compose identity, not a tenant ArcPod; `assert_single_operator_agent`
+enforces the one-agent invariant and `ensure_operator_agent_deployment` refuses
+to create a second. Free-form operator chat (any message that is not a Raven
+command) routes to that one agent via `enqueue_operator_agent_turn`, which
+stamps `operator_turn` and delivers through the existing `public-agent-turn`
+notification worker; the gateway-bridge worker replies asynchronously. This
+module is control-DB-only (it queues and resolves; it never runs Docker or SSH)
+and is `ARCLINK_OPERATOR_AGENT_ENABLED`-gated. A live reply depends on a routable
+in-stack Hermes gateway (`PG-HERMES` territory). When no live operator agent
+exists, the webhook falls back to the Raven control intro.
 
 **Ownership:**
 
@@ -1233,9 +1310,12 @@ workflow without live provider credentials.
 | Fleet hosts | `arclink_fleet.py` | Hostname, region, region tier, placement priority, tags, capacity slots, drain flag, status, and last health state |
 | Fleet reconciliation | `arclink_fleet.py` | Reports inventory/host registry orphans and writes audit warnings without repairing or deleting rows |
 | Placement | `arclink_fleet.py` | Active placement is one row per deployment; load increments on placement |
-| Admin action execution | `arclink_action_worker.py` | Claims queued intents, resolves the deployment's active placement, records attempts, and dispatches to the selected host executor |
-| Rollouts | `arclink_rollout.py` | Version tag, wave count, current wave, pause/fail/rollback state |
-| Operator read model | `arclink_dashboard.py` | `build_scale_operations_snapshot()` powers the admin API route |
+| Admin action execution | `arclink_action_worker.py` | Claims queued `arclink_action_intents`, resolves the deployment's active placement, records attempts, and dispatches to the selected host executor |
+| Operator action execution | `arclink_enrollment_provisioner.py` | Root maintenance loop drains the `operator_actions` table (`host_upgrade`/`pin_upgrade`), routing Docker-mode upgrades through `operator-upgrade-broker` |
+| Operator chat control | `arclink_operator_raven.py` | Queues real audited mutations (`pod_repair`, `rollout` → `arclink_action_intents`; `host_upgrade`, `pin_upgrade` → `operator_actions`) under the operator approval code; broad read surface |
+| Operator agent | `arclink_operator_agent.py` | One in-stack `control-stack` Hermes identity (one-agent invariant) plus a free-form chat bridge via the `public-agent-turn` worker |
+| Rollouts | `arclink_rollout.py` | Generic rollout model (version tag, wave count, pause/fail/rollback) plus the ArcPod-update planner/materializer/record-only batch executor |
+| Operator read model | `arclink_dashboard.py` | `build_scale_operations_snapshot()` powers the admin API route; `ARCLINK_ADMIN_ACTION_SUPPORT` owns the action-readiness matrix |
 
 **Assumptions:**
 

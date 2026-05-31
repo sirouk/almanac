@@ -1,6 +1,6 @@
 # Document Phase Status
 
-Generated: 2026-05-08 (Ralphie document phase: final product-reality alignment)
+Generated: 2026-05-08 (document phase: final product-reality alignment)
 
 Updated: 2026-05-10 (Raven selected-agent bridge contract alignment)
 
@@ -9,6 +9,79 @@ Updated: 2026-05-14 (ArcLink Wrapped runbook alignment)
 Updated: 2026-05-16 (Sovereign fleet Phase 0/1 documentation alignment)
 
 Updated: 2026-05-16 (Sovereign LLM Router source-level documentation alignment)
+
+Updated: 2026-05-30 (Ground-truth documentation alignment pass)
+
+## 2026-05-30 Ground-Truth Documentation Alignment
+
+This pass reconciled the project-facing documentation against the canonical
+`research/ARCLINK_GROUND_TRUTH_BRIEF.md` (which itself consolidates the 14
+subsystem-truth records under `research/ground-truth/`). It is an alignment and
+correction pass over historical drift; it added no live-proof claims, operator
+identity, private paths, secrets, command transcripts, or machine-only evidence.
+Like the prior notes in this file, this is an append-only historical entry and
+does not rewrite earlier audit context.
+
+### What This Pass Reconciled
+
+- **Module map rebuilt to 84 modules.** The authoritative `python/arclink_*.py`
+  inventory was rebuilt to the current 84 modules, surfacing the previously
+  undocumented public Agent gateway / exec-broker / pod-comms / agent-supervisor
+  family, `arclink_operator_raven` / `arclink_operator_agent`, the Academy
+  modules, `arclink_memory_synthesizer`, `arclink_fleet_share`, and
+  `arclink_pod_migration` that `architecture.md`'s module map had been missing.
+- **Table count corrected to 44 `arclink_*` + 9 `academy_*`.** The stale
+  "23 `arclink_*` tables" figure was corrected everywhere to 44 `arclink_*`
+  tables, with the non-prefixed Academy tables named explicitly: the original
+  mode/proposal rows plus the central corpus rows (`academy_sources`,
+  `academy_corpus_specialists`, `academy_specialist_sources`,
+  `academy_source_provenance`, `academy_specialist_subscriptions`). Schema
+  remains a single idempotent `ensure_schema()` (create-if-absent +
+  rebuild-when-needed), not a versioned/reversible migration ledger.
+- **Operator Raven real-action correction.** Documentation calling Operator Raven
+  "read-only/dry-run" (GAP-029) was corrected: it now queues real, audited,
+  identity-gated, approval-code-gated mutations (`pod_repair`, `rollout`,
+  `host_upgrade`, `pin_upgrade`) alongside its read surface and the single
+  in-stack operator Hermes agent with a free-form chat bridge. The `rollout`
+  action is `wired`/queueable (GAP-032), not "pending/disabled".
+- **New `public-agent-gateway.md`.** A new canonical doc was added for the public
+  Agent gateway and the trusted-host broker/helper family (bridge process,
+  native-handler replay, per-turn `docker exec` via `gateway-exec-broker`, and
+  the service/port/header/socket table), with the GAP-019 trust-boundary
+  invariants cross-linked to the authoritative operations-runbook entries.
+- **Fleet shared folder.** The 2026-05-29 fleet shared folder
+  (`arclink_fleet_share`: per-Captain bare git hub, per-agent working copy,
+  multi-writer rebase, conflict-surfacing-not-clobber, quarantine-and-reclone)
+  was documented as the writable **Fleet** root in Drive/Code and added to the
+  data-safety sharing story.
+- **Backup-restore state-root fixes.** `backup-restore.md` state-root and volume
+  paths were corrected to `/arcdata/deployments/{id}` with
+  `config/vault/state/nextcloud/published/`, and the two backup scripts plus the
+  two-phase `configure-agent-backup.sh` pending->verify->activate flow,
+  per-user key separation, public-repo refusal, and the
+  `deployment-exec-broker` Docker lifecycle owner were documented (GAP-013 /
+  PG-BACKUP boundaries kept).
+- **Alert-candidates in-product rail.** `alert-candidates.md` was corrected to
+  describe the actual in-product rail (health-watch edge-triggered operator
+  notifications -> `notification_outbox` -> operator channel, deploy-window
+  suppression, `arclink_service_health`), with the poll-based external pager
+  signals marked aspirational (no in-repo emitter).
+- **Finish gate now names `arclink_surface_contract.py`.** The professional
+  finish-gate documentation, previously prose-only, now names the executable
+  gate `python/arclink_surface_contract.py` and
+  `tests/test_arclink_surface_contract.py`, the audience/channel/state taxonomy,
+  the Captain-vocabulary lint, secret/traceback refusal, and the blocked-copy
+  "next action" rule (GAP-033 remains open / proof-gated, not closed).
+
+### Boundary Notes
+
+- Source-level work for the active steering DoD is complete; what remains is
+  operator-authorized live/proof work. No doc in this pass implies otherwise.
+- Proof gates stay named in copy (`PG-PROD`, `PG-STRIPE`, `PG-BOTS`,
+  `PG-PROVIDER`, `PG-PROVISION`, `PG-INGRESS`, `PG-FLEET`, `PG-HERMES`,
+  `PG-UPGRADE`, `PG-BACKUP`, `PG-NOTION`). GAP-019 stays acknowledged-only and
+  not tenant-safe. Closed-locally gaps were not resurrected and open gaps were
+  not claimed closed.
 
 ## 2026-05-16 Sovereign LLM Router Documentation Update
 
@@ -236,7 +309,7 @@ transcripts.
 ## Documentation Audit
 
 Project-facing ArcLink documentation has been checked against the current
-Ralphie product-reality matrix, implementation plan, operator-policy addendum,
+product-reality matrix, implementation plan, operator-policy addendum,
 recent build notes, and the closest README/AGENTS/docs artifacts. This pass
 focused on the final no-secret behaviors that changed after the earlier
 share-approval audit: single-operator ownership, Chutes provider isolation,
@@ -317,6 +390,6 @@ transcripts, or machine-only evidence were added.
 
 ## Verdict
 
-Docs are clear enough to proceed with the Ralphie handoff. The canonical docs
+Docs are clear enough to proceed with the implementation handoff. The canonical docs
 now describe the current no-secret implementation and rationale without
 claiming unproved live external behavior.

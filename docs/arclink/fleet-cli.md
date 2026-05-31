@@ -12,8 +12,10 @@ to parse as a single object on stdout.
 - `2`: invalid command or invalid arguments.
 
 Live SSH, cloud, and destructive provider operations remain proof-gated by the
-Operator. Use `--no-smoke-test` on registration when recording inventory
-without live SSH proof.
+Operator (live remote-fleet apply: PG-FLEET / PG-PROVISION; live Cloudflare DNS:
+PG-INGRESS; cloud provider create/destroy: GAP-021, parity-only no-secret
+tests). Use `--no-smoke-test` on registration when recording inventory without
+live SSH proof.
 
 ## Fleet Key
 
@@ -27,6 +29,13 @@ without live SSH proof.
 keypair beside it with a timestamped `rotated-...` suffix. The JSON response
 contains the public key and configured key path; it never prints private key
 material.
+
+`fleet-key --rotate` (and `inventory rotate-key` below) are SSH-key operations
+owned by `deploy.sh`, not subcommands of the Python `arclink_inventory.py` /
+`arclink_fleet*.py` CLIs — those Python CLIs have no rotate-key verb. Both write
+the new keypair to the durable runtime config; live SSH executor work against
+fleet workers stays proof-gated (PG-FLEET / PG-PROVISION) until the new public
+key is reinstalled on each worker.
 
 ## Enrollment
 
@@ -99,3 +108,21 @@ the provider environment (`HETZNER_API_TOKEN` or `LINODE_API_TOKEN`) and are
 never printed. Destructive provider removal requires the inventory machine to
 be drained first plus an explicit `--destroy`; use `--force` only for an
 Operator-approved recovery case after confirming no active placements remain.
+
+## Placement Strategy
+
+`inventory set-strategy <headroom|standard_unit>` sets the
+`ARCLINK_FLEET_PLACEMENT_STRATEGY` runtime-config env var via `deploy.sh` and
+rewrites the durable Docker runtime config. It does **not** write control-DB
+state — there is no persisted strategy column. Placement reads the value live
+from `ARCLINK_FLEET_PLACEMENT_STRATEGY` on every placement decision
+(`arclink_fleet.place_deployment`), so the change takes effect on the next
+deployment placed, not retroactively. `headroom` (the default) picks the host
+with the most free capacity slots; `standard_unit` picks the host with the most
+available ASU.
+
+Note the boundary: the bare Python CLI form
+(`python3 python/arclink_inventory.py set-strategy ...`) only **prints** the
+chosen strategy — it neither writes the runtime config nor mutates control-DB
+state. Use the `deploy.sh control inventory set-strategy` wrapper above to make
+the change durable.

@@ -180,6 +180,19 @@ type allowlists, Cloudflare Access TCP guards, Tailscale SSH guards, supported
 Chutes/Stripe actions, and rollback state-root preservation; live proof remains
 owned by the E2E gates.
 
+The live-proof runner (`python/arclink_live_runner.py`,
+`bin/arclink-live-proof`) and evidence ledger (`python/arclink_evidence.py`)
+orchestrate these gates: host readiness, presence-only provider diagnostics,
+journey planning, and redacted evidence capture. Today the runner is dry-run by
+default and writes a redacted artifact to `evidence/<run_id>.json` only. That
+evidence is file-only: the `arclink_evidence_runs` table and its persistence
+helpers are implemented and tested but unwired, and no dashboard, hosted API, or
+Operator Raven surface reads them. Do not assume evidence or run history is
+operator-visible. Only the `workspace` journey ships executable no-secret
+runners (proof-gated behind PG-HERMES); the hosted customer journey remains
+unproven (PG-PROD). See `docs/arclink/live-e2e-secrets-needed.md` and
+`docs/arclink/live-e2e-evidence-template.md` for the full proof contract.
+
 ## Public Onboarding Contract
 
 `python/arclink_onboarding.py` defines the current no-secret contract shared by
@@ -267,10 +280,14 @@ deployment id, user id, and a lower-bound timestamp.
 
 Admin actions are queued intent first, then action-worker execution when an
 operator path claims them. Supported fake/executor-backed worker actions
-currently include restart, DNS repair, Chutes key rotation, refund, and cancel.
-Comp, reprovision, rollout, suspend/unsuspend, force resynthesis, and bot-key
-rotation remain accepted admin intents but finish as pending-not-implemented
-worker failures rather than no-op applied successes. Each request must include
+currently include restart, reprovision, DNS repair, Chutes key rotation, refund,
+cancel, comp, backup write-check, and `rollout` (the `arcpod_update_rollout`
+operation, `worker_support="wired"`; it queues audited local ArcPod update
+rollout rows and can record one bounded fake/local batch, while live per-Pod
+refresh and health/smoke proof remain proof-gated under PG-UPGRADE/PG-HERMES).
+Suspend/unsuspend, force resynthesis, and bot-key rotation remain accepted admin
+intents but finish as pending-not-implemented worker failures rather than no-op
+applied successes. Each request must include
 an admin id, target, reason, and idempotency key; the helper writes an audit row
 and stores safe metadata only. Plaintext-looking secret material is rejected
 before the action intent is persisted, and live side effects still require a

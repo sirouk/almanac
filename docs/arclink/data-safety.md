@@ -49,6 +49,67 @@ cannot be reshared from that root, keep git mutations disabled from Linked, and
 may be copied into the receiver's own Vault/Workspace only through the
 receiver's normal user boundary. The Linked root itself stays system-managed.
 
+## Sharing Data Safety: Claim Nonces, Share-Request Broker, Fleet Folder
+
+Share grants, claim nonces, and Linked-resource projection are owned by
+`arclink_api_auth.py`; the Fleet shared folder git-sync engine is owned by
+`arclink_fleet_share.py`. All three are implemented and tested locally; live
+bot delivery of approval/recipient prompts is proof-gated (`PG-BOTS`).
+
+**Ephemeral claim nonce (`asn_`, 12h, hashed-only).** A claim nonce is a
+single-use, owner-minted handle that grants one scoped read-or-write Linked
+share to whoever the owner hands it to. Minting *is* the owner's approval:
+the recipient claims by running `/arclink_share_accept <nonce>`. Data-safety
+properties:
+
+- The nonce TTL is `ARCLINK_SHARE_CLAIM_NONCE_TTL_SECONDS = 12 * 60 * 60`
+  (12 hours), prefix `ARCLINK_SHARE_CLAIM_NONCE_PREFIX = "asn_"`.
+- Only the **hash** is persisted. `arclink_share_claim_nonces` stores
+  `nonce_hash = _hash_proof_token(nonce)`; the raw nonce value is never stored.
+- The sanitized public view (`_public_share_claim_nonce`) never includes the
+  nonce value **or** its hash — it exposes only ids, kinds, roots, and status.
+- Claim nonces support only Drive and Code resources.
+
+**Share-request broker (OFF by default).** The hosted broker route
+(`/user/share-grants/broker`) lets a deployment-scoped caller request a share
+on a Captain's behalf, authenticated by the
+`X-ArcLink-Share-Request-Broker-Token` header (hashed via
+`hash_share_request_broker_token`, stored as `token_hash`). It is fail-closed
+and OFF by default: no broker token hash is provisioned unless the operator
+wires one, so `_authenticate_share_request_broker` rejects every request when
+the config is absent or `enabled` is `False`. It supports only `owner_approval`
+or `claim_nonce` share modes. Live browser proof of the broker is proof-gated
+(`GAP-014`, policy-question; `PG-BOTS`/`PG-HERMES` for live effect).
+
+**Fleet shared folder (multi-writer git, conflict-surfacing not clobber).**
+The Fleet shared folder is a Captain-scoped read-write space surfaced as the
+writable **Fleet** root in Drive/Code. Data-safety design
+(`arclink_fleet_share.py`):
+
+- **Per-Captain bare hub, independent of any agent.** Each Captain's canonical
+  history lives in a bare repo at
+  `<ARCLINK_FLEET_SHARE_HUB_ROOT>/<owner>/fleet-shared.git`
+  (`DEFAULT_HUB_ROOT = /arcdata/captains`). Each Agent holds its own working
+  copy whose `origin` points at the hub.
+- **Multi-writer rebase, conflicts surfaced not clobbered.** A sync pass stages
+  and commits local edits, then `fetch` + `rebase` onto the hub before pushing.
+  A non-fast-forward push triggers a fetch + rebase retry; an unresolvable
+  rebase is `rebase --abort`ed and returned as a `conflict` status
+  (`"Local edits conflict with the shared folder. Resolve and re-sync."`)
+  rather than overwriting a peer's writes.
+- **Quarantine-and-reclone for corruption.** A corrupt working copy is moved
+  aside (`_quarantine_corrupt_working_copy`, preserving the user's files) so it
+  can be re-cloned instead of destroyed.
+- **Hub durability boundary.** An unreachable hub is a soft error: local edits
+  are committed and pushed on the next pass once the hub is reachable. The hub
+  is the per-Captain durability anchor; an individual Agent working copy is
+  recoverable from it. Remote (cross-host `ssh://`/`https://`) hub transport is
+  infra-gated. Sync is two-tier: the per-agent `fleet-share-sync` job runs the
+  in-pod read-write git sync, and the control-node `fleet-share-reconcile`
+  compose job runs DB-only membership convergence (`reconcile --all`, every
+  120s) — it enrols newly-active agents and deregisters torn-down ones without
+  touching the hub.
+
 ## Volume Layout
 
 ```text
@@ -424,6 +485,53 @@ ArcPod Docker volumes follow the naming convention:
   boundary incidents until the metadata is repaired or the operator records a
   residual-risk decision.
 
+`GAP-019` is **OPEN — acknowledged residual risk only**, not closed and not
+tenant-safe: each socket broker still owns a writeable Docker socket and each
+root helper still runs as root, gated behind
+`ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted`. The authoritative
+trust-boundary source is the `GAP-019` entries in
+`docs/arclink/operations-runbook.md`; the gap taxonomy lives in `GAPS.md`. This
+section summarizes the data-safety posture and must not be read as a closure
+claim.
+
+## Entitlement, Refuel, And Stripe Data Safety
+
+Billing state and refuel/inference budgeting are owned by `arclink_control.py`
+(entitlement state, refuel ledger, plan pricing, subscription mirror) and
+`arclink_entitlements.py` (Stripe webhook processing, reconciliation drift),
+with Stripe clients in `arclink_adapters.py`. All of this is implemented and
+tested locally with fake adapters; live Stripe checkout/portal/webhook delivery
+is proof-gated (`PG-STRIPE`) and live Chutes provider-balance application is
+proof-gated (`PG-PROVIDER`).
+
+- **Entitlement state is the provisioning gate.** The state machine is
+  `ARCLINK_ENTITLEMENT_STATES = {none, paid, comp, past_due, cancelled}`.
+  `arclink_deployment_can_provision` returns true only for `paid` or `comp`,
+  enforced at both gate-advance and intent-build, so a Captain whose payment
+  lapses cannot keep provisioning new ArcPod capacity.
+- **Refuel is LOCAL BUDGET ACCOUNTING ONLY until live provider proof.** Fuel
+  top-ups and subscription inference allowance move a **local** budget ledger,
+  not a real provider balance. The ledger stamps
+  `accounting_model = "fair_credit_local_ledger"` and
+  `provider_balance_application =
+  "local_budget_accounting_only_until_live_chutes_proof"`. No live provider
+  balance is moved anywhere until an authorized `PG-PROVIDER` proof window.
+- **`refuel_paid` is a synthetic marker, not a stored state.** A refuel
+  `checkout.session.completed` webhook returns
+  `entitlement_state = "refuel_paid"` as a returned marker only;
+  `refuel_paid` is NOT a member of `ARCLINK_ENTITLEMENT_STATES` and is never
+  written to `arclink_users.entitlement_state`.
+- **Webhook processing is fail-closed and idempotent.** With
+  `STRIPE_WEBHOOK_SECRET` unset the webhook route returns `503`
+  (`stripe_webhook_secret_unset`) so Stripe retries rather than the Control
+  Node silently accepting payment without crediting entitlements. Replay is
+  idempotent via `arclink_webhook_events`. Signature verification, email-driven
+  user merge, and the subscription mirror all run before any state change.
+- **No card or Stripe secret material is stored in plaintext.** Stripe customer
+  references are carried as `secret://arclink/stripe/customer/{user_id}`
+  references resolved at action time; refund/cancel actions fail closed unless a
+  resolvable Stripe customer/subscription exists.
+
 ## Knowledge And Memory Rails
 
 Agents should use ArcLink MCP tools before raw rummaging:
@@ -461,23 +569,43 @@ Destructive operations are allowed only through scoped, audited control rails.
 The product goal is to avoid tying the agent's hands while still making
 dangerous writes reversible, attributable, and policy-aware. Gating levels:
 
-1. **Admin confirmation required.** Teardown actions via
-   `POST /api/v1/admin/actions` require an admin session with mutation role,
-   CSRF token, reason, and idempotency key.
+1. **Teardown runs through the Sovereign worker, not the action worker.**
+   Pod teardown is driven by `arclink_sovereign_worker.py`
+   (`process_sovereign_teardown` → `_teardown_deployment`), which calls
+   `executor.docker_compose_lifecycle(action="teardown", ...)` once a
+   deployment reaches `teardown_requested`. The admin/operator action worker
+   (`arclink_action_worker.py`) does NOT perform teardown: its
+   `_EXECUTOR_ACTIONS` set covers `restart`, `reprovision`, `dns_repair`,
+   `rotate_chutes_key`, `refund`, `cancel`, `comp`, and `backup_write_check`
+   only — the sole lifecycle op it issues is `restart`. Live execution is
+   proof-gated (`PG-PROVISION`); with the fake executor adapter, teardown is
+   record-only.
 
-2. **Audit logging.** All teardown intents are recorded in `arclink_audit_log`
-   with actor, reason, target, and timestamp before execution.
+2. **Audit logging.** Teardown is bracketed by structured events
+   (`sovereign_teardown_started` / `sovereign_teardown_completed` /
+   `sovereign_teardown_failed`) and an `arclink_audit_log` record written via
+   `append_arclink_audit` on completion, capturing actor, target, and outcome.
 
 3. **State root preservation.** The executor's rollback contract requires
    `preserve_state_roots` in the plan. Rollback rejects action names that
    imply deleting customer state roots or vault data.
 
-4. **Volume preservation by default.** `docker compose down` (without `-v`)
-   preserves data volumes. Volume deletion requires explicit `destructive: true`
-   flag in the rollback plan.
+4. **Volume preservation by default.** Teardown runs `docker compose down
+   --remove-orphans` and only appends `--volumes` when volume deletion is
+   explicitly requested. The gate is `metadata.teardown.remove_volumes is True`
+   (`_teardown_removes_volumes` in `arclink_sovereign_worker.py`); the executor
+   adds `--volumes` only when `DockerComposeLifecycleRequest.remove_volumes` is
+   `True` and records `preserve_volumes = not request.remove_volumes`. There is
+   no `destructive: true` flag — absent the `remove_volumes` metadata, customer
+   data volumes are preserved.
 
-5. **DNS teardown is separate.** DNS record removal is a distinct admin action,
-   not bundled with container teardown.
+5. **DNS and provider-key teardown are scoped to the teardown pass.** In the
+   Sovereign teardown flow, DNS record removal runs via `cloudflare_dns_teardown`
+   only in `domain` ingress mode (path/`tailscale` mode marks records
+   `skipped`), and the deployment's Chutes router key is revoked
+   (`chutes_key_apply(action="revoke")`). Each provider mutation carries its own
+   idempotency key; live provider effect is proof-gated
+   (`PG-INGRESS` for DNS, `PG-PROVIDER` for Chutes).
 
 6. **Destructive state deletes are separately gated.** The executor's
    `_is_destructive_state_delete` check prevents accidental data loss.

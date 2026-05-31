@@ -14,7 +14,19 @@ HTTPS Hermes dashboard. Use
 `bin/arclink-live-proof --journey external` to plan provider-specific proof
 rows, or `bin/arclink-live-proof --journey external --live --json` only after
 the operator explicitly authorizes the named provider rows and supplies the
-required secret references or live credentials. The fake E2E harness
+required secret references or live credentials.
+
+**Important — the external journey is a plan/catalog, not an executable proof.**
+Only the `workspace` journey ships executable runners
+(`build_workspace_live_runners` in `python/arclink_live_runner.py`). The
+`external` rows in `python/arclink_live_journey.py` have **no registered
+runners**: even with every credential present, `bin/arclink-live-proof --journey
+external --live` returns the runner status `blocked_no_registered_runner` (each
+step is skipped with "live proof requested but no runner is registered") and
+exits 1. Treat `--journey external` as a credential-planning catalog only. The
+`hosted` journey likewise has no registered runners today; the workspace journey
+(PG-HERMES) is the only one that can reach `live_executed` against a real Hermes
+dashboard. The fake E2E harness
 (`tests/test_arclink_e2e_fake.py`) passes without credentials. Provider live
 checks in `tests/test_arclink_e2e_live.py` skip cleanly when credentials are
 absent. The ordered journey model (`python/arclink_live_journey.py`) and
@@ -95,6 +107,12 @@ The external journey is opt-in per provider row. If no `ARCLINK_PROOF_*` flag
 is set, dry-run planning reports all missing provider proof gates. If one or
 more proof flags are set, ArcLink requires only the environment for those named
 rows and skips unrelated provider rows.
+
+These external rows are a **catalog only** — they have no executable runners
+(see the warning above), so supplying these credentials lets you confirm the
+planning/opt-in behavior but does not exercise the named provider. Live external
+proof for each provider remains proof-gated (PG-STRIPE, PG-BOTS, PG-PROVIDER,
+PG-NOTION, PG-CLOUDFLARE, PG-TAILSCALE) and is not run by this runner today.
 
 | Var | Required For | Purpose |
 |-----|-------------|---------|
@@ -215,9 +233,10 @@ Executor adapter credential checklist:
 
 The public onboarding contract can be tested without live secrets through fake
 Stripe checkout sessions, durable `arclink_onboarding_*` rows, the local
-`python/arclink_product_surface.py` web/API surface, and deterministic
-Telegram/Discord bot conversation skeletons in `python/arclink_public_bots.py`,
-and runtime adapters in `python/arclink_telegram.py` and
+`python/arclink_product_surface.py` web/API surface, and the deterministic
+Raven public-bot turn engine for Telegram/Discord in
+`python/arclink_public_bots.py`, and runtime adapters in
+`python/arclink_telegram.py` and
 `python/arclink_discord.py` (fake mode when tokens are absent).
 A live E2E still needs Stripe checkout session creation against real
 product/price ids, signed checkout completion webhooks, hosted success/cancel

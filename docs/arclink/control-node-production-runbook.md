@@ -96,10 +96,20 @@ contract. Current local worker-backed actions are:
 | `rotate_chutes_key` | `chutes_key_apply` | Queue provider-key rotation using secret references. | `PG-PROVIDER` |
 | `refund` / `cancel` | `stripe_action_apply` | Queue Stripe action after resolving target through the control DB. | `PG-STRIPE` |
 | `comp` | `control_db_comp` | Apply audited local entitlement comp; no external provider mutation is implied. | `LOCAL-CONTROL-DB` |
+| `rollout` | `arcpod_update_rollout` | Queue audited local ArcPod update rollout rows from a ready dry-run preflight plan; optionally record one bounded fake/local batch. Live per-Pod refresh and health/smoke proof stay gated. | `PG-UPGRADE/PG-HERMES` |
 
-Pending actions such as rollout, suspend, unsuspend, force resynth, and bot-key
-rotation stay visible as disabled entries with fail-closed reasons until worker
-dispatch and policy are implemented.
+`rollout` is now wired in `ARCLINK_ADMIN_ACTION_SUPPORT` (`worker_support="wired"`,
+target kinds `deployment`/`system`). The action worker plans the update via
+`plan_arcpod_update_rollout`, materializes typed `arclink_rollouts` rows through
+`materialize_arcpod_update_rollout_job`, and can record one bounded batch through
+`execute_arcpod_update_rollout_batch` under an explicit fake/local record-only
+executor contract. No real per-Pod refresh, Docker, SSH, or live health is run;
+that remains proof-gated (`PG-UPGRADE/PG-HERMES`, GAP-032). See
+[GAPS.md](../../GAPS.md) for the gap taxonomy.
+
+Pending actions such as suspend, unsuspend, force resynth, and bot-key rotation
+stay visible as disabled entries (`worker_support="pending_not_implemented"`)
+with fail-closed reasons until worker dispatch and policy are implemented.
 
 Provisioning, provider actions, DNS changes, rollbacks, and admin actions use
 idempotency keys. Reusing a key with the same inputs should replay the recorded
@@ -117,6 +127,81 @@ Before enabling live mutation paths, verify:
 - Action worker results are recorded and visible in admin evidence/audit views.
 - Rollback plans preserve state roots and do not delete vault, Nextcloud,
   memory, qmd, or workspace data by default.
+
+## Operator Raven Control Surface
+
+Operator Raven (`python/arclink_operator_raven.py`) is the chat-native operator
+control console on the Operator's linked Telegram/Discord channel. It is no
+longer read-only or dry-run-only: mutating commands queue real, audited,
+identity-gated intents into the same rails described above. Treat this surface
+as proof-gated for live effect, but local-real for queueing.
+
+Read commands (never mutate): `status`, `agents`, `fleet_list`, `worker_probe`
+(dry-run only in this slice; no live SSH/Docker/health probe), `user_lookup`,
+`academy_status`, `academy_roster`, `upgrade_check` (fail-closed unless an
+upgrade-check runner is injected), and `action_status`.
+
+Mutating commands (`MUTATING_COMMANDS = {pod_repair, rollout, host_upgrade,
+pin_upgrade}`) use a three-mode contract:
+
+1. `--dry-run` previews and changes nothing.
+2. No `--dry-run` and no verified operator identity fails closed (read-only
+   refusal).
+3. No `--dry-run` with a verified operator identity queues a real, audited
+   intent that the action worker or the enrollment-provisioner root maintenance
+   loop executes asynchronously.
+
+Even when queued, live mutation stays gated by `ARCLINK_EXECUTOR_ADAPTER`
+(`fake` records only) and per-action proof gates: `pod_repair` actions
+(`restart`/`reprovision` PG-PROVISION, `dns_repair` PG-INGRESS), `rollout`
+(PG-UPGRADE/PG-HERMES), `host_upgrade`/`pin_upgrade` (operator-upgrade-broker,
+risk-accepted under GAP-019).
+
+### Operator Approval Code
+
+All Operator Raven mutating commands require an operator approval code on the
+originating channel. The code is read from
+`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or `ARCLINK_OPERATOR_APPROVAL_CODE`
+(first non-blank wins; blank means no code required) and is verified with a
+constant-time compare (`hmac.compare_digest`) on the trailing token before the
+command parser ever sees it. A missing or wrong code fails closed with an
+"Operator code required for this action" response and queues nothing. Keep the
+approval code in private state only; never commit it.
+
+### Two Action Queues
+
+Operator Raven writes to two distinct queues, drained by different workers:
+
+- `arclink_action_intents` (with attempts in `arclink_action_attempts`) is
+  drained by `control-action-worker` (`python/arclink_action_worker.py`).
+  `pod_repair` and `rollout` queue here via `queue_arclink_admin_action`, as do
+  admin dashboard/API actions.
+- `operator_actions` is drained by the enrollment-provisioner root maintenance
+  loop. `host_upgrade` (`upgrade`) and `pin_upgrade` (`pin-upgrade`) queue here
+  via `request_operator_action`; in Docker component-upgrade mode the loop
+  reaches the host through `operator-upgrade-broker` (see the
+  [operations runbook](operations-runbook.md) GAP-019 entries for the
+  authoritative trusted-host boundary).
+
+### Operator Single Hermes Agent
+
+The Operator gets exactly ONE in-stack Hermes agent
+(`python/arclink_operator_agent.py`), a first-class control-stack Compose
+identity (`DEFAULT_OPERATOR_AGENT_DEPLOYMENT_ID="operator"`, runtime
+`control-stack`), not a tenant ArcPod and not a legacy shared-host install. The
+one-agent invariant is enforced (`assert_single_operator_agent` raises if more
+than one exists); the deployment is comped and stamped `operator_agent=True`,
+`not_arcpod=True`. Runtime setup is handled by
+`bin/install-operator-hermes-home.sh` plus the Control Node Compose services;
+the module itself is control-DB only and never runs Docker or SSH.
+
+Free-form operator chat that is not a Raven command is bridged to this single
+agent: when the conversation is routable, `enqueue_operator_agent_turn` queues
+the message (stamped `operator_turn=True`, `source_kind="operator_chat"`)
+through the existing `public-agent-turn` notification worker, and the in-stack
+Hermes gateway replies asynchronously. A live reply requires a running gateway
+and Hermes runtime (PG-HERMES). If the agent is not routable, the channel falls
+back to the Raven control intro.
 
 ## Operator Pod Migration
 

@@ -44,14 +44,21 @@ Rate limits are enforced per-scope using a sliding window stored in the `rate_li
 
 | Scope | Limit | Window |
 |-------|-------|--------|
-| `login` | 10 requests | 15 min |
-| `admin_login` | 5 requests | 15 min |
-| `user_login` | 10 requests | 15 min |
-| `onboarding:{channel}` | 5 requests | 15 min |
-| `public_bot:{channel}` | via `check_arclink_rate_limit` | configurable |
+| `login` | 10 requests | 900s (15 min) |
+| `admin_login` | 5 requests | 900s (15 min) |
+| `user_login` | 10 requests | 900s (15 min) |
+| `onboarding_claim` | 5 requests | 900s (15 min) |
+| `onboarding:{channel}` | 5 requests | 900s (15 min) |
 | `webhook:stripe` | `ARCLINK_WEBHOOK_RATE_LIMIT_STRIPE` | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` |
 | `webhook:telegram` | `ARCLINK_WEBHOOK_RATE_LIMIT_TELEGRAM` | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` |
 | `webhook:discord` | `ARCLINK_WEBHOOK_RATE_LIMIT_DISCORD` | `ARCLINK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` |
+
+The login scopes (`login`, `user_login`, `admin_login`) and `onboarding_claim` are
+hard-coded in `arclink_api_auth.py`; the per-channel `onboarding:{channel}` scope is
+shared by public onboarding start and by public-bot turns (the public-bot turn limit
+and window come from `ARCLINK_PUBLIC_BOT_TURN_LIMIT` /
+`ARCLINK_PUBLIC_BOT_RATE_WINDOW_SECONDS`). Webhook scopes are subject-keyed by
+proxy-resolved client IP (`ip:<client_ip>`).
 
 When exceeded, the API returns `429` with `{"error": "ArcLink rate limit exceeded"}`, `Retry-After`, and `X-RateLimit-*` headers.
 
@@ -94,6 +101,10 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/onboarding/answer` | Answer onboarding question |
 | POST | `/onboarding/checkout` | Open Stripe checkout |
 | GET | `/onboarding/public-bot-checkout` | Redirect a signed public-bot checkout button to Stripe |
+| GET | `/onboarding/status` | Read the current onboarding-session status (status, entitlement state, plan, checkout state, and any provisioned ArcPod access) for the browser checkout-return page |
+| POST | `/onboarding/claim-session` | Exchange a paid onboarding `session_id` plus browser `claim_token` for a user session; mints the user session cookies on `201` and is rate-limited under the `onboarding_claim` scope (public route, gated by the claim token rather than session CSRF) |
+| POST | `/onboarding/cancel` | Cancel an in-progress onboarding session; gated by `session_id` plus a browser `cancel_token` (public route) |
+| GET | `/adapter-mode` | Report fake-adapter posture for the browser: `{fake_mode, fake_stripe}` (true when no live Stripe key is configured or `ARCLINK_FAKE_MODE`/`ARCLINK_FAKE_ADAPTERS` is set) |
 | POST | `/webhooks/stripe` | Stripe webhook receiver |
 | POST | `/webhooks/telegram` | Telegram Bot API webhook; requires `X-Telegram-Bot-Api-Secret-Token` matching `TELEGRAM_WEBHOOK_SECRET` |
 | POST | `/webhooks/discord` | Discord interaction webhook; verifies signature timestamp tolerance and interaction replay |
@@ -125,6 +136,12 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/crew-recipe` | Read the active Crew Recipe, prior archived recipe, and "what changed" summary |
 | POST | `/user/crew-recipe/preview` | Preview or regenerate a Crew Recipe without applying it (CSRF) |
 | POST | `/user/crew-recipe/apply` | Confirm Crew Training and apply the additive SOUL overlay (CSRF) |
+| GET | `/user/academy` | Read the Captain's Academy view: available Majors, enrolled Trainees, per-account quota, and graduate gallery |
+| GET | `/user/academy/mode-status` | Read sticky Academy Mode status for a Trainee (`trainee_id` query); reports whether a session is open |
+| POST | `/user/academy/enroll` | Enroll a Trainee into a Major (`program_id`, `name`, `depth`) within the per-account quota (CSRF) |
+| POST | `/user/academy/mode-open` | Open a sticky Academy Mode session for a Trainee (idempotent; one open session per Trainee) (CSRF) |
+| POST | `/user/academy/mode-end` | Close the open Academy Mode session, optionally graduating the Trainee; mode-end itself returns `mutation_performed=false` and writes no Agent files. The separate queued `academy_apply` action is the PG-HERMES-gated Agent write path; today it materializes the marker-bounded Academy SOUL section and a private apply receipt when authorized. (CSRF) |
+| POST | `/user/academy/adopt` | Adopt a redacted graduate card from the owner-scoped gallery into a new Trainee (`source_trainee_id`, `name`) (CSRF) |
 | GET | `/user/share-grants` | Share approval inbox for the authenticated owner or recipient, including pending owner approval, recipient acceptance waits, and no-channel recovery state |
 | POST | `/user/share-grants` | Request a Drive/Code share grant (CSRF). Drive/Code folder shares default to read/write access in the recipient's Linked root. Same-account agent-to-agent shares require `owner_deployment_id` plus a different `recipient_deployment_id` and auto-accept into the target agent's Linked root. |
 | POST | `/user/share-grants/broker` | Internal Drive/Code Request Share broker route. Requires `X-ArcLink-Share-Request-Broker-Token`; derives the owner from the token-bound `owner_deployment_id` and does not accept browser session cookies as a substitute. With `share_mode="claim_nonce"` (the default for Drive/Code right-click Share) it mints a single-use, 12-hour ephemeral nonce instead of resolving a recipient up front, returning `{nonce, accept_command, copy_text, expires_at, expires_in_hours}`. |
@@ -257,6 +274,17 @@ ArcPod match. Paid monthly subscription invoices also replenish included ArcPod
 fuel through the same credit ledger; duplicate `invoice.payment_succeeded` /
 `invoice.paid` events are idempotent per invoice and ArcPod.
 
+For a matched refuel payment the webhook result carries a synthetic
+`entitlement_state="refuel_paid"` marker. This is a transient response label, not
+a stored entitlement state — the persisted entitlement states remain
+`none|paid|comp|past_due|cancelled`. The refuel/allowance ledger is local budget
+accounting only and is stamped
+`local_budget_accounting_only_until_live_chutes_proof`; it never moves a real
+Chutes provider balance. Live Chutes provider-balance application is proof-gated
+(PG-PROVIDER), and live Stripe checkout/portal/webhook delivery is proof-gated
+(PG-STRIPE). The Stripe webhook is fail-closed: when `STRIPE_WEBHOOK_SECRET` is
+unset it returns `503` so Stripe keeps retrying.
+
 The provider-state payload includes sanitized ArcLink LLM Router consumption
 when router rows exist: request/status counts, stream counts, token totals,
 estimated/actual cents, open reservation cents, credential counts, and the
@@ -327,7 +355,20 @@ command, or instruction-override patterns is rejected before fallback.
 
 - **Owner**: ArcLink control-plane team
 - **Database**: Single SQLite file (Postgres path planned but not active)
-- **Session storage**: `sessions` table in same DB; no external session store
+- **Session storage**: `arclink_user_sessions` and `arclink_admin_sessions` tables
+  in the same DB; only token/CSRF hashes are stored, no external session store
 - **Rate limit storage**: `rate_limits` table; no Redis dependency
 - **Stripe client**: Defaults to `FakeStripeClient` when no live key configured
 - **Bot adapters**: Telegram/Discord webhooks use fake-mode adapters by default
+
+## Related Documents
+
+This reference plus `docs/openapi/arclink-v1.openapi.json` are the canonical
+route catalog; `docs/openapi/arclink-v1.openapi.json` is byte-identical to the
+spec generated by `build_arclink_openapi_spec()` and is regenerated on any
+`_ROUTES` change. For other concerns, cross-reference rather than duplicate:
+
+- **Trust boundary / Docker-socket brokers (GAP-019)**: see the GAP-019 entries in
+  `docs/arclink/operations-runbook.md` (authoritative source).
+- **Gap and proof-gate taxonomy (GAP-* / PG-*)**: see `GAPS.md`.
+- **LLM Router live-proof variables**: see `docs/arclink/llm-router.md`.

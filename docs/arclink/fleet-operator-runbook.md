@@ -3,7 +3,56 @@
 This runbook covers source-level fleet operations. Live host and provider
 proofs require explicit Operator authorization.
 
+For the Docker-socket/root trusted-host services that back live host mutation
+(GAP-019, risk-accepted only), see the GAP-019 entries in
+`docs/arclink/operations-runbook.md` (authoritative). For the fleet operator
+CLI reference, see `docs/arclink/fleet-cli.md`.
+
+## Single-Machine Mode (docker-local-starter, no SSH)
+
+For a single Control Node that also runs ArcPods on its own host, there is no
+enrollment token and no SSH join. The control machine registers itself as a
+fleet host and is admitted by a dedicated no-SSH probe path.
+
+1. Register the local machine as a fleet host by running the Sovereign worker
+   with `ARCLINK_REGISTER_LOCAL_FLEET_HOST=1`. `process_sovereign_batch`
+   (in `python/arclink_sovereign_worker.py`) calls `register_fleet_host` for the
+   local host and stamps host metadata with `executor` (the value of
+   `ARCLINK_EXECUTOR_ADAPTER`), `ingress_mode`, `edge_target`, and
+   `state_root_base`. Set `ARCLINK_LOCAL_FLEET_SSH_HOST` to `localhost`,
+   `127.0.0.1`, or `::1` (the three values in `LOCAL_SSH_HOST_ALIASES`).
+
+2. The fleet inventory worker
+   (`python/arclink_fleet_inventory_worker.py`) flags the host for the
+   `docker-local-starter` probe mode when all three conditions hold (computed in
+   `_host_rows`, written to `_arclink_docker_local_starter_probe`):
+
+   - `ARCLINK_DOCKER_MODE` is truthy, AND
+   - the linked inventory machine metadata `executor == "local"`, AND
+   - the host `ssh_host` is one of `localhost`, `127.0.0.1`, `::1`.
+
+   When flagged, `SshProbeRunner` short-circuits to `_docker_local_starter_probe`
+   and never opens SSH. That probe always returns `ok=True` with
+   `admitting=True` and `probe_mode="docker-local-starter"`, so the host is
+   admitted on the local machine alone. This is the local-real, single-machine
+   equivalent of the remote enrollment path below.
+
+3. Confirm admission with the same inventory commands used for remote workers:
+
+   ```bash
+   ./deploy.sh control inventory health --json
+   ./deploy.sh control inventory list --filter status=ready --json
+   ```
+
+Live remote-fleet apply and worker execution remain proof-gated (PG-FLEET /
+PG-PROVISION); the docker-local-starter admission path itself is local-real and
+does not need that authorization.
+
 ## Enroll A Worker
+
+This is the remote-fleet path. For a single-machine Control Node, use
+[Single-Machine Mode](#single-machine-mode-docker-local-starter-no-ssh) above
+instead of an enrollment token.
 
 1. Mint a token:
 

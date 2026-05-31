@@ -23,7 +23,10 @@ tests as truth, then update the closest canonical doc.
 | `docs/docker.md` | Canonical | Retired Shared Host Docker notice plus Control Node Docker-substrate boundary. |
 | `docs/API_REFERENCE.md` | Canonical | Hosted API route and config reference; OpenAPI remains in `docs/openapi/`. |
 | `docs/org-profile.md` | Canonical | Organization profile ingestion and private-state source guidance. |
-| `docs/arclink/architecture.md` | Canonical | Current module map, route catalog, and integration boundaries. |
+| `docs/arclink/architecture.md` | Canonical | Current module map and integration boundaries; its route table cross-links `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` as the authoritative route catalog. |
+| `docs/arclink/public-agent-gateway.md` | Canonical | Public Agent gateway and trusted-host broker/helper security boundary; cross-links `operations-runbook.md` GAP-019 entries as the authoritative trust-boundary source. |
+| `docs/arclink/brand-system.md` | Canonical | Brand palette, typography, and voice; matches the product-surface CSS. |
+| `docs/arclink/professional-finish-gate.md` | Canonical | Cross-surface finish-gate guidance naming the executable `arclink_surface_contract.py` linter and its taxonomy. |
 | `docs/arclink/foundation.md` | Canonical | Behavior notes for no-secret foundation and proof-gated execution boundaries. |
 | `docs/arclink/foundation-runbook.md` | Canonical | Repair and validation runbook for foundation behavior. |
 | `docs/arclink/operations-runbook.md` | Canonical | Operator runbook for hosted/control operations and workspace plugins. |
@@ -37,12 +40,24 @@ tests as truth, then update the closest canonical doc.
 | `docs/arclink/live-e2e-secrets-needed.md` | Proof-gated | Live proof prerequisites and Node/Playwright setup. |
 | `docs/arclink/live-e2e-evidence-template.md` | Proof-gated | Evidence capture template for credentialed live runs. |
 | `docs/arclink/operator-stripe-webhook.md` | Canonical | Stripe event destination setup. |
+| `docs/arclink/sovereign-control-node.md` | Canonical | Sovereign Control Node product overview and deploy path. |
+| `docs/arclink/academy-trainer.md` | Canonical | Academy training subsystem (sticky Mode, central corpus, continuing education, and the PG-HERMES-gated Academy SOUL apply path). |
+| `docs/arclink/raven-public-bot.md` | Canonical | Raven public-bot persona, voice, and onboarding story rails. |
+| `docs/arclink/fleet-cli.md` | Canonical | `./deploy.sh control ...` Operator CLI surface, subcommands, and JSON/exit-code contract. |
+| `docs/arclink/fleet-operator-runbook.md` | Canonical | Source-level Sovereign fleet operations; live host/provider proofs require Operator authorization and cross-link `operations-runbook.md` GAP-019 entries. |
+| `docs/arclink/ingress-plan.md` | Canonical | Ingress modes (Cloudflare/Traefik `domain` and Tailscale path mode); live DNS apply remains proof-gated. |
+| `docs/arclink/backup-restore.md` | Canonical | Backup/restore targets and methods; live GitHub write/activation/restore recoverability remain proof-gated. |
+| `docs/arclink/alert-candidates.md` | Canonical | The shipped `arclink_health_watch` alerting rail plus candidate signals that have real state tables but no in-repo emitter yet. |
+| `docs/arclink/local-validation.md` | Canonical | No-secret, web, and proof-gated local validation procedures. |
+| `docs/arclink/secret-checklist.md` | Proof-gated | Secrets required for live deployment; live behavior requires these credentials before it can be claimed. |
 | `plugins/hermes-agent/*/README.md` | Canonical | Plugin-local behavior, install notes, and validation checks. |
-| `IMPLEMENTATION_PLAN.md` | Historical | Ralphie build backlog/status, not an operating runbook. |
+| `IMPLEMENTATION_PLAN.md` | Historical | Build backlog/status, not an operating runbook. |
 | `research/CONTRACT_AUDIT_20260510.md` | Historical | No-secret contract audit snapshot after the Raven selected-agent bridge repair. Useful evidence, but canonical docs/tests own current behavior. |
 | `research/RALPHIE_ARCLINK_ECOSYSTEM_GAP_REPAIR_STEERING.md` | Historical | Steering backlog and audit-derived rationale. |
 | `research/*` | Historical | Research and phase notes unless a specific file says otherwise. |
 | `docs/arclink/CREATIVE_BRIEF.md` | Speculative | Product voice and public copy direction; verify against implemented web/bot behavior before treating as shipped. |
+| `docs/arclink/sovereign-control-node-symphony.md` | Speculative | Intended dream-shape architecture narrative; describes direction ahead of implementation. Verify against code and the ground-truth brief before treating any claim as shipped. |
+| `FUTURE_SHARED_ARCLINK.md` | Speculative | North-star cross-sovereign-node sharing vision; today only single-control-plane share grants, Linked resources, the claim-nonce/share-request brokers, and the git fleet shared folder are built. The keypair/mesh/cross-node layer is unbuilt. |
 | `docs/arclink/CHANGELOG.md` | Historical | Phase changelog. Useful context, but nearby canonical docs own current behavior. |
 | `docs/arclink/document-phase-status.md` | Historical | Documentation phase audit status. |
 

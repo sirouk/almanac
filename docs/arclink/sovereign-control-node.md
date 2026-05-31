@@ -95,12 +95,19 @@ deployments across registered fleet workers.
      `orbital-beacon-7xq2`. The pool uses generic hard-SF/frontier language,
      not show-specific proper nouns, and the control DB enforces
      case-insensitive uniqueness.
-   - In `domain` mode, `python/arclink_ingress.py` computes Cloudflare DNS
-     records and Traefik labels for:
-     - `u-<prefix>.<base-domain>`
-     - `files-<prefix>.<base-domain>`
-     - `code-<prefix>.<base-domain>`
-     - `hermes-<prefix>.<base-domain>`
+   - In `domain` mode, `python/arclink_ingress.py` provisions Cloudflare DNS
+     records and Traefik routers for **only two** host roles
+     (`ARCLINK_HOST_ROLES = ("dashboard", "hermes")` in `arclink_ingress.py`):
+     - `u-<prefix>.<base-domain>` (the `dashboard` role)
+     - `hermes-<prefix>.<base-domain>` (the `hermes` role)
+   - `arclink_hostnames` (in `python/arclink_adapters.py`) still computes
+     `files-<prefix>` and `code-<prefix>` hostnames, but Files and Code are
+     **dashboard plugin routes served under the `u-` dashboard**, not standalone
+     subdomains: `desired_arclink_dns_records` filters to `ARCLINK_HOST_ROLES`,
+     so they receive **no DNS record and no Traefik router**. (Per-Captain
+     subdomains for Files/Code would require wildcard DNS that is not provisioned
+     today.) Cross-reference `docs/arclink/ingress-plan.md` for the authoritative
+     ingress host table.
    - In `tailscale` mode, Cloudflare DNS is skipped. The control host is
      published with Tailscale Funnel on `ARCLINK_TAILSCALE_HTTPS_PORT`, default
      `443`. Control-plane callbacks stay path-based under the worker Tailscale
@@ -114,11 +121,36 @@ deployments across registered fleet workers.
      renders `https://<worker-tailnet-name>/u/<prefix>/notion/webhook`.
 
 7. **Execution and health**
-   - `python/arclink_sovereign_worker.py` is the control-node worker. It:
+   - `python/arclink_sovereign_worker.py` is the control-node worker
+     (`control-provisioner`, `process_sovereign_batch`). It:
      claims paid deployments, registers an optional starter local host, places
      the deployment onto a fleet host, renders the pod intent, applies
      Cloudflare DNS only in domain mode, applies Docker Compose locally or over
      SSH, records service health, and writes audited timeline events.
+   - **Operator-arcpod exclusion.** The apply selection explicitly skips
+     deployments whose metadata carries `"operator_agent"` (the Operator's own
+     single in-stack Hermes agent, see "Operator Control" below). Those are
+     provisioned outside the fleet batch, never placed on a fleet host.
+   - **Mid-apply entitlement re-check.** Each apply step re-validates through
+     `_reload_apply_ready_deployment`, which re-asserts that the deployment is
+     still `provisioning`, the owning user still exists, and
+     `arclink_deployment_can_provision` still permits it. If the entitlement is
+     revoked mid-apply, the worker fails closed rather than finishing a pod the
+     Captain no longer owns.
+   - **Tailnet port allocator (tailscale path mode only).**
+     `_ensure_tailnet_service_ports` allocates a per-deployment `hermes` tailnet
+     HTTPS port from `ARCLINK_TAILNET_SERVICE_PORT_BASE` (default `8443`),
+     skipping ports already held by other live deployments, and records/releases
+     them in deployment metadata. Domain mode does not use this allocator.
+   - **Handoff health gate.** When
+     `ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HEALTHY_SERVICES` is set (default `1`),
+     the worker maps `docker compose ps` state to
+     `healthy|unhealthy|starting|failed|missing` and refuses to emit
+     `user_handoff_ready` if any service is `failed`, `unhealthy`, or `missing` —
+     the apply fails instead of handing a Captain a broken pod. The `fake`
+     executor adapter marks every service `healthy`, so this gate is exercised
+     only against the `local`/`ssh` adapters (proof-gated behind
+     `PG-FLEET`/`PG-PROVISION`).
    - `python/arclink_executor.py` is the executor boundary for Docker Compose,
      domain/Tailscale ingress, Chutes key lifecycle, Stripe actions, and rollback.
      In live mode it materializes compose/env/secret files under the deployment
@@ -136,11 +168,14 @@ deployments across registered fleet workers.
    metadata explicitly requests removal.
 
 8. **LLM routing**
-   - `python/arclink_llm_router.py` is the intended Control Node provider
-     boundary for ArcPod inference. Hermes sees an OpenAI-compatible `/v1`
-     provider; the router verifies a per-deployment ArcLink key, enforces
+   - `python/arclink_llm_router.py` is the Control Node provider boundary for
+     ArcPod inference. The `control-llm-router` ASGI service is wired and each
+     ArcPod's default base URL points at it. Hermes sees an OpenAI-compatible
+     `/v1` provider; the router verifies a per-deployment ArcLink key, enforces
      Chutes billing and budget policy, relays with the central server-side
-     Chutes credential, and records sanitized usage.
+     Chutes credential, and records sanitized usage. The live Chutes inference
+     relay itself is proof-gated (GAP-031, PG-PROVIDER) — the wiring is real, the
+     live upstream transaction is not yet proven.
    - The current source-level router does not store raw prompts or completions.
      Raw router keys are one-time materialization secrets; only hashes and
      metadata are stored in the control database.
@@ -158,15 +193,58 @@ deployments across registered fleet workers.
    - When the pod is healthy, ArcLink returns the user's dashboard/files/code/
      Hermes URLs and keeps the deployment visible in admin operations.
 
+## Operator Control
+
+The Operator governs the fleet from the admin dashboard, the chat-native
+**Operator Raven** console (`python/arclink_operator_raven.py`), and a single
+in-stack **operator Hermes agent** (`python/arclink_operator_agent.py`).
+
+- **Operator Raven queues real, audited, identity-gated actions** — it is not
+  read-only or dry-run-only. Mutating commands (`pod_repair`, `rollout`,
+  `host_upgrade`, `pin_upgrade`) use a three-mode contract: `--dry-run` previews
+  and changes nothing; no `--dry-run` with no operator actor fails closed; no
+  `--dry-run` with an operator actor queues a real intent. All mutating commands
+  require the operator approval code (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`
+  or `ARCLINK_OPERATOR_APPROVAL_CODE`), verified with a constant-time compare.
+  Read commands (`status`, `agents`, `fleet_list`, `worker_probe` (dry-run
+  only), `user_lookup`, `academy_status`, `academy_roster`, `upgrade_check`,
+  `action_status`) never mutate. Raven only *queues* intents; live mutation stays gated by
+  `ARCLINK_EXECUTOR_ADAPTER` and the per-action proof gates (e.g. PG-PROVISION,
+  PG-INGRESS, PG-UPGRADE, PG-HERMES). This corrects the stale "read-only
+  Operator Raven" framing (GAP-029, partially closed).
+- **Two queues.** Operator Raven writes admin/operator intents to
+  `arclink_action_intents` (drained by `python/arclink_action_worker.py`) and to
+  `operator_actions` (drained by the enrollment-provisioner root maintenance
+  loop). `action_status` reads recent rows from both.
+- **One operator Hermes agent.** The Operator gets exactly ONE in-stack Hermes
+  identity, reserved by `ensure_operator_agent_deployment` with the
+  `control-stack` runtime and a `"operator_agent"` metadata marker. The
+  one-agent invariant is enforced (`assert_single_operator_agent` refuses a
+  second). `enqueue_operator_agent_turn` bridges a free-form operator chat
+  message to that agent through the notification worker. Because of the
+  `"operator_agent"` marker, the sovereign worker excludes this deployment from
+  fleet apply (see "Execution and health" above).
+- ArcPod rollout (`rollout` / `arcpod_update_rollout`) is `wired`/queueable in
+  `ARCLINK_ADMIN_ACTION_SUPPORT`; the planner, local materializer, and
+  record-only batch executor are implemented and tested locally, but real
+  per-Pod refresh/apply with live multi-Pod health remains proof-gated
+  (GAP-032, PG-UPGRADE/PG-HERMES). See
+  `docs/arclink/operations-runbook.md` for the operator action-readiness rows
+  and the authoritative GAP-019 trust-boundary entries, and `GAPS.md` for the
+  gap taxonomy.
+
 ## Pod Comms
 
 Control Node Comms uses `python/arclink_pod_comms.py`. Same-Captain Pods may
 message by default; cross-Captain Pod Comms requires an accepted, unexpired
-`pod_comms` share grant.
-Messages are rate-limited per sender deployment, audited as
-`pod_message_sent`, `pod_message_delivered`, and `pod_message_redacted`, and
-delivered through `notification_outbox`. Attachments are Drive/Code share-grant
-references only, not raw files.
+`pod_comms` share grant. Send + store + list over `arclink_pod_messages` are
+implemented and tested locally; messages are rate-limited per sender deployment
+and audited as `pod_message_sent`. Attachments are Drive/Code share-grant
+projection references only, not raw files. Cross-Pod **delivery** and operator
+redaction (`mark_pod_message_delivered` / `redact_pod_message`,
+`pod_message_delivered` / `pod_message_redacted` audit events) are defined but
+currently unwired (no production caller), so do not assume live delivery
+without a live gateway runtime (PG-BOTS/PG-HERMES).
 
 ## Required Live Credentials
 

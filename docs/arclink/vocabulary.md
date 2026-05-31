@@ -87,9 +87,34 @@ though the underlying queue rows are keyed on technical identifiers.
 - Operator audit reason: "operator:opadm123 queued action `restart` on deployment `dep_abc12`."
 - Inventory output: "Hetzner host `fsn1-arc-3` · ASU capacity 4 · 2 consumed · 2 free."
 
+## Mechanical enforcement
+
+The Captain/Operator vocabulary split is not just a style guide — it is mechanically
+enforced at the Captain boundary by `python/arclink_surface_contract.py`, the executable
+cross-surface finish gate (GAP-033-A; tested by `tests/test_arclink_surface_contract.py`).
+Every surface is classified by an audience (`captain`, `operator`, `agent`, or `mixed`),
+a channel (`chat`, `dashboard`, `plugin`, `cli`, `tui`, `api`, `web`, or `docs`), and a
+state (`normal`, `blocked`, or `proof_gated`).
+
+For `captain`-audience copy, the gate's `_CAPTAIN_FORBIDDEN_PATTERNS` rejects:
+
+- the word "deployment(s)" — must say ArcPod or Pod;
+- "user(s)" / "buyer(s)" — must say Captain;
+- "operator(s)" — reserved for admin/deploy surfaces;
+- lower-case `agent`, `agents`, `pod`, `pods`, or `crew` (case-sensitive) — product terms
+  must be capitalized as Agent, Agents, Pod, Pods, and Crew.
+
+A bridge surface that legitimately renders both vocabularies (the admin dashboard's
+Captain detail panel) opts out of the Captain lint with `allow_captain_technical_terms`.
+The gate also refuses leaked secrets and raw tracebacks, and requires that any
+blocked/proof-gated copy still offer a concrete next action or name its proof gate (for
+example `PG-PROD`, `PG-BOTS`, `PG-HERMES`). The gate proves only that the *local* copy is
+honest about its vocabulary and gating; how Telegram, Discord, the browser, or a terminal
+actually render remains proof-gated under GAP-033.
+
 ## Cross-references
 
 This vocabulary is enforced by the surfaces named in
 `research/RALPHIE_ARCPOD_CAPTAIN_CONSOLE_STEERING.md` and the wave-by-wave migration
-plan in `IMPLEMENTATION_PLAN.md`. When a new surface is added, classify the audience
-first, then pick the column.
+plan in `IMPLEMENTATION_PLAN.md`. The gap taxonomy (including GAP-033) lives in `GAPS.md`.
+When a new surface is added, classify the audience first, then pick the column.

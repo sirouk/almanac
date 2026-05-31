@@ -126,7 +126,7 @@ ArcLink owns:
 - Queued admin action execution, attempt rows, stale-action recovery, and
   pending-not-implemented status handling in `python/arclink_action_worker.py`.
 - Local no-secret website/API views in `python/arclink_product_surface.py`.
-- Public Telegram/Discord bot conversation skeletons in
+- The deterministic Raven public-bot turn engine for Telegram/Discord in
   `python/arclink_public_bots.py`.
 - Telegram runtime adapter in `python/arclink_telegram.py`.
 - Discord runtime adapter in `python/arclink_discord.py`.
@@ -299,7 +299,7 @@ API/auth boundary:
 - `python/arclink_api_auth.py` stores user/admin session tokens and CSRF tokens
   as hashes only.
 - Public onboarding API helpers share the same durable onboarding session rows
-  and rate-limit rail as the website and public bot skeletons.
+  and rate-limit rail as the website and public bot turn surfaces.
 - Hosted route work must extract session credentials from explicit
   `X-ArcLink-Session-Id` plus bearer token headers or the matching
   `arclink_user_*`/`arclink_admin_*` cookies; unsupported session kinds fail
@@ -368,10 +368,11 @@ Telegram and Discord runtime adapters:
 - Neither adapter stores private user-agent bot tokens or provider credentials
   in public onboarding rows.
 
-Public bot skeletons:
+Public bot turn engine:
 
-- `python/arclink_public_bots.py` provides deterministic Telegram and Discord
-  conversation turns over the same public onboarding session contract.
+- `python/arclink_public_bots.py` provides the deterministic Raven turn engine
+  for Telegram and Discord conversation turns over the same public onboarding
+  session contract.
 - Supported turns collect name, plan, status, account-aware agent roster actions,
   and fake checkout. Stripe Checkout collects email; chat onboarding does not.
   The module does not run live bot clients or store private user-agent bot tokens.
@@ -394,13 +395,17 @@ Dashboard and admin contracts:
   `arclink_action_attempts` row, dispatches supported actions through the
   guarded executor, and writes audit/event rows for success, failure, or
   unsupported paths.
-- Executor-backed worker actions currently include restart, DNS repair,
-  provider key rotation, refund, and cancel. They are fake/no-secret unless the caller
-  deliberately supplies a live-enabled executor and live adapters.
-- Other accepted admin action types, including comp, reprovision, rollout,
-  suspend, unsuspend, force resynthesis, and bot-key rotation, are honest
-  pending-not-implemented paths in the worker rather than no-op applied
-  successes.
+- Executor-backed worker actions currently include restart, reprovision, DNS
+  repair, provider key rotation, refund, cancel, comp, backup write-check, and
+  `rollout` (`worker_support="wired"`, operation kind `arcpod_update_rollout`:
+  queues audited local ArcPod update rollout rows from a ready dry-run preflight
+  plan and can record one bounded fake/local batch). They are fake/no-secret
+  unless the caller deliberately supplies a live-enabled executor and live
+  adapters, and live per-Pod refresh plus health/smoke proof remain proof-gated
+  under PG-UPGRADE/PG-HERMES.
+- Other accepted admin action types, including suspend, unsuspend, force
+  resynthesis, and bot-key rotation, are honest pending-not-implemented paths in
+  the worker rather than no-op applied successes.
 - Admin actions require an admin id, supported action type, supported target,
   reason, and idempotency key.
 - Reusing an idempotency key for the same action returns the existing intent
@@ -572,6 +577,13 @@ Before promoting ArcLink beyond foundation work, confirm these are still true:
 - Workspace docs preserve the distinction between current Drive/Code plugin
   capabilities, Terminal managed-pty sessions, completed workspace Docker/TLS
   proof, and the separate hosted customer live-proof gate.
+- Live-proof docs do not imply the evidence ledger is operator-visible. The live
+  runner (`python/arclink_live_runner.py`, `bin/arclink-live-proof`) writes a
+  redacted evidence ledger to a file only (`evidence/<run_id>.json`). The
+  `arclink_evidence_runs` table and its `python/arclink_evidence.py` storage
+  helpers are implemented and tested locally but remain unwired; nothing reads
+  the table and no dashboard, hosted API, or Operator Raven surface exposes
+  persisted evidence today.
 - New public docs contain no local machine paths, operator names, live hostnames,
   tokens, or copied `.env` values.
 - New tests can run without live secrets.

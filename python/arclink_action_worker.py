@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import secrets
 import sqlite3
+import tempfile
 import time
 from typing import Any, Mapping
 
@@ -1078,7 +1079,7 @@ def _dispatch_action(
         # Live Agent-home writes require a live adapter AND explicit PG-HERMES
         # authorization. Without both, the apply is recorded fail-closed.
         live_authorized = _truthy((env or os.environ).get("ARCLINK_ACADEMY_APPLY_LIVE"))
-        result = stage_academy_apply(
+        staged_result = stage_academy_apply(
             conn,
             trainee_id=trainee_id,
             adapter_name=str(executor.config.adapter_name),
@@ -1087,6 +1088,13 @@ def _dispatch_action(
             created_at=utc_now_iso(),
             target_kind=target_kind,
             target_id=target_id,
+        )
+        result = _materialize_academy_apply(
+            conn,
+            result=staged_result,
+            target_kind=target_kind,
+            target_id=target_id,
+            applied_at=utc_now_iso(),
         )
         operation_key = str(metadata.get("idempotency_key") or idempotency_key or action_id)
         _link_action_operation(
@@ -1304,6 +1312,132 @@ def _deployment_lifecycle_metadata(conn: sqlite3.Connection, *, deployment_id: s
         "env_file": str(config_root / "arclink.env"),
         "compose_file": str(config_root / "compose.yaml"),
     }
+
+
+def _safe_child_path(path: str, root: Path, *, label: str) -> Path:
+    candidate = Path(str(path or "")).expanduser()
+    if not candidate.is_absolute():
+        raise ArcLinkActionWorkerError(f"Academy apply {label} path must be absolute")
+    resolved = candidate.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        raise ArcLinkActionWorkerError(f"Academy apply {label} path is outside deployment state root")
+    return resolved
+
+
+def _deployment_academy_roots(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Path]:
+    row = _deployment_row(conn, deployment_id)
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+    raw_roots = metadata.get("state_roots")
+    if isinstance(raw_roots, Mapping):
+        roots = {str(key): str(value) for key, value in raw_roots.items() if str(value or "").strip()}
+    else:
+        roots = {}
+    if not roots.get("root") or not roots.get("hermes_home") or not roots.get("vault"):
+        roots = render_arclink_state_roots(
+            deployment_id=str(row["deployment_id"] or deployment_id),
+            prefix=str(row["prefix"] or ""),
+            state_root_base=str(metadata.get("state_root_base") or os.environ.get("ARCLINK_STATE_ROOT_BASE") or "/arcdata/deployments"),
+        )
+    root = Path(str(roots["root"])).expanduser().resolve(strict=False)
+    return {
+        "root": root,
+        "hermes_home": _safe_child_path(str(roots.get("hermes_home") or ""), root, label="Hermes home"),
+        "vault": _safe_child_path(str(roots.get("vault") or ""), root, label="vault"),
+    }
+
+
+def _write_private_text_atomic(path: Path, body: str) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = ""
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing = ""
+    if existing == body:
+        try:
+            os.chmod(path, 0o600)
+        except FileNotFoundError:
+            pass
+        return False
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+    return True
+
+
+def _materialize_academy_apply(
+    conn: sqlite3.Connection,
+    *,
+    result: Mapping[str, Any],
+    target_kind: str,
+    target_id: str,
+    applied_at: str,
+) -> dict[str, Any]:
+    payload = dict(result)
+    if not payload.get("writes_enabled"):
+        return payload
+    deployment_id = str(payload.get("deployment_id") or (target_id if target_kind == "deployment" else "")).strip()
+    if not deployment_id:
+        raise ArcLinkActionWorkerError("academy_apply requires a deployment target for live Hermes-home materialization")
+    section = str(payload.get("academy_soul_section") or "").strip()
+    if not section:
+        raise ArcLinkActionWorkerError("academy_apply has no Trainer-reviewed Academy SOUL section to materialize")
+    roots = _deployment_academy_roots(conn, deployment_id=deployment_id)
+    hermes_home = roots["hermes_home"]
+    from arclink_org_profile import merge_academy_overlay
+
+    soul_path = hermes_home / "SOUL.md"
+    try:
+        existing_soul = soul_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        existing_soul = ""
+    soul_changed = _write_private_text_atomic(soul_path, merge_academy_overlay(existing_soul, section))
+    state_body = json.dumps(
+        {
+            "applied_at": applied_at,
+            "deployment_id": deployment_id,
+            "trainee_id": str(payload.get("trainee_id") or ""),
+            "program_id": str(payload.get("program_id") or ""),
+            "manifest_id": str(payload.get("manifest_id") or ""),
+            "plan_id": str(payload.get("plan_id") or ""),
+            "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
+            "academy_capsule_version": int(payload.get("academy_capsule_version") or 0),
+        },
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    state_changed = _write_private_text_atomic(hermes_home / "state" / "arclink-academy-apply.json", state_body)
+    conn.execute(
+        """
+        UPDATE academy_specialist_subscriptions
+        SET last_applied_capsule_version = ?
+        WHERE trainee_id = ?
+        """,
+        (int(payload.get("academy_capsule_version") or 0), str(payload.get("trainee_id") or "")),
+    )
+    payload.update(
+        {
+            "status": "applied_hermes_home",
+            "note": "PG-HERMES authorized: Academy specialist SOUL section was materialized into the deployment Hermes home.",
+            "mutation_performed": True,
+            "workspace_mutation_performed": False,
+            "filesystem_mutation_performed": bool(soul_changed or state_changed),
+            "applied_paths": ["SOUL.md", "state/arclink-academy-apply.json"],
+        }
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------

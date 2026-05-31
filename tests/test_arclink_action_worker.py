@@ -803,6 +803,91 @@ def test_academy_apply_action_stages_fail_closed_without_authorization() -> None
     print("PASS test_academy_apply_action_stages_fail_closed_without_authorization")
 
 
+def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_academy_apply_live")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_academy_apply_live")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_academy_apply_live")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_academy_apply_live")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_aw_apply_live")
+    org_profile = load_module("arclink_org_profile.py", "arclink_org_profile_aw_academy_apply_live")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "dep-academy-live"
+        roots = {
+            "root": str(root),
+            "config": str(root / "config"),
+            "state": str(root / "state"),
+            "vault": str(root / "vault"),
+            "hermes_home": str(root / "state" / "hermes-home"),
+        }
+        hermes_home = Path(roots["hermes_home"])
+        hermes_home.mkdir(parents=True)
+        (hermes_home / "SOUL.md").write_text("# SOUL\nHuman-authored identity.\n", encoding="utf-8")
+        user_id = "user_academy_live"
+        deployment_id = "dep_academy_live"
+        control.upsert_arclink_user(conn, user_id=user_id, email="academy-live@example.test", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id=deployment_id,
+            user_id=user_id,
+            prefix="academy-live",
+            base_domain="example.test",
+            status="active",
+            metadata={"state_roots": roots},
+        )
+        programs.seed_default_academy_programs(conn)
+        trainee = programs.enroll_academy_trainee(
+            conn, program_id="systems_practice_engineer", user_id=user_id, deployment_id=deployment_id, name="Apply Live"
+        )
+        session = programs.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by=user_id)
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id=deployment_id,
+            lane_id="github_repository",
+            title="Live apply source",
+            origin_url="https://example.test/live-apply",
+            summary="Compressed source notes for the materialized Academy overlay.",
+            proposed_by="agent-live",
+        )
+        programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor=user_id, graduate=True)
+        action = _queue_action(
+            dashboard,
+            conn,
+            action_type="academy_apply",
+            target_kind="deployment",
+            target_id=deployment_id,
+            key="academy-apply-live-1",
+            metadata={"trainee_id": trainee["trainee_id"]},
+        )
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+        )
+        result = worker.process_next_arclink_action(
+            conn,
+            executor=executor,
+            env={"ARCLINK_ACADEMY_APPLY_LIVE": "1"},
+        )
+        expect(result is not None and result["status"] == "succeeded", str(result))
+        applied = result["result"]
+        expect(applied["status"] == "applied_hermes_home", str(applied))
+        expect(applied["writes_enabled"] is True and applied["mutation_performed"] is True, str(applied))
+        expect(applied["filesystem_mutation_performed"] is True, str(applied))
+        soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
+        expect("Human-authored identity." in soul, soul)
+        expect(org_profile.BEGIN_ACADEMY_MARKER in soul and "Live apply source" in soul, soul)
+        state = json.loads((hermes_home / "state" / "arclink-academy-apply.json").read_text(encoding="utf-8"))
+        expect(state["trainee_id"] == trainee["trainee_id"], str(state))
+        link = conn.execute(
+            """
+            SELECT * FROM arclink_action_operation_links
+            WHERE action_id = ? AND operation_kind = 'academy_agent_apply'
+            """,
+            (action["action_id"],),
+        ).fetchone()
+        expect(link is not None and link["idempotency_key"] == "academy-apply-live-1", str(link))
+        print("PASS test_academy_apply_action_materializes_local_hermes_home_when_authorized")
+
+
 def test_reprovision_dispatches_pod_migration() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_reprovision")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_reprovision")
@@ -1665,6 +1750,7 @@ if __name__ == "__main__":
     test_academy_apply_preview_action_records_no_write_result_without_executor()
     test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
     test_academy_apply_action_stages_fail_closed_without_authorization()
+    test_academy_apply_action_materializes_local_hermes_home_when_authorized()
     test_reprovision_dispatches_pod_migration()
     test_reprovision_non_dry_run_requires_root_capture_opt_in()
     test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode()

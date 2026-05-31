@@ -2024,7 +2024,7 @@ def stage_academy_apply(
     review = composed["review"] if isinstance(composed["review"], Mapping) else {}
     review_ready = str(review.get("status") or "") in {"ready_for_review", "live_proof_pending"}
     adapter = str(adapter_name or "fake").strip().lower()
-    live_adapter = adapter in {"ssh", "live"}
+    live_adapter = adapter in {"local", "ssh", "live"}
 
     if not contract_ok:
         status = "not_staged"
@@ -2058,9 +2058,11 @@ def stage_academy_apply(
     # merge via merge_academy_overlay; the control plane itself writes nothing here.
     academy_soul_section = ""
     academy_capsule_version = 0
+    academy_specialist_uid = ""
     try:
         program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
         spec_uid, _ = specialist_uid_for_program(program_row)
+        academy_specialist_uid = spec_uid
         spec_row = conn.execute(
             "SELECT compressed_soul_capsule, capsule_version, role_title FROM academy_corpus_specialists WHERE specialist_uid = ?",
             (spec_uid,),
@@ -2103,6 +2105,7 @@ def stage_academy_apply(
         "academy_soul_section": academy_soul_section,
         "academy_soul_marker": "ARCLINK ACADEMY SPECIALIST",
         "academy_capsule_version": academy_capsule_version,
+        "academy_specialist_uid": academy_specialist_uid,
         "proof_gates": list(ACADEMY_APPLY_PROOF_GATES),
         "actor": str(actor or "").strip() or "system:action_worker",
         "mutation_performed": False,

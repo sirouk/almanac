@@ -864,13 +864,22 @@ def end_academy_mode(
     if graduate:
         try:
             promotion = promote_proposals_to_central(conn, trainee_id=trainee["trainee_id"], actor=str(actor or ""), commit=False)
-            summary.setdefault("central_specialist_uid", str(promotion.get("specialist_uid") or ""))
+            specialist_uid = str(promotion.get("specialist_uid") or "")
+            summary.setdefault("central_specialist_uid", specialist_uid)
             summary.setdefault("central_sources_promoted", int(promotion.get("promoted_count") or 0))
             summary.setdefault("central_sources_deduped", int(promotion.get("deduped_count") or 0))
             summary.setdefault("central_sources_skipped", int(promotion.get("skipped_count") or 0))
             summary.setdefault("central_share_scope", str(promotion.get("share_scope") or ""))
             summary.setdefault("central_capsule_version", int(promotion.get("capsule_version") or 0))
-        except Exception as exc:  # noqa: BLE001 - promotion must not crash graduation
+            # Trainer deep dive over the (now central) corpus. Deterministic by
+            # default; the live LLM Trainer (same inference model) is PG-PROVIDER
+            # gated, so the *live* deep dive remains queued below.
+            if specialist_uid:
+                trainer_result = run_academy_trainer_review(conn, specialist_uid=specialist_uid, actor=str(actor or ""), commit=False)
+                summary.setdefault("central_trainer_reviewed", True)
+                summary.setdefault("central_trainer_engine", str(trainer_result.get("engine") or ""))
+                summary.setdefault("central_trainer_live_status", str(trainer_result.get("live_enrichment_status") or ""))
+        except Exception as exc:  # noqa: BLE001 - promotion/review must not crash graduation
             from arclink_secrets_regex import redact_then_truncate
 
             summary.setdefault("central_promotion_error", redact_then_truncate(str(exc), limit=200))
@@ -1507,6 +1516,141 @@ def refresh_specialist_capsule(
     }
 
 
+class DeterministicAcademyTrainer:
+    """Default, no-network Academy Trainer.
+
+    Produces governed per-source verdicts + a deterministic review summary. The LIVE
+    Academy Trainer -- the SAME inference model used for the Agent, routed through
+    ``arclink_llm_router`` -- is an injectable client exposing the same ``.review()``
+    surface with ``live = True``; it is consulted ONLY when ``PG-PROVIDER``
+    authorization (``live_authorized``) is present, and any failure falls closed to
+    this deterministic engine.
+    """
+
+    live = False
+
+    def review(self, *, role_title: str, topic: str, sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        verdicts = [
+            {
+                "source_uid": str(s.get("source_uid") or ""),
+                "lane_id": str(s.get("lane_id") or ""),
+                "verdict": "keep",
+                "note": "derived notes retained; cite before advising",
+            }
+            for s in sources
+        ]
+        return {
+            "engine": "deterministic",
+            "live": False,
+            "summary": f"Deterministic Trainer review of {len(verdicts)} source(s) for {role_title}.",
+            "verdicts": verdicts,
+            "topic": topic,
+        }
+
+
+def run_academy_trainer_review(
+    conn: sqlite3.Connection,
+    *,
+    specialist_uid: str,
+    client: Any | None = None,
+    live_authorized: bool = False,
+    actor: str = "system:trainer",
+    commit: bool = True,
+) -> dict[str, Any]:
+    """The Academy Trainer deep dive: review/dedupe/enrich a specialist's central
+    corpus and refresh its replaceable capsule.
+
+    Deterministic by default (no network). When ``live_authorized`` (``PG-PROVIDER``)
+    AND a live ``client`` (same inference model via ``arclink_llm_router``) is
+    supplied, the live review is used; otherwise it fails CLOSED to the deterministic
+    engine and records that live enrichment is still pending. Records the review on
+    the specialist ``enrichment_json`` and stamps ``trainer_review_json`` on the
+    contributing proposals so the Captain can see the deep dive ran.
+    """
+    clean = str(specialist_uid or "").strip()
+    spec = conn.execute(
+        "SELECT * FROM academy_corpus_specialists WHERE specialist_uid = ?", (clean,)
+    ).fetchone()
+    if spec is None:
+        raise ArcLinkAcademyProgramError(f"unknown central specialist: {specialist_uid}")
+    program = get_academy_program(conn, str(spec["program_id"] or "")) or {}
+    rows = conn.execute(
+        """
+        SELECT src.* FROM academy_sources src
+        JOIN academy_specialist_sources link ON link.source_uid = src.source_uid
+        WHERE link.specialist_uid = ? AND src.status = 'active'
+        ORDER BY src.first_seen_at, src.source_uid
+        """,
+        (clean,),
+    ).fetchall()
+    role_title = str(spec["role_title"] or program.get("label") or "Specialist")
+    topic = str(program.get("topic_map") or spec["topic_fingerprint"] or "")
+    sources = [dict(r) for r in rows]
+
+    use_live = bool(live_authorized) and client is not None and bool(getattr(client, "live", False))
+    trainer = client if use_live else DeterministicAcademyTrainer()
+    try:
+        review = trainer.review(role_title=role_title, topic=topic, sources=sources)
+    except Exception as exc:  # noqa: BLE001 - a live Trainer failure falls closed to deterministic
+        review = DeterministicAcademyTrainer().review(role_title=role_title, topic=topic, sources=sources)
+        review["live_error"] = str(exc)[:200]
+        use_live = False
+    now = _now()
+    engine = str(review.get("engine") or ("live" if use_live else "deterministic"))
+    enrichment = {
+        "reviewed_at": now,
+        "live": bool(use_live),
+        "live_authorized": bool(live_authorized),
+        "engine": engine,
+        "summary": str(review.get("summary") or "")[:2000],
+        "verdict_count": len(review.get("verdicts") or []),
+        "source_count": len(sources),
+        "proof_gate": "PG-PROVIDER",
+        "live_enrichment_status": "live_reviewed" if use_live else "pending_pg_provider",
+        "actor": str(actor or "").strip() or "system:trainer",
+    }
+    conn.execute(
+        "UPDATE academy_corpus_specialists SET enrichment_json = ?, last_enriched_at = ?, updated_at = ? WHERE specialist_uid = ?",
+        (_dumps(enrichment), now, now, clean),
+    )
+    # Recompose the capsule from the reviewed corpus (idempotent; live enrichment of
+    # the capsule body layers on here when a live client returns enriched text).
+    refresh_specialist_capsule(conn, specialist_uid=clean, actor=actor, only_if_changed=True, commit=False)
+    # Stamp the contributing trainees' promoted proposals so the Captain sees the
+    # Trainer deep dive ran on what they gathered.
+    contributors = {
+        str(pr["trainee_id"])
+        for pr in conn.execute(
+            "SELECT DISTINCT p.contributor_trainee_id AS trainee_id FROM academy_source_provenance p "
+            "JOIN academy_specialist_sources s ON s.source_uid = p.source_uid "
+            "WHERE s.specialist_uid = ? AND p.revoked_at = ''",
+            (clean,),
+        ).fetchall()
+        if pr["trainee_id"]
+    }
+    reviewed_proposals = 0
+    for tid in contributors:
+        rv = {"reviewed_at": now, "engine": engine, "live": bool(use_live), "specialist_uid": clean}
+        cur = conn.execute(
+            "UPDATE academy_resource_proposals SET trainer_review_json = ?, updated_at = ? WHERE trainee_id = ? AND status = 'accepted'",
+            (_dumps(rv), now, tid),
+        )
+        reviewed_proposals += int(cur.rowcount or 0)
+    if commit:
+        conn.commit()
+    return {
+        "specialist_uid": clean,
+        "engine": engine,
+        "live": bool(use_live),
+        "live_authorized": bool(live_authorized),
+        "source_count": len(sources),
+        "verdict_count": len(review.get("verdicts") or []),
+        "reviewed_proposals": reviewed_proposals,
+        "live_enrichment_status": enrichment["live_enrichment_status"],
+        "proof_gate": "PG-PROVIDER",
+    }
+
+
 def subscribe_trainee_to_specialist(
     conn: sqlite3.Connection, *, trainee_id: str, commit: bool = True
 ) -> str | None:
@@ -1901,6 +2045,32 @@ def stage_academy_apply(
         writes_enabled = False
         note = "Record-only adapter; application plan staged, no Agent-home write was performed."
 
+    # Render the REPLACEABLE Academy SOUL section from the central specialist capsule.
+    # The string is staged in the result for the PG-HERMES Hermes-home installer to
+    # merge via merge_academy_overlay; the control plane itself writes nothing here.
+    academy_soul_section = ""
+    academy_capsule_version = 0
+    try:
+        program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
+        spec_uid, _ = specialist_uid_for_program(program_row)
+        spec_row = conn.execute(
+            "SELECT compressed_soul_capsule, capsule_version, role_title FROM academy_corpus_specialists WHERE specialist_uid = ?",
+            (spec_uid,),
+        ).fetchone()
+        if spec_row is not None and str(spec_row["compressed_soul_capsule"] or "").strip():
+            from arclink_org_profile import render_academy_overlay
+
+            academy_capsule_version = int(spec_row["capsule_version"] or 0)
+            academy_soul_section = render_academy_overlay(
+                role_title=str(spec_row["role_title"] or program_row.get("label") or ""),
+                topic=str(program_row.get("topic_map") or ""),
+                capsule_body=str(spec_row["compressed_soul_capsule"] or ""),
+                capsule_version=academy_capsule_version,
+                specialist_uid=spec_uid,
+            )
+    except Exception:  # noqa: BLE001 - a missing/empty capsule just omits the section
+        academy_soul_section = ""
+
     return {
         "operation_kind": "academy_agent_apply",
         "trainee_id": trainee["trainee_id"],
@@ -1920,6 +2090,11 @@ def stage_academy_apply(
         "live_authorized": bool(live_authorized),
         "review_status": str(review.get("status") or ""),
         "intent_counts": intent_counts,
+        # The replaceable Academy SOUL section (marker-bounded; merged additively by
+        # the PG-HERMES installer, never overwriting the human SOUL body).
+        "academy_soul_section": academy_soul_section,
+        "academy_soul_marker": "ARCLINK ACADEMY SPECIALIST",
+        "academy_capsule_version": academy_capsule_version,
         "proof_gates": list(ACADEMY_APPLY_PROOF_GATES),
         "actor": str(actor or "").strip() or "system:action_worker",
         "mutation_performed": False,

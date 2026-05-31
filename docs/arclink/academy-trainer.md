@@ -182,12 +182,31 @@ captain count) with **no contributor identity**, mirroring `academy_graduate_car
 **Replaceable capsule (`refresh_specialist_capsule`).** The Trainer composes the
 specialist's `compressed_soul_capsule` from its redacted central sources (role +
 topic + per-source derived notes + citations), versioned and **idempotent**
-(`only_if_changed` skips no-op weekly churn). This is the replaceable section the
-apply path renders into the Agent SOUL behind `PG-HERMES`; live LLM
-enrichment/compression by the Academy Trainer (same inference model) layers on top
-behind `PG-PROVIDER`. The weekly `control-academy-ce` job refreshes capsules and
-**queues a Captain notification** per graduate (`queue_notification`, channel
-`academy`).
+(`only_if_changed` skips no-op weekly churn). The weekly `control-academy-ce` job
+refreshes capsules and **queues a Captain notification** per graduate
+(`queue_notification`, channel `academy`).
+
+**Trainer deep dive (`run_academy_trainer_review`).** At graduation (after
+promotion) and on demand, the Academy Trainer reviews the specialist's central
+corpus, records per-source verdicts + a review summary on the specialist
+`enrichment_json`, stamps `trainer_review_json` on the contributing proposals, and
+refreshes the capsule. It is **deterministic by default**
+(`DeterministicAcademyTrainer`, no network); the **live** Trainer -- the *same
+inference model* used for the Agent, routed through `arclink_llm_router` -- is an
+**injectable client** (`client=`, `live = True`) consulted ONLY under `PG-PROVIDER`
+authorization (`live_authorized`), and **fails closed** to the deterministic engine
+on any error or missing authorization. The mode-end `trainer_deep_dive_status`
+stays `queued_for_review` because that field tracks the *live* deep dive; the
+deterministic review that ran is recorded as `central_trainer_reviewed` /
+`central_trainer_engine`.
+
+**Replaceable SOUL section (render/apply, `PG-HERMES`).** `arclink_org_profile`
+provides `BEGIN/END_ACADEMY_MARKER` + `render_academy_overlay` /
+`merge_academy_overlay` / `remove_academy_overlay` -- a **separate marker pair** from
+the org-profile overlay, so the Academy capsule renders as a self-contained,
+swappable section that never touches the human SOUL body or the org-profile block.
+`stage_academy_apply` stages the rendered `academy_soul_section` for the PG-HERMES
+Hermes-home installer to merge additively; the control plane writes nothing itself.
 
 **Cross-OPERATOR sharing gate.** Within one ArcLink instance the `redacted_public`
 corpus is shared across the operator's captains/crew. A future cross-*operator*

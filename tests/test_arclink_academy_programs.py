@@ -749,11 +749,101 @@ def test_academy_central_specialist_shared_and_deduped_across_captains() -> None
         cleanup(tmp, old_env)
 
 
+class _FakeLiveTrainer:
+    live = True
+
+    def review(self, *, role_title, topic, sources):
+        return {
+            "engine": "live-router",
+            "live": True,
+            "summary": f"Live Trainer review for {role_title}",
+            "verdicts": [{"source_uid": s["source_uid"], "verdict": "keep"} for s in sources],
+        }
+
+
+def test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-t", deployment_id="dep-t")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-t")
+        _propose(ap, conn, "dep-t", lane_id="github_repository", title="Deep dive repo",
+                 origin_url="https://example.test/dd-repo", summary="Derived patterns for the deep dive.")
+        ended = ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-t", graduate=True)
+        cs = ended["session"]["commit_summary"]
+
+        # The deterministic Trainer deep dive ran at graduation...
+        expect(cs["central_trainer_reviewed"] is True, str(cs))
+        expect(cs["central_trainer_engine"] == "deterministic", str(cs))
+        # ...but the LIVE (same-inference-model) deep dive stays PG-PROVIDER queued.
+        expect(cs["trainer_deep_dive_status"] == "queued_for_review", str(cs))
+        expect(cs["central_trainer_live_status"] == "pending_pg_provider", str(cs))
+
+        spec_uid = cs["central_specialist_uid"]
+        spec = conn.execute(
+            "SELECT enrichment_json FROM academy_corpus_specialists WHERE specialist_uid = ?", (spec_uid,)
+        ).fetchone()
+        expect('"engine": "deterministic"' in str(spec["enrichment_json"]), str(spec["enrichment_json"]))
+
+        # The contributing proposal carries a Trainer review stamp.
+        prop = conn.execute(
+            "SELECT trainer_review_json FROM academy_resource_proposals WHERE trainee_id = ?", (t["trainee_id"],)
+        ).fetchone()
+        expect('"specialist_uid"' in str(prop["trainer_review_json"]), str(prop["trainer_review_json"]))
+
+        # A PG-PROVIDER-authorized live client routes through the live engine.
+        live = ap.run_academy_trainer_review(conn, specialist_uid=spec_uid, client=_FakeLiveTrainer(), live_authorized=True)
+        expect(live["live"] is True and live["engine"] == "live-router", str(live))
+        # Without authorization a live client is ignored (fail-closed to deterministic).
+        det = ap.run_academy_trainer_review(conn, specialist_uid=spec_uid, client=_FakeLiveTrainer(), live_authorized=False)
+        expect(det["live"] is False and det["engine"] == "deterministic", str(det))
+        print("PASS test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_apply_stages_replaceable_soul_section() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        import arclink_org_profile as op
+
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="capt-s", deployment_id="dep-s")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-s")
+        _propose(ap, conn, "dep-s", lane_id="web_article", title="Capsule source",
+                 origin_url="https://example.test/capsule", summary="Derived notes that should land in the capsule.")
+        ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-s", graduate=True)
+
+        applied = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="fake")
+        section = applied["academy_soul_section"]
+        expect(applied["academy_capsule_version"] >= 1, str(applied))
+        expect(op.BEGIN_ACADEMY_MARKER in section and op.END_ACADEMY_MARKER in section, section)
+        expect("Capsule source" in section, "rendered section carries the curated derived notes")
+        expect(applied["writes_enabled"] is False, "record-only apply still writes nothing")
+
+        # The Academy section is additive + replaceable: merging it preserves the
+        # human SOUL body and a co-existing org-profile overlay; removing it strips
+        # only the Academy block.
+        human = "# SOUL\nHuman-authored mission.\n"
+        with_org = op.merge_soul_overlay(human, op.render_soul_overlay({"organization": {"name": "Acme"}, "revision": "abc"}))
+        with_both = op.merge_academy_overlay(with_org, section)
+        expect("Human-authored mission." in with_both, "human SOUL body is preserved")
+        expect(op.BEGIN_SOUL_MARKER in with_both and op.BEGIN_ACADEMY_MARKER in with_both, "both overlays co-exist")
+        stripped = op.remove_academy_overlay(with_both)
+        expect(op.BEGIN_ACADEMY_MARKER not in stripped, "remove strips only the Academy block")
+        expect("Human-authored mission." in stripped and op.BEGIN_SOUL_MARKER in stripped, "remove leaves SOUL + org overlay intact")
+        print("PASS test_academy_apply_stages_replaceable_soul_section")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_academy_proposals_feed_corpus_not_fixtures()
     test_academy_graduation_promotes_public_sources_and_skips_private_and_raw()
     test_academy_opt_out_keeps_specialist_private()
     test_academy_central_specialist_shared_and_deduped_across_captains()
+    test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live()
+    test_academy_apply_stages_replaceable_soul_section()
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
     test_academy_apply_rejects_target_owner_mismatch()
     test_academy_trainee_quota_enforced()

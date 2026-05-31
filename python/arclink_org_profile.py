@@ -19,6 +19,12 @@ SOUL_TEMPLATE_PATH = REPO_ROOT / "templates" / "SOUL.md.tmpl"
 IDENTITY_STATE_FILENAME = "arclink-identity-context.json"
 BEGIN_SOUL_MARKER = "<!-- BEGIN ARCLINK ORG PROFILE -->"
 END_SOUL_MARKER = "<!-- END ARCLINK ORG PROFILE -->"
+# The Academy specialist section is a SEPARATE replaceable block from the org-profile
+# overlay above; its own marker pair lets it be refreshed or swapped (role change /
+# weekly continuing education) without ever touching the human SOUL body or the
+# org-profile overlay.
+BEGIN_ACADEMY_MARKER = "<!-- BEGIN ARCLINK ACADEMY SPECIALIST -->"
+END_ACADEMY_MARKER = "<!-- END ARCLINK ACADEMY SPECIALIST -->"
 DEFAULT_GENERATED_PROFILE_PATH = "Agents_KB/Operating_Context/org-profile.generated.md"
 STATE_SUBDIR = "org-profile"
 ORG_PROFILE_IDENTITY_KEYS = (
@@ -1702,6 +1708,57 @@ def merge_soul_overlay(existing: str, overlay: str) -> str:
     else:
         merged = existing.rstrip() + "\n\n" + overlay.strip() + "\n"
     return merged
+
+
+def render_academy_overlay(
+    *,
+    role_title: str,
+    topic: str = "",
+    capsule_body: str = "",
+    capsule_version: int = 0,
+    specialist_uid: str = "",
+) -> str:
+    """Render the REPLACEABLE Academy specialist section for SOUL.md.
+
+    Additive and self-contained between its own markers; :func:`merge_academy_overlay`
+    / :func:`remove_academy_overlay` only ever touch this block -- never the
+    human-authored SOUL body or the org-profile overlay. The body is the Trainer's
+    compressed, derived-notes-only capsule and is safe to swap if the Captain changes
+    the role or when continuing education refreshes it.
+    """
+    body = str(capsule_body or "").strip()
+    lines = [
+        BEGIN_ACADEMY_MARKER,
+        "ArcLink Academy specialist (replaceable; refreshed by continuing education):",
+        f"- Role: {role_title or '(unset)'}",
+    ]
+    if str(topic or "").strip():
+        lines.append(f"- Topic: {str(topic).strip()}")
+    if str(specialist_uid or "").strip():
+        lines.append(f"- Specialist: {specialist_uid} (capsule v{int(capsule_version or 0)})")
+    lines.append("")
+    lines.append(body if body else "(Academy capsule pending Trainer review.)")
+    lines.extend([END_ACADEMY_MARKER, ""])
+    return "\n".join(lines)
+
+
+def merge_academy_overlay(existing: str, overlay: str) -> str:
+    existing = existing.rstrip() + "\n" if existing.strip() else ""
+    start = existing.find(BEGIN_ACADEMY_MARKER)
+    end = existing.find(END_ACADEMY_MARKER)
+    if start >= 0 and end >= start:
+        end += len(END_ACADEMY_MARKER)
+        return existing[:start].rstrip() + "\n\n" + overlay.strip() + "\n" + existing[end:].lstrip()
+    return existing.rstrip() + "\n\n" + overlay.strip() + "\n"
+
+
+def remove_academy_overlay(existing: str) -> str:
+    start = existing.find(BEGIN_ACADEMY_MARKER)
+    end = existing.find(END_ACADEMY_MARKER)
+    if start < 0 or end < start:
+        return existing
+    end += len(END_ACADEMY_MARKER)
+    return (existing[:start].rstrip() + "\n\n" + existing[end:].lstrip()).strip() + "\n"
 
 
 def materialize_agent_context(hermes_home: Path, context: dict[str, Any]) -> dict[str, Any]:

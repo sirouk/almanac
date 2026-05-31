@@ -23,6 +23,18 @@ from arclink_api_auth import (
     _stable_handoff_id,
 )
 from arclink_adapters import arclink_access_urls
+from arclink_academy_programs import (
+    ArcLinkAcademyProgramError,
+    academy_mode_status,
+    end_academy_mode,
+    enroll_academy_trainee,
+    get_academy_program,
+    get_open_academy_mode,
+    list_academy_programs,
+    open_academy_mode,
+    seed_default_academy_programs,
+    update_academy_trainee_steer,
+)
 from arclink_boundary import json_dumps_safe, json_loads_safe
 from arclink_control import (
     arclink_refuel_topup_options,
@@ -117,7 +129,7 @@ ARCLINK_PUBLIC_BOT_CREDENTIAL_ACK_COMMANDS = frozenset(
 )
 ARCLINK_PUBLIC_BOT_HELP_COMMANDS = frozenset({"/help", "help", "commands", "/commands"})
 ARCLINK_PUBLIC_BOT_LEARN_COMMANDS = frozenset({"/learn", "learn", "tour", "/tour", "how this works"})
-ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop"})
+ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS = frozenset({"/cancel", "cancel", "stop", "exit", "exit academy", "leave academy"})
 ARCLINK_PUBLIC_BOT_AGENTS_COMMANDS = frozenset({"/agents", "agents", "my agents", "agent roster"})
 ARCLINK_PUBLIC_BOT_RETIRE_AGENT_COMMANDS = (
     "/retire-agent",
@@ -4106,7 +4118,7 @@ def _agents_reply(
             "Each Hermes Agent has one Hermes Dashboard link. ArcLink skills, Drive, Code, and Terminal live inside that dashboard as plugins; you do not need separate control links.",
             "Your dashboard username/password works across the Crew's Hermes Dashboards. Use `/credentials` if you need the handoff again.",
             "",
-            "Use `/train-crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/academy` to stage subject-matter specialist training for one Agent or the whole Crew. Use `/name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
+            "Use `/train-crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/academy` to open one-Agent-at-a-time Academy Mode for specialist training, Trainer review, and weekly continuing education. Use `/name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
         ]
     )
     buttons: list[ArcLinkPublicBotButton] = open_buttons[:4]
@@ -4650,7 +4662,7 @@ def _crew_training_start_reply(
         reply=(
             f"Crew Training is open. I see {count_label} in your Crew.\n\n"
             "I will ask a few short questions, then shape Agent names, roles, personalities, and the additive SOUL.md overlay. "
-            "After that, Quick Training can take any Agent into the Academy lane for specialist source maps, curriculum, practice tasks, and continuing review. "
+            "After that, Academy Mode can take one Hermes Agent at a time into specialist source maps, curriculum, practice tasks, Trainer review, and continuing education. "
             "You can send `cancel` at any time.\n\n"
             "What is your role? Send one line, for example `founder building a startup`."
         ),
@@ -4800,7 +4812,7 @@ def _crew_training_confirm_reply(
         deployment=deployment,
         buttons=tuple([
             *open_buttons[:2],
-            _button("Quick Training", command="/academy", style="secondary"),
+            _button("Academy Mode", command="/academy", style="secondary"),
             _button("Show My Crew", command="/agents", style="secondary"),
             _button("What Changed", command="/whats-changed", style="secondary"),
         ]),
@@ -4808,12 +4820,369 @@ def _crew_training_confirm_reply(
 
 
 def _academy_training_buttons(deployments: list[Mapping[str, Any]]) -> tuple[ArcLinkPublicBotButton, ...]:
-    buttons: list[ArcLinkPublicBotButton] = [_button("Train All", command="/academy all")]
+    buttons: list[ArcLinkPublicBotButton] = []
     for index, item in enumerate(deployments[:4], start=1):
         label = _agent_label(item, index=index, conn=None)
         buttons.append(_button(label[:32], command=f"/academy {item.get('deployment_id')}", style="secondary"))
     buttons.append(_button("Show My Crew", command="/agents", style="secondary"))
+    buttons.append(_button("Exit", command="/cancel", style="secondary"))
     return tuple(buttons[:8])
+
+
+def _academy_major_buttons(conn: sqlite3.Connection) -> tuple[ArcLinkPublicBotButton, ...]:
+    seed_default_academy_programs(conn)
+    buttons = [
+        _button(str(program.get("label") or program.get("program_id"))[:32], command=str(program.get("program_id") or ""), style="secondary")
+        for program in list_academy_programs(conn)[:5]
+    ]
+    buttons.append(_button("Exit", command="/cancel", style="secondary"))
+    return tuple(buttons[:8])
+
+
+def _academy_find_program(conn: sqlite3.Connection, requested: str) -> dict[str, Any] | None:
+    seed_default_academy_programs(conn)
+    wanted = _agent_slug(requested)
+    for index, program in enumerate(list_academy_programs(conn), start=1):
+        aliases = {
+            _agent_slug(str(program.get("program_id") or "")),
+            _agent_slug(str(program.get("label") or "")),
+            str(index),
+        }
+        if wanted in aliases:
+            return program
+    return None
+
+
+def _academy_status_for_mode(
+    *,
+    deployment: Mapping[str, Any],
+    program: Mapping[str, Any] | None,
+    trainee: Mapping[str, Any] | None,
+    mode_status: str,
+    summary: str,
+    graduation_status: str = "in_academy",
+    source_count: int = 0,
+) -> dict[str, Any]:
+    steer = (trainee or {}).get("captain_steer") if isinstance((trainee or {}).get("captain_steer"), Mapping) else {}
+    lanes = steer.get("allowed_source_lanes") if isinstance(steer.get("allowed_source_lanes"), list) else (program or {}).get("source_lanes") or []
+    return {
+        "deployment_id": str(deployment.get("deployment_id") or ""),
+        "agent_name": _agent_label(deployment),
+        "agent_title": str(deployment.get("agent_title") or ""),
+        "status": mode_status,
+        "summary": summary,
+        "program_id": str((program or {}).get("program_id") or (trainee or {}).get("program_id") or ""),
+        "role_title": str((program or {}).get("label") or (trainee or {}).get("name") or ""),
+        "manifest_id": str((trainee or {}).get("staged_manifest_id") or ""),
+        "application_plan_id": str((trainee or {}).get("staged_plan_id") or ""),
+        "source_count": int(source_count or 0),
+        "lane_count": len(lanes),
+        "lanes": list(lanes),
+        "graduation_status": graduation_status,
+        "focus": str(steer.get("focus") or ""),
+        "outside_sources": str(steer.get("outside_sources") or ""),
+        "proof_gates": ["PG-PROVIDER", "PG-HERMES"],
+        "local_only": True,
+        "no_network": True,
+        "no_write": True,
+        "writes_enabled": False,
+        "live_proof_required": True,
+    }
+
+
+def _persist_academy_deployment_status(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    academy_status: Mapping[str, Any],
+    actor_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    deployment_id = str(deployment.get("deployment_id") or "").strip()
+    if not deployment_id:
+        return dict(deployment)
+    metadata = _metadata(deployment)
+    metadata["academy_training"] = dict(academy_status)
+    now = utc_now_iso()
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+        (
+            json_dumps_safe(metadata, label="ArcLink Academy deployment metadata", error_cls=ArcLinkPublicBotError),
+            now,
+            deployment_id,
+        ),
+    )
+    append_arclink_audit(
+        conn,
+        action="academy_mode_status_recorded",
+        actor_id=str(actor_id or "").strip() or str(deployment.get("user_id") or ""),
+        target_kind="deployment",
+        target_id=deployment_id,
+        reason=str(reason or "Academy Mode status recorded")[:240],
+        metadata={
+            "status": str(academy_status.get("status") or ""),
+            "program_id": str(academy_status.get("program_id") or ""),
+            "graduation_status": str(academy_status.get("graduation_status") or ""),
+            "no_write": True,
+            "writes_enabled": False,
+        },
+        commit=False,
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="academy_mode_status_recorded",
+        metadata={
+            "status": str(academy_status.get("status") or ""),
+            "program_id": str(academy_status.get("program_id") or ""),
+            "graduation_status": str(academy_status.get("graduation_status") or ""),
+            "no_write": True,
+            "writes_enabled": False,
+        },
+        commit=False,
+    )
+    conn.commit()
+    try:
+        from arclink_provisioning import project_arclink_deployment_identity_context
+
+        projection = project_arclink_deployment_identity_context(
+            conn,
+            deployment_id=deployment_id,
+            source="academy_mode",
+        )
+    except Exception as exc:  # noqa: BLE001 - metadata/audit are already durable.
+        projection = {"status": "skipped", "reason": str(exc)[:160]}
+    row = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (deployment_id,)).fetchone()
+    refreshed = dict(row) if row is not None else dict(deployment)
+    refreshed["_academy_identity_projection"] = projection
+    return refreshed
+
+
+def _academy_agent_select_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    deployments: list[Mapping[str, Any]],
+    notice: str = "",
+) -> ArcLinkPublicBotTurn:
+    updated = _academy_training_update(conn, session, workflow="academy_training_select_agent", data={})
+    count_label = "one Hermes Agent" if len(deployments) == 1 else f"{len(deployments)} Hermes Agents"
+    prefix = f"{notice}\n\n" if notice else ""
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_select_agent",
+        reply=(
+            f"{prefix}Academy Training is ready for {count_label}.\n\n"
+            "Pick one Agent at a time. Raven will bootstrap the Academy turn by turn, then open that Agent's sticky Academy Mode. "
+            "You can send `cancel` or `exit` at any time."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=_academy_training_buttons(deployments),
+    )
+
+
+def _academy_major_prompt(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    updated = _academy_training_update(conn, session, workflow="academy_training_choose_major", data=data)
+    label = str(data.get("agent_label") or "this Agent")
+    majors = list_academy_programs(conn)
+    major_lines = [
+        f"- {index}. {program.get('label')}: {program.get('summary')}"
+        for index, program in enumerate(majors[:5], start=1)
+    ]
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_choose_major",
+        reply=(
+            f"Good. We will train {label} one Agent at a time.\n\n"
+            "Choose the Academy Major to start from:\n"
+            + "\n".join(major_lines)
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=_academy_major_buttons(conn),
+    )
+
+
+def _academy_focus_prompt(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    updated = _academy_training_update(conn, session, workflow="academy_training_focus", data=data)
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_focus",
+        reply=(
+            f"Major selected: {data.get('program_label')}.\n\n"
+            "What should this Agent become able to do for you? Send the research focus, outcomes, boundaries, and level of depth in one message."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(_button("Exit", command="/cancel", style="secondary"),),
+    )
+
+
+def _academy_sources_prompt(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    updated = _academy_training_update(conn, session, workflow="academy_training_sources", data=data)
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_training_sources",
+        reply=(
+            "Now send outside source lanes or specific materials this Agent should revisit weekly: URLs, repos, docs, channels, journals, standards, or `none`.\n\n"
+            "Do not paste tokens, private credentials, paid material, or anything the Agent is not allowed to retain."
+        ),
+        session=updated,
+        deployment=deployment,
+        buttons=(_button("No Outside Sources", command="none", style="secondary"), _button("Exit", command="/cancel", style="secondary")),
+    )
+
+
+def _academy_open_mode_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any],
+    deployment: Mapping[str, Any] | None,
+    data: Mapping[str, Any],
+) -> ArcLinkPublicBotTurn:
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    deployments = _deployments_for_user(conn, user_id)
+    target_id = str(data.get("deployment_id") or "").strip()
+    match = _find_agent_deployment(deployments, target_id, conn=conn)
+    if match is None:
+        return _academy_agent_select_reply(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            deployments=deployments,
+            notice="That Agent is no longer on the active roster.",
+        )
+    target, label = match
+    program = get_academy_program(conn, str(data.get("program_id") or ""))
+    if program is None:
+        return _academy_major_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data={**dict(data), "agent_label": label},
+        )
+    source_brief = "" if str(data.get("outside_sources") or "").strip().casefold() in {"none", "no", "n/a"} else str(data.get("outside_sources") or "").strip()
+    steer = {
+        "focus": str(data.get("focus") or "").strip(),
+        "outside_sources": source_brief,
+        "allowed_source_lanes": list(program.get("source_lanes") or []),
+        "weekly_review": True,
+        "weekly_review_cadence": "weekly",
+        "captain_bootstrap_channel": channel,
+        "agent_label": label,
+    }
+    try:
+        trainee = enroll_academy_trainee(
+            conn,
+            program_id=str(program.get("program_id") or ""),
+            user_id=user_id,
+            deployment_id=str(target.get("deployment_id") or ""),
+            agent_id=str(target.get("agent_id") or ""),
+            name=f"{label} Academy",
+            depth=str(program.get("default_depth") or "working"),
+            captain_steer=steer,
+        )
+        opened = open_academy_mode(
+            conn,
+            trainee_id=str(trainee["trainee_id"]),
+            opened_by=user_id,
+            opened_via=channel,
+        )
+    except ArcLinkAcademyProgramError as exc:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_training_failed",
+            reply=f"Academy Mode could not open for {label}: {exc}",
+            session=session,
+            deployment=deployment,
+            buttons=_academy_training_buttons(deployments),
+        )
+    trainee = opened.get("trainee") if isinstance(opened.get("trainee"), Mapping) else trainee
+    status = _academy_status_for_mode(
+        deployment=target,
+        program=program,
+        trainee=trainee,
+        mode_status="in_academy",
+        summary="Academy Mode active. Captain is shaping the research plan; Agent should use the arclink-academy skill before specialized study.",
+        graduation_status="in_academy",
+    )
+    refreshed_deployment = _persist_academy_deployment_status(
+        conn,
+        deployment=target,
+        academy_status=status,
+        actor_id=user_id,
+        reason="Captain opened Academy Mode",
+    )
+    next_data = {
+        **dict(data),
+        "deployment_id": str(target.get("deployment_id") or ""),
+        "agent_label": label,
+        "program_id": str(program.get("program_id") or ""),
+        "program_label": str(program.get("label") or ""),
+        "trainee_id": str(trainee.get("trainee_id") or ""),
+        "session_id": str((opened.get("session") or {}).get("session_id") or ""),
+    }
+    updated = _academy_training_update(conn, session, workflow="academy_training_mode_open", data=next_data)
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="academy_mode_opened",
+        reply=(
+            f"Academy Mode is open for {label}.\n\n"
+            f"Major: {program.get('label')}\n"
+            f"Focus: {steer['focus']}\n"
+            f"Weekly sources: {source_brief or 'Captain did not provide outside sources yet'}\n\n"
+            "The Hermes Agent now has the Academy context in managed state and should use the `arclink-academy` skill to run governed search, retrieval, lesson-card drafting, and evaluation.\n\n"
+            "Send more steering notes any time. Send `graduate` to close and stage the specialist corpus, or `cancel` / `exit` to leave Academy Training without graduating."
+        ),
+        session=updated,
+        deployment=refreshed_deployment,
+        buttons=(
+            _button("Graduate", command="graduate"),
+            _button("Exit", command="/cancel", style="secondary"),
+            _button("Show My Crew", command="/agents", style="secondary"),
+        ),
+    )
 
 
 def _academy_status_lines(status: Mapping[str, Any]) -> list[str]:
@@ -4855,54 +5224,33 @@ def _academy_training_start_reply(
             deployment=deployment,
             buttons=(_button("Take Me Aboard", command="/packages"),),
         )
-    try:
-        status = crew_academy_status(conn, user_id=user_id)
-        current_ready = str(status.get("recipe_id") or "").strip()
-    except Exception:
-        current_ready = ""
-    if not current_ready:
-        return _turn(
-            channel=channel,
-            channel_identity=channel_identity,
-            action="academy_training_needs_crew_recipe",
-            reply=(
-                "Academy Training needs an active Crew Recipe first. "
-                "Run Crew Training so I know each Agent's role, mission, and treatment, then come back to `/academy`."
-            ),
-            session=session,
-            deployment=deployment,
-            buttons=(_button("Train My Crew", command="/train-crew"),),
-        )
     clean_value = str(requested_value or "").strip()
     if clean_value:
         if clean_value.casefold() in {"all", "crew", "everyone", "each"}:
-            data = {
-                "queue": [str(item.get("deployment_id") or "") for item in deployments if str(item.get("deployment_id") or "").strip()],
-                "index": 0,
-                "trained": [],
-                "skipped": [],
-            }
-            updated = _academy_training_update(conn, session, workflow="academy_training_walk", data=data)
-            return _academy_training_walk_prompt(
-                conn,
-                channel=channel,
-                channel_identity=channel_identity,
-                session=updated,
-                deployment=deployment,
-                data=data,
-            )
-        match = _find_agent_deployment(deployments, clean_value, conn=conn)
-        if match is not None:
-            item, label = match
-            return _academy_training_stage_one_reply(
+            return _academy_agent_select_reply(
                 conn,
                 channel=channel,
                 channel_identity=channel_identity,
                 session=session,
                 deployment=deployment,
-                target=item,
-                label=label,
-                clear_workflow=False,
+                deployments=deployments,
+                notice="Academy Training now opens one Agent at a time so the Captain can shape the role and source rails carefully.",
+            )
+        match = _find_agent_deployment(deployments, clean_value, conn=conn)
+        if match is not None:
+            item, label = match
+            data = {
+                "deployment_id": str(item.get("deployment_id") or ""),
+                "agent_label": label,
+                "agent_title": str(item.get("agent_title") or ""),
+            }
+            return _academy_major_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
             )
         return _turn(
             channel=channel,
@@ -4913,22 +5261,13 @@ def _academy_training_start_reply(
             deployment=deployment,
             buttons=_academy_training_buttons(deployments),
         )
-    updated = _academy_training_update(conn, session, workflow="academy_training_select", data={})
-    count_label = "one Agent" if len(deployments) == 1 else f"{len(deployments)} Agents"
-    return _turn(
+    return _academy_agent_select_reply(
+        conn,
         channel=channel,
         channel_identity=channel_identity,
-        action="academy_training_select_agent",
-        reply=(
-            f"Academy Training is open for {count_label}.\n\n"
-            "This stages a role-specific specialist corpus, curriculum, source map, SOUL overlay plan, skill/tool recipes, "
-            "practice tasks, and continuing-education review for each Agent. It is local and governed: no live crawling, "
-            "no raw workspace writes, and graduation still needs provider + Hermes proof.\n\n"
-            "Pick one Agent, or Train All to walk the Crew one by one with Skip available. You can also call this lane Quick Training, Quick Briefing, Quick Align, or Quick Huddle."
-        ),
-        session=updated,
+        session=session,
         deployment=deployment,
-        buttons=_academy_training_buttons(deployments),
+        deployments=deployments,
     )
 
 
@@ -5077,6 +5416,216 @@ def _handle_academy_training_workflow(
     data = _academy_training_data(session)
     user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
     deployments = _deployments_for_user(conn, user_id) if user_id else []
+    if workflow == "academy_training_select_agent":
+        value = _academy_command_value(message, command)
+        if value is None:
+            value = message.strip()
+        match = _find_agent_deployment(deployments, value, conn=conn)
+        if match is None:
+            return _academy_agent_select_reply(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                deployments=deployments,
+                notice="I could not match that to an active Hermes Agent.",
+            )
+        item, label = match
+        return _academy_major_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data={
+                "deployment_id": str(item.get("deployment_id") or ""),
+                "agent_label": label,
+                "agent_title": str(item.get("agent_title") or ""),
+            },
+        )
+    if workflow == "academy_training_choose_major":
+        value = _academy_command_value(message, command)
+        if value is None:
+            value = message.strip()
+        program = _academy_find_program(conn, value)
+        if program is None:
+            return _academy_major_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
+            )
+        next_data = {
+            **dict(data),
+            "program_id": str(program.get("program_id") or ""),
+            "program_label": str(program.get("label") or ""),
+        }
+        return _academy_focus_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=next_data,
+        )
+    if workflow == "academy_training_focus":
+        if command.startswith("/") and _academy_command_value(message, command) is None:
+            return None
+        focus = message.strip()
+        if not focus:
+            return _academy_focus_prompt(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=session,
+                deployment=deployment,
+                data=data,
+            )
+        next_data = {**dict(data), "focus": focus}
+        return _academy_sources_prompt(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=next_data,
+        )
+    if workflow == "academy_training_sources":
+        if command.startswith("/") and _academy_command_value(message, command) is None:
+            return None
+        next_data = {**dict(data), "outside_sources": message.strip()}
+        return _academy_open_mode_reply(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            data=next_data,
+        )
+    if workflow == "academy_training_mode_open":
+        trainee_id = str(data.get("trainee_id") or "").strip()
+        target_id = str(data.get("deployment_id") or "").strip()
+        target_match = _find_agent_deployment(deployments, target_id, conn=conn)
+        target = target_match[0] if target_match is not None else deployment
+        label = str(data.get("agent_label") or (target_match[1] if target_match else "this Agent"))
+        if command in {"graduate", "/graduate", "done", "complete", "finish", "stage", "commit"}:
+            try:
+                open_session = get_open_academy_mode(conn, trainee_id=trainee_id)
+                if open_session is None:
+                    raise ArcLinkAcademyProgramError("no open Academy Mode for this trainee")
+                result = end_academy_mode(conn, session_id=str(open_session["session_id"]), actor=user_id, graduate=True)
+                trainee = result.get("trainee") if isinstance(result.get("trainee"), Mapping) else {}
+                program = get_academy_program(conn, str(trainee.get("program_id") or data.get("program_id") or ""))
+                summary = result.get("session", {}).get("commit_summary") if isinstance(result.get("session"), Mapping) else {}
+                source_count = int((summary or {}).get("source_count") or 0)
+                status = _academy_status_for_mode(
+                    deployment=target or {},
+                    program=program,
+                    trainee=trainee,
+                    mode_status="trainer_review_pending",
+                    summary="Captain closed Academy Mode. Academy Trainer deep dive must review, dedupe, and compress resources before canon/apply.",
+                    graduation_status="blocked_by_trainer_deep_dive",
+                    source_count=source_count,
+                )
+                refreshed = _persist_academy_deployment_status(
+                    conn,
+                    deployment=target or {},
+                    academy_status=status,
+                    actor_id=user_id,
+                    reason="Captain graduated Academy Mode",
+                )
+            except ArcLinkAcademyProgramError as exc:
+                return _turn(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    action="academy_training_failed",
+                    reply=f"Academy Mode could not graduate {label}: {exc}",
+                    session=session,
+                    deployment=deployment,
+                    buttons=(_button("Exit", command="/cancel", style="secondary"),),
+                )
+            updated = _clear_academy_training_workflow(conn, session)
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="academy_mode_graduated",
+                reply=(
+                    f"Academy Mode closed for {label}.\n\n"
+                    f"Status: Trainer deep dive queued; not canon yet.\n"
+                    f"Staged manifest: {status.get('manifest_id') or 'pending'}\n\n"
+                    "The Academy Trainer must review, dedupe, and compress the gathered resources before the replaceable Academy section is written to the Hermes Agent. Weekly continuing education is armed after that canon/apply gate."
+                ),
+                session=updated,
+                deployment=refreshed,
+                buttons=(_button("Show My Crew", command="/agents", style="secondary"), _button("Academy", command="/academy", style="secondary")),
+            )
+        if command in {"status", "/status"}:
+            try:
+                status = academy_mode_status(conn, trainee_id=trainee_id)
+            except Exception:
+                status = {"mode_open": False}
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="academy_mode_status",
+                reply=(
+                    f"Academy Mode for {label}: {'open' if status.get('mode_open') else 'not open'}.\n\n"
+                    "Send more steering notes, `graduate`, or `cancel`."
+                ),
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Graduate", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
+            )
+        note = message.strip()
+        if note:
+            try:
+                trainee = update_academy_trainee_steer(
+                    conn,
+                    trainee_id=trainee_id,
+                    append_note=note,
+                    actor=user_id,
+                )
+                program = get_academy_program(conn, str(trainee.get("program_id") or data.get("program_id") or ""))
+                status = _academy_status_for_mode(
+                    deployment=target or {},
+                    program=program,
+                    trainee=trainee,
+                    mode_status="in_academy",
+                    summary="Academy Mode active. Captain added steering notes; Agent should incorporate them before proposing Academy resources.",
+                    graduation_status="in_academy",
+                )
+                _persist_academy_deployment_status(
+                    conn,
+                    deployment=target or {},
+                    academy_status=status,
+                    actor_id=user_id,
+                    reason="Captain updated Academy Mode steering",
+                )
+            except ArcLinkAcademyProgramError as exc:
+                return _turn(
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    action="academy_training_failed",
+                    reply=f"I could not add that Academy steering note: {exc}",
+                    session=session,
+                    deployment=deployment,
+                    buttons=(_button("Exit", command="/cancel", style="secondary"),),
+                )
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="academy_mode_steer_recorded",
+            reply=(
+                f"Added that steering note for {label}.\n\n"
+                "Academy Mode remains open. The Agent should use `arclink-academy`, gather and compress proposed resources, submit them to ArcLink for Trainer review, and prepare weekly continuing education. Send `graduate` when the staged training plan is ready, or `cancel` / `exit` to leave."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Graduate", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
+        )
     if workflow == "academy_training_select":
         value = _academy_command_value(message, command)
         if value is None:
@@ -5222,6 +5771,35 @@ def _handle_active_workflow(
         )
     if command in ARCLINK_PUBLIC_BOT_CANCEL_COMMANDS:
         if workflow.startswith("academy_training_"):
+            data = _academy_training_data(session)
+            trainee_id = str(data.get("trainee_id") or "").strip()
+            if trainee_id and workflow == "academy_training_mode_open":
+                try:
+                    open_session = get_open_academy_mode(conn, trainee_id=trainee_id)
+                    if open_session is not None:
+                        end_academy_mode(conn, session_id=str(open_session["session_id"]), actor=str(session.get("user_id") or ""), graduate=False)
+                        target_id = str(data.get("deployment_id") or "").strip()
+                        target = None
+                        if target_id:
+                            target = conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (target_id,)).fetchone()
+                        if target is not None:
+                            program = get_academy_program(conn, str(data.get("program_id") or ""))
+                            _persist_academy_deployment_status(
+                                conn,
+                                deployment=dict(target),
+                                academy_status=_academy_status_for_mode(
+                                    deployment=dict(target),
+                                    program=program,
+                                    trainee={"captain_steer": dict(data), "program_id": str(data.get("program_id") or "")},
+                                    mode_status="cancelled",
+                                    summary="Captain exited Academy Training before graduation.",
+                                    graduation_status="cancelled",
+                                ),
+                                actor_id=str(session.get("user_id") or ""),
+                                reason="Captain cancelled Academy Mode",
+                            )
+                except Exception:
+                    pass
             updated = _clear_academy_training_workflow(conn, session)
         else:
             updated = _clear_crew_training_workflow(conn, session)
@@ -5629,7 +6207,7 @@ def _learn_reply(
             "- Show My Crew lists every Hermes Agent and Hermes Dashboard link; use it to switch who owns bare chat.\n"
             "- Login Credentials reveals the shared dashboard login until you confirm it is stored.\n"
             "- Crew Training shapes names, roles, tone, mission, and SOUL overlays.\n"
-            "- Quick Training is the Academy lane: pick one Hermes Agent or train all, with Skip available, to stage specialist source maps, curriculum, practice tasks, and continuing review.\n\n"
+            "- Academy Mode trains one Hermes Agent at a time: Raven gathers Captain steering, opens the Agent's sticky Academy Mode, the `arclink-academy` skill gathers/proposes resources, and the Trainer review seals canon before apply.\n\n"
             "Start with Show My Crew, Login Credentials, or Crew Training."
         ),
         session=session,
@@ -5638,7 +6216,7 @@ def _learn_reply(
             _button("Show My Crew", command="/agents", style="secondary"),
             _button("Login Credentials", command="/credentials", style="secondary"),
             _button("Crew Training", command="/train-crew", style="secondary"),
-            _button("Quick Training", command="/academy", style="secondary"),
+            _button("Academy Mode", command="/academy", style="secondary"),
         ),
     )
 

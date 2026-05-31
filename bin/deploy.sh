@@ -3294,6 +3294,7 @@ render_agent_install_payload_body() {
     "arclink-notion-knowledge"
     "arclink-ssot-connect"
     "arclink-notion-mcp"
+    "arclink-academy"
     "arclink-resources"
   )
   local skill_name=""

@@ -1060,6 +1060,7 @@ assert_agent_payload() {
     "$ARCLINK_REPO_DIR/skills/arclink-notion-knowledge" \
     "$ARCLINK_REPO_DIR/skills/arclink-ssot-connect" \
     "$ARCLINK_REPO_DIR/skills/arclink-notion-mcp" \
+    "$ARCLINK_REPO_DIR/skills/arclink-academy" \
     "$ARCLINK_REPO_DIR/skills/arclink-resources"
   do
     if ! grep -Fq "$required" <<<"$payload"; then

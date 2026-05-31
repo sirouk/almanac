@@ -20,6 +20,7 @@ if [[ $# -eq 0 ]]; then
     arclink-notion-knowledge \
     arclink-ssot-connect \
     arclink-notion-mcp \
+    arclink-academy \
     arclink-resources
 fi
 

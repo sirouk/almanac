@@ -19,6 +19,7 @@ from typing import Any
 
 from arclink_http import http_request, parse_json_response
 from arclink_api_auth import create_user_share_grant_for_owner
+from arclink_academy_programs import ArcLinkAcademyProgramError, record_academy_resource_proposal
 from arclink_pod_comms import list_pod_messages, send_pod_message
 from arclink_control import (
     Config,
@@ -82,6 +83,7 @@ TOOLS = {
     "vault.search-and-fetch": "Fast bounded search of shared/private vault knowledge and fetched text for top hits. One-shot replacement for qmd.query followed by qmd.get; includes vault-pdf-ingest by default and does not rerank. A leading Markdown YAML metadata block stays inline in text when fetched from the top and is also duplicated into metadata when present.",
     "agents.managed-memory": "Fetch the caller's canonical managed-memory payload used by the managed-context plugin, including routing stubs, Notion digest, and the user-scoped today-plate work snapshot.",
     "agents.consume-notifications": "Atomically read+ack notifications targeted at the caller's agent.",
+    "academy.propose-resource": "Submit a compressed source/resource proposal from the caller's active Academy Mode for centralized Trainer review and weekly refresh. Requires an open Academy Mode; raw content and secrets are rejected.",
     "shares.request": "Request a read/write Drive/Code shared folder or a read-only Notion subtree share. The request stays pending for owner approval, then recipient acceptance, never shares Linked resources onward, and keeps Linked git mutations disabled.",
     "pod_comms.list": "List the caller's Pod Comms inbox/outbox for one authenticated deployment. Results are scoped to the caller's own deployment.",
     "pod_comms.send": "Send a Pod Comms message from the caller's deployment. Same-Captain Crew messages are allowed; cross-Captain messages require an active pod_comms share grant.",
@@ -338,6 +340,20 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "token": AGENT_TOKEN_PROP,
             "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
         },
+    ),
+    "academy.propose-resource": _schema(
+        {
+            "token": AGENT_TOKEN_PROP,
+            "deployment_id": {"type": "string", "description": "Caller-owned deployment id. Defaults to the caller's active deployment."},
+            "lane_id": {"type": "string", "description": "Academy source lane id, e.g. web_article, github_repository, scholarly_standard, video_transcript, organization_private."},
+            "title": {"type": "string", "minLength": 1, "description": "Short source/resource title."},
+            "origin_url": {"type": "string", "description": "Source URL, repo URL, canonical id, or blank for a Captain-provided offline resource."},
+            "summary": {"type": "string", "description": "Compressed derived notes. Do not submit raw article bodies, transcripts, secrets, or paid material."},
+            "relevance": {"type": "object", "additionalProperties": True, "description": "Why this source matters for the Academy role, topic, boundaries, and weekly refresh."},
+            "citations": {"type": "array", "items": {"type": "string"}, "description": "Citation URLs or ids supporting the proposal."},
+            "actor": ACTOR_PROP,
+        },
+        required=("lane_id", "title"),
     ),
     "shares.request": _schema(
         {
@@ -2058,6 +2074,44 @@ class Handler(BaseHTTPRequestHandler):
                     "notifications": consume_agent_notifications(
                         conn, agent_id=str(token_row["agent_id"]), limit=limit
                     ),
+                }
+
+            if tool_name == "academy.propose-resource":
+                token_row = validate_token(conn, str(arguments.get("token") or ""))
+                agent_id = str(token_row["agent_id"] or "")
+                owner = _agent_share_owner(conn, agent_id, str(arguments.get("deployment_id") or ""))
+                citations_arg = arguments.get("citations")
+                proposal = record_academy_resource_proposal(
+                    conn,
+                    deployment_id=owner["deployment_id"],
+                    lane_id=str(arguments.get("lane_id") or ""),
+                    title=str(arguments.get("title") or ""),
+                    origin_url=str(arguments.get("origin_url") or ""),
+                    summary=str(arguments.get("summary") or ""),
+                    relevance=arguments.get("relevance") if isinstance(arguments.get("relevance"), dict) else {},
+                    citations=citations_arg if isinstance(citations_arg, list) else [],
+                    proposed_by=str(arguments.get("actor") or agent_id),
+                )
+                queue_notification(
+                    conn,
+                    target_kind="user",
+                    target_id=owner["user_id"],
+                    channel_kind="academy",
+                    message=f"Academy resource proposed for Trainer review: {proposal.get('title') or 'untitled'}",
+                    extra={
+                        "proposal_id": str(proposal.get("proposal_id") or ""),
+                        "deployment_id": owner["deployment_id"],
+                        "trainee_id": str(proposal.get("trainee_id") or ""),
+                        "lane_id": str(proposal.get("lane_id") or ""),
+                    },
+                )
+                return {
+                    "ok": True,
+                    "agent_id": agent_id,
+                    "deployment_id": owner["deployment_id"],
+                    "trainer_review_status": "review_pending",
+                    "captain_notification_queued": True,
+                    "proposal": proposal,
                 }
 
             if tool_name == "shares.request":

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import secrets
 import sqlite3
 from typing import Any, Mapping, Sequence
@@ -544,6 +545,222 @@ def academy_mode_status(conn: sqlite3.Connection, *, trainee_id: str) -> dict[st
     }
 
 
+def update_academy_trainee_steer(
+    conn: sqlite3.Connection,
+    *,
+    trainee_id: str,
+    updates: Mapping[str, Any] | None = None,
+    append_note: str = "",
+    actor: str = "",
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Merge Captain steering into a Trainee while Academy Mode is open.
+
+    Raven uses this during the turn-by-turn Academy bootstrap and while the
+    sticky mode is active. It is intentionally control-plane-only: the Agent's
+    SOUL, skills, qmd, vault, and workspace are still mutated only through the
+    proof-gated apply path.
+    """
+    from arclink_boundary import reject_secret_material
+
+    trainee = get_academy_trainee(conn, trainee_id)
+    if trainee is None:
+        raise ArcLinkAcademyProgramError(f"unknown academy trainee: {trainee_id}")
+    if trainee.get("status") == "archived":
+        raise ArcLinkAcademyProgramError("cannot update Academy steer for an archived trainee")
+    if get_open_academy_mode(conn, trainee_id=str(trainee["trainee_id"])) is None:
+        raise ArcLinkAcademyProgramError("Academy steering updates require an open Academy Mode")
+    merged = dict(trainee.get("captain_steer") or {})
+    clean_updates = dict(updates or {})
+    note = str(append_note or "").strip()
+    reject_secret_material(
+        {
+            **{f"steer.{key}": value for key, value in clean_updates.items()},
+            "note": note,
+            "actor": actor,
+        }
+    )
+    for key, value in clean_updates.items():
+        clean_key = _slug(str(key or ""))[:64]
+        if not clean_key:
+            continue
+        if isinstance(value, (list, tuple)):
+            cleaned = [str(item or "").strip()[:500] for item in value if str(item or "").strip()]
+            merged[clean_key] = cleaned[:20]
+        elif isinstance(value, Mapping):
+            merged[clean_key] = {
+                _slug(str(k or ""))[:64]: str(v or "").strip()[:500]
+                for k, v in list(value.items())[:20]
+                if _slug(str(k or ""))
+            }
+        else:
+            merged[clean_key] = str(value or "").strip()[:2000]
+    if note:
+        notes = merged.get("captain_notes")
+        if not isinstance(notes, list):
+            notes = []
+        notes.append(
+            {
+                "at": _now(),
+                "actor": str(actor or "").strip()[:120] or "captain",
+                "note": note[:2000],
+            }
+        )
+        merged["captain_notes"] = notes[-50:]
+    conn.execute(
+        "UPDATE academy_trainees SET captain_steer_json = ?, updated_at = ? WHERE trainee_id = ?",
+        (_dumps(merged), _now(), trainee["trainee_id"]),
+    )
+    if commit:
+        conn.commit()
+    return get_academy_trainee(conn, trainee["trainee_id"]) or {}
+
+
+def active_academy_mode_for_deployment(conn: sqlite3.Connection, *, deployment_id: str) -> dict[str, Any] | None:
+    """Return the open Academy Mode for one deployment, with trainee/program."""
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        return None
+    session = get_open_academy_mode(conn, deployment_id=clean_deployment)
+    if session is None:
+        return None
+    trainee = get_academy_trainee(conn, str(session.get("trainee_id") or ""))
+    if trainee is None:
+        return None
+    return {
+        "session": session,
+        "trainee": trainee,
+        "program": get_academy_program(conn, str(trainee.get("program_id") or "")),
+    }
+
+
+def record_academy_resource_proposal(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    title: str,
+    origin_url: str,
+    lane_id: str,
+    summary: str,
+    relevance: Mapping[str, Any] | None = None,
+    citations: Sequence[str] | None = None,
+    proposed_by: str = "",
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Record an Agent-proposed Academy source for Trainer review.
+
+    This is the central handoff from the Hermes Agent skill back into ArcLink:
+    the Agent may gather and compress candidate resources, but it submits only
+    source metadata, citations, and concise derived notes. The Academy Trainer
+    review/weekly refresh loop can then dedupe and promote the source without
+    letting raw crawled content leak into reusable corpora.
+    """
+    from arclink_boundary import reject_secret_material
+
+    active = active_academy_mode_for_deployment(conn, deployment_id=deployment_id)
+    if active is None:
+        raise ArcLinkAcademyProgramError("academy resource proposals require an open Academy Mode for this deployment")
+    trainee = active["trainee"]
+    session = active["session"]
+    clean_lane = str(lane_id or "").strip()
+    if not clean_lane:
+        raise ArcLinkAcademyProgramError("academy resource proposal requires a source lane")
+    _validate_source_lanes([clean_lane])
+    clean_title = str(title or "").strip()[:240]
+    clean_url = str(origin_url or "").strip()[:1000]
+    clean_summary = str(summary or "").strip()[:4000]
+    clean_citations = [str(item or "").strip()[:1000] for item in (citations or []) if str(item or "").strip()][:20]
+    clean_relevance = {
+        _slug(str(k or ""))[:64]: str(v or "").strip()[:1000]
+        for k, v in list(dict(relevance or {}).items())[:25]
+        if _slug(str(k or ""))
+    }
+    reject_secret_material(
+        {
+            "title": clean_title,
+            "origin_url": clean_url,
+            "summary": clean_summary,
+            "lane_id": clean_lane,
+            "proposed_by": proposed_by,
+            **{f"citation.{idx}": value for idx, value in enumerate(clean_citations)},
+            **{f"relevance.{key}": value for key, value in clean_relevance.items()},
+        }
+    )
+    if not clean_title:
+        raise ArcLinkAcademyProgramError("academy resource proposal requires title")
+    if not clean_url and not clean_summary:
+        raise ArcLinkAcademyProgramError("academy resource proposal requires origin_url or summary")
+    dedupe_seed = f"{trainee['trainee_id']}|{clean_url or clean_title.lower()}"
+    proposal_id = "aprop_" + hashlib.sha256(dedupe_seed.encode("utf-8")).hexdigest()[:16]
+    now = _now()
+    status = "review_pending"
+    existing = None
+    if clean_url:
+        existing = conn.execute(
+            "SELECT * FROM academy_resource_proposals WHERE trainee_id = ? AND origin_url = ?",
+            (str(trainee["trainee_id"]), clean_url),
+        ).fetchone()
+    if existing is None:
+        existing = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
+    if existing is not None:
+        conn.execute(
+            """
+            UPDATE academy_resource_proposals
+            SET session_id = ?, lane_id = ?, title = ?, origin_url = ?, summary = ?,
+                relevance_json = ?, citations_json = ?, proposed_by = ?,
+                status = 'deduped', updated_at = ?
+            WHERE proposal_id = ?
+            """,
+            (
+                str(session.get("session_id") or ""),
+                clean_lane,
+                clean_title,
+                clean_url,
+                clean_summary,
+                _dumps(clean_relevance),
+                _dumps(clean_citations),
+                str(proposed_by or "").strip()[:160],
+                now,
+                str(existing["proposal_id"]),
+            ),
+        )
+        if commit:
+            conn.commit()
+        row = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (str(existing["proposal_id"]),)).fetchone()
+        return _proposal_public(row) if row is not None else {}
+    conn.execute(
+        """
+        INSERT INTO academy_resource_proposals (
+          proposal_id, trainee_id, session_id, user_id, deployment_id, program_id,
+          lane_id, title, origin_url, summary, relevance_json, citations_json,
+          proposed_by, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            proposal_id,
+            str(trainee["trainee_id"]),
+            str(session.get("session_id") or ""),
+            str(trainee.get("user_id") or ""),
+            str(trainee.get("deployment_id") or ""),
+            str(trainee.get("program_id") or ""),
+            clean_lane,
+            clean_title,
+            clean_url,
+            clean_summary,
+            _dumps(clean_relevance),
+            _dumps(clean_citations),
+            str(proposed_by or "").strip()[:160],
+            status,
+            now,
+            now,
+        ),
+    )
+    if commit:
+        conn.commit()
+    row = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
+    return _proposal_public(row) if row is not None else {}
+
+
 def end_academy_mode(
     conn: sqlite3.Connection,
     *,
@@ -599,11 +816,22 @@ def end_academy_mode(
             summary.setdefault("curation_error", redact_then_truncate(str(exc), limit=200))
     summary.setdefault("graduated", bool(graduate))
     summary.setdefault("manifest_id", resolved_manifest)
-    summary.setdefault("apply_status", "staged" if graduate else "cancelled")
+    proposal_count = 0
+    if graduate:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM academy_resource_proposals WHERE trainee_id = ?",
+            (trainee["trainee_id"],),
+        ).fetchone()
+        proposal_count = int(row["n"] if row is not None else 0)
+    summary.setdefault("resource_proposal_count", proposal_count)
+    summary.setdefault("trainer_deep_dive_status", "queued_for_review" if graduate else "cancelled")
+    summary.setdefault("canon_status", "not_canon_until_trainer_deep_dive_and_apply" if graduate else "cancelled")
+    summary.setdefault("agent_write_status", "blocked_until_trainer_review_and_pg_hermes" if graduate else "cancelled")
+    summary.setdefault("apply_status", "deep_dive_queued" if graduate else "cancelled")
     summary.setdefault("apply_proof_gates", list(ACADEMY_APPLY_PROOF_GATES))
     summary.setdefault(
         "apply_note",
-        "Staged at control plane; real SOUL/skills/qmd/vault writes remain PG-HERMES gated.",
+        "Captain closed Academy Mode; Trainer deep dive must review/dedupe resources before canonical SOUL/skills/qmd/vault writes.",
     )
     summary.setdefault("forward_maintenance", "weekly continuing education armed" if graduate else "not armed")
     summary.setdefault("actor", str(actor or "").strip() or "captain")
@@ -1128,6 +1356,14 @@ def _trainee_public(row: sqlite3.Row) -> dict[str, Any]:
 def _session_public(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
     data["commit_summary"] = _loads(data.pop("commit_summary_json", "{}"), default={})
+    return data
+
+
+def _proposal_public(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    data["relevance"] = _loads(data.pop("relevance_json", "{}"), default={})
+    data["citations"] = _loads(data.pop("citations_json", "[]"), default=[])
+    data["trainer_review"] = _loads(data.pop("trainer_review_json", "{}"), default={})
     return data
 
 

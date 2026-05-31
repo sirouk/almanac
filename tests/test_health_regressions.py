@@ -538,6 +538,7 @@ def test_active_agent_health_treats_private_user_runtime_as_ok() -> None:
                 "arclink-notion-knowledge",
                 "arclink-ssot-connect",
                 "arclink-notion-mcp",
+                "arclink-academy",
                 "arclink-resources",
                 "email/himalaya",
                 "productivity/google-workspace",
@@ -647,6 +648,7 @@ def test_active_agent_health_fails_when_shared_vault_acl_is_missing() -> None:
             "arclink-notion-knowledge",
             "arclink-ssot-connect",
             "arclink-notion-mcp",
+            "arclink-academy",
             "arclink-resources",
         ]
         hermes_home.mkdir(parents=True)
@@ -778,6 +780,7 @@ def test_active_agent_health_fails_when_shared_vault_parent_acl_is_mount_hostile
             "arclink-notion-knowledge",
             "arclink-ssot-connect",
             "arclink-notion-mcp",
+            "arclink-academy",
             "arclink-resources",
         ]
         hermes_home.mkdir(parents=True)
@@ -918,6 +921,7 @@ def test_active_agent_health_fails_when_agent_backup_cron_last_run_failed() -> N
             "arclink-notion-knowledge",
             "arclink-ssot-connect",
             "arclink-notion-mcp",
+            "arclink-academy",
             "arclink-resources",
         ]
         hermes_home.mkdir(parents=True)

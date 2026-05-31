@@ -799,6 +799,7 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
         "arclink-notion-knowledge",
         "arclink-ssot-connect",
         "arclink-notion-mcp",
+        "arclink-academy",
         "arclink-resources",
     ]
     expected_keys = [

@@ -493,11 +493,14 @@ rows, mirrored into deployment metadata, projected into the Agent's local
 managed identity context, shown in the dashboard Crew Training panel and Crew
 Recipe API, queried read-only from Operator Raven, and previewed through the
 local action worker without executor or filesystem calls. Captains enter this
-lane with `/academy`, can pick one Agent, or choose Train All to walk the Crew
-one by one and skip Agents they do not want trained. Real live source
-acquisition, provider-assisted generation, workspace application proof, real
-Agent application writes, hosted weekly scheduling, and source-governance
-decisions remain under `GAP-034`.
+lane with `/academy`, pick one Agent at a time, give the role/source/weekly
+refresh rails over a turn-by-turn Raven bootstrap, and open a real sticky
+Academy Mode. The Agent uses the `arclink-academy` skill to search approved
+rails and submit compressed resources through `academy.propose-resource`; the
+Captain closes the mode to queue the Academy Trainer deep dive. Canonical
+application to the Agent remains blocked until Trainer review, dedupe,
+provider-assisted generation, workspace application proof, real Agent writes,
+and source-governance decisions pass under `GAP-034`.
 
 This is larger than the current Crew Recipe system. The current source locally
 supports deterministic recipe/SOUL projection and proof-gated live recipe

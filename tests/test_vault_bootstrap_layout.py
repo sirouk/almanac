@@ -143,6 +143,7 @@ def test_reconcile_vault_layout_creates_realistic_org_structure_and_prunes_legac
             "arclink-first-contact.md",
             "arclink-notion-knowledge.md",
             "arclink-notion-mcp.md",
+            "arclink-academy.md",
             "arclink-qmd-mcp.md",
             "arclink-resources.md",
             "arclink-ssot.md",

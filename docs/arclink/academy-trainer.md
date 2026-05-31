@@ -45,10 +45,15 @@ with weekly forward-maintenance armed. Real Agent writes are gated behind
 2. **Choose.** *Adopt a graduate* (clone a ready specialist's Major + staged
    corpus into a chosen Agent -- the fast path) **or** *enroll a new Trainee*
    (name it, pick a Major, set depth, authorize source lanes).
-3. **Enter Academy Mode** (sticky). Curate with the Trainer; iterate as long as
-   you want. Evaluate.
-4. **End the mode** when satisfied -> commit -> the Agent arrives in the ArcPod
-   knowing its Major. Weekly continuing education keeps it current.
+3. **Enter Academy Mode** (sticky). Raven gathers the Captain's role, subject,
+   depth, boundaries, outside resources, and weekly refresh expectations one
+   turn at a time, then opens the selected Agent's sticky mode. The Agent uses
+   the `arclink-academy` skill to search approved rails and submit compressed
+   resource proposals through `academy.propose-resource`.
+4. **End the mode** when satisfied -> Trainer deep dive -> canon/apply. Closing
+   the mode queues the Academy Trainer to review, dedupe, enrich, and compress
+   gathered resources. Only after that review and the proof-gated apply path is
+   the replaceable Academy section written to the Agent.
 
 ## Lifecycle State Machine
 
@@ -57,8 +62,9 @@ BROWSE majors / graduates
   -> ADOPT graduate   OR   ENROLL trainee
   -> ACADEMY MODE (sticky; LLM Trainer + Captain curate)  --- stays open until the Captain ends it
         corpus assembly -> curriculum -> lesson cards -> evaluation   (staged, no-write)
-  -> CAPTAIN ENDS MODE -> graduation gate (PG-PROVIDER + PG-HERMES)
-  -> COMMIT: apply plan additively (SOUL overlay, vault, qmd, memory, skills)
+  -> CAPTAIN ENDS MODE -> TRAINER DEEP DIVE (dedupe, enrich, compress, review)
+  -> graduation/apply gate (PG-PROVIDER + PG-HERMES)
+  -> COMMIT: apply replaceable Academy section additively (SOUL overlay, vault, qmd, memory, skills)
   -> GRADUATE (durable) -> FORWARD-MAINTAIN (weekly continuing education) --- loops
 ```
 
@@ -108,12 +114,11 @@ phased plan below.
   tools to use; the managed-context plugin surfaces "Academy Mode active."
 - **Sticky mode state** (P0, done): open/status/end, one-open-per-trainee,
   Captain-ends-only semantics.
-- **Captain chat surface** (P1, *pending*): a new browse -> adopt/enroll -> mode
-  flow in `arclink_public_bots.py` / Telegram + Discord adapters; mode stays open
-  across turns; an explicit "graduate / end Academy" control commits. The legacy
-  crew-recipe `/academy` training flow remains intact and untouched; the new
-  program/trainee experience reuses `arclink_academy_programs` + the hosted API
-  below as a thin adapter layer when prioritized.
+- **Captain chat surface** (P1, done): `/academy` in `arclink_public_bots.py`
+  now selects one Agent at a time, gathers Captain steering over multiple turns,
+  opens the real sticky `academy_mode_sessions` record, accepts more steering
+  notes while open, and lets the Captain `graduate` or `cancel` at any time.
+  Closing the mode queues Trainer deep dive; it does not claim canon.
 - **Dashboard surface** (P1, done): the **Academy** tab in
   `web/src/app/dashboard/page.tsx` -- browse Majors + graduates, enroll a
   Trainee, enter/close (graduate or cancel) the sticky mode, and adopt a
@@ -124,6 +129,11 @@ phased plan below.
 - **Hosted API** (P1, done): `GET /user/academy`, `GET /user/academy/mode-status`,
   `POST /user/academy/{enroll,mode-open,mode-end,adopt}` -- owner-scoped, CSRF on
   mutations, no secrets, in the OpenAPI spec.
+- **Resource proposal rail** (P1, done): Agents in Academy Mode use the
+  `arclink-academy` skill and `academy.propose-resource` MCP tool to submit
+  compressed source candidates back to ArcLink. Proposals are central,
+  dedupable, secret-checked, and queued for Trainer review; raw content is not
+  stored through this handoff.
 - **LLM Trainer curation engine** (P1): `curate_academy_trainee` /
   `_compose_trainee_corpus` compose the governed corpus + application plan +
   review, and `end_academy_mode` curates on graduation. Uses lane-valid local

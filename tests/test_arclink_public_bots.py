@@ -1997,7 +1997,7 @@ def test_public_bot_train_crew_flow_and_whats_changed() -> None:
 
     start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="/train-crew")
     expect(start.action == "crew_training_prompt_role", str(start))
-    expect("Quick Training can take any Agent into the Academy lane" in start.reply, start.reply)
+    expect("Academy Mode can take one Hermes Agent at a time" in start.reply, start.reply)
     mission = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="founder building a tool")
     expect(mission.action == "crew_training_prompt_mission", str(mission))
     treatment = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:crew", text="ship the launch")
@@ -2054,41 +2054,66 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     )
     conn.commit()
 
-    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/train-crew")
-    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="founder")
-    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="ship an expert crew")
-    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="peer")
-    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="Frontier")
-    bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="development")
-    applied = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="confirm")
-    expect(applied.action == "crew_training_applied", str(applied))
-    expect(any(button.label == "Quick Training" for button in applied.buttons), str(applied.buttons))
-
     start = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy")
     expect(start.action == "academy_training_select_agent", str(start))
-    expect("role-specific specialist corpus" in start.reply, start.reply)
+    expect("one Agent at a time" in start.reply, start.reply)
     quick = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/quick-training")
     expect(quick.action == "academy_training_select_agent", str(quick))
-    walk = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy all")
-    expect(walk.action == "academy_training_walk_prompt", str(walk))
-    trained = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="train")
-    expect(trained.action == "academy_training_walk_prompt", str(trained))
-    skipped = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="skip")
-    expect(skipped.action == "academy_training_walk_complete", str(skipped))
-    expect("staged for 1 of 2" in skipped.reply and "1 skipped" in skipped.reply, skipped.reply)
+    all_reply = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/academy all")
+    expect(all_reply.action == "academy_training_select_agent", str(all_reply))
+    expect("one Agent at a time" in all_reply.reply, all_reply.reply)
 
-    current = conn.execute("SELECT soul_overlay_json FROM arclink_crew_recipes WHERE user_id = ? AND status = 'active'", (seeded["user_id"],)).fetchone()
-    overlay = json.loads(current["soul_overlay_json"])
-    academy = overlay["academy_training"]
-    expect(academy["trained_agent_count"] == 1, str(academy))
-    expect(academy["skipped_agent_count"] == 1, str(academy))
-    expect(len(academy["agents"]) == 2, str(academy))
+    major = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="Beacon")
+    expect(major.action == "academy_training_choose_major", str(major))
+    expect("Choose the Academy Major" in major.reply, major.reply)
+    focus_prompt = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="research_analyst")
+    expect(focus_prompt.action == "academy_training_focus", str(focus_prompt))
+    sources_prompt = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:academy",
+        text="Become an inference-routing research analyst for weekly Chutes and Hermes architecture review.",
+    )
+    expect(sources_prompt.action == "academy_training_sources", str(sources_prompt))
+    opened = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:academy",
+        text="https://docs.chutes.ai and https://github.com/NousResearch/hermes-agent",
+    )
+    expect(opened.action == "academy_mode_opened", opened.reply)
+    expect("Academy Mode is open for Beacon" in opened.reply, opened.reply)
+    trainee_row = conn.execute("SELECT * FROM academy_trainees WHERE deployment_id = ?", ("arcdep_academy_second",)).fetchone()
+    expect(trainee_row is not None and trainee_row["status"] == "in_academy", str(dict(trainee_row or {})))
+    open_row = conn.execute("SELECT * FROM academy_mode_sessions WHERE trainee_id = ? AND status = 'open'", (trainee_row["trainee_id"],)).fetchone()
+    expect(open_row is not None, "academy mode should stay open")
+
+    note = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:academy",
+        text="Prioritize source freshness, licensing, and what should be checked every week.",
+    )
+    expect(note.action == "academy_mode_steer_recorded", note.reply)
+    trainee_after_note = conn.execute("SELECT captain_steer_json FROM academy_trainees WHERE trainee_id = ?", (trainee_row["trainee_id"],)).fetchone()
+    steer = json.loads(trainee_after_note["captain_steer_json"])
+    expect(steer["captain_notes"], str(steer))
+
+    graduated = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="graduate")
+    expect(graduated.action == "academy_mode_graduated", graduated.reply)
+    expect("Trainer deep dive queued" in graduated.reply, graduated.reply)
+    closed_row = conn.execute("SELECT * FROM academy_mode_sessions WHERE trainee_id = ? AND status = 'open'", (trainee_row["trainee_id"],)).fetchone()
+    expect(closed_row is None, "graduation should close the sticky mode")
+    deployment_meta = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?", ("arcdep_academy_second",)).fetchone()
+    academy = json.loads(deployment_meta["metadata_json"])["academy_training"]
+    expect(academy["status"] == "trainer_review_pending", str(academy))
+    expect(academy["graduation_status"] == "blocked_by_trainer_deep_dive", str(academy))
     audit_actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log ORDER BY created_at").fetchall()]
-    expect("crew_academy_agent_training_staged" in audit_actions, str(audit_actions))
+    expect("academy_mode_status_recorded" in audit_actions, str(audit_actions))
 
     learn = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/learn")
     expect(learn.action == "learn", str(learn))
-    expect("Quick Training is the Academy lane" in learn.reply, learn.reply)
+    expect("Academy Mode trains one Hermes Agent at a time" in learn.reply, learn.reply)
     print("PASS test_public_bot_academy_training_walks_crew_with_skip")
 
 

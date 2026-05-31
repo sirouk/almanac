@@ -443,6 +443,7 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
         "arclink-notion-knowledge",
         "arclink-ssot-connect",
         "arclink-notion-mcp",
+        "arclink-academy",
         "arclink-resources",
     ]
     arclink_plugin_names = [

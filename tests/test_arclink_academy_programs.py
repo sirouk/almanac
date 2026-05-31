@@ -137,8 +137,106 @@ def test_academy_enroll_open_sticky_and_graduate() -> None:
         expect(ended["trainee"]["forward_maintained"] is True, "forward-maintenance armed on graduation")
         cs = ended["session"]["commit_summary"]
         expect("PG-HERMES" in cs.get("apply_proof_gates", []), str(cs))
+        expect(cs["trainer_deep_dive_status"] == "queued_for_review", str(cs))
+        expect(cs["canon_status"] == "not_canon_until_trainer_deep_dive_and_apply", str(cs))
         expect(ended["session"]["status"] == "closed", str(ended["session"]))
         print("PASS test_academy_enroll_open_sticky_and_graduate")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_mode_records_steer_and_resource_proposals() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        trainee = ap.enroll_academy_trainee(
+            conn,
+            program_id="research_analyst",
+            user_id="user-1",
+            deployment_id="dep-1",
+            captain_steer={"focus": "routing research"},
+        )
+        opened = ap.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by="captain")
+        updated = ap.update_academy_trainee_steer(
+            conn,
+            trainee_id=trainee["trainee_id"],
+            updates={"weekly_review": True},
+            append_note="Track source freshness every week.",
+            actor="captain",
+        )
+        expect(updated["captain_steer"]["weekly_review"] == "True", str(updated))
+        expect(updated["captain_steer"]["captain_notes"], str(updated))
+
+        proposal = ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-1",
+            lane_id="web_article",
+            title="Routing architecture field note",
+            origin_url="https://example.test/routing",
+            summary="Compressed routing architecture notes for Trainer review.",
+            relevance={"role_fit": "supports research analyst training", "weekly_refresh": "check for revisions"},
+            citations=["https://example.test/routing"],
+            proposed_by="agent-1",
+        )
+        expect(proposal["status"] == "review_pending", str(proposal))
+        expect(proposal["trainee_id"] == trainee["trainee_id"], str(proposal))
+        deduped = ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-1",
+            lane_id="web_article",
+            title="Routing architecture field note revised",
+            origin_url="https://example.test/routing",
+            summary="Updated compressed notes.",
+            proposed_by="agent-1",
+        )
+        expect(deduped["proposal_id"] == proposal["proposal_id"], str(deduped))
+        expect(deduped["status"] == "deduped", str(deduped))
+        offline = ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-1",
+            lane_id="organization_private",
+            title="Captain offline source bundle",
+            origin_url="",
+            summary="Captain-approved offline reference notes, compressed for Trainer review.",
+            proposed_by="agent-1",
+        )
+        offline_deduped = ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-1",
+            lane_id="organization_private",
+            title="Captain offline source bundle",
+            origin_url="",
+            summary="Revised offline source notes.",
+            proposed_by="agent-1",
+        )
+        expect(offline_deduped["proposal_id"] == offline["proposal_id"], str(offline_deduped))
+        expect(offline_deduped["status"] == "deduped", str(offline_deduped))
+        missing_lane_rejected = False
+        try:
+            ap.record_academy_resource_proposal(
+                conn,
+                deployment_id="dep-1",
+                lane_id="",
+                title="Lane-free source",
+                origin_url="https://example.test/lane-free",
+                summary="Should fail closed without a governed lane.",
+                proposed_by="agent-1",
+            )
+        except ap.ArcLinkAcademyProgramError:
+            missing_lane_rejected = True
+        expect(missing_lane_rejected, "resource proposals must name a governed source lane")
+
+        ended = ap.end_academy_mode(conn, session_id=opened["session"]["session_id"], actor="captain", graduate=True)
+        cs = ended["session"]["commit_summary"]
+        expect(cs["resource_proposal_count"] == 2, str(cs))
+        expect(cs["trainer_deep_dive_status"] == "queued_for_review", str(cs))
+        closed_steer_rejected = False
+        try:
+            ap.update_academy_trainee_steer(conn, trainee_id=trainee["trainee_id"], append_note="too late")
+        except ap.ArcLinkAcademyProgramError:
+            closed_steer_rejected = True
+        expect(closed_steer_rejected, "Captain steering updates require open Academy Mode")
+        print("PASS test_academy_mode_records_steer_and_resource_proposals")
     finally:
         cleanup(tmp, old_env)
 
@@ -530,6 +628,7 @@ if __name__ == "__main__":
     test_academy_continuing_education_is_no_write()
     test_academy_catalog_seed_is_idempotent_and_browsable()
     test_academy_enroll_open_sticky_and_graduate()
+    test_academy_mode_records_steer_and_resource_proposals()
     test_academy_cancel_mode_returns_to_enrolled()
     test_academy_browse_graduates_and_adopt()
     test_academy_many_types_as_data_and_lane_validation()

@@ -1553,6 +1553,37 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ON academy_mode_sessions (trainee_id)
         WHERE status = 'open';
 
+        -- Academy: resources proposed by the Agent while Academy Mode is open.
+        -- These are central, dedupable source candidates for the Trainer review
+        -- and weekly continuing-education refresh loop. Raw content is not stored
+        -- here; Agents submit source metadata, citations, and compressed notes.
+        CREATE TABLE IF NOT EXISTS academy_resource_proposals (
+          proposal_id TEXT PRIMARY KEY,
+          trainee_id TEXT NOT NULL DEFAULT '',
+          session_id TEXT NOT NULL DEFAULT '',
+          user_id TEXT NOT NULL DEFAULT '',
+          deployment_id TEXT NOT NULL DEFAULT '',
+          program_id TEXT NOT NULL DEFAULT '',
+          lane_id TEXT NOT NULL DEFAULT '',
+          title TEXT NOT NULL DEFAULT '',
+          origin_url TEXT NOT NULL DEFAULT '',
+          summary TEXT NOT NULL DEFAULT '',
+          relevance_json TEXT NOT NULL DEFAULT '{}',
+          citations_json TEXT NOT NULL DEFAULT '[]',
+          proposed_by TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed', 'review_pending', 'accepted', 'rejected', 'deduped')),
+          trainer_review_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_academy_resource_proposals_trainee_status
+        ON academy_resource_proposals (trainee_id, status, updated_at);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_academy_resource_proposals_trainee_origin
+        ON academy_resource_proposals (trainee_id, origin_url)
+        WHERE origin_url != '';
+
         CREATE TABLE IF NOT EXISTS arclink_wrapped_reports (
           report_id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,
@@ -17035,6 +17066,7 @@ def build_managed_memory_payload(
         "- Use arclink-ssot-connect only for optional user-owned Notion MCP setup; it is not the default shared ArcLink Notion knowledge rail.\n"
         "- Use arclink-notion-mcp only as an optional personal Notion helper after that user-owned Notion MCP is actually live; do not treat it as the default shared ArcLink workspace-search lane.\n"
         "- For org-wide new Notion pages or databases, use the brokered ssot.write rail so creations are parented under the shared ArcLink page and inherit org access; do not use personal Notion MCP for shared SSOT creation.\n"
+        "- Use arclink-academy when Academy Mode is active: gather Captain steering, search approved rails, propose compressed resources through academy.propose-resource, and wait for Trainer deep dive before treating material as canon.\n"
         "- Use arclink-resources for /arclink-resources, dashboard/code workspace links, remote helper setup, backup setup, and the user-visible ~/ArcLink vault path.\n"
         "- Use arclink-first-contact for ArcLink setup or diagnostic checks.\n"
         "- Org-published Hermes skills live under ~/ArcLink/Agents_Skills/*/skills and are wired into skills.external_dirs during install/refresh; use skills_list/skill_view when the skill is active, and qmd vault.search-and-fetch for source-level review or edits.\n"
@@ -17935,7 +17967,8 @@ def write_managed_memory_stubs(
         " coordination, arclink-notion-knowledge for the shared Notion knowledge"
         " rail, arclink-ssot-connect only for optional user-owned"
         " Notion MCP setup, arclink-notion-mcp only as that separate personal"
-        " Notion helper once the MCP is live, arclink-resources for"
+        " Notion helper once the MCP is live, arclink-academy for active Academy"
+        " Mode resource proposal and Trainer-review preparation, arclink-resources for"
         " /arclink-resources and user-facing dashboard/code/vault links, and arclink-first-contact for"
         " ArcLink setup or diagnostic checks. All vaults remain retrievable"
         " through ArcLink/qmd even when a vault is unsubscribed; subscriptions"

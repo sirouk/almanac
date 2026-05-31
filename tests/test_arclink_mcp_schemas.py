@@ -106,6 +106,7 @@ def test_arclink_mcp_tools_advertise_actionable_input_schemas() -> None:
         "knowledge.search-and-fetch",
         "agents.managed-memory",
         "agents.consume-notifications",
+        "academy.propose-resource",
         "shares.request",
         "ssot.read",
         "ssot.pending",
@@ -179,6 +180,14 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "resource_root": "vault",
             "resource_path": "/Projects/brief.md",
             "display_name": "Project Brief",
+        },
+        "academy.propose-resource": {
+            "title": "Example architecture notes",
+            "lane_id": "web_article",
+            "origin_url": "https://example.test/academy/source",
+            "summary": "Compressed source notes for Trainer review.",
+            "relevance": {"role_fit": "supports the specialist role"},
+            "citations": ["https://example.test/academy/source"],
         },
         "ssot.write": {
             "operation": "create_page",

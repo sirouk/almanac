@@ -871,6 +871,7 @@ required_skill_names = [
     "arclink-notion-knowledge",
     "arclink-ssot-connect",
     "arclink-notion-mcp",
+    "arclink-academy",
     "arclink-resources",
 ]
 required_bundled_skill_paths = [

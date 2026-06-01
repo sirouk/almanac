@@ -155,22 +155,27 @@ failures = 0
 with connect_db(cfg) as conn:
     conn.row_factory = __import__("sqlite3").Row
     jobs = conn.execute(
-        "SELECT job_name, last_run_at, last_status FROM refresh_jobs ORDER BY job_name"
+        "SELECT job_name, job_kind, schedule, last_run_at, last_status FROM refresh_jobs ORDER BY job_name"
     ).fetchall()
     if not jobs:
         print("OK no refresh jobs recorded yet")
         raise SystemExit(0)
     for job in jobs:
         name = str(job["job_name"] or "")
+        kind = str(job["job_kind"] or "")
+        schedule = str(job["schedule"] or "")
         status = str(job["last_status"] or "unknown")
         last_run = parse_utc_iso(str(job["last_run_at"] or ""))
         if last_run is None:
             print(f"WARN {name}: no valid last_run_at")
             continue
         age_h = (now - last_run).total_seconds() / 3600
+        on_demand = kind == "operator-action" or "on demand" in schedule.lower()
         if status in ("ok", "skipped"):
-            if age_h > 8:
+            if age_h > 8 and not on_demand:
                 print(f"WARN {name}: stale ({age_h:.1f}h since last run)")
+            elif on_demand:
+                print(f"OK {name}: {status} (on demand; last run {age_h:.1f}h ago)")
             else:
                 print(f"OK {name}: {status} ({age_h:.1f}h ago)")
         elif status in ("warn", "warning", "disabled"):

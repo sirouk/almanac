@@ -17158,7 +17158,7 @@ def build_managed_memory_payload(
         "- Use arclink-ssot-connect only for optional user-owned Notion MCP setup; it is not the default shared ArcLink Notion knowledge rail.\n"
         "- Use arclink-notion-mcp only as an optional personal Notion helper after that user-owned Notion MCP is actually live; do not treat it as the default shared ArcLink workspace-search lane.\n"
         "- For org-wide new Notion pages or databases, use the brokered ssot.write rail so creations are parented under the shared ArcLink page and inherit org access; do not use personal Notion MCP for shared SSOT creation.\n"
-        "- Use arclink-academy when Academy Mode is active: gather Captain steering, search approved rails, propose compressed resources through academy.propose-resource, and wait for Trainer deep dive before treating material as canon.\n"
+        "- Use arclink-academy when Academy Mode is active: gather Captain steering, call academy.search-graduates before inventing a new specialist, search approved rails, propose compressed resources through academy.propose-resource, and wait for Trainer deep dive before treating material as canon.\n"
         "- Use arclink-resources for /arclink-resources, dashboard/code workspace links, remote helper setup, backup setup, and the user-visible ~/ArcLink vault path.\n"
         "- Use arclink-first-contact for ArcLink setup or diagnostic checks.\n"
         "- Org-published Hermes skills live under ~/ArcLink/Agents_Skills/*/skills and are wired into skills.external_dirs during install/refresh; use skills_list/skill_view when the skill is active, and qmd vault.search-and-fetch for source-level review or edits.\n"

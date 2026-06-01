@@ -90,12 +90,13 @@ The Operator Telegram command set is the registered
 (`operator_status`, `fleet_list`, `user_lookup`, `academy_status`,
 `upgrade_check`, `action_status`, and `worker_probe`, which is dry-run only)
 never mutate. The mutating commands (`pod_repair`, `rollout`, `upgrade`/host
-upgrade, `pin_upgrade`) are NOT read-only: they use a three-mode contract where
+upgrade, `pin_upgrade`) are NOT read-only: they use a four-mode contract where
 `--dry-run` previews, no-dry-run without an operator actor fails closed, and
-no-dry-run with the operator actor queues a real, audited, identity-gated action
-intent. Every mutating command requires the operator approval code
-(`strip_operator_approval_code`, constant-time compare), and live execution
-still honors `ARCLINK_EXECUTOR_ADAPTER` (fake adapter = record-only). Live
+no-dry-run with the operator actor but no second confirmation fails closed. A
+real queued intent requires the operator actor plus `confirm` or the configured
+operator approval code (`strip_operator_approval_code`, constant-time compare),
+and live execution still honors `ARCLINK_EXECUTOR_ADAPTER` (fake adapter =
+record-only). Live
 delivery of these surfaces is proof-gated behind `PG-BOTS`; per-action live
 effect rolls up to the relevant proof gate (for example rollout is
 `PG-UPGRADE`/`PG-HERMES`). For the authoritative operator action matrix and the

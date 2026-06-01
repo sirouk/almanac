@@ -88,25 +88,25 @@ Telegram operator approvals can require a typed second factor by setting
 and `/retry_contact` commands must include the code, and approval/install
 buttons are refused with guidance to use the typed command.
 
-The same operator code is mandatory for **every** Operator Raven mutating
-command. `python/arclink_operator_raven.py` defines
-`MUTATING_COMMANDS = {pod_repair, rollout, host_upgrade, pin_upgrade}`, and
-`python/arclink_telegram.py` calls `strip_operator_approval_code` (a
-constant-time `hmac.compare_digest` on the trailing token) for any command that
-`operator_raven_command_is_mutating` reports before dispatch. A missing or wrong
-code fails closed with "Operator code required for this action." and queues
-nothing. The code must be appended to the originating channel message, for
-example `/pod_repair <deployment> restart <operator-code>` or `/rollout
-<target-version> <operator-code>`. Read-only Operator Raven commands (`status`,
+Every Operator Raven mutating command requires a verified operator channel
+**and** an explicit second confirmation. `python/arclink_operator_raven.py`
+defines `MUTATING_COMMANDS = {pod_repair, rollout, host_upgrade, pin_upgrade}`.
+Operators should run `--dry-run` first, then append `confirm` when no approval
+code is configured, for example `/upgrade confirm`. If
+`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or `ARCLINK_OPERATOR_APPROVAL_CODE` is
+configured, the Telegram and Discord adapters verify that trailing token with
+constant-time `hmac.compare_digest`, strip it, and pass the shared confirmation
+token into Operator Raven. A missing/wrong code fails closed with "Operator code
+required for this action"; a missing `confirm`/code from a verified actor fails
+closed and queues nothing. Read-only Operator Raven commands (`status`,
 `agents`, `fleet_list`, `worker_probe`, `user_lookup`, `action_status`,
-`upgrade_check`, `academy_status`, `academy_roster`) never require the code and
-never mutate.
+`upgrade_check`, `academy_status`, `academy_roster`) never require confirmation
+and never mutate.
 
-Discord Curator operator actions are currently gated by the configured
-operator channel. That is a channel-permission authority model, not parity with
-Telegram's typed approval code. Keep the Discord operator channel tightly
-permissioned until `GAP-027` is resolved by either accepting that policy in
-tests/runbooks or adding a Discord second factor or allowlist.
+Discord Curator operator actions are gated by the configured operator channel;
+when an operator approval code is configured, mutating Discord commands must
+also include that code, same as Telegram. Keep the Discord operator channel
+tightly permissioned.
 
 Hosted user sessions expose credential handoff state through
 `GET /api/v1/user/credentials` and acknowledge storage through
@@ -1273,11 +1273,11 @@ entry). `action_status` in Operator Raven reads both tables.
 
 **Operator Raven as a real mutation entry point:** Operator Raven
 (`python/arclink_operator_raven.py`) is not read-only/dry-run. Mutating commands
-(`pod_repair`, `rollout`, `host_upgrade`, `pin_upgrade`) use a three-mode
+(`pod_repair`, `rollout`, `host_upgrade`, `pin_upgrade`) use a four-mode
 contract: `--dry-run` previews and changes nothing; no `--dry-run` with no
-operator actor fails closed; no `--dry-run` with an operator actor queues a
-real, audited, idempotent intent into the matching queue above. All four require
-the operator approval code (see the Hosted API section). Live mutation stays
+operator actor fails closed; no `--dry-run` with an operator actor but no
+`confirm`/approval code fails closed; no `--dry-run` with actor plus confirmation
+queues a real, audited, idempotent intent into the matching queue above. Live mutation stays
 gated by `ARCLINK_EXECUTOR_ADAPTER` (`fake` = record-only) plus the per-action
 proof gate (`PG-PROVISION` restart/reprovision, `PG-INGRESS` dns_repair,
 `PG-UPGRADE/PG-HERMES` rollout, `PG-PROVIDER` chutes, `PG-STRIPE` refund/cancel,
@@ -1312,7 +1312,7 @@ exists, the webhook falls back to the Raven control intro.
 | Placement | `arclink_fleet.py` | Active placement is one row per deployment; load increments on placement |
 | Admin action execution | `arclink_action_worker.py` | Claims queued `arclink_action_intents`, resolves the deployment's active placement, records attempts, and dispatches to the selected host executor |
 | Operator action execution | `arclink_enrollment_provisioner.py` | Root maintenance loop drains the `operator_actions` table (`host_upgrade`/`pin_upgrade`), routing Docker-mode upgrades through `operator-upgrade-broker` |
-| Operator chat control | `arclink_operator_raven.py` | Queues real audited mutations (`pod_repair`, `rollout` → `arclink_action_intents`; `host_upgrade`, `pin_upgrade` → `operator_actions`) under the operator approval code; broad read surface |
+| Operator chat control | `arclink_operator_raven.py` | Queues real audited mutations (`pod_repair`, `rollout` -> `arclink_action_intents`; `host_upgrade`, `pin_upgrade` -> `operator_actions`) only after verified operator identity plus `confirm` or the operator approval code; broad read surface |
 | Operator agent | `arclink_operator_agent.py` | One in-stack `control-stack` Hermes identity (one-agent invariant) plus a free-form chat bridge via the `public-agent-turn` worker |
 | Rollouts | `arclink_rollout.py` | Generic rollout model (version tag, wave count, pause/fail/rollback) plus the ArcPod-update planner/materializer/record-only batch executor |
 | Operator read model | `arclink_dashboard.py` | `build_scale_operations_snapshot()` powers the admin API route; `ARCLINK_ADMIN_ACTION_SUPPORT` owns the action-readiness matrix |

@@ -2153,6 +2153,43 @@ def stage_academy_apply(
     adapter = str(adapter_name or "fake").strip().lower()
     live_adapter = adapter in {"local", "ssh", "live"}
 
+    # Render the REPLACEABLE Academy SOUL section from the central specialist
+    # capsule before deciding whether live writes are enabled. This is the
+    # fail-closed Trainer gate: a live apply can only materialize a capsule that
+    # the Trainer deep dive already stamped.
+    academy_soul_section = ""
+    academy_capsule_version = 0
+    academy_specialist_uid = ""
+    academy_trainer_reviewed_at = ""
+    academy_trainer_live_status = ""
+    trainer_review_ready = False
+    try:
+        program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
+        spec_uid, _ = specialist_uid_for_program(program_row)
+        academy_specialist_uid = spec_uid
+        spec_row = conn.execute(
+            "SELECT compressed_soul_capsule, capsule_version, role_title, enrichment_json FROM academy_corpus_specialists WHERE specialist_uid = ?",
+            (spec_uid,),
+        ).fetchone()
+        if spec_row is not None and str(spec_row["compressed_soul_capsule"] or "").strip():
+            from arclink_org_profile import render_academy_overlay
+
+            enrichment = _loads(spec_row["enrichment_json"], default={})
+            if isinstance(enrichment, Mapping):
+                academy_trainer_reviewed_at = str(enrichment.get("reviewed_at") or "")
+                academy_trainer_live_status = str(enrichment.get("live_enrichment_status") or "")
+            academy_capsule_version = int(spec_row["capsule_version"] or 0)
+            academy_soul_section = render_academy_overlay(
+                role_title=str(spec_row["role_title"] or program_row.get("label") or ""),
+                topic=str(program_row.get("topic_map") or ""),
+                capsule_body=str(spec_row["compressed_soul_capsule"] or ""),
+                capsule_version=academy_capsule_version,
+                specialist_uid=spec_uid,
+            )
+            trainer_review_ready = bool(academy_soul_section.strip()) and bool(academy_trainer_reviewed_at)
+    except Exception:  # noqa: BLE001 - a missing/empty capsule just omits the section
+        academy_soul_section = ""
+
     if not contract_ok:
         status = "not_staged"
         writes_enabled = False
@@ -2164,13 +2201,17 @@ def stage_academy_apply(
             "Staged plan no longer matches the current Major (the Major changed after graduation); "
             "re-graduate to re-review. Fail-closed: no Agent-home write."
         )
-    elif live_adapter and live_authorized and review_ready:
+    elif live_adapter and live_authorized and review_ready and trainer_review_ready:
         status = "handoff_to_hermes_home"
         writes_enabled = True
         note = (
             "PG-HERMES authorized: Captain-approved staged contract handed to the Hermes-home installer "
             "(bin/install-deployment-hermes-home.sh) for the additive SOUL/skills/qmd/vault apply."
         )
+    elif live_adapter and live_authorized and not trainer_review_ready:
+        status = "failed_closed"
+        writes_enabled = False
+        note = "Academy Trainer deep-dive/capsule is not ready; no Agent-home write was performed."
     elif live_adapter and not live_authorized:
         status = "failed_closed"
         writes_enabled = False
@@ -2179,34 +2220,6 @@ def stage_academy_apply(
         status = "staged"
         writes_enabled = False
         note = "Record-only adapter; application plan staged, no Agent-home write was performed."
-
-    # Render the REPLACEABLE Academy SOUL section from the central specialist capsule.
-    # The string is staged in the result for the PG-HERMES Hermes-home installer to
-    # merge via merge_academy_overlay; the control plane itself writes nothing here.
-    academy_soul_section = ""
-    academy_capsule_version = 0
-    academy_specialist_uid = ""
-    try:
-        program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
-        spec_uid, _ = specialist_uid_for_program(program_row)
-        academy_specialist_uid = spec_uid
-        spec_row = conn.execute(
-            "SELECT compressed_soul_capsule, capsule_version, role_title FROM academy_corpus_specialists WHERE specialist_uid = ?",
-            (spec_uid,),
-        ).fetchone()
-        if spec_row is not None and str(spec_row["compressed_soul_capsule"] or "").strip():
-            from arclink_org_profile import render_academy_overlay
-
-            academy_capsule_version = int(spec_row["capsule_version"] or 0)
-            academy_soul_section = render_academy_overlay(
-                role_title=str(spec_row["role_title"] or program_row.get("label") or ""),
-                topic=str(program_row.get("topic_map") or ""),
-                capsule_body=str(spec_row["compressed_soul_capsule"] or ""),
-                capsule_version=academy_capsule_version,
-                specialist_uid=spec_uid,
-            )
-    except Exception:  # noqa: BLE001 - a missing/empty capsule just omits the section
-        academy_soul_section = ""
 
     return {
         "operation_kind": "academy_agent_apply",
@@ -2233,6 +2246,9 @@ def stage_academy_apply(
         "academy_soul_marker": "ARCLINK ACADEMY SPECIALIST",
         "academy_capsule_version": academy_capsule_version,
         "academy_specialist_uid": academy_specialist_uid,
+        "academy_trainer_review_ready": trainer_review_ready,
+        "academy_trainer_reviewed_at": academy_trainer_reviewed_at,
+        "academy_trainer_live_status": academy_trainer_live_status,
         "proof_gates": list(ACADEMY_APPLY_PROOF_GATES),
         "actor": str(actor or "").strip() or "system:action_worker",
         "mutation_performed": False,

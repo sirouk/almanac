@@ -4,7 +4,7 @@ TRUTH: control node=Docker Compose project arclink. Captain ArcPods=Docker deplo
 
 PATHS: repo=$repo_dir priv=$priv_dir operator_vault=$vault_dir control_api=$control_api. Control DB is not mounted into chat/runtime; use control API/Raven for reads.
 
-MUTATE: never improvise raw Docker/socket/secret edits. Use Operator Raven/action queues/brokers/CLI. Chat commands: /operator_status /operator_fleet /upgrade_check /action_status /upgrade /pin_upgrade <component> /pod_repair <deployment> /rollout <target>. CLI: ./deploy.sh control health|upgrade|inventory, ./deploy.sh hermes-upgrade, ./bin/arclink-ctl.
+MUTATE: never improvise raw Docker/socket/secret edits. Use Operator Raven/action queues/brokers/CLI. Chat commands: /operator_status /operator_fleet /upgrade_check /action_status /upgrade /pin_upgrade <component> /pod_repair <deployment> /rollout <target>. Use --dry-run first; real Raven actions require verified operator channel plus confirm or the configured approval code. CLI: ./deploy.sh control health|upgrade|inventory, ./deploy.sh hermes-upgrade, ./bin/arclink-ctl.
 
 BROKERS: upgrade=$upgrade_broker gateway=$gateway_broker. Dangerous work must be typed, audited, idempotent, status-trackable. Prefer fake/record-only unless proof gate says live.
 

@@ -96,6 +96,7 @@ _RELEVANT_TERMS = (
     "arclink",
     "access",
     "agent",
+    "academy",
     "code",
     "dashboard",
     "event",
@@ -119,6 +120,10 @@ _RELEVANT_TERMS = (
     "subscriptions",
     "subscribe",
     "research",
+    "training",
+    "graduate",
+    "graduates",
+    "specialist",
     "projects",
     "repos",
     "plugins",
@@ -268,6 +273,8 @@ _TOKEN_TOOL_SUFFIXES = {
     "notion_fetch": "notion.fetch",
     "notion_query": "notion.query",
     "notion_search_and_fetch": "notion.search-and-fetch",
+    "academy_search_graduates": "academy.search-graduates",
+    "academy_propose_resource": "academy.propose-resource",
 }
 _TOKEN_TOOL_NAMES = set(_TOKEN_TOOL_SUFFIXES.values()) | {
     f"mcp_arclink_mcp_{suffix}" for suffix in _TOKEN_TOOL_SUFFIXES
@@ -282,6 +289,46 @@ _TOKEN_TOOL_NAMES = set(_TOKEN_TOOL_SUFFIXES.values()) | {
 # plugin-managed context.
 _MAX_RECIPES_PER_TURN = 2
 _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "academy.search-graduates",
+        (
+            "academy mode",
+            "academy training",
+            "academy graduate",
+            "academy graduates",
+            "become a specialist",
+            "become an expert",
+            "train as",
+            "trained specialist",
+            "specialist role",
+            "subject matter expert",
+            "continuing education",
+        ),
+        (
+            "academy.search-graduates - search existing reusable Academy specialists before shaping a new training track. "
+            "The plugin injects token automatically; omit token. Required: query. Optional: program_id, limit. "
+            "Use central/public-lane matches when reusable; same-Captain private matches may accelerate only that Captain's agent. "
+            "Do not leak another Captain's private strategy or resources into public Academy proposals."
+        ),
+    ),
+    (
+        "academy.propose-resource",
+        (
+            "propose academy resource",
+            "submit academy source",
+            "trainer review",
+            "academy trainer",
+            "weekly refresh source",
+            "continuing education source",
+            "training resource",
+        ),
+        (
+            "academy.propose-resource - submit compressed source notes for control-plane Trainer review. "
+            "The plugin injects token automatically; omit token. Required: title, lane_id, summary. "
+            "Include origin_url or offline reference, relevance.role_fit, relevance.weekly_refresh, relevance.limits, citations, and permission/freshness notes. "
+            "Submit derived compressed notes only; never submit secrets, private Captain strategy, raw paywalled text, or protected material."
+        ),
+    ),
     (
         "knowledge.search-and-fetch",
         (

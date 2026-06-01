@@ -23,7 +23,17 @@ Academy Mode is a living training workflow, not a one-shot role label. Your job 
 1. Confirm the role and specialist identity the Captain wants.
 2. Confirm subject matter, depth, boundaries, and examples of good work.
 3. Confirm allowed source lanes: Captain-provided docs, vault/Notion, web articles, scholarly/standards, repositories, video transcripts, community discussion, and approved tools/skills.
-4. Search and fetch through governed tools first:
+4. Search for already-graduated Academy specialists before shaping a new track:
+
+```json
+{"tool":"academy.search-graduates","arguments":{"query":"<role/topic>", "limit":5}}
+```
+
+Use reusable central/public-lane graduates when they fit, and use same-Captain
+graduates as private acceleration only for that Captain. Do not copy another
+Captain's private strategy, notes, or protected resources into a public lane.
+
+5. Search and fetch through governed tools first:
 
 ```json
 {"tool":"knowledge.search-and-fetch","arguments":{"query":"<topic>", "search_limit":3, "fetch_limit":2}}
@@ -31,7 +41,7 @@ Academy Mode is a living training workflow, not a one-shot role label. Your job 
 {"tool":"notion.search-and-fetch","arguments":{"query":"<topic>", "search_limit":3, "fetch_limit":2}}
 ```
 
-5. For each strong source, submit a compressed proposal:
+6. For each strong source, submit a compressed proposal:
 
 ```json
 {
@@ -51,8 +61,8 @@ Academy Mode is a living training workflow, not a one-shot role label. Your job 
 }
 ```
 
-6. Tell the Captain what you gathered, what you rejected, what needs Trainer review, and what you still need.
-7. When the Captain is satisfied, ask them to graduate or exit Academy Mode through Raven. Do not self-graduate.
+7. Tell the Captain what you gathered, what you rejected, what needs Trainer review, and what you still need.
+8. When the Captain is satisfied, ask them to graduate or exit Academy Mode through Raven. Do not self-graduate.
 
 ## Source Proposal Rules
 
@@ -100,4 +110,3 @@ When reporting progress to the Captain, use this shape:
 - weekly refresh plan
 - open questions
 - whether the Captain should continue steering, graduate, or exit
-

@@ -197,13 +197,15 @@ ships a real-but-fenced operator command layer with a broad read surface
 (`status`, `agents`, `fleet_list`, `worker_probe` dry-run, `user_lookup`,
 `academy_status`, `academy_roster`, `upgrade_check`, `action_status`) AND a real
 mutation layer. The mutating commands (`pod_repair`, `rollout`, `host_upgrade`,
-`pin_upgrade`, the `MUTATING_COMMANDS` set) follow a three-mode contract: a
+`pin_upgrade`, the `MUTATING_COMMANDS` set) follow a four-mode contract: a
 `--dry-run` preview changes nothing; a real run with no operator actor fails
-closed (read-only refusal); a real run with a proven operator actor QUEUES a
-real, audited intent. `pod_repair` and `rollout` queue into `arclink_action_intents`
+closed (read-only refusal); a real run with a proven operator actor but no
+`confirm`/approval code fails closed; a real run with actor plus confirmation
+QUEUES a real, audited intent. `pod_repair` and `rollout` queue into `arclink_action_intents`
 (drained by `arclink_action_worker.py`); `host_upgrade` and `pin_upgrade` queue
 into `operator_actions` (drained by the enrollment-provisioner root maintenance
-loop). All mutating commands additionally require the operator approval code
+loop). The second confirmation can be the literal `confirm` token, or the
+configured operator approval code
 (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`/`ARCLINK_OPERATOR_APPROVAL_CODE`,
 constant-time compare) on the originating channel. The operator also gets exactly
 one in-stack Hermes agent (`arclink_operator_agent.py`, one-agent invariant,

@@ -316,7 +316,8 @@ def _handle_operator_command(
         message_id = str((message.get("message_id") or "")).strip()
         dispatch_text = text
         if operator_raven_command_is_mutating(text):
-            code_ok, dispatch_text = strip_operator_approval_code(text, _operator_approval_code())
+            approval_code = _operator_approval_code()
+            code_ok, dispatch_text = strip_operator_approval_code(text, approval_code)
             if not code_ok:
                 send_text(
                     bot_token,
@@ -324,6 +325,8 @@ def _handle_operator_command(
                     "Operator code required for this action. Append your operator code, e.g. /upgrade <operator-code> or /pod_repair <deployment> restart <operator-code>.",
                 )
                 return
+            if approval_code:
+                dispatch_text = f"{dispatch_text} --confirm"
         try:
             with connect_db(cfg) as conn:
                 result = dispatch_operator_raven_command(

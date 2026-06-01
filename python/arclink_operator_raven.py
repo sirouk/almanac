@@ -9,12 +9,16 @@ ways:
 * ``--dry-run`` -> a preview that changes nothing (the historical behavior).
 * no ``--dry-run`` and no operator ``actor_id`` -> fail closed (read-only
   refusal). The adapter must prove operator identity before a real action runs.
-* no ``--dry-run`` with an operator ``actor_id`` -> QUEUE a real, audited intent
-  that the ArcLink action worker / enrollment provisioner executes
-  asynchronously, honoring the configured ``ARCLINK_EXECUTOR_ADAPTER`` (``fake``
-  records only). Operator Raven never runs Docker/SSH/provider commands inline;
-  it only queues intents. Live mutation stays gated by the executor adapter and
-  the per-action live proof gate.
+* no ``--dry-run`` with an operator ``actor_id`` but no explicit confirmation
+  token -> refuse. The operator must append ``confirm`` or the configured
+  approval code after reviewing a dry-run preview.
+* no ``--dry-run`` with an operator ``actor_id`` and explicit confirmation ->
+  QUEUE a real, audited intent that the ArcLink action worker / enrollment
+  provisioner executes asynchronously, honoring the configured
+  ``ARCLINK_EXECUTOR_ADAPTER`` (``fake`` records only). Operator Raven never
+  runs Docker/SSH/provider commands inline; it only queues intents. Live
+  mutation stays gated by the executor adapter and the per-action live proof
+  gate.
 """
 from __future__ import annotations
 
@@ -42,6 +46,7 @@ class OperatorRavenCommand:
     dry_run: bool
     raw_text: str
     component: str = ""
+    confirmed: bool = False
 
 
 _COMMAND_ALIASES = {
@@ -136,8 +141,8 @@ _COMMAND_ALIASES = {
 }
 
 # Commands that, outside of --dry-run, queue a real audited intent. The adapter
-# must supply an operator actor identity (and clear any configured approval
-# code) before these run for real.
+# must supply an operator actor identity plus an explicit confirmation token
+# (or clear any configured approval code) before these run for real.
 MUTATING_COMMANDS = frozenset({"pod_repair", "rollout", "host_upgrade", "pin_upgrade"})
 
 # Pinned components the operator can upgrade through Operator Raven. Mirrors the
@@ -154,11 +159,16 @@ PIN_UPGRADE_COMPONENTS = (
 
 _POD_REPAIR_ACTIONS = ("restart", "reprovision", "dns_repair")
 
-_DRY_RUN_TOKENS = {"--dry-run", "--dry_run", "dry-run", "dry_run"}
+_DRY_RUN_TOKENS = {"--dry-run", "dry-run"}
+_CONFIRM_TOKENS = {"--confirm", "--confirmed", "confirm", "confirmed"}
 
 _SECRETISH_RE = re.compile(
     r"(?i)(api[_-]?key|token|secret|password|authorization|bearer|oauth|webhook[_-]?secret)"
 )
+
+
+def _operator_token(value: str) -> str:
+    return str(value or "").strip().lower().replace("_", "-")
 
 
 def parse_operator_raven_command(text: str) -> OperatorRavenCommand | None:
@@ -175,8 +185,13 @@ def parse_operator_raven_command(text: str) -> OperatorRavenCommand | None:
     name = _COMMAND_ALIASES.get(normalized)
     if not name:
         return None
-    dry_run = any(arg.strip().lower() in _DRY_RUN_TOKENS for arg in args)
-    clean_args = tuple(arg for arg in args if arg.strip().lower() not in _DRY_RUN_TOKENS)
+    dry_run = any(_operator_token(arg) in _DRY_RUN_TOKENS for arg in args)
+    confirmed = any(_operator_token(arg) in _CONFIRM_TOKENS for arg in args)
+    clean_args = tuple(
+        arg
+        for arg in args
+        if _operator_token(arg) not in _DRY_RUN_TOKENS and _operator_token(arg) not in _CONFIRM_TOKENS
+    )
     component = _infer_pin_component(normalized, clean_args) if name == "pin_upgrade" else ""
     return OperatorRavenCommand(
         name=name,
@@ -184,6 +199,7 @@ def parse_operator_raven_command(text: str) -> OperatorRavenCommand | None:
         dry_run=dry_run,
         raw_text=raw,
         component=component,
+        confirmed=confirmed,
     )
 
 
@@ -307,6 +323,17 @@ def _require_operator_actor(actor_id: str, command_label: str) -> dict[str, Any]
     }
 
 
+def _require_operator_confirmation(command: OperatorRavenCommand) -> dict[str, Any] | None:
+    if command.confirmed:
+        return None
+    return {
+        "message": (
+            "That is a real Operator Raven action. Preview it with `--dry-run` first, then append "
+            "`confirm` or your configured operator approval code to queue it. No action was queued."
+        ),
+    }
+
+
 def _executor_adapter(env: Mapping[str, str]) -> str:
     return str(env.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower() or "disabled"
 
@@ -359,7 +386,7 @@ def _handle_status(
         f"Admin actions: {queueable} queueable via {adapter}",
         f"Queued/running operator actions: {_format_counts(action_counts)}",
         "Live actions honor ARCLINK_EXECUTOR_ADAPTER (fake = record-only); set it to local/ssh after the live proof gate.",
-        "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component> (add --dry-run to preview)",
+        "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component> (add --dry-run to preview; append confirm or the operator approval code to queue)",
         "Next: /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
         "Live proof still required for live mutation: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
     ]
@@ -689,6 +716,9 @@ def _handle_pod_repair(
                 f"Set ARCLINK_EXECUTOR_ADAPTER and clear the {gate} proof gate first. No action was queued."
             ),
         }
+    needs_confirm = _require_operator_confirmation(command)
+    if needs_confirm is not None:
+        return needs_confirm
 
     target_kind = "deployment"
     key = _action_idempotency_key(idempotency_key, kind=f"podrepair-{action_type}", target=str(deployment.get("deployment_id")))
@@ -788,6 +818,9 @@ def _handle_host_upgrade(
     blocked = _require_operator_actor(actor_id, "Host upgrade")
     if blocked is not None:
         return blocked
+    needs_confirm = _require_operator_confirmation(command)
+    if needs_confirm is not None:
+        return needs_confirm
     # Host/component upgrades use the operator-action queue, which the root
     # maintenance loop / enrollment provisioner drains through the upgrade
     # broker -- not ARCLINK_EXECUTOR_ADAPTER. There is no executor-adapter gate
@@ -850,6 +883,9 @@ def _handle_pin_upgrade(
     blocked = _require_operator_actor(actor_id, "Pin upgrade")
     if blocked is not None:
         return blocked
+    needs_confirm = _require_operator_confirmation(command)
+    if needs_confirm is not None:
+        return needs_confirm
     try:
         from arclink_control import request_operator_action
 
@@ -964,6 +1000,9 @@ def _handle_rollout(
                 f"Set ARCLINK_EXECUTOR_ADAPTER and clear the {gate} proof gate first. No rollout was queued."
             ),
         }
+    needs_confirm = _require_operator_confirmation(command)
+    if needs_confirm is not None:
+        return needs_confirm
 
     execute_local_batch = _has_execute_batch_flag(command.args)
     key = _action_idempotency_key(idempotency_key, kind="rollout", target=str(target_version))

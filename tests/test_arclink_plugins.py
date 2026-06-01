@@ -3483,6 +3483,19 @@ def test_arclink_managed_context_injects_tool_recipe_cards_on_intent_triggers() 
             )
             expect("policy question" not in share_turn["context"].lower(), share_turn["context"])
 
+            academy_turn = hook(
+                session_id="session-recipes-academy",
+                user_message="open Academy training so this Agent can become a subject matter expert on resilience engineering",
+                conversation_history=[],
+                is_first_turn=False,
+                model="test-model",
+                platform="discord",
+                sender_id="user-1",
+            )
+            expect(isinstance(academy_turn, dict) and "- academy.search-graduates:" in academy_turn.get("context", ""), f"expected academy.search-graduates recipe, got {academy_turn!r}")
+            expect("before shaping a new training track" in academy_turn["context"], academy_turn["context"])
+            expect("Captain's private strategy" in academy_turn["context"], academy_turn["context"])
+
             knowledge_memory_turn = hook(
                 session_id="session-recipes-knowledge-memory",
                 user_message="what do we know about Example Lattice?",
@@ -3683,6 +3696,30 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
             )
             expect(share_args["token"] == "tok_live_test", share_args)
 
+            academy_search_args = {"query": "resilience engineering", "limit": 5}
+            hook(
+                tool_name="mcp_arclink_mcp_academy_search_graduates",
+                args=academy_search_args,
+                session_id="session-token",
+                task_id="task-academy-search",
+                tool_call_id="call-academy-search",
+            )
+            expect(academy_search_args["token"] == "tok_live_test", academy_search_args)
+
+            academy_resource_args = {
+                "title": "Resilience engineering notes",
+                "lane_id": "web_article",
+                "summary": "Compressed notes from an approved public source.",
+            }
+            hook(
+                tool_name="academy.propose-resource",
+                args=academy_resource_args,
+                session_id="session-token",
+                task_id="task-academy-resource",
+                tool_call_id="call-academy-resource",
+            )
+            expect(academy_resource_args["token"] == "tok_live_test", academy_resource_args)
+
             canonical_args = {"pending_id": "ssotw_123"}
             hook(tool_name="ssot.status", args=canonical_args, session_id="session-token")
             expect(canonical_args["token"] == "tok_live_test", canonical_args)
@@ -3714,7 +3751,7 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
 
             os.environ["HERMES_HOME"] = str(hermes_home)
             lines = [json.loads(line) for line in telemetry_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-            expect(len(lines) == 6, lines)
+            expect(len(lines) == 8, lines)
             expect(all(record.get("tool_token_injected") is True for record in lines), lines)
             expect(
                 {record.get("tool_name") for record in lines}
@@ -3725,12 +3762,23 @@ def test_arclink_managed_context_pre_tool_call_injects_bootstrap_token() -> None
                     "mcp_arclink_mcp_ssot_write",
                     "mcp_arclink_mcp_ssot_preflight",
                     "mcp_arclink_mcp_shares_request",
+                    "mcp_arclink_mcp_academy_search_graduates",
+                    "academy.propose-resource",
                 },
                 lines,
             )
             expect(
                 {record.get("task_id") for record in lines}
-                == {"task-1", "task-knowledge", "task-2", "task-ssot-write", "task-ssot-preflight", "task-share"},
+                == {
+                    "task-1",
+                    "task-knowledge",
+                    "task-2",
+                    "task-ssot-write",
+                    "task-ssot-preflight",
+                    "task-share",
+                    "task-academy-search",
+                    "task-academy-resource",
+                },
                 lines,
             )
             telemetry_body = telemetry_path.read_text(encoding="utf-8")
@@ -3932,6 +3980,8 @@ def test_arclink_managed_context_recipe_tools_match_mcp_surface() -> None:
     expect(not missing, f"recipe tools missing from MCP server: {missing}")
     expect("knowledge.search-and-fetch" in recipe_tools, recipe_tools)
     expect("vault.search-and-fetch" in recipe_tools, recipe_tools)
+    expect("academy.search-graduates" in recipe_tools, recipe_tools)
+    expect("academy.propose-resource" in recipe_tools, recipe_tools)
     for tool_name, _, recipe in plugin._TOOL_RECIPES:
         expect(tool_name in recipe, f"recipe for {tool_name} should name its tool: {recipe}")
         expect(tool_name in mcp_server.TOOL_SCHEMAS, f"recipe tool missing schema: {tool_name}")

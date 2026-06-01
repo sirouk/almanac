@@ -1,6 +1,6 @@
 ---
 name: arclink-upgrade-orchestrator
-description: Use when Curator or the operator needs to check whether the deployed ArcLink host is behind its tracked upstream, summarize the upgrade state, and ask the operator to run `./deploy.sh upgrade`.
+description: Use when Operator Raven, Curator, or the operator needs to check whether the deployed ArcLink host is behind its tracked upstream, summarize the upgrade state, or queue/run the guarded upgrade path.
 ---
 
 # ArcLink Upgrade Orchestrator
@@ -12,7 +12,7 @@ Use this skill when:
 - the operator wants a concise rollout checklist for upgrading ArcLink itself
 - you need to confirm what commit is deployed and what upstream commit is newer
 
-This skill is for the shared host and Curator only.
+This skill is for the control node, Operator Raven, and Curator only.
 
 It is not for user-agent refresh work.
 
@@ -21,7 +21,7 @@ deployment config such as `arclink.env`.
 
 ## Authority boundary
 
-Curator does not execute upgrades.
+Curator does not execute upgrades directly.
 
 The Curator process runs as the operator service user (non-root) and has no
 `sudo` rights. It can:
@@ -29,17 +29,21 @@ The Curator process runs as the operator service user (non-root) and has no
 - detect that upstream is ahead of the deployed commit
 - queue exactly one operator notification per new upstream SHA
 - summarize the upgrade state and ask the operator to run the upgrade
+- route a verified Operator Raven `/upgrade --dry-run` preview or `/upgrade confirm`
+  request into the audited operator-action queue
 - verify the post-upgrade health state once the operator confirms
 
 It cannot:
 
-- run `./deploy.sh upgrade` on its own
+- run `./deploy.sh upgrade` inline from chat
 - modify systemd units, files under `/etc`, or files outside the ArcLink
   service-user tree
 
 The privileged upgrade apply path is `./deploy.sh upgrade`, which
-self-reexecutes under `sudo` via `--apply-upgrade`. Only an operator with
-sudo on the host can run it.
+self-reexecutes under `sudo` via `--apply-upgrade`. Operator Raven may queue
+the same intent only from the configured operator surface after a dry-run and
+explicit confirmation; the root maintenance loop performs the privileged apply.
+Manual CLI remains the canonical break-glass path.
 
 ## First checks
 
@@ -62,8 +66,9 @@ checkout you happen to be standing in.
    - tracked upstream repo and branch
    - upstream head commit
    - whether an upgrade is actually available
-3. Ask the operator to run `./deploy.sh upgrade` on the host when they are
-   ready. Do not claim you will run it yourself.
+3. If the operator is in chat, recommend `/upgrade --dry-run`, then `/upgrade confirm`
+   or the configured operator approval code when ready. If the operator is on
+   the host, `./deploy.sh upgrade` is equivalent and remains canonical.
 4. After the operator confirms the upgrade finished, run `./deploy.sh health`
    to verify.
 5. Report only the outcome that matters: upgraded or not, current commit, and
@@ -83,6 +88,13 @@ Host upgrade (operator-only, requires sudo on the host):
 ./deploy.sh upgrade
 ```
 
+Operator Raven preview and queued apply:
+
+```text
+/upgrade --dry-run
+/upgrade confirm
+```
+
 Post-upgrade verification:
 
 ```bash
@@ -91,15 +103,17 @@ Post-upgrade verification:
 
 ## Guardrails
 
-- Do not claim Curator ran or will run the upgrade. Curator nags; the operator
-  executes.
+- Do not claim Curator ran or will run the upgrade inline. Curator/Raven can
+  queue an audited action only from the verified operator surface after explicit
+  confirmation.
 - Do not route enrolled user bots into this workflow. It is operator-only.
 - Do not use a local developer checkout (for example `~/arclink` on a laptop)
   as the upgrade source for production.
 - Prefer the configured `ARCLINK_UPSTREAM_REPO_URL` and `ARCLINK_UPSTREAM_BRANCH`.
 - If you are talking to the operator through Telegram, Discord, or another remote
-  channel, ask them to run `./deploy.sh upgrade` on the host. Do not assume a
-  host-side TUI session is available to you.
+  channel, prefer Operator Raven `/upgrade --dry-run` followed by `/upgrade confirm`
+  or the configured approval code. Do not assume a host-side TUI session is
+  available.
 - Always ask the operator to follow up with `./deploy.sh health` after an
   upgrade, and surface any remaining failures.
 - If `upgrade check` says the deployed release state is missing, say that

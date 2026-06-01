@@ -386,6 +386,17 @@ def test_academy_continuing_education_is_no_write() -> None:
 def _graduate(ap, conn, program_id, user_id, deployment_id):
     t = ap.enroll_academy_trainee(conn, program_id=program_id, user_id=user_id, deployment_id=deployment_id)
     s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by=user_id)
+    program = ap.get_academy_program(conn, program_id) or {}
+    lane = next((item for item in (program.get("source_lanes") or []) if item != "organization_private"), "web_article")
+    ap.record_academy_resource_proposal(
+        conn,
+        deployment_id=deployment_id,
+        lane_id=lane,
+        title=f"{program_id} trainer-reviewed source for {deployment_id}",
+        origin_url=f"https://example.test/academy/{program_id}/{deployment_id}",
+        summary="Compressed public-lane source notes for the Trainer-reviewed Academy capsule.",
+        proposed_by="test-agent",
+    )
     ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor=user_id, graduate=True)
     return t
 
@@ -413,6 +424,7 @@ def test_academy_apply_is_fail_closed() -> None:
         authd = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
         expect(authd["status"] == "handoff_to_hermes_home", str(authd))
         expect(authd["writes_enabled"] is True, "authorized live apply hands off to the imparting seam")
+        expect(authd["academy_trainer_review_ready"] is True, str(authd))
         expect(authd["mutation_performed"] is False, "control plane itself performs no filesystem write")
         print("PASS test_academy_apply_is_fail_closed")
     finally:

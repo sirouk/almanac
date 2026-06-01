@@ -267,12 +267,15 @@ async def main() -> None:
                         "This Operator Raven action runs for real and must come from the operator channel "
                         "with an identified operator. It was refused."
                     )
-                code_ok, dispatch_text = strip_operator_approval_code(content, operator_approval_code(os.environ))
+                approval_code = operator_approval_code(os.environ)
+                code_ok, dispatch_text = strip_operator_approval_code(content, approval_code)
                 if not code_ok:
                     return (
                         "Operator code required for this action. Append your operator code, "
                         "e.g. /upgrade <operator-code> or /pod_repair <deployment> restart <operator-code>."
                     )
+                if approval_code:
+                    dispatch_text = f"{dispatch_text} --confirm"
             with connect_db(cfg) as conn:
                 result = dispatch_operator_raven_command(
                     conn,

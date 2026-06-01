@@ -471,9 +471,10 @@ Telegram registered command menus must use underscore names because Telegram
 rejects hyphens in BotCommand entries. Keep aliases such as `/retry-contact`
 working when useful, but register menu commands as `/retry_contact`,
 `/setup_backup`, `/verify_notion`, and `/ssh_key`. Operator Curator channels
-also expose `/upgrade` to queue an idempotent host upgrade/repair. Curator
-startup refreshes Telegram command menus, and Discord startup syncs app
-commands.
+also expose `/upgrade` to queue an idempotent host upgrade/repair only after
+the operator uses `--dry-run` and then supplies `confirm` or the configured
+operator approval code. Curator startup refreshes Telegram command menus, and
+Discord startup syncs app commands.
 Public Raven Telegram chats are different from per-user Hermes Agent bots: after a
 Telegram public channel has an active ArcLink deployment, the active Hermes Agent owns
 the bare slash command menu and Raven controls move behind a selected Raven

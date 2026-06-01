@@ -201,11 +201,12 @@ in-stack **operator Hermes agent** (`python/arclink_operator_agent.py`).
 
 - **Operator Raven queues real, audited, identity-gated actions** — it is not
   read-only or dry-run-only. Mutating commands (`pod_repair`, `rollout`,
-  `host_upgrade`, `pin_upgrade`) use a three-mode contract: `--dry-run` previews
+  `host_upgrade`, `pin_upgrade`) use a four-mode contract: `--dry-run` previews
   and changes nothing; no `--dry-run` with no operator actor fails closed; no
-  `--dry-run` with an operator actor queues a real intent. All mutating commands
-  require the operator approval code (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`
-  or `ARCLINK_OPERATOR_APPROVAL_CODE`), verified with a constant-time compare.
+  `--dry-run` with an operator actor but no second confirmation fails closed; no
+  `--dry-run` with actor plus `confirm` or the configured operator approval code
+  queues a real intent. Approval codes (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`
+  or `ARCLINK_OPERATOR_APPROVAL_CODE`) are verified with a constant-time compare.
   Read commands (`status`, `agents`, `fleet_list`, `worker_probe` (dry-run
   only), `user_lookup`, `academy_status`, `academy_roster`, `upgrade_check`,
   `action_status`) never mutate. Raven only *queues* intents; live mutation stays gated by

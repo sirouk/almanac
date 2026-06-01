@@ -1098,14 +1098,14 @@ def _operator_raven_intro_reply() -> str:
         "- /upgrade_check - read upgrade availability\n"
         "- /action_status [id] - track queued actions and rollouts\n"
         "- /academy_status <query> - read Academy training state\n\n"
-        "Action commands (queue real, audited intents; add --dry-run to preview first):\n"
+        "Action commands (queue real, audited intents; add --dry-run to preview first, then append confirm or your approval code):\n"
         "- /pod_repair <deployment-id> [restart|reprovision|dns_repair]\n"
         "- /rollout <target-version> [--batch-size N]\n"
         "- /upgrade - apply the ArcLink host/control upgrade and repair\n"
         "- /pin_upgrade <component> - upgrade hermes, qmd, nextcloud, postgres, redis, nvm, or node\n\n"
         "Live execution honors ARCLINK_EXECUTOR_ADAPTER (fake = record-only) and the "
-        "per-action live proof gate. If an operator approval code is configured, append it "
-        "to action commands, e.g. /upgrade <operator-code>.\n\n"
+        "per-action live proof gate. Without a configured approval code, append confirm "
+        "to action commands, e.g. /upgrade confirm.\n\n"
         "You can also just talk to me; I route your message to your Hermes operator agent."
     )
 
@@ -1162,7 +1162,8 @@ def _handle_operator_telegram_update(
         actor_id = f"telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}"
         message_id = str(parsed.get("message_id") or parsed.get("telegram_message_id") or "").strip()
         if operator_raven_command_is_mutating(dispatch_text):
-            code_ok, dispatch_text = strip_operator_approval_code(dispatch_text, operator_approval_code(env))
+            approval_code = operator_approval_code(env)
+            code_ok, dispatch_text = strip_operator_approval_code(dispatch_text, approval_code)
             if not code_ok:
                 return {
                     "chat_id": str(parsed.get("chat_id") or ""),
@@ -1176,6 +1177,8 @@ def _handle_operator_telegram_update(
                     "callback_message_id": str(parsed.get("callback_message_id") or ""),
                     "command_scope": None,
                 }
+            if approval_code:
+                dispatch_text = f"{dispatch_text} --confirm"
         dispatch_command = _telegram_command_token(dispatch_text.split(maxsplit=1)[0])
         upgrade_commands = {"/upgrade_check", "/upgrade_hermes", "/hermes_upgrade"}
         upgrade_runner = None

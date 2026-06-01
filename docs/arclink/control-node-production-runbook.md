@@ -142,12 +142,14 @@ Read commands (never mutate): `status`, `agents`, `fleet_list`, `worker_probe`
 upgrade-check runner is injected), and `action_status`.
 
 Mutating commands (`MUTATING_COMMANDS = {pod_repair, rollout, host_upgrade,
-pin_upgrade}`) use a three-mode contract:
+pin_upgrade}`) use a four-mode contract:
 
 1. `--dry-run` previews and changes nothing.
 2. No `--dry-run` and no verified operator identity fails closed (read-only
    refusal).
-3. No `--dry-run` with a verified operator identity queues a real, audited
+3. No `--dry-run` with verified operator identity but no `confirm`/approval code
+   fails closed and queues nothing.
+4. No `--dry-run` with a verified operator identity plus confirmation queues a real, audited
    intent that the action worker or the enrollment-provisioner root maintenance
    loop executes asynchronously.
 
@@ -157,16 +159,17 @@ Even when queued, live mutation stays gated by `ARCLINK_EXECUTOR_ADAPTER`
 (PG-UPGRADE/PG-HERMES), `host_upgrade`/`pin_upgrade` (operator-upgrade-broker,
 risk-accepted under GAP-019).
 
-### Operator Approval Code
+### Operator Confirmation
 
-All Operator Raven mutating commands require an operator approval code on the
-originating channel. The code is read from
+All Operator Raven mutating commands require verified operator identity plus a
+second confirmation. Operators should run `--dry-run` first. If no operator
+approval code is configured, append the literal `confirm` token, such as
+`/upgrade confirm`. If a code is configured, it is read from
 `ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or `ARCLINK_OPERATOR_APPROVAL_CODE`
-(first non-blank wins; blank means no code required) and is verified with a
-constant-time compare (`hmac.compare_digest`) on the trailing token before the
-command parser ever sees it. A missing or wrong code fails closed with an
-"Operator code required for this action" response and queues nothing. Keep the
-approval code in private state only; never commit it.
+(first non-blank wins) and verified with a constant-time compare
+(`hmac.compare_digest`) on the trailing token before the command parser ever
+sees it. A missing/wrong code or missing `confirm` fails closed and queues
+nothing. Keep the approval code in private state only; never commit it.
 
 ### Two Action Queues
 

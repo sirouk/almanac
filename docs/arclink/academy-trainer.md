@@ -69,7 +69,8 @@ writes. Live source acquisition and provider curation remain behind
 3. **Enter Academy Mode** (sticky). Raven gathers the Captain's role, subject,
    depth, boundaries, outside resources, and weekly refresh expectations one
    turn at a time, then opens the selected Agent's sticky mode. The Agent uses
-   the `arclink-academy` skill to search approved rails and submit compressed
+   the `arclink-academy` skill to call `academy.search-graduates` before shaping
+   a new specialist track, then searches approved rails and submits compressed
    resource proposals through `academy.propose-resource`.
 4. **End the mode** when satisfied -> Trainer deep dive -> canon/apply. Closing
    the mode queues the Academy Trainer to review, dedupe, enrich, and compress
@@ -212,10 +213,12 @@ swappable section that never touches the human SOUL body or the org-profile bloc
 `stage_academy_apply` stages the rendered `academy_soul_section`. The
 `academy_apply` action worker materializes it only when `writes_enabled=True`
 (adapter `local`/`ssh`/`live`, `ARCLINK_ACADEMY_APPLY_LIVE=1`, fresh staged
-contract, deployment target): it merges the section into `SOUL.md`, writes
-`state/arclink-academy-apply.json` mode `0600`, and updates the trainee's
-`last_applied_capsule_version`. Unauthorized/record-only runs keep
-`mutation_performed=false`.
+contract, deployment target, and a Trainer-reviewed capsule present): it merges
+the section into `SOUL.md`, writes `state/arclink-academy-apply.json` mode
+`0600`, and updates the trainee's `last_applied_capsule_version`. The receipt
+records `academy_trainer_review_ready`, `academy_trainer_reviewed_at`, and the
+live Trainer status. Unauthorized, record-only, stale, or missing-Trainer runs
+keep `mutation_performed=false`.
 
 **Cross-OPERATOR sharing gate.** Within one ArcLink instance the `redacted_public`
 corpus is shared across the operator's captains/crew. A future cross-*operator*

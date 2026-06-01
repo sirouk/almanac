@@ -6086,6 +6086,8 @@ def test_docker_operator_commands_are_present() -> None:
     expect("Refreshed deployment-managed Hermes plugins" in body, body)
     expect("docker_repair_deployment_dashboard_plugin_mounts()" in body, body)
     expect("run-hermes-dashboard-proxy.sh" in body, body)
+    dashboard_proxy = read("bin/run-hermes-dashboard-proxy.sh")
+    expect("yaml.safe_load" in dashboard_proxy and "config.plugins.enabled missing" in dashboard_proxy, dashboard_proxy)
     expect("DRIVE_ROOT" in body and "CODE_WORKSPACE_ROOT" in body, body)
     expect("TERMINAL_ALLOW_ROOT" in body and "HERMES_TUI_DIR" in body, body)
     expect("ARCLINK_DASHBOARD_THEME" in body and "ARCLINK_DASHBOARD_AGENT_LABEL" in body, body)

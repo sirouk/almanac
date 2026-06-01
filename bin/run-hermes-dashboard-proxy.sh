@@ -41,6 +41,18 @@ ready_file = Path(sys.argv[3])
 required = {"drive", "code", "terminal"}
 missing: list[str] = []
 
+try:
+    import yaml
+except Exception:
+    yaml = None
+
+
+def string_set(value: object) -> set[str]:
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return set()
+
+
 def sequence_for(text: str, parent: str, child: str) -> set[str]:
     values: set[str] = set()
     parent_indent: int | None = None
@@ -54,7 +66,7 @@ def sequence_for(text: str, parent: str, child: str) -> set[str]:
         indent = len(raw) - len(raw.lstrip(" "))
         stripped = line.strip()
         if in_child:
-            if indent > int(child_indent or 0) and stripped.startswith("-"):
+            if indent >= int(child_indent or 0) and stripped.startswith("-"):
                 values.add(stripped[1:].strip().strip("\"'"))
                 continue
             in_child = False
@@ -89,8 +101,23 @@ for name in sorted(required):
 config_path = hermes_home / "config.yaml"
 if config_path.is_file():
     text = config_path.read_text(encoding="utf-8", errors="replace")
-    enabled = sequence_for(text, "plugins", "enabled")
-    hidden = sequence_for(text, "dashboard", "hidden_plugins")
+    enabled: set[str] = set()
+    hidden: set[str] = set()
+    if yaml is not None:
+        try:
+            parsed = yaml.safe_load(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            plugins = parsed.get("plugins")
+            dashboard = parsed.get("dashboard")
+            if isinstance(plugins, dict):
+                enabled = string_set(plugins.get("enabled"))
+            if isinstance(dashboard, dict):
+                hidden = string_set(dashboard.get("hidden_plugins"))
+    if not enabled:
+        enabled = sequence_for(text, "plugins", "enabled")
+        hidden = sequence_for(text, "dashboard", "hidden_plugins")
     if not required <= enabled:
         missing.append("config.plugins.enabled missing " + ",".join(sorted(required - enabled)))
     blocked = sorted(required & hidden)

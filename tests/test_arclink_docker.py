@@ -6092,6 +6092,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("dashboard_sso_secret" in body and "ARCLINK_DASHBOARD_SSO_SECRET_FILE" in body, body)
     expect("ARCLINK_CREW_DASHBOARDS_JSON" in body and "_crew_dashboard_links" in body, body)
     expect("sso_secret_for_subject" in body and "secrets.token_urlsafe(32)" in body, body)
+    expect("os.chown(path, owner.st_uid, owner.st_gid)" in body and "path.chmod(0o600)" in body, body)
     expect("default_arclink_agent_profile" in body and "deployment_identities = load_deployment_identities()" in body, body)
     expect('"VAULT_DIR": "/srv/vault"' in body and '"/srv/vault/Agents_KB/hermes-agent-docs"' in body, body)
     expect('services.pop("code-server", None)' in body, body)
@@ -6279,6 +6280,11 @@ docker_repair_deployment_dashboard_plugin_mounts
             secret_path = deployment_root / "config" / "secrets" / "dashboard_sso_secret"
             secrets_by_deployment[deployment_id] = secret_path.read_text(encoding="utf-8").strip()
             expect(secret_path.stat().st_mode & 0o777 == 0o600, f"secret permissions not narrowed for {secret_path}")
+            expect(
+                (secret_path.stat().st_uid, secret_path.stat().st_gid)
+                == ((deployment_root / "config" / "secrets").stat().st_uid, (deployment_root / "config" / "secrets").stat().st_gid),
+                f"secret ownership must follow the private secrets directory for container readability: {secret_path}",
+            )
             expect("code-server" not in compose["services"], json.dumps(compose, sort_keys=True))
             expect("code_server_password" not in compose["secrets"], json.dumps(compose["secrets"], sort_keys=True))
             expect(compose["secrets"]["dashboard_sso_secret"] == {"file": str(secret_path)}, str(compose["secrets"]))

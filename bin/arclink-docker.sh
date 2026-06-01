@@ -1027,6 +1027,7 @@ docker_repair_deployment_dashboard_plugin_mounts() {
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -1130,19 +1131,23 @@ def secret_file_first_line(path: Path) -> str:
 def ensure_secret_file(path: Path, value: str) -> bool:
     if not value:
         return False
-    current = secret_file_first_line(path)
-    if current == value:
+    def protect() -> None:
+        try:
+            owner = path.parent.stat()
+            os.chown(path, owner.st_uid, owner.st_gid)
+        except OSError:
+            pass
         try:
             path.chmod(0o600)
         except OSError:
             pass
+    current = secret_file_first_line(path)
+    if current == value:
+        protect()
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value + "\n", encoding="utf-8")
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    protect()
     return True
 
 

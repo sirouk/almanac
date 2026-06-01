@@ -20,12 +20,12 @@ const spaceGrotesk = Space_Grotesk({
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_ARCLINK_SITE_URL || "https://arclink.online"),
   title: "ArcLink - Raven Runs Your Operations",
-  description: "Deploy autonomous ArcLink agents with Raven for research, data movement, reporting, follow-up, and operational workflows.",
+  description: "Deploy autonomous Hermes Agents with ArcLink skills for research, data movement, reporting, follow-up, and operational workflows.",
   applicationName: "ArcLink",
   manifest: "/manifest.webmanifest",
   openGraph: {
     title: "ArcLink - Raven Runs Your Operations",
-    description: "Deploy autonomous ArcLink agents that connect to your tools and handle recurring operations.",
+    description: "Deploy autonomous Hermes Agents with ArcLink skills that connect to your tools and handle recurring operations.",
     images: ["/marketing/Arclink-share.png"],
   },
   appleWebApp: {

@@ -1469,7 +1469,7 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     if not _public_agent_quiet_fallback_enabled():
         message = f"{label} did not answer through the Hermes gateway bridge yet.\n\n{_bridge_error}"
         if helm:
-            message += f"\n\nHelm is still available: {helm}"
+            message += f"\n\nHermes Dashboard is still available: {helm}"
         return _deliver_public_bot_user(
             cfg,
             channel_kind=channel_kind,
@@ -1483,7 +1483,7 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     if error:
         message = f"{label} did not answer through Raven yet.\n\n{error}"
         if helm:
-            message += f"\n\nHelm is still available: {helm}"
+            message += f"\n\nHermes Dashboard is still available: {helm}"
     else:
         message = f"{label}:\n\n{response}"
     return _deliver_public_bot_user(

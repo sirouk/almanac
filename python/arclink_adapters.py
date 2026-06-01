@@ -110,7 +110,7 @@ class LiveStripeClient:
             "custom_text": {
                 "submit": {
                     "message": (
-                        "Raven is on the line. The moment payment clears, your ArcLink agent joins the launch queue."
+                        "Raven is on the line. The moment payment clears, your Hermes Agent joins the launch queue."
                     )
                 }
             },

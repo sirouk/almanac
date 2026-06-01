@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "ArcLink",
     short_name: "ArcLink",
-    description: "Raven deploys autonomous ArcLink agents that run recurring operations.",
+    description: "Raven deploys autonomous Hermes Agents with ArcLink skills for recurring operations.",
     start_url: "/",
     scope: "/",
     display: "standalone",

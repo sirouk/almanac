@@ -257,7 +257,7 @@ def project_arclink_deployment_identity_context(
     theme_profile = _deployment_theme_profile(metadata)
     payload.update(
         {
-            "agent_label": agent_label or "your ArcLink agent",
+            "agent_label": agent_label or "your Hermes Agent",
             "agent_title": agent_title,
             "agent_personality": str(metadata.get("agent_personality") or payload.get("agent_personality") or "").strip(),
             "dashboard_theme": str(metadata.get("dashboard_theme") or payload.get("dashboard_theme") or theme_profile["dashboard_theme"]).strip(),
@@ -485,6 +485,16 @@ def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata:
     return f"secret://arclink/dashboard/{deployment_id}/password"
 
 
+def dashboard_sso_secret_ref(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
+    explicit = str(metadata.get("dashboard_sso_secret_ref") or "").strip()
+    if explicit:
+        return explicit
+    clean_user = _safe_segment(user_id)
+    if clean_user:
+        return f"secret://arclink/dashboard/users/{clean_user}/sso-session-secret"
+    return f"secret://arclink/dashboard/{deployment_id}/sso-session-secret"
+
+
 def _render_secret_refs(
     deployment_id: str,
     user_id: str,
@@ -504,6 +514,7 @@ def _render_secret_refs(
     return {
         **provider_key,
         "dashboard_password": dashboard_password_secret_ref(deployment_id=deployment_id, user_id=user_id, metadata=metadata),
+        "dashboard_sso_secret": dashboard_sso_secret_ref(deployment_id=deployment_id, user_id=user_id, metadata=metadata),
         "nextcloud_admin_password": _secret_ref(
             metadata,
             "nextcloud_admin_password_ref",
@@ -600,6 +611,92 @@ def _clean_tailnet_service_ports(value: Any) -> dict[str, int]:
     return ports
 
 
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(str(value or "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _crew_dashboard_links(
+    conn: sqlite3.Connection,
+    *,
+    current_deployment_id: str,
+    user_id: str,
+    base_domain: str,
+    ingress_mode: str,
+    tailscale_dns_name: str,
+    tailscale_host_strategy: str,
+    current_metadata: Mapping[str, Any],
+    limit: int = 24,
+) -> list[dict[str, Any]]:
+    current_session_id = str(current_metadata.get("onboarding_session_id") or "").strip()
+    current_primary = str(current_metadata.get("bundle_primary_deployment_id") or current_deployment_id).strip()
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT deployment_id, user_id, prefix, base_domain, agent_name, agent_title,
+                   status, metadata_json, created_at
+            FROM arclink_deployments
+            WHERE user_id = ?
+            ORDER BY created_at, deployment_id
+            """,
+            (user_id,),
+        ).fetchall()
+    ]
+    links: list[dict[str, Any]] = []
+    for row in rows:
+        deployment_id = str(row.get("deployment_id") or "").strip()
+        try:
+            metadata = _json_loads(str(row.get("metadata_json") or "{}"))
+        except Exception:
+            metadata = {}
+        row_session_id = str(metadata.get("onboarding_session_id") or "").strip()
+        row_primary = str(metadata.get("bundle_primary_deployment_id") or deployment_id).strip()
+        if current_session_id:
+            if deployment_id != current_deployment_id and row_session_id != current_session_id:
+                continue
+        elif current_primary:
+            if deployment_id != current_deployment_id and row_primary != current_primary:
+                continue
+        status = str(row.get("status") or "").strip()
+        if status in {"archived", "deleted", "retired"}:
+            continue
+        prefix = str(row.get("prefix") or "").strip()
+        if not prefix:
+            continue
+        row_base_domain = str(row.get("base_domain") or base_domain).strip() or base_domain
+        row_tailnet_ports = _clean_tailnet_service_ports(metadata.get("tailnet_service_ports"))
+        urls = arclink_access_urls(
+            prefix=prefix,
+            base_domain=row_base_domain,
+            ingress_mode=ingress_mode,
+            tailscale_dns_name=tailscale_dns_name,
+            tailscale_host_strategy=tailscale_host_strategy,
+            tailnet_service_ports=row_tailnet_ports,
+        )
+        label = str(row.get("agent_name") or "").strip() or f"Hermes Agent {_int_or_zero(metadata.get('bundle_agent_index')) or len(links) + 1}"
+        theme = _deployment_theme_profile(metadata)
+        links.append(
+            {
+                "deployment_id": deployment_id,
+                "label": label,
+                "title": str(row.get("agent_title") or "").strip(),
+                "status": status,
+                "url": str(urls.get("hermes") or urls.get("dashboard") or "").strip(),
+                "dashboard_url": str(urls.get("dashboard") or "").strip(),
+                "hermes_url": str(urls.get("hermes") or "").strip(),
+                "current": deployment_id == current_deployment_id,
+                "bundle_agent_index": _int_or_zero(metadata.get("bundle_agent_index")),
+                "bundle_agent_count": _int_or_zero(metadata.get("bundle_agent_count")),
+                "theme_label": theme["theme_label"],
+            }
+        )
+    links.sort(key=lambda item: (_int_or_zero(item.get("bundle_agent_index")) or 9999, str(item.get("label") or ""), str(item.get("deployment_id") or "")))
+    return links[: max(1, int(limit or 24))]
+
+
 def _url_hostport(value: str) -> str:
     text = str(value or "").strip()
     if not text.startswith("https://"):
@@ -687,19 +784,23 @@ def _service(
     volumes: list[dict[str, str]] | None = None,
     ports: list[str] | None = None,
     labels: Mapping[str, str] | None = None,
-    depends_on: list[str] | None = None,
+    depends_on: list[str] | Mapping[str, Any] | None = None,
     secrets: list[dict[str, str]] | None = None,
     deploy: Mapping[str, Any] | None = None,
     healthcheck: Mapping[str, str] | None = None,
     networks: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if isinstance(depends_on, Mapping):
+        rendered_depends_on: list[str] | dict[str, Any] = dict(depends_on)
+    else:
+        rendered_depends_on = list(depends_on or [])
     svc: dict[str, Any] = {
         "image": image,
         "command": command,
         "environment": dict(environment),
         "volumes": list(volumes or []),
         "labels": dict(labels or {}),
-        "depends_on": list(depends_on or []),
+        "depends_on": rendered_depends_on,
         "secrets": list(secrets or []),
     }
     if ports:
@@ -802,6 +903,7 @@ def _render_services(
 
     _limits = ARCLINK_DEFAULT_RESOURCE_LIMITS.get
     _hc = ARCLINK_DEFAULT_HEALTHCHECKS.get
+    installer_complete_depends_on = {"managed-context-install": {"condition": "service_completed_successfully"}}
 
     return {
         "dashboard": _service(
@@ -825,7 +927,10 @@ def _render_services(
                 linked_resources_volume,
                 fleet_shared_volume,
             ],
-            depends_on=["qmd-mcp", "managed-context-install"],
+            depends_on={
+                "qmd-mcp": {"condition": "service_started"},
+                "managed-context-install": {"condition": "service_completed_successfully"},
+            },
             secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
             deploy=_limits("hermes-gateway"),
             networks=_control_network(prefix, "hermes-gateway"),
@@ -844,7 +949,7 @@ def _render_services(
             ],
             ports=hermes_host_ports,
             labels=labels["hermes"],
-            depends_on=["managed-context-install"],
+            depends_on=installer_complete_depends_on,
             secrets=[
                 {"source": provider_secret_name, "target": secret_target[provider_secret_name]},
                 {"source": "share_request_broker_token", "target": secret_target["share_request_broker_token"]},
@@ -968,7 +1073,7 @@ def _render_services(
             command=["./bin/docker-job-loop.sh", "fleet-share-sync", "120", "python3", "python/arclink_fleet_share.py", "sync-local"],
             environment=fleet_share_sync_env,
             volumes=fleet_share_sync_volumes,
-            depends_on=["managed-context-install"],
+            depends_on=installer_complete_depends_on,
             deploy=_limits("fleet-share-sync"),
         ),
         "managed-context-install": _service(
@@ -1005,6 +1110,10 @@ def _render_services(
                 "ARCLINK_MODEL_REASONING_DEFAULT": env["ARCLINK_MODEL_REASONING_DEFAULT"],
                 "ARCLINK_CHUTES_API_KEY_FILE": secret_target[provider_secret_name],
                 "ARCLINK_DASHBOARD_PASSWORD_FILE": secret_target["dashboard_password"],
+                "ARCLINK_DASHBOARD_SSO_SECRET_FILE": secret_target["dashboard_sso_secret"],
+                "ARCLINK_DASHBOARD_SSO_SUBJECT": env["ARCLINK_USER_ID"],
+                "ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN": env["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"],
+                "ARCLINK_CREW_DASHBOARDS_JSON": env.get("ARCLINK_CREW_DASHBOARDS_JSON", "[]"),
             },
             volumes=[
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
@@ -1013,6 +1122,7 @@ def _render_services(
             secrets=[
                 {"source": provider_secret_name, "target": secret_target[provider_secret_name]},
                 {"source": "dashboard_password", "target": secret_target["dashboard_password"]},
+                {"source": "dashboard_sso_secret", "target": secret_target["dashboard_sso_secret"]},
             ],
             deploy=_limits("managed-context-install"),
         ),
@@ -1134,6 +1244,16 @@ def render_arclink_provisioning_intent(
         tailscale_host_strategy=clean_tailscale_strategy,
         tailnet_service_ports=tailnet_service_ports,
     )
+    crew_dashboard_links = _crew_dashboard_links(
+        conn,
+        current_deployment_id=deployment_id,
+        user_id=str(deployment["user_id"]),
+        base_domain=clean_base_domain,
+        ingress_mode=clean_ingress_mode,
+        tailscale_dns_name=clean_tailscale_dns_name,
+        tailscale_host_strategy=clean_tailscale_strategy,
+        current_metadata=metadata,
+    )
     fleet_share_hub_host_ref = _fleet_share_hub_host_ref(source_env, user_id=str(deployment["user_id"]))
     fleet_share_hub_container_ref = _fleet_share_hub_container_ref(fleet_share_hub_host_ref)
     notion_callback_path = _notion_callback_path(
@@ -1181,6 +1301,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_DASHBOARD_HOST": hostnames["dashboard"],
         "ARCLINK_DASHBOARD_USERNAME": str(user.get("email") or deployment["user_id"]),
         "ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS": "1",
+        "ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN": clean_base_domain if clean_ingress_mode == "domain" and "." in clean_base_domain and clean_base_domain != "localhost" else "",
+        "ARCLINK_CREW_DASHBOARDS_JSON": json.dumps(crew_dashboard_links, separators=(",", ":"), sort_keys=True),
         "ARCLINK_FILES_HOST": hostnames["files"],
         "ARCLINK_CODE_HOST": hostnames["code"],
         "ARCLINK_HERMES_HOST": hostnames["hermes"],
@@ -1313,6 +1435,7 @@ def render_arclink_provisioning_intent(
                 for name in (
                     provider_secret_name,
                     "dashboard_password",
+                    "dashboard_sso_secret",
                     "telegram_bot_token",
                     "discord_bot_token",
                     "notion_token",

@@ -18,15 +18,24 @@ type ResourceUrls = {
   code?: string;
   hermes?: string;
 };
+type DeploymentStatus = {
+  deployment_id?: string;
+  agent_label?: string;
+  agent_title?: string;
+  bundle_agent_index?: number;
+  bundle_agent_count?: number;
+  ready?: boolean;
+  status?: string;
+  access?: { urls?: ResourceUrls };
+};
 type CheckoutStatusData = {
   entitlement_state?: string;
   display_name?: string;
   channel?: string;
-  deployment?: {
-    ready?: boolean;
-    status?: string;
-    access?: { urls?: ResourceUrls };
-  } | null;
+  deployment?: DeploymentStatus | null;
+  deployments?: DeploymentStatus[];
+  agent_count?: number;
+  ready_count?: number;
 };
 
 export default function CheckoutSuccessPage() {
@@ -66,8 +75,9 @@ function CheckoutSuccessContent() {
   const [channel, setChannel] = useState("");
   const [sessionClaimed, setSessionClaimed] = useState(false);
   const [deploymentReady, setDeploymentReady] = useState(false);
-  const [deploymentStatus, setDeploymentStatus] = useState("");
-  const [resourceUrls, setResourceUrls] = useState<ResourceUrls>({});
+  const [deployments, setDeployments] = useState<DeploymentStatus[]>([]);
+  const [agentCount, setAgentCount] = useState(1);
+  const [readyCount, setReadyCount] = useState(0);
   const [pollCount, setPollCount] = useState(0);
 
   useEffect(() => {
@@ -117,14 +127,35 @@ function CheckoutSuccessContent() {
           const data = res.data as CheckoutStatusData;
           if (data.display_name) setDisplayName(data.display_name);
           if (data.channel) setChannel(data.channel);
-          const deployment = data.deployment || null;
-          setDeploymentStatus(deployment?.status || "");
-          setResourceUrls(deployment?.access?.urls || {});
+          const nextDeployments = data.deployments?.length
+            ? data.deployments
+            : data.deployment
+              ? [data.deployment]
+              : [];
+          const expectedCount =
+            data.agent_count ||
+            nextDeployments.find((deployment) => deployment.bundle_agent_count)?.bundle_agent_count ||
+            nextDeployments.length ||
+            1;
+          const nextReadyCount = data.ready_count ?? nextDeployments.filter((deployment) => {
+            const urls = deployment.access?.urls || {};
+            return deployment.ready && (urls.hermes || urls.dashboard);
+          }).length;
+          setDeployments(nextDeployments);
+          setAgentCount(expectedCount);
+          setReadyCount(nextReadyCount);
           if (data.entitlement_state === "paid") {
             setStatus("paid");
             claimSession();
           }
-          if (deployment?.ready && (deployment.access?.urls?.hermes || deployment.access?.urls?.dashboard)) {
+          const allExpectedDashboardsReady =
+            nextDeployments.length >= expectedCount &&
+            nextDeployments.length > 0 &&
+            nextDeployments.every((deployment) => {
+              const urls = deployment.access?.urls || {};
+              return deployment.ready && (urls.hermes || urls.dashboard);
+            });
+          if (allExpectedDashboardsReady) {
             setDeploymentReady(true);
           } else {
             setPollCount((c) => c + 1);
@@ -148,9 +179,12 @@ function CheckoutSuccessContent() {
   const timedOut = pollCount >= MAX_POLLS && !deploymentReady;
   const waitingForResources = confirmed && !deploymentReady && !timedOut;
   const channelLabel = channel === "telegram" ? "Telegram" : channel === "discord" ? "Discord" : "";
-  const hermesUrl = resourceUrls.hermes || "";
-  const helmUrl = resourceUrls.dashboard || "";
-  const primaryResourceUrl = hermesUrl || helmUrl;
+  const agentWord = agentCount === 1 ? "Hermes Agent" : "Hermes Agents";
+  const statusSummary = deployments
+    .map((deployment) => deployment.status)
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index)
+    .join(", ");
 
   return (
     <main className="flex min-h-screen items-center justify-center px-6">
@@ -159,7 +193,7 @@ function CheckoutSuccessContent() {
           {confirmed ? "Payment confirmed" : "Verifying payment"}
         </p>
         <h1 className="font-display text-3xl font-bold">
-          {confirmed ? (deploymentReady ? "ArcPod online" : "Launch queue engaged") : "Waiting for confirmation"}
+          {confirmed ? (deploymentReady ? `${agentCount} ${agentWord} online` : `Launching ${agentCount} ${agentWord}`) : "Waiting for confirmation"}
         </h1>
 
         {!confirmed && !timedOut && (
@@ -174,24 +208,24 @@ function CheckoutSuccessContent() {
         {confirmed && (
           <div className="mt-4">
             <p className="text-sm text-soft-white/65">
-              {displayName ? `Captain ${displayName}, ` : ""}{deploymentReady ? "your ArcPod is online." : "Raven has confirmed payment and your ArcPod is entering the launch queue."}
+              {displayName ? `Captain ${displayName}, ` : ""}{deploymentReady ? `your ${agentWord} ${agentCount === 1 ? "is" : "are"} online.` : `Raven has confirmed payment and your ${agentCount} ${agentWord} ${agentCount === 1 ? "is" : "are"} entering the launch queue.`}
             </p>
             {channelLabel && (
               <p className="mt-2 text-sm text-soft-white/65">
-                Return to your {channelLabel} chat with Raven. Raven will send the ready links and dashboard credential handoff there when provisioning is complete. This page will not show the password.
+                Return to your {channelLabel} chat with Raven. Raven will send ready links and the Hermes Agent Dashboard credential handoff there when provisioning is complete. This page will not show the password.
               </p>
             )}
             {waitingForResources && (
               <div className="mt-3 flex items-center gap-3">
                 <LoadingSpinner label="" />
                 <p className="text-sm text-soft-white/65">
-                  Resources are coming online{deploymentStatus ? `: ${deploymentStatus}` : ""}.
+                  Agent dashboards are coming online: {readyCount}/{agentCount} ready{statusSummary ? ` (${statusSummary})` : ""}.
                 </p>
               </div>
             )}
             {deploymentReady && (
               <p className="mt-2 text-sm text-neon-green">
-                Use the Helm username and password Raven gives you in chat.
+                Use the dashboard username and password Raven gives you in chat. The same sign-in opens each Hermes Agent Dashboard in this Crew.
               </p>
             )}
             {sessionClaimed && (
@@ -217,35 +251,47 @@ function CheckoutSuccessContent() {
           <StatusBadge status={deploymentReady ? "ready" : confirmed ? "paid" : timedOut ? "pending" : "verifying"} />
         </div>
 
-        <div className="mt-6 flex flex-wrap gap-3">
-          {deploymentReady && primaryResourceUrl ? (
-            <a
-              href={primaryResourceUrl}
-              className="rounded bg-signal-orange px-4 py-2 font-semibold text-jet transition hover:opacity-90"
-            >
-              Open Hermes Dashboard
-            </a>
-          ) : (
+        <div className="mt-6 grid gap-3">
+          {deployments.length > 0 ? deployments.map((deployment, index) => {
+            const urls = deployment.access?.urls || {};
+            const href = urls.hermes || urls.dashboard || "";
+            const label = deployment.agent_label || `Hermes Agent ${deployment.bundle_agent_index || index + 1}`;
+            const ready = Boolean(deployment.ready && href);
+            return ready ? (
+              <a
+                key={deployment.deployment_id || label}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded bg-signal-orange px-4 py-2 text-center font-semibold text-jet transition hover:opacity-90"
+              >
+                Open {label}
+              </a>
+            ) : (
+              <button
+                key={deployment.deployment_id || label}
+                type="button"
+                disabled
+                className="flex items-center justify-center gap-2 rounded bg-signal-orange/40 px-4 py-2 font-semibold text-jet/70"
+              >
+                <LoadingSpinner label="" />
+                {label} preparing
+              </button>
+            );
+          }) : (
             <button
               type="button"
               disabled
-              className="rounded bg-signal-orange/40 px-4 py-2 font-semibold text-jet/70"
+              className="flex items-center justify-center gap-2 rounded bg-signal-orange/40 px-4 py-2 font-semibold text-jet/70"
             >
-              Hermes Preparing
+              <LoadingSpinner label="" />
+              Hermes Agent dashboards preparing
             </button>
-          )}
-          {deploymentReady && helmUrl && helmUrl !== primaryResourceUrl && (
-            <a
-              href={helmUrl}
-              className="rounded border border-border px-4 py-2 font-semibold text-soft-white transition hover:bg-carbon"
-            >
-              Open Helm
-            </a>
           )}
           {sessionClaimed && (
             <Link
               href="/dashboard"
-              className="rounded border border-border px-4 py-2 font-semibold text-soft-white transition hover:bg-carbon"
+              className="rounded border border-border px-4 py-2 text-center font-semibold text-soft-white transition hover:bg-carbon"
             >
               Account Dashboard
             </Link>

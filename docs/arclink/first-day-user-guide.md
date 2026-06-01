@@ -89,7 +89,7 @@ Founders and Sovereign provision one. The roster reply also offers Train My
 Crew, Academy, and Credentials. `/name Your Name` sets what the Crew calls you.
 
 If you have more than one Agent, switch which one a bare-slash command reaches
-with `/agent` (list), `/agent <name>`, or `/agent-<slug>`. Helm switches are
+with `/agent` (list), `/agent <name>`, or `/agent-<slug>`. Raven switches are
 Raven-owned and never relayed to a Hermes Agent. The first non-slash message in
 a linked channel claims a one-time bridge intro before your Agent answers.
 

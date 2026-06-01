@@ -33,7 +33,10 @@ HOP_BY_HOP_HEADERS = {
 }
 SESSION_COOKIE_NAME = "arclink_dash_session"
 SESSION_COOKIE_NAME_PREFIX = f"{SESSION_COOKIE_NAME}_"
+SESSION_SSO_COOKIE_NAME = "arclink_dash_sso"
+SESSION_SSO_COOKIE_NAME_PREFIX = f"{SESSION_SSO_COOKIE_NAME}_"
 SESSION_TOKEN_AUDIENCE = "hermes-dashboard"
+SESSION_SSO_TOKEN_AUDIENCE = "hermes-dashboard-sso"
 SESSION_TOKEN_TTL_SECONDS = 12 * 60 * 60
 PLUGIN_DEEPLINK_PATHS = {"/drive", "/code", "/terminal"}
 LOGIN_PATH = "/__arclink/login"
@@ -70,7 +73,7 @@ def _json_b64(data: dict[str, object]) -> str:
     return _b64url(json.dumps(data, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
 
-def _token_secret(access: dict[str, str], realm: str) -> bytes:
+def _token_secret(access: dict[str, object], realm: str) -> bytes:
     configured = str(access.get("session_secret") or "").strip()
     if configured:
         return configured.encode("utf-8")
@@ -85,7 +88,66 @@ def _token_secret(access: dict[str, str], realm: str) -> bytes:
     return hashlib.sha256(fallback.encode("utf-8")).digest()
 
 
-def load_access(path: Path) -> dict[str, str]:
+def _sso_token_secret(access: dict[str, object]) -> bytes:
+    configured = str(access.get("sso_session_secret") or "").strip()
+    return configured.encode("utf-8") if configured else b""
+
+
+def _sso_subject(access: dict[str, object]) -> str:
+    return str(access.get("sso_subject") or access.get("username") or "").strip()
+
+
+def _safe_cookie_domain(value: str) -> str:
+    candidate = str(value or "").strip().lower().lstrip(".").rstrip(".")
+    if not candidate or candidate == "localhost":
+        return ""
+    if any(ch in candidate for ch in "\r\n;=, \t"):
+        return ""
+    if not re.fullmatch(r"[a-z0-9.-]+", candidate):
+        return ""
+    if "." not in candidate:
+        return ""
+    return candidate
+
+
+def _safe_dashboard_url(value: str) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    parsed = urlsplit(candidate)
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        return ""
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        return ""
+    return candidate
+
+
+def _clean_crew_dashboards(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, object]] = []
+    for raw in value[:24]:
+        if not isinstance(raw, dict):
+            continue
+        url = _safe_dashboard_url(str(raw.get("url") or raw.get("hermes_url") or raw.get("dashboard_url") or ""))
+        if not url:
+            continue
+        label = str(raw.get("label") or raw.get("agent_name") or "Hermes Agent").strip()[:120] or "Hermes Agent"
+        items.append(
+            {
+                "deployment_id": str(raw.get("deployment_id") or "").strip()[:120],
+                "label": label,
+                "title": str(raw.get("title") or raw.get("agent_title") or "").strip()[:160],
+                "status": str(raw.get("status") or "").strip()[:80],
+                "theme_label": str(raw.get("theme_label") or "").strip()[:120],
+                "url": url,
+                "current": bool(raw.get("current")),
+            }
+        )
+    return items
+
+
+def load_access(path: Path) -> dict[str, object]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -96,8 +158,12 @@ def load_access(path: Path) -> dict[str, str]:
         "username": str(data.get("username") or ""),
         "password": str(data.get("password") or ""),
         "session_secret": str(data.get("session_secret") or ""),
+        "sso_session_secret": str(data.get("sso_session_secret") or ""),
+        "sso_subject": str(data.get("sso_subject") or ""),
+        "sso_cookie_domain": _safe_cookie_domain(str(data.get("sso_cookie_domain") or "")),
         "deployment_id": str(data.get("deployment_id") or ""),
         "prefix": str(data.get("prefix") or ""),
+        "crew_dashboards": _clean_crew_dashboards(data.get("crew_dashboards")),
     }
 
 
@@ -288,6 +354,71 @@ def _managed_lifecycle_controls_script() -> str:
     )
 
 
+def _crew_switcher_config(access: dict[str, object]) -> dict[str, object] | None:
+    raw_items = access.get("crew_dashboards")
+    if not isinstance(raw_items, list):
+        return None
+    items = [dict(item) for item in raw_items if isinstance(item, dict) and item.get("url")]
+    if len(items) < 2:
+        return None
+    current = next((item for item in items if item.get("current")), items[0])
+    theme_label = str(current.get("theme_label") or "").strip()
+    return {
+        "items": [
+            {
+                "label": str(item.get("label") or "Hermes Agent"),
+                "title": str(item.get("title") or ""),
+                "status": str(item.get("status") or ""),
+                "url": str(item.get("url") or ""),
+                "current": bool(item.get("current")),
+            }
+            for item in items
+        ],
+        "label": str(current.get("label") or "Hermes Agent"),
+        "themeLabel": theme_label,
+    }
+
+
+def _crew_switcher_script(access: dict[str, object]) -> str:
+    config = _crew_switcher_config(access)
+    if not config:
+        return ""
+    config_json = (
+        json.dumps(config, separators=(",", ":"), sort_keys=True)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    return (
+        '<script data-arclink-crew-switcher>(function(){'
+        f"var config={config_json};"
+        "function text(value){return String(value||'').replace(/\\s+/g,' ').trim();}"
+        "function install(){"
+        "if(document.querySelector('[data-arclink-crew-switcher-root]'))return;"
+        "var items=Array.isArray(config.items)?config.items:[];"
+        "if(items.length<2)return;"
+        "var style=document.createElement('style');style.setAttribute('data-arclink-crew-switcher-style','');"
+        "style.textContent='[data-arclink-crew-switcher-root]{position:fixed;top:12px;right:16px;z-index:2147483000;font:13px system-ui,-apple-system,Segoe UI,sans-serif;color:#f7f4ef}[data-arclink-crew-switcher-root] button{max-width:min(360px,calc(100vw - 32px));height:34px;border:1px solid rgba(255,255,255,.16);border-radius:7px;background:rgba(10,13,18,.9);color:#f7f4ef;padding:0 12px;display:flex;align-items:center;gap:8px;box-shadow:0 10px 28px rgba(0,0,0,.24);cursor:pointer}[data-arclink-crew-switcher-root] button:after{content:\"v\";font-size:10px;opacity:.72}[data-arclink-crew-switcher-menu]{position:absolute;right:0;top:40px;min-width:260px;max-width:min(380px,calc(100vw - 24px));border:1px solid rgba(255,255,255,.14);border-radius:8px;background:#0b0f14;box-shadow:0 18px 44px rgba(0,0,0,.42);padding:6px;display:none}[data-arclink-crew-switcher-root][data-open=\"true\"] [data-arclink-crew-switcher-menu]{display:block}[data-arclink-crew-switcher-menu] a{display:block;border-radius:6px;padding:10px 11px;color:#f7f4ef;text-decoration:none;line-height:1.25}[data-arclink-crew-switcher-menu] a:hover{background:rgba(251,80,5,.14)}[data-arclink-crew-switcher-menu] a[aria-current=\"page\"]{border:1px solid rgba(251,80,5,.5);background:rgba(251,80,5,.1)}[data-arclink-crew-switcher-menu] span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}[data-arclink-crew-switcher-menu] small{display:block;margin-top:3px;color:rgba(247,244,239,.62);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}@media(max-width:700px){[data-arclink-crew-switcher-root]{top:8px;right:8px}[data-arclink-crew-switcher-root] button{height:32px;max-width:calc(100vw - 16px)}}';"
+        "document.head.appendChild(style);"
+        "var root=document.createElement('div');root.setAttribute('data-arclink-crew-switcher-root','');"
+        "var button=document.createElement('button');button.type='button';button.setAttribute('aria-haspopup','menu');button.setAttribute('aria-expanded','false');"
+        "button.title='Open another Hermes Agent Dashboard';"
+        "button.textContent=text(config.label)+(text(config.themeLabel)?' / '+text(config.themeLabel):'');"
+        "var menu=document.createElement('div');menu.setAttribute('data-arclink-crew-switcher-menu','');menu.setAttribute('role','menu');"
+        "items.forEach(function(item){var link=document.createElement('a');link.href=String(item.url||'#');link.target='_blank';link.rel='noopener noreferrer';link.setAttribute('role','menuitem');"
+        "if(item.current)link.setAttribute('aria-current','page');"
+        "var label=document.createElement('span');label.textContent=text(item.label)||'Hermes Agent';"
+        "var meta=document.createElement('small');var bits=[];if(text(item.title))bits.push(text(item.title));if(text(item.status))bits.push(text(item.status));meta.textContent=bits.join(' / ');"
+        "link.appendChild(label);if(meta.textContent)link.appendChild(meta);menu.appendChild(link);});"
+        "button.addEventListener('click',function(event){event.stopPropagation();var open=root.getAttribute('data-open')==='true';root.setAttribute('data-open',open?'false':'true');button.setAttribute('aria-expanded',open?'false':'true');});"
+        "document.addEventListener('click',function(){root.setAttribute('data-open','false');button.setAttribute('aria-expanded','false');});"
+        "root.appendChild(button);root.appendChild(menu);document.body.appendChild(root);"
+        "}"
+        "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();"
+        "})();</script>"
+    )
+
+
 def _is_login_path(value: str) -> bool:
     path = urlsplit(str(value or "")).path.rstrip("/") or "/"
     return path == LOGIN_PATH or path.endswith(LOGIN_PATH)
@@ -323,7 +454,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
     backend_session_token_target: str = ""
     backend_session_token_lock = threading.Lock()
 
-    def _session_cookie_name(self, access: dict[str, str]) -> str:
+    def _session_cookie_name(self, access: dict[str, object]) -> str:
         scope = "\0".join(
             [
                 "arclink-dashboard-cookie-v1",
@@ -338,23 +469,79 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
         return f"{SESSION_COOKIE_NAME_PREFIX}{digest}"
 
-    def _make_token(self, username: str) -> str:
+    def _sso_cookie_name(self, access: dict[str, object]) -> str:
+        scope = "\0".join(
+            [
+                "arclink-dashboard-sso-cookie-v1",
+                _sso_subject(access),
+                str(access.get("sso_session_secret") or ""),
+            ]
+        )
+        digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:16]
+        return f"{SESSION_SSO_COOKIE_NAME_PREFIX}{digest}"
+
+    def _make_signed_token(self, *, secret: bytes, subject: str, audience: str, scope: str = "") -> str:
         now = int(time.time())
         header = _json_b64({"alg": "HS256", "typ": "JWT"})
-        payload = _json_b64(
-            {
-                "aud": SESSION_TOKEN_AUDIENCE,
-                "exp": now + SESSION_TOKEN_TTL_SECONDS,
-                "iat": now,
-                "nonce": secrets.token_urlsafe(12),
-                "sub": username,
-            }
-        )
+        claims: dict[str, object] = {
+            "aud": audience,
+            "exp": now + SESSION_TOKEN_TTL_SECONDS,
+            "iat": now,
+            "nonce": secrets.token_urlsafe(12),
+            "sub": subject,
+        }
+        if scope:
+            claims["scope"] = scope
+        payload = _json_b64(claims)
         signing_input = f"{header}.{payload}"
-        signature = hmac.new(_token_secret(load_access(self.access_file), self.realm), signing_input.encode("ascii"), hashlib.sha256)
+        signature = hmac.new(secret, signing_input.encode("ascii"), hashlib.sha256)
         return f"{signing_input}.{_b64url(signature.digest())}"
 
-    def _valid_session_cookie(self, access: dict[str, str]) -> bool:
+    def _make_token(self, access: dict[str, object], username: str) -> str:
+        return self._make_signed_token(
+            secret=_token_secret(access, self.realm),
+            subject=username,
+            audience=SESSION_TOKEN_AUDIENCE,
+        )
+
+    def _make_sso_token(self, access: dict[str, object]) -> str:
+        secret = _sso_token_secret(access)
+        subject = _sso_subject(access)
+        if not secret or not subject:
+            return ""
+        return self._make_signed_token(
+            secret=secret,
+            subject=subject,
+            audience=SESSION_SSO_TOKEN_AUDIENCE,
+            scope="captain-dashboard-sso",
+        )
+
+    def _valid_token(self, token: str, *, secret: bytes, audience: str, subject: str, scope: str = "") -> bool:
+        token = str(token or "")
+        parts = token.split(".")
+        if len(parts) != 3:
+            return False
+        signing_input = f"{parts[0]}.{parts[1]}"
+        expected = hmac.new(secret, signing_input.encode("ascii"), hashlib.sha256).digest()
+        try:
+            supplied = _b64url_decode(parts[2])
+            payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
+        except Exception:
+            return False
+        if not hmac.compare_digest(supplied, expected):
+            return False
+        if str(payload.get("aud") or "") != audience:
+            return False
+        if str(payload.get("sub") or "") != subject:
+            return False
+        if scope and str(payload.get("scope") or "") != scope:
+            return False
+        try:
+            return int(payload.get("exp") or 0) > int(time.time())
+        except (TypeError, ValueError):
+            return False
+
+    def _valid_session_cookie(self, access: dict[str, object]) -> bool:
         header = self.headers.get("Cookie") or ""
         if not header:
             return False
@@ -363,27 +550,33 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         morsel = cookie.get(self._session_cookie_name(access))
         if morsel is None:
             return False
-        token = str(morsel.value or "")
-        parts = token.split(".")
-        if len(parts) != 3:
+        return self._valid_token(
+            str(morsel.value or ""),
+            secret=_token_secret(access, self.realm),
+            audience=SESSION_TOKEN_AUDIENCE,
+            subject=str(access.get("username") or ""),
+        )
+
+    def _valid_sso_cookie(self, access: dict[str, object]) -> bool:
+        secret = _sso_token_secret(access)
+        subject = _sso_subject(access)
+        if not secret or not subject:
             return False
-        signing_input = f"{parts[0]}.{parts[1]}"
-        expected = hmac.new(_token_secret(access, self.realm), signing_input.encode("ascii"), hashlib.sha256).digest()
-        try:
-            supplied = _b64url_decode(parts[2])
-            payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
-        except Exception:
+        header = self.headers.get("Cookie") or ""
+        if not header:
             return False
-        if not hmac.compare_digest(supplied, expected):
+        cookie = SimpleCookie()
+        cookie.load(header)
+        morsel = cookie.get(self._sso_cookie_name(access))
+        if morsel is None:
             return False
-        if str(payload.get("aud") or "") != SESSION_TOKEN_AUDIENCE:
-            return False
-        if str(payload.get("sub") or "") != str(access.get("username") or ""):
-            return False
-        try:
-            return int(payload.get("exp") or 0) > int(time.time())
-        except (TypeError, ValueError):
-            return False
+        return self._valid_token(
+            str(morsel.value or ""),
+            secret=secret,
+            audience=SESSION_SSO_TOKEN_AUDIENCE,
+            subject=subject,
+            scope="captain-dashboard-sso",
+        )
 
     def _authorized(self) -> AuthState:
         if not self.require_auth:
@@ -391,7 +584,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         access = load_access(self.access_file)
         if not access.get("username") or not access.get("password"):
             return AuthState(ok=False)
-        if not self._valid_session_cookie(access):
+        if not self._valid_session_cookie(access) and not self._valid_sso_cookie(access):
             return AuthState(ok=False)
         header = self.headers.get("Authorization") or ""
         scheme, _, token = header.partition(" ")
@@ -406,25 +599,51 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         cookie = SimpleCookie()
         cookie.load(header)
         for name in list(cookie):
-            if name == SESSION_COOKIE_NAME or name.startswith(SESSION_COOKIE_NAME_PREFIX):
+            if (
+                name == SESSION_COOKIE_NAME
+                or name.startswith(SESSION_COOKIE_NAME_PREFIX)
+                or name == SESSION_SSO_COOKIE_NAME
+                or name.startswith(SESSION_SSO_COOKIE_NAME_PREFIX)
+            ):
                 del cookie[name]
         pairs = [f"{morsel.key}={morsel.value}" for morsel in cookie.values()]
         return "; ".join(pairs) or None
 
-    def _session_cookie_header(self, access: dict[str, str], username: str) -> str:
-        value = self._make_token(username)
+    def _session_cookie_header(self, access: dict[str, object], username: str) -> str:
+        value = self._make_token(access, username)
         return f"{self._session_cookie_name(access)}={value}; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure"
 
-    def _clear_cookie_header(self, name: str) -> str:
-        return f"{name}=; HttpOnly; Path={self._cookie_path()}; SameSite=Lax; Secure; Max-Age=0"
+    def _sso_cookie_header(self, access: dict[str, object]) -> str:
+        value = self._make_sso_token(access)
+        if not value:
+            return ""
+        domain = str(access.get("sso_cookie_domain") or "")
+        domain_part = f"; Domain={domain}" if domain else ""
+        return f"{self._sso_cookie_name(access)}={value}; HttpOnly; Path=/; SameSite=Lax; Secure{domain_part}"
 
-    def _clear_session_cookie_headers(self, access: dict[str, str] | None = None) -> list[str]:
+    def _clear_cookie_header(self, name: str, *, path: str = "", domain: str = "") -> str:
+        clean_path = path or self._cookie_path()
+        domain_part = f"; Domain={domain}" if domain else ""
+        return f"{name}=; HttpOnly; Path={clean_path}; SameSite=Lax; Secure{domain_part}; Max-Age=0"
+
+    def _clear_session_cookie_headers(self, access: dict[str, object] | None = None) -> list[str]:
         names = [SESSION_COOKIE_NAME]
         if access is not None:
             scoped = self._session_cookie_name(access)
             if scoped not in names:
                 names.append(scoped)
-        return [self._clear_cookie_header(name) for name in names]
+        headers = [self._clear_cookie_header(name) for name in names]
+        sso_names = [SESSION_SSO_COOKIE_NAME]
+        if access is not None and _sso_token_secret(access):
+            scoped_sso = self._sso_cookie_name(access)
+            if scoped_sso not in sso_names:
+                sso_names.append(scoped_sso)
+        domain = str((access or {}).get("sso_cookie_domain") or "") if access is not None else ""
+        for name in sso_names:
+            headers.append(self._clear_cookie_header(name, path="/"))
+            if domain:
+                headers.append(self._clear_cookie_header(name, path="/", domain=domain))
+        return headers
 
     def _mount_prefix(self) -> str:
         return _safe_mount_prefix(
@@ -499,6 +718,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return payload
 
         script = _managed_lifecycle_controls_script()
+        marker = "</body>"
+        if marker in body:
+            body = body.replace(marker, script + marker, 1)
+        else:
+            body += script
+        return body.encode("utf-8")
+
+    def _maybe_inject_crew_switcher(self, payload: bytes, response_headers: list[tuple[str, str]]) -> bytes:
+        if self.command != "GET":
+            return payload
+
+        header_map = {key.lower(): value for key, value in response_headers}
+        content_type = header_map.get("content-type", "")
+        if "text/html" not in content_type.lower() or header_map.get("content-encoding"):
+            return payload
+
+        try:
+            body = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            return payload
+        if "data-arclink-crew-switcher" in body:
+            return payload
+
+        script = _crew_switcher_script(load_access(self.access_file))
+        if not script:
+            return payload
         marker = "</body>"
         if marker in body:
             body = body.replace(marker, script + marker, 1)
@@ -686,8 +931,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         self.send_response(303)
         self.send_header("Location", next_path)
-        for cookie_header in self._clear_session_cookie_headers(None):
+        for cookie_header in self._clear_session_cookie_headers(access):
             self.send_header("Set-Cookie", cookie_header)
+        sso_cookie = self._sso_cookie_header(access)
+        if sso_cookie:
+            self.send_header("Set-Cookie", sso_cookie)
         self.send_header("Set-Cookie", self._session_cookie_header(access, access_username))
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -854,6 +1102,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             payload = self._rewrite_mounted_css_paths(payload, response_headers)
             payload = self._rewrite_mounted_json_paths(payload, response_headers)
             payload = self._maybe_inject_managed_lifecycle_controls(payload, response_headers)
+            payload = self._maybe_inject_crew_switcher(payload, response_headers)
             payload = self._maybe_inject_plugin_deeplink(payload, response_headers)
 
         self.send_response(status, reason)

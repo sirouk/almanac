@@ -495,13 +495,13 @@ export default function OnboardingPage() {
               ) : (
                 <>
                   <p className="font-body text-sm text-[#1AC153]">
-                    Onboarding complete. I am preparing your ArcPod.
+                    Onboarding complete. I am preparing your Hermes Agent Dashboard.
                   </p>
                   <Link
                     href="/dashboard"
                     className="block w-full rounded bg-[#FB5005] px-4 py-3 text-center font-body font-semibold text-white transition hover:bg-[#e04504]"
                   >
-                    Open Dashboard
+                    Open Hermes Dashboard
                   </Link>
                 </>
               )}

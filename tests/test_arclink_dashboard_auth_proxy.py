@@ -166,6 +166,25 @@ def request(
         connection.close()
 
 
+def request_with_header_pairs(
+    port: int,
+    path: str,
+    *,
+    method: str = "GET",
+    body: bytes | str | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, list[tuple[str, str]], str]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        payload = body.encode("utf-8") if isinstance(body, str) else body
+        connection.request(method, path, body=payload, headers=headers or {})
+        response = connection.getresponse()
+        response_body = response.read().decode("utf-8", "replace")
+        return response.status, response.getheaders(), response_body
+    finally:
+        connection.close()
+
+
 def start_proxy(proxy_mod, access_file: Path):
     backend = proxy_mod.ThreadingHTTPServer(("127.0.0.1", 0), TestBackend)
     backend_thread = threading.Thread(target=backend.serve_forever, daemon=True)
@@ -216,6 +235,25 @@ def login(port: int, *, username: str = "alex", password: str = "test-password")
     cookie = headers.get("Set-Cookie") or ""
     expect(cookie_name(cookie).startswith("arclink_dash_session_"), headers)
     return cookie
+
+
+def login_cookie_header(port: int, *, username: str = "alex", password: str = "test-password") -> str:
+    body = urlencode({"username": username, "password": password, "next": "/"})
+    status, headers, _body = request_with_header_pairs(
+        port,
+        "/__arclink/login",
+        method="POST",
+        body=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    expect(status == 303, f"expected login redirect, saw {status} {headers}")
+    cookies = [
+        cookie_pair(value)
+        for key, value in headers
+        if key.lower() == "set-cookie" and "Max-Age=0" not in value
+    ]
+    expect(any(cookie.startswith("arclink_dash_session_") for cookie in cookies), str(headers))
+    return "; ".join(cookies)
 
 
 def test_proxy_allows_hermes_bearer_api_calls_after_session_login() -> None:
@@ -384,6 +422,117 @@ def test_proxy_scopes_session_cookie_per_dashboard_instance() -> None:
         finally:
             stop_proxy(backend_one, backend_thread_one, proxy_one, proxy_thread_one)
             stop_proxy(backend_two, backend_thread_two, proxy_two, proxy_thread_two)
+
+
+def test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_sso_cookie_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        access_one = root / "one" / "arclink-web-access.json"
+        access_two = root / "two" / "arclink-web-access.json"
+        access_other = root / "other" / "arclink-web-access.json"
+        for path in (access_one, access_two, access_other):
+            path.parent.mkdir(parents=True, exist_ok=True)
+        shared = {
+            "username": "captain@example.test",
+            "password": "shared-dashboard-password",
+            "sso_session_secret": "shared-sso-secret",
+            "sso_subject": "user_1",
+        }
+        access_one.write_text(json.dumps({**shared, "session_secret": "session-one", "deployment_id": "arcdep_one", "prefix": "one"}), encoding="utf-8")
+        access_two.write_text(json.dumps({**shared, "session_secret": "session-two", "deployment_id": "arcdep_two", "prefix": "two"}), encoding="utf-8")
+        access_other.write_text(
+            json.dumps(
+                {
+                    "username": "other@example.test",
+                    "password": "other-password",
+                    "session_secret": "session-other",
+                    "sso_session_secret": "other-sso-secret",
+                    "sso_subject": "user_2",
+                    "deployment_id": "arcdep_other",
+                    "prefix": "other",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        backend_one, backend_thread_one, proxy_one, proxy_thread_one = start_proxy(proxy_mod, access_one)
+        backend_two, backend_thread_two, proxy_two, proxy_thread_two = start_proxy(proxy_mod, access_two)
+        backend_other, backend_thread_other, proxy_other, proxy_thread_other = start_proxy(proxy_mod, access_other)
+        try:
+            browser_cookie_header = login_cookie_header(
+                proxy_one.server_port,
+                username="captain@example.test",
+                password="shared-dashboard-password",
+            )
+            sso_cookie = "; ".join(
+                part.strip()
+                for part in browser_cookie_header.split(";")
+                if part.strip().startswith("arclink_dash_sso_")
+            )
+            expect(sso_cookie, browser_cookie_header)
+
+            status, headers, body = request(proxy_two.server_port, "/", headers={"Cookie": sso_cookie})
+            expect(status == 200, f"expected SSO cookie to open sibling dashboard, saw {status} {headers} {body!r}")
+            expect(
+                TestBackend.last_cookie in (None, ""),
+                f"expected SSO cookie to stay at proxy, saw backend cookie {TestBackend.last_cookie!r}",
+            )
+
+            status, headers, body = request(proxy_other.server_port, "/", headers={"Cookie": sso_cookie})
+            expect(status == 401, f"expected SSO cookie to be rejected for another Captain, saw {status} {headers} {body!r}")
+            print("PASS test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards")
+        finally:
+            stop_proxy(backend_one, backend_thread_one, proxy_one, proxy_thread_one)
+            stop_proxy(backend_two, backend_thread_two, proxy_two, proxy_thread_two)
+            stop_proxy(backend_other, backend_thread_other, proxy_other, proxy_thread_other)
+
+
+def test_proxy_injects_crew_switcher_from_access_state() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_crew_switcher_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps(
+                {
+                    "username": "alex",
+                    "password": "test-password",
+                    "session_secret": "session-secret",
+                    "crew_dashboards": [
+                        {
+                            "label": "Atlas",
+                            "title": "Research Lead",
+                            "status": "active",
+                            "theme_label": "ArcLink Signal Orange",
+                            "url": "https://hermes-atlas.example.test",
+                            "current": True,
+                        },
+                        {
+                            "label": "Vela </script>",
+                            "title": "Signal Strategist",
+                            "status": "active",
+                            "theme_label": "Deep Violet",
+                            "url": "https://hermes-vela.example.test",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            cookie = login(proxy.server_port)
+            status, headers, body = request(proxy.server_port, "/", headers={"Cookie": cookie})
+            expect(status == 200, f"expected dashboard response, saw {status} {headers}")
+            expect("data-arclink-crew-switcher" in body, body)
+            expect("Atlas" in body and "Research Lead" in body, body)
+            expect("hermes-vela.example.test" in body, body)
+            expect("Vela </script>" not in body, body)
+            expect("\\u003c/script\\u003e" in body, body)
+            print("PASS test_proxy_injects_crew_switcher_from_access_state")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
 def test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper() -> None:
@@ -663,13 +812,15 @@ def main() -> int:
     test_proxy_bridges_arclink_session_to_backend_hermes_api_token()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
     test_proxy_scopes_session_cookie_per_dashboard_instance()
+    test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards()
+    test_proxy_injects_crew_switcher_from_access_state()
     test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
     test_proxy_can_run_dashboard_helpers_without_auth()
     test_proxy_rejects_cross_origin_dashboard_mutations()
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 10 dashboard-auth-proxy regression tests")
+    print("PASS all 12 dashboard-auth-proxy regression tests")
     return 0
 
 

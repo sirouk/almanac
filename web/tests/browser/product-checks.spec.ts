@@ -146,6 +146,10 @@ const MOCK_USER_LINKED_RESOURCES = {
   ],
 };
 
+const MOCK_USER_SHARE_GRANTS = {
+  share_grants: [],
+};
+
 const MOCK_USER_CREW_RECIPE = {
   current: {
     recipe_id: "crew_001",
@@ -160,6 +164,20 @@ const MOCK_USER_CREW_RECIPE = {
   },
   prior: null,
   whats_changed: { status: "first_recipe", summary: "This is the first active Crew Recipe." },
+};
+
+const MOCK_USER_ACADEMY = {
+  majors: [
+    {
+      program_id: "academy_founder_operator",
+      label: "Founder Operator",
+      summary: "Conversation-led training that prepares a Hermes Agent for a specialist role.",
+      source_lanes: ["captain_instructions", "weekly_sources"],
+      default_depth: "deep",
+    },
+  ],
+  trainees: [],
+  graduates: [],
 };
 
 const MOCK_USER_PROVIDER_STATE = {
@@ -346,6 +364,12 @@ async function mockApi(
       }
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_LINKED_RESOURCES) });
     }
+    if (url.includes("/user/share-grants")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_SHARE_GRANTS) });
+    }
+    if (url.includes("/user/academy")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_ACADEMY) });
+    }
     if (url.includes("/user/provider-state")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_PROVIDER_STATE) });
     }
@@ -440,6 +464,12 @@ async function mockDashboardAuxApi(page: Page) {
   });
   await page.route("**/api/v1/user/linked-resources", async (route: Route) => {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_LINKED_RESOURCES) });
+  });
+  await page.route("**/api/v1/user/share-grants", async (route: Route) => {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_SHARE_GRANTS) });
+  });
+  await page.route("**/api/v1/user/academy", async (route: Route) => {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_ACADEMY) });
   });
   await page.route("**/api/v1/user/provider-state", async (route: Route) => {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_PROVIDER_STATE) });
@@ -545,7 +575,7 @@ test.describe("Route smoke", () => {
     await expect(page.getByText("Provider Access")).toBeVisible();
     await expect(page.getByText("Billing is current for this deployment.")).toBeVisible();
     await page.locator('button:has-text("vault"):visible').first().click();
-    await expect(page.getByText("Linked Resources")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Linked Resources" })).toBeVisible();
     await expect(page.getByText("Accepted Drive and Code folders appear as writable Linked resources.")).toBeVisible();
     await expect(page.getByText("Project Brief")).toBeVisible();
     await expect(page.getByText("Linked: linked:/share_001-project-brief")).toBeVisible();
@@ -633,19 +663,20 @@ test.describe("Empty and loading states", () => {
     await mockDashboardAuxApi(page);
     // Delay API response to catch loading state
     await page.route("**/api/v1/user/dashboard", async (route) => {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 1500));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_DASHBOARD) });
     });
     await page.route("**/api/v1/user/billing", async (route) => {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 1500));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_BILLING) });
     });
     await page.route("**/api/v1/user/provisioning", async (route) => {
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 1500));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_PROVISIONING) });
     });
+    const loadingVisible = expect(page.getByText("Loading dashboard", { exact: false })).toBeVisible();
     await page.goto("/dashboard");
-    await expect(page.locator("text=Loading dashboard")).toBeVisible();
+    await loadingVisible;
   });
 
   test("dashboard shows empty state with no deployments", async ({ page }) => {

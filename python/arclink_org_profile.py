@@ -1862,7 +1862,7 @@ def _render_base_soul(context: dict[str, Any], *, unix_user: str = "") -> str:
     rendered = Template(template).substitute(
         {
             "upstream_soul": _upstream_soul_text(),
-            "agent_label": agent.get("name") or "your ArcLink agent",
+            "agent_label": agent.get("name") or "your Hermes Agent",
             "agent_title": agent.get("title") or "",
             "unix_user": unix_user or "unknown",
             "user_name": context.get("human_display_name") or "your enrolled user",

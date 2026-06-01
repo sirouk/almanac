@@ -142,6 +142,8 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(compose_secrets["nextcloud_admin_password"]["target"] == "/run/secrets/nextcloud_admin_password", str(compose_secrets))
     expect(compose_secrets["dashboard_password"]["secret_ref"] == "secret://arclink/dashboard/users/user_1/password", str(compose_secrets))
     expect(compose_secrets["dashboard_password"]["target"] == "/run/secrets/dashboard_password", str(compose_secrets))
+    expect(compose_secrets["dashboard_sso_secret"]["secret_ref"] == "secret://arclink/dashboard/users/user_1/sso-session-secret", str(compose_secrets))
+    expect(compose_secrets["dashboard_sso_secret"]["target"] == "/run/secrets/dashboard_sso_secret", str(compose_secrets))
     expect(
         compose_secrets["share_request_broker_token"]["secret_ref"]
         == "secret://arclink/share-request-broker/dep_1/token",
@@ -179,6 +181,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["ARCLINK_LLM_ROUTER_API_KEY_REF"] == "secret://arclink/llm-router/dep_1/api-key", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] == "1", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"] == "example.test", str(intent["environment"]))
+    crew_links = json.loads(intent["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"])
+    expect(crew_links[0]["label"] == "Atlas" and crew_links[0]["current"] is True, str(crew_links))
     expect(intent["environment"]["ARCLINK_CAPTAIN_NAME"] == "person@example.test", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_CAPTAIN_EMAIL"] == "person@example.test", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_HERMES_URL"] == "https://hermes-amber-vault-1a2b.example.test", str(intent["environment"]))
@@ -237,6 +242,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_gateway_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["hermes-gateway"]))
     gateway_linked_volume = next(item for item in services["hermes-gateway"]["volumes"] if item["target"] == "/linked-resources")
     expect(gateway_linked_volume.get("read_only") is not True, str(gateway_linked_volume))
+    expect(
+        services["hermes-gateway"]["depends_on"]["managed-context-install"]["condition"] == "service_completed_successfully",
+        str(services["hermes-gateway"]),
+    )
     hermes_dashboard_volumes = {item["target"]: item["source"] for item in services["hermes-dashboard"]["volumes"]}
     expect(hermes_dashboard_volumes["/home/arclink/.hermes"] == intent["state_roots"]["hermes_home"], str(services["hermes-dashboard"]))
     expect(hermes_dashboard_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["hermes-dashboard"]))
@@ -245,6 +254,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(hermes_dashboard_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(services["hermes-dashboard"]))
     linked_volume = next(item for item in services["hermes-dashboard"]["volumes"] if item["target"] == "/linked-resources")
     expect(linked_volume.get("read_only") is not True, str(linked_volume))
+    expect(
+        services["hermes-dashboard"]["depends_on"]["managed-context-install"]["condition"] == "service_completed_successfully",
+        str(services["hermes-dashboard"]),
+    )
     fleet_sync = services["fleet-share-sync"]
     expect(
         fleet_sync["command"] == ["./bin/docker-job-loop.sh", "fleet-share-sync", "120", "python3", "python/arclink_fleet_share.py", "sync-local"],
@@ -252,6 +265,10 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     )
     expect(fleet_sync["environment"]["ARCLINK_FLEET_SHARE_HUB_URL"] == "/fleet-share-hub.git", str(fleet_sync))
     expect(fleet_sync["environment"]["ARCLINK_FLEET_SHARED_ROOT"] == "/fleet-shared", str(fleet_sync))
+    expect(
+        fleet_sync["depends_on"]["managed-context-install"]["condition"] == "service_completed_successfully",
+        str(fleet_sync),
+    )
     fleet_sync_volumes = {item["target"]: item["source"] for item in fleet_sync["volumes"]}
     expect(fleet_sync_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(fleet_sync))
     expect(fleet_sync_volumes["/fleet-share-hub.git"] == "/arcdata/captains/user_1/fleet-shared.git", str(fleet_sync))
@@ -307,12 +324,17 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     )
     expect(services["managed-context-install"]["environment"]["ARCLINK_NOTION_CALLBACK_URL"] == intent["environment"]["ARCLINK_NOTION_CALLBACK_URL"], str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_PASSWORD_FILE"] == "/run/secrets/dashboard_password", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_SECRET_FILE"] == "/run/secrets/dashboard_sso_secret", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_SUBJECT"] == "user_1", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"] == "example.test", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"] == intent["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"], str(services["managed-context-install"]))
     expect(
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",
         str(services["managed-context-install"]),
     )
     expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "dashboard_password", "target": "/run/secrets/dashboard_password"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
+    expect({"source": "dashboard_sso_secret", "target": "/run/secrets/dashboard_sso_secret"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["hermes-gateway"]["secrets"], str(services["hermes-gateway"]))
     expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["hermes-dashboard"]["secrets"], str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(services["hermes-dashboard"]))
@@ -329,6 +351,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect("llm_router_api_key" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
     expect("dashboard_password" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
+    expect("dashboard_sso_secret" in intent["runtime_resolution"]["app_ref_resolver_required"], str(intent["runtime_resolution"]))
     expect(services["hermes-gateway"]["labels"] == {}, str(services["hermes-gateway"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.http.routers.arclink-amber-vault-1a2b-hermes.rule"] == "Host(`hermes-amber-vault-1a2b.example.test`)", str(services["hermes-dashboard"]))
     expect(services["hermes-dashboard"]["labels"]["traefik.docker.network"] == "arclink_default", str(services["hermes-dashboard"]))
@@ -384,10 +407,17 @@ def test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso() -> No
     ref_1 = intent_1["secret_refs"]["dashboard_password"]
     ref_2 = intent_2["secret_refs"]["dashboard_password"]
     ref_3 = intent_3["secret_refs"]["dashboard_password"]
+    sso_ref_1 = intent_1["secret_refs"]["dashboard_sso_secret"]
+    sso_ref_2 = intent_2["secret_refs"]["dashboard_sso_secret"]
+    sso_ref_3 = intent_3["secret_refs"]["dashboard_sso_secret"]
     expect(ref_1 == "secret://arclink/dashboard/users/user_1/password", ref_1)
     expect(ref_2 == ref_1, f"same user deployments should share the dashboard password ref: {ref_1} vs {ref_2}")
     expect(ref_3 == "secret://arclink/dashboard/users/user_2/password", ref_3)
     expect(ref_3 != ref_1, f"different users must not share dashboard password refs: {ref_1} vs {ref_3}")
+    expect(sso_ref_1 == "secret://arclink/dashboard/users/user_1/sso-session-secret", sso_ref_1)
+    expect(sso_ref_2 == sso_ref_1, f"same user deployments should share the dashboard SSO ref: {sso_ref_1} vs {sso_ref_2}")
+    expect(sso_ref_3 == "secret://arclink/dashboard/users/user_2/sso-session-secret", sso_ref_3)
+    expect(sso_ref_3 != sso_ref_1, f"different users must not share dashboard SSO refs: {sso_ref_1} vs {sso_ref_3}")
     print("PASS test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso")
 
 
@@ -534,13 +564,13 @@ def test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explici
     }, str(services["nextcloud-db"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_PASSWORD_FILE"] == "/run/secrets/nextcloud_db_password", str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["NEXTCLOUD_ADMIN_PASSWORD_FILE"] == "/run/secrets/nextcloud_admin_password", str(services["nextcloud"]))
-    for secret_name in ("nextcloud_db_password", "nextcloud_admin_password", "dashboard_password"):
+    for secret_name in ("nextcloud_db_password", "nextcloud_admin_password", "dashboard_password", "dashboard_sso_secret"):
         expect(compose_secrets[secret_name]["secret_ref"].startswith("secret://"), str(compose_secrets[secret_name]))
         expect(compose_secrets[secret_name]["target"] == f"/run/secrets/{secret_name}", str(compose_secrets[secret_name]))
     expect("code_server_password" not in compose_secrets, str(compose_secrets))
     expect(intent["runtime_resolution"]["entrypoint_file_resolver"] == {}, str(intent["runtime_resolution"]))
     expect(
-        intent["runtime_resolution"]["app_ref_resolver_required"] == ["llm_router_api_key", "dashboard_password", "notion_webhook_secret"],
+        intent["runtime_resolution"]["app_ref_resolver_required"] == ["llm_router_api_key", "dashboard_password", "dashboard_sso_secret", "notion_webhook_secret"],
         str(intent["runtime_resolution"]),
     )
     print("PASS test_stock_image_credentials_use_file_env_and_resolver_fallbacks_are_explicit")

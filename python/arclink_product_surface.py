@@ -427,11 +427,11 @@ def _checkout_result_page(kind: str) -> ArcLinkSurfaceResponse:
     success = kind == "success"
     title = "Launch queue engaged" if success else "Checkout paused"
     body = (
-        "Raven is watching for payment confirmation. Once Stripe clears, your ArcLink agent moves into the launch queue."
+        "Raven is watching for payment confirmation. Once Stripe clears, your Hermes Agent Dashboard moves into the launch queue. Scale plans show each Hermes Agent as it comes online."
         if success
         else "No charge completed. Your ArcLink onboarding lane is still available when you are ready."
     )
-    action = "Open Dashboard" if success else "Resume Onboarding"
+    action = "Open Hermes Dashboard" if success else "Resume Onboarding"
     href = "/user" if success else "/"
     html = f"""
 <section class="hero">

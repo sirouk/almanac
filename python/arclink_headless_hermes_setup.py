@@ -386,7 +386,7 @@ def _render_soul(bot_name: str, unix_user: str, user_name: str = "", agent_title
             Template(template).substitute(
                 {
                     "upstream_soul": _upstream_soul_text(),
-                    "agent_label": _identity_value(bot_name, "your ArcLink agent"),
+                    "agent_label": _identity_value(bot_name, "your Hermes Agent"),
                     "agent_title": str(agent_title or "").strip(),
                     "unix_user": _identity_value(unix_user, "unknown"),
                     "user_name": _identity_value(user_name, "your enrolled user"),
@@ -449,7 +449,7 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
     arclink_plugin_names = [
         "arclink-managed-context",
     ]
-    label = bot_name.strip() or "your ArcLink agent"
+    label = bot_name.strip() or "your Hermes Agent"
     unix_user = unix_user.strip()
     user_name = user_name.strip()
     hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")

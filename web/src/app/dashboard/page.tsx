@@ -1061,6 +1061,15 @@ export default function DashboardPage() {
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-soft-white/60">
                   Your private agent workspace, service links, model lane, memory rail, billing state, and launch health in one place.
                 </p>
+                <p className="mt-3 text-sm text-soft-white/70">
+                  Active Hermes Agent:{" "}
+                  <span className="font-semibold text-soft-white">
+                    {activeDeployment ? deploymentTitle(activeDeployment) : "No active agent"}
+                  </span>
+                  {activeDeployment && deploymentHost(activeDeployment) ? (
+                    <span className="text-soft-white/45"> at {deploymentHost(activeDeployment)}</span>
+                  ) : null}
+                </p>
               </div>
               <div className="w-full space-y-3 lg:max-w-md">
                 <label className="block text-left">

@@ -34,6 +34,7 @@ def seed_paid_deployment(
     display_name: str = "Hosted User",
     prefix: str = "hosted-vault-1a2b",
     model_id: str = "model-hosted",
+    plan_id: str = "sovereign",
 ):
     session = onboarding.create_or_resume_arclink_onboarding_session(
         conn,
@@ -42,7 +43,7 @@ def seed_paid_deployment(
         session_id=session_id,
         email_hint=email,
         display_name_hint=display_name,
-        selected_plan_id="sovereign",
+        selected_plan_id=plan_id,
         selected_model_id=model_id,
     )
     prepared = onboarding.prepare_arclink_onboarding_deployment(
@@ -5619,6 +5620,10 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
     expect(payload["deployment"]["ready"] is True, str(payload))
     expect(payload["deployment"]["access"]["urls"]["hermes"].startswith("https://"), str(payload))
     expect(payload["deployment"]["service_health"][0]["service_name"] == "qmd-mcp", str(payload))
+    expect(payload["agent_count"] == 1, str(payload))
+    expect(payload["ready_count"] == 1, str(payload))
+    expect(len(payload["deployments"]) == 1, str(payload))
+    expect(payload["deployments"][0]["agent_label"], str(payload))
 
     # Missing session_id -> 400
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -5635,6 +5640,62 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
     expect(status == 404, f"expected 404 got {status}")
 
     print("PASS test_onboarding_status_returns_entitlement_and_identity")
+
+
+def test_onboarding_status_returns_scale_agent_progress() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_scale_status_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_scale_status_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_scale_status_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    prepared = seed_paid_deployment(
+        control,
+        onboarding,
+        conn,
+        session_id="onb_hosted_scale",
+        email="scale@example.test",
+        display_name="Scale Captain",
+        prefix="scale-vault-1a2b",
+        plan_id="scale",
+    )
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT deployment_id, metadata_json
+            FROM arclink_deployments
+            WHERE user_id = ?
+            ORDER BY json_extract(metadata_json, '$.bundle_agent_index')
+            """,
+            (prepared["user_id"],),
+        ).fetchall()
+    ]
+    expect(len(rows) == 3, str(rows))
+    now = control.utc_now_iso()
+    for index, row in enumerate(rows, start=1):
+        conn.execute(
+            "UPDATE arclink_deployments SET status = ?, updated_at = ? WHERE deployment_id = ?",
+            ("active" if index == 1 else "provisioning", now, row["deployment_id"]),
+        )
+    conn.commit()
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/onboarding/status",
+        headers={},
+        query={"session_id": "onb_hosted_scale"},
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["agent_count"] == 3, str(payload))
+    expect(payload["ready_count"] == 1, str(payload))
+    expect(len(payload["deployments"]) == 3, str(payload))
+    expect(payload["deployment"]["deployment_id"] == prepared["deployment_id"], str(payload))
+    expect([item["bundle_agent_index"] for item in payload["deployments"]] == [1, 2, 3], str(payload))
+    expect([item["ready"] for item in payload["deployments"]] == [True, False, False], str(payload))
+    expect(all(item["agent_label"] for item in payload["deployments"]), str(payload))
+    print("PASS test_onboarding_status_returns_scale_agent_progress")
 
 
 def main() -> int:
@@ -5730,7 +5791,8 @@ def main() -> int:
     test_onboarding_claim_session_rejects_unknown_session()
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
-    print("PASS all 83 ArcLink hosted API tests")
+    test_onboarding_status_returns_scale_agent_progress()
+    print("PASS all 84 ArcLink hosted API tests")
     return 0
 
 

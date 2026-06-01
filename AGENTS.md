@@ -510,8 +510,10 @@ New and refreshed agents should get these defaults from the outset:
 - Per-agent Hermes Dashboard access is gated by
   `python/arclink_dashboard_auth_proxy.py`, which uses the generated
   `state/arclink-web-access.json` username/password plus a signed, expiring
-  session cookie. Do not reintroduce browser-facing Basic Auth for dashboard,
-  Drive, Code, Terminal, or legacy external resources.
+  per-dashboard session cookie and, when provisioned, a user-scoped signed SSO
+  cookie for sibling Hermes Agent dashboards in the same Captain account. Do
+  not reintroduce browser-facing Basic Auth for dashboard, Drive, Code,
+  Terminal, or legacy external resources.
 - Per-agent ArcLink MCP bootstrap token installed at
   `HERMES_HOME/secrets/arclink-bootstrap-token`. Agents do not pass this token
   manually; `arclink-managed-context` injects it before ArcLink MCP tool

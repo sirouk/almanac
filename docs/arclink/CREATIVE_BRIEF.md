@@ -113,14 +113,14 @@ I'll bring your ArcPod online.
 Hero body:
 
 ```text
-Give me an Agent name, a mission, and a cleared Stripe handoff. I will bring your ArcPod online. Sovereign is one Agent onboard ArcLink for $199/month. Scale is three Agents onboard ArcLink with Federation for $275/month.
+Give me a Hermes Agent name, a mission, and a cleared Stripe handoff. I will bring your ArcPod online. Sovereign is one Hermes Agent onboard ArcLink for $199/month. Scale is three Hermes Agents onboard ArcLink with Federation for $275/month.
 ```
 
 Hero CTAs:
 
 ```text
 Onboard Agent
-Open Dashboard
+Open Hermes Dashboard
 ```
 
 Feature grid:
@@ -260,19 +260,19 @@ Complete The Hire
 Fallback:
 
 ```text
-Onboarding complete. I am preparing your ArcPod.
+Onboarding complete. I am preparing your Hermes Agent Dashboard.
 ```
 
 Fallback CTA:
 
 ```text
-Open Dashboard →
+Open Hermes Dashboard →
 ```
 
 Checkout return pages:
 
 ```text
-/checkout/success?session={session_id} clears local onboarding resume state and offers Open Dashboard or Add Another Agent.
+/checkout/success?session={session_id} clears local onboarding resume state and offers each ready Hermes Agent Dashboard plus Account Dashboard.
 /checkout/cancel?session={session_id} preserves the onboarding resume path and offers Resume Onboarding or Back Home.
 ```
 
@@ -426,7 +426,7 @@ Triggered by `/checkout`.
 ```text
 Checkout is ready.
 
-Finish the secure Stripe checkout below. Once payment clears, I launch your ArcLink agent and report back here with the working links and credential handoff.
+Finish the secure Stripe checkout below. Once payment clears, I launch your Hermes Agent and report back here with the working links and credential handoff.
 ```
 
 Buttons:
@@ -757,7 +757,7 @@ Wire Notion
 Set Up Backup
 Complete The Hire
 Onboard Agent
-Open Dashboard
+Open Hermes Dashboard
 ```
 
 ## Brand And Voice North Star

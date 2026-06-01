@@ -60,6 +60,7 @@ import secrets
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 path = Path(os.environ.get("ARCLINK_HERMES_DASHBOARD_ACCESS_FILE") or sys.argv[1])
 try:
@@ -72,14 +73,31 @@ except Exception:
 username = str(os.environ.get("ARCLINK_DASHBOARD_USERNAME") or existing.get("username") or os.environ.get("ARCLINK_PREFIX") or "arclink").strip().lower()
 username = "".join(ch for ch in username if ch.isalnum() or ch in "@._-").strip(".-_") or "arclink"
 password_file = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD_FILE") or "").strip()
-password_from_file = ""
-if password_file:
+def read_first_line(path_value: str) -> str:
+    if not path_value:
+        return ""
     try:
-        password_from_file = Path(password_file).read_text(encoding="utf-8").splitlines()[0].strip()
+        return Path(path_value).read_text(encoding="utf-8").splitlines()[0].strip()
     except Exception:
-        password_from_file = ""
+        return ""
+
+password_from_file = read_first_line(password_file)
 password = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD") or password_from_file or existing.get("password") or secrets.token_urlsafe(24))
 session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
+sso_secret_file = str(os.environ.get("ARCLINK_DASHBOARD_SSO_SECRET_FILE") or "").strip()
+sso_secret_from_file = read_first_line(sso_secret_file)
+sso_session_secret = str(
+    os.environ.get("ARCLINK_DASHBOARD_SSO_SECRET")
+    or sso_secret_from_file
+    or existing.get("sso_session_secret")
+    or ""
+).strip()
+sso_subject = str(
+    os.environ.get("ARCLINK_DASHBOARD_SSO_SUBJECT")
+    or os.environ.get("ARCLINK_USER_ID")
+    or existing.get("sso_subject")
+    or username
+).strip()
 dashboard_url = str(os.environ.get("ARCLINK_HERMES_URL") or os.environ.get("ARCLINK_DASHBOARD_URL") or "").strip()
 drive_url = str(os.environ.get("ARCLINK_FILES_URL") or "").strip()
 if not drive_url and dashboard_url:
@@ -87,15 +105,61 @@ if not drive_url and dashboard_url:
 code_url = str(os.environ.get("ARCLINK_CODE_URL") or "").strip()
 if not code_url and dashboard_url:
     code_url = dashboard_url.rstrip("/") + "/code"
+
+def clean_crew_dashboards() -> list[dict[str, object]]:
+    raw = os.environ.get("ARCLINK_CREW_DASHBOARDS_JSON")
+    if raw is None:
+        existing_crew = existing.get("crew_dashboards")
+        return list(existing_crew) if isinstance(existing_crew, list) else []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    crew: list[dict[str, object]] = []
+    for item in parsed[:24]:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("hermes_url") or item.get("dashboard_url") or "").strip()
+        parsed_url = urlsplit(url)
+        if parsed_url.scheme not in {"https", "http"} or not parsed_url.netloc:
+            continue
+        if parsed_url.scheme == "http" and parsed_url.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            continue
+        label = str(item.get("label") or item.get("agent_name") or "Hermes Agent").strip()[:120] or "Hermes Agent"
+        title = str(item.get("title") or item.get("agent_title") or "").strip()[:160]
+        theme_label = str(item.get("theme_label") or "").strip()[:120]
+        status = str(item.get("status") or "").strip()[:80]
+        deployment_id = str(item.get("deployment_id") or "").strip()[:120]
+        crew.append(
+            {
+                "deployment_id": deployment_id,
+                "label": label,
+                "title": title,
+                "status": status,
+                "url": url,
+                "current": bool(item.get("current")),
+                "bundle_agent_index": int(item.get("bundle_agent_index") or 0) if str(item.get("bundle_agent_index") or "").isdigit() else 0,
+                "bundle_agent_count": int(item.get("bundle_agent_count") or 0) if str(item.get("bundle_agent_count") or "").isdigit() else 0,
+                "theme_label": theme_label,
+            }
+        )
+    return crew
+
 payload = {
     **existing,
     "auth_scheme": "signed-session",
     "username": username,
     "password": password,
     "session_secret": session_secret,
+    "sso_session_secret": sso_session_secret,
+    "sso_subject": sso_subject,
+    "sso_cookie_domain": str(os.environ.get("ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN") or existing.get("sso_cookie_domain") or "").strip(),
     "dashboard_url": dashboard_url,
     "drive_url": drive_url,
     "code_url": code_url,
+    "crew_dashboards": clean_crew_dashboards(),
     "share_request_broker_url": str(os.environ.get("ARCLINK_SHARE_REQUEST_BROKER_URL") or "").strip(),
     "notion_callback_url": str(os.environ.get("ARCLINK_NOTION_CALLBACK_URL") or "").strip(),
     "notion_root_url": str(
@@ -172,3 +236,50 @@ PY
     --unix-user "arclink" \
     --user-name "$captain_name" >/dev/null
 fi
+
+ready_file="${ARCLINK_HERMES_HOME_READY_FILE:-$HERMES_HOME_TARGET/state/arclink-hermes-home-ready.json}"
+"$PYTHON_BIN" - "$ready_file" "$HERMES_HOME_TARGET" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+ready_path = Path(sys.argv[1])
+hermes_home = Path(sys.argv[2])
+plugins = {}
+for name in ("drive", "code", "terminal", "arclink-managed-context"):
+    root = hermes_home / "plugins" / name
+    plugins[name] = {
+        "plugin": (root / "plugin.yaml").is_file(),
+        "module": (root / "__init__.py").is_file(),
+        "dashboard": (root / "dashboard" / "manifest.json").is_file(),
+    }
+
+payload = {
+    "status": "ready",
+    "ready_at": datetime.now(timezone.utc).isoformat(),
+    "deployment_id": str(os.environ.get("ARCLINK_DEPLOYMENT_ID") or "").strip(),
+    "prefix": str(os.environ.get("ARCLINK_PREFIX") or "").strip(),
+    "agent_name": str(os.environ.get("ARCLINK_AGENT_NAME") or "").strip(),
+    "plugins": plugins,
+}
+ready_path.parent.mkdir(parents=True, exist_ok=True)
+fd, tmp_name = tempfile.mkstemp(dir=str(ready_path.parent), prefix=".arclink-hermes-home-ready-", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp_name, ready_path)
+finally:
+    try:
+        os.unlink(tmp_name)
+    except FileNotFoundError:
+        pass
+ready_path.chmod(0o600)
+PY

@@ -1840,47 +1840,130 @@ def _handle_onboarding_status(
         ).fetchone()
         if user_row is not None:
             entitlement_state = str(dict(user_row).get("entitlement_state") or "unknown")
-    deployment_payload: dict[str, Any] | None = None
     deployment_id = str(row_dict.get("deployment_id") or "").strip()
-    if deployment_id and user_id:
+    deployment_payloads: list[dict[str, Any]] = []
+
+    def build_deployment_payload(deployment: Mapping[str, Any]) -> dict[str, Any]:
+        dep_id = str(deployment.get("deployment_id") or "").strip()
+        metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+        urls = _deployment_urls(
+            str(deployment.get("prefix") or ""),
+            str(deployment.get("base_domain") or ""),
+            metadata,
+        )
+        status = str(deployment.get("status") or "")
+        health = [
+            dict(item)
+            for item in conn.execute(
+                """
+                SELECT service_name, status, checked_at
+                FROM arclink_service_health
+                WHERE deployment_id = ?
+                ORDER BY service_name
+                """,
+                (dep_id,),
+            ).fetchall()
+        ]
+        try:
+            index = int(str(metadata.get("bundle_agent_index") or "0"))
+        except (TypeError, ValueError):
+            index = 0
+        try:
+            count = int(str(metadata.get("bundle_agent_count") or "0"))
+        except (TypeError, ValueError):
+            count = 0
+        label = str(deployment.get("agent_name") or "").strip() or (f"Hermes Agent {index}" if index else "Hermes Agent")
+        return {
+            "deployment_id": dep_id,
+            "status": status,
+            "ready": status in {"active", "first_contacted"},
+            "prefix": str(deployment.get("prefix") or ""),
+            "agent_label": label,
+            "agent_title": str(deployment.get("agent_title") or "").strip(),
+            "bundle_agent_index": index,
+            "bundle_agent_count": count,
+            "access": {"urls": urls},
+            "service_health": health,
+            "updated_at": str(deployment.get("updated_at") or ""),
+        }
+
+    if user_id:
+        rows = [
+            dict(item)
+            for item in conn.execute(
+                """
+                SELECT deployment_id, user_id, prefix, base_domain, agent_name,
+                       agent_title, status, metadata_json, created_at, updated_at
+                FROM arclink_deployments
+                WHERE user_id = ?
+                ORDER BY created_at, deployment_id
+                """,
+                (user_id,),
+            ).fetchall()
+        ]
+        primary_metadata: dict[str, Any] = {}
+        for item in rows:
+            if str(item.get("deployment_id") or "") == deployment_id:
+                primary_metadata = json_loads_safe(str(item.get("metadata_json") or "{}"))
+                break
+        primary_bundle_id = str(primary_metadata.get("bundle_primary_deployment_id") or deployment_id).strip()
+        selected_session_id = session_id
+        selected_rows = []
+        for item in rows:
+            dep_id = str(item.get("deployment_id") or "").strip()
+            metadata = json_loads_safe(str(item.get("metadata_json") or "{}"))
+            metadata_session_id = str(metadata.get("onboarding_session_id") or "").strip()
+            metadata_primary_id = str(metadata.get("bundle_primary_deployment_id") or dep_id).strip()
+            if selected_session_id and metadata_session_id == selected_session_id:
+                selected_rows.append(item)
+            elif dep_id == deployment_id:
+                selected_rows.append(item)
+            elif primary_bundle_id and metadata_primary_id == primary_bundle_id:
+                selected_rows.append(item)
+        seen: set[str] = set()
+        for item in selected_rows:
+            dep_id = str(item.get("deployment_id") or "").strip()
+            if dep_id in seen:
+                continue
+            seen.add(dep_id)
+            deployment_payloads.append(build_deployment_payload(item))
+        deployment_payloads.sort(
+            key=lambda item: (
+                int(item.get("bundle_agent_index") or 0) or 9999,
+                str(item.get("agent_label") or ""),
+                str(item.get("deployment_id") or ""),
+            )
+        )
+    deployment_payload: dict[str, Any] | None = None
+    if deployment_payloads:
+        deployment_payload = next(
+            (item for item in deployment_payloads if str(item.get("deployment_id") or "") == deployment_id),
+            deployment_payloads[0],
+        )
+    elif deployment_id and user_id:
         deployment_row = conn.execute(
             """
-            SELECT deployment_id, user_id, prefix, base_domain, status, metadata_json, updated_at
+            SELECT deployment_id, user_id, prefix, base_domain, agent_name,
+                   agent_title, status, metadata_json, created_at, updated_at
             FROM arclink_deployments
             WHERE deployment_id = ? AND user_id = ?
             """,
             (deployment_id, user_id),
         ).fetchone()
         if deployment_row is not None:
-            deployment = dict(deployment_row)
-            metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
-            urls = _deployment_urls(
-                str(deployment.get("prefix") or ""),
-                str(deployment.get("base_domain") or ""),
-                metadata,
-            )
-            status = str(deployment.get("status") or "")
-            health = [
-                dict(item)
-                for item in conn.execute(
-                    """
-                    SELECT service_name, status, checked_at
-                    FROM arclink_service_health
-                    WHERE deployment_id = ?
-                    ORDER BY service_name
-                    """,
-                    (deployment_id,),
-                ).fetchall()
-            ]
-            deployment_payload = {
-                "deployment_id": deployment_id,
-                "status": status,
-                "ready": status in {"active", "first_contacted"},
-                "prefix": str(deployment.get("prefix") or ""),
-                "access": {"urls": urls},
-                "service_health": health,
-                "updated_at": str(deployment.get("updated_at") or ""),
-            }
+            deployment_payload = build_deployment_payload(dict(deployment_row))
+            deployment_payloads = [deployment_payload]
+    bundle_counts = [int(item.get("bundle_agent_count") or 0) for item in deployment_payloads if int(item.get("bundle_agent_count") or 0) > 0]
+    plan_count = 3 if str(row_dict.get("selected_plan_id") or "").strip() == "scale" else (1 if deployment_id else 0)
+    agent_count = max([len(deployment_payloads), plan_count, *bundle_counts, 0])
+    ready_count = sum(
+        1
+        for item in deployment_payloads
+        if item.get("ready") and (
+            item.get("access", {}).get("urls", {}).get("hermes")
+            or item.get("access", {}).get("urls", {}).get("dashboard")
+        )
+    )
     return _json_response(200, {
         "session_id": session_id,
         "status": row_dict.get("status") or "open",
@@ -1890,6 +1973,9 @@ def _handle_onboarding_status(
         "checkout_state": row_dict.get("checkout_state") or "",
         "deployment_id": deployment_id,
         "deployment": deployment_payload,
+        "deployments": deployment_payloads,
+        "agent_count": agent_count,
+        "ready_count": ready_count,
         "display_name": row_dict.get("display_name_hint") or "",
         "channel": row_dict.get("channel") or "",
         "channel_identity": row_dict.get("channel_identity") or "",

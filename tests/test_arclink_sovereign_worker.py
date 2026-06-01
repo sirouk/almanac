@@ -872,14 +872,22 @@ def test_dashboard_password_secret_is_generated_for_canonical_handoff_store() ->
             materialization_root=Path(tmpdir) / "materialized-2",
         )
         user_ref = "secret://arclink/dashboard/users/user_1/password"
+        sso_ref = "secret://arclink/dashboard/users/user_1/sso-session-secret"
         user_first = resolver.materialize(user_ref, "/run/secrets/dashboard_password")
         user_second = resolver_2.materialize(user_ref, "/run/secrets/dashboard_password")
+        sso_first = resolver.materialize(sso_ref, "/run/secrets/dashboard_sso_secret")
+        sso_second = resolver_2.materialize(sso_ref, "/run/secrets/dashboard_sso_secret")
         user_secret = Path(tmpdir) / "store" / "users" / f"{hashlib.sha256(user_ref.encode('utf-8')).hexdigest()}.secret"
+        sso_secret = Path(tmpdir) / "store" / "users" / f"{hashlib.sha256(sso_ref.encode('utf-8')).hexdigest()}.secret"
         expect(user_secret.exists(), f"expected user-scoped dashboard password secret file: {user_secret}")
+        expect(sso_secret.exists(), f"expected user-scoped dashboard SSO secret file: {sso_secret}")
         expect(Path(user_first.source_path).read_text(encoding="utf-8") == Path(user_second.source_path).read_text(encoding="utf-8"), "same user ref must materialize the same dashboard password across deployments")
+        expect(Path(sso_first.source_path).read_text(encoding="utf-8") == Path(sso_second.source_path).read_text(encoding="utf-8"), "same user ref must materialize the same dashboard SSO secret across deployments")
         expect(user_secret.read_text(encoding="utf-8").strip() == Path(user_first.source_path).read_text(encoding="utf-8").strip(), "materialized user secret must mirror canonical user store")
+        expect(sso_secret.read_text(encoding="utf-8").strip() == Path(sso_first.source_path).read_text(encoding="utf-8").strip(), "materialized SSO secret must mirror canonical user store")
         expect(stat.S_IMODE(user_secret.parent.stat().st_mode) == 0o700, oct(stat.S_IMODE(user_secret.parent.stat().st_mode)))
         expect(stat.S_IMODE(user_secret.stat().st_mode) == 0o600, oct(stat.S_IMODE(user_secret.stat().st_mode)))
+        expect(stat.S_IMODE(sso_secret.stat().st_mode) == 0o600, oct(stat.S_IMODE(sso_secret.stat().st_mode)))
         expect(stat.S_IMODE(materialized_secret.parent.stat().st_mode) == 0o700, oct(stat.S_IMODE(materialized_secret.parent.stat().st_mode)))
         expect(stat.S_IMODE(materialized_secret.stat().st_mode) == 0o600, oct(stat.S_IMODE(materialized_secret.stat().st_mode)))
     print("PASS test_dashboard_password_secret_is_generated_for_canonical_handoff_store")

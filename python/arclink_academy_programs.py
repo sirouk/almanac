@@ -1795,6 +1795,133 @@ def list_central_specialists(conn: sqlite3.Connection, *, include_private: bool 
     return cards
 
 
+def search_academy_reuse_candidates(
+    conn: sqlite3.Connection,
+    *,
+    query: str = "",
+    user_id: str = "",
+    program_id: str = "",
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Search reusable Academy graduates/specialists before starting training.
+
+    Returns redacted public central specialists plus the requesting Captain's own
+    graduates. It never exposes another Captain's identity, steer, deployment id,
+    or private organization material.
+    """
+
+    seed_default_academy_programs(conn)
+    clean_query = str(query or "").strip()
+    clean_user = str(user_id or "").strip()
+    clean_program = _slug(str(program_id or ""))
+    tokens = _search_tokens(" ".join([clean_query, clean_program]))
+    programs = {p["program_id"]: p for p in list_academy_programs(conn)}
+    candidates: list[dict[str, Any]] = []
+
+    for card in list_central_specialists(conn):
+        program = programs.get(str(card.get("program_id") or ""))
+        haystack = " ".join(
+            [
+                str(card.get("role_title") or ""),
+                str(card.get("topic_fingerprint") or ""),
+                str(card.get("program_id") or ""),
+                str((program or {}).get("label") or ""),
+                str((program or {}).get("summary") or ""),
+                " ".join((card.get("source_lane_counts") or {}).keys())
+                if isinstance(card.get("source_lane_counts"), Mapping)
+                else "",
+            ]
+        )
+        score = _candidate_match_score(
+            haystack,
+            tokens=tokens,
+            program_id=clean_program,
+            candidate_program_id=str(card.get("program_id") or ""),
+        )
+        if score <= 0 and (tokens or clean_program):
+            continue
+        candidates.append(
+            {
+                "kind": "central_specialist",
+                "score": score,
+                "program_label": str((program or {}).get("label") or card.get("program_id") or ""),
+                **card,
+            }
+        )
+
+    if clean_user:
+        gallery = browse_academy_graduates(conn, user_id=clean_user)
+        for grad in gallery.get("graduates") or []:
+            card = academy_graduate_card(grad)
+            program = programs.get(str(card.get("program_id") or ""))
+            haystack = " ".join(
+                [
+                    str(card.get("name") or ""),
+                    str(card.get("program_id") or ""),
+                    str(card.get("program_label") or ""),
+                    str((program or {}).get("summary") or ""),
+                    " ".join(card.get("source_lanes") or []),
+                ]
+            )
+            score = _candidate_match_score(
+                haystack,
+                tokens=tokens,
+                program_id=clean_program,
+                candidate_program_id=str(card.get("program_id") or ""),
+            )
+            if score <= 0 and (tokens or clean_program):
+                continue
+            candidates.append({"kind": "captain_graduate", "score": score, **card})
+
+    candidates.sort(
+        key=lambda item: (
+            -int(item.get("score") or 0),
+            0 if item.get("kind") == "central_specialist" else 1,
+            str(item.get("program_label") or item.get("role_title") or item.get("name") or ""),
+        )
+    )
+    cap = max(1, min(20, int(limit or 5)))
+    return {
+        "query": clean_query,
+        "program_id": clean_program,
+        "candidates": candidates[:cap],
+        "candidate_count": len(candidates),
+        "privacy": "central candidates are redacted_public; Captain graduates are scoped to the requesting user",
+        "cross_tenant_proof_gate": ACADEMY_CROSS_TENANT_PROOF_GATE,
+    }
+
+
+def _search_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re_split_tokens(value)
+        if len(token) >= 3 and token not in {"agent", "academy", "training", "specialist"}
+    }
+
+
+def re_split_tokens(value: str) -> list[str]:
+    import re
+
+    return [item for item in re.split(r"[^a-z0-9]+", str(value or "").lower()) if item]
+
+
+def _candidate_match_score(
+    haystack: str,
+    *,
+    tokens: set[str],
+    program_id: str,
+    candidate_program_id: str,
+) -> int:
+    text = " ".join(re_split_tokens(haystack))
+    score = 0
+    if program_id and _slug(candidate_program_id) == program_id:
+        score += 40
+    for token in tokens:
+        if token in text:
+            score += 8
+    return score
+
+
 def _source_dedup_key(source: Any) -> str:
     cu = _canonical_url(getattr(source, "origin_url", ""))
     if cu and not any(host in cu for host in _PLACEHOLDER_HOSTS):

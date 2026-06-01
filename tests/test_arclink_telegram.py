@@ -328,6 +328,8 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     expect(calls[0]["scope"] == {"type": "chat", "chat_id": 42}, str(calls[0]))
     names = {item["command"] for item in calls[0]["commands"]}
     expect("raven" in names, str(names))
+    expect("raven_agents" in names and "raven_status" in names, str(names))
+    expect("raven_academy" in names and "raven_switch_agent" in names, str(names))
     expect("agents" not in names and "status" not in names and "help" not in names, str(names))
     expect("model" in names, str(names))
     expect("provider" in names, str(names))
@@ -460,6 +462,53 @@ def test_telegram_status_reports_selected_agent_label() -> None:
     print("PASS test_telegram_status_reports_selected_agent_label")
 
 
+def test_telegram_active_scope_exposes_dynamic_agent_switch_command() -> None:
+    control = load_module("arclink_control.py", "arclink_control_tg_dynamic_switch_scope_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_dynamic_switch_scope_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:99",
+        prefix="arc-tg-main",
+    )
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_tg_atlas",
+        user_id=seeded["user_id"],
+        prefix="arc-tg-atlas",
+        base_domain="control.example.ts.net",
+        status="active",
+        metadata={
+            "agent_name": "Atlas",
+            "ingress_mode": "tailscale",
+            "tailscale_dns_name": "control.example.ts.net",
+            "tailscale_host_strategy": "path",
+        },
+    )
+    calls: list[dict[str, object]] = []
+    tg.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+
+    result = tg.handle_telegram_update(
+        conn,
+        {"update_id": 61, "message": {"message_id": 1, "chat": {"id": 42}, "from": {"id": 99}, "text": "/raven agents"}},
+        telegram_bot_token="123:abc",
+    )
+
+    expect(result is not None and result["action"] == "show_agents", str(result))
+    names = {item["command"] for item in calls[-1]["commands"]}
+    expect("agent_atlas" in names, str(names))
+    expect("raven_agent" in names and "raven_switch_agent" in names, str(names))
+    switched = tg.handle_telegram_update(
+        conn,
+        {"update_id": 62, "message": {"message_id": 2, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agent_atlas"}},
+    )
+    expect(switched is not None and switched["action"] == "switch_agent", str(switched))
+    expect("Atlas is at the helm" in switched["text"], switched["text"])
+    print("PASS test_telegram_active_scope_exposes_dynamic_agent_switch_command")
+
+
 def test_telegram_webhook_registration_allows_buttons() -> None:
     tg = load_module("arclink_telegram.py", "arclink_telegram_webhook_register_test")
     calls: list[dict[str, object]] = []
@@ -544,11 +593,12 @@ def main() -> int:
     test_telegram_active_chat_scope_adds_agent_commands()
     test_telegram_active_media_carries_native_update_to_agent_bridge()
     test_telegram_status_reports_selected_agent_label()
+    test_telegram_active_scope_exposes_dynamic_agent_switch_command()
     test_telegram_webhook_registration_allows_buttons()
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 14 ArcLink Telegram adapter tests")
+    print("PASS all 15 ArcLink Telegram adapter tests")
     return 0
 
 

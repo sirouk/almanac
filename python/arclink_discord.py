@@ -319,16 +319,23 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
         data = interaction.get("data") or {}
         options = data.get("options") or []
         text = ""
+        name = str(data.get("name") or "")
         option_values = {
             str(opt.get("name") or ""): str(opt.get("value") or "")
             for opt in options
             if isinstance(opt, Mapping)
         }
-        for opt in options:
-            if opt.get("name") == "message":
-                text = str(opt.get("value") or "")
+        if name == "agent":
+            target = option_values.get("name", "").strip() or option_values.get("message", "").strip()
+            text = f"/agent {target}".strip()
+        elif name == "raven":
+            raven_message = option_values.get("message", "").strip()
+            text = f"/raven {raven_message}".strip() if raven_message else "/raven"
+        else:
+            for opt in options:
+                if opt.get("name") == "message":
+                    text = str(opt.get("value") or "")
         if not text:
-            name = str(data.get("name") or "")
             if name == "email":
                 text = f"email {option_values.get('address', '').strip()}".strip()
             elif name == "name":

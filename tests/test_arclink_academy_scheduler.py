@@ -191,9 +191,44 @@ def test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently
         cleanup(tmp, old_env)
 
 
+def test_forward_maintenance_rotates_shared_specialist_subscribers() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        # Captain A creates the shared central specialist.
+        a = programs.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-a2", deployment_id="dep-a2")
+        sa = programs.open_academy_mode(conn, trainee_id=a["trainee_id"], opened_by="capt-a2")
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-a2",
+            lane_id="github_repository",
+            title="Shared systems repo",
+            origin_url="https://example.test/systems",
+            summary="Compressed systems practice notes.",
+            proposed_by="agent-a",
+        )
+        programs.end_academy_mode(conn, session_id=sa["session"]["session_id"], actor="capt-a2", graduate=True)
+
+        # Captain B trains the same Major and subscribes to the same central specialist.
+        b = programs.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-b", deployment_id="dep-b")
+        sb = programs.open_academy_mode(conn, trainee_id=b["trainee_id"], opened_by="capt-b")
+        programs.end_academy_mode(conn, session_id=sb["session"]["session_id"], actor="capt-b", graduate=True)
+
+        result = scheduler.run_academy_forward_maintenance(conn, env={}, created_at="2026-06-01T00:00:00Z")
+        expect(result["eligible"] >= 2, str(result))
+        expect(result["processed"] == result["eligible"] - result["shared_rotation_deferred"], str(result))
+        expect(result["shared_rotation_deferred"] >= 1, str(result))
+        rotating = [review for review in result["reviews"] if review.get("rotation_specialist_uid")]
+        expect(len(rotating) == 1, f"one subscriber should carry the shared specialist this week: {result}")
+        print("PASS test_forward_maintenance_rotates_shared_specialist_subscribers")
+    finally:
+        cleanup(tmp, old_env)
+
+
 if __name__ == "__main__":
     test_forward_maintenance_reviews_graduates_without_writes()
     test_forward_maintenance_caps_and_reports_overflow()
     test_forward_maintenance_limit_zero_processes_all()
     test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently()
+    test_forward_maintenance_rotates_shared_specialist_subscribers()
     print("PASS all academy scheduler tests")

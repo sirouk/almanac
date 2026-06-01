@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+from datetime import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -42,6 +44,68 @@ from arclink_academy_programs import (
 DEFAULT_FORWARD_MAINTENANCE_LIMIT = 200
 
 
+def _academy_week_key(value: str) -> str:
+    try:
+        dt = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        iso = dt.isocalendar()
+        return f"{iso.year}-W{iso.week:02d}"
+    except Exception:
+        return str(value or "")[:10] or "unknown-week"
+
+
+def _rotating_forward_maintenance_candidates(
+    conn: sqlite3.Connection,
+    graduates: list[dict[str, Any]],
+    *,
+    created_at: str,
+) -> tuple[list[dict[str, Any]], int, dict[str, str]]:
+    """Pick one subscribed trainee per shared specialist for this weekly turn."""
+
+    by_id = {str(item.get("trainee_id") or ""): item for item in graduates if str(item.get("trainee_id") or "")}
+    if not by_id:
+        return [], 0, {}
+    placeholders = ",".join("?" for _ in by_id)
+    rows = conn.execute(
+        f"""
+        SELECT specialist_uid, trainee_id
+        FROM academy_specialist_subscriptions
+        WHERE trainee_id IN ({placeholders})
+        ORDER BY specialist_uid, trainee_id
+        """,
+        tuple(by_id.keys()),
+    ).fetchall()
+    grouped: dict[str, list[str]] = {}
+    grouped_trainees: set[str] = set()
+    for row in rows:
+        specialist_uid = str(row["specialist_uid"] or "")
+        trainee_id = str(row["trainee_id"] or "")
+        if not specialist_uid or trainee_id not in by_id:
+            continue
+        grouped.setdefault(specialist_uid, []).append(trainee_id)
+        grouped_trainees.add(trainee_id)
+
+    selected_ids: set[str] = set()
+    rotation_for: dict[str, str] = {}
+    deferred = 0
+    week_key = _academy_week_key(created_at)
+    for specialist_uid, trainee_ids in grouped.items():
+        ordered = sorted(set(trainee_ids))
+        if not ordered:
+            continue
+        digest = hashlib.sha256(f"{specialist_uid}:{week_key}".encode("utf-8")).hexdigest()
+        chosen = ordered[int(digest[:8], 16) % len(ordered)]
+        selected_ids.add(chosen)
+        rotation_for[chosen] = specialist_uid
+        deferred += max(0, len(ordered) - 1)
+
+    for trainee_id in by_id:
+        if trainee_id not in grouped_trainees:
+            selected_ids.add(trainee_id)
+
+    selected = [item for item in graduates if str(item.get("trainee_id") or "") in selected_ids]
+    return selected, deferred, rotation_for
+
+
 def run_academy_forward_maintenance(
     conn: sqlite3.Connection,
     *,
@@ -60,12 +124,17 @@ def run_academy_forward_maintenance(
     seed_default_academy_programs(conn)
     graduates = [t for t in list_academy_trainees(conn, status="graduated") if t.get("forward_maintained")]
     eligible = len(graduates)
+    rotation_candidates, rotation_deferred, rotation_for = _rotating_forward_maintenance_candidates(
+        conn,
+        graduates,
+        created_at=now,
+    )
     # Explicit cap semantics: limit <= 0 means "process all eligible" (unbounded);
     # a positive limit caps this run and reports the remainder as deferred.
     n = int(limit)
-    capped = eligible if n <= 0 else min(n, eligible)
-    batch = graduates[:capped]
-    deferred = eligible - len(batch)
+    capped = len(rotation_candidates) if n <= 0 else min(n, len(rotation_candidates))
+    batch = rotation_candidates[:capped]
+    deferred = rotation_deferred + (len(rotation_candidates) - len(batch))
 
     reviews: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
@@ -89,6 +158,8 @@ def run_academy_forward_maintenance(
             "blocked_source_count": int(plan.get("blocked_source_count") or 0),
             "next_review_at": str(plan.get("next_review_at") or ""),
             "proof_gates": list(plan.get("proof_gates") or []),
+            "rotation_specialist_uid": rotation_for.get(trainee_id, ""),
+            "rotation_week": _academy_week_key(now),
         }
         reviews.append(review)
         subject_id = review["deployment_id"] or trainee_id
@@ -157,6 +228,8 @@ def run_academy_forward_maintenance(
                     "kind": "academy_forward_maintenance",
                     "trainee_id": review["trainee_id"],
                     "deployment_id": review["deployment_id"],
+                    "rotation_specialist_uid": review.get("rotation_specialist_uid", ""),
+                    "rotation_week": review.get("rotation_week", ""),
                     "review_needed_count": review["review_needed_count"],
                     "blocked_source_count": review["blocked_source_count"],
                     "agent_update_status": review["agent_update_status"],
@@ -171,6 +244,7 @@ def run_academy_forward_maintenance(
         "eligible": eligible,
         "processed": len(reviews),
         "deferred_to_next_run": deferred,
+        "shared_rotation_deferred": rotation_deferred,
         "errors": errors,
         "reviews": reviews,
         "captains_notified": notified,

@@ -24,6 +24,7 @@ if str(_PYTHON_DIR) not in sys.path:
 
 from arclink_public_bots import (
     ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES,
+    arclink_public_bot_captain_telegram_commands,
     arclink_public_bot_telegram_commands,
     arclink_public_bot_turn_telegram_reply_markup,
     handle_arclink_public_bot_turn,
@@ -488,6 +489,7 @@ def arclink_public_bot_telegram_agent_commands(
 def arclink_public_bot_telegram_active_command_plan(
     *,
     agent_commands: list[dict[str, str]] | None = None,
+    captain_commands: list[dict[str, str]] | None = None,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build a conflict-free active-chat Telegram command plan.
@@ -540,20 +542,46 @@ def arclink_public_bot_telegram_active_command_plan(
         {"command": raven_command, "description": ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION[:256]}
     ]
     used = {raven_command}
+    raw_captain = (
+        list(captain_commands)
+        if captain_commands is not None
+        else arclink_public_bot_captain_telegram_commands()
+    )
+    captain_command_names: list[str] = []
+    captain_conflicts: list[str] = []
+    for item in raw_captain:
+        name = _telegram_command_name(str(item.get("command") or ""))
+        description = str(item.get("description") or "").strip()
+        if not name or not description:
+            continue
+        if name in used:
+            continue
+        if name in raw_agent_names:
+            captain_conflicts.append(name)
+            continue
+        if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
+            break
+        commands.append({"command": name, "description": description[:256]})
+        captain_command_names.append(name)
+        used.add(name)
+    agent_added_count = 0
     for item in normalized_agent:
         if item["command"] in used:
             continue
         commands.append(item)
         used.add(item["command"])
+        agent_added_count += 1
         if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
             break
 
     legacy_conflicts = sorted(raw_agent_names & ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES)
     hard_conflicts = sorted(raw_agent_names & set(ARCLINK_TELEGRAM_RAVEN_CONTROL_CANDIDATES))
-    hidden_count = max(0, len(normalized_agent) + 1 - len(commands))
+    hidden_count = max(0, len(normalized_agent) - agent_added_count)
     return {
         "commands": commands,
         "agent_command_names": sorted(seen_agent),
+        "captain_command_names": sorted(captain_command_names),
+        "captain_conflicts": sorted(set(captain_conflicts)),
         "legacy_raven_conflicts": legacy_conflicts,
         "hard_raven_conflicts": hard_conflicts,
         "policy_suppressed": sorted(set(suppressed)),
@@ -623,10 +651,11 @@ def arclink_operator_telegram_command_plan(
 def arclink_public_bot_telegram_chat_commands(
     *,
     include_agent_commands: bool,
+    captain_commands: list[dict[str, str]] | None = None,
     env: Mapping[str, str] | None = None,
 ) -> list[dict[str, str]]:
     if include_agent_commands:
-        plan = arclink_public_bot_telegram_active_command_plan(env=env)
+        plan = arclink_public_bot_telegram_active_command_plan(captain_commands=captain_commands, env=env)
         return list(plan["commands"])
 
     merged: list[dict[str, str]] = []
@@ -652,6 +681,7 @@ def refresh_arclink_public_telegram_chat_commands(
     bot_token: str,
     chat_id: str,
     include_agent_commands: bool,
+    captain_commands: list[dict[str, str]] | None = None,
     env: Mapping[str, str] | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -661,11 +691,12 @@ def refresh_arclink_public_telegram_chat_commands(
         return {"skipped": True, "reason": "missing_token_or_chat"}
     plan: dict[str, Any] = {}
     if include_agent_commands:
-        plan = arclink_public_bot_telegram_active_command_plan(env=env)
+        plan = arclink_public_bot_telegram_active_command_plan(captain_commands=captain_commands, env=env)
         commands = list(plan["commands"])
     else:
         commands = arclink_public_bot_telegram_chat_commands(
             include_agent_commands=False,
+            captain_commands=captain_commands,
             env=env,
         )
     signature = ",".join(item["command"] for item in commands)
@@ -678,6 +709,8 @@ def refresh_arclink_public_telegram_chat_commands(
             "command_count": len(commands),
             "include_agent_commands": include_agent_commands,
             "raven_command": plan.get("raven_command", ""),
+            "captain_command_names": plan.get("captain_command_names", []),
+            "captain_conflicts": plan.get("captain_conflicts", []),
             "legacy_raven_conflicts": plan.get("legacy_raven_conflicts", []),
             "hard_raven_conflicts": plan.get("hard_raven_conflicts", []),
             "policy_suppressed": plan.get("policy_suppressed", []),
@@ -693,6 +726,8 @@ def refresh_arclink_public_telegram_chat_commands(
         "include_agent_commands": include_agent_commands,
         "raven_command": plan.get("raven_command", ""),
         "agent_command_names": plan.get("agent_command_names", []),
+        "captain_command_names": plan.get("captain_command_names", []),
+        "captain_conflicts": plan.get("captain_conflicts", []),
         "legacy_raven_conflicts": plan.get("legacy_raven_conflicts", []),
         "hard_raven_conflicts": plan.get("hard_raven_conflicts", []),
         "policy_suppressed": plan.get("policy_suppressed", []),
@@ -1237,6 +1272,33 @@ def _route_operator_free_form_to_agent(
     }
 
 
+def _captain_commands_for_turn(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+) -> list[dict[str, str]]:
+    clean_user = str(user_id or "").strip()
+    deployments: list[dict[str, Any]] = []
+    if clean_user:
+        try:
+            deployments = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT *
+                    FROM arclink_deployments
+                    WHERE user_id = ?
+                      AND status IN ('active', 'first_contacted')
+                    ORDER BY created_at ASC, deployment_id ASC
+                    """,
+                    (clean_user,),
+                ).fetchall()
+            ]
+        except Exception:
+            deployments = []
+    return arclink_public_bot_captain_telegram_commands(deployments=deployments)
+
+
 def handle_telegram_update(
     conn: sqlite3.Connection,
     update: Mapping[str, Any],
@@ -1298,10 +1360,12 @@ def handle_telegram_update(
             turn.deployment_id and turn.status in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
         )
         try:
+            captain_commands = _captain_commands_for_turn(conn, user_id=turn.user_id) if include_agent_commands else []
             command_scope = refresh_arclink_public_telegram_chat_commands(
                 bot_token=clean_token,
                 chat_id=parsed["chat_id"],
                 include_agent_commands=include_agent_commands,
+                captain_commands=captain_commands or None,
                 force=turn.action == "switch_agent",
             )
         except Exception as exc:  # noqa: BLE001 - never fail the webhook on menu refresh

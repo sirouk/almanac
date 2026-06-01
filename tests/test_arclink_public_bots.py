@@ -439,13 +439,16 @@ def test_public_bot_action_catalog_has_real_platform_commands() -> None:
     expect("wrapped_frequency" in telegram_names, str(telegram))
     expect("upgrade_hermes" in telegram_names, str(telegram))
     expect("agent" in telegram_names, str(telegram))
+    captain_telegram = bots.arclink_public_bot_captain_telegram_commands()
+    captain_names = {item["command"] for item in captain_telegram}
+    expect("raven_agents" in captain_names and "raven_academy" in captain_names and "raven_agent" in captain_names, str(captain_names))
     expect("connect-notion" not in telegram_names, str(telegram))
     expect("config-backup" not in telegram_names, str(telegram))
     expect("upgrade-hermes" not in telegram_names, str(telegram))
 
     discord = bots.arclink_public_bot_discord_application_commands()
     discord_names = {item["name"] for item in discord}
-    expect({"arclink", "agent", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "wrapped-frequency", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
+    expect({"arclink", "raven", "agent", "connect-notion", "config-backup", "pair-channel", "link-channel", "raven-name", "wrapped-frequency", "upgrade-hermes", "agents", "name", "plan"} <= discord_names, str(discord_names))
     expect("email" not in discord_names, str(discord_names))
     plan = next(item for item in discord if item["name"] == "plan")
     expect({choice["value"] for choice in plan["options"][0]["choices"]} == {"founders", "sovereign", "scale"}, str(plan))
@@ -2066,6 +2069,7 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     major = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="Beacon")
     expect(major.action == "academy_training_choose_major", str(major))
     expect("Choose the Academy Major" in major.reply, major.reply)
+    expect("Existing Academy search" in major.reply, major.reply)
     focus_prompt = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="research_analyst")
     expect(focus_prompt.action == "academy_training_focus", str(focus_prompt))
     sources_prompt = bots.handle_arclink_public_bot_turn(
@@ -2083,6 +2087,7 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     )
     expect(opened.action == "academy_mode_opened", opened.reply)
     expect("Academy Mode is open for Beacon" in opened.reply, opened.reply)
+    expect("Shared Academy contribution" in opened.reply, opened.reply)
     trainee_row = conn.execute("SELECT * FROM academy_trainees WHERE deployment_id = ?", ("arcdep_academy_second",)).fetchone()
     expect(trainee_row is not None and trainee_row["status"] == "in_academy", str(dict(trainee_row or {})))
     open_row = conn.execute("SELECT * FROM academy_mode_sessions WHERE trainee_id = ? AND status = 'open'", (trainee_row["trainee_id"],)).fetchone()
@@ -2114,6 +2119,8 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     learn = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/learn")
     expect(learn.action == "learn", str(learn))
     expect("Academy Mode trains one Hermes Agent at a time" in learn.reply, learn.reply)
+    prefixed = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="/raven_agents")
+    expect(prefixed.action == "show_agents", str(prefixed))
     print("PASS test_public_bot_academy_training_walks_crew_with_skip")
 
 

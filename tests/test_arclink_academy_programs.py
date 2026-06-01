@@ -750,6 +750,16 @@ def test_academy_central_specialist_shared_and_deduped_across_captains() -> None
         expect(card["captain_count"] == 2, f"two distinct captains contributed: {card}")
         gallery = ap.list_central_specialists(conn)
         expect(any(c["specialist_uid"] == spec_uid for c in gallery), "shared specialist appears in the central gallery")
+        search = ap.search_academy_reuse_candidates(
+            conn,
+            user_id="capt-b",
+            query="systems practice shared repo architecture",
+            program_id="systems_practice_engineer",
+        )
+        expect(search["candidates"], str(search))
+        expect(search["candidates"][0]["kind"] == "central_specialist", str(search))
+        blob = json.dumps(search, sort_keys=True)
+        expect("dep-a" not in blob and "capt-a" not in blob, f"reuse search must stay redacted: {blob}")
         print("PASS test_academy_central_specialist_shared_and_deduped_across_captains")
     finally:
         cleanup(tmp, old_env)

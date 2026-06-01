@@ -16,6 +16,7 @@ if str(_PYTHON_DIR) not in sys.path:
 
 from arclink_discord import DiscordConfig, register_arclink_public_discord_commands
 from arclink_control import queue_notification, utc_now_iso
+from arclink_public_bots import arclink_public_bot_captain_telegram_commands
 from arclink_telegram import (
     TelegramConfig,
     arclink_public_bot_telegram_active_command_plan,
@@ -185,6 +186,34 @@ def _update_session_command_scope_metadata(
     )
 
 
+def _captain_commands_for_session(conn: sqlite3.Connection, row: sqlite3.Row) -> list[dict[str, str]]:
+    user_id = ""
+    deployment_id = str(row["deployment_id"] or "").strip()
+    if deployment_id:
+        dep = conn.execute(
+            "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+            (deployment_id,),
+        ).fetchone()
+        if dep is not None:
+            user_id = str(dep["user_id"] or "").strip()
+    deployments: list[dict[str, Any]] = []
+    if user_id:
+        deployments = [
+            dict(item)
+            for item in conn.execute(
+                """
+                SELECT *
+                FROM arclink_deployments
+                WHERE user_id = ?
+                  AND status IN ('active', 'first_contacted')
+                ORDER BY created_at ASC, deployment_id ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        ]
+    return arclink_public_bot_captain_telegram_commands(deployments=deployments)
+
+
 def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, Any]:
     token = str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
     db_path = _control_db_path(env)
@@ -213,7 +242,12 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
             commands, source, source_hidden_count = _agent_commands_from_gateway_container(str(row["deployment_id"] or ""))
             if not commands:
                 commands = arclink_public_bot_telegram_agent_commands(env=env)
-            plan = arclink_public_bot_telegram_active_command_plan(agent_commands=commands, env=env)
+            captain_commands = _captain_commands_for_session(conn, row)
+            plan = arclink_public_bot_telegram_active_command_plan(
+                agent_commands=commands,
+                captain_commands=captain_commands,
+                env=env,
+            )
             result = refresh_arclink_public_telegram_chat_commands(
                 bot_token=token,
                 chat_id=chat_id,
@@ -235,6 +269,7 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
                 result = {**result, **plan, "command_count": len(plan["commands"])}
             metadata = _json_loads(str(row["metadata_json"] or "{}"))
             metadata["telegram_active_agent_command_names"] = list(plan.get("agent_command_names") or [])
+            metadata["telegram_captain_command_names"] = list(plan.get("captain_command_names") or [])
             metadata["telegram_raven_control_command"] = str(plan.get("raven_command") or "raven")
             metadata["telegram_command_scope_refreshed_at"] = utc_now_iso()
             metadata["telegram_command_scope_source"] = source

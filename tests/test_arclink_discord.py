@@ -50,6 +50,9 @@ def test_discord_slash_command_through_bot_contract() -> None:
 
 def test_discord_registered_action_command_options_parse_to_bot_contract() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_registered_action_parse_test")
+    registered = dc.arclink_public_bot_discord_application_commands()
+    registered_names = {item["name"] for item in registered}
+    expect("raven" in registered_names and "agent" in registered_names, str(registered_names))
     interaction = {
         "type": 2,
         "channel_id": "ch_1",
@@ -113,10 +116,18 @@ def test_discord_registered_action_command_options_parse_to_bot_contract() -> No
         "type": 2,
         "channel_id": "ch_1",
         "member": {"user": {"id": "u_1"}},
-        "data": {"name": "agent", "options": [{"name": "message", "value": "/reload-mcp"}]},
+        "data": {"name": "agent", "options": [{"name": "name", "value": "Atlas"}]},
     }
     parsed_agent = dc.parse_discord_interaction(agent)
-    expect(parsed_agent["text"] == "/reload-mcp", str(parsed_agent))
+    expect(parsed_agent["text"] == "/agent Atlas", str(parsed_agent))
+    raven = {
+        "type": 2,
+        "channel_id": "ch_1",
+        "member": {"user": {"id": "u_1"}},
+        "data": {"name": "raven", "options": [{"name": "message", "value": "academy Atlas"}]},
+    }
+    parsed_raven = dc.parse_discord_interaction(raven)
+    expect(parsed_raven["text"] == "/raven academy Atlas", str(parsed_raven))
     component = {
         "type": 3,
         "channel_id": "ch_1",

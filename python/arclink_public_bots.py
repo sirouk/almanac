@@ -33,6 +33,7 @@ from arclink_academy_programs import (
     list_academy_programs,
     open_academy_mode,
     seed_default_academy_programs,
+    search_academy_reuse_candidates,
     update_academy_trainee_steer,
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe
@@ -688,6 +689,9 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
     if not parts:
         return "/help"
     control = parts[0].lower().split("@", 1)[0]
+    prefixed = _raven_prefixed_command_rewrite(message, control)
+    if prefixed is not None:
+        return prefixed
     if control not in ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_COMMANDS and not ARCLINK_PUBLIC_BOT_RAVEN_CONTROL_FALLBACK_RE.fullmatch(control):
         return None
     rest = parts[1].strip() if len(parts) > 1 else ""
@@ -765,6 +769,58 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return "/cancel"
     if verb in {"name", "raven_name", "raven-name"}:
         return f"/raven_name {tail}".strip()
+    return "/help"
+
+
+def _raven_prefixed_command_rewrite(message: str, control: str) -> str | None:
+    token = str(control or "").strip().lower().replace("-", "_")
+    if not token.startswith("/raven_"):
+        return None
+    parts = str(message or "").strip().split(maxsplit=1)
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    verb = token[len("/raven_") :]
+    if verb in {"switch_agent", "agent"}:
+        return f"/agent {rest}".strip()
+    if verb in {"agents", "crew", "roster", "manifest"}:
+        return "/agents"
+    if verb in {"train", "train_crew", "crew_training"}:
+        return "/train-crew"
+    if verb in {"academy", "academy_training", "quick_training", "quick_briefing", "quick_align", "quick_huddle"}:
+        return f"/academy {rest}".strip()
+    if verb in {"whats_changed", "changed", "changes"}:
+        return "/whats-changed"
+    if verb in {"top_up", "topup", "refuel", "credits"}:
+        return f"/refuel {rest}".strip()
+    if verb in {"credentials", "credential"}:
+        return f"/credentials {rest}".strip()
+    if verb in {"credentials_stored", "credential_stored", "stored"}:
+        return f"/credentials-stored {rest}".strip()
+    if verb in {"notion", "connect_notion", "connectnotion"}:
+        return "/connect_notion"
+    if verb in {"backup", "config_backup", "configbackup"}:
+        return "/config_backup"
+    if verb in {"link", "pair", "link_channel", "pair_channel"}:
+        return f"/link_channel {rest}".strip()
+    if verb in {"add", "add_agent"}:
+        return "/add-agent"
+    if verb in {"retire", "retire_agent", "remove", "remove_agent", "delete", "delete_agent"}:
+        return f"/retire-agent {rest}".strip()
+    if verb in {"upgrade", "upgrade_hermes", "update"}:
+        return "/upgrade_hermes"
+    if verb in {"cancel", "stop"}:
+        return "/cancel"
+    if verb in {"help", "commands", "menu"}:
+        return "/help"
+    if verb in {"learn", "tour"}:
+        return "/learn"
+    if verb in {"status", "health"}:
+        return "/status"
+    if verb in {"name", "raven_name"}:
+        return f"/raven_name {rest}".strip()
+    for action in ARCLINK_PUBLIC_BOT_ACTIONS:
+        action_name = str(action.telegram_command or "").replace("-", "_")
+        if verb == action_name:
+            return f"/{action.telegram_command} {rest}".strip()
     return "/help"
 
 
@@ -1338,6 +1394,51 @@ def arclink_public_bot_telegram_commands() -> list[dict[str, str]]:
     ]
 
 
+def arclink_public_bot_captain_telegram_commands(
+    *,
+    deployments: list[Mapping[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    """Captain-scoped active-chat Telegram commands.
+
+    Active chats let the selected Hermes Agent own the bare slash namespace, but
+    Captains should still see the full Raven control surface in the command
+    picker. These prefixed commands route back through Raven.
+    """
+
+    commands: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, description: str) -> None:
+        clean = re.sub(r"[^a-z0-9_]", "", str(name or "").strip().lower().replace("-", "_")).strip("_")
+        clean = clean[:32]
+        if not clean or clean in seen:
+            return
+        commands.append({"command": clean, "description": str(description or "").strip()[:256]})
+        seen.add(clean)
+
+    add("raven", "Raven: ArcLink controls and command palette")
+    for action in ARCLINK_PUBLIC_BOT_ACTIONS:
+        add(f"raven_{str(action.telegram_command or '').replace('-', '_')}", f"Raven: {action.description}")
+    add("raven_switch_agent", "Raven: switch the active Hermes Agent")
+
+    ready_deployments = [
+        item
+        for item in (deployments or [])
+        if str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES
+    ]
+    if len(ready_deployments) <= 1:
+        return commands
+
+    for index, item in enumerate(ready_deployments):
+        if str(item.get("status") or "") not in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            continue
+        label = _agent_label(item, index=index, conn=None)
+        slug = _agent_slug(label).replace("-", "_")
+        if slug:
+            add(f"agent_{slug[:26]}", f"Switch to Hermes Agent {label}")
+    return commands
+
+
 def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
     commands: list[dict[str, Any]] = [
         {
@@ -1352,7 +1453,20 @@ def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
                     "required": True,
                 }
             ],
-        }
+        },
+        {
+            "name": "raven",
+            "type": 1,
+            "description": "Talk to Raven, your ArcLink guide",
+            "options": [
+                {
+                    "type": 3,
+                    "name": "message",
+                    "description": "Raven command, for example agents, academy, or agent Atlas",
+                    "required": False,
+                }
+            ],
+        },
     ]
     for action in ARCLINK_PUBLIC_BOT_ACTIONS:
         payload: dict[str, Any] = {
@@ -4987,6 +5101,43 @@ def _academy_agent_select_reply(
     )
 
 
+def _academy_reuse_brief(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    query: str = "",
+    program_id: str = "",
+    limit: int = 3,
+) -> tuple[str, list[dict[str, Any]]]:
+    try:
+        result = search_academy_reuse_candidates(
+            conn,
+            user_id=user_id,
+            query=query,
+            program_id=program_id,
+            limit=limit,
+        )
+    except Exception:
+        return "", []
+    candidates = [dict(item) for item in (result.get("candidates") or []) if isinstance(item, Mapping)]
+    if not candidates:
+        return (
+            "Existing Academy search: no reusable graduate or shared specialist matched yet. "
+            "This Agent can still pioneer a new specialist and contribute public-lane derived notes after Trainer review.",
+            [],
+        )
+    lines = ["Existing Academy search found reusable starting points:"]
+    for item in candidates[:limit]:
+        kind = "shared specialist" if item.get("kind") == "central_specialist" else "your graduate"
+        label = str(item.get("program_label") or item.get("role_title") or item.get("name") or item.get("program_id") or "Academy specialist")
+        source_count = int(item.get("source_count") or 0)
+        version = item.get("capsule_version")
+        version_note = f", capsule v{version}" if version not in (None, "") else ""
+        lines.append(f"- {label} ({kind}, {source_count} source(s){version_note})")
+    lines.append("Raven will use this to avoid duplicate work and keep private strategy out of the shared Academy.")
+    return "\n".join(lines), candidates[:limit]
+
+
 def _academy_major_prompt(
     conn: sqlite3.Connection,
     *,
@@ -4996,8 +5147,15 @@ def _academy_major_prompt(
     deployment: Mapping[str, Any] | None,
     data: Mapping[str, Any],
 ) -> ArcLinkPublicBotTurn:
-    updated = _academy_training_update(conn, session, workflow="academy_training_choose_major", data=data)
     label = str(data.get("agent_label") or "this Agent")
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    reuse_text, reuse_candidates = _academy_reuse_brief(
+        conn,
+        user_id=user_id,
+        query=" ".join([label, str(data.get("agent_title") or "")]).strip(),
+    )
+    stored_data = {**dict(data), "reuse_candidates": reuse_candidates}
+    updated = _academy_training_update(conn, session, workflow="academy_training_choose_major", data=stored_data)
     majors = list_academy_programs(conn)
     major_lines = [
         f"- {index}. {program.get('label')}: {program.get('summary')}"
@@ -5009,6 +5167,7 @@ def _academy_major_prompt(
         action="academy_training_choose_major",
         reply=(
             f"Good. We will train {label} one Agent at a time.\n\n"
+            f"{reuse_text}\n\n"
             "Choose the Academy Major to start from:\n"
             + "\n".join(major_lines)
         ),
@@ -5027,13 +5186,29 @@ def _academy_focus_prompt(
     deployment: Mapping[str, Any] | None,
     data: Mapping[str, Any],
 ) -> ArcLinkPublicBotTurn:
-    updated = _academy_training_update(conn, session, workflow="academy_training_focus", data=data)
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    query = " ".join(
+        [
+            str(data.get("agent_label") or ""),
+            str(data.get("agent_title") or ""),
+            str(data.get("program_label") or ""),
+        ]
+    ).strip()
+    reuse_text, reuse_candidates = _academy_reuse_brief(
+        conn,
+        user_id=user_id,
+        query=query,
+        program_id=str(data.get("program_id") or ""),
+    )
+    stored_data = {**dict(data), "reuse_candidates": reuse_candidates}
+    updated = _academy_training_update(conn, session, workflow="academy_training_focus", data=stored_data)
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="academy_training_focus",
         reply=(
             f"Major selected: {data.get('program_label')}.\n\n"
+            f"{reuse_text}\n\n"
             "What should this Agent become able to do for you? Send the research focus, outcomes, boundaries, and level of depth in one message."
         ),
         session=updated,
@@ -5051,14 +5226,29 @@ def _academy_sources_prompt(
     deployment: Mapping[str, Any] | None,
     data: Mapping[str, Any],
 ) -> ArcLinkPublicBotTurn:
-    updated = _academy_training_update(conn, session, workflow="academy_training_sources", data=data)
+    user_id = str((deployment or {}).get("user_id") or session.get("user_id") or "").strip()
+    reuse_text, reuse_candidates = _academy_reuse_brief(
+        conn,
+        user_id=user_id,
+        query=" ".join(
+            [
+                str(data.get("focus") or ""),
+                str(data.get("program_label") or ""),
+                str(data.get("agent_title") or ""),
+            ]
+        ).strip(),
+        program_id=str(data.get("program_id") or ""),
+    )
+    stored_data = {**dict(data), "reuse_candidates": reuse_candidates}
+    updated = _academy_training_update(conn, session, workflow="academy_training_sources", data=stored_data)
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
         action="academy_training_sources",
         reply=(
+            f"{reuse_text}\n\n"
             "Now send outside source lanes or specific materials this Agent should revisit weekly: URLs, repos, docs, channels, journals, standards, or `none`.\n\n"
-            "Do not paste tokens, private credentials, paid material, or anything the Agent is not allowed to retain."
+            "Do not paste tokens, private credentials, paid material, or anything the Agent is not allowed to retain. Add `private` if public-lane derived notes should not be promoted to the shared Academy."
         ),
         session=updated,
         deployment=deployment,
@@ -5101,10 +5291,17 @@ def _academy_open_mode_reply(
             data={**dict(data), "agent_label": label},
         )
     source_brief = "" if str(data.get("outside_sources") or "").strip().casefold() in {"none", "no", "n/a"} else str(data.get("outside_sources") or "").strip()
+    share_text = " ".join([str(data.get("focus") or ""), source_brief]).casefold()
+    private_markers = ("private", "do not share", "don't share", "no share", "opt out", "opt-out")
+    share_policy = "private" if any(phrase in share_text for phrase in private_markers) else "redacted_public"
     steer = {
         "focus": str(data.get("focus") or "").strip(),
         "outside_sources": source_brief,
         "allowed_source_lanes": list(program.get("source_lanes") or []),
+        "reuse_candidates": list(data.get("reuse_candidates") or [])[:5]
+        if isinstance(data.get("reuse_candidates"), list)
+        else [],
+        "share": share_policy,
         "weekly_review": True,
         "weekly_review_cadence": "weekly",
         "captain_bootstrap_channel": channel,
@@ -5172,6 +5369,7 @@ def _academy_open_mode_reply(
             f"Major: {program.get('label')}\n"
             f"Focus: {steer['focus']}\n"
             f"Weekly sources: {source_brief or 'Captain did not provide outside sources yet'}\n\n"
+            f"Shared Academy contribution: {'off for this trainee' if share_policy == 'private' else 'public-lane derived notes only, after Trainer redaction and review'}.\n\n"
             "The Hermes Agent now has the Academy context in managed state and should use the `arclink-academy` skill to run governed search, retrieval, lesson-card drafting, and evaluation.\n\n"
             "Send more steering notes any time. Send `graduate` to close and stage the specialist corpus, or `cancel` / `exit` to leave Academy Training without graduating."
         ),

@@ -106,6 +106,7 @@ def test_arclink_mcp_tools_advertise_actionable_input_schemas() -> None:
         "knowledge.search-and-fetch",
         "agents.managed-memory",
         "agents.consume-notifications",
+        "academy.search-graduates",
         "academy.propose-resource",
         "shares.request",
         "ssot.read",
@@ -180,6 +181,11 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "resource_root": "vault",
             "resource_path": "/Projects/brief.md",
             "display_name": "Project Brief",
+        },
+        "academy.search-graduates": {
+            "query": "systems practice engineer weekly education source methodology",
+            "program_id": "systems_practice_engineer",
+            "limit": 5,
         },
         "academy.propose-resource": {
             "title": "Example architecture notes",

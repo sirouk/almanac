@@ -6089,6 +6089,9 @@ def test_docker_operator_commands_are_present() -> None:
     expect("DRIVE_ROOT" in body and "CODE_WORKSPACE_ROOT" in body, body)
     expect("TERMINAL_ALLOW_ROOT" in body and "HERMES_TUI_DIR" in body, body)
     expect("ARCLINK_DASHBOARD_THEME" in body and "ARCLINK_DASHBOARD_AGENT_LABEL" in body, body)
+    expect("dashboard_sso_secret" in body and "ARCLINK_DASHBOARD_SSO_SECRET_FILE" in body, body)
+    expect("ARCLINK_CREW_DASHBOARDS_JSON" in body and "_crew_dashboard_links" in body, body)
+    expect("sso_secret_for_subject" in body and "secrets.token_urlsafe(32)" in body, body)
     expect("default_arclink_agent_profile" in body and "deployment_identities = load_deployment_identities()" in body, body)
     expect('"VAULT_DIR": "/srv/vault"' in body and '"/srv/vault/Agents_KB/hermes-agent-docs"' in body, body)
     expect('services.pop("code-server", None)' in body, body)
@@ -6150,6 +6153,150 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker health passed" not in body.lower() or "Docker health passed." in body, body)
     expect("redact_output" in job_loop and 'cat "$output_file"' not in job_loop, "Docker job loop must redact failure output before logs/state")
     print("PASS test_docker_operator_commands_are_present")
+
+
+def test_docker_repair_backfills_dashboard_sso_and_crew_links() -> None:
+    snippet = extract(
+        read("bin/arclink-docker.sh"),
+        "docker_repair_deployment_dashboard_plugin_mounts() {",
+        "\ncompose_service_secrets_available() {",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        deployments = root / "deployments"
+        state = repo / "arclink-priv" / "state"
+        state.mkdir(parents=True)
+        (repo / "python").symlink_to(REPO / "python")
+        db_path = state / "arclink-control.sqlite3"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE arclink_deployments (
+                  deployment_id TEXT PRIMARY KEY,
+                  user_id TEXT,
+                  prefix TEXT,
+                  base_domain TEXT,
+                  agent_name TEXT,
+                  agent_title TEXT,
+                  status TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT
+                )
+                """
+            )
+            rows = [
+                ("arcdep_one", "user_1", "amber-one", "example.test", "Vela", "Systems Builder", 1),
+                ("arcdep_two", "user_1", "amber-two", "example.test", "Atlas", "Mission Operator", 2),
+            ]
+            for deployment_id, user_id, prefix, base_domain, agent_name, agent_title, index in rows:
+                metadata = {
+                    "onboarding_session_id": "onb_test",
+                    "bundle_primary_deployment_id": "arcdep_one",
+                    "bundle_agent_index": index,
+                    "bundle_agent_count": 2,
+                }
+                conn.execute(
+                    """
+                    INSERT INTO arclink_deployments (
+                      deployment_id, user_id, prefix, base_domain, agent_name, agent_title,
+                      status, metadata_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                    """,
+                    (
+                        deployment_id,
+                        user_id,
+                        prefix,
+                        base_domain,
+                        agent_name,
+                        agent_title,
+                        json.dumps(metadata, sort_keys=True),
+                        f"2026-01-01T00:00:0{index}+00:00",
+                    ),
+                )
+            conn.commit()
+
+        for deployment_id, _user_id, prefix, base_domain, agent_name, _agent_title, _index in rows:
+            config = deployments / f"{deployment_id}-{prefix}" / "config"
+            config.mkdir(parents=True)
+            payload = {
+                "services": {
+                    "code-server": {"image": "legacy"},
+                    "hermes-dashboard": {
+                        "command": ["legacy-dashboard"],
+                        "environment": {
+                            "ARCLINK_BASE_DOMAIN": base_domain,
+                            "ARCLINK_INGRESS_MODE": "domain",
+                            "ARCLINK_PREFIX": prefix,
+                            "ARCLINK_HERMES_URL": f"https://hermes-{prefix}.{base_domain}",
+                        },
+                        "volumes": [],
+                    },
+                    "hermes-gateway": {
+                        "environment": {"ARCLINK_PREFIX": prefix},
+                        "volumes": [],
+                    },
+                    "managed-context-install": {
+                        "command": ["legacy-installer"],
+                        "environment": {},
+                        "secrets": [],
+                        "volumes": [],
+                    },
+                },
+                "secrets": {"code_server_password": {"file": str(root / f"{agent_name}.secret")}},
+            }
+            (config / "compose.yaml").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        script = f"""
+set -euo pipefail
+REPO_DIR={shlex.quote(str(repo))}
+configured_or_default() {{
+  case "$1" in
+    ARCLINK_STATE_ROOT_BASE) printf '%s\\n' {shlex.quote(str(deployments))} ;;
+    *) printf '%s\\n' "${{2:-}}" ;;
+  esac
+}}
+{snippet}
+docker_repair_deployment_dashboard_plugin_mounts
+"""
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            cwd=REPO,
+            env={**os.environ, "PYTHONPATH": str(REPO / "python")},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        expect(result.returncode == 0, f"repair failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+
+        loaded = {}
+        secrets_by_deployment = {}
+        for deployment_id, _user_id, prefix, _base_domain, _agent_name, _agent_title, _index in rows:
+            deployment_root = deployments / f"{deployment_id}-{prefix}"
+            compose = json.loads((deployment_root / "config" / "compose.yaml").read_text(encoding="utf-8"))
+            loaded[deployment_id] = compose
+            secret_path = deployment_root / "config" / "secrets" / "dashboard_sso_secret"
+            secrets_by_deployment[deployment_id] = secret_path.read_text(encoding="utf-8").strip()
+            expect(secret_path.stat().st_mode & 0o777 == 0o600, f"secret permissions not narrowed for {secret_path}")
+            expect("code-server" not in compose["services"], json.dumps(compose, sort_keys=True))
+            expect("code_server_password" not in compose["secrets"], json.dumps(compose["secrets"], sort_keys=True))
+            expect(compose["secrets"]["dashboard_sso_secret"] == {"file": str(secret_path)}, str(compose["secrets"]))
+            dashboard = compose["services"]["hermes-dashboard"]
+            installer = compose["services"]["managed-context-install"]
+            expect(dashboard["command"] == ["./bin/run-hermes-dashboard-proxy.sh"], str(dashboard))
+            expect({"source": "dashboard_sso_secret", "target": "/run/secrets/dashboard_sso_secret"} in installer["secrets"], str(installer))
+            expect(installer["environment"]["ARCLINK_DASHBOARD_SSO_SECRET_FILE"] == "/run/secrets/dashboard_sso_secret", str(installer))
+            expect(installer["environment"]["ARCLINK_DASHBOARD_SSO_SUBJECT"] == "user_1", str(installer))
+            expect(installer["environment"]["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"] == "example.test", str(installer))
+            crew = json.loads(dashboard["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"])
+            expect([item["deployment_id"] for item in crew] == ["arcdep_one", "arcdep_two"], str(crew))
+            expect(sum(1 for item in crew if item.get("current")) == 1, str(crew))
+            expect(any(item["label"] == "Vela" for item in crew) and any(item["label"] == "Atlas" for item in crew), str(crew))
+            expect(dashboard["environment"]["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"] == "example.test", str(dashboard))
+            expect(installer["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"] == dashboard["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"], str(installer))
+        expect(secrets_by_deployment["arcdep_one"] == secrets_by_deployment["arcdep_two"], str(secrets_by_deployment))
+    print("PASS test_docker_repair_backfills_dashboard_sso_and_crew_links")
 
 
 def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
@@ -7177,6 +7324,7 @@ def main() -> int:
     test_docker_agent_supervisor_rejects_unapproved_agent_process_env_keys()
     test_docker_agent_supervisor_delegates_process_launch_to_process_helper()
     test_docker_operator_commands_are_present()
+    test_docker_repair_backfills_dashboard_sso_and_crew_links()
     test_deployment_hermes_home_installer_seeds_runtime_knowledge()
     test_docker_tailnet_publish_failure_withholds_app_urls()
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
@@ -7196,7 +7344,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 56 ArcLink Docker regression tests")
+    print("PASS all 57 ArcLink Docker regression tests")
     return 0
 
 

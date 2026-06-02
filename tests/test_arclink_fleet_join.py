@@ -15,6 +15,8 @@ REPO = Path(__file__).resolve().parents[1]
 JOIN_SH = REPO / "bin" / "arclink-fleet-join.sh"
 PROBE_WRAPPER = REPO / "bin" / "arclink-fleet-probe-wrapper"
 PUBLIC_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestArcLinkFleetJoinKey arclink-test"
+CONTROL_WG_PUBLIC_KEY = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/AB="
+WORKER_WG_PUBLIC_KEY = "BcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/ABC="
 
 
 def run(cmd: list[str], *, env: dict[str, str] | None = None, stdin: str = "") -> subprocess.CompletedProcess[str]:
@@ -80,6 +82,10 @@ def test_join_fake_root_is_idempotent_and_does_not_persist_token() -> None:
             "worker-a.example.test",
             "--ssh-host",
             "10.0.0.10",
+            "--private-dns-name",
+            "worker-a.wg.internal",
+            "--tailscale-dns-name",
+            "worker-a.tailnet.ts.net",
             "--ssh-user",
             "arclink",
             "--region",
@@ -105,6 +111,8 @@ def test_join_fake_root_is_idempotent_and_does_not_persist_token() -> None:
         payload = callbacks[0]["payload"]
         expect(payload["hostname"] == "worker-a.example.test", str(payload))
         expect(payload["ssh_host"] == "10.0.0.10", str(payload))
+        expect(payload["private_dns_name"] == "worker-a.wg.internal", str(payload))
+        expect(payload["tailscale_dns_name"] == "worker-a.tailnet.ts.net", str(payload))
         expect(payload["capacity_slots"] == 7, str(payload))
         rendered = json.dumps(callbacks, sort_keys=True)
         expect("safe-token-signature" not in rendered and "arcfleet_v1" not in rendered, rendered)
@@ -112,6 +120,80 @@ def test_join_fake_root_is_idempotent_and_does_not_persist_token() -> None:
         key_lines = authorized_keys.read_text(encoding="utf-8").splitlines()
         expect(key_lines.count(PUBLIC_KEY) == 1, key_lines)
     print("PASS test_join_fake_root_is_idempotent_and_does_not_persist_token")
+
+
+def test_join_fake_root_configures_wireguard_without_ssh_surgery() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        root = tmp_path / "root"
+        sink = tmp_path / "callback.jsonl"
+        token_file = tmp_path / "token"
+        key_file = tmp_path / "fleet.pub"
+        fakebin = tmp_path / "bin"
+        fakebin.mkdir()
+        write(root / "etc" / "machine-id", "1234567890abcdef1234567890abcdef\n")
+        write(token_file, "arcfleet_v1.flenr_test.wireguard-token\n")
+        write(key_file, PUBLIC_KEY + "\n", mode=0o644)
+        write(
+            fakebin / "wg",
+            f"#!/bin/bash\nif [[ ${{1:-}} == genkey ]]; then echo test-worker-private-key; exit 0; fi\nif [[ ${{1:-}} == pubkey ]]; then cat >/dev/null; echo {WORKER_WG_PUBLIC_KEY}; exit 0; fi\nexit 64\n",
+            mode=0o755,
+        )
+        state_root = root / "var" / "lib" / "arclink-fleet"
+        authorized_keys = root / "home" / "arclink" / ".ssh" / "authorized_keys"
+        write(authorized_keys, "ssh-ed25519 AAAAC3NzaExisting existing-key\n", mode=0o600)
+        env = base_env(root, sink)
+        env["PATH"] = f"{fakebin}:{env.get('PATH', '')}"
+        result = run(
+            [
+                str(JOIN_SH),
+                "--control-url",
+                "https://control.example.test",
+                "--token-file",
+                str(token_file),
+                "--authorized-key-file",
+                str(key_file),
+                "--hostname",
+                "worker-wg.example.test",
+                "--ssh-host",
+                "198.51.100.44",
+                "--ssh-user",
+                "arclink",
+                "--state-root",
+                str(state_root),
+                "--wireguard-worker-ip",
+                "10.44.0.11/32",
+                "--wireguard-control-public-key",
+                CONTROL_WG_PUBLIC_KEY,
+                "--wireguard-control-endpoint",
+                "control.wg.example.test:51820",
+                "--wireguard-listen-port",
+                "51821",
+                "--skip-prereq-install",
+                "--json",
+            ],
+            env=env,
+        )
+        expect(result.returncode == 0, f"wireguard join failed: {result.stderr}\n{result.stdout}")
+        config = root / "etc" / "wireguard" / "wg-arclink.conf"
+        expect(config.exists(), "WireGuard config should be written in fake root")
+        config_text = config.read_text(encoding="utf-8")
+        expect("Address = 10.44.0.11/32" in config_text, config_text)
+        expect(f"PublicKey = {CONTROL_WG_PUBLIC_KEY}" in config_text, config_text)
+        expect("Endpoint = control.wg.example.test:51820" in config_text, config_text)
+        expect("ListenPort = 51821" in config_text, config_text)
+        firewall_plan = (state_root / "wireguard" / "firewall.plan").read_text(encoding="utf-8")
+        expect("51821/udp" in firewall_plan and "22" not in firewall_plan, firewall_plan)
+        key_lines = authorized_keys.read_text(encoding="utf-8").splitlines()
+        expect("ssh-ed25519 AAAAC3NzaExisting existing-key" in key_lines, key_lines)
+        expect(key_lines.count(PUBLIC_KEY) == 1, key_lines)
+        payload = json.loads(sink.read_text(encoding="utf-8").splitlines()[0])["payload"]
+        expect(payload["private_dns_name"] == "10.44.0.11", str(payload))
+        expect(payload["wireguard_private_ip"] == "10.44.0.11", str(payload))
+        expect(payload["wireguard_private_cidr"] == "10.44.0.11/32", str(payload))
+        expect(payload["wireguard_public_key"] == WORKER_WG_PUBLIC_KEY, str(payload))
+        expect(payload["wireguard_firewall_status"] == "planned", str(payload))
+    print("PASS test_join_fake_root_configures_wireguard_without_ssh_surgery")
 
 
 def test_join_callback_failure_leaves_worker_non_admitting() -> None:
@@ -175,9 +257,10 @@ def test_probe_wrapper_allowlist_outputs_json_and_rejects_unknown() -> None:
 def main() -> int:
     test_join_rejects_enrollment_token_in_argv()
     test_join_fake_root_is_idempotent_and_does_not_persist_token()
+    test_join_fake_root_configures_wireguard_without_ssh_surgery()
     test_join_callback_failure_leaves_worker_non_admitting()
     test_probe_wrapper_allowlist_outputs_json_and_rejects_unknown()
-    print("PASS all 4 ArcLink fleet join tests")
+    print("PASS all 5 ArcLink fleet join tests")
     return 0
 
 

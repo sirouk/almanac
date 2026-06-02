@@ -382,6 +382,22 @@ include Captain report text, Markdown, or raw ledger snippets.
 | `ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY` | `path`; Tailscale MagicDNS/Funnel does not provide ArcLink's dynamic per-Captain wildcard subdomains |
 | `ARCLINK_TAILNET_SERVICE_PORT_BASE` | First HTTPS port for per-deployment Hermes/files/code tailnet apps in Tailscale path mode |
 
+**Production private-mesh env vars:**
+| Var | Purpose |
+|-----|---------|
+| `ARCLINK_PRIVATE_DNS_NAME` | Preferred Control Node private mesh/WireGuard DNS or IP for remote ArcPods |
+| `ARCLINK_CONTROL_PRIVATE_BASE_URL` | Preferred HTTPS base URL remote ArcPods use for Control Node API and inference router access |
+| `ARCLINK_WIREGUARD_CONTROL_URL` | WireGuard-specific alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
+| `ARCLINK_PRIVATE_MESH_CONTROL_URL` | Generic private-mesh alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
+| `ARCLINK_WIREGUARD_ENABLED` | Enables Control Node WireGuard readiness during install/reconfigure, default `1` |
+| `ARCLINK_WIREGUARD_INTERFACE` | Control/worker WireGuard interface name, default `wg-arclink` |
+| `ARCLINK_WIREGUARD_NETWORK_CIDR` | Fleet tunnel subnet, default `10.44.0.0/24` |
+| `ARCLINK_WIREGUARD_CONTROL_IP` | Control Node tunnel IP, default `10.44.0.1` |
+| `ARCLINK_WIREGUARD_PORT` | Control Node WireGuard UDP port, default `51820` |
+| `ARCLINK_WIREGUARD_ACTIVATE` | Enables control interface activation during install/reconfigure, default `1` |
+| `ARCLINK_WIREGUARD_CONTROL_PUBLIC_KEY` | Control Node public key generated from private state |
+| `ARCLINK_WIREGUARD_CONTROL_ENDPOINT` | Worker peer endpoint in `host:port` form |
+
 **Fake mode:** Default. Records and intent are persisted to SQLite but no
 provider API calls are made. Drift reconciliation reports local-only state.
 
@@ -1354,9 +1370,25 @@ and health automation:
   results.
 - `arclink_fleet_audit_chain` for machine lifecycle audit-chain records.
 
-These tables and columns are additive. Current local validation may create and
-check them, but token mint/callback handling, periodic probing, and live
-two-host fleet proof remain gated until those phases land.
+These tables and columns are additive. Enrollment token mint/callback handling
+and periodic probing are implemented; live two-host fleet proof remains
+Operator proof-gated.
+
+Remote worker addressing is private-mesh first. Control install/reconfigure
+generates the Control Node WireGuard keypair in private state, records the
+public key/endpoint, writes the control interface config, and opens only the
+configured WireGuard UDP port when `ufw` or `firewalld` is already active.
+Register production workers with a WireGuard/private-mesh `ssh_host` plus
+`wireguard_private_ip`; ArcPods placed on those hosts render against the
+selected worker's private tunnel address and derive control API/router URLs from
+`ARCLINK_CONTROL_PRIVATE_BASE_URL` or `ARCLINK_WIREGUARD_CONTROL_URL` unless
+explicit public control URLs are configured. Worker join appends the fleet SSH
+key without replacing `authorized_keys`, changing `sshd_config`, or changing
+port 22. Tailscale can remain an access overlay/domain alternative through
+`tailscale_dns_name`, but it is not the preferred production dependency. Remote
+ArcPods do not join the control-node Docker network and require a remote
+`ARCLINK_FLEET_SHARE_HUB_URL` so the Captain shared folder does not split across
+worker-local disks.
 
 **Read scale state:**
 

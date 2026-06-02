@@ -8,6 +8,7 @@ ARCLINK_PREREQ_JSON="${ARCLINK_PREREQ_JSON:-0}"
 ARCLINK_PREREQ_AUDIT_FILE="${ARCLINK_PREREQ_AUDIT_FILE:-${STATE_DIR:+$STATE_DIR/arclink-prereq-audit.jsonl}}"
 ARCLINK_PREREQ_DOCKER_INSTALL_URL="${ARCLINK_PREREQ_DOCKER_INSTALL_URL:-https://get.docker.com}"
 ARCLINK_PREREQ_PYTHON_PACKAGES="${ARCLINK_PREREQ_PYTHON_PACKAGES:-}"
+ARCLINK_PREREQ_WIREGUARD="${ARCLINK_PREREQ_WIREGUARD:-0}"
 
 prereq_command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -53,6 +54,10 @@ PY
 
 prereq_have_docker_compose() {
   prereq_command_exists docker && docker compose version >/dev/null 2>&1
+}
+
+prereq_have_wireguard_tools() {
+  prereq_command_exists wg && prereq_command_exists wg-quick
 }
 
 prereq_audit() {
@@ -171,6 +176,34 @@ prereq_install_docker() {
     return 1
   fi
   prereq_audit "install_docker" "docker-compose-plugin" "completed"
+}
+
+prereq_install_wireguard_tools() {
+  local package_manager="$1"
+
+  if ! prereq_truthy "$ARCLINK_PREREQ_WIREGUARD"; then
+    return 0
+  fi
+  if prereq_have_wireguard_tools; then
+    prereq_audit "install_wireguard" "wireguard-tools" "present"
+    return 0
+  fi
+  if prereq_truthy "$ARCLINK_PREREQ_CHECK_ONLY" || prereq_truthy "$ARCLINK_SKIP_PREREQ_INSTALL"; then
+    prereq_audit "install_wireguard" "wireguard-tools" "planned"
+    echo "WireGuard tools are missing." >&2
+    return 1
+  fi
+  prereq_audit "install_wireguard" "wireguard-tools" "started"
+  if ! prereq_install_os_packages "$package_manager" wireguard-tools; then
+    prereq_audit "install_wireguard" "wireguard-tools" "failed" "package install failed"
+    return 1
+  fi
+  if ! prereq_have_wireguard_tools; then
+    prereq_audit "install_wireguard" "wireguard-tools" "failed" "wg or wg-quick unavailable after install"
+    echo "wireguard-tools installed, but wg or wg-quick is still unavailable." >&2
+    return 1
+  fi
+  prereq_audit "install_wireguard" "wireguard-tools" "completed"
 }
 
 prereq_install_python_packages() {
@@ -305,6 +338,10 @@ ensure_arclink_prereqs() {
 
   if ! prereq_install_python_packages; then
     planned+=("python-packages")
+  fi
+
+  if ! prereq_install_wireguard_tools "$package_manager"; then
+    planned+=("wireguard-tools")
   fi
 
   if (( ${#planned[@]} > 0 )); then

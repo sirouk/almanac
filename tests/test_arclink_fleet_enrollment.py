@@ -7,6 +7,7 @@ from arclink_test_helpers import expect, load_module, memory_db
 
 
 SECRET = "test-fleet-enrollment-secret"
+WORKER_WG_PUBLIC_KEY = "BcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/ABC="
 
 
 def _attestation_payload(hostname: str = "worker-1.example.test") -> dict:
@@ -129,12 +130,20 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
         enrollment_id="flenr_callback",
     )
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test", "ARCLINK_FLEET_ENROLLMENT_SECRET": SECRET})
+    attestation = _attestation_payload()
+    attestation["ssh_host"] = "10.44.0.11"
+    attestation["tailscale_dns_name"] = "worker-1.tailnet.ts.net"
+    attestation["wireguard_private_ip"] = "10.44.0.11"
+    attestation["wireguard_private_cidr"] = "10.44.0.11/32"
+    attestation["wireguard_public_key"] = WORKER_WG_PUBLIC_KEY
+    attestation["wireguard_interface"] = "wg-arclink"
+    attestation["wireguard_control_endpoint"] = "control.wg.example.test:51820"
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
         method="POST",
         path="/api/v1/fleet/enrollment/callback",
         headers={"Authorization": f"Bearer {minted['token']}"},
-        body=json.dumps(_attestation_payload()),
+        body=json.dumps(attestation),
         config=config,
     )
     expect(status == 201, f"expected callback 201 got {status}: {payload}")
@@ -142,8 +151,12 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     expect(minted["token"] not in rendered, rendered)
     worker = payload["worker"]
     expect(worker["host_id"].startswith("host_"), str(worker))
+    expect(worker["private_dns_name"] == "10.44.0.11", str(worker))
+    expect(worker["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(worker))
+    expect(worker["wireguard_private_ip"] == "10.44.0.11", str(worker))
+    expect(worker["wireguard_public_key"] == WORKER_WG_PUBLIC_KEY, str(worker))
     machine = conn.execute(
-        "SELECT enrollment_id, machine_fingerprint, attested_at, machine_host_link, audit_trail_chain FROM arclink_inventory_machines WHERE machine_id = ?",
+        "SELECT enrollment_id, machine_fingerprint, attested_at, machine_host_link, audit_trail_chain, metadata_json FROM arclink_inventory_machines WHERE machine_id = ?",
         (worker["machine_id"],),
     ).fetchone()
     expect(machine["enrollment_id"] == "flenr_callback", str(dict(machine)))
@@ -151,6 +164,21 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     expect(str(machine["attested_at"]), str(dict(machine)))
     expect(str(machine["machine_host_link"]).startswith("host_"), str(dict(machine)))
     expect(str(machine["audit_trail_chain"]), str(dict(machine)))
+    machine_meta = json.loads(machine["metadata_json"])
+    expect(machine_meta["private_dns_name"] == "10.44.0.11", str(machine_meta))
+    expect(machine_meta["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(machine_meta))
+    expect(machine_meta["control_network_mode"] == "remote", str(machine_meta))
+    expect(machine_meta["wireguard"]["public_key"] == WORKER_WG_PUBLIC_KEY, str(machine_meta))
+    host_meta = json.loads(
+        conn.execute(
+            "SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
+            (machine["machine_host_link"],),
+        ).fetchone()["metadata_json"]
+    )
+    expect(host_meta["private_dns_name"] == "10.44.0.11", str(host_meta))
+    expect(host_meta["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(host_meta))
+    expect(host_meta["control_network_mode"] == "remote", str(host_meta))
+    expect(host_meta["wireguard"]["private_ip"] == "10.44.0.11", str(host_meta))
 
     verified = enrollment.verify_fleet_audit_chain(conn)
     expect(verified["ok"] is True and verified["checked_entries"] == 2, str(verified))

@@ -839,6 +839,69 @@ def test_fleet_share_remote_hub_uses_resolved_url_without_local_bind() -> None:
     print("PASS test_fleet_share_remote_hub_uses_resolved_url_without_local_bind")
 
 
+def test_remote_private_mesh_worker_uses_private_control_urls_without_control_docker_network() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_remote_private_mesh_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_remote_private_mesh_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker-a.wg.internal",
+        env={
+            "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote",
+            "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
+            "ARCLINK_API_INTERNAL_URL": "http://control-api:8900",
+            "ARCLINK_LLM_ROUTER_BASE_URL": "http://control-llm-router:8090/v1",
+            "ARCLINK_FLEET_SHARE_HUB_URL": "ssh://hub.wg.internal/{user}/fleet-shared.git",
+        },
+    )
+    services = intent["compose"]["services"]
+    expect(intent["compose"]["networks"] == {}, str(intent["compose"]["networks"]))
+    for service_name in ("dashboard", "hermes-gateway", "hermes-dashboard", "nextcloud", "notion-webhook"):
+        expect("arclink-control" not in services[service_name].get("networks", {}), f"{service_name}: {services[service_name]}")
+    expect("traefik.docker.network" not in services["hermes-dashboard"]["labels"], str(services["hermes-dashboard"]))
+    expect("traefik.docker.network" not in services["notion-webhook"]["labels"], str(services["notion-webhook"]))
+    expect(intent["environment"]["ARCLINK_ARCPOD_CONTROL_NETWORK_MODE"] == "remote", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_PRIVATE_DNS_NAME"] == "worker-a.wg.internal", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_LLM_ROUTER_BASE_URL"] == "https://control.wg.internal/v1", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_CHUTES_BASE_URL"] == "https://control.wg.internal/v1", str(intent["environment"]))
+    expect(
+        intent["environment"]["ARCLINK_SHARE_REQUEST_BROKER_URL"]
+        == "https://control.wg.internal/api/v1/user/share-grants/broker",
+        str(intent["environment"]),
+    )
+    expect(intent["access"]["urls"]["dashboard"] == "https://worker-a.wg.internal/u/amber-vault-1a2b", str(intent["access"]))
+    sync = services["fleet-share-sync"]
+    expect(sync["environment"]["ARCLINK_FLEET_SHARE_HUB_URL"] == "ssh://hub.wg.internal/user_1/fleet-shared.git", str(sync))
+    expect("/fleet-share-hub.git" not in {item["target"] for item in sync["volumes"]}, str(sync))
+    print("PASS test_remote_private_mesh_worker_uses_private_control_urls_without_control_docker_network")
+
+
+def test_remote_worker_requires_remote_fleet_share_hub() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_remote_share_fail_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_remote_share_fail_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    try:
+        provisioning.render_arclink_provisioning_intent(
+            conn,
+            deployment_id="dep_1",
+            ingress_mode="tailscale",
+            tailscale_dns_name="worker-a.tailnet.ts.net",
+            env={
+                "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote",
+                "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
+            },
+        )
+    except provisioning.ArcLinkProvisioningError as exc:
+        expect("ARCLINK_FLEET_SHARE_HUB_URL" in str(exc), str(exc))
+    else:
+        raise AssertionError("remote ArcPod renders must require a remote fleet-share hub")
+    print("PASS test_remote_worker_requires_remote_fleet_share_hub")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso()
@@ -855,7 +918,9 @@ def main() -> int:
     test_tailscale_ingress_uses_dedicated_app_ports_when_recorded()
     test_dashboard_theme_falls_back_to_agent_index_variant()
     test_fleet_share_remote_hub_uses_resolved_url_without_local_bind()
-    print("PASS all 15 ArcLink provisioning tests")
+    test_remote_private_mesh_worker_uses_private_control_urls_without_control_docker_network()
+    test_remote_worker_requires_remote_fleet_share_hub()
+    print("PASS all 17 ArcLink provisioning tests")
     return 0
 
 

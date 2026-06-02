@@ -24,7 +24,16 @@ The old Shared Host/systemd installer and the public Shared Host Docker menu
 are retired. Fleet growth now happens by registering worker machines with the
 Control Node and placing ArcPods as Docker deployments on those workers.
 ArcPods as Docker deployments on registered fleet workers are the supported
-fleet shape.
+fleet shape. For production remote workers, prefer a self-owned private mesh
+such as WireGuard for `--ssh-host` and `--wireguard-private-ip`; SSH executor
+allowlists and machine-mode guards still apply. Control install/reconfigure
+prepares the Control Node WireGuard keypair and endpoint metadata. Worker join
+generates worker-local WireGuard keys, writes the worker config, and appends the
+fleet SSH key without replacing `authorized_keys`, modifying `sshd_config`, or
+changing port 22. Tailscale remains useful as an access overlay or domain
+alternative, but it is not the primary production dependency.
+When a Captain's Crew can span machines, configure `ARCLINK_FLEET_SHARE_HUB_URL`
+as a remote git hub so Fleet Shared stays unified.
 
 ## Current Architecture
 
@@ -71,6 +80,7 @@ Register and inspect workers:
 ```bash
 ./deploy.sh control fleet-key
 ./deploy.sh control register-worker
+./deploy.sh control register-worker --hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --wireguard-private-ip 10.44.0.11 --json
 ./deploy.sh control inventory list
 ./deploy.sh control inventory health --json
 ./deploy.sh control inventory probe-all --json

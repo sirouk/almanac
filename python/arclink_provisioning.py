@@ -433,37 +433,158 @@ def _allow_direct_chutes(env: Mapping[str, str] | None) -> bool:
     return _truthy((env or {}).get("ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS"))
 
 
-def _llm_router_base_url(env: Mapping[str, str] | None) -> str:
+def _control_network_mode(env: Mapping[str, str] | None, metadata: Mapping[str, Any] | None = None) -> str:
     source = env or {}
+    meta = metadata or {}
     value = str(
-        source.get("ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL")
-        or source.get("ARCLINK_LLM_ROUTER_BASE_URL")
-        or "http://control-llm-router:8090/v1"
-    ).strip()
-    return value.rstrip("/") or "http://control-llm-router:8090/v1"
+        meta.get("control_network_mode")
+        or meta.get("arcpod_control_network_mode")
+        or source.get("ARCLINK_ARCPOD_CONTROL_NETWORK_MODE")
+        or source.get("ARCLINK_DEPLOYMENT_CONTROL_NETWORK_MODE")
+        or "local"
+    ).strip().lower()
+    if value in {"", "local", "docker", "control", "shared", "on", "1", "true"}:
+        return "local"
+    if value in {"remote", "tailnet", "tailscale", "none", "off", "0", "false"}:
+        return "remote"
+    raise ArcLinkProvisioningError("ArcLink ArcPod control network mode must be local or remote")
 
 
-def _share_request_broker_url(env: Mapping[str, str] | None) -> str:
+def _control_public_base_url(env: Mapping[str, str] | None) -> str:
     source = env or {}
-    value = str(
-        source.get("ARCLINK_SHARE_REQUEST_BROKER_URL")
-        or source.get("ARCLINK_API_INTERNAL_URL")
-        or "http://control-api:8900"
+    private_value = str(
+        source.get("ARCLINK_CONTROL_PRIVATE_BASE_URL")
+        or source.get("ARCLINK_WIREGUARD_CONTROL_URL")
+        or source.get("ARCLINK_PRIVATE_MESH_CONTROL_URL")
+        or ""
     ).strip().rstrip("/")
-    if not value:
-        value = "http://control-api:8900"
-    if value.endswith("/api/v1/user/share-grants/broker"):
+    if private_value:
+        return private_value
+    private_host = str(
+        source.get("ARCLINK_PRIVATE_DNS_NAME")
+        or source.get("ARCLINK_WIREGUARD_DNS_NAME")
+        or source.get("ARCLINK_PRIVATE_MESH_DNS_NAME")
+        or ""
+    ).strip().lower().strip(".")
+    if private_host:
+        port = str(
+            source.get("ARCLINK_CONTROL_PRIVATE_HTTPS_PORT")
+            or source.get("ARCLINK_WIREGUARD_HTTPS_PORT")
+            or source.get("ARCLINK_PRIVATE_MESH_HTTPS_PORT")
+            or source.get("ARCLINK_TAILSCALE_HTTPS_PORT")
+            or "443"
+        ).strip()
+        suffix = "" if port in {"", "443"} else f":{port}"
+        return f"https://{private_host}{suffix}"
+    value = str(
+        source.get("ARCLINK_CONTROL_PUBLIC_BASE_URL")
+        or source.get("ARCLINK_TAILSCALE_CONTROL_URL")
+        or ""
+    ).strip().rstrip("/")
+    if value:
         return value
-    return f"{value}/api/v1/user/share-grants/broker"
+    tailnet_host = str(source.get("ARCLINK_TAILSCALE_DNS_NAME") or "").strip().lower().strip(".")
+    if tailnet_host:
+        port = str(source.get("ARCLINK_TAILSCALE_HTTPS_PORT") or "443").strip()
+        suffix = "" if port in {"", "443"} else f":{port}"
+        return f"https://{tailnet_host}{suffix}"
+    return ""
 
 
-def _fleet_share_hub_host_ref(env: Mapping[str, str] | None, *, user_id: str) -> str:
+def _looks_like_control_docker_url(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    return "://control-" in text or "://control_" in text or "://control." in text
+
+
+def _append_control_path(base_url: str, path: str) -> str:
+    base = str(base_url or "").strip().rstrip("/")
+    clean_path = "/" + str(path or "").strip().lstrip("/")
+    if not base:
+        return ""
+    if base.endswith(clean_path):
+        return base
+    return f"{base}{clean_path}"
+
+
+def _append_control_api_path(base_url: str, path: str) -> str:
+    base = str(base_url or "").strip().rstrip("/")
+    clean_path = "/" + str(path or "").strip().lstrip("/")
+    if not base:
+        return ""
+    if base.endswith(clean_path):
+        return base
+    if base.endswith("/api/v1"):
+        return f"{base}{clean_path.removeprefix('/api/v1')}"
+    if base.endswith("/api"):
+        return f"{base}/v1{clean_path.removeprefix('/api/v1')}"
+    return f"{base}{clean_path}"
+
+
+def _llm_router_base_url(env: Mapping[str, str] | None, *, control_network_mode: str = "local") -> str:
+    source = env or {}
+    public_value = str(source.get("ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if public_value:
+        return public_value
+    base_value = str(source.get("ARCLINK_LLM_ROUTER_BASE_URL") or "").strip().rstrip("/")
+    if base_value and (control_network_mode != "remote" or not _looks_like_control_docker_url(base_value)):
+        return base_value
+    if control_network_mode == "remote":
+        control_base = _control_public_base_url(source)
+        if control_base:
+            return _append_control_path(control_base, "/v1")
+        raise ArcLinkProvisioningError(
+            "Remote ArcPod rendering requires ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL "
+            "or ARCLINK_CONTROL_PRIVATE_BASE_URL/ARCLINK_WIREGUARD_CONTROL_URL "
+            "so pods do not depend on control-node Docker DNS"
+        )
+    return "http://control-llm-router:8090/v1"
+
+
+def _share_request_broker_url(env: Mapping[str, str] | None, *, control_network_mode: str = "local") -> str:
+    source = env or {}
+    explicit = str(source.get("ARCLINK_SHARE_REQUEST_BROKER_URL") or "").strip().rstrip("/")
+    if explicit:
+        if control_network_mode == "remote" and _looks_like_control_docker_url(explicit):
+            explicit = ""
+        else:
+            return _append_control_api_path(explicit, "/api/v1/user/share-grants/broker")
+    api_base = str(source.get("ARCLINK_API_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if control_network_mode == "remote":
+        if not api_base:
+            maybe_internal = str(source.get("ARCLINK_API_INTERNAL_URL") or "").strip().rstrip("/")
+            if maybe_internal and not _looks_like_control_docker_url(maybe_internal):
+                api_base = maybe_internal
+        if not api_base:
+            api_base = _control_public_base_url(source)
+        if api_base:
+            return _append_control_api_path(api_base, "/api/v1/user/share-grants/broker")
+        raise ArcLinkProvisioningError(
+            "Remote ArcPod rendering requires ARCLINK_SHARE_REQUEST_BROKER_URL, "
+            "ARCLINK_API_PUBLIC_BASE_URL, or ARCLINK_CONTROL_PRIVATE_BASE_URL/"
+            "ARCLINK_WIREGUARD_CONTROL_URL"
+        )
+    value = str(source.get("ARCLINK_API_INTERNAL_URL") or "http://control-api:8900").strip().rstrip("/")
+    return _append_control_api_path(value or "http://control-api:8900", "/api/v1/user/share-grants/broker")
+
+
+def _fleet_share_hub_host_ref(env: Mapping[str, str] | None, *, user_id: str, control_network_mode: str = "local") -> str:
     source = env or {}
     clean_user = _safe_segment(user_id)
     template = str(source.get("ARCLINK_FLEET_SHARE_HUB_URL") or "").strip()
     if template:
         ref = template.replace("{user}", clean_user) if "{user}" in template else f"{template.rstrip('/')}/{clean_user}/fleet-shared.git"
-        return _clean_git_ref(ref, label="fleet-share hub ref")
+        clean_ref = _clean_git_ref(ref, label="fleet-share hub ref")
+        if control_network_mode == "remote" and not _is_remote_git_ref(clean_ref):
+            raise ArcLinkProvisioningError(
+                "Remote ArcPod rendering requires ARCLINK_FLEET_SHARE_HUB_URL to be a remote git ref "
+                "so Captain shared folders do not split across worker-local disks"
+            )
+        return clean_ref
+    if control_network_mode == "remote":
+        raise ArcLinkProvisioningError(
+            "Remote ArcPod rendering requires ARCLINK_FLEET_SHARE_HUB_URL with a remote git ref "
+            "for the Captain shared folder hub"
+        )
     root = str(source.get("ARCLINK_FLEET_SHARE_HUB_ROOT") or "/arcdata/captains").strip().rstrip("/") or "/arcdata/captains"
     return _clean_git_ref(f"{root}/{clean_user}/fleet-shared.git", label="fleet-share hub ref")
 
@@ -666,16 +787,22 @@ def _crew_dashboard_links(
         prefix = str(row.get("prefix") or "").strip()
         if not prefix:
             continue
-        row_base_domain = str(row.get("base_domain") or base_domain).strip() or base_domain
-        row_tailnet_ports = _clean_tailnet_service_ports(metadata.get("tailnet_service_ports"))
-        urls = arclink_access_urls(
-            prefix=prefix,
-            base_domain=row_base_domain,
-            ingress_mode=ingress_mode,
-            tailscale_dns_name=tailscale_dns_name,
-            tailscale_host_strategy=tailscale_host_strategy,
-            tailnet_service_ports=row_tailnet_ports,
-        )
+        stored_urls = metadata.get("access_urls") if isinstance(metadata.get("access_urls"), Mapping) else {}
+        if stored_urls:
+            urls = {str(role): str(url).strip() for role, url in dict(stored_urls).items() if str(url or "").strip()}
+        else:
+            row_base_domain = str(row.get("base_domain") or base_domain).strip() or base_domain
+            row_tailnet_ports = _clean_tailnet_service_ports(metadata.get("tailnet_service_ports"))
+            row_tailscale_dns_name = str(metadata.get("tailscale_dns_name") or tailscale_dns_name).strip().lower().strip(".")
+            row_tailscale_strategy = str(metadata.get("tailscale_host_strategy") or tailscale_host_strategy).strip().lower()
+            urls = arclink_access_urls(
+                prefix=prefix,
+                base_domain=row_base_domain,
+                ingress_mode=str(metadata.get("ingress_mode") or ingress_mode),
+                tailscale_dns_name=row_tailscale_dns_name,
+                tailscale_host_strategy=row_tailscale_strategy,
+                tailnet_service_ports=row_tailnet_ports,
+            )
         label = str(row.get("agent_name") or "").strip() or f"Hermes Agent {_int_or_zero(metadata.get('bundle_agent_index')) or len(links) + 1}"
         theme = _deployment_theme_profile(metadata)
         links.append(
@@ -775,6 +902,12 @@ def _control_network(prefix: str, service_name: str) -> dict[str, Any]:
     }
 
 
+def _service_networks(prefix: str, service_name: str, *, use_control_network: bool) -> dict[str, Any] | None:
+    if not use_control_network:
+        return None
+    return _control_network(prefix, service_name)
+
+
 def _service(
     *,
     image: str,
@@ -856,6 +989,7 @@ def _render_services(
     compose_secrets: Mapping[str, Mapping[str, str]],
     fleet_share_hub_host_ref: str = "",
     tailnet_service_ports: Mapping[str, int] | None = None,
+    use_control_network: bool = True,
 ) -> dict[str, dict[str, Any]]:
     app_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
@@ -913,7 +1047,7 @@ def _render_services(
             volumes=[vault_volume, memory_volume],
             labels=labels["dashboard"],
             deploy=_limits("dashboard"),
-            networks=_control_network(prefix, "dashboard"),
+            networks=_service_networks(prefix, "dashboard", use_control_network=use_control_network),
         ),
         "hermes-gateway": _service(
             image=app_image,
@@ -933,7 +1067,7 @@ def _render_services(
             },
             secrets=[{"source": provider_secret_name, "target": secret_target[provider_secret_name]}],
             deploy=_limits("hermes-gateway"),
-            networks=_control_network(prefix, "hermes-gateway"),
+            networks=_service_networks(prefix, "hermes-gateway", use_control_network=use_control_network),
         ),
         "hermes-dashboard": _service(
             image=app_image,
@@ -955,7 +1089,7 @@ def _render_services(
                 {"source": "share_request_broker_token", "target": secret_target["share_request_broker_token"]},
             ],
             deploy=_limits("hermes-dashboard"),
-            networks=_control_network(prefix, "hermes"),
+            networks=_service_networks(prefix, "hermes", use_control_network=use_control_network),
         ),
         "qmd-mcp": _service(
             image=app_image,
@@ -1035,7 +1169,7 @@ def _render_services(
             ],
             deploy=_limits("nextcloud"),
             healthcheck=_hc("nextcloud"),
-            networks=_control_network(prefix, "nextcloud"),
+            networks=_service_networks(prefix, "nextcloud", use_control_network=use_control_network),
         ),
         "notion-webhook": _service(
             image=app_image,
@@ -1047,7 +1181,7 @@ def _render_services(
                 {"source": "notion_webhook_secret", "target": secret_target["notion_webhook_secret"]},
             ] if "notion_webhook_secret" in secret_target else [],
             deploy=_limits("notion-webhook"),
-            networks=_control_network(prefix, "notion"),
+            networks=_service_networks(prefix, "notion", use_control_network=use_control_network),
         ),
         "notification-delivery": _service(
             image=app_image,
@@ -1185,7 +1319,13 @@ def render_arclink_provisioning_intent(
     )
     clean_tailscale_dns_name = str(
         tailscale_dns_name
+        or source_env.get("ARCLINK_PRIVATE_DNS_NAME")
+        or source_env.get("ARCLINK_WIREGUARD_DNS_NAME")
+        or source_env.get("ARCLINK_PRIVATE_MESH_DNS_NAME")
         or source_env.get("ARCLINK_TAILSCALE_DNS_NAME")
+        or metadata.get("private_dns_name")
+        or metadata.get("wireguard_dns_name")
+        or metadata.get("private_mesh_dns_name")
         or metadata.get("tailscale_dns_name")
         or ""
     ).strip().lower().strip(".")
@@ -1201,6 +1341,8 @@ def render_arclink_provisioning_intent(
         if not clean_tailscale_dns_name:
             clean_tailscale_dns_name = clean_base_domain
     clean_edge_target = str(edge_target or metadata.get("edge_target") or f"edge.{clean_base_domain}").strip()
+    control_network_mode = _control_network_mode(source_env, metadata)
+    use_control_network = control_network_mode == "local"
     control_network_name = str(
         source_env.get("ARCLINK_CONTROL_DOCKER_NETWORK")
         or source_env.get("ARCLINK_DOCKER_NETWORK")
@@ -1232,7 +1374,7 @@ def render_arclink_provisioning_intent(
         ingress_mode=clean_ingress_mode,
         tailscale_dns_name=clean_tailscale_dns_name,
         tailscale_host_strategy=clean_tailscale_strategy,
-        docker_network=control_network_name,
+        docker_network=control_network_name if use_control_network else "",
     )
     direct_chutes = _allow_direct_chutes(env)
     provider_secret_name = "chutes_api_key" if direct_chutes else "llm_router_api_key"
@@ -1262,7 +1404,11 @@ def render_arclink_provisioning_intent(
         tailscale_host_strategy=clean_tailscale_strategy,
         current_metadata=metadata,
     )
-    fleet_share_hub_host_ref = _fleet_share_hub_host_ref(source_env, user_id=str(deployment["user_id"]))
+    fleet_share_hub_host_ref = _fleet_share_hub_host_ref(
+        source_env,
+        user_id=str(deployment["user_id"]),
+        control_network_mode=control_network_mode,
+    )
     fleet_share_hub_container_ref = _fleet_share_hub_container_ref(fleet_share_hub_host_ref)
     notion_callback_path = _notion_callback_path(
         prefix,
@@ -1282,10 +1428,13 @@ def render_arclink_provisioning_intent(
         hostname=hostnames["dashboard"],
         callback_path=notion_callback_path,
         strip_prefix=f"/u/{prefix}" if clean_ingress_mode == "tailscale" and clean_tailscale_strategy == "path" else "",
-        docker_network=control_network_name,
+        docker_network=control_network_name if use_control_network else "",
     )
+    llm_router_base_url = _llm_router_base_url(source_env, control_network_mode=control_network_mode)
+    share_request_broker_url = _share_request_broker_url(source_env, control_network_mode=control_network_mode)
     deployment_env = {
         "ARCLINK_DEPLOYMENT_ID": deployment_id,
+        "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": control_network_mode,
         "ARCLINK_USER_ID": str(deployment["user_id"]),
         "ARCLINK_PREFIX": prefix,
         "ARCLINK_AGENT_NAME": agent_name,
@@ -1297,6 +1446,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_DASHBOARD_ACCENT_HEX": dashboard_accent_hex,
         "ARCLINK_BASE_DOMAIN": clean_base_domain,
         "ARCLINK_INGRESS_MODE": clean_ingress_mode,
+        "ARCLINK_PRIVATE_DNS_NAME": clean_tailscale_dns_name if clean_ingress_mode == "tailscale" else "",
+        "ARCLINK_PRIVATE_MESH_DNS_NAME": clean_tailscale_dns_name if clean_ingress_mode == "tailscale" else "",
         "ARCLINK_TAILSCALE_DNS_NAME": clean_tailscale_dns_name,
         "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": clean_tailscale_strategy,
         "ARCLINK_TAILSCALE_NOTION_PATH": str(
@@ -1324,15 +1475,15 @@ def render_arclink_provisioning_intent(
         "ARCLINK_FILES_URL": access_urls["files"],
         "ARCLINK_CODE_URL": access_urls["code"],
         "ARCLINK_HERMES_URL": access_urls["hermes"],
-        "ARCLINK_SHARE_REQUEST_BROKER_URL": _share_request_broker_url(source_env),
+        "ARCLINK_SHARE_REQUEST_BROKER_URL": share_request_broker_url,
         "ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE": compose_secrets["share_request_broker_token"]["target"],
         "ARCLINK_PRIMARY_PROVIDER": primary_provider(env),
-        "ARCLINK_CHUTES_BASE_URL": chutes_base_url(env) if direct_chutes else _llm_router_base_url(env),
+        "ARCLINK_CHUTES_BASE_URL": chutes_base_url(env) if direct_chutes else llm_router_base_url,
         "ARCLINK_CHUTES_DEFAULT_MODEL": chutes_default_model(env),
         "ARCLINK_MODEL_REASONING_DEFAULT": model_reasoning_default(env),
         "ARCLINK_CHUTES_API_KEY_REF": secret_refs[provider_secret_name],
         "ARCLINK_CHUTES_API_KEY_FILE": compose_secrets[provider_secret_name]["target"],
-        "ARCLINK_LLM_ROUTER_BASE_URL": _llm_router_base_url(env),
+        "ARCLINK_LLM_ROUTER_BASE_URL": llm_router_base_url,
         "ARCLINK_LLM_ROUTER_API_KEY_REF": secret_refs.get("llm_router_api_key", ""),
         "NEXTCLOUD_ADMIN_PASSWORD_REF": secret_refs["nextcloud_admin_password"],
         "NEXTCLOUD_DB_PASSWORD_REF": secret_refs["nextcloud_db_password"],
@@ -1401,6 +1552,7 @@ def render_arclink_provisioning_intent(
         compose_secrets=compose_secrets,
         fleet_share_hub_host_ref=fleet_share_hub_host_ref,
         tailnet_service_ports=tailnet_service_ports,
+        use_control_network=use_control_network,
     )
     nextcloud_hostport = _url_hostport(access_urls["files"])
     if nextcloud_hostport:
@@ -1437,7 +1589,7 @@ def render_arclink_provisioning_intent(
                     "external": True,
                     "name": control_network_name,
                 }
-            },
+            } if use_control_network else {},
         },
         "runtime_resolution": {
             "stock_image_file_env": {
@@ -1493,6 +1645,7 @@ def render_arclink_provisioning_intent(
             "entitlement_state": entitlement_state,
             "ingress_mode": clean_ingress_mode,
             "dns_provider": "cloudflare" if clean_ingress_mode == "domain" else "tailscale",
+            "control_network_mode": control_network_mode,
         },
     }
     validate_no_plaintext_secrets(intent)

@@ -21,6 +21,22 @@ Options:
   --authorized-key-file PATH  Public SSH key authorized for Control Node access.
   --hostname NAME             Worker hostname to attest.
   --ssh-host HOST             SSH address reported to the Control Node.
+  --private-dns-name NAME     Production private mesh DNS/IP used for ArcPod links.
+  --tailscale-dns-name NAME   Optional Tailscale MagicDNS access name for this worker.
+  --wireguard-worker-ip IP    Worker WireGuard tunnel IP or CIDR. Used as private DNS/IP when none is supplied.
+  --wireguard-control-public-key KEY
+                              Control Node WireGuard public key.
+  --wireguard-control-public-key-file PATH
+                              Read the Control Node WireGuard public key from PATH.
+  --wireguard-control-endpoint HOST:PORT
+                              Control Node WireGuard endpoint.
+  --wireguard-control-allowed-ips CIDR[,CIDR]
+                              Worker peer AllowedIPs. Default: 10.44.0.1/32.
+  --wireguard-interface NAME  Worker WireGuard interface. Default: wg-arclink.
+  --wireguard-listen-port N   Optional worker WireGuard UDP listen port.
+  --wireguard-persistent-keepalive N
+                              WireGuard peer keepalive seconds. Default: 25.
+  --skip-wireguard            Do not configure WireGuard even if WireGuard args/env are present.
   --ssh-user USER             Worker SSH/service user. Default: arclink.
   --ssh-port PORT             Worker SSH port. Default: 22.
   --region REGION             Placement region label.
@@ -63,6 +79,21 @@ TOKEN_STDIN=0
 AUTHORIZED_KEY_FILE=""
 HOSTNAME_VALUE="$(hostname -f 2>/dev/null || hostname)"
 SSH_HOST=""
+PRIVATE_DNS_NAME="${ARCLINK_FLEET_PRIVATE_DNS_NAME:-${ARCLINK_FLEET_WIREGUARD_DNS_NAME:-${ARCLINK_FLEET_PRIVATE_MESH_DNS_NAME:-}}}"
+TAILSCALE_DNS_NAME="${ARCLINK_FLEET_TAILSCALE_DNS_NAME:-}"
+WIREGUARD_SKIP=0
+WIREGUARD_CONTROL_PUBLIC_KEY="${ARCLINK_WIREGUARD_CONTROL_PUBLIC_KEY:-}"
+WIREGUARD_CONTROL_PUBLIC_KEY_FILE=""
+WIREGUARD_CONTROL_ENDPOINT="${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-}"
+WIREGUARD_WORKER_IP="${ARCLINK_WIREGUARD_WORKER_IP:-${ARCLINK_FLEET_WIREGUARD_WORKER_IP:-}}"
+WIREGUARD_CONTROL_ALLOWED_IPS="${ARCLINK_WIREGUARD_CONTROL_ALLOWED_IPS:-10.44.0.1/32}"
+WIREGUARD_INTERFACE="${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}"
+WIREGUARD_LISTEN_PORT="${ARCLINK_WIREGUARD_LISTEN_PORT:-}"
+WIREGUARD_PERSISTENT_KEEPALIVE="${ARCLINK_WIREGUARD_PERSISTENT_KEEPALIVE:-25}"
+WIREGUARD_PUBLIC_KEY=""
+WIREGUARD_PRIVATE_IP=""
+WIREGUARD_PRIVATE_CIDR=""
+WIREGUARD_FIREWALL_STATUS="not-configured"
 SSH_USER="${ARCLINK_FLEET_WORKER_USER:-arclink}"
 SSH_PORT="22"
 REGION=""
@@ -111,6 +142,50 @@ while (($#)); do
       SSH_HOST="${2:-}"
       shift 2
       ;;
+    --private-dns-name|--wireguard-dns-name|--private-mesh-dns-name)
+      PRIVATE_DNS_NAME="${2:-}"
+      shift 2
+      ;;
+    --tailscale-dns-name|--tailnet-dns-name|--magicdns-name)
+      TAILSCALE_DNS_NAME="${2:-}"
+      shift 2
+      ;;
+    --wireguard-worker-ip|--wireguard-private-ip)
+      WIREGUARD_WORKER_IP="${2:-}"
+      shift 2
+      ;;
+    --wireguard-control-public-key)
+      WIREGUARD_CONTROL_PUBLIC_KEY="${2:-}"
+      shift 2
+      ;;
+    --wireguard-control-public-key-file)
+      WIREGUARD_CONTROL_PUBLIC_KEY_FILE="${2:-}"
+      shift 2
+      ;;
+    --wireguard-control-endpoint)
+      WIREGUARD_CONTROL_ENDPOINT="${2:-}"
+      shift 2
+      ;;
+    --wireguard-control-allowed-ips)
+      WIREGUARD_CONTROL_ALLOWED_IPS="${2:-}"
+      shift 2
+      ;;
+    --wireguard-interface)
+      WIREGUARD_INTERFACE="${2:-}"
+      shift 2
+      ;;
+    --wireguard-listen-port)
+      WIREGUARD_LISTEN_PORT="${2:-}"
+      shift 2
+      ;;
+    --wireguard-persistent-keepalive)
+      WIREGUARD_PERSISTENT_KEEPALIVE="${2:-}"
+      shift 2
+      ;;
+    --skip-wireguard)
+      WIREGUARD_SKIP=1
+      shift
+      ;;
     --ssh-user)
       SSH_USER="${2:-}"
       shift 2
@@ -158,6 +233,21 @@ if [[ -z "$STATE_ROOT" ]]; then
   fi
 fi
 SSH_HOST="${SSH_HOST:-$HOSTNAME_VALUE}"
+WIREGUARD_PRIVATE_IP="${WIREGUARD_WORKER_IP%%/*}"
+if [[ "$WIREGUARD_WORKER_IP" == */* ]]; then
+  WIREGUARD_PRIVATE_CIDR="$WIREGUARD_WORKER_IP"
+elif [[ -n "$WIREGUARD_WORKER_IP" ]]; then
+  WIREGUARD_PRIVATE_CIDR="$WIREGUARD_WORKER_IP/32"
+fi
+if [[ -z "$PRIVATE_DNS_NAME" && -n "$WIREGUARD_PRIVATE_IP" ]]; then
+  PRIVATE_DNS_NAME="$WIREGUARD_PRIVATE_IP"
+fi
+if [[ -z "$PRIVATE_DNS_NAME" && "$SSH_HOST" == *.wg* ]]; then
+  PRIVATE_DNS_NAME="$SSH_HOST"
+fi
+if [[ -z "$TAILSCALE_DNS_NAME" && "$SSH_HOST" == *.ts.net ]]; then
+  TAILSCALE_DNS_NAME="$SSH_HOST"
+fi
 
 ETC_DIR="${SYSTEM_ROOT:-}/etc/arclink"
 USR_LOCAL_BIN="${SYSTEM_ROOT:-}/usr/local/bin"
@@ -217,6 +307,75 @@ if [[ -f "$ADMISSION_FILE" ]] && grep -qx 'admitting' "$ADMISSION_FILE"; then
   already_admitting=1
 fi
 
+wireguard_requested() {
+  [[ "$WIREGUARD_SKIP" != "1" ]] && {
+    [[ -n "$WIREGUARD_WORKER_IP" ]] || \
+    [[ -n "$WIREGUARD_CONTROL_PUBLIC_KEY" ]] || \
+    [[ -n "$WIREGUARD_CONTROL_PUBLIC_KEY_FILE" ]] || \
+    [[ -n "$WIREGUARD_CONTROL_ENDPOINT" ]]
+  }
+}
+
+wireguard_should_configure() {
+  wireguard_requested && \
+    [[ -n "$WIREGUARD_PRIVATE_CIDR" ]] && \
+    [[ -n "$WIREGUARD_CONTROL_PUBLIC_KEY" ]] && \
+    [[ -n "$WIREGUARD_CONTROL_ENDPOINT" ]]
+}
+
+load_wireguard_control_public_key() {
+  if [[ -n "$WIREGUARD_CONTROL_PUBLIC_KEY_FILE" ]]; then
+    if [[ ! -r "$WIREGUARD_CONTROL_PUBLIC_KEY_FILE" ]]; then
+      fail "WireGuard control public key file is not readable"
+      return 1
+    fi
+    IFS= read -r WIREGUARD_CONTROL_PUBLIC_KEY <"$WIREGUARD_CONTROL_PUBLIC_KEY_FILE" || WIREGUARD_CONTROL_PUBLIC_KEY=""
+  fi
+  WIREGUARD_CONTROL_PUBLIC_KEY="${WIREGUARD_CONTROL_PUBLIC_KEY//[[:space:]]/}"
+}
+
+validate_wireguard_args() {
+  if [[ "$WIREGUARD_SKIP" == "1" ]]; then
+    return 0
+  fi
+  load_wireguard_control_public_key
+  if ! wireguard_requested; then
+    return 0
+  fi
+  if [[ -z "$WIREGUARD_PRIVATE_CIDR" || -z "$WIREGUARD_CONTROL_PUBLIC_KEY" || -z "$WIREGUARD_CONTROL_ENDPOINT" ]]; then
+    fail "WireGuard setup requires worker IP, control public key, and control endpoint"
+    return 1
+  fi
+  if [[ ! "$WIREGUARD_PRIVATE_CIDR" =~ ^[A-Za-z0-9_.:-]+/[0-9]{1,3}$ ]]; then
+    fail "WireGuard worker IP must be an IP/CIDR such as 10.44.0.11/32"
+    return 1
+  fi
+  if [[ ! "$WIREGUARD_CONTROL_PUBLIC_KEY" =~ ^[A-Za-z0-9+/=]{20,100}$ ]]; then
+    fail "WireGuard control public key is not a valid public-key-shaped value"
+    return 1
+  fi
+  if [[ ! "$WIREGUARD_CONTROL_ENDPOINT" =~ ^[A-Za-z0-9_.:-]+:[0-9]{1,5}$ ]]; then
+    fail "WireGuard control endpoint must be host:port"
+    return 1
+  fi
+  if [[ ! "$WIREGUARD_INTERFACE" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    fail "WireGuard interface name is unsafe"
+    return 1
+  fi
+  if [[ -n "$WIREGUARD_LISTEN_PORT" ]] && { [[ ! "$WIREGUARD_LISTEN_PORT" =~ ^[0-9]+$ ]] || (( WIREGUARD_LISTEN_PORT < 1 || WIREGUARD_LISTEN_PORT > 65535 )); }; then
+    fail "WireGuard listen port must be a UDP port number"
+    return 1
+  fi
+  if [[ ! "$WIREGUARD_PERSISTENT_KEEPALIVE" =~ ^[0-9]+$ ]]; then
+    fail "WireGuard persistent keepalive must be a number"
+    return 1
+  fi
+}
+
+if ! validate_wireguard_args; then
+  exit 2
+fi
+
 ensure_prereqs() {
   if truthy "$SKIP_PREREQS"; then
     python3 - "$PREREQ_AUDIT_FILE" <<'PY'
@@ -237,6 +396,7 @@ PY
     return 0
   fi
   ARCLINK_PREREQ_SURFACE="worker-join" \
+  ARCLINK_PREREQ_WIREGUARD="$(wireguard_should_configure && printf '1' || printf '0')" \
   ARCLINK_PREREQ_AUDIT_FILE="$PREREQ_AUDIT_FILE" \
     "$REPO_DIR/bin/lib/ensure-prereqs.sh"
 }
@@ -331,6 +491,109 @@ ensure_docker_group() {
   fi
 }
 
+configure_wireguard_firewall() {
+  if ! wireguard_should_configure; then
+    WIREGUARD_FIREWALL_STATUS="not-configured"
+    return 0
+  fi
+  if [[ -z "$WIREGUARD_LISTEN_PORT" ]]; then
+    WIREGUARD_FIREWALL_STATUS="not-required"
+    return 0
+  fi
+  if [[ -n "$SYSTEM_ROOT" ]]; then
+    mkdir -p "$STATE_ROOT/wireguard"
+    printf 'allow %s/udp for %s\n' "$WIREGUARD_LISTEN_PORT" "$WIREGUARD_INTERFACE" >"$STATE_ROOT/wireguard/firewall.plan"
+    WIREGUARD_FIREWALL_STATUS="planned"
+    return 0
+  fi
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+    ufw allow "$WIREGUARD_LISTEN_PORT/udp" comment 'ArcLink WireGuard fleet mesh' >/dev/null || true
+    WIREGUARD_FIREWALL_STATUS="ufw-allowed"
+    return 0
+  fi
+  if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port="$WIREGUARD_LISTEN_PORT/udp" >/dev/null || true
+    firewall-cmd --reload >/dev/null || true
+    WIREGUARD_FIREWALL_STATUS="firewalld-allowed"
+    return 0
+  fi
+  WIREGUARD_FIREWALL_STATUS="unchanged"
+  echo "No active ufw/firewalld manager detected; WireGuard worker firewall left unchanged." >&2
+}
+
+configure_wireguard() {
+  local wg_dir="" private_key_file="" public_key_file="" config_file="" private_key="" listen_line=""
+
+  if ! wireguard_should_configure; then
+    return 0
+  fi
+  if ! command -v wg >/dev/null 2>&1; then
+    fail "WireGuard setup requested, but wg is not installed"
+    return 1
+  fi
+  if [[ -n "$SYSTEM_ROOT" ]]; then
+    wg_dir="$SYSTEM_ROOT/etc/wireguard"
+  else
+    wg_dir="/etc/wireguard"
+  fi
+  mkdir -p "$wg_dir"
+  chmod 700 "$wg_dir" 2>/dev/null || true
+  private_key_file="$wg_dir/$WIREGUARD_INTERFACE.key"
+  public_key_file="$wg_dir/$WIREGUARD_INTERFACE.pub"
+  config_file="$wg_dir/$WIREGUARD_INTERFACE.conf"
+  if [[ ! -f "$private_key_file" ]]; then
+    ( umask 077 && wg genkey >"$private_key_file" )
+  fi
+  if [[ ! -f "$public_key_file" ]]; then
+    wg pubkey <"$private_key_file" >"$public_key_file"
+  fi
+  chmod 600 "$private_key_file" "$config_file" 2>/dev/null || true
+  chmod 644 "$public_key_file" 2>/dev/null || true
+  private_key="$(cat "$private_key_file")"
+  WIREGUARD_PUBLIC_KEY="$(cat "$public_key_file")"
+  if [[ -n "$WIREGUARD_LISTEN_PORT" ]]; then
+    listen_line="ListenPort = $WIREGUARD_LISTEN_PORT"
+  fi
+  (
+    umask 077
+    {
+      printf '[Interface]\n'
+      printf 'Address = %s\n' "$WIREGUARD_PRIVATE_CIDR"
+      [[ -n "$listen_line" ]] && printf '%s\n' "$listen_line"
+      printf 'PrivateKey = %s\n' "$private_key"
+      printf '\n[Peer]\n'
+      printf 'PublicKey = %s\n' "$WIREGUARD_CONTROL_PUBLIC_KEY"
+      printf 'Endpoint = %s\n' "$WIREGUARD_CONTROL_ENDPOINT"
+      printf 'AllowedIPs = %s\n' "$WIREGUARD_CONTROL_ALLOWED_IPS"
+      printf 'PersistentKeepalive = %s\n' "$WIREGUARD_PERSISTENT_KEEPALIVE"
+    } >"$config_file"
+  )
+  chmod 600 "$config_file" 2>/dev/null || true
+  configure_wireguard_firewall
+  if [[ -n "$SYSTEM_ROOT" ]]; then
+    mkdir -p "$STATE_ROOT/wireguard"
+    printf 'planned\n' >"$STATE_ROOT/wireguard/activation.state"
+    return 0
+  fi
+  if wg show "$WIREGUARD_INTERFACE" >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl enable --now "wg-quick@$WIREGUARD_INTERFACE" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  if command -v wg-quick >/dev/null 2>&1; then
+    wg-quick up "$WIREGUARD_INTERFACE" >/dev/null 2>&1 || {
+      fail "WireGuard config was written, but wg-quick could not activate $WIREGUARD_INTERFACE"
+      return 1
+    }
+    return 0
+  fi
+  fail "WireGuard config was written, but wg-quick is not installed"
+  return 1
+}
+
 compute_fingerprint() {
   local machine_id_path=""
   if [[ -n "$SYSTEM_ROOT" && -r "$SYSTEM_ROOT/etc/machine-id" ]]; then
@@ -362,13 +625,34 @@ PY
 
 build_payload() {
   local fingerprint="$1"
-  python3 - "$PAYLOAD_FILE" "$SYSTEM_ROOT" "$HOSTNAME_VALUE" "$SSH_HOST" "$SSH_USER" "$SSH_PORT" "$REGION" "$CAPACITY_SLOTS" "$PROVIDER" "$fingerprint" "$PREREQ_AUDIT_FILE" <<'PY'
+  python3 - "$PAYLOAD_FILE" "$SYSTEM_ROOT" "$HOSTNAME_VALUE" "$SSH_HOST" "$PRIVATE_DNS_NAME" "$TAILSCALE_DNS_NAME" "$SSH_USER" "$SSH_PORT" "$REGION" "$CAPACITY_SLOTS" "$PROVIDER" "$fingerprint" "$PREREQ_AUDIT_FILE" "$WIREGUARD_INTERFACE" "$WIREGUARD_PRIVATE_IP" "$WIREGUARD_PRIVATE_CIDR" "$WIREGUARD_PUBLIC_KEY" "$WIREGUARD_CONTROL_ENDPOINT" "$WIREGUARD_LISTEN_PORT" "$WIREGUARD_FIREWALL_STATUS" <<'PY'
 import json
 import os
 import platform
 import sys
 
-payload_path, system_root, hostname, ssh_host, ssh_user, ssh_port, region, capacity_slots, provider, fingerprint, prereq_audit_file = sys.argv[1:12]
+(
+    payload_path,
+    system_root,
+    hostname,
+    ssh_host,
+    private_dns_name,
+    tailscale_dns_name,
+    ssh_user,
+    ssh_port,
+    region,
+    capacity_slots,
+    provider,
+    fingerprint,
+    prereq_audit_file,
+    wireguard_interface,
+    wireguard_private_ip,
+    wireguard_private_cidr,
+    wireguard_public_key,
+    wireguard_control_endpoint,
+    wireguard_listen_port,
+    wireguard_firewall_status,
+) = sys.argv[1:21]
 os_release_path = os.path.join(system_root, "etc", "os-release") if system_root else "/etc/os-release"
 os_version = platform.platform()
 if os.path.exists(os_release_path):
@@ -398,6 +682,8 @@ for event in prereq_events:
 payload = {
     "hostname": hostname,
     "ssh_host": ssh_host,
+    "private_dns_name": private_dns_name.strip().lower().strip("."),
+    "tailscale_dns_name": tailscale_dns_name.strip().lower().strip("."),
     "ssh_user": ssh_user,
     "ssh_port": int(ssh_port),
     "region": region,
@@ -409,6 +695,14 @@ payload = {
     "prereq_audit": prereq_summary,
     "tags": {"source": "arclink-fleet-join"},
 }
+if wireguard_private_ip or wireguard_public_key:
+    payload["wireguard_interface"] = wireguard_interface
+    payload["wireguard_private_ip"] = wireguard_private_ip
+    payload["wireguard_private_cidr"] = wireguard_private_cidr
+    payload["wireguard_public_key"] = wireguard_public_key
+    payload["wireguard_control_endpoint"] = wireguard_control_endpoint
+    payload["wireguard_listen_port"] = int(wireguard_listen_port) if wireguard_listen_port else 0
+    payload["wireguard_firewall_status"] = wireguard_firewall_status
 with open(payload_path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, sort_keys=True)
     handle.write("\n")
@@ -491,6 +785,7 @@ main() {
   install_authorized_key
   install_probe_wrapper
   ensure_docker_group
+  configure_wireguard
   fingerprint="$(compute_fingerprint)"
   printf '%s\n' "$fingerprint" >"$FINGERPRINT_FILE"
   chmod 600 "$FINGERPRINT_FILE" 2>/dev/null || true

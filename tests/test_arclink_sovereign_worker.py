@@ -473,6 +473,64 @@ def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     print("PASS test_tailscale_sovereign_worker_skips_cloudflare_dns")
 
 
+def test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_remote_private_mesh")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_remote_private_mesh")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir, register_local=False)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "control.wg.internal",
+                "edge_target": "control.wg.internal",
+                "tailscale_dns_name": "control.tailnet.ts.net",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_PRIVATE_DNS_NAME": "control.wg.internal",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "control.tailnet.ts.net",
+                    "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                    "ARCLINK_TAILNET_SERVICE_PORT_BASE": "8443",
+                    "ARCLINK_FLEET_SHARE_HUB_URL": "ssh://hub.wg.internal/{user}/fleet-shared.git",
+                },
+            }
+        )
+        worker_mod.register_fleet_host(
+            conn,
+            hostname="worker-a",
+            region="iad",
+            capacity_slots=8,
+            metadata={
+                "executor": "ssh",
+                "ssh_host": "10.44.0.11",
+                "ssh_user": "arclink",
+                "private_dns_name": "worker-a.wg.internal",
+                "tailscale_dns_name": "worker-a.tailnet.ts.net",
+                "state_root_base": f"{tmpdir}/worker-a/deployments",
+            },
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg)
+
+    expect(results[0]["status"] == "applied", str(results))
+    expect(results[0]["placement"]["hostname"] == "worker-a", str(results))
+    expect(results[0]["urls"]["dashboard"] == "https://worker-a.wg.internal:8443", str(results))
+    metadata = json.loads(
+        conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
+    )
+    expect(metadata["private_dns_name"] == "worker-a.wg.internal", str(metadata))
+    expect(metadata["tailscale_dns_name"] == "worker-a.tailnet.ts.net", str(metadata))
+    expect(metadata["control_network_mode"] == "remote", str(metadata))
+    expect(metadata["fleet_host_hostname"] == "worker-a", str(metadata))
+    expect(metadata["access_urls"]["hermes"] == "https://worker-a.wg.internal:8443", str(metadata))
+    expect(metadata["state_root_base"].endswith("/worker-a/deployments"), str(metadata))
+    print("PASS test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns")
+
+
 def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_teardown")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_teardown")
@@ -1068,6 +1126,7 @@ if __name__ == "__main__":
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
+    test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns()
     test_sovereign_worker_tears_down_active_deployment_idempotently()
     test_sovereign_worker_retries_legacy_teardown_without_chutes_client()
     test_tailnet_port_allocation_ignores_released_deployments()

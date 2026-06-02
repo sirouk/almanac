@@ -176,6 +176,13 @@ ARCLINK_LLM_ROUTER_API_KEY_REF=secret://arclink/llm-router/<deployment_id>/api-k
 Same-network Control Node deployments use
 `http://control-llm-router:8090/v1`. Remote fleet deployments may use
 `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` to point at the operator-selected ingress.
+When a placement host is marked remote through fleet metadata, the ArcPod
+renderer prefers `ARCLINK_CONTROL_PRIVATE_BASE_URL`,
+`ARCLINK_WIREGUARD_CONTROL_URL`, or `ARCLINK_PRIVATE_MESH_CONTROL_URL`, then
+derives `<control-url>/v1` for inference plus `<control-url>/api/v1/...` for the
+share-request broker. `ARCLINK_TAILSCALE_CONTROL_URL` remains a compatibility
+fallback/access-overlay lane. Remote pods do not join the control-node Docker
+network.
 Direct Chutes key mounting is retained only behind
 `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS=1` for compatibility rollback.
 
@@ -216,6 +223,10 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | `90` | Idle upstream connection lifetime |
 | `ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED` | `1` | Warm the provider pool on router startup when configured |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
+| `ARCLINK_CONTROL_PRIVATE_BASE_URL` | none | Preferred Control Node private mesh HTTPS base URL used by remote ArcPods for control API and router URLs |
+| `ARCLINK_WIREGUARD_CONTROL_URL` | none | WireGuard-specific alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
+| `ARCLINK_PRIVATE_MESH_CONTROL_URL` | none | Generic private-mesh alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
+| `ARCLINK_TAILSCALE_CONTROL_URL` | none | Compatibility fallback Control Node Tailscale HTTPS base URL when private/public control URLs are not set |
 | `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS` | `0` | Compatibility flag to restore direct Chutes key mounting |
 | `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | none | Optional reusable Stripe Product id for ArcPod Refueling Checkout |
 | `ARCLINK_REFUEL_STRIPE_PRODUCT_NAME` | `ArcPod Refueling` | Inline Checkout product display name when no product id is configured |

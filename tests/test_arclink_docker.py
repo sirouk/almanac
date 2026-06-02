@@ -451,6 +451,8 @@ def test_compose_defines_full_stack_services() -> None:
     expect("ARCLINK_BACKEND_ALLOWED_CIDRS:" in body, body)
     expect("ARCLINK_BASE_DOMAIN:" in body and "ARCLINK_PRIMARY_PROVIDER:" in body, body)
     expect("ARCLINK_INGRESS_MODE:" in body and "ARCLINK_TAILSCALE_DNS_NAME:" in body, body)
+    expect("ARCLINK_WIREGUARD_CONTROL_PUBLIC_KEY:" in body and "ARCLINK_WIREGUARD_CONTROL_ENDPOINT:" in body, body)
+    expect("ARCLINK_WIREGUARD_ACTIVATE:" in body, body)
     expect("ARCLINK_CONTROL_PROVISIONER_ENABLED:" in body and "ARCLINK_EXECUTOR_ADAPTER:" in body, body)
     expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:" in body, body)
     expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:" in body, body)
@@ -7131,8 +7133,10 @@ def test_docker_health_script_checks_container_runtime() -> None:
     compose_body = read("compose.yaml")
     expect("--ping=true" in compose_body and "--ping.entrypoint=web" in compose_body, compose_body)
     expect('ARCLINK_INGRESS_MODE:-domain' in body, body)
+    expect('ARCLINK_CONTROL_PRIVATE_BASE_URL:-' in body, body)
+    expect('ARCLINK_WIREGUARD_CONTROL_URL:-' in body, body)
     expect('ARCLINK_TAILSCALE_CONTROL_URL:-' in body, body)
-    expect("configured Tailscale/Funnel route" in body, body)
+    expect("configured private/Tailscale route" in body, body)
     expect('status in ("warn", "warning", "disabled")' in body, body)
     for job in (
         "control-provisioner",

@@ -54,43 +54,67 @@ This is the remote-fleet path. For a single-machine Control Node, use
 [Single-Machine Mode](#single-machine-mode-docker-local-starter-no-ssh) above
 instead of an enrollment token.
 
-1. Mint a token:
-
-   ```bash
-   ./deploy.sh control enrollment mint --ttl-seconds 3600 --json
-   ```
-
-   Mint returns cleartext token material only once. Keep it out of shell
-   history and logs.
-
-2. Fetch the control fleet public key for worker SSH access:
+1. Fetch the control fleet public key for first-contact SSH access:
 
    ```bash
    ./deploy.sh control fleet-key --json
    ```
 
-3. On the worker, run `bin/arclink-fleet-join.sh` as root with the enrollment
-   token supplied by file or stdin and the control fleet public key supplied as
-   a file:
+   Append the returned public key to the exact first-contact account ArcLink
+   should use on the fresh worker, normally `root` or an account with
+   passwordless `sudo -n`. Do not replace `authorized_keys`; ArcLink does not
+   change `sshd_config`, does not change port 22, and does not delete existing
+   SSH keys.
+
+2. Run push-button registration from the Control Node:
 
    ```bash
-   bin/arclink-fleet-join.sh \
-     --control-url https://control.example.test \
-     --token-file /path/to/enrollment-token \
-     --authorized-key-file /path/to/control-fleet-key.pub \
-     --hostname worker-1.example.test \
-     --ssh-host 203.0.113.10 \
+   ./deploy.sh control register-worker \
+     --hostname worker-1 \
+     --ssh-host 10.44.0.11 \
+     --bootstrap-remote \
+     --bootstrap-ssh-host 203.0.113.10 \
+     --bootstrap-ssh-user root \
+     --wireguard-private-ip 10.44.0.11 \
+     --tailscale-dns-name worker-1.tailnet.ts.net \
      --ssh-user arclink \
      --region iad \
      --capacity-slots 4 \
      --json
    ```
 
-   Enrollment tokens are intentionally rejected on argv. The join script owns
-   worker-local setup for the service user, authorized key, state root, Docker
-   group membership, probe wrapper, machine fingerprint, and callback payload.
-   It writes a local non-admitting state before callback and admits the worker
-   only after the control callback succeeds.
+   `register-worker --bootstrap-remote` mints the one-time enrollment token,
+   stages only `bin/arclink-fleet-join.sh`, `bin/arclink-fleet-probe-wrapper`,
+   `bin/lib/ensure-prereqs.sh`, and the control fleet public key over SSH, then
+   runs the join remotely as root or passwordless `sudo -n`. The enrollment
+   token is passed over stdin, never argv, and is revoked if the remote join
+   fails. The join script owns worker-local setup for the service user,
+   authorized key, state root, Docker group membership, WireGuard config,
+   additive firewall allowance where `ufw`/`firewalld` is active, probe wrapper,
+   machine fingerprint, and callback payload. It writes a local non-admitting
+   state before callback and admits the worker only after the control callback
+   succeeds.
+
+   Prefer a production private mesh/WireGuard address for `--ssh-host` and
+   `--wireguard-worker-ip`. The callback persists that private DNS/IP into
+   inventory and fleet-host metadata, so ArcPods placed on this worker render
+   their dashboard, Drive, Code, Terminal, and Notion links against the worker
+   that actually owns the containers. The control-node URL used by remote pods
+   for API and inference should be the control machine's private mesh ingress,
+   normally `ARCLINK_CONTROL_PRIVATE_BASE_URL` or
+   `ARCLINK_WIREGUARD_CONTROL_URL`. `--tailscale-dns-name` is optional access
+   compatibility metadata.
+   The bootstrap callback uses the public or Tailscale Control Node URL because
+   the Control Node cannot know the worker WireGuard public key before the fresh
+   worker generates it. After the callback, `register-worker` reads the
+   callback-reported public key and syncs the peer into the Control Node config
+   and live interface. If the worker public key is already known, pass it to
+   `register-worker --wireguard-public-key` and the peer is appended before
+   bootstrap too.
+   Cross-machine Captain shared folders require a remote
+   `ARCLINK_FLEET_SHARE_HUB_URL`, for example
+   `ssh://hub.wg.internal/{user}/fleet-shared.git`; remote ArcPod renders
+   fail closed rather than creating one local hub per worker.
 
    By default the join script runs the shared prerequisite installer. Use
    `--skip-prereq-install` only for a pre-hardened worker image where
@@ -110,8 +134,10 @@ For inventory-only registration without live SSH proof:
 
 ```bash
 ./deploy.sh control register-worker \
-  --hostname worker-1.example.test \
-  --ssh-host 203.0.113.10 \
+  --hostname worker-1 \
+  --ssh-host 10.44.0.11 \
+  --wireguard-private-ip 10.44.0.11 \
+  --tailscale-dns-name worker-1.tailnet.ts.net \
   --ssh-user arclink \
   --region iad \
   --capacity-slots 4 \

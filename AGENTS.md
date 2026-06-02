@@ -125,6 +125,29 @@ mode. Control Node internals still use Docker Compose through
 `./deploy.sh control ...`, and ArcPods remain Docker deployments across the
 registered fleet.
 
+Remote production fleet machines should be addressed through the operator-owned
+private mesh, normally WireGuard: use
+`./deploy.sh control register-worker --ssh-host <worker-private-ip-or-dns>
+--wireguard-private-ip <worker-tunnel-ip> --bootstrap-remote
+--bootstrap-ssh-host <first-contact-host> --bootstrap-ssh-user root` for the
+push-button path. Control install/reconfigure prepares the Control Node
+WireGuard keypair and endpoint metadata. `register-worker --bootstrap-remote`
+mints the one-time enrollment token, stages only the worker join script plus
+its small helper assets over SSH, passes the token over stdin, and runs the
+join remotely as root or passwordless `sudo -n`. Fleet join generates a
+worker-local WireGuard keypair, writes only worker-local WireGuard config,
+reports the worker public key back to control, and appends the configured fleet
+SSH public key without replacing `authorized_keys`, changing `sshd_config`, or
+changing port 22. Tailscale is an access overlay/domain alternative and
+compatibility lane, not the preferred production fabric. Remote ArcPods must
+render against the selected worker's private mesh name and reach control APIs
+through `ARCLINK_CONTROL_PRIVATE_BASE_URL`, `ARCLINK_WIREGUARD_CONTROL_URL`, or
+explicit public control URLs; do not assume the control-node Docker network
+exists on remote workers.
+For multi-machine Crew sharing, set `ARCLINK_FLEET_SHARE_HUB_URL` to a remote
+git ref such as `ssh://hub.wg.internal/{user}/fleet-shared.git`; remote
+ArcPod renders fail closed without it.
+
 Organization profile ingestion is the operator-owned path for aligning agent
 baseline, roles, teams, boundaries, and per-agent context. The private source
 file belongs at `arclink-priv/config/org-profile.yaml`; use the public

@@ -991,6 +991,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     manual = add_sub.add_parser("manual")
     manual.add_argument("--hostname", required=True)
     manual.add_argument("--ssh-host", default="")
+    manual.add_argument("--private-dns-name", "--wireguard-dns-name", "--private-mesh-dns-name", dest="private_dns_name", default="")
+    manual.add_argument("--tailscale-dns-name", "--tailnet-dns-name", "--magicdns-name", dest="tailscale_dns_name", default="")
+    manual.add_argument("--wireguard-private-ip", "--wireguard-worker-ip", dest="wireguard_private_ip", default="")
+    manual.add_argument("--wireguard-public-key", dest="wireguard_public_key", default="")
+    manual.add_argument("--wireguard-interface", dest="wireguard_interface", default="")
     manual.add_argument("--ssh-user", default="arclink")
     manual.add_argument("--region", default="")
     manual.add_argument("--capacity-slots", type=int, default=4)
@@ -1061,17 +1066,42 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"fleet_probe_all probes={result['probe_count']} pruned={result['pruned']}")
         elif args.command == "add" and args.provider == "manual":
             tags = json_loads_safe(args.tags_json)
+            ssh_host = args.ssh_host or args.hostname
+            private_dns_name = str(args.private_dns_name or "").strip().lower().strip(".")
+            tailscale_dns_name = str(args.tailscale_dns_name or "").strip().lower().strip(".")
+            wireguard_private_ip = str(args.wireguard_private_ip or "").strip()
+            wireguard_public_key = str(args.wireguard_public_key or "").strip()
+            wireguard_interface = str(args.wireguard_interface or "").strip()
+            if not private_dns_name and wireguard_private_ip:
+                private_dns_name = wireguard_private_ip.split("/", 1)[0].lower().strip(".")
+            if not tailscale_dns_name and str(ssh_host).strip().lower().endswith(".ts.net"):
+                tailscale_dns_name = str(ssh_host).strip().lower().strip(".")
+            metadata = {"ssh_host": ssh_host, "ssh_user": args.ssh_user}
+            if private_dns_name:
+                metadata["private_dns_name"] = private_dns_name
+                metadata["control_network_mode"] = "remote"
+            if tailscale_dns_name:
+                metadata["tailscale_dns_name"] = tailscale_dns_name
+                metadata["control_network_mode"] = "remote"
+            if wireguard_private_ip or wireguard_public_key:
+                metadata["wireguard"] = {
+                    "interface": wireguard_interface,
+                    "private_ip": wireguard_private_ip.split("/", 1)[0],
+                    "private_cidr": wireguard_private_ip if "/" in wireguard_private_ip else (f"{wireguard_private_ip}/32" if wireguard_private_ip else ""),
+                    "public_key": wireguard_public_key,
+                }
+                metadata["control_network_mode"] = "remote"
             row = register_inventory_machine(
                 conn,
                 provider="manual",
                 hostname=args.hostname,
-                ssh_host=args.ssh_host or args.hostname,
+                ssh_host=ssh_host,
                 ssh_user=args.ssh_user,
                 region=args.region,
                 status="pending",
                 capacity_slots=args.capacity_slots,
                 tags=tags,
-                metadata={"ssh_host": args.ssh_host or args.hostname, "ssh_user": args.ssh_user},
+                metadata=metadata,
             )
             print(json.dumps(dict(row), sort_keys=True))
         elif args.command == "drain":

@@ -271,6 +271,161 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
     )
 
 
+def _clean_host_name(value: Any) -> str:
+    return str(value or "").strip().lower().strip(".")
+
+
+def _is_local_host_ref(value: Any, *, worker: SovereignWorkerConfig | None = None) -> bool:
+    clean = _clean_host_name(value)
+    if clean in {"", "localhost", "localhost.localdomain", "127.0.0.1", "::1", "0.0.0.0"}:
+        return True
+    local_names = {
+        _clean_host_name(socket.gethostname()),
+        _clean_host_name(socket.getfqdn()),
+    }
+    if worker is not None:
+        local_names.update(
+            {
+                _clean_host_name(worker.local_hostname),
+                _clean_host_name(worker.local_ssh_host),
+            }
+        )
+    return clean in {name for name in local_names if name}
+
+
+def _host_is_remote_worker(
+    *,
+    worker: SovereignWorkerConfig,
+    host: Mapping[str, Any],
+    host_meta: Mapping[str, Any],
+) -> bool:
+    mode = str(host_meta.get("control_network_mode") or host_meta.get("arcpod_control_network_mode") or "").strip().lower()
+    if mode in {"remote", "tailnet", "tailscale", "none", "off", "0", "false"}:
+        return True
+    if mode in {"local", "docker", "control", "shared", "on", "1", "true"}:
+        return False
+    ssh_host = str(host_meta.get("ssh_host") or host.get("hostname") or "").strip()
+    if _is_local_host_ref(ssh_host, worker=worker):
+        return False
+    private_host = str(
+        host_meta.get("private_dns_name")
+        or host_meta.get("wireguard_dns_name")
+        or host_meta.get("private_mesh_dns_name")
+        or ""
+    ).strip()
+    if private_host and not _is_local_host_ref(private_host, worker=worker):
+        return True
+    executor = str(host_meta.get("executor") or "").strip().lower()
+    if executor == "ssh":
+        return True
+    return worker.executor_adapter == "ssh" and bool(ssh_host)
+
+
+def _host_tailscale_dns_name(
+    *,
+    worker: SovereignWorkerConfig,
+    host: Mapping[str, Any],
+    host_meta: Mapping[str, Any],
+) -> str:
+    for key in ("private_dns_name", "wireguard_dns_name", "private_mesh_dns_name", "tailscale_dns_name", "tailnet_dns_name", "magicdns_name"):
+        value = _clean_host_name(host_meta.get(key))
+        if value:
+            return value
+    ssh_host = _clean_host_name(host_meta.get("ssh_host"))
+    if ssh_host and not _is_local_host_ref(ssh_host, worker=worker):
+        return ssh_host
+    hostname = _clean_host_name(host.get("hostname"))
+    if hostname and not _is_local_host_ref(hostname, worker=worker):
+        return hostname
+    return _clean_host_name(worker.tailscale_dns_name or worker.base_domain)
+
+
+def _host_private_dns_name(
+    *,
+    worker: SovereignWorkerConfig,
+    host: Mapping[str, Any],
+    host_meta: Mapping[str, Any],
+) -> str:
+    for key in ("private_dns_name", "wireguard_dns_name", "private_mesh_dns_name"):
+        value = _clean_host_name(host_meta.get(key))
+        if value:
+            return value
+    ssh_host = _clean_host_name(host_meta.get("ssh_host"))
+    if ssh_host and not ssh_host.endswith(".ts.net") and not _is_local_host_ref(ssh_host, worker=worker):
+        return ssh_host
+    hostname = _clean_host_name(host.get("hostname"))
+    if hostname and "." in hostname and not hostname.endswith(".ts.net") and not _is_local_host_ref(hostname, worker=worker):
+        return hostname
+    return ""
+
+
+def _host_tailscale_compat_dns_name(
+    *,
+    worker: SovereignWorkerConfig,
+    host_meta: Mapping[str, Any],
+) -> str:
+    for key in ("tailscale_dns_name", "tailnet_dns_name", "magicdns_name"):
+        value = _clean_host_name(host_meta.get(key))
+        if value:
+            return value
+    ssh_host = _clean_host_name(host_meta.get("ssh_host"))
+    if ssh_host.endswith(".ts.net"):
+        return ssh_host
+    return _clean_host_name(worker.tailscale_dns_name)
+
+
+def _private_control_url(worker: SovereignWorkerConfig) -> str:
+    value = str(
+        worker.env.get("ARCLINK_CONTROL_PRIVATE_BASE_URL")
+        or worker.env.get("ARCLINK_WIREGUARD_CONTROL_URL")
+        or worker.env.get("ARCLINK_PRIVATE_MESH_CONTROL_URL")
+        or worker.env.get("ARCLINK_TAILSCALE_CONTROL_URL")
+        or ""
+    ).strip().rstrip("/")
+    if value:
+        return value
+    host = _clean_host_name(
+        worker.env.get("ARCLINK_PRIVATE_DNS_NAME")
+        or worker.env.get("ARCLINK_WIREGUARD_DNS_NAME")
+        or worker.env.get("ARCLINK_PRIVATE_MESH_DNS_NAME")
+        or worker.tailscale_dns_name
+    )
+    if not host:
+        return ""
+    port = str(
+        worker.env.get("ARCLINK_CONTROL_PRIVATE_HTTPS_PORT")
+        or worker.env.get("ARCLINK_WIREGUARD_HTTPS_PORT")
+        or worker.env.get("ARCLINK_PRIVATE_MESH_HTTPS_PORT")
+        or worker.tailscale_https_port
+        or "443"
+    ).strip()
+    suffix = "" if port in {"", "443"} else f":{port}"
+    return f"https://{host}{suffix}"
+
+
+def _render_env_for_host(
+    *,
+    worker: SovereignWorkerConfig,
+    host: Mapping[str, Any],
+    host_meta: Mapping[str, Any],
+) -> dict[str, str]:
+    render_env = dict(worker.env)
+    remote = _host_is_remote_worker(worker=worker, host=host, host_meta=host_meta)
+    host_mode = str(host_meta.get("control_network_mode") or host_meta.get("arcpod_control_network_mode") or "").strip()
+    if host_mode:
+        render_env["ARCLINK_ARCPOD_CONTROL_NETWORK_MODE"] = host_mode
+    elif remote:
+        render_env["ARCLINK_ARCPOD_CONTROL_NETWORK_MODE"] = "remote"
+    else:
+        render_env.setdefault("ARCLINK_ARCPOD_CONTROL_NETWORK_MODE", "local")
+    if remote and not str(render_env.get("ARCLINK_TAILSCALE_CONTROL_URL") or "").strip():
+        control_url = _private_control_url(worker)
+        if control_url:
+            render_env["ARCLINK_TAILSCALE_CONTROL_URL"] = control_url
+            render_env.setdefault("ARCLINK_CONTROL_PRIVATE_BASE_URL", control_url)
+    return render_env
+
+
 def process_sovereign_batch(
     conn: sqlite3.Connection,
     *,
@@ -290,6 +445,17 @@ def process_sovereign_batch(
             local_metadata["ssh_host"] = worker.local_ssh_host
         if worker.local_ssh_user:
             local_metadata["ssh_user"] = worker.local_ssh_user
+        if worker.tailscale_dns_name:
+            local_metadata["tailscale_dns_name"] = worker.tailscale_dns_name
+        private_dns_name = _clean_host_name(
+            worker.env.get("ARCLINK_PRIVATE_DNS_NAME")
+            or worker.env.get("ARCLINK_WIREGUARD_DNS_NAME")
+            or worker.env.get("ARCLINK_PRIVATE_MESH_DNS_NAME")
+            or ""
+        )
+        if private_dns_name:
+            local_metadata["private_dns_name"] = private_dns_name
+        local_metadata["control_network_mode"] = "local"
         register_fleet_host(
             conn,
             hostname=worker.local_hostname,
@@ -680,17 +846,22 @@ def _apply_deployment(
     host_meta = json_loads_safe(str(host.get("metadata_json") or "{}"))
     edge_target = str(host_meta.get("edge_target") or worker.edge_target)
     state_root_base = str(host_meta.get("state_root_base") or worker.state_root_base)
+    host_tailscale_dns_name = _host_tailscale_dns_name(worker=worker, host=host, host_meta=host_meta)
+    host_private_dns_name = _host_private_dns_name(worker=worker, host=host, host_meta=host_meta)
+    host_tailscale_compat_dns_name = _host_tailscale_compat_dns_name(worker=worker, host_meta=host_meta)
+    render_env = _render_env_for_host(worker=worker, host=host, host_meta=host_meta)
+    render_base_domain = host_tailscale_dns_name if worker.ingress_mode == "tailscale" and host_tailscale_dns_name else worker.base_domain
     intent = render_arclink_provisioning_intent(
         conn,
         deployment_id=deployment_id,
-        base_domain=worker.base_domain,
+        base_domain=render_base_domain,
         edge_target=edge_target,
         state_root_base=state_root_base,
         ingress_mode=worker.ingress_mode,
-        tailscale_dns_name=worker.tailscale_dns_name,
+        tailscale_dns_name=host_tailscale_dns_name if worker.ingress_mode == "tailscale" else worker.tailscale_dns_name,
         tailscale_host_strategy=worker.tailscale_host_strategy,
         tailscale_notion_path=worker.tailscale_notion_path,
-        env=worker.env,
+        env=render_env,
     )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_deployment_runtime_metadata(
@@ -699,6 +870,15 @@ def _apply_deployment(
         urls=intent["access"]["urls"],
         state_roots=intent["state_roots"],
         state_root_base=state_root_base,
+        runtime_metadata={
+            "fleet_host_id": str(placement["host_id"]),
+            "fleet_host_hostname": str(host.get("hostname") or ""),
+            "ingress_mode": worker.ingress_mode,
+            "private_dns_name": host_private_dns_name if worker.ingress_mode == "tailscale" else "",
+            "tailscale_dns_name": host_tailscale_compat_dns_name if worker.ingress_mode == "tailscale" else "",
+            "tailscale_host_strategy": worker.tailscale_host_strategy if worker.ingress_mode == "tailscale" else "",
+            "control_network_mode": str(intent.get("execution", {}).get("control_network_mode") or ""),
+        },
     )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _ensure_share_request_broker_token_hash(
@@ -1072,6 +1252,7 @@ def _persist_deployment_runtime_metadata(
     urls: Mapping[str, Any],
     state_roots: Mapping[str, Any],
     state_root_base: str,
+    runtime_metadata: Mapping[str, Any] | None = None,
 ) -> None:
     row = conn.execute(
         "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
@@ -1083,6 +1264,13 @@ def _persist_deployment_runtime_metadata(
     metadata["access_urls"] = {str(role): str(url) for role, url in dict(urls).items() if str(url or "").strip()}
     metadata["state_roots"] = {str(key): str(value) for key, value in dict(state_roots).items() if str(value or "").strip()}
     metadata["state_root_base"] = str(state_root_base or "").strip()
+    for key, value in dict(runtime_metadata or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            metadata[str(key)] = value.strip()
+            continue
+        metadata[str(key)] = value
     conn.execute(
         "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
         (json.dumps(metadata, sort_keys=True), utc_now_iso(), deployment_id),
@@ -1137,7 +1325,7 @@ def _access_urls_for_deployment(
     host_meta: dict[str, Any] = {}
     placement = conn.execute(
         """
-        SELECT h.metadata_json
+        SELECT h.hostname, h.metadata_json
         FROM arclink_deployment_placements p
         JOIN arclink_fleet_hosts h ON h.host_id = p.host_id
         WHERE p.deployment_id = ?
@@ -1147,19 +1335,28 @@ def _access_urls_for_deployment(
         """,
         (str(deployment["deployment_id"]),),
     ).fetchone()
+    placement_hostname = ""
     if placement is not None:
+        placement_hostname = str(placement["hostname"] or "")
         host_meta = json_loads_safe(str(placement["metadata_json"] or "{}"))
+    host_for_render = {
+        "hostname": placement_hostname,
+        "metadata_json": json.dumps(host_meta, sort_keys=True),
+    }
+    host_tailscale_dns_name = _host_tailscale_dns_name(worker=worker, host=host_for_render, host_meta=host_meta)
+    render_env = _render_env_for_host(worker=worker, host=host_for_render, host_meta=host_meta)
+    render_base_domain = host_tailscale_dns_name if worker.ingress_mode == "tailscale" and host_tailscale_dns_name else worker.base_domain
     intent = render_arclink_provisioning_intent(
         conn,
         deployment_id=str(deployment["deployment_id"]),
-        base_domain=worker.base_domain,
+        base_domain=render_base_domain,
         edge_target=str(host_meta.get("edge_target") or worker.edge_target),
         state_root_base=str(host_meta.get("state_root_base") or worker.state_root_base),
         ingress_mode=worker.ingress_mode,
-        tailscale_dns_name=worker.tailscale_dns_name,
+        tailscale_dns_name=host_tailscale_dns_name if worker.ingress_mode == "tailscale" else worker.tailscale_dns_name,
         tailscale_host_strategy=worker.tailscale_host_strategy,
         tailscale_notion_path=worker.tailscale_notion_path,
-        env=worker.env,
+        env=render_env,
     )
     access = intent.get("access") if isinstance(intent.get("access"), Mapping) else {}
     urls = access.get("urls") if isinstance(access.get("urls"), Mapping) else {}

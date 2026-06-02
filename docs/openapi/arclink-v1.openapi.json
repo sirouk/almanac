@@ -913,11 +913,38 @@
                   "ssh_host": {
                     "type": "string"
                   },
+                  "private_dns_name": {
+                    "type": "string"
+                  },
+                  "wireguard_interface": {
+                    "type": "string"
+                  },
+                  "wireguard_private_ip": {
+                    "type": "string"
+                  },
+                  "wireguard_private_cidr": {
+                    "type": "string"
+                  },
+                  "wireguard_public_key": {
+                    "type": "string"
+                  },
+                  "wireguard_control_endpoint": {
+                    "type": "string"
+                  },
+                  "wireguard_listen_port": {
+                    "type": "integer"
+                  },
+                  "wireguard_firewall_status": {
+                    "type": "string"
+                  },
                   "ssh_user": {
                     "type": "string"
                   },
                   "tags": {
                     "type": "object"
+                  },
+                  "tailscale_dns_name": {
+                    "type": "string"
                   }
                 },
                 "required": [

@@ -131,6 +131,8 @@ def render_runtime_config(
     qmd_embed_dimensions: str = "",
     qmd_embed_force_on_next_refresh: str = "0",
     arclink_base_domain: str = "arclink.example.ts.net",
+    arclink_control_private_base_url: str = "",
+    arclink_private_dns_name: str = "",
     arclink_tailscale_control_url: str = "",
     telegram_webhook_url: str = "",
 ) -> str:
@@ -145,6 +147,8 @@ ARCLINK_REPO_DIR=/home/arclink/arclink
 ARCLINK_PRIV_DIR=/home/arclink/arclink/arclink-priv
 ARCLINK_PRIV_CONFIG_DIR=/home/arclink/arclink/arclink-priv/config
 ARCLINK_BASE_DOMAIN={shlex.quote(arclink_base_domain)}
+ARCLINK_PRIVATE_DNS_NAME={shlex.quote(arclink_private_dns_name)}
+ARCLINK_CONTROL_PRIVATE_BASE_URL={shlex.quote(arclink_control_private_base_url)}
 ARCLINK_TAILSCALE_CONTROL_URL={shlex.quote(arclink_tailscale_control_url)}
 TELEGRAM_WEBHOOK_URL={shlex.quote(telegram_webhook_url)}
 VAULT_DIR=/home/arclink/arclink/arclink-priv/vault
@@ -312,6 +316,19 @@ def test_emit_runtime_config_defaults_public_telegram_webhook_to_callback_ready_
     expect(
         source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://operator.example.ts.net/api/v1/webhooks/telegram",
         config,
+    )
+    config = render_runtime_config(
+        "tui-only",
+        "tui-only",
+        arclink_base_domain="arclink.example.test",
+        arclink_private_dns_name="control.wg.internal",
+        arclink_control_private_base_url="https://control.wg.internal",
+    )
+    expect(source_value(config, "ARCLINK_PRIVATE_DNS_NAME") == "control.wg.internal", config)
+    expect(source_value(config, "ARCLINK_CONTROL_PRIVATE_BASE_URL") == "https://control.wg.internal", config)
+    expect(
+        source_value(config, "TELEGRAM_WEBHOOK_URL") == "https://arclink.example.test/api/v1/webhooks/telegram",
+        "private mesh control URL must not become the public Telegram webhook URL",
     )
     config = render_runtime_config(
         "tui-only",
@@ -2481,18 +2498,42 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     text = DEPLOY_SH.read_text()
     fleet_key = extract(text, "run_control_fleet_ssh_key() {", "is_safe_local_fleet_user() {")
     register = extract(text, "register_control_remote_fleet_worker() {", "publish_control_tailscale_ingress() {")
+    remote_bootstrap = extract(text, "run_remote_fleet_worker_bootstrap() {", "register_control_remote_fleet_worker() {")
     expect("deploy.sh control fleet-key" in text, "usage should expose fleet-key")
     expect("deploy.sh control fleet-key --rotate --json" in text, "usage should expose fleet key rotation JSON")
     expect("deploy.sh control register-worker" in text, "usage should expose register-worker")
-    expect("--hostname worker-1 --ssh-host 203.0.113.10 --ssh-user arclink --json" in text, "usage should expose non-interactive worker registration")
+    expect(
+        "--hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --wireguard-private-ip 10.44.0.11 --json" in text,
+        "usage should expose push-button WireGuard/private-mesh worker bootstrap",
+    )
     expect("run_control_fleet_ssh_key()" in text, "expected first-class public key command")
     expect("--rotate" in fleet_key and '"rotated"' in fleet_key, "fleet-key should support audited scriptable rotation output")
     expect('"public_key"' in fleet_key and '"key_path"' in fleet_key, "fleet-key JSON should expose only public key metadata")
     expect("ensure_control_fleet_ssh_key" in register, "worker registration should reuse the Sovereign control SSH key")
     expect("--hostname" in register and "--ssh-host" in register and "--ssh-user" in register, "worker registration should parse non-interactive target flags")
+    expect("--bootstrap-remote" in register and "--bootstrap-ssh-host" in register and "--bootstrap-ssh-user" in register, "worker registration should parse push-button remote bootstrap flags")
+    expect("run_remote_fleet_worker_bootstrap" in register, "register-worker should be able to run the full remote join")
+    expect("mint_control_fleet_enrollment_json" in remote_bootstrap, "remote bootstrap should mint the one-time token internally")
+    expect("--token-stdin" in remote_bootstrap and "--token " not in remote_bootstrap, "remote bootstrap must pass enrollment tokens over stdin, not argv")
+    expect('printf \'%s\\n\' "$enrollment_token" | ssh' in remote_bootstrap, "remote bootstrap should pipe the token through SSH stdin")
+    expect("revoke_control_fleet_enrollment_id" in remote_bootstrap, "remote bootstrap should revoke the token on failed join")
+    expect("sudo -n --" in remote_bootstrap, "non-root remote bootstrap should require passwordless sudo without prompting")
+    expect("bash $q_remote_stage/bin/arclink-fleet-join.sh" in remote_bootstrap, "remote bootstrap should invoke the staged join through bash for noexec temp mounts")
+    expect("arclink-fleet-join.sh" in remote_bootstrap and "arclink-fleet-probe-wrapper" in remote_bootstrap and "ensure-prereqs.sh" in remote_bootstrap, "remote bootstrap should stage the minimal join assets")
+    expect("lookup_control_wireguard_worker_public_key" in register, "register-worker should read callback-reported WireGuard public keys")
+    expect("--private-dns-name" in register and '"private_dns_name"' in register, "worker registration should store per-worker private mesh DNS metadata")
+    expect("--tailscale-dns-name" in register and '"tailscale_dns_name"' in register, "worker registration should store per-worker Tailscale DNS metadata")
+    expect("--wireguard-private-ip" in register and '"wireguard"' in register, "worker registration should store per-worker WireGuard metadata")
+    expect("ensure_control_wireguard_ready" in register, "worker registration should prepare control WireGuard material")
+    expect("ensure_control_wireguard_peer" in register, "worker registration should append known worker peers to control WireGuard config")
+    expect("activate_control_wireguard_interface" in text, "control install/reconfigure should activate the control WireGuard interface")
+    expect("ARCLINK_WIREGUARD_ACTIVATE" in text, "control WireGuard activation should be explicitly configurable")
+    expect("next_control_wireguard_worker_ip" in register, "interactive worker registration should suggest the next tunnel IP")
+    expect("sync_control_wireguard_peers_from_inventory" in text, "control install/reconfigure should sync callback-reported WireGuard peers")
+    expect('"control_network_mode"] = "remote"' in register, "remote worker registration should mark ArcPods as remote control-network renders")
     expect("--tags-json" in register and "json.loads(tags_raw or \"{}\")" in register, "worker registration should accept JSON placement tags")
     expect("--no-smoke-test" in register and "--smoke-test" in register, "worker registration should gate live SSH smoke in scriptable mode")
-    expect('"$json" != "1" || "$smoke_requested" == "1"' in register, "JSON worker registration should not contaminate stdout with default smoke output")
+    expect('"$remote_bootstrap" == "1" || "$json" != "1" || "$smoke_requested" == "1"' in register, "remote bootstrap should run post-join smoke proof by default without contaminating JSON stdout")
     expect('"restart_required"' in register, "JSON worker registration should report that control workers need refresh")
     expect("Fleet inventory hostname" in register, "worker registration should ask for placement hostname")
     expect("SSH host" in register and "SSH user" in register, "worker registration should ask for SSH target")
@@ -2838,10 +2879,53 @@ SH
     print("PASS test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom")
 
 
+def test_ensure_prereqs_wireguard_check_only_plans_tools() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        fakebin = tmp_path / "bin"
+        state = tmp_path / "state"
+        fakebin.mkdir()
+        state.mkdir()
+        _write_executable(fakebin / "apt-get", "#!/bin/bash\necho apt-get should-not-run >&2\nexit 99\n")
+        _write_executable(fakebin / "curl", "#!/bin/bash\nexit 0\n")
+        _write_executable(fakebin / "jq", "#!/bin/bash\nexit 0\n")
+        _write_executable(fakebin / "rsync", "#!/bin/bash\nexit 0\n")
+        _write_executable(fakebin / "ssh", "#!/bin/bash\nexit 0\n")
+        _write_executable(
+            fakebin / "docker",
+            "#!/bin/bash\nif [[ ${1:-} == compose && ${2:-} == version ]]; then echo 'Docker Compose v2.0.0'; exit 0; fi\nexit 0\n",
+        )
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "STATE_DIR": str(state),
+                "ARCLINK_PREREQ_AUDIT_FILE": str(state / "audit.jsonl"),
+                "ARCLINK_PREREQ_WIREGUARD": "1",
+                "ARCLINK_SKIP_PREREQ_INSTALL": "1",
+            }
+        )
+        result = subprocess.run(
+            ["/bin/bash", str(ENSURE_PREREQS_SH), "--surface", "control-node", "--json"],
+            text=True,
+            capture_output=True,
+            env=env,
+            cwd=str(REPO),
+            check=False,
+        )
+        expect(result.returncode == 1, f"expected missing WireGuard tools to be planned: {result.stdout}\n{result.stderr}")
+        expect("wireguard-tools" in result.stdout, result.stdout)
+        audit = (state / "audit.jsonl").read_text(encoding="utf-8")
+        expect('"action": "install_wireguard"' in audit and '"status": "planned"' in audit, audit)
+        expect("should-not-run" not in result.stderr, result.stderr)
+    print("PASS test_ensure_prereqs_wireguard_check_only_plans_tools")
+
+
 def test_control_install_wires_prereq_auto_installation_with_skip_opt_out() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
     flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
     expect('"$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"' in flow, flow)
+    expect("ARCLINK_PREREQ_WIREGUARD" in flow, "control install should request WireGuard tools for fleet mesh readiness")
     expect("--skip-prereq-install" in flow, flow)
     expect("ARCLINK_SKIP_PREREQ_INSTALL=1" in flow, flow)
     expect(
@@ -4225,6 +4309,7 @@ def main() -> int:
         test_ensure_prereqs_ready_fake_system_is_noop,
         test_ensure_prereqs_check_only_plans_missing_without_mutation,
         test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom,
+        test_ensure_prereqs_wireguard_check_only_plans_tools,
         test_control_install_wires_prereq_auto_installation_with_skip_opt_out,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,

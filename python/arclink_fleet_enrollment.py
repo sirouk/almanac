@@ -31,6 +31,8 @@ from arclink_secrets_regex import redact_then_truncate
 TOKEN_PREFIX = "arcfleet_v1"
 DEFAULT_ENROLLMENT_TTL_SECONDS = 3600
 _FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9_.:=+/@-]{16,256}$")
+_WIREGUARD_PUBLIC_KEY_RE = re.compile(r"^[A-Za-z0-9+/=]{20,100}$")
+_WIREGUARD_IP_CIDR_RE = re.compile(r"^[A-Za-z0-9_.:-]+/[0-9]{1,3}$")
 
 
 class ArcLinkFleetEnrollmentError(ValueError):
@@ -114,6 +116,27 @@ def _require_pending_enrollment(
     if status != "pending":
         raise ArcLinkFleetEnrollmentError(f"enrollment token is {status or 'unavailable'}")
     return row
+
+
+def _clean_optional_wireguard_public_key(value: Any) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        return ""
+    clean = re.sub(r"\s+", "", clean)
+    if not _WIREGUARD_PUBLIC_KEY_RE.fullmatch(clean):
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard public key")
+    return clean
+
+
+def _clean_optional_wireguard_cidr(value: Any) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        return ""
+    if "/" not in clean:
+        clean = f"{clean}/32"
+    if not _WIREGUARD_IP_CIDR_RE.fullmatch(clean):
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard private CIDR")
+    return clean
 
 
 def mint_fleet_enrollment(
@@ -306,6 +329,10 @@ def _clean_hostname(value: Any) -> str:
     return text
 
 
+def _clean_optional_hostname(value: Any) -> str:
+    return str(value or "").strip().lower().strip(".")
+
+
 def _safe_mapping(value: Any, *, label: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -396,6 +423,40 @@ def consume_fleet_enrollment(
     fingerprint = _clean_fingerprint(body.get("machine_fingerprint") or body.get("fingerprint"))
     hostname = _clean_hostname(body.get("hostname"))
     ssh_host = str(body.get("ssh_host") or hostname).strip()
+    tailscale_dns_name = _clean_optional_hostname(
+        body.get("tailscale_dns_name")
+        or body.get("tailnet_dns_name")
+        or body.get("magicdns_name")
+        or ""
+    )
+    private_dns_name = _clean_optional_hostname(
+        body.get("private_dns_name")
+        or body.get("wireguard_dns_name")
+        or body.get("private_mesh_dns_name")
+        or ""
+    )
+    wireguard_private_cidr = _clean_optional_wireguard_cidr(
+        body.get("wireguard_private_cidr")
+        or body.get("wireguard_worker_cidr")
+        or body.get("wireguard_worker_ip")
+        or body.get("wireguard_private_ip")
+        or ""
+    )
+    wireguard_private_ip = str(body.get("wireguard_private_ip") or "").strip()
+    if not wireguard_private_ip and wireguard_private_cidr:
+        wireguard_private_ip = wireguard_private_cidr.split("/", 1)[0]
+    wireguard_public_key = _clean_optional_wireguard_public_key(body.get("wireguard_public_key") or "")
+    wireguard_interface = str(body.get("wireguard_interface") or "").strip()[:64]
+    wireguard_control_endpoint = str(body.get("wireguard_control_endpoint") or "").strip()[:255]
+    wireguard_firewall_status = str(body.get("wireguard_firewall_status") or "").strip()[:64]
+    try:
+        wireguard_listen_port = int(body.get("wireguard_listen_port") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard listen port") from exc
+    if not private_dns_name and wireguard_private_ip:
+        private_dns_name = _clean_optional_hostname(wireguard_private_ip)
+    if not tailscale_dns_name and ssh_host.strip().lower().endswith(".ts.net"):
+        tailscale_dns_name = _clean_optional_hostname(ssh_host)
     ssh_user = str(body.get("ssh_user") or "arclink").strip()
     region = str(body.get("region") or "").strip().lower()
     capacity_slots = max(1, int(body.get("capacity_slots") or 4))
@@ -412,6 +473,23 @@ def consume_fleet_enrollment(
         "enrollment_id": str(enrollment["enrollment_id"]),
         "prereq_audit": prereq_audit,
     }
+    if tailscale_dns_name:
+        metadata["tailscale_dns_name"] = tailscale_dns_name
+        metadata["control_network_mode"] = "remote"
+    if private_dns_name:
+        metadata["private_dns_name"] = private_dns_name
+        metadata["control_network_mode"] = "remote"
+    if wireguard_private_cidr or wireguard_public_key:
+        metadata["wireguard"] = {
+            "interface": wireguard_interface,
+            "private_ip": wireguard_private_ip,
+            "private_cidr": wireguard_private_cidr,
+            "public_key": wireguard_public_key,
+            "control_endpoint": wireguard_control_endpoint,
+            "listen_port": wireguard_listen_port,
+            "firewall_status": wireguard_firewall_status,
+        }
+        metadata["control_network_mode"] = "remote"
     if source_ip:
         metadata["source_ip"] = source_ip
 
@@ -473,6 +551,9 @@ def consume_fleet_enrollment(
             "enrollment_id": str(enrollment["enrollment_id"]),
             "hostname": hostname,
             "provider": provider,
+            "private_dns_name": private_dns_name,
+            "tailscale_dns_name": tailscale_dns_name,
+            "wireguard_private_ip": wireguard_private_ip,
         },
     )
     verified = append_fleet_audit_chain_entry(
@@ -485,6 +566,9 @@ def consume_fleet_enrollment(
             "hostname": hostname,
             "region": region,
             "capacity_slots": capacity_slots,
+            "private_dns_name": private_dns_name,
+            "tailscale_dns_name": tailscale_dns_name,
+            "wireguard_private_ip": wireguard_private_ip,
         },
     )
     conn.execute(
@@ -506,6 +590,9 @@ def consume_fleet_enrollment(
             "enrollment_id": str(enrollment["enrollment_id"]),
             "hostname": hostname,
             "host_id": str(machine.get("machine_host_link") or ""),
+            "private_dns_name": private_dns_name,
+            "tailscale_dns_name": tailscale_dns_name,
+            "wireguard_private_ip": wireguard_private_ip,
         },
         commit=False,
     )
@@ -516,6 +603,11 @@ def consume_fleet_enrollment(
         "machine_id": str(machine["machine_id"]),
         "host_id": str(machine.get("machine_host_link") or ""),
         "hostname": str(machine["hostname"]),
+        "private_dns_name": private_dns_name,
+        "tailscale_dns_name": tailscale_dns_name,
+        "wireguard_private_ip": wireguard_private_ip,
+        "wireguard_private_cidr": wireguard_private_cidr,
+        "wireguard_public_key": wireguard_public_key,
         "status": str(machine["status"]),
         "attested_at": str(machine["attested_at"]),
         "audit_chain_root": str(root["entry_id"]),

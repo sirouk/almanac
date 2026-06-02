@@ -52,6 +52,16 @@ only in that one response.
 
 ## Worker Registration
 
+Use the production private mesh, normally WireGuard, for remote worker
+addressing by default. SSH executor machine mode and the host allowlist still
+gate execution; the private mesh is the transport, not a replacement for those
+controls. Tailscale can still be recorded as an access overlay or domain
+alternative through `--tailscale-dns-name`. Control install/reconfigure prepares
+the Control Node WireGuard keypair, endpoint, UDP firewall allowance when a
+managed firewall is active, and runtime metadata. Worker setup appends the fleet
+SSH key; it does not replace `authorized_keys`, change `sshd_config`, or change
+port 22.
+
 Interactive:
 
 ```bash
@@ -62,21 +72,43 @@ Scriptable:
 
 ```bash
 ./deploy.sh control register-worker \
-  --hostname worker-1.example.test \
-  --ssh-host 203.0.113.10 \
+  --hostname worker-1 \
+  --ssh-host 10.44.0.11 \
+  --bootstrap-remote \
+  --bootstrap-ssh-host 203.0.113.10 \
+  --bootstrap-ssh-user root \
+  --wireguard-private-ip 10.44.0.11 \
+  --tailscale-dns-name worker-1.tailnet.ts.net \
   --ssh-user arclink \
   --region iad \
   --capacity-slots 4 \
   --tags-json '{"tier":"standard"}' \
-  --no-smoke-test \
   --json
 ```
 
-Scriptable registration updates the SSH executor allowlist and records the
-fleet host. With `--json`, the command does not restart control services; the
-response includes `restart_required: true`. JSON mode skips the live SSH smoke
-test by default so stdout remains parseable; add `--smoke-test` when that live
-proof is explicitly authorized.
+Scriptable registration with `--bootstrap-remote` mints a one-time enrollment
+token, stages only the worker join script plus its probe/prereq helpers over
+SSH, runs the join through root or passwordless `sudo -n`, and passes the token
+over stdin so it never appears in argv. The bootstrap account is only the first
+contact account; `--ssh-user` remains the long-lived ArcLink worker/provisioning
+account created or repaired by the join script. `--wireguard-private-ip` is
+persisted into host metadata and is used as the private mesh address when
+`--private-dns-name` is omitted, causing ArcPods placed there to render against
+the worker that owns the containers instead of joining the control-node Docker
+network. When the worker reports its WireGuard public key by callback,
+`register-worker` syncs that peer into the Control Node config and live
+interface. If the worker public key is already known, pass
+`--wireguard-public-key` and `deploy.sh` appends that peer before bootstrap.
+`--tailscale-dns-name` is optional
+compatibility/access metadata; if `--ssh-host` already ends in `.ts.net`,
+ArcLink uses it as that MagicDNS name unless an explicit value is supplied.
+Remote ArcPods also require `ARCLINK_FLEET_SHARE_HUB_URL` to point at a remote
+git hub such as `ssh://hub.wg.internal/{user}/fleet-shared.git`, so a Captain's
+shared folder stays coherent when their Crew spans machines. With `--json`, the
+command does not restart control services; the response includes
+`restart_required: true`. JSON mode skips the live SSH smoke test by default so
+stdout remains parseable; add `--smoke-test` when that live proof is explicitly
+authorized.
 
 ## Inventory
 

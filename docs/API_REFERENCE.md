@@ -116,6 +116,14 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/health` | Liveness check (DB connectivity) |
 | GET | `/openapi.json` | OpenAPI 3.1 spec (machine-readable route catalog) |
 
+Fleet enrollment callback payloads may include `wireguard_private_ip`,
+`wireguard_private_cidr`, and `wireguard_public_key` so worker join can report
+its tunnel address and public peer key. The callback may also include
+`private_dns_name` for an explicit private mesh address and optional
+`tailscale_dns_name` for access compatibility. ArcLink prefers the private mesh
+address for remote ArcPod links and remote control-network rendering. Worker
+private keys are never callback fields.
+
 ### User (session_kind=user)
 
 | Method | Path | Description |

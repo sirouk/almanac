@@ -39,6 +39,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 450
 DEFAULT_TIMEOUT_SECONDS = 60
 DEFAULT_FAILURE_RETRY_SECONDS = 3600
 DEFAULT_CARDS_IN_CONTEXT = 8
+DEFAULT_MAX_CONTENT_HASH_BYTES = 8 * 1024 * 1024
 TEXT_SUFFIXES = {".md", ".markdown", ".mdx", ".txt", ".text"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".svg"}
 VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".mpeg", ".mpg", ".wmv", ".flv"}
@@ -73,6 +74,7 @@ ASSET_SUFFIXES = (
     IMAGE_SUFFIXES | VIDEO_SUFFIXES | AUDIO_SUFFIXES | OFFICE_SUFFIXES | DATA_SUFFIXES | DESIGN_SUFFIXES | ARCHIVE_SUFFIXES
 )
 SIGNATURE_SUFFIXES = TEXT_SUFFIXES | {".pdf"} | ASSET_SUFFIXES
+LINKED_MANIFEST_NAME = ".arclink-linked-resources.json"
 SKIP_DIR_NAMES = {
     ".git",
     ".hg",
@@ -239,6 +241,15 @@ def _safe_iterdir(path: Path) -> list[Path]:
         return []
 
 
+def _safe_iterdir_allow_root_symlink(path: Path) -> list[Path]:
+    try:
+        if not path.is_dir():
+            return []
+        return sorted(path.iterdir(), key=lambda item: item.name.casefold())
+    except OSError:
+        return []
+
+
 def _safe_stat(path: Path) -> os.stat_result | None:
     try:
         return path.stat()
@@ -297,6 +308,15 @@ def _file_content_hash(path: Path) -> str:
     try:
         if path.is_symlink() or not path.is_file():
             return ""
+        stat = path.stat()
+        max_hash_bytes = _int_env(
+            "ARCLINK_MEMORY_SYNTH_MAX_CONTENT_HASH_BYTES",
+            DEFAULT_MAX_CONTENT_HASH_BYTES,
+            minimum=0,
+            maximum=256 * 1024 * 1024,
+        )
+        if max_hash_bytes and stat.st_size > max_hash_bytes:
+            return ""
         digest = hashlib.sha256()
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -313,6 +333,7 @@ def _file_fingerprint(prefix: str, path: Path, root: Path, stat: os.stat_result 
     return (
         f"{prefix}:{rel_path}:"
         f"{stat.st_size if stat else 0}:"
+        f"{int(stat.st_mtime) if stat else 0}:"
         f"{content_hash or 'unreadable'}"
     )
 
@@ -611,6 +632,244 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
     return candidates
 
 
+def _unique_existing_roots(names: Sequence[str]) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for name in names:
+        value = _env(name, "").strip()
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        try:
+            if not path.is_dir() or path.is_symlink():
+                continue
+            marker = str(path.resolve(strict=False))
+        except OSError:
+            continue
+        if marker in seen:
+            continue
+        seen.add(marker)
+        roots.append(path)
+    return roots
+
+
+def _safe_entry_path(root: Path, raw_path: str) -> Path | None:
+    text = str(raw_path or "").strip()
+    if not text:
+        return None
+    text = text.lstrip("/")
+    parts = Path(text).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
+    return root / Path(*parts)
+
+
+def _linked_manifest_entries(root: Path) -> list[tuple[str, dict[str, Any], Path]]:
+    manifest_path = root / LINKED_MANIFEST_NAME
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        return []
+    entries = manifest.get("entries") if isinstance(manifest, dict) else {}
+    if not isinstance(entries, dict):
+        return []
+    result: list[tuple[str, dict[str, Any], Path]] = []
+    for slug, raw_entry in sorted(entries.items(), key=lambda item: str(item[0]).casefold()):
+        if not isinstance(raw_entry, dict):
+            continue
+        entry_path = (
+            str(raw_entry.get("entry_path") or "").strip()
+            or str(raw_entry.get("linked_path") or "").strip()
+            or f"/{slug}"
+        )
+        path = _safe_entry_path(root, entry_path)
+        if path is None or not path.exists():
+            continue
+        result.append((str(slug or Path(entry_path).name or "linked-share"), raw_entry, path))
+    return result
+
+
+def _shared_path_candidate(
+    *,
+    source_kind: str,
+    source_key: str,
+    source_title: str,
+    root_label: str,
+    entry_label: str,
+    path: Path,
+    settings: SynthesisSettings,
+    metadata: Mapping[str, Any] | None = None,
+) -> SourceCandidate | None:
+    if not path.exists():
+        return None
+    metadata = metadata or {}
+    fingerprints: list[str] = []
+    text_files: list[str] = []
+    pdfs: list[str] = []
+    subfolders: list[str] = []
+    asset_examples: list[dict[str, Any]] = []
+    asset_counts: dict[str, int] = {}
+    asset_seen: set[str] = set()
+    snippets: list[dict[str, str]] = []
+
+    def add_asset(item: Path, *, rel_root: Path) -> None:
+        suffix = item.suffix.casefold()
+        rel_path = _path_rel(item, rel_root)
+        if suffix in ASSET_SUFFIXES:
+            kind = _asset_kind_for_suffix(suffix)
+            if rel_path not in asset_seen:
+                asset_seen.add(rel_path)
+                asset_counts[kind] = asset_counts.get(kind, 0) + 1
+                if len(asset_examples) < 24:
+                    asset_examples.append(_asset_summary_for_path(item, rel_root))
+
+    if path.is_file():
+        suffix = path.suffix.casefold()
+        if suffix not in SIGNATURE_SUFFIXES:
+            return None
+        fingerprints.append(_file_fingerprint("shared-file", path, path.parent))
+        if suffix == ".pdf":
+            pdfs.append(path.name)
+        elif suffix in TEXT_SUFFIXES:
+            text_files.append(path.name)
+            snippet = _read_file_snippet(path, max_chars=min(900, settings.max_source_chars // 3))
+            if snippet:
+                snippets.append({"path": entry_label, "snippet": snippet})
+        add_asset(path, rel_root=path.parent)
+        source_count = 1
+    elif path.is_dir():
+        children = _safe_iterdir_allow_root_symlink(path)
+        for nested in children[:250]:
+            if not nested.name or nested.name.startswith(".") or nested.name in SKIP_DIR_NAMES or nested.is_symlink():
+                continue
+            stat = _safe_stat(nested)
+            if nested.is_dir():
+                subfolders.append(nested.name)
+                fingerprints.append(f"d:{nested.name}:{int(stat.st_mtime) if stat else 0}")
+                continue
+            if not nested.is_file():
+                continue
+            suffix = nested.suffix.casefold()
+            if suffix not in SIGNATURE_SUFFIXES:
+                continue
+            fingerprints.append(_file_fingerprint("shared", nested, path, stat))
+            if suffix == ".pdf":
+                pdfs.append(nested.name)
+            elif suffix in TEXT_SUFFIXES:
+                text_files.append(nested.name)
+            add_asset(nested, rel_root=path)
+
+        preferred_snippet_files = [
+            candidate
+            for candidate in [path / "README.md", path / "README.txt", path / "readme.md", path / "readme.txt"]
+            if candidate.is_file() and not candidate.is_symlink()
+        ]
+        for snippet_path in preferred_snippet_files[:3]:
+            snippet = _read_file_snippet(snippet_path, max_chars=min(900, settings.max_source_chars // 4))
+            if snippet:
+                snippets.append({"path": _path_rel(snippet_path, path), "snippet": snippet})
+        if not snippets:
+            for snippet_path in _bounded_walk_files(path, suffixes=TEXT_SUFFIXES, limit=300):
+                if len(snippets) >= 4:
+                    break
+                snippet = _read_file_snippet(snippet_path, max_chars=min(700, settings.max_source_chars // 4))
+                if snippet:
+                    snippets.append({"path": _path_rel(snippet_path, path), "snippet": snippet})
+        for item in _bounded_walk_files(path, suffixes=SIGNATURE_SUFFIXES, limit=300):
+            rel_path = _path_rel(item, path)
+            stat = _safe_stat(item)
+            fingerprints.append(_file_fingerprint("shared-deep", item, path, stat))
+            if item.suffix.casefold() in ASSET_SUFFIXES and rel_path not in asset_seen:
+                add_asset(item, rel_root=path)
+        source_count = len(children)
+    else:
+        return None
+
+    if not fingerprints and not snippets and not asset_examples:
+        return None
+    payload = {
+        "source": source_kind,
+        "root": root_label,
+        "entry_path": entry_label,
+        "access_mode": _clean_space(metadata.get("access_mode") or metadata.get("mode") or "", limit=80),
+        "projection_mode": _clean_space(metadata.get("projection_mode") or "", limit=80),
+        "resource_kind": _clean_space(metadata.get("resource_kind") or ("directory" if path.is_dir() else "file"), limit=80),
+        "read_only": bool(metadata.get("read_only", False)),
+        "subfolders": _compact_unique(subfolders, limit=40),
+        "text_files": _compact_unique(text_files, limit=30),
+        "pdfs": _compact_unique(pdfs, limit=30),
+        "asset_counts": dict(sorted(asset_counts.items())),
+        "asset_examples": asset_examples[:24],
+        "snippets": snippets[:4],
+        **_fingerprint_digest(fingerprints),
+    }
+    return _candidate_from_payload(
+        source_kind,
+        source_key,
+        source_title,
+        payload,
+        source_count=max(1, source_count),
+    )
+
+
+def build_shared_document_candidates(settings: SynthesisSettings) -> list[SourceCandidate]:
+    candidates: list[SourceCandidate] = []
+    for root in _unique_existing_roots(("ARCLINK_LINKED_RESOURCES_ROOT", "DRIVE_LINKED_ROOT", "CODE_LINKED_ROOT")):
+        manifest_entries = _linked_manifest_entries(root)
+        manifest_paths = {path for _, _, path in manifest_entries}
+        for slug, entry, path in manifest_entries:
+            rel = _path_rel(path, root)
+            title = _clean_space(entry.get("label") or slug or rel, limit=140) or "Linked shared folder"
+            candidate = _shared_path_candidate(
+                source_kind="linked",
+                source_key=rel or slug,
+                source_title=title,
+                root_label=str(root),
+                entry_label=f"{str(root).rstrip('/')}/{rel}".rstrip("/"),
+                path=path,
+                settings=settings,
+                metadata=entry,
+            )
+            if candidate is not None:
+                candidates.append(candidate)
+        root_files: list[Path] = []
+        for item in _safe_iterdir(root):
+            if item in manifest_paths or not item.is_file() or item.name == LINKED_MANIFEST_NAME:
+                continue
+            if item.name.startswith(".") or item.suffix.casefold() not in SIGNATURE_SUFFIXES:
+                continue
+            root_files.append(item)
+        if root_files:
+            for item in root_files[:20]:
+                candidate = _shared_path_candidate(
+                    source_kind="linked",
+                    source_key=f"root:{item.name}",
+                    source_title=f"Linked root file: {item.name}",
+                    root_label=str(root),
+                    entry_label=f"{str(root).rstrip('/')}/{item.name}",
+                    path=item,
+                    settings=settings,
+                    metadata={"resource_kind": "file"},
+                )
+                if candidate is not None:
+                    candidates.append(candidate)
+
+    for root in _unique_existing_roots(("ARCLINK_FLEET_SHARED_ROOT", "DRIVE_FLEET_SHARED_ROOT", "CODE_FLEET_SHARED_ROOT")):
+        candidate = _shared_path_candidate(
+            source_kind="fleet",
+            source_key="fleet-shared",
+            source_title="Fleet shared folder",
+            root_label=str(root),
+            entry_label=str(root),
+            path=root,
+            settings=settings,
+            metadata={"access_mode": "read_write", "projection_mode": "fleet_shared_git", "resource_kind": "directory"},
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
 def _notion_area_from_row(row: sqlite3.Row) -> str:
     try:
         from arclink_control import _notion_landmark_area
@@ -739,6 +998,7 @@ def build_notion_candidates(conn: sqlite3.Connection, cfg: Config, settings: Syn
 
 def build_candidates(conn: sqlite3.Connection, cfg: Config, settings: SynthesisSettings) -> list[SourceCandidate]:
     candidates = build_vault_candidates(cfg, settings)
+    candidates.extend(build_shared_document_candidates(settings))
     candidates.extend(build_notion_candidates(conn, cfg, settings))
     return candidates
 
@@ -1142,10 +1402,29 @@ def _card_has_unsafe_output(card: Mapping[str, Any]) -> bool:
     return any(pattern.search(joined) for pattern in UNSAFE_OUTPUT_PATTERNS)
 
 
+def _retrieval_rail_for_candidate(candidate: SourceCandidate) -> str:
+    source_kind = str(candidate.source_kind or "").strip().casefold()
+    if source_kind == "vault":
+        return "vault.search-and-fetch"
+    if source_kind == "notion":
+        return "notion.search-and-fetch"
+    if source_kind == "linked":
+        return "Drive/Code Linked root"
+    if source_kind == "fleet":
+        return "Drive/Code Fleet root"
+    return "knowledge.search-and-fetch"
+
+
 def render_card_text(candidate: SourceCandidate, card: dict[str, Any]) -> str:
     if not card.get("inject") or not str(card.get("summary") or "").strip():
         return ""
     bits = [f"- [{candidate.source_kind}:{candidate.source_title}] {card['summary']}"]
+    rail = _retrieval_rail_for_candidate(candidate)
+    source_key = _clean_space(candidate.source_key, limit=140) or _clean_space(candidate.source_title, limit=140)
+    if source_key:
+        bits.append(f"Retrieval rail: {rail}; source key: {source_key}.")
+    else:
+        bits.append(f"Retrieval rail: {rail}.")
     domains = ", ".join(card.get("domains") or [])
     workflows = ", ".join(card.get("workflows") or [])
     content_types = ", ".join(card.get("content_types") or [])
@@ -1294,7 +1573,7 @@ def _mark_stale_cards(conn: sqlite3.Connection, active_keys: set[tuple[str, str]
         SELECT source_kind, source_key
         FROM memory_synthesis_cards
         WHERE status != 'stale'
-          AND source_kind IN ('vault', 'notion')
+          AND source_kind IN ('vault', 'notion', 'linked', 'fleet')
         """
     ).fetchall()
     stale = [

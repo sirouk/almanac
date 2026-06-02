@@ -82,6 +82,7 @@ _RECALL_STUB_GUARDRAIL_MARKERS = (
     "Treat these as awareness cards",
     "Default broad question path:",
     "Vault/PDF/file path:",
+    "Shared Drive/Code path:",
     "Shared Notion path:",
     "Quality rule:",
 )
@@ -325,6 +326,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         (
             "academy.propose-resource - submit compressed source notes for control-plane Trainer review. "
             "The plugin injects token automatically; omit token. Required: title, lane_id, summary. "
+            "Use proposal_kind=add_resource for new sources or proposal_kind=discontinue_resource with origin_url/target_source_uid to queue Trainer/PG-PROVIDER review when a watched source is a dead end. "
             "Include origin_url or offline reference, relevance.role_fit, relevance.weekly_refresh, relevance.limits, citations, and permission/freshness notes. "
             "Submit derived compressed notes only; never submit secrets, private Captain strategy, raw paywalled text, or protected material."
         ),

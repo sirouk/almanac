@@ -282,6 +282,8 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 expect("Repos contains compact orientation" in card_text, card_text)
                 expect("Nimbus Trading Lab" in card_text, card_text)
                 expect("Archive Delta" in card_text, card_text)
+                expect("Retrieval rail: vault.search-and-fetch; source key: Research." in card_text, card_text)
+                expect("Retrieval rail: notion.search-and-fetch; source key: Work Focus." in card_text, card_text)
                 expect("Domains: creator, family, business." in card_text, card_text)
                 expect("Workflows: content planning, household coordination, research review." in card_text, card_text)
                 expect("Content: notes, PDFs, videos, images, tables." in card_text, card_text)
@@ -310,9 +312,11 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                 )
                 conn.commit()
                 payload = control.build_managed_memory_payload(conn, cfg, agent_id="agent-test")
+                expect("untrusted source labels" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("Semantic synthesis cards:" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("Compact recall hints only" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("[vault:Research]" in payload["recall-stubs"], payload["recall-stubs"])
+                expect("Retrieval rail: vault.search-and-fetch; source key: Research." in payload["recall-stubs"], payload["recall-stubs"])
                 expect("Trust score: 0.72." in payload["recall-stubs"], payload["recall-stubs"])
                 expect("Contradiction signals:" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("Disagreement signals:" in payload["recall-stubs"], payload["recall-stubs"])
@@ -417,6 +421,106 @@ def test_memory_synthesizer_local_fallback_runs_without_llm_config() -> None:
                 expect("Compact recall hints only" in payload["recall-stubs"], payload["recall-stubs"])
                 expect("[vault:Research]" in payload["recall-stubs"], payload["recall-stubs"])
             print("PASS test_memory_synthesizer_local_fallback_runs_without_llm_config")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_memory_synthesizer_picks_up_linked_and_fleet_shared_documents() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = base_config(root)
+        values["ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN"] = "20"
+        write_config(config_path, values)
+        linked_root = root / "linked-resources"
+        fleet_root = root / "fleet-shared"
+        linked_root.mkdir(parents=True)
+        fleet_root.mkdir(parents=True)
+        source_live = root / "owner-source" / "live-brief"
+        source_live.mkdir(parents=True)
+        (source_live / "overview.md").write_text("# Live Brief\n\nShared launch notes.\n", encoding="utf-8")
+        (source_live / ".env").write_text("TOKEN=hidden\n", encoding="utf-8")
+        (linked_root / "live-brief").symlink_to(source_live, target_is_directory=True)
+        outside = root / "outside-private"
+        outside.mkdir()
+        (outside / "private-note.md").write_text("off-linked private note\n", encoding="utf-8")
+        (linked_root / "unapproved-private").symlink_to(outside, target_is_directory=True)
+        (linked_root / ".arclink-linked-resources.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": {
+                        "live-brief": {
+                            "entry_path": "/live-brief",
+                            "resource_kind": "directory",
+                            "access_mode": "read_write",
+                            "projection_mode": "living_symlink",
+                            "read_only": False,
+                        }
+                    },
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (fleet_root / "crew-plan.md").write_text("# Crew Plan\n\nFleet-wide shared plan.\n", encoding="utf-8")
+
+        old_env = os.environ.copy()
+        os.environ.update(values)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        os.environ["ARCLINK_LINKED_RESOURCES_ROOT"] = str(linked_root)
+        os.environ["ARCLINK_FLEET_SHARED_ROOT"] = str(fleet_root)
+        try:
+            cfg = control.Config.from_env()
+            calls: list[str] = []
+
+            def fake_model(candidate: synth.SourceCandidate, settings: synth.SynthesisSettings) -> dict[str, object]:
+                calls.append(f"{candidate.source_kind}:{candidate.source_key}")
+                return {
+                    "summary": f"{candidate.source_title} shared document cues are available for inspection.",
+                    "domains": ["workspace"],
+                    "workflows": ["shared document review"],
+                    "content_types": ["notes"],
+                    "topics": [candidate.source_title],
+                    "entities": [candidate.source_title],
+                    "retrieval_queries": [candidate.source_key],
+                    "source_hints": [candidate.source_key],
+                    "confidence": "low",
+                    "trust_score": 0.4,
+                    "inject": True,
+                }
+
+            with control.connect_db(cfg) as conn:
+                settings = synth.load_settings(cfg)
+                candidates = synth.build_candidates(conn, cfg, settings)
+                linked = next(candidate for candidate in candidates if candidate.source_kind == "linked")
+                fleet = next(candidate for candidate in candidates if candidate.source_kind == "fleet")
+                linked_payload = json.dumps(linked.payload, sort_keys=True)
+                fleet_payload = json.dumps(fleet.payload, sort_keys=True)
+                expect("overview.md" in linked_payload, linked_payload)
+                expect("Shared launch notes" in linked_payload, linked_payload)
+                expect("off-linked private note" not in linked_payload, linked_payload)
+                expect("unapproved-private" not in linked_payload, linked_payload)
+                expect("TOKEN=hidden" not in linked_payload, linked_payload)
+                expect("crew-plan.md" in fleet_payload, fleet_payload)
+                expect("Fleet-wide shared plan" in fleet_payload, fleet_payload)
+
+            result = synth.run_once(cfg, model_client=fake_model)
+            expect(result["status"] == "ok", str(result))
+            expect("linked:live-brief" in calls, calls)
+            expect("fleet:fleet-shared" in calls, calls)
+            with control.connect_db(cfg) as conn:
+                card_text = "\n".join(
+                    str(row["card_text"] or "")
+                    for row in conn.execute(
+                        "SELECT card_text FROM memory_synthesis_cards WHERE source_kind IN ('linked', 'fleet') ORDER BY source_kind"
+                    ).fetchall()
+                )
+                expect("Retrieval rail: Drive/Code Linked root; source key: live-brief." in card_text, card_text)
+                expect("Retrieval rail: Drive/Code Fleet root; source key: fleet-shared." in card_text, card_text)
+            print("PASS test_memory_synthesizer_picks_up_linked_and_fleet_shared_documents")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -581,11 +685,12 @@ def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
     test_memory_synthesizer_local_fallback_runs_without_llm_config()
+    test_memory_synthesizer_picks_up_linked_and_fleet_shared_documents()
     test_memory_synthesizer_falls_back_when_llm_returns_malformed_json()
     test_memory_synthesizer_notion_paths_stay_inside_index_root()
     test_memory_synthesizer_redacts_secret_material_before_truncation()
     test_memory_synthesizer_rejects_unsafe_model_output()
-    print("PASS all 7 memory synthesizer tests")
+    print("PASS all 8 memory synthesizer tests")
     return 0
 
 

@@ -140,6 +140,10 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             (root / "vault" / "Research Annex").mkdir(parents=True, exist_ok=True)
             (root / "vault" / "Research Annex" / "archive_note_alpha.pdf").write_text("pdf", encoding="utf-8")
             (root / "vault" / "Research Annex" / "archive_note_beta.pdf").write_text("pdf", encoding="utf-8")
+            (root / "outside-vault").mkdir(parents=True, exist_ok=True)
+            (root / "outside-vault" / "private-name.md").write_text("# Private\n", encoding="utf-8")
+            os.symlink(root / "outside-vault", root / "vault" / "Linked Private", target_is_directory=True)
+            os.symlink(root / "outside-vault", root / "vault" / "Research Annex" / "Linked Private Nested", target_is_directory=True)
             (root / "vault" / "Repos" / "sample-sdk").mkdir(parents=True, exist_ok=True)
             (root / "vault" / "Repos" / "sample-sdk" / "README.md").write_text("# sample-sdk\n", encoding="utf-8")
             for doc_key, page_id, title, breadcrumb in [
@@ -242,6 +246,8 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("Research Annex" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
             expect("archive_note_alpha.pdf" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
             expect("archive_note_beta.pdf" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("Linked Private" not in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
+            expect("private-name.md" not in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
             expect("Repos" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
             expect("sample-sdk" in managed_payload["vault-landmarks"], managed_payload["vault-landmarks"])
             expect(

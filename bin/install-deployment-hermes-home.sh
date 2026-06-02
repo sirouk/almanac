@@ -98,6 +98,14 @@ sso_subject = str(
     or existing.get("sso_subject")
     or username
 ).strip()
+revocation_env = {
+    "dashboard_auth_revoked_before": "ARCLINK_DASHBOARD_AUTH_REVOKED_BEFORE",
+    "dashboard_session_revoked_before": "ARCLINK_DASHBOARD_SESSION_REVOKED_BEFORE",
+    "dashboard_sso_revoked_before": "ARCLINK_DASHBOARD_SSO_REVOKED_BEFORE",
+    "dashboard_auth_revoked_at": "ARCLINK_DASHBOARD_AUTH_REVOKED_AT",
+    "dashboard_auth_revoked_by": "ARCLINK_DASHBOARD_AUTH_REVOKED_BY",
+    "dashboard_auth_revocation_reason": "ARCLINK_DASHBOARD_AUTH_REVOCATION_REASON",
+}
 dashboard_url = str(os.environ.get("ARCLINK_HERMES_URL") or os.environ.get("ARCLINK_DASHBOARD_URL") or "").strip()
 drive_url = str(os.environ.get("ARCLINK_FILES_URL") or "").strip()
 if not drive_url and dashboard_url:
@@ -173,6 +181,10 @@ payload = {
     "captain_name": str(os.environ.get("ARCLINK_CAPTAIN_NAME") or "").strip(),
     "captain_email": str(os.environ.get("ARCLINK_CAPTAIN_EMAIL") or "").strip(),
 }
+for key, env_name in revocation_env.items():
+    value = str(os.environ.get(env_name) or "").strip()
+    if value:
+        payload[key] = value
 path.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".arclink-web-access-", suffix=".tmp")
 try:

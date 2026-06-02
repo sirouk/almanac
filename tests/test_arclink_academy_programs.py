@@ -84,6 +84,19 @@ def cleanup(tmp, old_env) -> None:
     tmp.cleanup()
 
 
+def _seed_deployment(conn, *, deployment_id: str, user_id: str, status: str = "active") -> None:
+    now = "2026-05-27T03:00:00Z"
+    conn.execute(
+        """
+        INSERT INTO arclink_deployments (
+          deployment_id, user_id, prefix, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (deployment_id, user_id, deployment_id.replace("_", "-")[:40] or "dep", status, now, now),
+    )
+    conn.commit()
+
+
 def test_academy_catalog_seed_is_idempotent_and_browsable() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -279,6 +292,48 @@ def test_academy_browse_graduates_and_adopt() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_adopts_central_specialist_for_new_captain() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="u1", deployment_id="dep-a", name="Grace")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u1")
+        _propose(
+            ap,
+            conn,
+            "dep-a",
+            lane_id="web_article",
+            title="Shared systems practice source",
+            origin_url="https://example.test/systems-practice",
+            summary="Derived public-lane notes for systems practice.",
+        )
+        ended = ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="u1", graduate=True)
+        specialist_uid = ended["session"]["commit_summary"]["central_specialist_uid"]
+        card = ap.academy_specialist_public_card(conn, specialist_uid=specialist_uid)
+        expect(card is not None and card["source_count"] >= 1, str(card))
+
+        adopted = ap.adopt_central_specialist(
+            conn,
+            specialist_uid=specialist_uid,
+            user_id="u2",
+            deployment_id="dep-b",
+            name="Grace Shared",
+        )
+        expect(adopted["status"] == "graduated", str(adopted))
+        expect(adopted["central_specialist"]["specialist_uid"] == specialist_uid, str(adopted))
+        expect(adopted["staged_source_count"] >= 1, str(adopted))
+        steer = adopted["captain_steer"]
+        expect(steer["adopted_central_specialist_uid"] == specialist_uid and steer["share"] == "redacted_public", str(steer))
+        sub = conn.execute(
+            "SELECT * FROM academy_specialist_subscriptions WHERE trainee_id = ? AND specialist_uid = ?",
+            (adopted["trainee_id"], specialist_uid),
+        ).fetchone()
+        expect(sub is not None and sub["user_id"] == "u2", str(dict(sub) if sub else None))
+        print("PASS test_academy_adopts_central_specialist_for_new_captain")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_academy_many_types_as_data_and_lane_validation() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -326,6 +381,17 @@ def test_academy_rejects_secret_material_and_unknown_program() -> None:
         except Exception:
             secretish = True
         expect(secretish, "secret-looking steer must be rejected")
+        label_secretish = False
+        try:
+            ap.upsert_academy_program(
+                conn,
+                program_id="secret_label",
+                label="api_key=sk-livesecretvalue1234567890",
+                source_lanes=["web_article"],
+            )
+        except Exception:
+            label_secretish = True
+        expect(label_secretish, "secret-looking Major labels must be rejected before they can become public specialist titles")
         print("PASS test_academy_rejects_secret_material_and_unknown_program")
     finally:
         cleanup(tmp, old_env)
@@ -624,11 +690,91 @@ def test_academy_adopt_helper_blocks_cross_owner_clone() -> None:
         cleanup(tmp, old_env)
 
 
-def _propose(ap, conn, deployment_id, *, lane_id, title, origin_url, summary, citations=None):
+def test_academy_helpers_reject_real_deployment_owner_mismatch() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        _seed_deployment(conn, deployment_id="dep-owned-by-b", user_id="owner-b")
+
+        raised = False
+        try:
+            ap.enroll_academy_trainee(
+                conn,
+                program_id="research_analyst",
+                user_id="owner-a",
+                deployment_id="dep-owned-by-b",
+            )
+        except ap.ArcLinkAcademyProgramError:
+            raised = True
+        expect(raised, "Academy enroll must reject a real deployment owned by another account")
+
+        _seed_deployment(conn, deployment_id="dep-owned-by-a", user_id="owner-a")
+        trainee = ap.enroll_academy_trainee(
+            conn,
+            program_id="research_analyst",
+            user_id="owner-a",
+            deployment_id="dep-owned-by-a",
+        )
+        expect(trainee["deployment_id"] == "dep-owned-by-a", str(trainee))
+        print("PASS test_academy_helpers_reject_real_deployment_owner_mismatch")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_central_adoption_rejects_real_deployment_owner_mismatch() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        _graduate(ap, conn, "systems_practice_engineer", "capt-source", "dep-source")
+        spec_uid, _ = ap.specialist_uid_for_program(ap.get_academy_program(conn, "systems_practice_engineer"))
+        _seed_deployment(conn, deployment_id="dep-owned-by-c", user_id="capt-c")
+
+        raised = False
+        try:
+            ap.adopt_central_specialist(
+                conn,
+                specialist_uid=spec_uid,
+                user_id="capt-b",
+                deployment_id="dep-owned-by-c",
+                name="Wrong Pod",
+            )
+        except ap.ArcLinkAcademyProgramError:
+            raised = True
+        expect(raised, "central specialist adoption must reject another Captain's deployment id")
+
+        _seed_deployment(conn, deployment_id="dep-owned-by-b", user_id="capt-b")
+        adopted = ap.adopt_central_specialist(
+            conn,
+            specialist_uid=spec_uid,
+            user_id="capt-b",
+            deployment_id="dep-owned-by-b",
+            name="Right Pod",
+        )
+        expect(adopted["deployment_id"] == "dep-owned-by-b", str(adopted))
+        print("PASS test_academy_central_adoption_rejects_real_deployment_owner_mismatch")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def _propose(
+    ap,
+    conn,
+    deployment_id,
+    *,
+    lane_id,
+    title,
+    origin_url,
+    summary,
+    citations=None,
+    proposal_kind="add_resource",
+    target_source_uid="",
+):
     return ap.record_academy_resource_proposal(
         conn,
         deployment_id=deployment_id,
         lane_id=lane_id,
+        proposal_kind=proposal_kind,
+        target_source_uid=target_source_uid,
         title=title,
         origin_url=origin_url,
         summary=summary,
@@ -704,6 +850,82 @@ def test_academy_graduation_promotes_public_sources_and_skips_private_and_raw() 
         cleanup(tmp, old_env)
 
 
+def test_academy_discontinue_proposal_queues_review_without_quarantining_central_source() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        first = ap.enroll_academy_trainee(
+            conn,
+            program_id="systems_practice_engineer",
+            user_id="capt-source",
+            deployment_id="dep-source",
+        )
+        first_session = ap.open_academy_mode(conn, trainee_id=first["trainee_id"], opened_by="capt-source")
+        _propose(
+            ap,
+            conn,
+            "dep-source",
+            lane_id="github_repository",
+            title="Shared source to retire",
+            origin_url="https://example.test/dead-end",
+            summary="Compressed source notes that initially looked useful.",
+        )
+        first_end = ap.end_academy_mode(conn, session_id=first_session["session"]["session_id"], actor="capt-source", graduate=True)
+        spec_uid = first_end["session"]["commit_summary"]["central_specialist_uid"]
+        source = conn.execute(
+            "SELECT source_uid, status FROM academy_sources WHERE canonical_url = ?",
+            ("https://example.test/dead-end",),
+        ).fetchone()
+        expect(source is not None and source["status"] == "active", str(dict(source) if source else None))
+
+        second = ap.enroll_academy_trainee(
+            conn,
+            program_id="systems_practice_engineer",
+            user_id="capt-review",
+            deployment_id="dep-review",
+        )
+        second_session = ap.open_academy_mode(conn, trainee_id=second["trainee_id"], opened_by="capt-review")
+        discontinue = _propose(
+            ap,
+            conn,
+            "dep-review",
+            lane_id="github_repository",
+            title="Shared source to retire",
+            origin_url="https://example.test/dead-end",
+            summary="Dead end after review: stale repository guidance contradicts the stronger current source.",
+            proposal_kind="discontinue_resource",
+        )
+        expect(discontinue["proposal_kind"] == "discontinue_resource", str(discontinue))
+        second_end = ap.end_academy_mode(conn, session_id=second_session["session"]["session_id"], actor="capt-review", graduate=True)
+        cs = second_end["session"]["commit_summary"]
+        expect(cs["central_specialist_uid"] == spec_uid, str(cs))
+        expect(cs["central_sources_discontinued"] == 0, str(cs))
+        expect(cs["central_source_discontinue_reviews"] == 1, str(cs))
+        expect("post_discontinuation_recurated" not in cs, str(cs))
+
+        retired = conn.execute(
+            "SELECT status, enrichment_json FROM academy_sources WHERE source_uid = ?",
+            (source["source_uid"],),
+        ).fetchone()
+        expect(retired["status"] == "active", str(dict(retired)))
+        expect("discontinue_review" in str(retired["enrichment_json"]), str(retired["enrichment_json"]))
+        expect("pending_pg_provider" in str(retired["enrichment_json"]), str(retired["enrichment_json"]))
+        prop = conn.execute(
+            "SELECT status, trainer_review_json FROM academy_resource_proposals WHERE proposal_id = ?",
+            (discontinue["proposal_id"],),
+        ).fetchone()
+        expect(prop["status"] == "review_pending", str(dict(prop)))
+        expect("pending_live_review" in str(prop["trainer_review_json"]), str(prop["trainer_review_json"]))
+        card = ap.academy_specialist_public_card(conn, specialist_uid=spec_uid)
+        expect(card is not None and card["source_count"] == 1, str(card))
+        applied = ap.stage_academy_apply(conn, trainee_id=second["trainee_id"], adapter_name="fake")
+        expect(applied["contract_fresh"] is True, str(applied))
+        expect(applied["writes_enabled"] is False, "record-only apply remains no-write")
+        print("PASS test_academy_discontinue_proposal_queues_review_without_quarantining_central_source")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_academy_opt_out_keeps_specialist_private() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -719,6 +941,32 @@ def test_academy_opt_out_keeps_specialist_private() -> None:
         subs = conn.execute("SELECT COUNT(*) AS n FROM academy_specialist_subscriptions").fetchone()
         expect(int(subs["n"]) == 0, "opt-out Captain creates no subscription")
         print("PASS test_academy_opt_out_keeps_specialist_private")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_opt_out_private_capsule_can_apply_without_public_corpus() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="capt-private", deployment_id="dep-private",
+                                      captain_steer={"share": "private"})
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-private")
+        _propose(ap, conn, "dep-private", lane_id="organization_private", title="Captain teaching notes",
+                 origin_url="", summary="Compressed Captain-approved private teaching notes for this Agent only.")
+        ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-private", graduate=True)
+
+        central = conn.execute("SELECT COUNT(*) AS n FROM academy_sources").fetchone()
+        expect(int(central["n"]) == 0, "private capsule must not publish sources centrally")
+        staged = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="fake")
+        expect(staged["writes_enabled"] is False and staged["status"] == "staged", str(staged))
+        expect(staged["academy_specialist_uid"].startswith("private:"), str(staged))
+        expect("Captain teaching notes" in staged["academy_soul_section"], staged["academy_soul_section"])
+
+        live = ap.stage_academy_apply(conn, trainee_id=t["trainee_id"], adapter_name="ssh", live_authorized=True)
+        expect(live["status"] == "handoff_to_hermes_home" and live["writes_enabled"] is True, str(live))
+        expect(live["academy_trainer_review_ready"] is True, str(live))
+        print("PASS test_academy_opt_out_private_capsule_can_apply_without_public_corpus")
     finally:
         cleanup(tmp, old_env)
 
@@ -773,6 +1021,71 @@ def test_academy_central_specialist_shared_and_deduped_across_captains() -> None
         blob = json.dumps(search, sort_keys=True)
         expect("dep-a" not in blob and "capt-a" not in blob, f"reuse search must stay redacted: {blob}")
         print("PASS test_academy_central_specialist_shared_and_deduped_across_captains")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_academy_public_cards_and_capsules_ignore_private_central_rows() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        _graduate(ap, conn, "systems_practice_engineer", "capt-pub", "dep-pub")
+        spec_uid, _ = ap.specialist_uid_for_program(ap.get_academy_program(conn, "systems_practice_engineer"))
+
+        now = "2026-05-27T03:00:00Z"
+        conn.execute(
+            """
+            INSERT INTO academy_sources (
+              source_uid, canonical_url, lane_id, title, derived_notes, citations_json,
+              content_hash, license_status, enrichment_json, quality_score, share_scope,
+              status, first_seen_at, last_reviewed_at, last_observed_at, freshness_days, updated_at
+            ) VALUES (?, ?, 'web_article', ?, ?, '[]', ?, 'agent-reported', '{}', 99,
+              'private', 'active', ?, ?, '', 7, ?)
+            """,
+            (
+                "asrc_private_manual",
+                "https://example.test/private-central-row",
+                "Private central row",
+                "PRIVATE_NEVER_IN_PUBLIC_CAPSULE",
+                "privatehash",
+                now,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO academy_specialist_sources (specialist_uid, source_uid, weight, added_at) VALUES (?, ?, 0, ?)",
+            (spec_uid, "asrc_private_manual", now),
+        )
+        ap.refresh_specialist_capsule(conn, specialist_uid=spec_uid)
+        spec = conn.execute(
+            "SELECT compressed_soul_capsule FROM academy_corpus_specialists WHERE specialist_uid = ?",
+            (spec_uid,),
+        ).fetchone()
+        card = ap.academy_specialist_public_card(conn, specialist_uid=spec_uid)
+        expect(card is not None and card["source_count"] == 1, str(card))
+        expect("PRIVATE_NEVER_IN_PUBLIC_CAPSULE" not in str(spec["compressed_soul_capsule"]), str(spec["compressed_soul_capsule"]))
+
+        conn.execute(
+            """
+            INSERT INTO academy_corpus_specialists (
+              specialist_uid, program_id, role_title, topic_fingerprint,
+              compressed_soul_capsule, capsule_version, enrichment_json, captain_count,
+              share_scope, status, first_seen_at, last_enriched_at, updated_at
+            ) VALUES ('aspec_private_manual', 'research_analyst', 'Private Role',
+              'private-role', 'private body', 1, '{}', 1, 'private', 'active', ?, ?, ?)
+            """,
+            (now, now, now),
+        )
+        expect(
+            ap.academy_specialist_public_card(conn, specialist_uid="aspec_private_manual") is None,
+            "public card helper must refuse private specialists by default",
+        )
+        expect(
+            all(c["specialist_uid"] != "aspec_private_manual" for c in ap.list_central_specialists(conn)),
+            "public central gallery must not include private specialists",
+        )
+        print("PASS test_academy_public_cards_and_capsules_ignore_private_central_rows")
     finally:
         cleanup(tmp, old_env)
 
@@ -888,8 +1201,11 @@ def test_academy_continuing_education_uses_real_sources() -> None:
 if __name__ == "__main__":
     test_academy_proposals_feed_corpus_not_fixtures()
     test_academy_graduation_promotes_public_sources_and_skips_private_and_raw()
+    test_academy_discontinue_proposal_queues_review_without_quarantining_central_source()
     test_academy_opt_out_keeps_specialist_private()
+    test_academy_opt_out_private_capsule_can_apply_without_public_corpus()
     test_academy_central_specialist_shared_and_deduped_across_captains()
+    test_academy_public_cards_and_capsules_ignore_private_central_rows()
     test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live()
     test_academy_apply_stages_replaceable_soul_section()
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()
@@ -901,6 +1217,8 @@ if __name__ == "__main__":
     test_academy_graduate_card_redacts_tenant_identity()
     test_academy_seed_refreshes_default_catalog_drift()
     test_academy_adopt_helper_blocks_cross_owner_clone()
+    test_academy_helpers_reject_real_deployment_owner_mismatch()
+    test_academy_central_adoption_rejects_real_deployment_owner_mismatch()
     test_academy_apply_is_fail_closed()
     test_academy_apply_requires_graduated_trainee()
     test_academy_curation_builds_corpus_plan_and_stages()
@@ -911,6 +1229,7 @@ if __name__ == "__main__":
     test_academy_mode_records_steer_and_resource_proposals()
     test_academy_cancel_mode_returns_to_enrolled()
     test_academy_browse_graduates_and_adopt()
+    test_academy_adopts_central_specialist_for_new_captain()
     test_academy_many_types_as_data_and_lane_validation()
     test_academy_rejects_secret_material_and_unknown_program()
     print("PASS all academy programs tests")

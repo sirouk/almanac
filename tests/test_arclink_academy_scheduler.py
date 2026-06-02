@@ -103,7 +103,7 @@ def test_forward_maintenance_reviews_graduates_without_writes() -> None:
         programs.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="u3", deployment_id="dep-3")
 
         before_intents = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
-        result = scheduler.run_academy_forward_maintenance(conn, env={})
+        result = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"})
         expect(result["status"] == "ok", str(result))
         expect(result["eligible"] == 2, f"only graduates are eligible, got {result['eligible']}")
         expect(result["processed"] == 2 and result["deferred_to_next_run"] == 0, str(result))
@@ -130,7 +130,7 @@ def test_forward_maintenance_caps_and_reports_overflow() -> None:
         programs.seed_default_academy_programs(conn)
         for i in range(3):
             _graduate(programs, conn, "research_analyst", f"u{i}", f"dep-{i}")
-        result = scheduler.run_academy_forward_maintenance(conn, env={}, limit=2)
+        result = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"}, limit=2)
         expect(result["eligible"] == 3, str(result))
         expect(result["processed"] == 2, str(result))
         expect(result["deferred_to_next_run"] == 1, "overflow is reported, never silently dropped")
@@ -146,10 +146,10 @@ def test_forward_maintenance_limit_zero_processes_all() -> None:
         for i in range(3):
             _graduate(programs, conn, "research_analyst", f"u{i}", f"dep-{i}")
         # limit <= 0 means "process all eligible" (explicit, documented).
-        result = scheduler.run_academy_forward_maintenance(conn, env={}, limit=0)
+        result = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"}, limit=0)
         expect(result["eligible"] == 3 and result["processed"] == 3, str(result))
         expect(result["deferred_to_next_run"] == 0, str(result))
-        neg = scheduler.run_academy_forward_maintenance(conn, env={}, limit=-5)
+        neg = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"}, limit=-5)
         expect(neg["processed"] == 3, "negative limit also means process all")
         print("PASS test_forward_maintenance_limit_zero_processes_all")
     finally:
@@ -174,7 +174,7 @@ def test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently
         programs.seed_default_academy_programs(conn)
         _graduate_with_public_source(programs, conn, "research_analyst", "capt-w", "dep-w")
 
-        result = scheduler.run_academy_forward_maintenance(conn, env={})
+        result = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"})
         expect(result["captains_notified"] == 1, f"the Captain is notified weekly: {result}")
         # The capsule was already composed at graduation; weekly content is unchanged
         # for stable sources, so the version is NOT churned.
@@ -214,13 +214,110 @@ def test_forward_maintenance_rotates_shared_specialist_subscribers() -> None:
         sb = programs.open_academy_mode(conn, trainee_id=b["trainee_id"], opened_by="capt-b")
         programs.end_academy_mode(conn, session_id=sb["session"]["session_id"], actor="capt-b", graduate=True)
 
-        result = scheduler.run_academy_forward_maintenance(conn, env={}, created_at="2026-06-01T00:00:00Z")
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"},
+            created_at="2026-06-01T00:00:00Z",
+        )
         expect(result["eligible"] >= 2, str(result))
         expect(result["processed"] == result["eligible"] - result["shared_rotation_deferred"], str(result))
         expect(result["shared_rotation_deferred"] >= 1, str(result))
         rotating = [review for review in result["reviews"] if review.get("rotation_specialist_uid")]
         expect(len(rotating) == 1, f"one subscriber should carry the shared specialist this week: {result}")
+        first = rotating[0]["trainee_id"]
+        result2 = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"},
+            created_at="2026-06-08T00:00:00Z",
+        )
+        rotating2 = [review for review in result2["reviews"] if review.get("rotation_specialist_uid")]
+        expect(len(rotating2) == 1, str(result2))
+        expect(rotating2[0]["trainee_id"] != first, f"shared specialist rotation should advance statefully: {result2}")
         print("PASS test_forward_maintenance_rotates_shared_specialist_subscribers")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_forward_maintenance_live_crawls_public_sources_digest_only() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        _graduate_with_public_source(programs, conn, "research_analyst", "capt-crawl", "dep-crawl")
+        calls: list[str] = []
+
+        def fake_fetcher(*, url, headers, timeout, max_bytes):
+            calls.append(url)
+            if url.endswith("/robots.txt"):
+                return {"status_code": 404, "headers": {}, "text": ""}
+            return {
+                "status_code": 200,
+                "headers": {"etag": "v2", "last-modified": "Tue, 02 Jun 2026 00:00:00 GMT"},
+                "text": "<html><body>Updated public Academy weekly source with enough safe derived observable content for review.</body></html>",
+            }
+
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
+            fetcher=fake_fetcher,
+            created_at="2026-06-02T00:00:00Z",
+        )
+        expect(result["live_crawl"]["enabled"] is True, str(result))
+        expect(result["live_crawl"]["attempted"] == 1, str(result))
+        expect(result["live_crawl"]["changed"] == 1, str(result))
+        expect(result["reviews"][0]["review_needed_count"] == 1, str(result))
+        expect(result["no_write"] is True and result["writes_enabled"] is False, str(result))
+        expect(any(url.endswith("/robots.txt") for url in calls), f"crawler must check robots.txt: {calls}")
+        observations = conn.execute("SELECT * FROM academy_source_crawl_observations").fetchall()
+        expect(len(observations) == 1, str([dict(r) for r in observations]))
+        row = observations[0]
+        expect(row["status"] == "changed", str(dict(row)))
+        expect(row["content_hash"], "digest-only observation should record a hash")
+        expect("Updated public Academy" not in str(row["metadata_json"]), "raw fetched content leaked into metadata")
+        after_intents = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        expect(after_intents == 0, "live weekly crawl must not queue Agent writes")
+        source = conn.execute("SELECT content_hash, enrichment_json FROM academy_sources").fetchone()
+        enrich = json.loads(source["enrichment_json"])
+        expect(enrich["crawl"]["observed_content_hash"] == row["content_hash"], str(enrich))
+        expect(source["content_hash"] != row["content_hash"], "accepted source hash should not change before Trainer/apply review")
+        print("PASS test_forward_maintenance_live_crawls_public_sources_digest_only")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        t = programs.enroll_academy_trainee(conn, program_id="research_analyst", user_id="capt-ssrf", deployment_id="dep-ssrf")
+        s = programs.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-ssrf")
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-ssrf",
+            lane_id="web_article",
+            title="Unsafe local source",
+            origin_url="http://127.0.0.1/secret",
+            summary="Compressed safe notes for an unsafe local URL.",
+            proposed_by="agent-x",
+        )
+        programs.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-ssrf", graduate=True)
+
+        def fail_fetcher(*, url, headers, timeout, max_bytes):
+            raise AssertionError(f"unsafe URL should not be fetched: {url}")
+
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
+            fetcher=fail_fetcher,
+            created_at="2026-06-02T00:00:00Z",
+        )
+        expect(result["live_crawl"]["blocked"] >= 1, str(result))
+        rows = [dict(row) for row in conn.execute("SELECT status, reason FROM academy_source_crawl_observations")]
+        expect(rows and rows[0]["status"] == "blocked", str(rows))
+        expect(
+            any(term in rows[0]["reason"] for term in ("loopback", "https", "non-public")),
+            str(rows),
+        )
+        print("PASS test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching")
     finally:
         cleanup(tmp, old_env)
 
@@ -231,4 +328,6 @@ if __name__ == "__main__":
     test_forward_maintenance_limit_zero_processes_all()
     test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently()
     test_forward_maintenance_rotates_shared_specialist_subscribers()
+    test_forward_maintenance_live_crawls_public_sources_digest_only()
+    test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching()
     print("PASS all academy scheduler tests")

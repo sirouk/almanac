@@ -95,6 +95,100 @@ def test_public_onboarding_routes_work_without_session_auth() -> None:
     print("PASS test_public_onboarding_routes_work_without_session_auth")
 
 
+def test_public_academy_observatory_is_aggregate_and_redacted() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_academy_public_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_public_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+    now = control.utc_now_iso()
+
+    conn.execute(
+        """
+        INSERT INTO academy_sources (
+          source_uid, canonical_url, lane_id, title, share_scope, status,
+          first_seen_at, last_reviewed_at, last_observed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("src_public", "https://example.test/public-academy", "papers", "Public Academy Source", "redacted_public", "active", now, now, now, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO academy_sources (
+          source_uid, canonical_url, lane_id, title, share_scope, status,
+          first_seen_at, last_reviewed_at, last_observed_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("src_private", "https://example.test/private-academy", "strategy", "Private Ops Ritual", "private", "active", now, now, now, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO academy_corpus_specialists (
+          specialist_uid, role_title, topic_fingerprint, capsule_version,
+          captain_count, share_scope, status, first_seen_at, last_enriched_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("spec_public", "Research Analyst", "research", 3, 2, "redacted_public", "active", now, now, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO academy_corpus_specialists (
+          specialist_uid, role_title, topic_fingerprint, capsule_version,
+          captain_count, share_scope, status, first_seen_at, last_enriched_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("spec_private", "Private Strategy Expert", "private", 1, 1, "private", "active", now, now, now),
+    )
+    conn.execute(
+        "INSERT INTO academy_specialist_sources (specialist_uid, source_uid, weight, added_at) VALUES (?, ?, ?, ?)",
+        ("spec_public", "src_public", 1, now),
+    )
+    conn.execute(
+        "INSERT INTO academy_specialist_subscriptions (specialist_uid, trainee_id, user_id, subscribed_at) VALUES (?, ?, ?, ?)",
+        ("spec_public", "trainee_public", "user_public", now),
+    )
+    conn.execute(
+        "INSERT INTO academy_specialist_subscriptions (specialist_uid, trainee_id, user_id, subscribed_at) VALUES (?, ?, ?, ?)",
+        ("spec_private", "trainee_private", "user_private", now),
+    )
+    conn.execute(
+        """
+        INSERT INTO academy_source_crawl_observations (
+          observation_id, source_ref_kind, source_ref_id, source_uid, specialist_uid,
+          trainee_id, user_id, deployment_id, lane_id, canonical_url, status, observed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("obs_public", "central_source", "src_public", "src_public", "spec_public", "trainee_public", "user_public", "dep_public", "papers", "https://example.test/public-academy", "changed", now),
+    )
+    conn.execute(
+        """
+        INSERT INTO academy_source_crawl_observations (
+          observation_id, source_ref_kind, source_ref_id, source_uid, specialist_uid,
+          trainee_id, user_id, deployment_id, lane_id, canonical_url, status, observed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("obs_private", "central_source", "src_private", "src_private", "spec_private", "trainee_private", "user_private", "dep_private", "strategy", "https://example.test/private-academy", "failed", now),
+    )
+    conn.commit()
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/academy/observatory", headers={}, config=config,
+    )
+    expect(status == 200, f"observatory expected 200 got {status}: {payload}")
+    expect(payload["stats"]["active_public_sources"] == 1, str(payload))
+    expect(payload["stats"]["active_public_specialists"] == 1, str(payload))
+    expect(payload["stats"]["weekly_observations"] == 1, str(payload))
+    expect(payload["stats"]["review_queue_events"] == 1, str(payload))
+    expect(payload["stats"]["subscribed_trainees"] == 1, str(payload))
+    expect(payload["privacy"]["digest_only"] is True, str(payload))
+    expect(payload["privacy"]["raw_pages_stored"] == 0, str(payload))
+    expect(payload["privacy"]["captain_private_context_excluded"] is True, str(payload))
+    blob = json.dumps(payload)
+    expect("Private Ops Ritual" not in blob, blob)
+    expect("Private Strategy Expert" not in blob, blob)
+    expect("private-academy" not in blob, blob)
+    print("PASS test_public_academy_observatory_is_aggregate_and_redacted")
+
+
 def test_user_dashboard_requires_session_auth() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_user_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_user_test")
@@ -690,6 +784,76 @@ def test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_te
     print("PASS test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant")
 
 
+def test_user_academy_public_specialist_adoption_is_redacted_and_csrf_protected() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_academy_public_adopt_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_academy_public_adopt_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_academy_public_adopt_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_public_specialist_adopt_test")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_hosted_public_adopt_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    a = seed_paid_deployment(control, onboarding, conn, session_id="onb_pub_adopt_a", email="pub-adopt-a@example.test", prefix="pub-adopt-a")
+    b = seed_paid_deployment(control, onboarding, conn, session_id="onb_pub_adopt_b", email="pub-adopt-b@example.test", prefix="pub-adopt-b")
+    programs.seed_default_academy_programs(conn)
+
+    ta = programs.enroll_academy_trainee(
+        conn,
+        program_id="systems_practice_engineer",
+        user_id=a["user_id"],
+        deployment_id=a["deployment_id"],
+        name="A public specialist",
+        captain_steer={"focus": "A-private-planning-context"},
+    )
+    sa = programs.open_academy_mode(conn, trainee_id=ta["trainee_id"], opened_by=a["user_id"])
+    programs.record_academy_resource_proposal(
+        conn,
+        deployment_id=a["deployment_id"],
+        lane_id="github_repository",
+        title="Reusable public systems source",
+        origin_url="https://example.test/public-systems-source",
+        summary="Compressed public-lane systems source notes for shared Academy reuse.",
+        proposed_by="agent-a",
+    )
+    ended = programs.end_academy_mode(conn, session_id=sa["session"]["session_id"], actor=a["user_id"], graduate=True)
+    specialist_uid = ended["session"]["commit_summary"]["central_specialist_uid"]
+
+    session_b = api.create_arclink_user_session(conn, user_id=b["user_id"], session_id="usess_public_specialist_b")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/academy", headers=auth_headers(session_b), config=config,
+    )
+    expect(status == 200, f"B academy read got {status}: {payload}")
+    expect(any(item["specialist_uid"] == specialist_uid for item in payload.get("central_specialists", [])), str(payload))
+    blob = json.dumps(payload, sort_keys=True)
+    for leak in (a["user_id"], a["deployment_id"], "A-private-planning-context"):
+        expect(leak not in blob, f"central specialist gallery leaked A data: {blob}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/academy/adopt-specialist",
+        headers=browser_auth_headers(session_b),
+        body=json.dumps({"specialist_uid": specialist_uid}),
+        config=config,
+    )
+    expect(status == 401, f"central specialist adoption without CSRF must fail, got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/academy/adopt-specialist",
+        headers=browser_auth_headers(session_b, csrf=True),
+        body=json.dumps({"specialist_uid": specialist_uid, "name": "B adopted systems specialist"}),
+        config=config,
+    )
+    expect(status == 200, f"central specialist adoption expected 200 got {status}: {payload}")
+    trainee = payload["trainee"]
+    expect(trainee["status"] == "graduated" and trainee["central_specialist"]["specialist_uid"] == specialist_uid, str(trainee))
+    expect(trainee["adopted_central_specialist_uid"] == specialist_uid, str(trainee))
+    expect(programs.list_academy_trainees(conn, user_id=b["user_id"])[0]["status"] == "graduated", str(trainee))
+    print("PASS test_user_academy_public_specialist_adoption_is_redacted_and_csrf_protected")
+
+
 def test_user_academy_enroll_without_arcpod_returns_clean_no_arcpod() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_academy_noarcpod_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_academy_noarcpod_test")
@@ -760,6 +924,7 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
         "target_id": prepared["deployment_id"],
         "reason": "hosted api test",
         "idempotency_key": "hosted-test-1",
+        "confirm": True,
     })
 
     # Missing CSRF -> 401
@@ -773,6 +938,25 @@ def test_admin_action_requires_csrf_and_mutation_role() -> None:
     )
     expect(status == 401, f"expected 401 got {status}: {payload}")
     expect(payload.get("error") == "unauthorized", str(payload))
+
+    unconfirmed_body = json.dumps({
+        "action_type": "restart",
+        "target_kind": "deployment",
+        "target_id": prepared["deployment_id"],
+        "reason": "hosted api test",
+        "idempotency_key": "hosted-test-unconfirmed",
+    })
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/admin/actions",
+        headers=browser_auth_headers(session, kind="admin", csrf=True),
+        body=unconfirmed_body,
+        config=config,
+    )
+    expect(status == 401, f"unconfirmed admin action expected 401 got {status}: {payload}")
+    queued_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+    expect(queued_count == 0, f"unconfirmed admin action queued rows: {queued_count}")
 
     # With CSRF -> 202
     status, payload, _ = hosted.route_arclink_hosted_api(
@@ -1094,6 +1278,7 @@ def test_admin_login_ignores_client_asserted_mfa() -> None:
             "target_id": prepared["deployment_id"],
             "reason": "mfa should not be self-asserted",
             "idempotency_key": "hosted-mfa-1",
+            "confirm": True,
         }),
         config=config,
     )
@@ -1110,10 +1295,53 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
     prepared = seed_paid_deployment(control, onboarding, conn)
+    tmpdir = tempfile.TemporaryDirectory()
+    hermes_home = Path(tmpdir.name) / "hermes-home"
+    access_path = hermes_home / "state" / "arclink-web-access.json"
+    access_path.parent.mkdir(parents=True, exist_ok=True)
+    access_path.write_text(
+        json.dumps(
+            {
+                "username": "hosted-user@example.test",
+                "password": "shared-dashboard-password",
+                "session_secret": "dashboard-session-secret",
+                "sso_session_secret": "dashboard-sso-secret",
+                "sso_subject": prepared["user_id"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    deployment_row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (prepared["deployment_id"],),
+    ).fetchone()
+    deployment_metadata = json.loads(str(deployment_row["metadata_json"] or "{}")) if deployment_row else {}
+    deployment_metadata["state_roots"] = {"hermes_home": str(hermes_home)}
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (json.dumps(deployment_metadata), prepared["deployment_id"]),
+    )
+    conn.commit()
 
     user_session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_revoke_hosted")
     api.upsert_arclink_admin(conn, admin_id="admin_revoke", email="revoke@example.test", role="ops")
     admin_session = api.create_arclink_admin_session(conn, admin_id="admin_revoke", session_id="asess_revoke_hosted")
+    api.upsert_arclink_admin(conn, admin_id="admin_revoke_read", email="revoke-read@example.test", role="read_only")
+    read_only_session = api.create_arclink_admin_session(conn, admin_id="admin_revoke_read", session_id="asess_revoke_read")
+    api.upsert_arclink_admin(conn, admin_id="admin_revoke_mfa", email="revoke-mfa@example.test", role="ops")
+    api.enroll_arclink_admin_totp_factor(
+        conn,
+        admin_id="admin_revoke_mfa",
+        secret_ref="secret://arclink/admin/revoke-mfa/totp",
+        factor_id="totp_revoke_mfa",
+    )
+    api.verify_arclink_admin_totp_factor(conn, factor_id="totp_revoke_mfa")
+    mfa_unverified_session = api.create_arclink_admin_session(
+        conn,
+        admin_id="admin_revoke_mfa",
+        session_id="asess_revoke_mfa",
+        mfa_verified=False,
+    )
 
     # No auth -> 401
     status, _, _ = hosted.route_arclink_hosted_api(
@@ -1126,6 +1354,27 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
     )
     expect(status == 401, f"expected 401 got {status}")
 
+    read_only_target = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_revoke_read_target")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/admin/sessions/revoke",
+        headers=browser_auth_headers(read_only_session, kind="admin", csrf=True),
+        body=json.dumps({"target_session_id": read_only_target["session_id"], "session_kind": "user", "reason": "blocked"}),
+        config=config,
+    )
+    expect(status == 401, f"read-only admin revoke expected 401 got {status}: {payload}")
+    mfa_target = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_revoke_mfa_target")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/admin/sessions/revoke",
+        headers=browser_auth_headers(mfa_unverified_session, kind="admin", csrf=True),
+        body=json.dumps({"target_session_id": mfa_target["session_id"], "session_kind": "user", "reason": "blocked"}),
+        config=config,
+    )
+    expect(status == 401, f"MFA-unverified admin revoke expected 401 got {status}: {payload}")
+
     # With auth + CSRF -> 200
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -1137,6 +1386,11 @@ def test_session_revoke_requires_admin_auth_and_csrf() -> None:
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload["session"]["status"] == "revoked", str(payload))
+    revocation = payload.get("dashboard_access_revocation") or {}
+    expect(revocation.get("updated_files") == 1, str(payload))
+    revoked_access = json.loads(access_path.read_text(encoding="utf-8"))
+    expect(int(revoked_access.get("dashboard_session_revoked_before") or 0) > 0, str(revoked_access))
+    expect(int(revoked_access.get("dashboard_sso_revoked_before") or 0) > 0, str(revoked_access))
 
     print("PASS test_session_revoke_requires_admin_auth_and_csrf")
 
@@ -1951,6 +2205,12 @@ def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
         display_name="Share Broker Other",
         prefix="share-broker-other",
     )
+    for deployment in (owner, recipient, other):
+        conn.execute(
+            "UPDATE arclink_deployments SET status = 'active' WHERE deployment_id = ?",
+            (deployment["deployment_id"],),
+        )
+    conn.commit()
     owner_session = api.create_arclink_user_session(conn, user_id=owner["user_id"], session_id="usess_share_broker_owner")
     recipient_session = api.create_arclink_user_session(conn, user_id=recipient["user_id"], session_id="usess_share_broker_recipient")
     broker_token = "share-broker-local-token"
@@ -2035,6 +2295,28 @@ def test_user_share_grant_broker_requires_deployment_scoped_token() -> None:
         )
         expect(status == 401, f"{label} should fail closed with 401 got {status}: {payload}")
         expect(grant_count() == before, f"{label} created a share grant")
+
+    before_inactive = grant_count()
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'torn_down' WHERE deployment_id = ?",
+        (owner["deployment_id"],),
+    )
+    conn.commit()
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/user/share-grants/broker",
+        headers=broker_headers,
+        body=json.dumps(body),
+        config=config,
+    )
+    expect(status == 401, f"inactive owner deployment should fail closed with 401 got {status}: {payload}")
+    expect(grant_count() == before_inactive, "inactive owner deployment created a share grant")
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'active' WHERE deployment_id = ?",
+        (owner["deployment_id"],),
+    )
+    conn.commit()
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
@@ -2684,6 +2966,7 @@ def test_admin_queued_actions_list_route() -> None:
             "action_type": "restart", "target_kind": "deployment",
             "target_id": prepared["deployment_id"], "reason": "list test",
             "idempotency_key": "qalist-test-1",
+            "confirm": True,
         }),
         config=config,
     )
@@ -2826,6 +3109,33 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
         "ARCLINK_COOKIE_DOMAIN": ".arclink.online",
     })
     prepared = seed_paid_deployment(control, onboarding, conn)
+    tmpdir = tempfile.TemporaryDirectory()
+    hermes_home = Path(tmpdir.name) / "hermes-home"
+    access_path = hermes_home / "state" / "arclink-web-access.json"
+    access_path.parent.mkdir(parents=True, exist_ok=True)
+    access_path.write_text(
+        json.dumps(
+            {
+                "username": "hosted-user@example.test",
+                "password": "hosted-dashboard-password",
+                "session_secret": "dashboard-session-secret",
+                "sso_session_secret": "dashboard-sso-secret",
+                "sso_subject": prepared["user_id"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    deployment_row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (prepared["deployment_id"],),
+    ).fetchone()
+    deployment_metadata = json.loads(str(deployment_row["metadata_json"] or "{}")) if deployment_row else {}
+    deployment_metadata["state_roots"] = {"hermes_home": str(hermes_home)}
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (json.dumps(deployment_metadata), prepared["deployment_id"]),
+    )
+    conn.commit()
     api.set_arclink_user_password(conn, user_id=prepared["user_id"], password="hosted-user-password")
 
     # Email-only login is not enough to create a session.
@@ -2918,6 +3228,11 @@ def test_user_login_sets_session_cookies_and_logout_clears_them() -> None:
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
     expect(payload["session"]["status"] == "revoked", str(payload))
+    revocation = payload.get("dashboard_access_revocation") or {}
+    expect(revocation.get("updated_files") == 1, str(payload))
+    revoked_access = json.loads(access_path.read_text(encoding="utf-8"))
+    expect(int(revoked_access.get("dashboard_session_revoked_before") or 0) > 0, str(revoked_access))
+    expect(int(revoked_access.get("dashboard_sso_revoked_before") or 0) > 0, str(revoked_access))
     clear_cookies = [v for k, v in headers if k == "Set-Cookie"]
     expect(any("Max-Age=0" in c for c in clear_cookies), "expected clearing cookies")
 
@@ -3130,6 +3445,9 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
     expect(status == 303, f"expected redirect got {status}: {payload}")
     location = dict(headers).get("Location", "")
     expect(location.startswith("https://stripe.test/checkout/"), str(headers))
+    set_cookies = [value for key, value in headers if key.lower() == "set-cookie"]
+    claim_cookie = next((value for value in set_cookies if value.startswith("arclink_onboarding_claim_token=")), "")
+    expect(claim_cookie, str(headers))
     checkout_session = stripe.checkout_sessions[location.rsplit("/", 1)[1]]
     expect(checkout_session["price_id"] == "price_scale_live", str(checkout_session))
     expect(checkout_session["success_url"] == "https://example.test/checkout/success?session=" + package.session_id, str(checkout_session))
@@ -3147,6 +3465,35 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
     ).fetchone()
     expect(deployments["n"] == 3, str(dict(deployments)))
 
+    status_redacted, payload_redacted, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/onboarding/status",
+        headers={},
+        query={"session_id": package.session_id},
+        config=config,
+    )
+    expect(status_redacted == 200, f"expected redacted status got {status_redacted}: {payload_redacted}")
+    expect(payload_redacted["proof_authorized"] is False, str(payload_redacted))
+    expect(payload_redacted["user_id"] == "", str(payload_redacted))
+    expect(all(not item["access"]["urls"] for item in payload_redacted["deployments"]), str(payload_redacted))
+
+    cookie_header = claim_cookie.split(";", 1)[0]
+    status_claimed, payload_claimed, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/onboarding/status",
+        headers={"Cookie": cookie_header},
+        query={"session_id": package.session_id},
+        config=config,
+    )
+    expect(status_claimed == 200, f"expected claimed status got {status_claimed}: {payload_claimed}")
+    expect(payload_claimed["proof_authorized"] is True, str(payload_claimed))
+    expect(payload_claimed["user_id"] == row["user_id"], str(payload_claimed))
+    expect(payload_claimed["agent_count"] == 3, str(payload_claimed))
+    expect(len(payload_claimed["deployments"]) == 3, str(payload_claimed))
+    expect(payload_claimed["deployments"][0]["access"]["urls"]["hermes"].startswith("https://"), str(payload_claimed))
+
     status2, payload2, headers2 = hosted.route_arclink_hosted_api(
         conn,
         method="GET",
@@ -3158,6 +3505,7 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
     )
     expect(status2 == 303, f"expected replay redirect got {status2}: {payload2}")
     expect(dict(headers2).get("Location") == location, str(headers2))
+    expect(any(value.startswith("arclink_onboarding_claim_token=") for key, value in headers2 if key.lower() == "set-cookie"), str(headers2))
     expect(len(stripe.checkout_sessions) == 1, str(stripe.checkout_sessions))
     print("PASS test_public_bot_checkout_button_redirects_to_stripe")
 
@@ -4908,6 +5256,7 @@ def test_read_only_admin_blocked_from_mutations() -> None:
             "action_type": "restart", "target_kind": "deployment",
             "target_id": prepared["deployment_id"], "reason": "ro test",
             "idempotency_key": "ro-test-1",
+            "confirm": True,
         }),
         config=config,
     )
@@ -5592,13 +5941,19 @@ def test_onboarding_cancel_marks_session_cancelled() -> None:
 
 def test_onboarding_status_returns_entitlement_and_identity() -> None:
     """The onboarding/status endpoint is the checkout success polling target.
-    It must return entitlement_state and user identity fields."""
+    It returns progress from a bare session id and identity/URLs only with browser proof."""
     control = load_module("arclink_control.py", "arclink_control_hosted_onbstatus_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_onbstatus_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_onbstatus_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_onbstatus_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
     prepared = seed_paid_deployment(control, onboarding, conn)
+    claim_token = "browser-claim-proof-status"
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (json.dumps({"browser_claim_proof_hash": api._hash_token(claim_token)}), "onb_hosted"),
+    )
     conn.execute(
         "UPDATE arclink_deployments SET status = 'active', updated_at = ? WHERE deployment_id = ?",
         (control.utc_now_iso(), prepared["deployment_id"]),
@@ -5612,6 +5967,27 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["proof_authorized"] is False, str(payload))
+    expect(payload["user_id"] == "", str(payload))
+    expect(payload["display_name"] == "", str(payload))
+    expect(payload["channel"] == "", str(payload))
+    expect(payload["channel_identity"] == "", str(payload))
+    expect(payload["deployment_id"] == "", str(payload))
+    expect(payload["deployment"]["access"]["urls"] == {}, str(payload))
+    expect(payload["deployment"]["service_health"] == [], str(payload))
+    expect("deployment_id" not in payload["deployment"], str(payload))
+    expect(payload["entitlement_state"] == "paid", str(payload))
+    expect(payload["agent_count"] == 1, str(payload))
+    expect(payload["ready_count"] == 1, str(payload))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET",
+        path="/api/v1/onboarding/status",
+        headers={}, query={"session_id": "onb_hosted", "claim_token": claim_token},
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["proof_authorized"] is True, str(payload))
     expect(payload["user_id"] == prepared["user_id"], str(payload))
     expect(payload["entitlement_state"] == "paid", str(payload))
     expect(payload["display_name"] == "Hosted User", str(payload))
@@ -5644,6 +6020,7 @@ def test_onboarding_status_returns_entitlement_and_identity() -> None:
 
 def test_onboarding_status_returns_scale_agent_progress() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_scale_status_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_scale_status_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_scale_status_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_scale_status_test")
     conn = memory_db(control)
@@ -5672,6 +6049,11 @@ def test_onboarding_status_returns_scale_agent_progress() -> None:
     ]
     expect(len(rows) == 3, str(rows))
     now = control.utc_now_iso()
+    claim_token = "browser-claim-proof-scale-status"
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (json.dumps({"browser_claim_proof_hash": api._hash_token(claim_token)}), "onb_hosted_scale"),
+    )
     for index, row in enumerate(rows, start=1):
         conn.execute(
             "UPDATE arclink_deployments SET status = ?, updated_at = ? WHERE deployment_id = ?",
@@ -5684,7 +6066,7 @@ def test_onboarding_status_returns_scale_agent_progress() -> None:
         method="GET",
         path="/api/v1/onboarding/status",
         headers={},
-        query={"session_id": "onb_hosted_scale"},
+        query={"session_id": "onb_hosted_scale", "claim_token": claim_token},
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -5700,6 +6082,7 @@ def test_onboarding_status_returns_scale_agent_progress() -> None:
 
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
+    test_public_academy_observatory_is_aggregate_and_redacted()
     test_user_dashboard_requires_session_auth()
     test_user_backup_deploy_key_request_requires_session_and_csrf()
     test_user_backup_write_check_route_requires_session_csrf_and_never_activates()
@@ -5708,6 +6091,7 @@ def main() -> int:
     test_user_crew_recipe_routes_require_csrf_and_apply_recipe()
     test_user_academy_routes_browse_enroll_sticky_mode_and_graduate()
     test_user_academy_gallery_is_owner_scoped_redacted_and_adopt_blocks_cross_tenant()
+    test_user_academy_public_specialist_adoption_is_redacted_and_csrf_protected()
     test_user_academy_enroll_without_arcpod_returns_clean_no_arcpod()
     test_admin_dashboard_requires_admin_session()
     test_admin_action_requires_csrf_and_mutation_role()
@@ -5792,7 +6176,7 @@ def main() -> int:
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
     test_onboarding_status_returns_scale_agent_progress()
-    print("PASS all 84 ArcLink hosted API tests")
+    print("PASS all ArcLink hosted API tests")
     return 0
 
 

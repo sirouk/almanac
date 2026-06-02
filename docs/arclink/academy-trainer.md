@@ -35,8 +35,10 @@ skill as "named and shipped; live plugin/runtime presence unverified
 
 2. **Forward-maintenance (autonomous, scheduled).** Once a graduate exists, the
    weekly `control-academy-ce` job keeps its review fresh on a weekly cadence: it
-   classifies each watched source (`unchanged/changed/stale/superseded/removed/
-   tombstoned`) and **produces a no-write weekly continuing-education review**
+   crawls approved public source URLs within HTTPS, robots, rate-limit, and SSRF
+   rails; stores only observation metadata and content hashes; classifies each
+   watched source (`unchanged/changed/stale/superseded/removed/tombstoned`); and
+   **produces a no-write weekly continuing-education review**
    (`run_academy_forward_maintenance` returns `no_write=True`,
    `writes_enabled=False`, `mutation_performed=False`). It does **not**
    self-maintain SOUL.md or skills: any Agent update applies **only** through
@@ -125,14 +127,20 @@ Control-plane scaffolding (now built, no-write):
 - **Resource proposal** -- `academy_resource_proposals` table; the Agent ->
   ArcLink handoff for source candidates discovered during Academy Mode
   (`record_academy_resource_proposal`, MCP tool `academy.propose-resource`).
-  Proposal id `aprop_<sha256[:16]>` over `trainee|origin_url-or-title`. Submits
+  Proposal id `aprop_<sha256[:16]>` over `trainee|proposal_kind|origin_url-or-title`. Submits
   **only source metadata/citations/derived notes -- never raw crawled content**.
+  `proposal_kind='add_resource'` adds a candidate source;
+  `proposal_kind='discontinue_resource'` asks the Trainer critic to queue a
+  dead-end central source for stronger PG-PROVIDER/Operator review, identified
+  by canonical `origin_url` or `target_source_uid`. Discontinuation proposals
+  preserve the source/provenance history and do not remove the shared central
+  row from capsules until a stronger review gate accepts that action.
   Status enum `('proposed','review_pending','accepted','rejected','deduped')`. A
   partial unique index (`idx_academy_resource_proposals_trainee_origin WHERE
-  origin_url != ''`) deduplicates per `(trainee_id, origin_url)`; an
-  `ON CONFLICT` path stamps the duplicate `deduped`. Requires an **open** Academy
-  Mode for the deployment; absent-mode submissions and secret-looking material
-  are rejected.
+  origin_url != ''`) deduplicates per `(trainee_id, proposal_kind, origin_url)`;
+  an `ON CONFLICT` path stamps the duplicate `deduped`. Requires an **open**
+  Academy Mode for the deployment; absent-mode submissions and secret-looking
+  material are rejected.
 - **Graduate** -- a trainee with `status='graduated'`; `browse_academy_graduates`
   is the gallery; `academy_graduate_card` is a **redacted owner-safe projection**
   (withholds `user_id`/`deployment_id`/`agent_id`, private Captain steer, and
@@ -188,8 +196,8 @@ captain count) with **no contributor identity**, mirroring `academy_graduate_car
 specialist's `compressed_soul_capsule` from its redacted central sources (role +
 topic + per-source derived notes + citations), versioned and **idempotent**
 (`only_if_changed` skips no-op weekly churn). The weekly `control-academy-ce` job
-refreshes capsules and **queues a Captain notification** per graduate
-(`queue_notification`, channel `academy`).
+records crawl observations, refreshes capsules, and **queues a Captain
+notification** per graduate (`queue_notification`, channel `academy`).
 
 **Trainer deep dive (`run_academy_trainer_review`).** At graduation (after
 promotion) and on demand, the Academy Trainer reviews the specialist's central
@@ -273,7 +281,10 @@ phased plan below.
   `arclink-academy` skill and `academy.propose-resource` MCP tool to submit
   compressed source candidates back to ArcLink. Proposals are central,
   dedupable, secret-checked, and queued for Trainer review; raw content is not
-  stored through this handoff.
+  stored through this handoff. The same rail accepts `discontinue_resource`
+  proposals for dead-end, poisoned, removed, or no-longer-useful sources; the
+  critic review records a pending PG-PROVIDER review against the matched central
+  source without deleting provenance or immediately changing shared corpus use.
 - **LLM Trainer curation engine** (P1): `curate_academy_trainee` /
   `_compose_trainee_corpus` compose the governed corpus + application plan +
   review, and `end_academy_mode` curates on graduation. Uses lane-valid local
@@ -290,8 +301,10 @@ phased plan below.
   fail closed, and stale Major/corpus contracts require re-graduation.
 - **Forward-maintenance scheduler** (P4, done): the weekly `control-academy-ce`
   compose job runs `arclink_academy_scheduler.py` (`run_academy_forward_maintenance`),
-  a no-write weekly continuing-education review per graduate; live lane sweeps +
-  delta application stay `PG-PROVIDER`/`PG-HERMES` gated.
+  a bounded public-source crawl plus no-write continuing-education review per
+  graduate. It stores crawl observations as metadata and content hashes only;
+  changed, removed, tombstoned, or unsafe sources remain review-gated, and delta
+  application stays `PG-HERMES` gated.
 - **Tests/docs** (every phase): `tests/test_arclink_academy_programs.py`,
   `tests/test_arclink_academy_scheduler.py`, the action-worker + hosted-API +
   operator-raven + web suites, this doc, and the symphony.
@@ -371,8 +384,10 @@ preserve allowed high-value archived material; promote stronger material; rebuil
 lesson cards/indexes/memory stubs; re-run evaluations; produce a Captain/Operator
 report; push SOUL/skill deltas **only** when the gate says `ready`.
 `removed`/`tombstoned` sources hard-block the Agent update; reviews are
-content-stripped and secret-free; every cycle is audited. Scheduling reuses the
-existing cron/loop infra (P4).
+content-stripped and secret-free; dead-end resources are submitted as
+`discontinue_resource` proposals and held as pending PG-PROVIDER review items
+until a stronger gate accepts retirement;
+every cycle is audited. Scheduling reuses the existing cron/loop infra (P4).
 
 ## Evaluation And Graduation
 
@@ -444,8 +459,10 @@ dashboard, and CLI. The local layer returns `blocked_by_live_proof` until
   staged contracts require re-graduation, and authorized `local`/`ssh`/`live`
   runs materialize the marker-bounded Academy SOUL section plus a private apply
   receipt. Vault/qmd/skill writes remain future/proof-gated.
-- **P4 (done, no-write; live sweep `PG-PROVIDER` gated)** -- the weekly
-  `control-academy-ce` compose job runs `arclink_academy_scheduler.py`'s no-write
+- **P4 (done, crawl-observe + no-write review)** -- the weekly
+  `control-academy-ce` compose job runs `arclink_academy_scheduler.py`, crawls
+  approved public source URLs within HTTPS/robots/rate-limit/SSRF rails, stores
+  only observation metadata and content hashes, and runs the no-write
   continuing-education review per graduate.
 
 Reuse summary: the **central LLM router** powers Trainer synthesis (P1-P2, live

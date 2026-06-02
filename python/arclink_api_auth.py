@@ -65,12 +65,14 @@ from arclink_academy_programs import (
     ArcLinkAcademyProgramError,
     academy_graduate_card,
     academy_mode_status,
+    adopt_central_specialist,
     adopt_academy_graduate,
     browse_academy_graduates,
     end_academy_mode,
     enroll_academy_trainee,
     get_academy_trainee,
     get_open_academy_mode,
+    list_central_specialists,
     list_academy_trainees,
     open_academy_mode,
     seed_default_academy_programs,
@@ -86,6 +88,7 @@ ARCLINK_SHARE_RESOURCE_ROOTS = frozenset({"vault", "workspace"})
 ARCLINK_SHARE_NOTION_ROOTS = frozenset({"notion", "ssot"})
 ARCLINK_SHARE_ACCESS_MODES = frozenset({"read", "read_write"})
 ARCLINK_SHARE_STATUSES = ARCLINK_SHARE_GRANT_STATUSES
+ARCLINK_SHARE_BROKER_ACTIVE_DEPLOYMENT_STATUSES = frozenset({"active"})
 ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS = 7 * 24 * 60 * 60
 ARCLINK_SHARE_GRANT_TTL_SECONDS = 7 * 24 * 60 * 60
 # Ephemeral, single-use claim nonces hand a scoped read share to whoever the owner
@@ -1368,6 +1371,7 @@ def read_user_academy_api(
             "majors": gallery.get("programs", []),
             "graduates": [academy_graduate_card(g) for g in gallery.get("graduates", [])],
             "trainees": list_academy_trainees(conn, user_id=user_id),
+            "central_specialists": list_central_specialists(conn),
         },
     )
 
@@ -1482,6 +1486,32 @@ def adopt_user_academy_graduate_api(
     trainee = adopt_academy_graduate(
         conn,
         source_trainee_id=str(source_trainee_id or "").strip(),
+        user_id=user_id,
+        deployment_id=deployment_id,
+        name=str(name or "").strip(),
+    )
+    return ArcLinkApiResponse(status=200, payload={"trainee": trainee})
+
+
+def adopt_user_academy_specialist_api(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    session_token: str,
+    csrf_token: str,
+    specialist_uid: str,
+    name: str = "",
+) -> ArcLinkApiResponse:
+    user_id = _csrf_user_id(conn, session_id=session_id, session_token=session_token, csrf_token=csrf_token)
+    deployment_id = _primary_deployment_id(conn, user_id)
+    if not deployment_id:
+        return ArcLinkApiResponse(
+            status=400,
+            payload={"error": "no_arcpod", "detail": "Deploy an ArcPod before adopting an Academy specialist."},
+        )
+    trainee = adopt_central_specialist(
+        conn,
+        specialist_uid=str(specialist_uid or "").strip(),
         user_id=user_id,
         deployment_id=deployment_id,
         name=str(name or "").strip(),
@@ -2159,6 +2189,100 @@ def _deployment_state_roots_for_user(conn: sqlite3.Connection, user_id: str, *, 
     return {}
 
 
+def _write_json_file_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(payload), handle, sort_keys=True, indent=2)
+            handle.write("\n")
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
+def revoke_user_dashboard_access(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    actor_id: str,
+    reason: str,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Invalidate per-Agent dashboard cookies for every deployment owned by a user.
+
+    The dashboard proxy is intentionally DB-free and reloads
+    ``arclink-web-access.json`` for each request. Stamping a revocation epoch in
+    that file lets hosted logout/admin revoke invalidate stateless dashboard JWTs
+    and Crew-wide SSO cookies without widening proxy privileges.
+    """
+
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        return {"revoked": False, "reason": "user_id_required", "updated_files": 0, "updated_deployments": 0}
+    now = utc_now_iso()
+    epoch = int(utc_now().timestamp())
+    rows = [
+        rowdict(row)
+        for row in conn.execute(
+            """
+            SELECT deployment_id, metadata_json
+            FROM arclink_deployments
+            WHERE user_id = ?
+            ORDER BY created_at, deployment_id
+            """,
+            (clean_user,),
+        ).fetchall()
+    ]
+    updated_files = 0
+    failed_files: list[str] = []
+    for row in rows:
+        metadata = json_loads_safe(str(row.get("metadata_json") or "{}"))
+        roots = metadata.get("state_roots") if isinstance(metadata.get("state_roots"), Mapping) else {}
+        hermes_home = str((roots or {}).get("hermes_home") or "").strip()
+        if hermes_home:
+            access_path = Path(hermes_home).expanduser() / "state" / "arclink-web-access.json"
+            if access_path.is_file():
+                try:
+                    access = json_loads_safe(access_path.read_text(encoding="utf-8"))
+                    if not isinstance(access, dict):
+                        access = {}
+                    access.update(
+                        {
+                            "dashboard_session_revoked_before": epoch,
+                            "dashboard_sso_revoked_before": epoch,
+                            "dashboard_auth_revoked_at": now,
+                            "dashboard_auth_revoked_by": str(actor_id or "").strip()[:160],
+                            "dashboard_auth_revocation_reason": str(reason or "").strip()[:240],
+                        }
+                    )
+                    _write_json_file_atomic(access_path, access)
+                    updated_files += 1
+                except OSError:
+                    failed_files.append(str(access_path))
+        metadata["dashboard_auth_revoked_before"] = epoch
+        metadata["dashboard_auth_revoked_at"] = now
+        metadata["dashboard_auth_revoked_by"] = str(actor_id or "").strip()[:160]
+        metadata["dashboard_auth_revocation_reason"] = str(reason or "").strip()[:240]
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+            (json_dumps_safe(metadata), now, str(row.get("deployment_id") or "")),
+        )
+    if commit:
+        conn.commit()
+    return {
+        "revoked": bool(rows),
+        "updated_files": updated_files,
+        "updated_deployments": len(rows),
+        "failed_files": failed_files[:10],
+        "revoked_before": epoch,
+    }
+
+
 def _share_deployment_user(
     conn: sqlite3.Connection,
     deployment_id: str,
@@ -2248,6 +2372,9 @@ def _authenticate_share_request_broker(
     if row is None:
         raise ArcLinkApiAuthError("ArcLink share-request broker deployment was not found")
     deployment = rowdict(row)
+    deployment_status = str(deployment.get("status") or "").strip()
+    if deployment_status not in ARCLINK_SHARE_BROKER_ACTIVE_DEPLOYMENT_STATUSES:
+        raise ArcLinkApiAuthError("ArcLink share-request broker deployment is not active")
     metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
     broker = _share_request_broker_config(metadata)
     if broker.get("enabled") is False:
@@ -4650,11 +4777,14 @@ def queue_admin_action_api(
     target_id: str,
     reason: str,
     idempotency_key: str,
+    confirm: bool = False,
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
     session = authenticate_arclink_admin_session(conn, session_id=session_id, session_token=session_token)
     require_arclink_csrf(conn, session_id=session_id, csrf_token=csrf_token, session_kind="admin")
     _admin_mutation_allowed(conn, session)
+    if confirm is not True:
+        raise ArcLinkApiAuthError("ArcLink admin action queueing requires explicit confirmation")
     admin_id = str(session["admin_id"] or "")
     check_arclink_rate_limit(conn, scope="admin_action:admin", subject=admin_id, limit=30, window_seconds=60)
     check_arclink_rate_limit(

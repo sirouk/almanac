@@ -188,6 +188,7 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
             "limit": 5,
         },
         "academy.propose-resource": {
+            "proposal_kind": "add_resource",
             "title": "Example architecture notes",
             "lane_id": "web_article",
             "origin_url": "https://example.test/academy/source",
@@ -204,6 +205,19 @@ def test_high_value_sample_calls_match_advertised_schemas() -> None:
     }
     for name, sample in samples.items():
         assert_sample_matches_outer_schema(mod._tool_schema(name), sample, name)
+    assert_sample_matches_outer_schema(
+        mod._tool_schema("academy.propose-resource"),
+        {
+            "proposal_kind": "discontinue_resource",
+            "title": "Example architecture notes",
+            "lane_id": "web_article",
+            "origin_url": "https://example.test/academy/source",
+            "summary": "Concise reason this source should be reviewed for retirement.",
+            "relevance": {"dead_end_reason": "superseded by a stronger public source"},
+            "citations": ["https://example.test/academy/source"],
+        },
+        "academy.propose-resource discontinue",
+    )
     print("PASS test_high_value_sample_calls_match_advertised_schemas")
 
 

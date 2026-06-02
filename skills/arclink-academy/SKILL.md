@@ -47,6 +47,7 @@ Captain's private strategy, notes, or protected resources into a public lane.
 {
   "tool": "academy.propose-resource",
   "arguments": {
+    "proposal_kind": "add_resource",
     "title": "Short source title",
     "origin_url": "https://example.test/source",
     "lane_id": "web_article",
@@ -62,7 +63,27 @@ Captain's private strategy, notes, or protected resources into a public lane.
 ```
 
 7. Tell the Captain what you gathered, what you rejected, what needs Trainer review, and what you still need.
-8. When the Captain is satisfied, ask them to graduate or exit Academy Mode through Raven. Do not self-graduate.
+8. If a watched public-lane source is stale, misleading, poisoned, superseded beyond use, or a dead end, submit a Trainer/PG-PROVIDER discontinuation review proposal instead of silently dropping it:
+
+```json
+{
+  "tool": "academy.propose-resource",
+  "arguments": {
+    "proposal_kind": "discontinue_resource",
+    "title": "Short source title",
+    "origin_url": "https://example.test/source",
+    "lane_id": "web_article",
+    "summary": "Concise reason this source should be reviewed for removal or replacement.",
+    "relevance": {
+      "dead_end_reason": "Why it no longer supports the specialist role.",
+      "replacement": "Optional stronger source or search direction."
+    },
+    "citations": ["https://example.test/source"]
+  }
+}
+```
+
+9. When the Captain is satisfied, ask them to graduate or exit Academy Mode through Raven. Do not self-graduate.
 
 ## Source Proposal Rules
 
@@ -76,6 +97,14 @@ Good proposals include:
 - what should be revisited weekly
 - citations or source ids
 - limitations, freshness risk, and licensing/permission notes
+
+Discontinuation proposals include:
+
+- `proposal_kind: "discontinue_resource"`
+- source URL or central `target_source_uid`
+- concise dead-end, poison, removal, supersession, or quality reason for review
+- safer replacement source or next search direction when known
+- citations or observations supporting the retirement request
 
 Allowed lane ids:
 
@@ -97,6 +126,7 @@ Weekly Academy refresh should:
 - dedupe repeated resources
 - preserve citations and source metadata
 - rebuild compact lesson cards and update recommendations
+- submit `discontinue_resource` proposals for dead-end or unsafe resources; do not remove sources silently and do not assume the public-lane source is retired until the stronger review gate accepts it
 - notify the Captain of meaningful changes
 - keep the Academy section replaceable and current without rewriting unrelated SOUL or personal memory
 

@@ -872,11 +872,18 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(applied["status"] == "applied_hermes_home", str(applied))
         expect(applied["writes_enabled"] is True and applied["mutation_performed"] is True, str(applied))
         expect(applied["filesystem_mutation_performed"] is True, str(applied))
+        expect(any(path.startswith("vault/Academy/") for path in applied["applied_paths"]), str(applied))
+        expect("state/arclink-academy-memory-seeds.json" in applied["applied_paths"], str(applied))
         soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
         expect("Human-authored identity." in soul, soul)
         expect(org_profile.BEGIN_ACADEMY_MARKER in soul and "Live apply source" in soul, soul)
         state = json.loads((hermes_home / "state" / "arclink-academy-apply.json").read_text(encoding="utf-8"))
         expect(state["trainee_id"] == trainee["trainee_id"], str(state))
+        expect(state["qmd_memory_seed_intents"], str(state))
+        academy_files = list((root / "vault" / "Academy").rglob("*.md"))
+        expect(academy_files, "Academy apply should materialize governed vault markdown")
+        rendered_vault = "\n".join(path.read_text(encoding="utf-8") for path in academy_files)
+        expect("First Week Practice" in rendered_vault and "Source id:" in rendered_vault, rendered_vault)
         link = conn.execute(
             """
             SELECT * FROM arclink_action_operation_links

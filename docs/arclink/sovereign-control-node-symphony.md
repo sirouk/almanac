@@ -517,6 +517,9 @@ Academy Continuing Education should run weekly. It should sweep all source
 lanes, refresh watched repositories/papers/docs/threads, preserve allowed
 high-value material that disappears, tombstone content when deletion or license
 policy requires it, replace weaker materials with stronger current ones,
+queue Agent-submitted `discontinue_resource` proposals for dead-end or poisoned
+resources for stronger Trainer/PG-PROVIDER or Operator review before shared
+source retirement,
 rebuild lesson cards/indexes/memory stubs, run evaluations, and produce a
 Captain/Operator report before updating the Agent.
 
@@ -538,15 +541,25 @@ defines the no-network Academy schemas, default governed source-lane registry,
 fake acquisition reports, deterministic quality scoring, curriculum/evaluation
 records, no-write application plans, a no-write `academy_apply_preview`
 action-worker boundary, and weekly Continuing Education review/gate persistence.
+The shipped weekly scheduler now performs bounded autonomous live crawling for
+approved public source URLs. It rotates the agent responsible for each shared
+specialist with durable state, honors HTTPS/robots/rate-limit/SSRF rails,
+records digest-only crawl observations in `academy_source_crawl_observations`,
+feeds changed/removed/tombstoned observations into the weekly review gate,
+refreshes central capsules from already-approved public-lane sources, and
+notifies Captains. It stores no raw crawled content and performs no Agent write.
+Live transcript/ASR, provider-assisted synthesis, source retirement, and Agent
+mutation remain under the acquisition, critic, PG-PROVIDER, and PG-HERMES gates
+described above.
 The separate `academy_apply` action now materializes the Academy SOUL overlay and
 receipt for a deployment only when PG-HERMES authorization is present; record-only
 or unauthorized adapters stage/fail closed. It fails closed for
 disabled lanes, unsupported lanes, requested live actions, missing
 license/permission or required lane metadata, raw-storage violations,
 unreviewed public skills, secret-looking fixture material, deletion/tombstone
-violations, and any attempt to represent live crawling, ASR/transcription, or
-provider generation as local success. It also rejects unsafe observed-source
-payloads before weekly review persistence. Compact Academy status summaries are
+violations, and any attempt to represent ASR/transcription or provider
+generation as local success. It also rejects unsafe observed-source payloads
+before weekly review persistence. Compact Academy status summaries are
 now staged per Agent on the active Crew Recipe overlay with audit and event
 rows, mirrored into deployment metadata, projected into the Agent's local
 managed identity context, shown in the dashboard Crew Training panel and Crew
@@ -555,7 +568,8 @@ local action worker without executor or filesystem calls. Captains enter this
 lane with `/academy`, pick one Agent at a time, give the role/source/weekly
 refresh rails over a turn-by-turn Raven bootstrap, and open a real sticky
 Academy Mode. The Agent uses the `arclink-academy` skill to search approved
-rails and submit compressed resources through `academy.propose-resource`; the
+rails and submit compressed resources or reviewed discontinuation requests
+through `academy.propose-resource`; the
 Captain closes the mode to queue the Academy Trainer deep dive. Canonical
 application to the Agent is split: the marker-bounded SOUL overlay apply is
 implemented behind the PG-HERMES action gate, while live source acquisition,

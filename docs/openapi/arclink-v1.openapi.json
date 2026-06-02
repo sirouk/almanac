@@ -27,6 +27,20 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/academy/observatory": {
+      "get": {
+        "operationId": "public_academy_observatory",
+        "responses": {
+          "200": {
+            "description": "Aggregate public Academy Observatory telemetry"
+          }
+        },
+        "summary": "Read public aggregate Academy training telemetry",
+        "tags": [
+          "academy"
+        ]
+      }
+    },
     "/api/v1/adapter-mode": {
       "get": {
         "operationId": "adapter_mode",
@@ -93,6 +107,10 @@
                   "action_type": {
                     "type": "string"
                   },
+                  "confirm": {
+                    "description": "Must be true after the admin/operator explicitly confirms the modeled action.",
+                    "type": "boolean"
+                  },
                   "idempotency_key": {
                     "type": "string"
                   },
@@ -112,7 +130,10 @@
                 "required": [
                   "action_type",
                   "target_kind",
-                  "target_id"
+                  "target_id",
+                  "reason",
+                  "idempotency_key",
+                  "confirm"
                 ],
                 "type": "object"
               }
@@ -1271,6 +1292,52 @@
         ],
         "summary": "User Academy Adopt",
         "tags": []
+      }
+    },
+    "/api/v1/user/academy/adopt-specialist": {
+      "post": {
+        "operationId": "user_academy_specialist_adopt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "specialist_uid": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "specialist_uid"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Public specialist adopted as a Captain-owned Trainee"
+          },
+          "400": {
+            "description": "No ArcPod or specialist is not public/adoptable"
+          },
+          "401": {
+            "description": "Unauthorized or missing CSRF"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ],
+        "summary": "Adopt a redacted public Academy specialist into the Captain's Crew",
+        "tags": [
+          "user",
+          "academy"
+        ]
       }
     },
     "/api/v1/user/academy/enroll": {

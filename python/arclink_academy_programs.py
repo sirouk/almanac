@@ -66,6 +66,7 @@ ACADEMY_CROSS_TENANT_PROOF_GATE = "PG-CONSENT"
 # Proposal statuses whose derived notes may feed a trainee corpus and be considered
 # for central promotion. 'rejected' is excluded (Trainer/Captain declined it).
 USABLE_PROPOSAL_STATUSES = ("proposed", "review_pending", "accepted", "deduped")
+ACADEMY_RESOURCE_PROPOSAL_KINDS = ("add_resource", "discontinue_resource")
 
 # Per-account guardrail against unbounded trainee growth (DoS / scheduler load).
 DEFAULT_MAX_TRAINEES_PER_USER = 50
@@ -106,6 +107,29 @@ def _enforce_trainee_quota(conn: sqlite3.Connection, user_id: str) -> None:
         raise ArcLinkAcademyProgramError(
             f"academy trainee limit reached for this account ({cap}); archive a trainee before enrolling another"
         )
+
+
+def _ensure_deployment_owner_consistency(conn: sqlite3.Connection, *, user_id: str, deployment_id: str) -> None:
+    """Fail closed when a real ArcPod deployment row belongs to another Captain.
+
+    Some unit tests exercise the Academy helpers without seeding deployment rows;
+    those fixture-only ids are allowed. In production/API/bot paths, deployment
+    rows exist and this guard prevents a caller from binding Academy state to
+    another Captain's Agent by passing a borrowed deployment id.
+    """
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_user or not clean_deployment:
+        raise ArcLinkAcademyProgramError("academy trainee requires user_id and deployment_id")
+    try:
+        row = conn.execute(
+            "SELECT user_id FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row is not None and str(row["user_id"] or "").strip() != clean_user:
+        raise ArcLinkAcademyProgramError("academy deployment is outside this account")
 
 
 def academy_graduate_card(graduate: Mapping[str, Any]) -> dict[str, Any]:
@@ -296,6 +320,7 @@ def upsert_academy_program(
     skills = [str(s).strip() for s in (required_skills or ()) if str(s).strip()]
     reject_secret_material(
         {
+            "label": clean_label,
             "summary": summary,
             "topic_map": topic_map,
             "role_template": role_template,
@@ -385,6 +410,7 @@ def enroll_academy_trainee(
     clean_deployment = str(deployment_id or "").strip()
     if not clean_user or not clean_deployment:
         raise ArcLinkAcademyProgramError("academy trainee requires user_id and deployment_id")
+    _ensure_deployment_owner_consistency(conn, user_id=clean_user, deployment_id=clean_deployment)
     _enforce_trainee_quota(conn, clean_user)
     clean_depth = str(depth or "").strip().lower() or str(program.get("default_depth") or "working")
     if clean_depth not in PROGRAM_DEPTHS:
@@ -660,15 +686,18 @@ def record_academy_resource_proposal(
     relevance: Mapping[str, Any] | None = None,
     citations: Sequence[str] | None = None,
     proposed_by: str = "",
+    proposal_kind: str = "add_resource",
+    target_source_uid: str = "",
     commit: bool = True,
 ) -> dict[str, Any]:
-    """Record an Agent-proposed Academy source for Trainer review.
+    """Record an Agent-proposed Academy source action for Trainer review.
 
     This is the central handoff from the Hermes Agent skill back into ArcLink:
-    the Agent may gather and compress candidate resources, but it submits only
-    source metadata, citations, and concise derived notes. The Academy Trainer
-    review/weekly refresh loop can then dedupe and promote the source without
-    letting raw crawled content leak into reusable corpora.
+    the Agent may gather and compress candidate resources or flag a shared
+    resource as a dead end, but it submits only source metadata, citations, and
+    concise derived notes/reasons. The Academy Trainer review/weekly refresh
+    loop can then dedupe, promote, or queue the source for stronger discontinuation
+    review without letting raw crawled content leak into reusable corpora.
     """
     from arclink_boundary import reject_secret_material
 
@@ -677,12 +706,15 @@ def record_academy_resource_proposal(
         raise ArcLinkAcademyProgramError("academy resource proposals require an open Academy Mode for this deployment")
     trainee = active["trainee"]
     session = active["session"]
+    clean_kind = _clean_proposal_kind(proposal_kind)
     clean_lane = str(lane_id or "").strip()
     if not clean_lane:
         raise ArcLinkAcademyProgramError("academy resource proposal requires a source lane")
     _validate_source_lanes([clean_lane])
     clean_title = str(title or "").strip()[:240]
     clean_url = str(origin_url or "").strip()[:1000]
+    clean_target_source = str(target_source_uid or "").strip()[:120]
+    clean_target_canonical = _canonical_url(clean_url)
     clean_summary = str(summary or "").strip()[:4000]
     clean_citations = [str(item or "").strip()[:1000] for item in (citations or []) if str(item or "").strip()][:20]
     clean_relevance = {
@@ -696,6 +728,8 @@ def record_academy_resource_proposal(
             "origin_url": clean_url,
             "summary": clean_summary,
             "lane_id": clean_lane,
+            "proposal_kind": clean_kind,
+            "target_source_uid": clean_target_source,
             "proposed_by": proposed_by,
             **{f"citation.{idx}": value for idx, value in enumerate(clean_citations)},
             **{f"relevance.{key}": value for key, value in clean_relevance.items()},
@@ -705,15 +739,17 @@ def record_academy_resource_proposal(
         raise ArcLinkAcademyProgramError("academy resource proposal requires title")
     if not clean_url and not clean_summary:
         raise ArcLinkAcademyProgramError("academy resource proposal requires origin_url or summary")
-    dedupe_seed = f"{trainee['trainee_id']}|{clean_url or clean_title.lower()}"
+    if clean_kind == "discontinue_resource" and not (clean_url or clean_target_source):
+        raise ArcLinkAcademyProgramError("academy discontinue proposal requires origin_url or target_source_uid")
+    dedupe_seed = f"{trainee['trainee_id']}|{clean_kind}|{clean_url or clean_target_source or clean_title.lower()}"
     proposal_id = "aprop_" + hashlib.sha256(dedupe_seed.encode("utf-8")).hexdigest()[:16]
     now = _now()
     status = "review_pending"
     existing = None
     if clean_url:
         existing = conn.execute(
-            "SELECT * FROM academy_resource_proposals WHERE trainee_id = ? AND origin_url = ?",
-            (str(trainee["trainee_id"]), clean_url),
+            "SELECT * FROM academy_resource_proposals WHERE trainee_id = ? AND proposal_kind = ? AND origin_url = ?",
+            (str(trainee["trainee_id"]), clean_kind, clean_url),
         ).fetchone()
     if existing is None:
         existing = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
@@ -721,7 +757,8 @@ def record_academy_resource_proposal(
         conn.execute(
             """
             UPDATE academy_resource_proposals
-            SET session_id = ?, lane_id = ?, title = ?, origin_url = ?, summary = ?,
+            SET session_id = ?, lane_id = ?, proposal_kind = ?, target_source_uid = ?,
+                target_canonical_url = ?, title = ?, origin_url = ?, summary = ?,
                 relevance_json = ?, citations_json = ?, proposed_by = ?,
                 status = 'deduped', updated_at = ?
             WHERE proposal_id = ?
@@ -729,6 +766,9 @@ def record_academy_resource_proposal(
             (
                 str(session.get("session_id") or ""),
                 clean_lane,
+                clean_kind,
+                clean_target_source,
+                clean_target_canonical,
                 clean_title,
                 clean_url,
                 clean_summary,
@@ -747,9 +787,10 @@ def record_academy_resource_proposal(
         """
         INSERT INTO academy_resource_proposals (
           proposal_id, trainee_id, session_id, user_id, deployment_id, program_id,
-          lane_id, title, origin_url, summary, relevance_json, citations_json,
+          lane_id, proposal_kind, target_source_uid, target_canonical_url,
+          title, origin_url, summary, relevance_json, citations_json,
           proposed_by, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             proposal_id,
@@ -759,6 +800,9 @@ def record_academy_resource_proposal(
             str(trainee.get("deployment_id") or ""),
             str(trainee.get("program_id") or ""),
             clean_lane,
+            clean_kind,
+            clean_target_source,
+            clean_target_canonical,
             clean_title,
             clean_url,
             clean_summary,
@@ -842,22 +886,6 @@ def end_academy_mode(
     now = _now()
     resolved_manifest = str(staged_manifest_id or trainee.get("staged_manifest_id") or "").strip()
     resolved_plan = str(staged_plan_id or trainee.get("staged_plan_id") or "").strip()
-    # On graduation, curate the specialist corpus + staged application plan if it
-    # has not been curated yet. This is no-write w.r.t. the Agent; the real apply
-    # is the PG-HERMES gated academy_apply action.
-    if graduate and not resolved_plan and not resolved_manifest:
-        try:
-            # commit=False: staging + session-close + graduation are one atomic txn.
-            curated = curate_academy_trainee(conn, trainee_id=trainee["trainee_id"], created_at=now, commit=False)
-            resolved_manifest = str(curated.get("manifest_id") or resolved_manifest)
-            resolved_plan = str(curated.get("plan_id") or resolved_plan)
-            review = curated.get("review") if isinstance(curated.get("review"), Mapping) else {}
-            summary.setdefault("review_status", str(review.get("status") or ""))
-            summary.setdefault("source_count", int(curated.get("source_count") or 0))
-        except Exception as exc:  # noqa: BLE001 - mode end must not crash on curation
-            from arclink_secrets_regex import redact_then_truncate
-
-            summary.setdefault("curation_error", redact_then_truncate(str(exc), limit=200))
     # On graduation the Trainer promotes the trainee's public-lane, public-safe
     # proposals into the CENTRAL deduplicated shared corpus (opt-out sharing) and
     # subscribes the trainee to its specialist. No Agent write happens here.
@@ -868,6 +896,8 @@ def end_academy_mode(
             summary.setdefault("central_specialist_uid", specialist_uid)
             summary.setdefault("central_sources_promoted", int(promotion.get("promoted_count") or 0))
             summary.setdefault("central_sources_deduped", int(promotion.get("deduped_count") or 0))
+            summary.setdefault("central_sources_discontinued", int(promotion.get("discontinued_count") or 0))
+            summary.setdefault("central_source_discontinue_reviews", int(promotion.get("discontinue_review_pending_count") or 0))
             summary.setdefault("central_sources_skipped", int(promotion.get("skipped_count") or 0))
             summary.setdefault("central_share_scope", str(promotion.get("share_scope") or ""))
             summary.setdefault("central_capsule_version", int(promotion.get("capsule_version") or 0))
@@ -883,6 +913,23 @@ def end_academy_mode(
             from arclink_secrets_regex import redact_then_truncate
 
             summary.setdefault("central_promotion_error", redact_then_truncate(str(exc), limit=200))
+    # On graduation, curate the specialist corpus + staged application plan after
+    # central promotion/trainer review, so the staged contract and later apply
+    # recomputation use the same canonical source graph. This is no-write w.r.t.
+    # the Agent; the real apply is the PG-HERMES gated academy_apply action.
+    if graduate and not resolved_plan and not resolved_manifest:
+        try:
+            # commit=False: staging + session-close + graduation are one atomic txn.
+            curated = curate_academy_trainee(conn, trainee_id=trainee["trainee_id"], created_at=now, commit=False)
+            resolved_manifest = str(curated.get("manifest_id") or resolved_manifest)
+            resolved_plan = str(curated.get("plan_id") or resolved_plan)
+            review = curated.get("review") if isinstance(curated.get("review"), Mapping) else {}
+            summary.setdefault("review_status", str(review.get("status") or ""))
+            summary.setdefault("source_count", int(curated.get("source_count") or 0))
+        except Exception as exc:  # noqa: BLE001 - mode end must not crash on curation
+            from arclink_secrets_regex import redact_then_truncate
+
+            summary.setdefault("curation_error", redact_then_truncate(str(exc), limit=200))
     summary.setdefault("graduated", bool(graduate))
     summary.setdefault("manifest_id", resolved_manifest)
     proposal_count = 0
@@ -1006,6 +1053,7 @@ def adopt_academy_graduate(
         raise ArcLinkAcademyProgramError("adopt requires user_id and deployment_id")
     if str(source.get("user_id") or "") != clean_user:
         raise ArcLinkAcademyProgramError("can only adopt an academy graduate owned by this account")
+    _ensure_deployment_owner_consistency(conn, user_id=clean_user, deployment_id=clean_deployment)
     _enforce_trainee_quota(conn, clean_user)
     trainee_id = "atrn_" + secrets.token_hex(8)
     now = _now()
@@ -1037,6 +1085,96 @@ def adopt_academy_graduate(
     )
     conn.commit()
     return get_academy_trainee(conn, trainee_id) or {}
+
+
+def adopt_central_specialist(
+    conn: sqlite3.Connection,
+    *,
+    specialist_uid: str,
+    user_id: str,
+    deployment_id: str,
+    agent_id: str = "",
+    name: str = "",
+    captain_steer: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Adopt a redacted public Academy specialist for a Captain's Agent.
+
+    This is the cross-Captain reuse path. It does NOT clone another Captain's
+    private trainee or steer; it creates a new graduated trainee subscribed to
+    the shared ``redacted_public`` specialist corpus, then stages a fresh
+    Captain-owned application contract for that Agent.
+    """
+    from arclink_boundary import reject_secret_material
+
+    clean_specialist = str(specialist_uid or "").strip()
+    clean_user = str(user_id or "").strip()
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_specialist or not clean_user or not clean_deployment:
+        raise ArcLinkAcademyProgramError("central specialist adoption requires specialist_uid, user_id, and deployment_id")
+    _ensure_deployment_owner_consistency(conn, user_id=clean_user, deployment_id=clean_deployment)
+    spec = conn.execute(
+        """
+        SELECT * FROM academy_corpus_specialists
+        WHERE specialist_uid = ? AND status = 'active' AND share_scope = 'redacted_public'
+        """,
+        (clean_specialist,),
+    ).fetchone()
+    if spec is None:
+        raise ArcLinkAcademyProgramError("can only adopt an active redacted-public central Academy specialist")
+    program = get_academy_program(conn, str(spec["program_id"] or ""))
+    if program is None:
+        raise ArcLinkAcademyProgramError("central Academy specialist has no active Major program")
+    _enforce_trainee_quota(conn, clean_user)
+    steer = dict(captain_steer or {})
+    steer.update(
+        {
+            "adopted_central_specialist_uid": clean_specialist,
+            "adoption_source": "academy_corpus_specialist",
+            "share": str(steer.get("share") or "redacted_public"),
+        }
+    )
+    reject_secret_material({"name": name, **{f"steer.{k}": v for k, v in steer.items()}})
+    trainee_id = "atrn_" + secrets.token_hex(8)
+    now = _now()
+    conn.execute(
+        """
+        INSERT INTO academy_trainees (
+          trainee_id, program_id, user_id, deployment_id, agent_id, name, status,
+          mode_open, depth, captain_steer_json, staged_manifest_id, staged_plan_id,
+          forward_maintained, adopted_from_trainee_id, enrolled_at, graduated_at,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'graduated', 0, ?, ?, '', '', 1, '', ?, ?, ?, ?)
+        """,
+        (
+            trainee_id,
+            str(spec["program_id"] or ""),
+            clean_user,
+            clean_deployment,
+            str(agent_id or "").strip(),
+            str(name or "").strip() or str(spec["role_title"] or program.get("label") or "Academy Specialist"),
+            str(program.get("default_depth") or "working"),
+            _dumps(steer),
+            now,
+            now,
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO academy_specialist_subscriptions (
+          specialist_uid, trainee_id, user_id, subscribed_at, last_applied_capsule_version
+        ) VALUES (?, ?, ?, ?, 0)
+        """,
+        (clean_specialist, trainee_id, clean_user, now),
+    )
+    curated = curate_academy_trainee(conn, trainee_id=trainee_id, created_at=now, commit=False)
+    conn.commit()
+    trainee = get_academy_trainee(conn, trainee_id) or {}
+    trainee["adopted_central_specialist_uid"] = clean_specialist
+    trainee["central_specialist"] = academy_specialist_public_card(conn, specialist_uid=clean_specialist)
+    trainee["staged_source_count"] = int(curated.get("source_count") or 0)
+    return trainee
 
 
 # Lane-valid fixture metadata so locally-generated corpora pass the governed
@@ -1184,6 +1322,8 @@ def _proposal_to_source(proposal: Mapping[str, Any], *, stable_ts: str) -> Any:
     """
     from arclink_academy_trainer import fake_academy_source
 
+    if _proposal_kind(proposal) != "add_resource":
+        raise ArcLinkAcademyProgramError("only add_resource proposals can become Academy sources")
     lane = str(proposal.get("lane_id") or "").strip()
     meta = dict(_LANE_REQUIRED_META.get(lane, {}))
     meta.update({"proposed": True, "fresh": True, "freshness_days": 7})
@@ -1208,6 +1348,194 @@ def _proposal_to_source(proposal: Mapping[str, Any], *, stable_ts: str) -> Any:
         metadata=meta,
         review_status="reviewed",
     )
+
+
+def _proposal_kind(proposal: Mapping[str, Any]) -> str:
+    return _clean_proposal_kind(str(proposal.get("proposal_kind") or "add_resource"))
+
+
+def _clean_proposal_kind(value: str) -> str:
+    clean = _slug(str(value or "add_resource")).replace("__", "_")
+    aliases = {
+        "add": "add_resource",
+        "add_source": "add_resource",
+        "source": "add_resource",
+        "resource": "add_resource",
+        "retire_resource": "discontinue_resource",
+        "retire_source": "discontinue_resource",
+        "remove_resource": "discontinue_resource",
+        "remove_source": "discontinue_resource",
+        "discontinue": "discontinue_resource",
+        "discontinue_source": "discontinue_resource",
+        "dead_end": "discontinue_resource",
+    }
+    clean = aliases.get(clean, clean)
+    if clean not in ACADEMY_RESOURCE_PROPOSAL_KINDS:
+        raise ArcLinkAcademyProgramError(f"unsupported academy resource proposal kind: {value}")
+    return clean
+
+
+def _review_payload(
+    *,
+    proposal_kind: str,
+    verdict: str,
+    reason: str,
+    specialist_uid: str,
+    source_uid: str = "",
+    engine: str = "deterministic",
+) -> dict[str, Any]:
+    return {
+        "reviewed_at": _now(),
+        "engine": engine,
+        "live": False,
+        "proposal_kind": proposal_kind,
+        "verdict": verdict,
+        "reason": str(reason or "")[:500],
+        "specialist_uid": str(specialist_uid or ""),
+        "source_uid": str(source_uid or ""),
+        "proof_gate": "PG-PROVIDER",
+        "live_enrichment_status": "pending_pg_provider",
+    }
+
+
+def _review_discontinue_resource_proposal(
+    conn: sqlite3.Connection,
+    *,
+    specialist_uid: str,
+    proposal: Mapping[str, Any],
+    now: str,
+) -> dict[str, Any]:
+    """Critic-review a request to review a central Academy source for removal.
+
+    A single Agent cannot delete corpus history. A discontinuation proposal must
+    identify an existing source attached to the same shared specialist. A match
+    records a PG-PROVIDER review queue item and leaves the shared source active;
+    central corpus removal requires a stronger live/provider or Operator gate.
+    """
+
+    pid = str(proposal.get("proposal_id") or "")
+    lane = str(proposal.get("lane_id") or "").strip()
+    target_uid = str(proposal.get("target_source_uid") or "").strip()
+    canonical = str(proposal.get("target_canonical_url") or "").strip() or _canonical_url(proposal.get("origin_url"))
+    summary = str(proposal.get("summary") or "").strip()
+    if not summary:
+        review = _review_payload(
+            proposal_kind="discontinue_resource",
+            verdict="reject",
+            reason="discontinuation proposal requires a concise reason",
+            specialist_uid=specialist_uid,
+        )
+        conn.execute(
+            "UPDATE academy_resource_proposals SET status = 'rejected', trainer_review_json = ?, updated_at = ? WHERE proposal_id = ?",
+            (_dumps(review), now, pid),
+        )
+        return {"proposal_id": pid, "status": "rejected", "reason": review["reason"]}
+    clauses = ["link.specialist_uid = ?"]
+    params: list[Any] = [specialist_uid]
+    if target_uid:
+        clauses.append("src.source_uid = ?")
+        params.append(target_uid)
+    elif canonical:
+        clauses.append("src.canonical_url = ?")
+        params.append(canonical)
+    else:
+        review = _review_payload(
+            proposal_kind="discontinue_resource",
+            verdict="reject",
+            reason="discontinuation proposal requires target_source_uid or canonical origin_url",
+            specialist_uid=specialist_uid,
+        )
+        conn.execute(
+            "UPDATE academy_resource_proposals SET status = 'rejected', trainer_review_json = ?, updated_at = ? WHERE proposal_id = ?",
+            (_dumps(review), now, pid),
+        )
+        return {"proposal_id": pid, "status": "rejected", "reason": review["reason"]}
+    row = conn.execute(
+        f"""
+        SELECT src.* FROM academy_sources src
+        JOIN academy_specialist_sources link ON link.source_uid = src.source_uid
+        WHERE {' AND '.join(clauses)}
+        ORDER BY src.first_seen_at, src.source_uid
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    if row is None:
+        review = _review_payload(
+            proposal_kind="discontinue_resource",
+            verdict="reject",
+            reason="target source is not attached to this shared Academy specialist",
+            specialist_uid=specialist_uid,
+        )
+        conn.execute(
+            "UPDATE academy_resource_proposals SET status = 'rejected', trainer_review_json = ?, updated_at = ? WHERE proposal_id = ?",
+            (_dumps(review), now, pid),
+        )
+        return {"proposal_id": pid, "status": "rejected", "reason": review["reason"]}
+    source_uid = str(row["source_uid"])
+    if lane and lane != str(row["lane_id"] or ""):
+        review = _review_payload(
+            proposal_kind="discontinue_resource",
+            verdict="reject",
+            reason="proposal lane does not match the target source lane",
+            specialist_uid=specialist_uid,
+            source_uid=source_uid,
+        )
+        conn.execute(
+            "UPDATE academy_resource_proposals SET status = 'rejected', trainer_review_json = ?, updated_at = ? WHERE proposal_id = ?",
+            (_dumps(review), now, pid),
+        )
+        return {"proposal_id": pid, "status": "rejected", "source_uid": source_uid, "reason": review["reason"]}
+    enrichment = _loads(row["enrichment_json"], default={})
+    if not isinstance(enrichment, dict):
+        enrichment = {}
+    review = _review_payload(
+        proposal_kind="discontinue_resource",
+        verdict="pending_live_review",
+        reason=summary,
+        specialist_uid=specialist_uid,
+        source_uid=source_uid,
+    )
+    queue = enrichment.get("discontinue_review_queue")
+    if not isinstance(queue, list):
+        queue = []
+    queue = [item for item in queue if str((item if isinstance(item, dict) else {}).get("proposal_id") or "") != pid]
+    queue.append(
+        {
+            "proposal_id": pid,
+            "queued_at": review["reviewed_at"],
+            "engine": review["engine"],
+            "reason": review["reason"],
+            "status": "pending_pg_provider",
+        }
+    )
+    enrichment["discontinue_review"] = {
+        "proposal_id": pid,
+        "reviewed_at": review["reviewed_at"],
+        "engine": review["engine"],
+        "reason": review["reason"],
+        "status": "pending_pg_provider",
+    }
+    enrichment["discontinue_review_queue"] = queue[-20:]
+    conn.execute(
+        """
+        UPDATE academy_sources
+        SET enrichment_json = ?, last_reviewed_at = ?, updated_at = ?
+        WHERE source_uid = ?
+        """,
+        (_dumps(enrichment), now, now, source_uid),
+    )
+    conn.execute(
+        "UPDATE academy_resource_proposals SET status = 'review_pending', trainer_review_json = ?, updated_at = ? WHERE proposal_id = ?",
+        (_dumps(review), now, pid),
+    )
+    return {
+        "proposal_id": pid,
+        "status": "review_pending",
+        "source_uid": source_uid,
+        "reason": review["reason"],
+        "review_required": "PG-PROVIDER",
+    }
 
 
 def promote_proposals_to_central(
@@ -1250,8 +1578,26 @@ def promote_proposals_to_central(
     ).fetchone()
     # No shareable footprint and no specialist yet (e.g. a fixture-only graduate):
     # do not create an empty central specialist.
-    has_candidate = (not opted_out) and any(str(p.get("lane_id") or "") in eligible_lanes for p in proposals)
+    has_candidate = (not opted_out) and any(
+        _proposal_kind(p) == "add_resource" and str(p.get("lane_id") or "") in eligible_lanes for p in proposals
+    )
     if not has_candidate and existing_spec is None:
+        reviewed_discontinuations: list[dict[str, Any]] = []
+        for proposal in proposals:
+            if _proposal_kind(proposal) != "discontinue_resource":
+                continue
+            pid = str(proposal.get("proposal_id") or "")
+            review = _review_payload(
+                proposal_kind="discontinue_resource",
+                verdict="reject",
+                reason="no shared Academy specialist exists for this discontinuation target yet",
+                specialist_uid="",
+            )
+            conn.execute(
+                "UPDATE academy_resource_proposals SET status = 'rejected', trainer_review_json = ?, updated_at = ? WHERE proposal_id = ?",
+                (_dumps(review), now, pid),
+            )
+            reviewed_discontinuations.append({"proposal_id": pid, "status": "rejected", "reason": review["reason"]})
         if commit:
             conn.commit()
         return {
@@ -1259,9 +1605,12 @@ def promote_proposals_to_central(
             "share_scope": share_scope,
             "promoted_source_uids": [],
             "deduped_source_uids": [],
+            "discontinued_sources": reviewed_discontinuations,
             "skipped": [{"reason": "no_share_eligible_proposals"}] if proposals else [],
             "promoted_count": 0,
             "deduped_count": 0,
+            "discontinued_count": 0,
+            "discontinue_review_pending_count": 0,
             "skipped_count": len(proposals) if opted_out or proposals else 0,
             "opted_out": opted_out,
             "cross_tenant_proof_gate": ACADEMY_CROSS_TENANT_PROOF_GATE,
@@ -1295,9 +1644,20 @@ def promote_proposals_to_central(
 
     promoted: list[str] = []
     deduped: list[str] = []
+    discontinued: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for proposal in proposals:
         pid = str(proposal.get("proposal_id") or "")
+        kind = _proposal_kind(proposal)
+        if kind == "discontinue_resource":
+            reviewed = _review_discontinue_resource_proposal(
+                conn,
+                specialist_uid=specialist_uid,
+                proposal=proposal,
+                now=now,
+            )
+            discontinued.append({"proposal_id": pid, **reviewed})
+            continue
         lane = str(proposal.get("lane_id") or "").strip()
         title = str(proposal.get("title") or "").strip()[:240]
         notes = str(proposal.get("summary") or "").strip()
@@ -1400,9 +1760,10 @@ def promote_proposals_to_central(
     )
     # Recompose the replaceable knowledge capsule from the (deduped) central sources.
     capsule_version = 0
-    if promoted or deduped:
+    if promoted or deduped or any(item.get("status") == "accepted" for item in discontinued):
         capsule = refresh_specialist_capsule(conn, specialist_uid=specialist_uid, actor=actor, commit=False)
         capsule_version = int(capsule.get("capsule_version") or 0)
+    pending_discontinue_count = len([item for item in discontinued if item.get("status") == "review_pending"])
     if commit:
         conn.commit()
     return {
@@ -1410,9 +1771,12 @@ def promote_proposals_to_central(
         "share_scope": share_scope,
         "promoted_source_uids": promoted,
         "deduped_source_uids": deduped,
+        "discontinued_sources": discontinued,
         "skipped": skipped,
         "promoted_count": len(promoted),
         "deduped_count": len(deduped),
+        "discontinued_count": len([item for item in discontinued if item.get("status") == "accepted"]),
+        "discontinue_review_pending_count": pending_discontinue_count,
         "skipped_count": len(skipped),
         "capsule_version": capsule_version,
         "opted_out": opted_out,
@@ -1421,6 +1785,41 @@ def promote_proposals_to_central(
 
 
 ACADEMY_CAPSULE_CHAR_LIMIT = 6000
+
+
+def _private_trainee_capsule_from_manifest(manifest: Any, *, program: Mapping[str, Any]) -> str:
+    """Compose a private, per-trainee Academy capsule from reviewed lesson cards.
+
+    This is the non-public apply path for Captains who opt out of the shared
+    central corpus or whose useful training sources are private lanes. It uses the
+    same validated, derived lesson cards as the staged application plan and never
+    promotes anything into the reusable public Academy.
+    """
+    data = manifest.to_dict() if hasattr(manifest, "to_dict") else dict(manifest or {})
+    cards = [dict(item) for item in (data.get("lesson_cards") or []) if isinstance(item, Mapping)]
+    accepted = [card for card in cards if str(card.get("quality_status") or "") == "accepted"]
+    if not accepted:
+        return ""
+    role_title = str(program.get("label") or data.get("role_title") or "Specialist").strip()
+    topic = str(program.get("topic_map") or data.get("topic") or "").strip()
+    lines = [
+        f"# Academy specialist: {role_title}",
+        "",
+        "<!-- Private Academy capsule for this Captain-owned Agent.",
+        "Derived notes only; not published to the central reusable Academy. -->",
+        "",
+    ]
+    if topic:
+        lines += ["## Topic map", topic, ""]
+    lines.append("## Curated private sources (derived notes; retrieve and cite before advising)")
+    for card in accepted[:12]:
+        title = " ".join(str(card.get("title") or "source").split())[:180]
+        lane = " ".join(str(card.get("lane_id") or "source").split())[:80]
+        summary = " ".join(str(card.get("summary") or "").split())
+        if len(summary) > 400:
+            summary = summary[:397] + "..."
+        lines.append(f"- **{title}** ({lane}): {summary or 'Metadata-only source; retrieve approved details before relying on it.'}")
+    return "\n".join(lines)[:ACADEMY_CAPSULE_CHAR_LIMIT]
 
 
 def refresh_specialist_capsule(
@@ -1451,7 +1850,7 @@ def refresh_specialist_capsule(
         """
         SELECT src.* FROM academy_sources src
         JOIN academy_specialist_sources link ON link.source_uid = src.source_uid
-        WHERE link.specialist_uid = ? AND src.status = 'active'
+        WHERE link.specialist_uid = ? AND src.status = 'active' AND src.share_scope = 'redacted_public'
         ORDER BY src.quality_score DESC, src.first_seen_at
         """,
         (clean,),
@@ -1586,7 +1985,7 @@ def run_academy_trainer_review(
         """
         SELECT src.* FROM academy_sources src
         JOIN academy_specialist_sources link ON link.source_uid = src.source_uid
-        WHERE link.specialist_uid = ? AND src.status = 'active'
+        WHERE link.specialist_uid = ? AND src.status = 'active' AND src.share_scope = 'redacted_public'
         ORDER BY src.first_seen_at, src.source_uid
         """,
         (clean,),
@@ -1737,7 +2136,9 @@ def _central_source_to_academy_source(row: Mapping[str, Any], *, stable_ts: str)
     )
 
 
-def academy_specialist_public_card(conn: sqlite3.Connection, *, specialist_uid: str) -> dict[str, Any] | None:
+def academy_specialist_public_card(
+    conn: sqlite3.Connection, *, specialist_uid: str, allow_private: bool = False
+) -> dict[str, Any] | None:
     """Redacted, cross-tenant-safe projection of a central specialist.
 
     Exposes role/topic/freshness/source-lane counts and capsule version; withholds
@@ -1749,6 +2150,8 @@ def academy_specialist_public_card(conn: sqlite3.Connection, *, specialist_uid: 
         "SELECT * FROM academy_corpus_specialists WHERE specialist_uid = ?", (clean,)
     ).fetchone()
     if spec is None:
+        return None
+    if not allow_private and str(spec["share_scope"] or "") != "redacted_public":
         return None
     lane_rows = conn.execute(
         """
@@ -1789,7 +2192,11 @@ def list_central_specialists(conn: sqlite3.Connection, *, include_private: bool 
         ).fetchall()
     cards = []
     for row in rows:
-        card = academy_specialist_public_card(conn, specialist_uid=str(row["specialist_uid"]))
+        card = academy_specialist_public_card(
+            conn,
+            specialist_uid=str(row["specialist_uid"]),
+            allow_private=bool(include_private),
+        )
         if card is not None:
             cards.append(card)
     return cards
@@ -1956,17 +2363,17 @@ def _resolve_trainee_sources(
         seen_keys.add(key)
         candidates.append(source)
 
+    for row in read_central_specialist_sources(conn, trainee_id=str(trainee["trainee_id"])):
+        try:
+            _add(_central_source_to_academy_source(row, stable_ts=stable))
+        except Exception:  # noqa: BLE001
+            continue
     for proposal in read_academy_proposals(
         conn, trainee_id=str(trainee["trainee_id"]), statuses=USABLE_PROPOSAL_STATUSES
     ):
         try:
             _add(_proposal_to_source(proposal, stable_ts=stable))
         except Exception:  # noqa: BLE001 - a malformed proposal is skipped, not fatal
-            continue
-    for row in read_central_specialist_sources(conn, trainee_id=str(trainee["trainee_id"])):
-        try:
-            _add(_central_source_to_academy_source(row, stable_ts=stable))
-        except Exception:  # noqa: BLE001
             continue
     return candidates if candidates else _fixture_sources_for_program(program, stable)
 
@@ -2163,8 +2570,8 @@ def stage_academy_apply(
     academy_trainer_reviewed_at = ""
     academy_trainer_live_status = ""
     trainer_review_ready = False
+    program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
     try:
-        program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
         spec_uid, _ = specialist_uid_for_program(program_row)
         academy_specialist_uid = spec_uid
         spec_row = conn.execute(
@@ -2189,6 +2596,30 @@ def stage_academy_apply(
             trainer_review_ready = bool(academy_soul_section.strip()) and bool(academy_trainer_reviewed_at)
     except Exception:  # noqa: BLE001 - a missing/empty capsule just omits the section
         academy_soul_section = ""
+
+    if not academy_soul_section and review_ready:
+        # Private/opt-out Academy graduates intentionally do not publish a central
+        # redacted_public specialist. They still need a safe, replaceable Agent
+        # capsule, but only when real Captain/Agent proposals exist; fixture-only
+        # graduates remain staged until real training material is gathered.
+        proposal_count = len(read_academy_proposals(conn, trainee_id=trainee["trainee_id"], statuses=USABLE_PROPOSAL_STATUSES))
+        if proposal_count:
+            private_capsule = _private_trainee_capsule_from_manifest(composed.get("manifest"), program=program_row)
+            if private_capsule.strip():
+                from arclink_org_profile import render_academy_overlay
+
+                academy_specialist_uid = "private:" + str(trainee["trainee_id"])
+                academy_capsule_version = 1
+                academy_trainer_reviewed_at = str(trainee.get("graduated_at") or now)
+                academy_trainer_live_status = "private_corpus_pending_pg_provider"
+                academy_soul_section = render_academy_overlay(
+                    role_title=str(program_row.get("label") or trainee.get("name") or ""),
+                    topic=str(program_row.get("topic_map") or ""),
+                    capsule_body=private_capsule,
+                    capsule_version=academy_capsule_version,
+                    specialist_uid=academy_specialist_uid,
+                )
+                trainer_review_ready = True
 
     if not contract_ok:
         status = "not_staged"
@@ -2240,6 +2671,11 @@ def stage_academy_apply(
         "live_authorized": bool(live_authorized),
         "review_status": str(review.get("status") or ""),
         "intent_counts": intent_counts,
+        "vault_file_intents": list(plan_dict.get("vault_file_intents") or []),
+        "qmd_memory_seed_intents": list(plan_dict.get("qmd_memory_seed_intents") or []),
+        "approved_skill_intents": list(plan_dict.get("approved_skill_intents") or []),
+        "first_week_practice_tasks": list(plan_dict.get("first_week_practice_tasks") or []),
+        "evaluation_tasks": list(plan_dict.get("evaluation_tasks") or []),
         # The replaceable Academy SOUL section (marker-bounded; merged additively by
         # the PG-HERMES installer, never overwriting the human SOUL body).
         "academy_soul_section": academy_soul_section,

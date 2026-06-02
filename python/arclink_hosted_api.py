@@ -17,10 +17,12 @@ import secrets
 import sqlite3
 import threading
 import time
+import datetime as dt
 import hmac
 import hashlib
 import shlex
 from concurrent.futures import ThreadPoolExecutor
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
@@ -36,7 +38,10 @@ from arclink_control import (
     connect_db,
     is_ip_in_cidrs,
     is_loopback_ip,
+    parse_utc_iso,
     queue_notification,
+    utc_now,
+    utc_now_iso,
 )
 from arclink_entitlements import process_stripe_webhook, StripeWebhookResult
 from arclink_api_auth import (
@@ -44,13 +49,17 @@ from arclink_api_auth import (
     GENERIC_ARCLINK_AUTH_ERROR,
     ArcLinkApiAuthError,
     ArcLinkRateLimitError,
+    _admin_mutation_allowed,
     _header as _api_header,
+    _hash_proof_token,
+    _verify_proof_token_hash,
     accept_user_share_grant_api,
     claim_user_share_nonce_api,
     revoke_user_share_nonce_api,
     acknowledge_user_credential_api,
     admin_apply_user_crew_recipe_api,
     adopt_user_academy_graduate_api,
+    adopt_user_academy_specialist_api,
     answer_public_onboarding_api,
     authenticate_arclink_admin_session,
     approve_user_share_grant_api,
@@ -100,6 +109,7 @@ from arclink_api_auth import (
     request_user_backup_write_check_api,
     retry_user_share_grant_notification_api,
     revoke_arclink_session,
+    revoke_user_dashboard_access,
     revoke_user_share_grant_api,
     preview_user_crew_recipe_api,
     start_public_onboarding_api,
@@ -123,6 +133,7 @@ from arclink_product import base_domain as default_base_domain, chutes_default_m
 from arclink_secrets_regex import redact_then_truncate
 
 _SHARE_REQUEST_BROKER_TOKEN_HEADER = "x-arclink-share-request-broker-token"
+ONBOARDING_CLAIM_COOKIE = "arclink_onboarding_claim_token"
 from arclink_telegram import LiveTelegramTransport, TelegramConfig, handle_telegram_update
 
 logger = logging.getLogger("arclink.hosted_api")
@@ -418,6 +429,56 @@ def _clear_session_cookies(kind: str, *, config: HostedApiConfig) -> list[tuple[
     return [("Set-Cookie", f"{prefix}_{suffix}={flags}") for suffix in ("session_id", "session_token", "csrf")]
 
 
+def _cookie_value(headers: Mapping[str, Any], name: str) -> str:
+    raw = _api_header(headers, "cookie")
+    if not raw:
+        return ""
+    cookie = SimpleCookie()
+    try:
+        cookie.load(raw)
+    except Exception:
+        return ""
+    morsel = cookie.get(name)
+    return str(morsel.value or "") if morsel is not None else ""
+
+
+def _onboarding_claim_cookie(token: str, *, config: HostedApiConfig) -> tuple[str, str]:
+    return ("Set-Cookie", f"{ONBOARDING_CLAIM_COOKIE}={str(token or '')}{_cookie_flags(config)}")
+
+
+def _issue_onboarding_claim_cookie(
+    conn: sqlite3.Connection,
+    *,
+    session_id: str,
+    config: HostedApiConfig,
+) -> list[tuple[str, str]]:
+    """Mint a short browser-return proof for public-bot checkout redirects.
+
+    The token itself is sent only as an HttpOnly cookie; the DB stores the same
+    proof-token hash used by the explicit web onboarding claim token.
+    """
+    clean_session = str(session_id or "").strip()
+    if not clean_session:
+        return []
+    token = secrets.token_urlsafe(32)
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
+        (clean_session,),
+    ).fetchone()
+    if row is None:
+        return []
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+    metadata["browser_claim_proof_hash"] = _hash_proof_token(token)
+    metadata["browser_claim_cookie_issued_at"] = utc_now_iso()
+    metadata["browser_claim_cookie_name"] = ONBOARDING_CLAIM_COOKIE
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ?, updated_at = ? WHERE session_id = ?",
+        (json.dumps(metadata, sort_keys=True), utc_now_iso(), clean_session),
+    )
+    conn.commit()
+    return [_onboarding_claim_cookie(token, config=config)]
+
+
 def _cors_headers(config: HostedApiConfig) -> list[tuple[str, str]]:
     if not config.cors_origin:
         return []
@@ -621,11 +682,12 @@ def _handle_public_bot_onboarding_checkout_redirect(
     checkout_state = str(session.get("checkout_state") or "").strip().lower()
     if existing_url and checkout_state in {"open", "paid"}:
         if existing_plan == plan:
+            proof_cookie = _issue_onboarding_claim_cookie(conn, session_id=session_id, config=config)
             return _json_response(
                 303,
                 {"checkout_url": existing_url, "request_id": request_id},
                 request_id=request_id,
-                extra_headers=[("Location", existing_url), ("Cache-Control", "no-store")],
+                extra_headers=[("Location", existing_url), ("Cache-Control", "no-store"), *proof_cookie],
             )
         return _json_response(400, {"error": "checkout_already_open_for_different_plan", "request_id": request_id}, request_id=request_id)
 
@@ -659,11 +721,12 @@ def _handle_public_bot_onboarding_checkout_redirect(
     checkout_url = str(result.payload.get("session", {}).get("checkout_url") or "").strip()
     if not checkout_url:
         return _json_response(503, {"error": "stripe_checkout_url_missing", "request_id": request_id}, request_id=request_id)
+    proof_cookie = _issue_onboarding_claim_cookie(conn, session_id=session_id, config=config)
     return _json_response(
         303,
         {"checkout_url": checkout_url, "request_id": request_id},
         request_id=request_id,
-        extra_headers=[("Location", checkout_url), ("Cache-Control", "no-store")],
+        extra_headers=[("Location", checkout_url), ("Cache-Control", "no-store"), *proof_cookie],
     )
 
 
@@ -935,9 +998,9 @@ def _handle_logout(
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     creds = extract_arclink_browser_session_credentials(headers, session_kind=kind)
     if kind == "admin":
-        authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+        session = authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     else:
-        authenticate_arclink_user_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+        session = authenticate_arclink_user_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     csrf = extract_arclink_csrf_token(headers, session_kind=kind)
     require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind=kind)
     result = revoke_arclink_session(
@@ -947,8 +1010,19 @@ def _handle_logout(
         actor_id=creds["session_id"],
         reason=f"{kind}_logout",
     )
+    dashboard_revocation: dict[str, Any] | None = None
+    if kind == "user":
+        dashboard_revocation = revoke_user_dashboard_access(
+            conn,
+            user_id=str(session.get("user_id") or ""),
+            actor_id=creds["session_id"],
+            reason="user_logout",
+        )
     extra = _clear_session_cookies(kind, config=config)
-    return _json_response(200, {"session": result}, request_id=request_id, extra_headers=extra)
+    payload: dict[str, Any] = {"session": result}
+    if dashboard_revocation is not None:
+        payload["dashboard_access_revocation"] = dashboard_revocation
+    return _json_response(200, payload, request_id=request_id, extra_headers=extra)
 
 
 def _handle_user_dashboard(
@@ -1004,6 +1078,7 @@ def _handle_admin_action(
         target_id=str(body.get("target_id") or ""),
         reason=str(body.get("reason") or ""),
         idempotency_key=str(body.get("idempotency_key") or ""),
+        confirm=bool(body.get("confirm") is True),
         metadata=body.get("metadata"),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
@@ -1392,6 +1467,26 @@ def _handle_user_academy_adopt(
     return _json_response(result.status, result.payload, request_id=request_id)
 
 
+def _handle_user_academy_specialist_adopt(
+    conn: sqlite3.Connection,
+    headers: Mapping[str, Any],
+    body: dict[str, Any],
+    request_id: str,
+    config: HostedApiConfig,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    creds = extract_arclink_browser_session_credentials(headers, session_kind="user")
+    csrf = extract_arclink_csrf_token(headers, session_kind="user")
+    result = adopt_user_academy_specialist_api(
+        conn,
+        session_id=creds["session_id"],
+        session_token=creds["session_token"],
+        csrf_token=csrf,
+        specialist_uid=str(body.get("specialist_uid") or ""),
+        name=str(body.get("name") or ""),
+    )
+    return _json_response(result.status, result.payload, request_id=request_id)
+
+
 def _handle_admin_crew_recipe_apply(
     conn: sqlite3.Connection,
     headers: Mapping[str, Any],
@@ -1713,9 +1808,10 @@ def _handle_session_revoke(
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     session_kind = str(body.get("session_kind") or "").strip().lower()
     creds = extract_arclink_browser_session_credentials(headers, session_kind="admin")
-    authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
+    session = authenticate_arclink_admin_session(conn, session_id=creds["session_id"], session_token=creds["session_token"])
     csrf = extract_arclink_csrf_token(headers, session_kind="admin")
     require_arclink_csrf(conn, session_id=creds["session_id"], csrf_token=csrf, session_kind="admin")
+    _admin_mutation_allowed(conn, session)
     result = revoke_arclink_session(
         conn,
         session_id=str(body.get("target_session_id") or ""),
@@ -1723,8 +1819,19 @@ def _handle_session_revoke(
         actor_id=creds["session_id"],
         reason=str(body.get("reason") or ""),
     )
+    dashboard_revocation = None
+    if session_kind == "user":
+        dashboard_revocation = revoke_user_dashboard_access(
+            conn,
+            user_id=str(result.get("user_id") or ""),
+            actor_id=creds["session_id"],
+            reason=str(body.get("reason") or "admin_session_revoke"),
+        )
     extra = _clear_session_cookies(session_kind, config=config) if str(body.get("target_session_id") or "") == creds["session_id"] else []
-    return _json_response(200, {"session": result}, request_id=request_id, extra_headers=extra)
+    payload: dict[str, Any] = {"session": result}
+    if dashboard_revocation is not None:
+        payload["dashboard_access_revocation"] = dashboard_revocation
+    return _json_response(200, payload, request_id=request_id, extra_headers=extra)
 
 
 def _handle_provider_state(
@@ -1811,6 +1918,7 @@ def _handle_admin_wrapped(
 def _handle_onboarding_status(
     conn: sqlite3.Connection,
     query: dict[str, str],
+    headers: Mapping[str, Any],
     request_id: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     """Return current onboarding/entitlement state for a session.
@@ -1823,7 +1931,7 @@ def _handle_onboarding_status(
     row = conn.execute(
         """
         SELECT s.session_id, s.status, s.user_id, s.deployment_id, s.channel, s.channel_identity,
-               s.display_name_hint, s.selected_plan_id, s.checkout_state
+               s.display_name_hint, s.selected_plan_id, s.checkout_state, s.metadata_json
         FROM arclink_onboarding_sessions s
         WHERE s.session_id = ?
         """,
@@ -1832,6 +1940,22 @@ def _handle_onboarding_status(
     if row is None:
         return _json_response(404, {"error": "session_not_found"}, request_id=request_id)
     row_dict = dict(row)
+    session_metadata = json_loads_safe(str(row_dict.get("metadata_json") or "{}"))
+    claim_token = str(
+        query.get("claim_token")
+        or query.get("proof_token")
+        or _cookie_value(headers, ONBOARDING_CLAIM_COOKIE)
+        or ""
+    ).strip()
+    proof_authorized = False
+    if claim_token:
+        expected_hash = str(session_metadata.get("browser_claim_proof_hash") or "").strip()
+        replay_hash = str(session_metadata.get("browser_claim_proof_used_hash") or "").strip()
+        replay_until = parse_utc_iso(str(session_metadata.get("browser_claim_replay_until") or ""))
+        if expected_hash and _verify_proof_token_hash(claim_token, expected_hash):
+            proof_authorized = True
+        elif replay_hash and replay_until and replay_until > utc_now() and _verify_proof_token_hash(claim_token, replay_hash):
+            proof_authorized = True
     user_id = str(row_dict.get("user_id") or "").strip()
     entitlement_state = "unknown"
     if user_id:
@@ -1843,27 +1967,33 @@ def _handle_onboarding_status(
     deployment_id = str(row_dict.get("deployment_id") or "").strip()
     deployment_payloads: list[dict[str, Any]] = []
 
-    def build_deployment_payload(deployment: Mapping[str, Any]) -> dict[str, Any]:
+    def build_deployment_payload(deployment: Mapping[str, Any], *, include_sensitive: bool) -> dict[str, Any]:
         dep_id = str(deployment.get("deployment_id") or "").strip()
         metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
-        urls = _deployment_urls(
-            str(deployment.get("prefix") or ""),
-            str(deployment.get("base_domain") or ""),
-            metadata,
+        urls = (
+            _deployment_urls(
+                str(deployment.get("prefix") or ""),
+                str(deployment.get("base_domain") or ""),
+                metadata,
+            )
+            if include_sensitive
+            else {}
         )
         status = str(deployment.get("status") or "")
-        health = [
-            dict(item)
-            for item in conn.execute(
-                """
-                SELECT service_name, status, checked_at
-                FROM arclink_service_health
-                WHERE deployment_id = ?
-                ORDER BY service_name
-                """,
-                (dep_id,),
-            ).fetchall()
-        ]
+        health = []
+        if include_sensitive:
+            health = [
+                dict(item)
+                for item in conn.execute(
+                    """
+                    SELECT service_name, status, checked_at
+                    FROM arclink_service_health
+                    WHERE deployment_id = ?
+                    ORDER BY service_name
+                    """,
+                    (dep_id,),
+                ).fetchall()
+            ]
         try:
             index = int(str(metadata.get("bundle_agent_index") or "0"))
         except (TypeError, ValueError):
@@ -1873,19 +2003,25 @@ def _handle_onboarding_status(
         except (TypeError, ValueError):
             count = 0
         label = str(deployment.get("agent_name") or "").strip() or (f"Hermes Agent {index}" if index else "Hermes Agent")
-        return {
-            "deployment_id": dep_id,
+        payload = {
             "status": status,
-            "ready": status in {"active", "first_contacted"},
-            "prefix": str(deployment.get("prefix") or ""),
-            "agent_label": label,
-            "agent_title": str(deployment.get("agent_title") or "").strip(),
+            "ready": status == "active",
             "bundle_agent_index": index,
             "bundle_agent_count": count,
             "access": {"urls": urls},
             "service_health": health,
             "updated_at": str(deployment.get("updated_at") or ""),
         }
+        if include_sensitive:
+            payload.update(
+                {
+                    "deployment_id": dep_id,
+                    "prefix": str(deployment.get("prefix") or ""),
+                    "agent_label": label,
+                    "agent_title": str(deployment.get("agent_title") or "").strip(),
+                }
+            )
+        return payload
 
     if user_id:
         rows = [
@@ -1926,7 +2062,7 @@ def _handle_onboarding_status(
             if dep_id in seen:
                 continue
             seen.add(dep_id)
-            deployment_payloads.append(build_deployment_payload(item))
+            deployment_payloads.append(build_deployment_payload(item, include_sensitive=proof_authorized))
         deployment_payloads.sort(
             key=lambda item: (
                 int(item.get("bundle_agent_index") or 0) or 9999,
@@ -1951,34 +2087,28 @@ def _handle_onboarding_status(
             (deployment_id, user_id),
         ).fetchone()
         if deployment_row is not None:
-            deployment_payload = build_deployment_payload(dict(deployment_row))
+            deployment_payload = build_deployment_payload(dict(deployment_row), include_sensitive=proof_authorized)
             deployment_payloads = [deployment_payload]
     bundle_counts = [int(item.get("bundle_agent_count") or 0) for item in deployment_payloads if int(item.get("bundle_agent_count") or 0) > 0]
     plan_count = 3 if str(row_dict.get("selected_plan_id") or "").strip() == "scale" else (1 if deployment_id else 0)
     agent_count = max([len(deployment_payloads), plan_count, *bundle_counts, 0])
-    ready_count = sum(
-        1
-        for item in deployment_payloads
-        if item.get("ready") and (
-            item.get("access", {}).get("urls", {}).get("hermes")
-            or item.get("access", {}).get("urls", {}).get("dashboard")
-        )
-    )
+    ready_count = sum(1 for item in deployment_payloads if item.get("ready"))
     return _json_response(200, {
         "session_id": session_id,
         "status": row_dict.get("status") or "open",
-        "user_id": user_id,
+        "proof_authorized": proof_authorized,
+        "user_id": user_id if proof_authorized else "",
         "entitlement_state": entitlement_state,
         "plan_id": row_dict.get("selected_plan_id") or "",
         "checkout_state": row_dict.get("checkout_state") or "",
-        "deployment_id": deployment_id,
+        "deployment_id": deployment_id if proof_authorized else "",
         "deployment": deployment_payload,
         "deployments": deployment_payloads,
         "agent_count": agent_count,
         "ready_count": ready_count,
-        "display_name": row_dict.get("display_name_hint") or "",
-        "channel": row_dict.get("channel") or "",
-        "channel_identity": row_dict.get("channel_identity") or "",
+        "display_name": (row_dict.get("display_name_hint") or "") if proof_authorized else "",
+        "channel": (row_dict.get("channel") or "") if proof_authorized else "",
+        "channel_identity": (row_dict.get("channel_identity") or "") if proof_authorized else "",
     }, request_id=request_id)
 
 
@@ -2024,6 +2154,204 @@ def _handle_adapter_mode(
     return _json_response(200, {
         "fake_mode": fake_mode,
         "fake_stripe": fake_stripe,
+    }, request_id=request_id)
+
+
+def _handle_public_academy_observatory(
+    conn: sqlite3.Connection,
+    request_id: str,
+) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
+    """Return public, aggregate-only Academy training telemetry."""
+
+    def scalar(sql: str, params: tuple[Any, ...] = ()) -> int:
+        try:
+            row = conn.execute(sql, params).fetchone()
+        except sqlite3.Error:
+            return 0
+        try:
+            return int((row[0] if row is not None else 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    since = (utc_now() - dt.timedelta(days=7)).replace(microsecond=0).isoformat()
+    public_observation_scope = """
+      (
+        source_uid IN (
+          SELECT source_uid
+          FROM academy_sources
+          WHERE share_scope = 'redacted_public'
+            AND status IN ('active', 'stale', 'superseded')
+        )
+        OR specialist_uid IN (
+          SELECT specialist_uid
+          FROM academy_corpus_specialists
+          WHERE share_scope = 'redacted_public'
+            AND status = 'active'
+        )
+      )
+    """
+    active_sources = scalar(
+        """
+        SELECT COUNT(*)
+        FROM academy_sources
+        WHERE share_scope = 'redacted_public'
+          AND status IN ('active', 'stale', 'superseded')
+        """
+    )
+    active_specialists = scalar(
+        """
+        SELECT COUNT(*)
+        FROM academy_corpus_specialists
+        WHERE share_scope = 'redacted_public'
+          AND status = 'active'
+        """
+    )
+    weekly_observations = scalar(
+        f"""
+        SELECT COUNT(*)
+        FROM academy_source_crawl_observations
+        WHERE observed_at >= ?
+          AND {public_observation_scope}
+        """,
+        (since,),
+    )
+    review_queue_events = scalar(
+        f"""
+        SELECT COUNT(*)
+        FROM academy_source_crawl_observations
+        WHERE observed_at >= ?
+          AND {public_observation_scope}
+          AND status IN ('changed', 'removed', 'tombstoned', 'blocked', 'failed')
+        """,
+        (since,),
+    )
+    subscribed_trainees = scalar(
+        """
+        SELECT COUNT(*)
+        FROM academy_specialist_subscriptions sub
+        JOIN academy_corpus_specialists spec
+          ON spec.specialist_uid = sub.specialist_uid
+        WHERE spec.share_scope = 'redacted_public'
+          AND spec.status = 'active'
+        """
+    )
+
+    try:
+        lane_rows = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(lane_id, ''), 'public') AS lane_id, COUNT(*) AS source_count
+            FROM academy_sources
+            WHERE share_scope = 'redacted_public'
+              AND status IN ('active', 'stale', 'superseded')
+            GROUP BY COALESCE(NULLIF(lane_id, ''), 'public')
+            ORDER BY source_count DESC, lane_id ASC
+            LIMIT 4
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        lane_rows = []
+    lanes = [
+        {"lane_id": str(row["lane_id"] or "public"), "source_count": int(row["source_count"] or 0)}
+        for row in lane_rows
+    ]
+
+    try:
+        specialist_rows = conn.execute(
+            """
+            SELECT
+              spec.role_title AS role_title,
+              spec.capsule_version AS capsule_version,
+              spec.captain_count AS captain_count,
+              spec.last_enriched_at AS last_enriched_at,
+              COUNT(src.source_uid) AS source_count
+            FROM academy_corpus_specialists spec
+            LEFT JOIN academy_specialist_sources link
+              ON link.specialist_uid = spec.specialist_uid
+            LEFT JOIN academy_sources src
+              ON src.source_uid = link.source_uid
+             AND src.share_scope = 'redacted_public'
+             AND src.status IN ('active', 'stale', 'superseded')
+            WHERE spec.share_scope = 'redacted_public'
+              AND spec.status = 'active'
+            GROUP BY spec.specialist_uid
+            ORDER BY spec.last_enriched_at DESC, spec.updated_at DESC
+            LIMIT 3
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        specialist_rows = []
+    specialists = [
+        {
+            "role_title": str(row["role_title"] or "Hermes Specialist"),
+            "source_count": int(row["source_count"] or 0),
+            "capsule_version": int(row["capsule_version"] or 0),
+            "captain_count": int(row["captain_count"] or 0),
+            "last_enriched_at": str(row["last_enriched_at"] or ""),
+        }
+        for row in specialist_rows
+    ]
+
+    try:
+        status_rows = conn.execute(
+            f"""
+            SELECT status, COUNT(*) AS count
+            FROM academy_source_crawl_observations
+            WHERE observed_at >= ?
+              AND {public_observation_scope}
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+            """,
+            (since,),
+        ).fetchall()
+    except sqlite3.Error:
+        status_rows = []
+    observation_statuses = {str(row["status"] or "unknown"): int(row["count"] or 0) for row in status_rows}
+
+    try:
+        latest = conn.execute(
+            f"""
+            SELECT observed_at, status
+            FROM academy_source_crawl_observations
+            WHERE observed_at != ''
+              AND {public_observation_scope}
+            ORDER BY observed_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.Error:
+        latest = None
+
+    latest_observation = None
+    if latest is not None:
+        latest_observation = {
+            "observed_at": str(latest["observed_at"] or ""),
+            "status": str(latest["status"] or ""),
+        }
+
+    return _json_response(200, {
+        "generated_at": utc_now_iso(),
+        "cadence": {
+            "weekly_crawl_days": 7,
+            "label": "fully autonomous live web crawl every week",
+            "source_scope": "approved public sources only",
+        },
+        "stats": {
+            "active_public_sources": active_sources,
+            "active_public_specialists": active_specialists,
+            "weekly_observations": weekly_observations,
+            "review_queue_events": review_queue_events,
+            "subscribed_trainees": subscribed_trainees,
+        },
+        "lanes": lanes,
+        "specialists": specialists,
+        "observation_statuses": observation_statuses,
+        "latest_observation": latest_observation,
+        "privacy": {
+            "digest_only": True,
+            "raw_pages_stored": 0,
+            "captain_private_context_excluded": True,
+            "unreviewed_canon_allowed": False,
+        },
     }, request_id=request_id)
 
 
@@ -2613,6 +2941,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "503": {"description": "Stripe checkout unavailable"},
         },
     },
+    "public_academy_observatory": {
+        "summary": "Read public aggregate Academy training telemetry",
+        "tags": ["academy"],
+        "responses": {"200": {"description": "Aggregate public Academy Observatory telemetry"}},
+    },
     "stripe_webhook": {
         "summary": "Stripe webhook receiver",
         "tags": ["webhooks"],
@@ -2843,6 +3176,19 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
         }, required=["user_id", "role", "mission", "treatment", "preset", "capacity"]),
         "responses": {"200": {"description": "Crew Recipe applied on behalf"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
+    "user_academy_specialist_adopt": {
+        "summary": "Adopt a redacted public Academy specialist into the Captain's Crew",
+        "tags": ["user", "academy"],
+        "requestBody": _openapi_json_body({
+            "specialist_uid": {"type": "string"},
+            "name": {"type": "string"},
+        }, required=["specialist_uid"]),
+        "responses": {
+            "200": {"description": "Public specialist adopted as a Captain-owned Trainee"},
+            "400": {"description": "No ArcPod or specialist is not public/adoptable"},
+            "401": {"description": "Unauthorized or missing CSRF"},
+        },
+    },
     "user_share_grants": {
         "summary": "Read share approvals and recipient acceptance waits for the authenticated user",
         "tags": ["user"],
@@ -2999,8 +3345,12 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "target_id": {"type": "string"},
             "reason": {"type": "string"},
             "idempotency_key": {"type": "string"},
+            "confirm": {
+                "type": "boolean",
+                "description": "Must be true after the admin/operator explicitly confirms the modeled action.",
+            },
             "metadata": {"type": "object"},
-        }, required=["action_type", "target_kind", "target_id"]),
+        }, required=["action_type", "target_kind", "target_id", "reason", "idempotency_key", "confirm"]),
         "responses": {"202": {"description": "Action queued"}, "401": {"description": "Unauthorized or missing CSRF"}},
     },
     "admin_reconciliation": {
@@ -3198,6 +3548,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/onboarding/answer"): "public_onboarding_answer",
     ("POST", "/onboarding/checkout"): "public_onboarding_checkout",
     ("GET", "/onboarding/public-bot-checkout"): "public_bot_onboarding_checkout",
+    ("GET", "/academy/observatory"): "public_academy_observatory",
     ("POST", "/webhooks/stripe"): "stripe_webhook",
     ("POST", "/webhooks/telegram"): "telegram_webhook",
     ("POST", "/webhooks/discord"): "discord_webhook",
@@ -3229,6 +3580,7 @@ _ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/user/academy/mode-open"): "user_academy_mode_open",
     ("POST", "/user/academy/mode-end"): "user_academy_mode_end",
     ("POST", "/user/academy/adopt"): "user_academy_adopt",
+    ("POST", "/user/academy/adopt-specialist"): "user_academy_specialist_adopt",
     ("GET", "/user/share-grants"): "user_share_grants",
     ("POST", "/user/share-grants"): "user_share_grant_create",
     ("POST", "/user/share-grants/broker"): "user_share_grant_broker_create",
@@ -3271,6 +3623,7 @@ _PUBLIC_ROUTES = frozenset({
     "public_onboarding_answer",
     "public_onboarding_checkout",
     "public_bot_onboarding_checkout",
+    "public_academy_observatory",
     "onboarding_status",
     "onboarding_claim_session",
     "onboarding_cancel",
@@ -3335,6 +3688,7 @@ _JSON_OBJECT_ROUTES = frozenset({
     "user_academy_mode_open",
     "user_academy_mode_end",
     "user_academy_adopt",
+    "user_academy_specialist_adopt",
     "user_share_grant_create",
     "user_share_grant_broker_create",
     "user_share_grant_approve",
@@ -3447,6 +3801,8 @@ def route_arclink_hosted_api(
             result = _handle_public_onboarding_checkout(conn, parsed_body, request_id, cfg, stripe)
         elif route_key == "public_bot_onboarding_checkout":
             result = _handle_public_bot_onboarding_checkout_redirect(conn, clean_query, request_id, cfg, stripe)
+        elif route_key == "public_academy_observatory":
+            result = _handle_public_academy_observatory(conn, request_id)
         elif route_key == "stripe_webhook":
             result = _handle_stripe_webhook(conn, body, headers, request_id, cfg)
         elif route_key == "telegram_webhook":
@@ -3516,6 +3872,8 @@ def route_arclink_hosted_api(
             result = _handle_user_academy_mode_end(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_academy_adopt":
             result = _handle_user_academy_adopt(conn, headers, parsed_body, request_id, cfg)
+        elif route_key == "user_academy_specialist_adopt":
+            result = _handle_user_academy_specialist_adopt(conn, headers, parsed_body, request_id, cfg)
         elif route_key == "user_share_grants":
             result = _handle_user_share_grants_read(conn, headers, clean_query, request_id, cfg)
         elif route_key == "user_share_grant_create":
@@ -3561,7 +3919,7 @@ def route_arclink_hosted_api(
         elif route_key == "user_provider_state":
             result = _handle_provider_state(conn, headers, request_id, cfg, "user")
         elif route_key == "onboarding_status":
-            result = _handle_onboarding_status(conn, clean_query, request_id)
+            result = _handle_onboarding_status(conn, clean_query, headers, request_id)
         elif route_key == "onboarding_claim_session":
             result = _handle_onboarding_claim_session(conn, parsed_body, request_id, cfg)
         elif route_key == "onboarding_cancel":

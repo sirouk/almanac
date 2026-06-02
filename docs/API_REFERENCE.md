@@ -101,6 +101,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | POST | `/onboarding/answer` | Answer onboarding question |
 | POST | `/onboarding/checkout` | Open Stripe checkout |
 | GET | `/onboarding/public-bot-checkout` | Redirect a signed public-bot checkout button to Stripe |
+| GET | `/academy/observatory` | Read aggregate public Academy training telemetry for the landing-page Observatory; digest-only, no Captain private context, no raw pages |
 | GET | `/onboarding/status` | Read the current onboarding-session status (status, entitlement state, plan, checkout state, and any provisioned ArcPod access) for the browser checkout-return page |
 | POST | `/onboarding/claim-session` | Exchange a paid onboarding `session_id` plus browser `claim_token` for a user session; mints the user session cookies on `201` and is rate-limited under the `onboarding_claim` scope (public route, gated by the claim token rather than session CSRF) |
 | POST | `/onboarding/cancel` | Cancel an in-progress onboarding session; gated by `session_id` plus a browser `cancel_token` (public route) |
@@ -136,12 +137,13 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/user/crew-recipe` | Read the active Crew Recipe, prior archived recipe, and "what changed" summary |
 | POST | `/user/crew-recipe/preview` | Preview or regenerate a Crew Recipe without applying it (CSRF) |
 | POST | `/user/crew-recipe/apply` | Confirm Crew Training and apply the additive SOUL overlay (CSRF) |
-| GET | `/user/academy` | Read the Captain's Academy view: available Majors, enrolled Trainees, per-account quota, and graduate gallery |
+| GET | `/user/academy` | Read the Captain's Academy view: available Majors, enrolled Trainees, redacted public specialists, per-account quota, and graduate gallery |
 | GET | `/user/academy/mode-status` | Read sticky Academy Mode status for a Trainee (`trainee_id` query); reports whether a session is open |
 | POST | `/user/academy/enroll` | Enroll a Trainee into a Major (`program_id`, `name`, `depth`) within the per-account quota (CSRF) |
 | POST | `/user/academy/mode-open` | Open a sticky Academy Mode session for a Trainee (idempotent; one open session per Trainee) (CSRF) |
 | POST | `/user/academy/mode-end` | Close the open Academy Mode session, optionally graduating the Trainee; mode-end itself returns `mutation_performed=false` and writes no Agent files. The separate queued `academy_apply` action is the PG-HERMES-gated Agent write path; today it materializes the marker-bounded Academy SOUL section and a private apply receipt when authorized. (CSRF) |
 | POST | `/user/academy/adopt` | Adopt a redacted graduate card from the owner-scoped gallery into a new Trainee (`source_trainee_id`, `name`) (CSRF) |
+| POST | `/user/academy/adopt-specialist` | Adopt a redacted public Academy specialist into a Captain-owned Trainee (`specialist_uid`, `name`); private provenance and Captain steer stay hidden (CSRF) |
 | GET | `/user/share-grants` | Share approval inbox for the authenticated owner or recipient, including pending owner approval, recipient acceptance waits, and no-channel recovery state |
 | POST | `/user/share-grants` | Request a Drive/Code share grant (CSRF). Drive/Code folder shares default to read/write access in the recipient's Linked root. Same-account agent-to-agent shares require `owner_deployment_id` plus a different `recipient_deployment_id` and auto-accept into the target agent's Linked root. |
 | POST | `/user/share-grants/broker` | Internal Drive/Code Request Share broker route. Requires `X-ArcLink-Share-Request-Broker-Token`; derives the owner from the token-bound `owner_deployment_id` and does not accept browser session cookies as a substitute. With `share_mode="claim_nonce"` (the default for Drive/Code right-click Share) it mints a single-use, 12-hour ephemeral nonce instead of resolving a recipient up front, returning `{nonce, accept_command, copy_text, expires_at, expires_in_hours}`. |
@@ -169,7 +171,7 @@ health, and OpenAPI routes remain outside this CIDR gate.
 | GET | `/admin/audit` | Audit log (filters: deployment_id, since) |
 | GET | `/admin/events` | Event log (filters: deployment_id, since) |
 | GET | `/admin/actions` | Queued actions (filters: deployment_id, status, since) |
-| POST | `/admin/actions` | Queue admin action (CSRF) |
+| POST | `/admin/actions` | Queue admin action (CSRF, elevated admin auth, explicit `confirm=true`) |
 | POST | `/admin/crew-recipe/apply` | Apply Crew Training on a Captain's behalf with admin mutation auth, CIDR/CSRF protection, and audit logging |
 | GET | `/admin/reconciliation` | Reconciliation drift summary |
 | GET | `/admin/operator-snapshot` | Operator snapshot (host readiness, diagnostics, journey blockers, evidence status) |
@@ -243,7 +245,7 @@ The Next.js admin dashboard (`web/src/app/admin/page.tsx`) is wired to the hoste
 | audit | `/admin/audit` | GET |
 | events | `/admin/events` | GET |
 | actions (read) | `/admin/actions` | GET |
-| actions (queue) | `/admin/actions` | POST |
+| actions (queue, confirm required) | `/admin/actions` | POST |
 | crew training on behalf | `/admin/crew-recipe/apply` | POST |
 | provider | `/admin/provider-state` | GET |
 | reconciliation | `/admin/reconciliation` | GET |
@@ -321,13 +323,12 @@ The user dashboard (`web/src/app/dashboard/page.tsx`) consumes
 `/user/credentials`, `/user/credentials/acknowledge`, and
 `/user/linked-resources`. Its Crew Training tab consumes
 `/user/crew-recipe`, `/user/crew-recipe/preview`, and
-`/user/crew-recipe/apply`. The web API client also exposes
-`/user/share-grants/deny` and `/user/share-grants/revoke` for owner-scoped
-share closure flows. The hosted API and OpenAPI catalog define share create,
-approve, deny, accept, revoke, and linked-resource reads; the current Next.js
-dashboard intentionally wires only credential acknowledgement, linked-resource
-listing, and share status until full share creation, approval,
-acceptance, and revocation UI is built.
+`/user/crew-recipe/apply`. Its Academy tab consumes the user Academy routes for
+one-Agent-at-a-time enrollment, mode entry/exit, steering, reusable graduate
+search, and adoption. The share panel consumes linked-resource reads plus share
+grant approval, denial, acceptance, revocation, nonce revoke, and Raven prompt
+retry routes. Share creation remains a brokered Drive/Code plugin action; the
+dashboard owns Captain review and recovery controls.
 Same-account multi-agent shares use the same API surface but are deployment
 scoped: the source deployment provides Vault/Workspace, the target deployment
 receives a Linked projection, and no owner-notification approval loop

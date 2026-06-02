@@ -1377,6 +1377,72 @@ def _write_private_text_atomic(path: Path, body: str) -> bool:
     return True
 
 
+def _academy_safe_relative_path(value: Any, *, fallback: str) -> Path:
+    raw = str(value or fallback).strip() or fallback
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        raise ArcLinkActionWorkerError("Academy apply intent path must be relative")
+    parts = []
+    for part in candidate.parts:
+        clean = str(part or "").strip()
+        if clean in {"", ".", ".."}:
+            raise ArcLinkActionWorkerError("Academy apply intent path must stay inside the Academy vault folder")
+        parts.append(clean)
+    if not parts:
+        parts = [fallback]
+    return Path(*parts)
+
+
+def _academy_slug(value: Any, *, fallback: str = "academy-specialist") -> str:
+    clean = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value or "").strip())
+    clean = "-".join(part for part in clean.split("-") if part)
+    return clean[:80] or fallback
+
+
+def _academy_markdown_list(title: str, values: Any) -> str:
+    items = [str(item or "").strip() for item in (values or []) if str(item or "").strip()]
+    if not items:
+        return f"## {title}\n\n- None staged.\n"
+    return "## " + title + "\n\n" + "\n".join(f"- {item}" for item in items) + "\n"
+
+
+def _academy_vault_body(intent: Mapping[str, Any], *, payload: Mapping[str, Any], applied_at: str) -> str:
+    path = str(intent.get("path") or "")
+    name = Path(path).name.lower()
+    header = [
+        "# ArcLink Academy",
+        "",
+        f"- Applied: {applied_at}",
+        f"- Program: {payload.get('program_id') or 'unknown'}",
+        f"- Trainee: {payload.get('trainee_id') or 'unknown'}",
+        f"- Manifest: {payload.get('manifest_id') or 'unknown'}",
+        f"- Plan: {payload.get('plan_id') or 'unknown'}",
+        f"- Specialist: {payload.get('academy_specialist_uid') or 'unknown'}",
+        "",
+    ]
+    if name == "curriculum.md":
+        return "\n".join(header) + _academy_markdown_list("First Week Practice", payload.get("first_week_practice_tasks")) + "\n" + _academy_markdown_list("Evaluation", payload.get("evaluation_tasks"))
+    if name == "source_map.md":
+        return (
+            "\n".join(header)
+            + _academy_markdown_list("Proof Gates", payload.get("proof_gates"))
+            + "\n"
+            + f"## Source Count\n\n- {intent.get('source_count') or payload.get('intent_counts', {}).get('vault_file_intents') or 0}\n"
+        )
+    if str(intent.get("source_id") or "").strip():
+        return (
+            "\n".join(header)
+            + f"## Lesson Card\n\n- Source id: {str(intent.get('source_id') or '').strip()}\n"
+            + "- Retrieval posture: search and cite Academy/vault sources before specialist answers.\n"
+        )
+    return (
+        "\n".join(header)
+        + "## Canon\n\nThis folder contains the Captain-approved, Trainer-reviewed Academy specialist package for this Hermes Agent.\n"
+        + "\n"
+        + _academy_markdown_list("First Week Practice", payload.get("first_week_practice_tasks"))
+    )
+
+
 def _materialize_academy_apply(
     conn: sqlite3.Connection,
     *,
@@ -1404,24 +1470,91 @@ def _materialize_academy_apply(
     except FileNotFoundError:
         existing_soul = ""
     soul_changed = _write_private_text_atomic(soul_path, merge_academy_overlay(existing_soul, section))
+    applied_paths = ["SOUL.md"]
+    changed_any = bool(soul_changed)
+    vault_file_intents = [dict(item) for item in (payload.get("vault_file_intents") or []) if isinstance(item, Mapping)]
+    qmd_memory_seed_intents = [dict(item) for item in (payload.get("qmd_memory_seed_intents") or []) if isinstance(item, Mapping)]
+    approved_skill_intents = [dict(item) for item in (payload.get("approved_skill_intents") or []) if isinstance(item, Mapping)]
+    academy_base = _academy_slug(payload.get("program_id") or payload.get("academy_specialist_uid") or payload.get("trainee_id"))
+    vault = roots["vault"]
+    for index, intent in enumerate(vault_file_intents, start=1):
+        relative = _academy_safe_relative_path(intent.get("path"), fallback=f"Academy/{academy_base}/Intent_{index}.md")
+        path = vault / relative
+        changed = _write_private_text_atomic(path, _academy_vault_body(intent, payload=payload, applied_at=applied_at))
+        changed_any = changed_any or changed
+        applied_paths.append(str(Path("vault") / relative))
+    if qmd_memory_seed_intents:
+        memory_relative = Path("Academy") / academy_base / "Memory_Seeds.md"
+        memory_body = (
+            "# ArcLink Academy Memory Seeds\n\n"
+            + f"- Applied: {applied_at}\n"
+            + f"- Program: {payload.get('program_id') or 'unknown'}\n\n"
+            + "\n".join(
+                f"- {str(item.get('lesson_card_id') or item.get('source_id') or 'seed').strip()}: {str(item.get('text') or item.get('note') or '').strip()}"
+                for item in qmd_memory_seed_intents
+            )
+            + "\n"
+        )
+        changed = _write_private_text_atomic(vault / memory_relative, memory_body)
+        changed_any = changed_any or changed
+        applied_paths.append(str(Path("vault") / memory_relative))
+    if approved_skill_intents:
+        skills_relative = Path("Academy") / academy_base / "Approved_Skills.md"
+        skills_body = (
+            "# ArcLink Academy Approved Skills\n\n"
+            + f"- Applied: {applied_at}\n"
+            + f"- Program: {payload.get('program_id') or 'unknown'}\n\n"
+            + "\n".join(
+                f"- {str(item.get('skill_id') or item.get('source_id') or 'skill').strip()} ({str(item.get('review_status') or 'reviewed').strip()})"
+                for item in approved_skill_intents
+            )
+            + "\n"
+        )
+        changed = _write_private_text_atomic(vault / skills_relative, skills_body)
+        changed_any = changed_any or changed
+        applied_paths.append(str(Path("vault") / skills_relative))
+    state_payload = {
+        "applied_at": applied_at,
+        "deployment_id": deployment_id,
+        "trainee_id": str(payload.get("trainee_id") or ""),
+        "program_id": str(payload.get("program_id") or ""),
+        "manifest_id": str(payload.get("manifest_id") or ""),
+        "plan_id": str(payload.get("plan_id") or ""),
+        "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
+        "academy_capsule_version": int(payload.get("academy_capsule_version") or 0),
+        "academy_trainer_review_ready": bool(payload.get("academy_trainer_review_ready")),
+        "academy_trainer_reviewed_at": str(payload.get("academy_trainer_reviewed_at") or ""),
+        "academy_trainer_live_status": str(payload.get("academy_trainer_live_status") or ""),
+        "intent_counts": dict(payload.get("intent_counts") or {}),
+        "vault_file_intents": vault_file_intents,
+        "qmd_memory_seed_intents": qmd_memory_seed_intents,
+        "approved_skill_intents": approved_skill_intents,
+        "first_week_practice_tasks": list(payload.get("first_week_practice_tasks") or []),
+        "evaluation_tasks": list(payload.get("evaluation_tasks") or []),
+        "applied_paths": applied_paths,
+    }
     state_body = json.dumps(
-        {
-            "applied_at": applied_at,
-            "deployment_id": deployment_id,
-            "trainee_id": str(payload.get("trainee_id") or ""),
-            "program_id": str(payload.get("program_id") or ""),
-            "manifest_id": str(payload.get("manifest_id") or ""),
-            "plan_id": str(payload.get("plan_id") or ""),
-            "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
-            "academy_capsule_version": int(payload.get("academy_capsule_version") or 0),
-            "academy_trainer_review_ready": bool(payload.get("academy_trainer_review_ready")),
-            "academy_trainer_reviewed_at": str(payload.get("academy_trainer_reviewed_at") or ""),
-            "academy_trainer_live_status": str(payload.get("academy_trainer_live_status") or ""),
-        },
+        state_payload,
         indent=2,
         sort_keys=True,
     ) + "\n"
     state_changed = _write_private_text_atomic(hermes_home / "state" / "arclink-academy-apply.json", state_body)
+    changed_any = changed_any or state_changed
+    applied_paths.append("state/arclink-academy-apply.json")
+    if qmd_memory_seed_intents:
+        seeds_changed = _write_private_text_atomic(
+            hermes_home / "state" / "arclink-academy-memory-seeds.json",
+            json.dumps(qmd_memory_seed_intents, indent=2, sort_keys=True) + "\n",
+        )
+        changed_any = changed_any or seeds_changed
+        applied_paths.append("state/arclink-academy-memory-seeds.json")
+    if approved_skill_intents:
+        skills_changed = _write_private_text_atomic(
+            hermes_home / "state" / "arclink-academy-approved-skills.json",
+            json.dumps(approved_skill_intents, indent=2, sort_keys=True) + "\n",
+        )
+        changed_any = changed_any or skills_changed
+        applied_paths.append("state/arclink-academy-approved-skills.json")
     conn.execute(
         """
         UPDATE academy_specialist_subscriptions
@@ -1436,8 +1569,8 @@ def _materialize_academy_apply(
             "note": "PG-HERMES authorized: Academy specialist SOUL section was materialized into the deployment Hermes home.",
             "mutation_performed": True,
             "workspace_mutation_performed": False,
-            "filesystem_mutation_performed": bool(soul_changed or state_changed),
-            "applied_paths": ["SOUL.md", "state/arclink-academy-apply.json"],
+            "filesystem_mutation_performed": bool(changed_any),
+            "applied_paths": applied_paths,
         }
     )
     return payload

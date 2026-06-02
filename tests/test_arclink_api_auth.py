@@ -394,6 +394,7 @@ def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> No
         target_id=prepared["deployment_id"],
         reason="restart through api auth test",
         idempotency_key="api-auth-restart-1",
+        confirm=True,
     )
     expect(queued.status == 202 and queued.payload["action"]["status"] == "queued", str(queued))
     rendered = json.dumps(verified_admin, sort_keys=True) + json.dumps(queued.payload, sort_keys=True)
@@ -428,6 +429,7 @@ def test_admin_action_api_rate_limits_by_admin_and_target() -> None:
             target_id=prepared["deployment_id"],
             reason=f"rate limit test {index}",
             idempotency_key=f"rate-{index}",
+            confirm=True,
         )
         expect(response.status == 202, str(response))
     try:
@@ -441,6 +443,7 @@ def test_admin_action_api_rate_limits_by_admin_and_target() -> None:
             target_id=prepared["deployment_id"],
             reason="rate limit overflow",
             idempotency_key="rate-overflow",
+            confirm=True,
         )
     except api.ArcLinkRateLimitError as exc:
         expect("rate limit exceeded" in str(exc), str(exc))

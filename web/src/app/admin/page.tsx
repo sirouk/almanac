@@ -1371,6 +1371,7 @@ function QueueActionForm({ readiness, onQueued }: { readiness?: AdminActionReadi
         target_id: targetId,
         reason,
         idempotency_key: `web-${Date.now()}`,
+        confirm: true,
       });
       if (res.status === 202) {
         setResult("Action queued.");

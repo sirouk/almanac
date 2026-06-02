@@ -162,6 +162,7 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
             "target_id": prepared["deployment_id"],
             "reason": "restart from product surface contract test",
             "idempotency_key": "surface-action-form-1",
+            "confirm": "confirm",
         },
     )
     expect(form_action.status == 303, str(form_action))
@@ -178,6 +179,7 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
             "target_id": prepared["deployment_id"],
             "reason": "restart from product surface contract test",
             "idempotency_key": "surface-action-api-1",
+            "confirm": "confirm",
         },
     )
     expect(api_action.status == 202, api_action.body)

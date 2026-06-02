@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { api } from "@/lib/api";
 import Footer from "@/components/marketing/footer";
 import Nav from "@/components/marketing/nav";
 import { ArrowRight, Check, Zap, Shield, ChevronDown, GitBranch, Activity, Search, Database, RefreshCw, Clock, ChevronUp, Bot, Globe, FileText } from "lucide-react";
@@ -206,6 +207,10 @@ const Hero = () => (
                 <DiscordIcon /> START WITH DISCORD
               </Link>
             </div>
+
+            <Link href="#academy-observatory" className="mb-6 inline-flex w-fit items-center gap-2 font-mono text-[11px] tracking-widest text-[#FB5005] transition-colors hover:text-[#ff8a55] md:hidden">
+              ACADEMY <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
 
             <SystemLogTicker />
           </div>
@@ -571,6 +576,288 @@ const Solution = () => {
         </div>
       </div>
     </section>
+  );
+};
+
+const academyStats = [
+  { value: '7D', label: 'Weekly crawl', note: 'approved public sources' },
+  { value: '4', label: 'Public lanes', note: 'web, docs, papers, repos' },
+  { value: '0', label: 'Raw pages', note: 'digest-only observations' },
+  { value: '2', label: 'Proof gates', note: 'PG-PROVIDER and PG-HERMES' },
+];
+
+const academyAgents = [
+  {
+    name: 'Research Analyst',
+    focus: 'papers, standards, benchmarks',
+    status: 'Critic review',
+    progress: 84,
+    color: '#2075FE',
+    lanes: ['web', 'papers', 'wiki'],
+  },
+  {
+    name: 'Systems Practice Engineer',
+    focus: 'repos, release playbooks, tests',
+    status: 'Capsule refresh',
+    progress: 71,
+    color: '#FB5005',
+    lanes: ['repos', 'docs', 'skills'],
+  },
+  {
+    name: 'Community Insight Specialist',
+    focus: 'field notes, recurring patterns',
+    status: 'Source sweep',
+    progress: 58,
+    color: '#1AC153',
+    lanes: ['web', 'forums', 'policy'],
+  },
+];
+
+const academyFlow = [
+  { icon: <Search size={15} />, label: 'Crawl', copy: 'Live web refresh' },
+  { icon: <Shield size={15} />, label: 'Critic', copy: 'Poisoning review' },
+  { icon: <Database size={15} />, label: 'Canon', copy: 'Deduplicated role memory' },
+  { icon: <RefreshCw size={15} />, label: 'Weekly', copy: 'Round-robin education' },
+];
+
+interface AcademyObservatoryPayload {
+  stats?: {
+    active_public_sources?: number;
+    active_public_specialists?: number;
+    weekly_observations?: number;
+    review_queue_events?: number;
+    subscribed_trainees?: number;
+  };
+  lanes?: Array<{
+    lane_id?: string;
+    source_count?: number;
+  }>;
+  specialists?: Array<{
+    role_title?: string;
+    source_count?: number;
+    capsule_version?: number;
+    captain_count?: number;
+    last_enriched_at?: string;
+  }>;
+  observation_statuses?: Record<string, number>;
+  latest_observation?: {
+    observed_at?: string;
+    status?: string;
+  } | null;
+  privacy?: {
+    digest_only?: boolean;
+    raw_pages_stored?: number;
+    captain_private_context_excluded?: boolean;
+    unreviewed_canon_allowed?: boolean;
+  };
+}
+
+const academyBoundedNumber = (value: unknown, max = 999_999) => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(max, Math.trunc(value)));
+};
+
+const academyFormatCount = (value: unknown, fallback: string) => {
+  const bounded = academyBoundedNumber(value);
+  if (bounded === null) return fallback;
+  return new Intl.NumberFormat('en-US', { notation: bounded >= 10_000 ? 'compact' : 'standard' }).format(bounded);
+};
+
+const academyProgressFromSpecialist = (specialist: NonNullable<AcademyObservatoryPayload['specialists']>[number], index: number) => {
+  const sources = academyBoundedNumber(specialist.source_count, 50) ?? 0;
+  const capsule = academyBoundedNumber(specialist.capsule_version, 20) ?? 0;
+  return Math.max(42, Math.min(96, 46 + sources * 4 + capsule * 3 + index * 2));
+};
+
+// --- Academy Observatory ---
+const AcademyObservatory = () => {
+  const [telemetry, setTelemetry] = useState<AcademyObservatoryPayload | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    api.publicAcademyObservatory()
+      .then((res) => {
+        if (mounted && res.status === 200) {
+          setTelemetry(res.data as AcademyObservatoryPayload);
+        }
+      })
+      .catch(() => {
+        if (mounted) setTelemetry(null);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const displayStats = [
+    academyStats[0],
+    {
+      value: academyFormatCount(telemetry?.stats?.active_public_sources, academyStats[1].value),
+      label: 'Public sources',
+      note: 'approved and deduplicated',
+    },
+    {
+      value: academyFormatCount(telemetry?.stats?.active_public_specialists, '3'),
+      label: 'Specialists',
+      note: 'public-lane graduates',
+    },
+    academyStats[3],
+  ];
+  const weeklyObservations = telemetry?.stats?.weekly_observations;
+  const reviewEvents = telemetry?.stats?.review_queue_events;
+  const displayAgents = telemetry?.specialists?.length
+    ? telemetry.specialists.slice(0, 3).map((specialist, index) => {
+        const sourceCount = academyBoundedNumber(specialist.source_count, 999) ?? 0;
+        const capsuleVersion = academyBoundedNumber(specialist.capsule_version, 999) ?? 0;
+        const captainCount = academyBoundedNumber(specialist.captain_count, 999) ?? 0;
+        const roleTitle = String(specialist.role_title || academyAgents[index]?.name || 'Hermes Specialist').trim();
+        return {
+          name: roleTitle,
+          focus: `${sourceCount} public sources, capsule v${capsuleVersion}, ${captainCount} Captain${captainCount === 1 ? '' : 's'}`,
+          status: specialist.last_enriched_at ? 'Capsule enriched' : 'Public graduate',
+          progress: academyProgressFromSpecialist(specialist, index),
+          color: academyAgents[index]?.color || '#2075FE',
+          lanes: [
+            telemetry.lanes?.[index]?.lane_id || 'public',
+            `${sourceCount} sources`,
+            `v${capsuleVersion}`,
+          ],
+        };
+      })
+    : academyAgents;
+  const latestStatus = telemetry?.latest_observation?.status
+    ? `latest ${telemetry.latest_observation.status}`
+    : 'no raw source pages';
+  const liveStatus = typeof weeklyObservations === 'number'
+    ? `${academyFormatCount(weeklyObservations, '0')} observations this week`
+    : 'autonomous weekly crawl';
+  const reviewLabel = typeof reviewEvents === 'number'
+    ? `${academyFormatCount(reviewEvents, '0')} critic events`
+    : 'critic armed';
+
+  return (
+  <section id="academy-observatory" data-testid="academy-observatory" className="bg-[#080808] py-24 lg:py-32 border-t border-white/5 relative overflow-hidden scroll-mt-24">
+    <div className="absolute inset-0 pointer-events-none opacity-70"
+      style={{backgroundImage: 'linear-gradient(rgba(32,117,254,0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(26,193,83,0.025) 1px, transparent 1px)', backgroundSize: '72px 72px'}} />
+    <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#2075FE]/40 to-transparent pointer-events-none" />
+    <div className="scan-line-hero" style={{animationDelay: '2.2s'}} />
+
+    <div className="max-w-7xl mx-auto px-6 lg:px-8 relative">
+      <div className="grid lg:grid-cols-[0.9fr_1.1fr] gap-12 lg:gap-16 items-start">
+        <div className="lg:pt-4">
+          <span className="text-[#2075FE] text-xs font-mono tracking-widest uppercase">Academy Observatory</span>
+          <h2 className="font-heading font-normal text-[#E7E6E6] text-4xl lg:text-5xl mt-4 mb-7 leading-tight">
+            Watch Hermes Agents<br />become specialists.
+          </h2>
+          <p className="text-[#E7E6E6]/55 font-body text-base leading-relaxed mb-5">
+            The Academy turns a Captain&apos;s goals into a living specialist profile: public sources are crawled, reviewed, compressed, and refreshed on a weekly cadence so the Hermes Agent keeps learning without leaking private strategy.
+          </p>
+          <p className="text-[#E7E6E6]/42 font-body text-sm leading-relaxed mb-8">
+            Visitors see the public training lane. Captains see the private plan, approvals, and graduation trail inside their own dashboard.
+          </p>
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            {[
+              'Captain private context excluded',
+              'LLM critic before canon',
+              'Dead sources can be retired',
+              'SOUL memory capsules stay replaceable',
+            ].map((rail, i) => (
+              <div key={i} className="flex items-center gap-3 rounded border border-white/7 bg-[#0F0F0E]/80 px-4 py-3">
+                <Check size={13} className="text-[#1AC153] flex-shrink-0" />
+                <span className="font-body text-[#E7E6E6]/55 text-xs leading-snug">{rail}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-white/8 bg-[#0F0F0E]/95 overflow-hidden shadow-[0_0_80px_rgba(32,117,254,0.08)]">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-white/8 px-5 py-4 bg-[#080808]/70">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded border border-[#2075FE]/30 bg-[#2075FE]/10 flex items-center justify-center">
+                <Activity size={17} className="text-[#2075FE]" />
+              </div>
+              <div>
+                <span className="font-mono text-[9px] text-[#2075FE]/70 tracking-widest uppercase">Public training wall</span>
+                <h3 className="font-heading font-semibold text-[#E7E6E6] text-sm mt-0.5">Academy live lane</h3>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 font-mono text-[9px] text-[#1AC153]/75 tracking-widest uppercase">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#1AC153] status-blink" />
+              {liveStatus}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-white/5">
+            {displayStats.map((stat) => (
+              <div key={stat.label} className="bg-[#0F0F0E] px-4 py-5 min-h-28">
+                <span className="font-heading font-bold text-[#E7E6E6] text-2xl leading-none">{stat.value}</span>
+                <span className="block font-mono text-[9px] text-[#FB5005]/70 tracking-widest uppercase mt-3">{stat.label}</span>
+                <span className="block font-body text-[11px] text-[#E7E6E6]/35 mt-2 leading-snug">{stat.note}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="p-5 lg:p-6">
+            <div className="flex items-center justify-between mb-4">
+              <span className="font-mono text-[10px] text-[#E7E6E6]/30 tracking-widest uppercase">Agent training now</span>
+              <span className="font-mono text-[10px] text-[#1AC153]/70 tracking-widest uppercase">{reviewLabel}</span>
+            </div>
+
+            <div className="space-y-3">
+              {displayAgents.map((agent) => (
+                <div key={agent.name} className="rounded-lg border border-white/7 bg-[#080808]/70 p-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Bot size={14} style={{color: agent.color}} className="flex-shrink-0" />
+                        <h4 className="font-heading font-semibold text-[#E7E6E6] text-sm leading-snug break-words" style={{overflowWrap: 'anywhere'}}>{agent.name}</h4>
+                      </div>
+                      <p className="font-body text-xs text-[#E7E6E6]/40 leading-relaxed">{agent.focus}</p>
+                    </div>
+                    <span className="w-fit max-w-full rounded border px-2.5 py-1 font-mono text-[9px] uppercase tracking-widest leading-relaxed"
+                      style={{borderColor: `${agent.color}45`, color: agent.color, backgroundColor: `${agent.color}12`}}>
+                      {agent.status}
+                    </span>
+                  </div>
+
+                  <div className="h-2 rounded-full bg-white/6 overflow-hidden mb-3">
+                    <div className="h-full rounded-full transition-all duration-700"
+                      style={{width: `${agent.progress}%`, background: `linear-gradient(90deg, ${agent.color}, rgba(231,230,230,0.45))`}} />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {agent.lanes.map((lane) => (
+                      <span key={lane} className="max-w-full rounded border border-white/8 bg-white/4 px-2 py-1 font-mono text-[9px] text-[#E7E6E6]/35 uppercase tracking-widest leading-relaxed break-words" style={{overflowWrap: 'anywhere'}}>
+                        {lane}
+                      </span>
+                    ))}
+                    <span className="ml-auto font-mono text-[10px] text-[#E7E6E6]/35">{agent.progress}%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid sm:grid-cols-4 gap-px bg-white/5 rounded-lg overflow-hidden mt-5">
+              {academyFlow.map((step) => (
+                <div key={step.label} className="bg-[#0F0F0E] p-4 min-h-28">
+                  <div className="text-[#FB5005] mb-3">{step.icon}</div>
+                  <span className="font-mono text-[9px] text-[#E7E6E6]/60 tracking-widest uppercase">{step.label}</span>
+                  <p className="font-body text-[11px] text-[#E7E6E6]/35 mt-2 leading-snug">{step.copy}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-5 rounded border border-[#1AC153]/20 bg-[#1AC153]/5 px-4 py-3">
+              <p className="font-body text-xs text-[#E7E6E6]/45 leading-relaxed">
+                Public Academy telemetry is digest-only: no Captain secrets, no raw private files, no unreviewed canon. {latestStatus}.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
   );
 };
 
@@ -1270,6 +1557,7 @@ export default function App() {
         <IntegrationsCarousel />
         <Problem />
         <Solution />
+        <AcademyObservatory />
         <HowItWorks />
         <Comparison />
         <Pricing />

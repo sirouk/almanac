@@ -21,6 +21,9 @@ export default function MarketingFooter() {
           <Link href="/terms" className="font-body text-xs text-[#E7E6E6]/25 transition-colors hover:text-[#E7E6E6]/50">
             Terms of Service
           </Link>
+          <Link href="/policy" className="font-body text-xs text-[#E7E6E6]/25 transition-colors hover:text-[#E7E6E6]/50">
+            Operating Policy
+          </Link>
           <Link href="/refunds" className="font-body text-xs text-[#E7E6E6]/25 transition-colors hover:text-[#E7E6E6]/50">
             Refund Policy
           </Link>

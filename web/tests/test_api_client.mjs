@@ -55,7 +55,12 @@ const api = {
   startOnboarding: (body) => request("/onboarding/start", { method: "POST", body: JSON.stringify(body) }),
   answerOnboarding: (body) => request("/onboarding/answer", { method: "POST", body: JSON.stringify(body) }),
   openCheckout: (body) => request("/onboarding/checkout", { method: "POST", body: JSON.stringify(body) }),
-  checkoutStatus: (sessionId) => request(`/onboarding/status?session_id=${encodeURIComponent(sessionId)}`),
+  publicAcademyObservatory: () => request("/academy/observatory"),
+  checkoutStatus: (sessionId, claimToken = "") => {
+    const params = new URLSearchParams({ session_id: sessionId });
+    if (claimToken) params.set("claim_token", claimToken);
+    return request(`/onboarding/status?${params.toString()}`);
+  },
   claimSession: (sessionId, claimToken) => request("/onboarding/claim-session", { method: "POST", body: JSON.stringify({ session_id: sessionId, claim_token: claimToken }) }),
   cancelOnboarding: (sessionId, cancelToken) => request("/onboarding/cancel", { method: "POST", body: JSON.stringify({ session_id: sessionId, cancel_token: cancelToken }) }),
   userDashboard: () => request("/user/dashboard", {}, "user"),
@@ -75,6 +80,7 @@ const api = {
   openAcademyMode: (body) => request("/user/academy/mode-open", { method: "POST", body: JSON.stringify(body) }, "user"),
   endAcademyMode: (body) => request("/user/academy/mode-end", { method: "POST", body: JSON.stringify(body) }, "user"),
   adoptAcademyGraduate: (body) => request("/user/academy/adopt", { method: "POST", body: JSON.stringify(body) }, "user"),
+  adoptAcademySpecialist: (body) => request("/user/academy/adopt-specialist", { method: "POST", body: JSON.stringify(body) }, "user"),
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
   userShareGrants: () => request("/user/share-grants", {}, "user"),
   createShareGrant: (body) => request("/user/share-grants", { method: "POST", body: JSON.stringify(body) }, "user"),
@@ -130,9 +136,15 @@ describe("API client route construction", () => {
     assert.ok(lastFetchUrl.endsWith("/onboarding/checkout"));
   });
 
-  it("checkoutStatus GETs /onboarding/status with session_id", async () => {
-    await api.checkoutStatus("s1");
-    assert.ok(lastFetchUrl.endsWith("/onboarding/status?session_id=s1"));
+  it("publicAcademyObservatory GETs /academy/observatory", async () => {
+    await api.publicAcademyObservatory();
+    assert.ok(lastFetchUrl.endsWith("/academy/observatory"));
+    assert.equal(lastFetchOpts.method, undefined);
+  });
+
+  it("checkoutStatus GETs /onboarding/status with session_id and optional proof", async () => {
+    await api.checkoutStatus("s1", "claim_1");
+    assert.ok(lastFetchUrl.endsWith("/onboarding/status?session_id=s1&claim_token=claim_1"));
   });
 
   it("claimSession POSTs to /onboarding/claim-session", async () => {
@@ -228,6 +240,8 @@ describe("API client route construction", () => {
     assert.equal(JSON.parse(lastFetchOpts.body).graduate, true);
     await api.adoptAcademyGraduate({ source_trainee_id: "atrn_1" });
     assert.ok(lastFetchUrl.endsWith("/user/academy/adopt"));
+    await api.adoptAcademySpecialist({ specialist_uid: "aspec_1" });
+    assert.ok(lastFetchUrl.endsWith("/user/academy/adopt-specialist"));
   });
 
   it("userLinkedResources GETs /user/linked-resources", async () => {

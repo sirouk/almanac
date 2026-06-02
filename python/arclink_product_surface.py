@@ -140,6 +140,10 @@ def _param(params: Mapping[str, Any], key: str, default: str = "") -> str:
     return str(value or default).strip()
 
 
+def _surface_truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on", "confirm"}
+
+
 def _rows(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(sql, args).fetchall()]
 
@@ -610,6 +614,7 @@ def _admin_dashboard(conn: sqlite3.Connection, *, params: Mapping[str, Any] | No
     <div><label>Target Kind</label><input name="target_kind" value="deployment"></div>
     <div><label>Target ID</label><input name="target_id" value="{escape(target_id)}"></div>
     <div><label>Reason</label><textarea name="reason">local operator requested no-secret test action</textarea></div>
+    <label><input type="checkbox" name="confirm" value="confirm" required> Confirm this modeled action should be queued.</label>
     <button type="submit">Queue Action &gt;</button>
   </form>
 </section>"""
@@ -718,6 +723,7 @@ def handle_arclink_product_surface_request(
                 reason=_param(merged, "reason"),
                 idempotency_key=_param(merged, "idempotency_key")
                 or f"surface:{_param(merged, 'session_id')}:{_param(merged, 'action_type')}:{_param(merged, 'target_id')}",
+                confirm=_surface_truthy(_param(merged, "confirm")),
                 metadata={"surface": "local_admin"},
             )
             action = result.payload["action"]
@@ -739,6 +745,7 @@ def handle_arclink_product_surface_request(
                 target_id=_param(merged, "target_id"),
                 reason=_param(merged, "reason"),
                 idempotency_key=_param(merged, "idempotency_key"),
+                confirm=_surface_truthy(_param(merged, "confirm")),
                 metadata={"surface": "api"},
             )
             return _json_response(result.payload, status=202)

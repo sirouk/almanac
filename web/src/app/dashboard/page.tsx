@@ -426,10 +426,23 @@ interface AcademyTrainee {
   source_lanes?: string[];
 }
 
+interface AcademySpecialist {
+  specialist_uid?: string;
+  program_id?: string;
+  role_title?: string;
+  topic_fingerprint?: string;
+  source_count?: number;
+  source_lane_counts?: Record<string, number>;
+  capsule_version?: number;
+  captain_count?: number;
+  last_enriched_at?: string;
+}
+
 interface AcademyState {
   majors?: AcademyMajor[];
   graduates?: AcademyTrainee[];
   trainees?: AcademyTrainee[];
+  central_specialists?: AcademySpecialist[];
 }
 
 type Tab = "overview" | "crew" | "academy" | "billing" | "provisioning" | "services" | "vault" | "wrapped" | "comms" | "bots" | "model" | "memory" | "security" | "support";
@@ -870,6 +883,25 @@ export default function DashboardPage() {
       await refreshAcademy();
     } catch {
       setAcademyError("Could not adopt this graduate.");
+    } finally {
+      setAcademyBusy("");
+    }
+  }
+
+  async function handleAcademySpecialistAdopt(specialistUid: string) {
+    setAcademyError("");
+    setAcademyNotice("");
+    setAcademyBusy(`adopt-specialist:${specialistUid}`);
+    try {
+      const result = await api.adoptAcademySpecialist({ specialist_uid: specialistUid });
+      if (result.status !== 200) {
+        setAcademyError("Could not adopt this public specialist. Make sure you have an active ArcPod.");
+        return;
+      }
+      setAcademyNotice("Adopted public Academy specialist into a Captain-owned Trainee for your Crew.");
+      await refreshAcademy();
+    } catch {
+      setAcademyError("Could not adopt this public specialist.");
     } finally {
       setAcademyBusy("");
     }
@@ -1424,6 +1456,41 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+
+              <div className="border border-border bg-surface/80 p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-soft-white/40">Public Academy Specialists</p>
+                <p className="mt-1 text-xs text-soft-white/40">Adopt redacted public-lane specialists from the shared Academy corpus. Private Captain steer and contributor identity stay out of this gallery.</p>
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  {(academy?.central_specialists || []).length === 0 && (
+                    <p className="text-sm text-soft-white/45">No public Academy specialists are ready yet.</p>
+                  )}
+                  {(academy?.central_specialists || []).map((specialist) => {
+                    const laneCounts = specialist.source_lane_counts || {};
+                    const lanes = Object.entries(laneCounts)
+                      .map(([lane, count]) => `${lane} ${count}`)
+                      .slice(0, 4)
+                      .join(" · ");
+                    return (
+                      <div key={specialist.specialist_uid} className="space-y-2 border border-border/60 bg-carbon/40 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="min-w-0 break-words text-sm font-semibold text-soft-white">{specialist.role_title || "Academy Specialist"}</span>
+                          <span className="text-xs text-soft-white/40">v{specialist.capsule_version ?? 0}</span>
+                        </div>
+                        <p className="break-words text-xs text-soft-white/35">{specialist.program_id || specialist.topic_fingerprint || "public specialist"}</p>
+                        <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-wide text-soft-white/35">
+                          <span>{specialist.source_count ?? 0} source(s)</span>
+                          <span>{specialist.captain_count ?? 0} Captain(s)</span>
+                          {specialist.last_enriched_at ? <span>{formatDate(specialist.last_enriched_at)}</span> : null}
+                        </div>
+                        {lanes ? <p className="break-words text-xs text-soft-white/35">Lanes: {lanes}</p> : null}
+                        <button type="button" disabled={!!academyBusy} onClick={() => handleAcademySpecialistAdopt(specialist.specialist_uid || "")} className="rounded border border-signal-orange/50 px-3 py-1.5 text-xs font-semibold text-signal-orange transition hover:bg-signal-orange hover:text-jet disabled:opacity-50">
+                          {academyBusy === `adopt-specialist:${specialist.specialist_uid}` ? "Adopting..." : "Adopt specialist"}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

@@ -178,6 +178,80 @@ const MOCK_USER_ACADEMY = {
   ],
   trainees: [],
   graduates: [],
+  central_specialists: [
+    {
+      specialist_uid: "aspec_public_001",
+      program_id: "academy_founder_operator",
+      role_title: "Founder Operator",
+      topic_fingerprint: "founder_operator",
+      source_count: 7,
+      source_lane_counts: { web_article: 3, github_repository: 2, scholarly_standard: 2 },
+      capsule_version: 4,
+      captain_count: 3,
+      last_enriched_at: "2026-06-01T12:00:00Z",
+    },
+  ],
+};
+
+const MOCK_PUBLIC_ACADEMY_OBSERVATORY = {
+  generated_at: "2026-06-02T14:00:00Z",
+  cadence: {
+    weekly_crawl_days: 7,
+    label: "fully autonomous live web crawl every week",
+    source_scope: "approved public sources only",
+  },
+  stats: {
+    active_public_sources: 128,
+    active_public_specialists: 17,
+    weekly_observations: 314,
+    review_queue_events: 7,
+    subscribed_trainees: 42,
+  },
+  lanes: [
+    { lane_id: "papers", source_count: 54 },
+    { lane_id: "docs", source_count: 43 },
+    { lane_id: "repos", source_count: 31 },
+    { lane_id: "standards", source_count: 19 },
+  ],
+  specialists: [
+    {
+      role_title: "Research Analyst for Autonomous Weekly Public-Source Intelligence",
+      source_count: 27,
+      capsule_version: 8,
+      captain_count: 12,
+      last_enriched_at: "2026-06-02T13:45:00Z",
+    },
+    {
+      role_title: "Systems Practice Engineer",
+      source_count: 19,
+      capsule_version: 6,
+      captain_count: 9,
+      last_enriched_at: "2026-06-02T12:30:00Z",
+    },
+    {
+      role_title: "Community Insight Specialist",
+      source_count: 12,
+      capsule_version: 4,
+      captain_count: 5,
+      last_enriched_at: "2026-06-01T23:20:00Z",
+    },
+  ],
+  observation_statuses: {
+    observed: 221,
+    unchanged: 86,
+    changed: 5,
+    blocked: 2,
+  },
+  latest_observation: {
+    observed_at: "2026-06-02T13:55:00Z",
+    status: "changed",
+  },
+  privacy: {
+    digest_only: true,
+    raw_pages_stored: 0,
+    captain_private_context_excluded: true,
+    unreviewed_canon_allowed: false,
+  },
 };
 
 const MOCK_USER_PROVIDER_STATE = {
@@ -370,6 +444,9 @@ async function mockApi(
     if (url.includes("/user/academy")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_ACADEMY) });
     }
+    if (url.includes("/academy/observatory")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_PUBLIC_ACADEMY_OBSERVATORY) });
+    }
     if (url.includes("/user/provider-state")) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_USER_PROVIDER_STATE) });
     }
@@ -521,9 +598,32 @@ test.describe("Brand system", () => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: /Raven runs your operations/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Hire Raven, an agent/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Watch Hermes Agents/i })).toBeVisible();
+    await expect(page.getByRole("link", { name: "ACADEMY" })).toBeVisible();
     await expect(page.getByRole("heading", { name: /From idea to operating/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /One agent. Clear price./i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Questions answered./i })).toBeVisible();
+  });
+
+  test("Academy Observatory renders bounded mock telemetry responsively", async ({ page }, testInfo) => {
+    await mockApi(page);
+    await page.goto("/");
+    const observatory = page.getByTestId("academy-observatory");
+    await observatory.scrollIntoViewIfNeeded();
+    await expect(page.getByText("314 observations this week")).toBeVisible();
+    await expect(page.getByText("7 critic events")).toBeVisible();
+    await expect(page.getByText("128")).toBeVisible();
+    await expect(page.getByText("Research Analyst for Autonomous Weekly Public-Source Intelligence")).toBeVisible();
+    await expect(page.getByText("27 public sources, capsule v8, 12 Captains")).toBeVisible();
+    await expect(page.getByText("latest changed")).toBeVisible();
+    await expect(observatory).not.toContainText("raw private files, unreviewed canon allowed");
+    const noOverflow = await observatory.evaluate((el) => el.scrollWidth <= el.clientWidth + 2);
+    expect(noOverflow).toBe(true);
+    await observatory.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      window.scrollTo({ top: window.scrollY + rect.top - 88, behavior: "auto" });
+    });
+    await page.screenshot({ path: testInfo.outputPath(`academy-observatory-${testInfo.project.name}.png`), fullPage: false });
   });
 });
 

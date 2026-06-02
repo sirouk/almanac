@@ -122,7 +122,7 @@ function CheckoutSuccessContent() {
 
     const timer = setTimeout(async () => {
       try {
-        const res = await api.checkoutStatus(sessionId);
+        const res = await api.checkoutStatus(sessionId, claimToken);
         if (res.status === 200) {
           const data = res.data as CheckoutStatusData;
           if (data.display_name) setDisplayName(data.display_name);
@@ -169,7 +169,7 @@ function CheckoutSuccessContent() {
     }, pollCount === 0 ? 500 : POLL_INTERVAL_MS);
 
     return () => clearTimeout(timer);
-  }, [sessionId, deploymentReady, pollCount, claimSession]);
+  }, [sessionId, claimToken, deploymentReady, pollCount, claimSession]);
 
   useEffect(() => {
     if (status === "paid") claimSession();
@@ -225,7 +225,7 @@ function CheckoutSuccessContent() {
             )}
             {deploymentReady && (
               <p className="mt-2 text-sm text-neon-green">
-                Use the dashboard username and password Raven gives you in chat. The same sign-in opens each Hermes Agent Dashboard in this Crew.
+                {channelLabel ? "Use the dashboard username and password Raven gives you in chat. The same sign-in opens each Hermes Agent Dashboard in this Crew." : sessionClaimed ? "Use Account Dashboard for ready links and the Hermes Agent Dashboard credential handoff. The same sign-in opens each Hermes Agent Dashboard in this Crew." : "Sign in from Account Dashboard for ready links and the Hermes Agent Dashboard credential handoff."}
               </p>
             )}
             {sessionClaimed && (
@@ -239,7 +239,7 @@ function CheckoutSuccessContent() {
         {timedOut && (
           <div className="mt-4">
             <p className="text-sm text-soft-white/65">
-              {confirmed ? "Provisioning is taking longer than expected. Raven will keep reporting in chat." : "Payment confirmation is taking longer than expected. This is normal - Stripe webhooks can take a few minutes."}
+              {confirmed ? (channelLabel ? "Provisioning is taking longer than expected. Raven will keep reporting in chat." : "Provisioning is taking longer than expected. Your Account Dashboard will keep showing current status.") : "Payment confirmation is taking longer than expected. This is normal - Stripe webhooks can take a few minutes."}
             </p>
             <p className="mt-2 text-sm text-soft-white/65">
               You can safely close this page. If you began in Telegram or Discord, return to Raven there; otherwise check your dashboard for status updates.

@@ -50,8 +50,13 @@ export const api = {
   openCheckout: (body: Record<string, string>) =>
     request("/onboarding/checkout", { method: "POST", body: JSON.stringify(body) }),
 
-  checkoutStatus: (sessionId: string) =>
-    request(`/onboarding/status?session_id=${encodeURIComponent(sessionId)}`),
+  publicAcademyObservatory: () => request("/academy/observatory"),
+
+  checkoutStatus: (sessionId: string, claimToken = "") => {
+    const params = new URLSearchParams({ session_id: sessionId });
+    if (claimToken) params.set("claim_token", claimToken);
+    return request(`/onboarding/status?${params.toString()}`);
+  },
 
   claimSession: (sessionId: string, claimToken: string) =>
     request("/onboarding/claim-session", { method: "POST", body: JSON.stringify({ session_id: sessionId, claim_token: claimToken }) }),
@@ -111,6 +116,9 @@ export const api = {
   adoptAcademyGraduate: (body: Record<string, string>) =>
     request("/user/academy/adopt", { method: "POST", body: JSON.stringify(body) }, "user"),
 
+  adoptAcademySpecialist: (body: Record<string, string>) =>
+    request("/user/academy/adopt-specialist", { method: "POST", body: JSON.stringify(body) }, "user"),
+
   userLinkedResources: () => request("/user/linked-resources", {}, "user"),
 
   userShareGrants: () => request("/user/share-grants", {}, "user"),
@@ -154,7 +162,7 @@ export const api = {
 
   adminActions: () => request("/admin/actions", {}, "admin"),
 
-  queueAdminAction: (body: Record<string, string>) =>
+  queueAdminAction: (body: Record<string, unknown>) =>
     request("/admin/actions", { method: "POST", body: JSON.stringify(body) }, "admin"),
 
   adminApplyCrewRecipe: (body: Record<string, string>) =>

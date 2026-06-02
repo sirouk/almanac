@@ -21,6 +21,10 @@ describe("Page files exist and export default", () => {
     { path: "src/app/checkout/cancel/page.tsx", name: "Checkout Cancel" },
     { path: "src/app/dashboard/page.tsx", name: "Dashboard" },
     { path: "src/app/admin/page.tsx", name: "Admin" },
+    { path: "src/app/privacy/page.tsx", name: "Privacy" },
+    { path: "src/app/terms/page.tsx", name: "Terms" },
+    { path: "src/app/refunds/page.tsx", name: "Refunds" },
+    { path: "src/app/policy/page.tsx", name: "Operating Policy" },
   ];
 
   for (const page of pages) {
@@ -49,6 +53,44 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("ARCLINK") || content.includes("ArcLink"), "missing brand");
     assert.ok(content.includes("/onboarding"), "missing onboarding link");
     assert.ok(content.includes("#FB5005"), "missing brand color");
+  });
+
+  it("Landing page displays the public Academy Observatory", () => {
+    const content = readFileSync(resolve(ROOT, "src/components/marketing/marketing-home.tsx"), "utf-8");
+    for (const expected of [
+      "Academy Observatory",
+      "Watch Hermes Agents",
+      "autonomous weekly crawl",
+      "digest-only",
+      "PG-PROVIDER and PG-HERMES",
+      "Captain private context excluded",
+      "LLM critic before canon",
+      "SOUL memory capsules stay replaceable",
+      "api.publicAcademyObservatory",
+    ]) {
+      assert.ok(content.includes(expected), `Academy Observatory missing: ${expected}`);
+    }
+  });
+
+  it("Footer links the concise operating policy", () => {
+    const content = readFileSync(resolve(ROOT, "src/components/marketing/footer.tsx"), "utf-8");
+    assert.ok(content.includes("/policy"), "footer missing operating policy link");
+    assert.ok(content.includes("Operating Policy"), "footer missing operating policy label");
+  });
+
+  it("Operating policy covers security, Academy crawling, sessions, and read/write shares", () => {
+    const content = readFileSync(resolve(ROOT, "src/app/policy/page.tsx"), "utf-8");
+    for (const expected of [
+      "Public Academy lanes",
+      "Academy continuing education can crawl approved public source URLs on a weekly cadence",
+      "CSRF",
+      "confirm=true",
+      "signed expiring session or SSO cookies",
+      "read/write access by default",
+      "cannot be reshared",
+    ]) {
+      assert.ok(content.includes(expected), `policy missing: ${expected}`);
+    }
   });
 
   it("Login page uses unified role-resolving sign in", () => {
@@ -145,10 +187,12 @@ describe("Page content smoke checks", () => {
     assert.ok(content.includes("ArcLink Academy"), "missing ArcLink Academy panel");
     assert.ok(content.includes("Enter Academy Mode"), "missing Academy Mode entry control");
     assert.ok(content.includes("Graduate (close mode)"), "missing Captain-ends-mode control");
+    assert.ok(content.includes("Public Academy Specialists"), "missing public Academy specialist gallery");
     assert.ok(content.includes("Academy Graduates"), "missing Academy graduates gallery");
     assert.ok(content.includes("api.enrollAcademyTrainee"), "missing Academy enroll API call");
     assert.ok(content.includes("api.endAcademyMode"), "missing Academy mode-end API call");
     assert.ok(content.includes("api.adoptAcademyGraduate"), "missing Academy adopt API call");
+    assert.ok(content.includes("api.adoptAcademySpecialist"), "missing Academy central specialist adopt API call");
     assert.ok(content.includes("api.userBilling"), "missing billing API call");
     assert.ok(content.includes("Drive"), "dashboard should link to Drive");
     assert.ok(content.includes("Code"), "dashboard should link to Code");
@@ -223,7 +267,8 @@ describe("API client route parity with hosted API", () => {
       "/onboarding/start",
       "/onboarding/answer",
       "/onboarding/checkout",
-      "/onboarding/status?session_id=",
+      "/academy/observatory",
+      "/onboarding/status?",
       "/onboarding/claim-session",
       "/onboarding/cancel",
       "/user/dashboard",
@@ -237,6 +282,7 @@ describe("API client route parity with hosted API", () => {
       "/user/crew-recipe",
       "/user/crew-recipe/preview",
       "/user/crew-recipe/apply",
+      "/user/academy/adopt-specialist",
       "/user/linked-resources",
       "/user/share-grants",
       "/user/share-grants/approve",
@@ -267,6 +313,7 @@ describe("API client route parity with hosted API", () => {
     for (const path of requiredPaths) {
       assert.ok(apiContent.includes(path), `missing API route: ${path}`);
     }
+    assert.ok(apiContent.includes("new URLSearchParams({ session_id: sessionId"), "checkoutStatus must include session_id");
   });
 });
 

@@ -85,8 +85,9 @@ credential-bearing private operator channel.
 Telegram operator approvals can require a typed second factor by setting
 `ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or the shared
 `ARCLINK_OPERATOR_APPROVAL_CODE`. When set, `/approve`, `/deny`, `/upgrade`,
-and `/retry_contact` commands must include the code, and approval/install
-buttons are refused with guidance to use the typed command.
+and `/retry_contact` commands must include the code. Upgrade notification
+buttons are preview-only; live upgrade and pinned-component mutation requires
+the typed Operator Raven command with `confirm` or the configured code.
 
 Every Operator Raven mutating command requires a verified operator channel
 **and** an explicit second confirmation. `python/arclink_operator_raven.py`
@@ -1260,7 +1261,7 @@ separate when reasoning about which worker executes an action:
 | Queue table | Drained by | Operator Raven writers | Other writers |
 | --- | --- | --- | --- |
 | `arclink_action_intents` (+ `arclink_action_attempts`) | `python/arclink_action_worker.py` | `pod_repair`, `rollout` (via `queue_arclink_admin_action`) | Admin dashboard/API actions |
-| `operator_actions` | enrollment-provisioner root maintenance loop (`_run_pending_operator_actions` in `python/arclink_enrollment_provisioner.py`) | `host_upgrade` → `action_kind="upgrade"`, `pin_upgrade` → `action_kind="pin-upgrade"` (via `request_operator_action`) | Pin-upgrade detector Install-button tokens |
+| `operator_actions` | enrollment-provisioner root maintenance loop (`_run_pending_operator_actions` in `python/arclink_enrollment_provisioner.py`) | `host_upgrade` → `action_kind="upgrade"`, `pin_upgrade` → `action_kind="pin-upgrade"` (via `request_operator_action`) | Operator notification Preview-button tokens; live mutation still requires a typed Operator Raven `confirm` or approval code |
 
 The action worker consumes `arclink_action_intents`
 (`restart`, `reprovision`, `dns_repair`, `rotate_chutes_key`, `refund`,

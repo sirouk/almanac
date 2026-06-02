@@ -1823,8 +1823,8 @@ def upgrade_check(
             else:
                 operator_extra = operator_upgrade_action_extra(cfg, upstream_commit=upstream_commit)
                 operator_tail = (
-                    "Review with Curator using arclink-upgrade-orchestrator, then tap Install, "
-                    "send /upgrade in Operator Raven, or run ./deploy.sh upgrade on the host "
+                    "Review with Curator using arclink-upgrade-orchestrator, then tap Preview, "
+                    "send /upgrade confirm in Operator Raven, or run ./deploy.sh upgrade on the host "
                     "(same as ./deploy.sh control upgrade)."
                 )
                 if operator_extra is not None:

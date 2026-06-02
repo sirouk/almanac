@@ -17,6 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from arclink_boundary import json_loads_safe
 from arclink_control import Config, safe_slug, utc_now_iso
 
 
@@ -477,6 +478,24 @@ def ensure_access_state(
     dashboard_label = str(existing.get("dashboard_label") or f"agent-{url_slug}-dash")
     password = str(existing.get("password") or secrets.token_urlsafe(18))
     session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
+    deployment_metadata: dict[str, Any] = {}
+    try:
+        row = conn.execute(
+            """
+            SELECT metadata_json
+            FROM arclink_deployments
+            WHERE agent_id = ?
+            ORDER BY updated_at DESC, deployment_id DESC
+            LIMIT 1
+            """,
+            (agent_id,),
+        ).fetchone()
+        if row is not None:
+            deployment_metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+            if not isinstance(deployment_metadata, dict):
+                deployment_metadata = {}
+    except Exception:
+        deployment_metadata = {}
     dashboard_backend_port = _preserve_or_allocate_port(
         existing=existing.get("dashboard_backend_port"),
         reserved_other=reserved_other,
@@ -513,6 +532,19 @@ def ensure_access_state(
         "dashboard_label": dashboard_label,
         "updated_at": utc_now_iso(),
     }
+    for key in (
+        "dashboard_auth_revoked_before",
+        "dashboard_session_revoked_before",
+        "dashboard_sso_revoked_before",
+        "dashboard_auth_revoked_at",
+        "dashboard_auth_revoked_by",
+        "dashboard_auth_revocation_reason",
+    ):
+        value = existing.get(key)
+        if value in (None, ""):
+            value = deployment_metadata.get(key)
+        if value not in (None, ""):
+            payload[key] = value
     if cfg.agent_enable_tailscale_serve and tailscale_host:
         payload["dashboard_url"] = f"https://{tailscale_host}:{dashboard_proxy_port}/"
         payload["code_url"] = f"https://{tailscale_host}:{dashboard_proxy_port}/code"

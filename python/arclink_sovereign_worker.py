@@ -77,6 +77,12 @@ TERMINAL_JOB_STATUSES = {"succeeded", "cancelled"}
 TEARDOWN_REQUEST_STATUSES = {"teardown_requested", "teardown_failed", "cancelled"}
 TEARDOWN_TERMINAL_STATUSES = {"torn_down", "teardown_complete"}
 MISSING_CHUTES_CLIENT_ERROR = "ArcLink live Chutes key execution requires an injectable ChutesKeyClient"
+REQUIRED_HERMES_HOME_PLUGIN_SURFACES = {
+    "drive": ("plugin", "module", "dashboard"),
+    "code": ("plugin", "module", "dashboard"),
+    "terminal": ("plugin", "module", "dashboard"),
+    "arclink-managed-context": ("plugin", "module"),
+}
 
 
 @dataclass(frozen=True)
@@ -425,6 +431,7 @@ def recover_succeeded_sovereign_handoffs(
         job_id = str(deployment["job_id"])
         if str(deployment.get("status") or "") != "active":
             _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
+        _refresh_crew_dashboard_access_states(conn, user_id=str(deployment.get("user_id") or ""), worker=worker)
         urls = _handoff_urls_for_recovery(conn, deployment=deployment, worker=worker)
         _queue_vessel_online_notifications(conn, deployment_id=deployment_id, urls=urls)
         append_arclink_event(
@@ -471,6 +478,7 @@ def process_sovereign_deployment(
         result = _apply_deployment(conn, deployment=deployment, job=job, worker=worker, executor=executor)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
         _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
+        _refresh_crew_dashboard_access_states(conn, user_id=str(deployment.get("user_id") or ""), worker=worker)
         _queue_vessel_online_notifications(
             conn,
             deployment_id=deployment_id,
@@ -766,6 +774,25 @@ def _apply_deployment(
                 "ArcLink deployment compose services are not ready for handoff: "
                 + ", ".join(f"{service}={status}" for service, status in sorted(blockers.items()))
             )
+    if _truthy(str(worker.env.get("ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HERMES_HOME_READY") or "1")):
+        try:
+            hermes_ready = _validate_hermes_home_ready(deployment_id=deployment_id, intent=intent)
+        except ArcLinkSovereignWorkerError as exc:
+            upsert_arclink_service_health(
+                conn,
+                deployment_id=deployment_id,
+                service_name="hermes-home-ready",
+                status="failed",
+                detail={"job_id": str(job["job_id"]), "error": str(exc)},
+            )
+            raise
+        upsert_arclink_service_health(
+            conn,
+            deployment_id=deployment_id,
+            service_name="hermes-home-ready",
+            status="healthy",
+            detail={"job_id": str(job["job_id"]), **hermes_ready},
+        )
     append_arclink_event(
         conn,
         subject_kind="deployment",
@@ -1171,6 +1198,82 @@ def _handoff_urls_for_recovery(
     return urls
 
 
+def _refresh_crew_dashboard_access_states(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    worker: SovereignWorkerConfig,
+) -> list[str]:
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        return []
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            """
+            SELECT *
+            FROM arclink_deployments
+            WHERE user_id = ?
+              AND status NOT IN ('cancelled', 'teardown_complete', 'torn_down', 'archived', 'deleted', 'retired')
+            ORDER BY created_at ASC, deployment_id ASC
+            """,
+            (clean_user,),
+        ).fetchall()
+    ]
+    refreshed: list[str] = []
+    for row in rows:
+        deployment_id = str(row.get("deployment_id") or "").strip()
+        metadata = json_loads_safe(str(row.get("metadata_json") or "{}"))
+        roots = metadata.get("state_roots") if isinstance(metadata.get("state_roots"), Mapping) else {}
+        hermes_home = str((roots or {}).get("hermes_home") or "").strip()
+        if not hermes_home:
+            continue
+        access_path = Path(hermes_home) / "state" / "arclink-web-access.json"
+        if not access_path.is_file():
+            continue
+        try:
+            intent = render_arclink_provisioning_intent(
+                conn,
+                deployment_id=deployment_id,
+                base_domain=worker.base_domain,
+                edge_target=str(metadata.get("edge_target") or worker.edge_target),
+                state_root_base=str(metadata.get("state_root_base") or worker.state_root_base),
+                ingress_mode=worker.ingress_mode,
+                tailscale_dns_name=worker.tailscale_dns_name,
+                tailscale_host_strategy=worker.tailscale_host_strategy,
+                tailscale_notion_path=worker.tailscale_notion_path,
+                env=worker.env,
+            )
+            crew_raw = str((intent.get("environment") or {}).get("ARCLINK_CREW_DASHBOARDS_JSON") or "[]")
+            crew = json.loads(crew_raw)
+            if not isinstance(crew, list):
+                continue
+            existing = json_loads_safe(access_path.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                continue
+            existing["crew_dashboards"] = crew
+            existing["crew_dashboards_refreshed_at"] = utc_now_iso()
+            access_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(dir=str(access_path.parent), prefix=".arclink-web-access-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(existing, handle, indent=2, sort_keys=True)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp_name, access_path)
+            finally:
+                try:
+                    os.unlink(tmp_name)
+                except FileNotFoundError:
+                    pass
+            access_path.chmod(0o600)
+            refreshed.append(deployment_id)
+        except Exception:
+            continue
+    return refreshed
+
+
 def _secret_refs(intent: Mapping[str, Any]) -> list[str]:
     refs = []
     compose = intent.get("compose") if isinstance(intent.get("compose"), Mapping) else {}
@@ -1509,6 +1612,52 @@ def _docker_compose_service_statuses(rows: list[Mapping[str, Any]], *, project_n
     return statuses
 
 
+def _validate_hermes_home_ready(*, deployment_id: str, intent: Mapping[str, Any]) -> dict[str, Any]:
+    state_roots = intent.get("state_roots") if isinstance(intent.get("state_roots"), Mapping) else {}
+    hermes_home = str((state_roots or {}).get("hermes_home") or "").strip()
+    if not hermes_home:
+        raise ArcLinkSovereignWorkerError("ArcLink Hermes home readiness manifest missing state root")
+    ready_file = Path(hermes_home) / "state" / "arclink-hermes-home-ready.json"
+    if not ready_file.is_file():
+        raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest missing: {ready_file}")
+    try:
+        payload = json.loads(ready_file.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest is unreadable: {type(exc).__name__}") from exc
+    if not isinstance(payload, Mapping):
+        raise ArcLinkSovereignWorkerError("ArcLink Hermes home readiness manifest is not an object")
+    status = str(payload.get("status") or "").strip().lower()
+    if status != "ready":
+        raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest status is {status or 'blank'}")
+    manifest_deployment_id = str(payload.get("deployment_id") or "").strip()
+    if manifest_deployment_id and manifest_deployment_id != deployment_id:
+        raise ArcLinkSovereignWorkerError(
+            f"ArcLink Hermes home readiness manifest belongs to {manifest_deployment_id}, not {deployment_id}"
+        )
+    plugins = payload.get("plugins")
+    if not isinstance(plugins, Mapping):
+        raise ArcLinkSovereignWorkerError("ArcLink Hermes home readiness manifest is missing plugin status")
+    missing: list[str] = []
+    for plugin_name, fields in REQUIRED_HERMES_HOME_PLUGIN_SURFACES.items():
+        plugin_status = plugins.get(plugin_name)
+        if not isinstance(plugin_status, Mapping):
+            missing.append(plugin_name)
+            continue
+        for field in fields:
+            if plugin_status.get(field) is not True:
+                missing.append(f"{plugin_name}.{field}")
+    if missing:
+        raise ArcLinkSovereignWorkerError(
+            "ArcLink Hermes home readiness manifest is missing required plugin surfaces: "
+            + ", ".join(sorted(missing))
+        )
+    return {
+        "ready_file": str(ready_file),
+        "ready_at": str(payload.get("ready_at") or ""),
+        "required_plugins": sorted(REQUIRED_HERMES_HOME_PLUGIN_SURFACES),
+    }
+
+
 def _docker_compose_row_status(*, service_name: str, state: str, health: str, exit_code: Any) -> str:
     if state == "running":
         if health == "unhealthy":
@@ -1552,8 +1701,8 @@ def _vessel_online_message(
     deployment: Mapping[str, Any],
     urls: Mapping[str, Any],
 ) -> str:
-    label = str(deployment.get("agent_name") or "").strip() or f"Agent #{str(deployment.get('prefix') or '').rsplit('-', 1)[-1]}"
-    title = str(deployment.get("agent_title") or "").strip() or "ArcLink Agent"
+    label = str(deployment.get("agent_name") or "").strip() or f"Hermes Agent #{str(deployment.get('prefix') or '').rsplit('-', 1)[-1]}"
+    title = str(deployment.get("agent_title") or "").strip() or "Hermes Agent"
     user_id = str(deployment.get("user_id") or "").strip()
     crew_rows = []
     if user_id:
@@ -1574,8 +1723,8 @@ def _vessel_online_message(
         crew_rows = [dict(deployment)]
     crew_lines: list[str] = []
     for index, item in enumerate(crew_rows, start=1):
-        item_label = str(item.get("agent_name") or "").strip() or f"Agent #{str(item.get('prefix') or index).rsplit('-', 1)[-1]}"
-        item_title = str(item.get("agent_title") or "").strip() or "ArcLink Agent"
+        item_label = str(item.get("agent_name") or "").strip() or f"Hermes Agent #{str(item.get('prefix') or index).rsplit('-', 1)[-1]}"
+        item_title = str(item.get("agent_title") or "").strip() or "Hermes Agent"
         status = str(item.get("status") or "pending").replace("_", " ")
         dashboard = _deployment_dashboard_url(
             item,
@@ -1583,11 +1732,17 @@ def _vessel_online_message(
         )
         link = f" - {dashboard}" if dashboard else ""
         crew_lines.append(f"- {item_label}: {item_title} ({status}){link}")
-    crew_word = "ArcPod is" if len(crew_rows) == 1 else "ArcPods are"
+    ready_count = sum(1 for item in crew_rows if str(item.get("status") or "").strip() == "active")
+    if len(crew_rows) == 1:
+        readiness_line = "Your ArcPod is ready." if ready_count else "Your ArcPod launch is in progress."
+    elif ready_count == len(crew_rows):
+        readiness_line = "Your ArcPods are ready."
+    else:
+        readiness_line = f"Your Crew launch is in progress: {ready_count}/{len(crew_rows)} Hermes Agent dashboards ready."
     lines = [
         f"{label} is online as a Hermes Agent.",
         "",
-        f"Your {crew_word} ready.",
+        readiness_line,
         "",
         *crew_lines,
     ]
@@ -1659,7 +1814,7 @@ def _focus_public_bot_session_on_deployment(
     if label:
         metadata["active_agent_label"] = label
     elif prefix:
-        metadata["active_agent_label"] = f"Agent #{prefix.rsplit('-', 1)[-1]}"
+        metadata["active_agent_label"] = f"Hermes Agent #{prefix.rsplit('-', 1)[-1]}"
     conn.execute(
         """
         UPDATE arclink_onboarding_sessions

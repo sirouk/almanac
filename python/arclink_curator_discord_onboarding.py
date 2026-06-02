@@ -133,22 +133,6 @@ async def main() -> None:
             conn.commit()
             return cursor.rowcount == 1
 
-    def _queue_upgrade_operator_action(*, actor: str, request_source: str) -> str:
-        with connect_db(cfg) as conn:
-            action_row, created = request_operator_action(
-                conn,
-                action_kind="upgrade",
-                requested_by=actor,
-                request_source=request_source,
-                requested_target="",
-            )
-        status = str(action_row.get("status") or "pending")
-        if created:
-            return "Queued ArcLink upgrade/repair. The root maintenance loop will pick it up within about a minute."
-        if status == "running":
-            return "ArcLink upgrade is already running."
-        return "ArcLink upgrade is already queued."
-
     def _run_operator_action(*, target_id: str, action: str, actor: str, reason: str = "", scope: str = "") -> str:
         normalized_action = action.strip().lower()
         normalized_scope = scope.strip().lower()
@@ -206,39 +190,22 @@ async def main() -> None:
                     dismissed = dismiss_pin_upgrade_action(conn, target_id)
                     silenced = ", ".join(dismissed.get("silenced") or dismissed.get("components") or [])
                     return f"Dismissed pinned-component upgrade notice for {silenced or components}."
-                if normalized_action == "install":
-                    action_row, created = request_operator_action(
-                        conn,
-                        action_kind="pin-upgrade",
-                        requested_by=actor,
-                        request_source="discord-button",
-                        requested_target=target_id,
-                        dedupe_by_target=True,
+                if normalized_action in {"preview", "install"}:
+                    return (
+                        "Pinned-component upgrade preview only: no action was queued from this button. "
+                        f"Review {components}, then send `/pin_upgrade <component> confirm` in Operator Raven "
+                        "or append your configured operator approval code."
                     )
-                    status = str(action_row.get("status") or "pending")
-                    if created:
-                        return "Queued pinned-component upgrade. The root maintenance loop will pick it up within about a minute."
-                    if status == "running":
-                        return "Pinned-component upgrade is already running."
-                    return "Pinned-component upgrade is already queued."
                 return f"Unknown pinned-component upgrade action: {normalized_action}"
-            if normalized_action in {"install", "dismiss"}:
+            if normalized_action in {"preview", "install", "dismiss"}:
                 if normalized_action == "dismiss":
                     upsert_setting(conn, "arclink_upgrade_last_dismissed_sha", target_id)
                     return f"Dismissed ArcLink update notice for {target_id[:12]}."
-                action_row, created = request_operator_action(
-                    conn,
-                    action_kind="upgrade",
-                    requested_by=actor,
-                    request_source="discord-button",
-                    requested_target=target_id,
+                return (
+                    "ArcLink upgrade preview only: no action was queued from this button. "
+                    "Review the release notice, then send `/upgrade confirm` in Operator Raven "
+                    "or append your configured operator approval code."
                 )
-                status = str(action_row.get("status") or "pending")
-                if created:
-                    return "Queued ArcLink upgrade. The root maintenance loop will pick it up within about a minute."
-                if status == "running":
-                    return "ArcLink upgrade is already running."
-                return "ArcLink upgrade is already queued."
         return f"Unknown approval target: {target_id}"
 
     async def _ensure_operator_channel(interaction) -> bool:  # type: ignore[no-untyped-def]
@@ -545,13 +512,35 @@ async def main() -> None:
         )
         await interaction.response.send_message(response)
 
-    @tree.command(name="upgrade", description="Queue an ArcLink host upgrade or repair.")
-    async def upgrade_command(interaction) -> None:  # type: ignore[no-untyped-def]
+    @tree.command(name="upgrade", description="Preview or confirm an ArcLink host upgrade/repair.")
+    @app_commands.describe(confirm="Queue only after reviewing the dry-run", operator_code="Required when an operator approval code is configured")
+    async def upgrade_command(interaction, confirm: bool = False, operator_code: str = "") -> None:  # type: ignore[no-untyped-def]
         if not await _ensure_operator_channel(interaction):
             return
         actor = _format_actor_label(interaction.user)
+        dispatch = "/upgrade --dry-run"
+        if confirm:
+            dispatch = f"/upgrade {(operator_code.strip() or 'confirm')}"
         await interaction.response.send_message(
-            _queue_upgrade_operator_action(actor=actor, request_source="discord-command")
+            _operator_raven_response(dispatch, actor_id=actor, message_id=str(getattr(interaction, "id", "") or ""))
+        )
+
+    @tree.command(name="pin-upgrade", description="Preview or confirm a pinned-component upgrade.")
+    @app_commands.describe(
+        component="hermes, qmd, nextcloud, postgres, redis, nvm, or node",
+        confirm="Queue only after reviewing the dry-run",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def pin_upgrade_command(interaction, component: str, confirm: bool = False, operator_code: str = "") -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        clean_component = component.strip().lower()
+        dispatch = f"/pin_upgrade {clean_component} --dry-run"
+        if confirm:
+            dispatch = f"/pin_upgrade {clean_component} {(operator_code.strip() or 'confirm')}"
+        await interaction.response.send_message(
+            _operator_raven_response(dispatch, actor_id=actor, message_id=str(getattr(interaction, "id", "") or ""))
         )
 
     @tree.command(name="retry-contact", description="Retry a Discord agent-bot contact handoff.")

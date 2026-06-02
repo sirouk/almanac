@@ -183,7 +183,7 @@ def test_discord_completion_handoff_queues_root_dm_action() -> None:
     expect('@tree.command(name="backup"' in curator_text, "Curator Discord should register /backup")
     expect('@tree.command(name="sshkey"' in curator_text, "Curator Discord should register /sshkey")
     expect('@tree.command(name="upgrade"' in curator_text, "Curator Discord should expose /upgrade")
-    expect('request_source="discord-command"' in curator_text, "Curator Discord /upgrade should queue an operator action")
+    expect('request_source="discord-command"' not in curator_text, "Curator Discord /upgrade must not queue host mutations directly")
     expect("if operator_raven_command_requested(content):" in curator_text, "Curator Discord should accept typed /upgrade (and other operator commands) via Operator Raven in the operator channel")
     expect('@tree.command(name="retry-contact"' in curator_text, "Curator Discord should expose /retry-contact")
     expect('target: str = ""' in curator_text, "Curator Discord /retry-contact target should be optional for user self-retry")
@@ -854,7 +854,7 @@ def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None
                 conn,
                 action_kind="upgrade",
                 requested_by="@alex",
-                request_source="telegram-button",
+                request_source="operator-raven",
                 requested_target="bbbbbbbbbbbb2222222222222222222222222222",
             )
             expect(created is True, str(action_row))
@@ -882,6 +882,56 @@ def test_operator_upgrade_actions_run_root_upgrade_and_notify_operator() -> None
             expect("Starting ArcLink upgrade" in str(operator_rows[0]["message"] or ""), str([dict(row) for row in operator_rows]))
             expect("completed successfully" in str(operator_rows[1]["message"] or ""), str([dict(row) for row in operator_rows]))
             print("PASS test_operator_upgrade_actions_run_root_upgrade_and_notify_operator")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
+def test_operator_upgrade_actions_reject_unconfirmed_sources() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_operator_upgrade_source_gate_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_operator_upgrade_source_gate_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = config_values(root)
+        values["OPERATOR_NOTIFY_CHANNEL_PLATFORM"] = "telegram"
+        values["OPERATOR_NOTIFY_CHANNEL_ID"] = "1000000001"
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            conn = control.connect_db(cfg)
+            action_row, created = control.request_operator_action(
+                conn,
+                action_kind="upgrade",
+                requested_by="@alex",
+                request_source="telegram-button",
+                requested_target="bbbbbbbbbbbb2222222222222222222222222222",
+            )
+            expect(created is True, str(action_row))
+
+            def fail_if_upgrade_runs(cfg, *, log_path):
+                raise AssertionError("unconfirmed operator action source must not run an upgrade")
+
+            provisioner._run_host_upgrade = fail_if_upgrade_runs
+            provisioner._run_pending_operator_actions(conn, cfg)
+
+            refreshed = conn.execute(
+                "SELECT status, note, log_path FROM operator_actions WHERE id = ?",
+                (int(action_row["id"]),),
+            ).fetchone()
+            expect(refreshed is not None and refreshed["status"] == "failed", str(dict(refreshed) if refreshed else {}))
+            expect("unconfirmed request source telegram-button" in str(refreshed["note"] or ""), str(dict(refreshed)))
+            expect(not str(refreshed["log_path"] or "").strip(), str(dict(refreshed)))
+            operator_rows = conn.execute(
+                "SELECT message FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id ASC"
+            ).fetchall()
+            expect(len(operator_rows) == 1, str([dict(row) for row in operator_rows]))
+            expect("confirmed Operator Raven command" in str(operator_rows[0]["message"] or ""), str([dict(row) for row in operator_rows]))
+            print("PASS test_operator_upgrade_actions_reject_unconfirmed_sources")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -951,7 +1001,7 @@ def test_operator_pin_upgrade_actions_run_component_upgrade_and_notify_operator(
                 conn,
                 action_kind="pin-upgrade",
                 requested_by="@alex",
-                request_source="telegram-button",
+                request_source="operator-raven",
                 requested_target=token,
                 dedupe_by_target=True,
             )
@@ -1484,6 +1534,7 @@ def main() -> int:
     test_gateway_failures_notify_user_with_provision_error_status()
     test_completed_backup_setup_prompt_backfill_is_idempotent_for_chat_onboarding()
     test_operator_upgrade_actions_run_root_upgrade_and_notify_operator()
+    test_operator_upgrade_actions_reject_unconfirmed_sources()
     test_operator_pin_upgrade_actions_run_component_upgrade_and_notify_operator()
     test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade()
     test_operator_upgrade_stale_running_action_fails_closed()
@@ -1496,7 +1547,7 @@ def main() -> int:
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
     test_auto_provision_dashboard_probe_allows_cold_start_window()
-    print("PASS all 26 enrollment provisioner regression tests")
+    print("PASS all 27 enrollment provisioner regression tests")
     return 0
 
 

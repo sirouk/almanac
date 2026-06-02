@@ -132,13 +132,13 @@ def test_upgrade_check_notifies_operator_and_user_agents_once_per_sha() -> None:
             expect(len(operator_rows) == 1, operator_rows)
             operator_message = str(operator_rows[0]["message"] or "")
             expect("ArcLink update available" in operator_message, operator_message)
-            expect("tap Install" in operator_message, operator_message)
-            expect("send /upgrade in Operator Raven" in operator_message, operator_message)
+            expect("tap Preview" in operator_message, operator_message)
+            expect("send /upgrade confirm in Operator Raven" in operator_message, operator_message)
             expect("./deploy.sh upgrade" in operator_message, operator_message)
             expect("./deploy.sh control upgrade" in operator_message, operator_message)
             operator_extra = json.loads(str(operator_rows[0]["extra_json"] or "{}"))
             buttons = operator_extra.get("telegram_reply_markup", {}).get("inline_keyboard", [[]])[0]
-            expect([button.get("text") for button in buttons] == ["Dismiss", "Install"], str(operator_extra))
+            expect([button.get("text") for button in buttons] == ["Dismiss", "Preview"], str(operator_extra))
 
             agent_rows = conn.execute(
                 """
@@ -222,7 +222,7 @@ def test_upgrade_check_adds_discord_buttons_for_operator_channel() -> None:
             components = extra.get("discord_components") or []
             expect(len(components) == 1, str(extra))
             buttons = components[0].get("components") or []
-            expect([button.get("label") for button in buttons] == ["Dismiss", "Install"], str(extra))
+            expect([button.get("label") for button in buttons] == ["Dismiss", "Preview"], str(extra))
             print("PASS test_upgrade_check_adds_discord_buttons_for_operator_channel")
         finally:
             os.environ.clear()

@@ -24,7 +24,6 @@ from arclink_control import (
     find_active_onboarding_session,
     get_pin_upgrade_action_payload,
     get_onboarding_session,
-    request_operator_action,
     get_setting,
     mark_onboarding_update_skipped,
     record_onboarding_update_failure,
@@ -878,21 +877,12 @@ def _handle_operator_callback(
                     upsert_setting(conn, "arclink_upgrade_last_dismissed_sha", target_id)
                     result_text = f"Dismissed ArcLink update notice for {target_id[:12]}."
                     replacement_text = (message_text + f"\n\nDismissed by {actor}.").strip()
-                elif action == "install":
-                    action_row, created = request_operator_action(
-                        conn,
-                        action_kind="upgrade",
-                        requested_by=actor,
-                        request_source="telegram-button",
-                        requested_target=target_id,
+                elif action in {"preview", "install"}:
+                    result_text = (
+                        "ArcLink upgrade preview only: no action was queued from this button. "
+                        "Review the release notice, then send `/upgrade confirm` in Operator Raven "
+                        "or append your configured operator approval code."
                     )
-                    status = str(action_row.get("status") or "pending")
-                    if created:
-                        result_text = "Queued ArcLink upgrade. The root maintenance loop will pick it up within about a minute."
-                    elif status == "running":
-                        result_text = "ArcLink upgrade is already running."
-                    else:
-                        result_text = "ArcLink upgrade is already queued."
                     replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
             elif scope == "pin-upgrade":
                 payload = get_pin_upgrade_action_payload(conn, target_id)
@@ -903,22 +893,12 @@ def _handle_operator_callback(
                     dismissed = dismiss_pin_upgrade_action(conn, target_id)
                     silenced = ", ".join(dismissed.get("silenced") or dismissed.get("components") or [])
                     result_text = f"Dismissed pinned-component upgrade notice for {silenced or components}."
-                elif action == "install":
-                    action_row, created = request_operator_action(
-                        conn,
-                        action_kind="pin-upgrade",
-                        requested_by=actor,
-                        request_source="telegram-button",
-                        requested_target=target_id,
-                        dedupe_by_target=True,
+                elif action in {"preview", "install"}:
+                    result_text = (
+                        "Pinned-component upgrade preview only: no action was queued from this button. "
+                        f"Review {components}, then send `/pin_upgrade <component> confirm` in Operator Raven "
+                        "or append your configured operator approval code."
                     )
-                    status = str(action_row.get("status") or "pending")
-                    if created:
-                        result_text = "Queued pinned-component upgrade. The root maintenance loop will pick it up within about a minute."
-                    elif status == "running":
-                        result_text = "Pinned-component upgrade is already running."
-                    else:
-                        result_text = "Pinned-component upgrade is already queued."
                 else:
                     raise ValueError(f"unknown pinned-component upgrade action: {action}")
                 replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip() if message_text else result_text

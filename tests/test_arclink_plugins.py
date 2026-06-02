@@ -721,7 +721,7 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
             live_content_updated = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
             expect("Second version" in live_content_updated["content"], str(live_content_updated))
             live_listing = asyncio.run(drive_api.items(root="linked", path="/live-brief"))
-            expect(any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
+            expect(not any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
             linked_mkdir = asyncio.run(drive_api.mkdir(JsonRequest({"root": "linked", "path": "/live-brief", "name": "Notes"})))
             expect(linked_mkdir["path"] == "/live-brief/Notes", str(linked_mkdir))
             expect((source_live / "Notes").is_dir(), "linked Drive mkdir should write into the shared source folder")
@@ -763,7 +763,7 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
             )
             expect(copied_from_linked["destination_root"] == "vault", str(copied_from_linked))
             expect((vault / "Copied Live Brief" / "overview.md").is_file(), "linked copy should land in owned Vault")
-            expect((vault / "Copied Live Brief" / ".env").exists(), "accepted linked directory copies preserve owner-shared files")
+            expect(not (vault / "Copied Live Brief" / ".env").exists(), "linked directory copies must skip generic env files")
             try:
                 asyncio.run(drive_api.delete(JsonRequest({"root": "linked", "path": "/shared-note.md"})))
                 raise AssertionError("expected Drive linked delete to fail")
@@ -1933,24 +1933,21 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             drive_listing = asyncio.run(drive_api.items(root="workspace", path="/"))
             drive_paths = {item["path"] for item in drive_listing["items"]}
             expect("/public.md" in drive_paths, str(drive_listing))
-            expect("/.env" in drive_paths and "/.env.local" in drive_paths, str(drive_listing))
+            expect("/.env" not in drive_paths and "/.env.local" not in drive_paths, str(drive_listing))
             for forbidden in ("/secrets", "/state", "/.ssh"):
                 expect(forbidden not in drive_paths, str(drive_listing))
             code_listing = asyncio.run(code_api.items(root="workspace", path="/"))
             code_paths = {item["path"] for item in code_listing["items"]}
             expect("/public.md" in code_paths, str(code_listing))
-            expect("/.env" in code_paths and "/.env.local" in code_paths, str(code_listing))
+            expect("/.env" not in code_paths and "/.env.local" not in code_paths, str(code_listing))
             for forbidden in ("/secrets", "/state", "/.ssh"):
                 expect(forbidden not in code_paths, str(code_listing))
 
-            drive_env = asyncio.run(drive_api.content(root="workspace", path="/.env"))
-            expect("visible-to-owner" in drive_env["content"], str(drive_env))
-            code_env = asyncio.run(code_api.file(root="workspace", path="/.env.local"))
-            expect("visible-to-owner" in code_env["content"], str(code_env))
-
             for operation in (
+                lambda: drive_api.content(root="workspace", path="/.env"),
                 lambda: drive_api.download(root="workspace", path="/secrets/arclink-bootstrap-token"),
                 lambda: drive_api.preview(root="workspace", path="/state/private.md"),
+                lambda: code_api.file(root="workspace", path="/.env.local"),
                 lambda: code_api.download(root="workspace", path="/secrets/arclink-bootstrap-token"),
                 lambda: code_api.preview(root="workspace", path="/state/private.md"),
                 lambda: code_api.mkdir(JsonRequest({"root": "workspace", "path": "/.ssh/new"})),
@@ -1975,7 +1972,7 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             )
             expect(copied["destination"] == "/bundle-copy", str(copied))
             expect((hermes_home / "bundle-copy" / "note.md").is_file(), "expected copyable child to be copied")
-            expect((hermes_home / "bundle-copy" / ".env").exists(), "user-owned env files should copy inside the user's own surface")
+            expect(not (hermes_home / "bundle-copy" / ".env").exists(), "directory copies must skip env files")
 
             drive_search = asyncio.run(drive_api.items(root="workspace", path="/", query="token"))
             expect(not drive_search["items"], str(drive_search))

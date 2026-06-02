@@ -124,6 +124,7 @@ _SKIP_DIR_NAMES = {".git", ".hg", ".svn", "__pycache__", "node_modules", _TRASH_
 _SENSITIVE_DIR_NAMES = {".ssh"}
 _SENSITIVE_FILE_NAMES = {
     _LINKED_MANIFEST_NAME,
+    ".env",
     "arclink-bootstrap-token",
     "id_dsa",
     "id_ecdsa",
@@ -372,6 +373,8 @@ def _is_sensitive_path(path: Path) -> bool:
         return True
     name = path.name.lower()
     if name in _SENSITIVE_FILE_NAMES:
+        return True
+    if name == ".env" or name.startswith(".env."):
         return True
     if "bootstrap-token" in name:
         return True

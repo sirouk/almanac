@@ -211,7 +211,7 @@ def test_detector_adds_operator_buttons_for_pinned_component_digest() -> None:
                 token = str(extra.get("pin_upgrade_action_token") or "")
                 expect(token, str(extra))
                 buttons = extra.get("telegram_reply_markup", {}).get("inline_keyboard", [[]])[0]
-                expect([button.get("text") for button in buttons] == ["Dismiss", "Install"], str(extra))
+                expect([button.get("text") for button in buttons] == ["Dismiss", "Preview"], str(extra))
                 expect(all(f":{token}" in str(button.get("callback_data") or "") for button in buttons), str(buttons))
 
                 payload = control.get_pin_upgrade_action_payload(conn, token)

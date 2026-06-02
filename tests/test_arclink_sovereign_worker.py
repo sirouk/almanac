@@ -82,8 +82,111 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True, ingr
             "ARCLINK_PRIMARY_PROVIDER": "chutes",
             "ARCLINK_CHUTES_BASE_URL": "https://llm.chutes.ai/v1",
             "ARCLINK_CHUTES_DEFAULT_MODEL": "moonshotai/Kimi-K2.6-TEE",
+            "ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HERMES_HOME_READY": "0",
         },
     )
+
+
+def test_hermes_home_ready_manifest_requires_dashboard_plugins() -> None:
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_hermes_ready_test")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        hermes_home = Path(tmpdir) / "state" / "hermes-home"
+        ready_file = hermes_home / "state" / "arclink-hermes-home-ready.json"
+        ready_file.parent.mkdir(parents=True)
+        intent = {"state_roots": {"hermes_home": str(hermes_home)}}
+        ready_payload = {
+            "status": "ready",
+            "deployment_id": "dep_1",
+            "plugins": {
+                "drive": {"plugin": True, "module": True, "dashboard": True},
+                "code": {"plugin": True, "module": True, "dashboard": True},
+                "terminal": {"plugin": True, "module": True, "dashboard": True},
+                "arclink-managed-context": {"plugin": True, "module": True, "dashboard": False},
+            },
+        }
+        ready_file.write_text(json.dumps(ready_payload), encoding="utf-8")
+        result = worker_mod._validate_hermes_home_ready(deployment_id="dep_1", intent=intent)
+        expect(result["ready_file"] == str(ready_file), str(result))
+
+        ready_payload["plugins"]["terminal"]["dashboard"] = False
+        ready_file.write_text(json.dumps(ready_payload), encoding="utf-8")
+        try:
+            worker_mod._validate_hermes_home_ready(deployment_id="dep_1", intent=intent)
+        except worker_mod.ArcLinkSovereignWorkerError as exc:
+            expect("terminal.dashboard" in str(exc), str(exc))
+        else:
+            raise AssertionError("Hermes home readiness must fail when Terminal dashboard plugin is absent")
+    print("PASS test_hermes_home_ready_manifest_requires_dashboard_plugins")
+
+
+def test_crew_dashboard_access_state_refreshes_sibling_switchers() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_crew_refresh_test")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_crew_refresh_test")
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_2",
+        user_id="user_1",
+        prefix="ember-code-2222",
+        base_domain="example.test",
+        agent_name="Ember",
+        agent_title="the code specialist",
+        status="active",
+        metadata={
+            "onboarding_session_id": "onb_worker_1",
+            "bundle_primary_deployment_id": "dep_1",
+            "bundle_agent_index": 2,
+            "bundle_agent_count": 2,
+        },
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        roots_1 = worker_mod.render_arclink_state_roots(
+            deployment_id="dep_1",
+            prefix="amber-vault-1234",
+            state_root_base=cfg.state_root_base,
+        )
+        roots_2 = worker_mod.render_arclink_state_roots(
+            deployment_id="dep_2",
+            prefix="ember-code-2222",
+            state_root_base=cfg.state_root_base,
+        )
+        for dep_id, roots, index in (("dep_1", roots_1, 1), ("dep_2", roots_2, 2)):
+            row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?", (dep_id,)).fetchone()
+            metadata = json.loads(row["metadata_json"] or "{}")
+            metadata.update(
+                {
+                    "state_roots": roots,
+                    "state_root_base": cfg.state_root_base,
+                    "onboarding_session_id": "onb_worker_1",
+                    "bundle_primary_deployment_id": "dep_1",
+                    "bundle_agent_index": index,
+                    "bundle_agent_count": 2,
+                }
+            )
+            conn.execute(
+                "UPDATE arclink_deployments SET status = 'active', metadata_json = ? WHERE deployment_id = ?",
+                (json.dumps(metadata, sort_keys=True), dep_id),
+            )
+            access_file = Path(roots["hermes_home"]) / "state" / "arclink-web-access.json"
+            access_file.parent.mkdir(parents=True)
+            access_file.write_text(
+                json.dumps({"username": "person@example.test", "password": "keep-me", "crew_dashboards": []}),
+                encoding="utf-8",
+            )
+        conn.commit()
+
+        refreshed = worker_mod._refresh_crew_dashboard_access_states(conn, user_id="user_1", worker=cfg)
+        expect(set(refreshed) == {"dep_1", "dep_2"}, str(refreshed))
+        for dep_id, roots in (("dep_1", roots_1), ("dep_2", roots_2)):
+            access = json.loads((Path(roots["hermes_home"]) / "state" / "arclink-web-access.json").read_text(encoding="utf-8"))
+            expect(access["password"] == "keep-me", str(access))
+            expect(len(access["crew_dashboards"]) == 2, str(access))
+            current = [item for item in access["crew_dashboards"] if item["current"]]
+            expect(len(current) == 1 and current[0]["deployment_id"] == dep_id, str(access))
+            expect(access.get("crew_dashboards_refreshed_at"), str(access))
+    print("PASS test_crew_dashboard_access_state_refreshes_sibling_switchers")
 
 
 def test_fake_sovereign_worker_applies_ready_deployment() -> None:
@@ -960,6 +1063,8 @@ def test_dashboard_password_hash_sync_only_when_secret_is_new() -> None:
 
 
 if __name__ == "__main__":
+    test_hermes_home_ready_manifest_requires_dashboard_plugins()
+    test_crew_dashboard_access_state_refreshes_sibling_switchers()
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()

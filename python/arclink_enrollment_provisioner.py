@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from arclink_agent_access import (
     ensure_access_state,
@@ -2243,6 +2243,36 @@ def _run_pending_onboarding_notion_verifications_locked(conn, cfg: Config) -> No
     )
 
 
+CONFIRMED_OPERATOR_ACTION_SOURCES = {"operator-raven"}
+
+
+def _operator_action_has_confirmed_source(action: Mapping[str, Any]) -> bool:
+    source = str(action.get("request_source") or "").strip().lower()
+    return source in CONFIRMED_OPERATOR_ACTION_SOURCES
+
+
+def _fail_unconfirmed_operator_action(
+    conn,
+    cfg: Config,
+    *,
+    action: Mapping[str, Any],
+    label: str,
+) -> None:
+    action_id = int(action["id"])
+    source = str(action.get("request_source") or "").strip() or "unknown"
+    note = f"{label} request rejected: unconfirmed request source {source}"
+    finish_operator_action(conn, action_id=action_id, status="failed", note=note)
+    _queue_operator_message(
+        conn,
+        cfg,
+        (
+            f"{label} request {action_id} was not executed because it did not come from a confirmed Operator Raven command.\n"
+            f"Request source: {source}\n"
+            "Use Operator Raven with an explicit confirm/code phrase to queue host mutations."
+        ),
+    )
+
+
 def _run_pending_operator_actions(conn, cfg: Config) -> None:
     _fail_stale_running_operator_actions(
         conn,
@@ -2253,6 +2283,10 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
     )
     action = get_pending_operator_action(conn, action_kind="upgrade")
     if action is None:
+        _run_pending_pin_upgrade_actions(conn, cfg)
+        return
+    if not _operator_action_has_confirmed_source(action):
+        _fail_unconfirmed_operator_action(conn, cfg, action=action, label="ArcLink upgrade")
         _run_pending_pin_upgrade_actions(conn, cfg)
         return
     action_id = int(action["id"])
@@ -2367,6 +2401,9 @@ def _run_pending_pin_upgrade_actions(conn, cfg: Config) -> None:
     )
     action = get_pending_operator_action(conn, action_kind="pin-upgrade", reclaim_stale_running_seconds=0)
     if action is None:
+        return
+    if not _operator_action_has_confirmed_source(action):
+        _fail_unconfirmed_operator_action(conn, cfg, action=action, label="Pinned-component upgrade")
         return
     action_id = int(action["id"])
     requested_by = str(action.get("requested_by") or "operator").strip() or "operator"

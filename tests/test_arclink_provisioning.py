@@ -81,6 +81,11 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
             "telegram_bot_token_ref": "secret://arclink/telegram/dep_1/bot-token",
             "discord_bot_token_ref": "secret://arclink/discord/dep_1/bot-token",
             "notion_token_ref": "secret://arclink/notion/dep_1/token",
+            "dashboard_session_revoked_before": 1780000000,
+            "dashboard_sso_revoked_before": 1780000001,
+            "dashboard_auth_revoked_at": "2026-06-02T00:00:00+00:00",
+            "dashboard_auth_revoked_by": "admin_revoker",
+            "dashboard_auth_revocation_reason": "test revocation",
         },
     )
     result = provisioning.render_arclink_provisioning_dry_run(
@@ -182,6 +187,11 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["ARCLINK_DASHBOARD_USERNAME"] == "person@example.test", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] == "1", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"] == "example.test", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_SESSION_REVOKED_BEFORE"] == "1780000000", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_SSO_REVOKED_BEFORE"] == "1780000001", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_AUTH_REVOKED_AT"] == "2026-06-02T00:00:00+00:00", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_AUTH_REVOKED_BY"] == "admin_revoker", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_DASHBOARD_AUTH_REVOCATION_REASON"] == "test revocation", str(intent["environment"]))
     crew_links = json.loads(intent["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"])
     expect(crew_links[0]["label"] == "Atlas" and crew_links[0]["current"] is True, str(crew_links))
     expect(intent["environment"]["ARCLINK_CAPTAIN_NAME"] == "person@example.test", str(intent["environment"]))
@@ -203,6 +213,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["QMD_MCP_CONTAINER_PORT"] == "8181", str(intent["environment"]))
     expect(intent["environment"]["QMD_MCP_LOOPBACK_PORT"] == "18181", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"] == "/srv/memory", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_MAX_CONTENT_HASH_BYTES"] == "8388608", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_RUNTIME_ENV_CONFIG"] == "1", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_RUNTIME_CONFIG_FILE"] == "/tmp/arclink-runtime.env", str(intent["environment"]))
     expect(intent["environment"]["STATE_DIR"] == "/srv/memory", str(intent["environment"]))
@@ -280,6 +291,8 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     memory_synth_volumes = {item["target"]: item["source"] for item in services["memory-synth"]["volumes"]}
     expect(memory_synth_volumes["/srv/vault"] == intent["state_roots"]["vault"], str(services["memory-synth"]))
     expect(memory_synth_volumes[intent["environment"]["ARCLINK_MEMORY_SYNTH_STATE_DIR"]] == intent["state_roots"]["memory"], str(services["memory-synth"]))
+    expect(memory_synth_volumes["/linked-resources"] == intent["state_roots"]["linked_resources"], str(services["memory-synth"]))
+    expect(memory_synth_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(services["memory-synth"]))
     for service_name in ("vault-watch", "notion-webhook", "notification-delivery", "health-watch"):
         service_volumes = {item["target"]: item["source"] for item in services[service_name]["volumes"]}
         expect(
@@ -327,6 +340,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_SECRET_FILE"] == "/run/secrets/dashboard_sso_secret", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_SUBJECT"] == "user_1", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_COOKIE_DOMAIN"] == "example.test", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SESSION_REVOKED_BEFORE"] == "1780000000", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_SSO_REVOKED_BEFORE"] == "1780000001", str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_DASHBOARD_AUTH_REVOKED_BY"] == "admin_revoker", str(services["managed-context-install"]))
     expect(services["managed-context-install"]["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"] == intent["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"], str(services["managed-context-install"]))
     expect(
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",

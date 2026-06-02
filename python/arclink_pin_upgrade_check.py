@@ -573,9 +573,9 @@ def _build_digest(included: list[tuple[CheckResult, dict[str, Any]]],
     lines.append("  - Chat: /upgrade queues the standard ArcLink upgrade/repair from this operator channel.")
     if chat_commands:
         lines.append(
-            "  - This pinned-component upgrade: tap Install, or send "
+            "  - This pinned-component upgrade: tap Preview, then send "
             + " / ".join(chat_commands)
-            + "."
+            + " with confirm or your operator approval code."
         )
     for command in approve_commands:
         lines.append(f"  - Host CLI: {command}")

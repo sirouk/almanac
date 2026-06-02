@@ -488,6 +488,69 @@ def test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards() -> None:
             stop_proxy(backend_other, backend_thread_other, proxy_other, proxy_thread_other)
 
 
+def test_proxy_rejects_session_and_sso_cookies_after_revocation_epoch() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_revocation_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        access_one = root / "one" / "arclink-web-access.json"
+        access_two = root / "two" / "arclink-web-access.json"
+        access_one.parent.mkdir(parents=True, exist_ok=True)
+        access_two.parent.mkdir(parents=True, exist_ok=True)
+        shared = {
+            "username": "captain@example.test",
+            "password": "shared-dashboard-password",
+            "sso_session_secret": "shared-sso-secret",
+            "sso_subject": "user_1",
+        }
+        one_payload = {**shared, "session_secret": "session-one", "deployment_id": "arcdep_one", "prefix": "one"}
+        two_payload = {**shared, "session_secret": "session-two", "deployment_id": "arcdep_two", "prefix": "two"}
+        access_one.write_text(json.dumps(one_payload), encoding="utf-8")
+        access_two.write_text(json.dumps(two_payload), encoding="utf-8")
+
+        backend_one, backend_thread_one, proxy_one, proxy_thread_one = start_proxy(proxy_mod, access_one)
+        backend_two, backend_thread_two, proxy_two, proxy_thread_two = start_proxy(proxy_mod, access_two)
+        try:
+            browser_cookie_header = login_cookie_header(
+                proxy_one.server_port,
+                username="captain@example.test",
+                password="shared-dashboard-password",
+            )
+            session_cookie = "; ".join(
+                part.strip()
+                for part in browser_cookie_header.split(";")
+                if part.strip().startswith("arclink_dash_session_")
+            )
+            sso_cookie = "; ".join(
+                part.strip()
+                for part in browser_cookie_header.split(";")
+                if part.strip().startswith("arclink_dash_sso_")
+            )
+            expect(session_cookie and sso_cookie, browser_cookie_header)
+
+            status, headers, body = request(proxy_one.server_port, "/", headers={"Cookie": session_cookie})
+            expect(status == 200, f"expected session cookie before revocation, saw {status} {headers} {body!r}")
+            status, headers, body = request(proxy_two.server_port, "/", headers={"Cookie": sso_cookie})
+            expect(status == 200, f"expected SSO cookie before revocation, saw {status} {headers} {body!r}")
+
+            access_one.write_text(
+                json.dumps({**one_payload, "dashboard_session_revoked_before": 4102444800}),
+                encoding="utf-8",
+            )
+            access_two.write_text(
+                json.dumps({**two_payload, "dashboard_sso_revoked_before": 4102444800}),
+                encoding="utf-8",
+            )
+
+            status, headers, body = request(proxy_one.server_port, "/", headers={"Cookie": session_cookie})
+            expect(status == 401, f"expected session cookie rejection after revocation, saw {status} {headers} {body!r}")
+            status, headers, body = request(proxy_two.server_port, "/", headers={"Cookie": sso_cookie})
+            expect(status == 401, f"expected SSO cookie rejection after revocation, saw {status} {headers} {body!r}")
+            print("PASS test_proxy_rejects_session_and_sso_cookies_after_revocation_epoch")
+        finally:
+            stop_proxy(backend_one, backend_thread_one, proxy_one, proxy_thread_one)
+            stop_proxy(backend_two, backend_thread_two, proxy_two, proxy_thread_two)
+
+
 def test_proxy_injects_crew_switcher_from_access_state() -> None:
     proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_crew_switcher_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -813,6 +876,7 @@ def main() -> int:
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
     test_proxy_scopes_session_cookie_per_dashboard_instance()
     test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards()
+    test_proxy_rejects_session_and_sso_cookies_after_revocation_epoch()
     test_proxy_injects_crew_switcher_from_access_state()
     test_proxy_rejects_basic_headers_and_injects_dashboard_plugin_deeplink_helper()
     test_proxy_can_run_dashboard_helpers_without_auth()
@@ -820,7 +884,7 @@ def main() -> int:
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 12 dashboard-auth-proxy regression tests")
+    print("PASS all 13 dashboard-auth-proxy regression tests")
     return 0
 
 

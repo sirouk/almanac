@@ -97,6 +97,19 @@ def _sso_subject(access: dict[str, object]) -> str:
     return str(access.get("sso_subject") or access.get("username") or "").strip()
 
 
+def _int_value(value: object) -> int:
+    try:
+        return int(str(value or "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _dashboard_revoked_before(access: dict[str, object], *keys: str) -> int:
+    values = [_int_value(access.get("dashboard_auth_revoked_before"))]
+    values.extend(_int_value(access.get(key)) for key in keys)
+    return max(values)
+
+
 def _safe_cookie_domain(value: str) -> str:
     candidate = str(value or "").strip().lower().lstrip(".").rstrip(".")
     if not candidate or candidate == "localhost":
@@ -164,6 +177,9 @@ def load_access(path: Path) -> dict[str, object]:
         "deployment_id": str(data.get("deployment_id") or ""),
         "prefix": str(data.get("prefix") or ""),
         "crew_dashboards": _clean_crew_dashboards(data.get("crew_dashboards")),
+        "dashboard_auth_revoked_before": _int_value(data.get("dashboard_auth_revoked_before")),
+        "dashboard_session_revoked_before": _int_value(data.get("dashboard_session_revoked_before")),
+        "dashboard_sso_revoked_before": _int_value(data.get("dashboard_sso_revoked_before")),
     }
 
 
@@ -516,7 +532,16 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             scope="captain-dashboard-sso",
         )
 
-    def _valid_token(self, token: str, *, secret: bytes, audience: str, subject: str, scope: str = "") -> bool:
+    def _valid_token(
+        self,
+        token: str,
+        *,
+        secret: bytes,
+        audience: str,
+        subject: str,
+        scope: str = "",
+        revoked_before: int = 0,
+    ) -> bool:
         token = str(token or "")
         parts = token.split(".")
         if len(parts) != 3:
@@ -537,6 +562,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if scope and str(payload.get("scope") or "") != scope:
             return False
         try:
+            issued_at = int(payload.get("iat") or 0)
+            if revoked_before and issued_at <= revoked_before:
+                return False
             return int(payload.get("exp") or 0) > int(time.time())
         except (TypeError, ValueError):
             return False
@@ -555,6 +583,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             secret=_token_secret(access, self.realm),
             audience=SESSION_TOKEN_AUDIENCE,
             subject=str(access.get("username") or ""),
+            revoked_before=_dashboard_revoked_before(access, "dashboard_session_revoked_before"),
         )
 
     def _valid_sso_cookie(self, access: dict[str, object]) -> bool:
@@ -576,6 +605,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             audience=SESSION_SSO_TOKEN_AUDIENCE,
             subject=subject,
             scope="captain-dashboard-sso",
+            revoked_before=_dashboard_revoked_before(access, "dashboard_sso_revoked_before"),
         )
 
     def _authorized(self) -> AuthState:

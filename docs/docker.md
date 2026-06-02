@@ -47,7 +47,7 @@ operator should recognize:
 | `control-llm-router` | The LLM router ASGI app (`arclink_llm_router`, `uvicorn` on port 8090); ArcPods point their default base URL here. |
 | `control-provisioner` | The Sovereign fleet ArcPod loop (`arclink_sovereign_worker --once`): place → render → apply → teardown. |
 | `control-action-worker` | Admin/operator action-intent consumer; non-root, delegates Docker lifecycle to `deployment-exec-broker` and root migration capture to `migration-capture-helper`. |
-| `control-academy-ce` | Weekly no-write Academy continuing-education review (`run_academy_forward_maintenance`); performs no live source crawl and no Agent file write (live acquisition stays PG-PROVIDER, apply stays PG-HERMES). |
+| `control-academy-ce` | Weekly Academy continuing-education review (`run_academy_forward_maintenance`); performs bounded public-source crawl observations, stores metadata and content hashes only, and never writes Agent files without the separate apply gate. |
 | `notification-delivery` | Notification-outbox delivery worker; the public Agent bridge `docker exec` is delegated to `gateway-exec-broker` (GAP-019-F). |
 | `arclink-wrapped` | ArcLink Wrapped scoring/render/cadence/delivery worker. |
 | `health-watch` | Edge-triggered operator health-notification job (no Docker socket). |

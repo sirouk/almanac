@@ -536,6 +536,17 @@ def test_compose_defines_full_stack_services() -> None:
     expect("traefik.http.routers." not in body and "traefik.enable=true" not in body, body)
     expect('rule: "PathPrefix(`/v1`)"' in traefik_config, traefik_config)
     llm_router_block = extract(body, "  control-llm-router:", "\n\n")
+    for pool_env in (
+        "ARCLINK_LLM_ROUTER_UPSTREAM_CONNECT_TIMEOUT_SECONDS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_WRITE_TIMEOUT_SECONDS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_POOL_TIMEOUT_SECONDS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_MAX_CONNECTIONS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS",
+        "ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED",
+    ):
+        expect(pool_env in llm_router_block, f"missing router pool env {pool_env}\n{llm_router_block}")
     expect("<<: *arclink-control-secret-env" not in llm_router_block, llm_router_block)
     expect("STRIPE_SECRET_KEY:" not in llm_router_block and "CLOUDFLARE_API_TOKEN:" not in llm_router_block, llm_router_block)
     expect("python/arclink_sovereign_worker.py" in body and "control-provisioner" in body, body)

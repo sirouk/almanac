@@ -101,6 +101,7 @@ x-arclink-app: &arclink-app
     ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN: ${ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN:-12}
     ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS: ${ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS:-4500}
     ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS: ${ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS:-450}
+    ARCLINK_MEMORY_SYNTH_MAX_CONTENT_HASH_BYTES: ${ARCLINK_MEMORY_SYNTH_MAX_CONTENT_HASH_BYTES:-8388608}
     ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS: ${ARCLINK_MEMORY_SYNTH_TIMEOUT_SECONDS:-60}
     ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS: ${ARCLINK_MEMORY_SYNTH_FAILURE_RETRY_SECONDS:-3600}
     ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT: ${ARCLINK_MEMORY_SYNTH_CARDS_IN_CONTEXT:-8}
@@ -529,6 +530,14 @@ services:
       ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS: ${ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS:-2500}
       ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS: ${ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS:-95}
       ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS: ${ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS:-400}
+      ARCLINK_LLM_ROUTER_UPSTREAM_CONNECT_TIMEOUT_SECONDS: ${ARCLINK_LLM_ROUTER_UPSTREAM_CONNECT_TIMEOUT_SECONDS:-5}
+      ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS: ${ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS:-300}
+      ARCLINK_LLM_ROUTER_UPSTREAM_WRITE_TIMEOUT_SECONDS: ${ARCLINK_LLM_ROUTER_UPSTREAM_WRITE_TIMEOUT_SECONDS:-30}
+      ARCLINK_LLM_ROUTER_UPSTREAM_POOL_TIMEOUT_SECONDS: ${ARCLINK_LLM_ROUTER_UPSTREAM_POOL_TIMEOUT_SECONDS:-5}
+      ARCLINK_LLM_ROUTER_UPSTREAM_MAX_CONNECTIONS: ${ARCLINK_LLM_ROUTER_UPSTREAM_MAX_CONNECTIONS:-256}
+      ARCLINK_LLM_ROUTER_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS: ${ARCLINK_LLM_ROUTER_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS:-64}
+      ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS: ${ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS:-90}
+      ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED: ${ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED:-1}
     command: ["python3", "-m", "uvicorn", "arclink_llm_router:app", "--app-dir", "python", "--host", "0.0.0.0", "--port", "8090"]
     ports:
       - "127.0.0.1:${ARCLINK_LLM_ROUTER_PORT:-8090}:8090"
@@ -712,14 +721,15 @@ services:
 
   control-academy-ce:
     <<: *arclink-app
-    # Weekly no-write Academy continuing-education review for graduated, forward
-    # maintained Trainees. Performs no live source crawl and no Agent SOUL write;
-    # live acquisition stays PG-PROVIDER gated and apply stays PG-HERMES gated.
+    # Weekly Academy continuing-education review for graduated, forward-maintained
+    # Trainees. Performs bounded public-source crawl observations, stores metadata
+    # and content hashes only, and never writes Agent SOUL/skills/vault state;
+    # changed or unsafe sources remain review-gated and apply stays PG-HERMES gated.
     cap_drop:
       - ALL
-    # Least-privilege: this no-write job needs only DB access via the base env. It
+    # Least-privilege: this job needs DB access and outbound public HTTPS only. It
     # does NOT merge *arclink-control-secret-env (no Stripe/Cloudflare/Chutes/bot
-    # secrets), since run_academy_forward_maintenance reads none of them.
+    # secrets), since weekly crawling records only public-source metadata.
     environment:
       <<: *arclink-env
     volumes:

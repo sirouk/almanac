@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,15 @@ DEFAULT_USER_REQUESTS_PER_MINUTE = 300
 DEFAULT_MIN_RESERVATION_CENTS = 1
 DEFAULT_INPUT_CENTS_PER_MILLION = 95
 DEFAULT_OUTPUT_CENTS_PER_MILLION = 400
+DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECONDS = 5
+DEFAULT_UPSTREAM_READ_TIMEOUT_SECONDS = 300
+DEFAULT_UPSTREAM_WRITE_TIMEOUT_SECONDS = 30
+DEFAULT_UPSTREAM_POOL_TIMEOUT_SECONDS = 5
+DEFAULT_UPSTREAM_MAX_CONNECTIONS = 256
+DEFAULT_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS = 64
+DEFAULT_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS = 90
+DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 15000
+_SQLITE_SCHEMA_LOCK = threading.Lock()
 
 
 def _truthy(value: str | None, *, default: bool = False) -> bool:
@@ -101,6 +111,14 @@ class RouterConfig:
     default_monthly_budget_cents: int
     input_cents_per_million: int
     output_cents_per_million: int
+    upstream_connect_timeout_seconds: int
+    upstream_read_timeout_seconds: int
+    upstream_write_timeout_seconds: int
+    upstream_pool_timeout_seconds: int
+    upstream_max_connections: int
+    upstream_max_keepalive_connections: int
+    upstream_keepalive_expiry_seconds: int
+    upstream_warmup_enabled: bool
 
     @property
     def configured(self) -> bool:
@@ -123,6 +141,16 @@ class RouterConfig:
             "fallback_model_count": len(self.fallback_models),
             "model_auto_promote": self.model_auto_promote,
             "model_catalog_refresh_on_startup": self.refresh_model_catalog_on_startup,
+            "upstream_pool": {
+                "max_connections": self.upstream_max_connections,
+                "max_keepalive_connections": min(self.upstream_max_connections, self.upstream_max_keepalive_connections),
+                "keepalive_expiry_seconds": self.upstream_keepalive_expiry_seconds,
+                "connect_timeout_seconds": self.upstream_connect_timeout_seconds,
+                "read_timeout_seconds": self.upstream_read_timeout_seconds,
+                "write_timeout_seconds": self.upstream_write_timeout_seconds,
+                "pool_timeout_seconds": self.upstream_pool_timeout_seconds,
+                "warmup_enabled": self.upstream_warmup_enabled,
+            },
         }
 
 
@@ -234,6 +262,49 @@ def load_router_config(env: Mapping[str, str] | None = None) -> RouterConfig:
             DEFAULT_OUTPUT_CENTS_PER_MILLION,
             minimum=0,
         ),
+        upstream_connect_timeout_seconds=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_CONNECT_TIMEOUT_SECONDS",
+            DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECONDS,
+            minimum=1,
+        ),
+        upstream_read_timeout_seconds=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS",
+            DEFAULT_UPSTREAM_READ_TIMEOUT_SECONDS,
+            minimum=1,
+        ),
+        upstream_write_timeout_seconds=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_WRITE_TIMEOUT_SECONDS",
+            DEFAULT_UPSTREAM_WRITE_TIMEOUT_SECONDS,
+            minimum=1,
+        ),
+        upstream_pool_timeout_seconds=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_POOL_TIMEOUT_SECONDS",
+            DEFAULT_UPSTREAM_POOL_TIMEOUT_SECONDS,
+            minimum=1,
+        ),
+        upstream_max_connections=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_MAX_CONNECTIONS",
+            DEFAULT_UPSTREAM_MAX_CONNECTIONS,
+            minimum=1,
+        ),
+        upstream_max_keepalive_connections=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS",
+            DEFAULT_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS,
+            minimum=0,
+        ),
+        upstream_keepalive_expiry_seconds=_bounded_env_int(
+            source,
+            "ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS",
+            DEFAULT_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS,
+            minimum=1,
+        ),
+        upstream_warmup_enabled=_truthy(source.get("ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED"), default=True),
     )
 
 
@@ -261,9 +332,11 @@ def _require_configured(config: RouterConfig) -> JSONResponse | None:
 
 
 def _open_control_conn(config: RouterConfig) -> sqlite3.Connection:
-    conn = sqlite3.connect(config.db_path)
+    conn = sqlite3.connect(config.db_path, timeout=DEFAULT_SQLITE_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
-    ensure_schema(conn)
+    conn.execute(f"PRAGMA busy_timeout = {DEFAULT_SQLITE_BUSY_TIMEOUT_MS}")
+    with _SQLITE_SCHEMA_LOCK:
+        ensure_schema(conn)
     return conn
 
 
@@ -314,7 +387,6 @@ def _authenticate_request(config: RouterConfig, request: Request) -> tuple[dict[
         return None, _router_error(401, "missing_bearer_token", "ArcLink LLM router requires a Bearer token.")
     try:
         conn = _open_control_conn(config)
-        ensure_schema(conn)
         try:
             record = verify_llm_router_key(conn, raw_key)
         finally:
@@ -1148,9 +1220,90 @@ def _upstream_url(config: RouterConfig, path: str) -> str:
     return f"{config.chutes_base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
-def _upstream_client(config: RouterConfig, app_state: Any) -> httpx.AsyncClient:
+def _upstream_timeout(config: RouterConfig) -> httpx.Timeout:
+    return httpx.Timeout(
+        connect=float(config.upstream_connect_timeout_seconds),
+        read=float(config.upstream_read_timeout_seconds),
+        write=float(config.upstream_write_timeout_seconds),
+        pool=float(config.upstream_pool_timeout_seconds),
+    )
+
+
+def _upstream_limits(config: RouterConfig) -> httpx.Limits:
+    return httpx.Limits(
+        max_connections=int(config.upstream_max_connections),
+        max_keepalive_connections=min(int(config.upstream_max_connections), int(config.upstream_max_keepalive_connections)),
+        keepalive_expiry=float(config.upstream_keepalive_expiry_seconds),
+    )
+
+
+def _create_upstream_client(config: RouterConfig, app_state: Any) -> httpx.AsyncClient:
     transport = getattr(app_state, "router_upstream_transport", None)
-    return httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(60.0, connect=10.0))
+    return httpx.AsyncClient(
+        transport=transport,
+        timeout=_upstream_timeout(config),
+        limits=_upstream_limits(config),
+    )
+
+
+def _current_loop_key() -> str:
+    try:
+        return str(id(asyncio.get_running_loop()))
+    except RuntimeError:
+        return "no-running-loop"
+
+
+def _upstream_client(config: RouterConfig, app_state: Any) -> httpx.AsyncClient:
+    clients = getattr(app_state, "router_upstream_clients", None)
+    if not isinstance(clients, dict):
+        clients = {}
+        app_state.router_upstream_clients = clients
+    loop_key = _current_loop_key()
+    client = clients.get(loop_key)
+    if client is None or bool(getattr(client, "is_closed", False)):
+        client = _create_upstream_client(config, app_state)
+        clients[loop_key] = client
+    return client
+
+
+async def _close_upstream_clients(app_state: Any) -> None:
+    clients = getattr(app_state, "router_upstream_clients", None)
+    if not isinstance(clients, dict):
+        return
+    for client in list(clients.values()):
+        if client is not None and not bool(getattr(client, "is_closed", False)):
+            await client.aclose()
+    clients.clear()
+
+
+async def _warm_up_upstream_pool(config: RouterConfig, app_state: Any) -> dict[str, Any]:
+    if not config.upstream_warmup_enabled:
+        return {"status": "disabled"}
+    if not config.enabled:
+        return {"status": "skipped", "reason": "router_disabled"}
+    if not config.configured:
+        return {"status": "skipped", "reason": "router_not_configured"}
+    if getattr(app_state, "router_upstream_transport", None) is not None:
+        return {"status": "skipped", "reason": "test_transport"}
+    client = _upstream_client(config, app_state)
+    warmup_timeout = httpx.Timeout(
+        connect=float(config.upstream_connect_timeout_seconds),
+        read=5.0,
+        write=5.0,
+        pool=float(config.upstream_pool_timeout_seconds),
+    )
+    try:
+        response = await client.get(_upstream_url(config, "models"), headers=_upstream_headers(config), timeout=warmup_timeout)
+        await response.aread()
+    except httpx.HTTPError as exc:
+        return {"status": "failed", "error": _safe_upstream_error(str(exc))}
+    if response.status_code in {401, 403}:
+        return {"status": "failed", "status_code": response.status_code}
+    if response.status_code >= 500:
+        return {"status": "degraded", "status_code": response.status_code}
+    if response.status_code >= 400:
+        return {"status": "degraded", "status_code": response.status_code}
+    return {"status": "ok", "status_code": response.status_code}
 
 
 def _record_router_usage(
@@ -1301,146 +1454,146 @@ async def _forward_non_streaming(
     data: dict[str, Any] = {}
     source_kind = "provider_usage"
 
-    async with _upstream_client(config, request.app.state) as client:
-        for index, candidate_model in enumerate(candidates):
-            final_model = candidate_model
+    client = _upstream_client(config, request.app.state)
+    for index, candidate_model in enumerate(candidates):
+        final_model = candidate_model
+        try:
+            upstream = await client.post(
+                _upstream_url(config, "chat/completions"),
+                json=_prepare_upstream_payload(payload, model=candidate_model),
+                headers=_upstream_headers(config),
+            )
+        except httpx.HTTPError as exc:
+            error_summary = _safe_upstream_error(str(exc))
+            next_model = candidates[index + 1] if index + 1 < len(candidates) else ""
+            attempt = _fallback_attempt_metadata(
+                reservation=reservation,
+                auth_record=auth_record,
+                requested_model=model,
+                primary_model=upstream_model,
+                attempted_model=candidate_model,
+                next_model=next_model,
+                status_code=502,
+                stream=False,
+                outcome="retrying" if next_model else "failed",
+                error_summary=error_summary,
+                attempt_index=index,
+                retryable=bool(next_model),
+            )
+            fallback_attempts.append(attempt)
+            _record_fallback_attempt_event(config, attempt)
+            if next_model:
+                continue
+            conn = _open_control_conn(config)
             try:
-                upstream = await client.post(
-                    _upstream_url(config, "chat/completions"),
-                    json=_prepare_upstream_payload(payload, model=candidate_model),
-                    headers=_upstream_headers(config),
-                )
-            except httpx.HTTPError as exc:
-                error_summary = _safe_upstream_error(str(exc))
-                next_model = candidates[index + 1] if index + 1 < len(candidates) else ""
-                attempt = _fallback_attempt_metadata(
+                _record_router_usage(
+                    conn,
+                    config,
                     reservation=reservation,
                     auth_record=auth_record,
-                    requested_model=model,
-                    primary_model=upstream_model,
-                    attempted_model=candidate_model,
-                    next_model=next_model,
-                    status_code=502,
+                    model=candidate_model,
                     stream=False,
-                    outcome="retrying" if next_model else "failed",
+                    status="failed",
+                    input_tokens=int(reservation.get("input_token_estimate") or 0),
+                    output_tokens=0,
+                    total_tokens=int(reservation.get("input_token_estimate") or 0),
+                    source_kind="upstream_error",
                     error_summary=error_summary,
-                    attempt_index=index,
-                    retryable=bool(next_model),
+                    fallback_attempts=fallback_attempts,
                 )
-                fallback_attempts.append(attempt)
-                _record_fallback_attempt_event(config, attempt)
-                if next_model:
-                    continue
-                conn = _open_control_conn(config)
-                try:
-                    _record_router_usage(
-                        conn,
-                        config,
-                        reservation=reservation,
-                        auth_record=auth_record,
-                        model=candidate_model,
-                        stream=False,
-                        status="failed",
-                        input_tokens=int(reservation.get("input_token_estimate") or 0),
-                        output_tokens=0,
-                        total_tokens=int(reservation.get("input_token_estimate") or 0),
-                        source_kind="upstream_error",
-                        error_summary=error_summary,
-                        fallback_attempts=fallback_attempts,
-                    )
-                finally:
-                    conn.close()
-                return _router_error(502, "upstream_unavailable", "Chutes upstream request failed.")
+            finally:
+                conn.close()
+            return _router_error(502, "upstream_unavailable", "Chutes upstream request failed.")
 
-            if upstream.status_code >= 400:
-                error_summary = _safe_upstream_error(upstream.text)
-                retryable = _upstream_status_is_retryable(config, upstream.status_code)
-                next_model = candidates[index + 1] if retryable and index + 1 < len(candidates) else ""
-                attempt = _fallback_attempt_metadata(
-                    reservation=reservation,
-                    auth_record=auth_record,
-                    requested_model=model,
-                    primary_model=upstream_model,
-                    attempted_model=candidate_model,
-                    next_model=next_model,
-                    status_code=upstream.status_code,
-                    stream=False,
-                    outcome="retrying" if next_model else "failed",
-                    error_summary=error_summary,
-                    attempt_index=index,
-                    retryable=retryable,
-                )
-                fallback_attempts.append(attempt)
-                _record_fallback_attempt_event(config, attempt)
-                if next_model:
-                    continue
-                conn = _open_control_conn(config)
-                try:
-                    _record_router_usage(
-                        conn,
-                        config,
-                        reservation=reservation,
-                        auth_record=auth_record,
-                        model=candidate_model,
-                        stream=False,
-                        status="failed",
-                        input_tokens=int(reservation.get("input_token_estimate") or 0),
-                        output_tokens=0,
-                        total_tokens=int(reservation.get("input_token_estimate") or 0),
-                        source_kind="upstream_error",
-                        error_summary=error_summary,
-                        fallback_attempts=fallback_attempts,
-                    )
-                finally:
-                    conn.close()
-                return _router_error(upstream.status_code if upstream.status_code < 500 else 502, "upstream_error", error_summary or "Chutes upstream returned an error.")
-
+        if upstream.status_code >= 400:
+            error_summary = _safe_upstream_error(upstream.text)
+            retryable = _upstream_status_is_retryable(config, upstream.status_code)
+            next_model = candidates[index + 1] if retryable and index + 1 < len(candidates) else ""
+            attempt = _fallback_attempt_metadata(
+                reservation=reservation,
+                auth_record=auth_record,
+                requested_model=model,
+                primary_model=upstream_model,
+                attempted_model=candidate_model,
+                next_model=next_model,
+                status_code=upstream.status_code,
+                stream=False,
+                outcome="retrying" if next_model else "failed",
+                error_summary=error_summary,
+                attempt_index=index,
+                retryable=retryable,
+            )
+            fallback_attempts.append(attempt)
+            _record_fallback_attempt_event(config, attempt)
+            if next_model:
+                continue
+            conn = _open_control_conn(config)
             try:
-                parsed = upstream.json()
-            except Exception:
-                error_summary = _safe_upstream_error(upstream.text)
-                next_model = candidates[index + 1] if index + 1 < len(candidates) else ""
-                attempt = _fallback_attempt_metadata(
+                _record_router_usage(
+                    conn,
+                    config,
                     reservation=reservation,
                     auth_record=auth_record,
-                    requested_model=model,
-                    primary_model=upstream_model,
-                    attempted_model=candidate_model,
-                    next_model=next_model,
-                    status_code=502,
+                    model=candidate_model,
                     stream=False,
-                    outcome="retrying" if next_model else "failed",
+                    status="failed",
+                    input_tokens=int(reservation.get("input_token_estimate") or 0),
+                    output_tokens=0,
+                    total_tokens=int(reservation.get("input_token_estimate") or 0),
+                    source_kind="upstream_error",
                     error_summary=error_summary,
-                    attempt_index=index,
-                    retryable=bool(next_model),
+                    fallback_attempts=fallback_attempts,
                 )
-                fallback_attempts.append(attempt)
-                _record_fallback_attempt_event(config, attempt)
-                if next_model:
-                    continue
-                conn = _open_control_conn(config)
-                try:
-                    _record_router_usage(
-                        conn,
-                        config,
-                        reservation=reservation,
-                        auth_record=auth_record,
-                        model=candidate_model,
-                        stream=False,
-                        status="failed",
-                        input_tokens=int(reservation.get("input_token_estimate") or 0),
-                        output_tokens=0,
-                        total_tokens=int(reservation.get("input_token_estimate") or 0),
-                        source_kind="invalid_upstream_json",
-                        error_summary=error_summary,
-                        fallback_attempts=fallback_attempts,
-                    )
-                finally:
-                    conn.close()
-                return _router_error(502, "invalid_upstream_response", "Chutes upstream returned invalid JSON.")
-            data = parsed if isinstance(parsed, dict) else {}
-            source_kind = "provider_usage"
-            break
+            finally:
+                conn.close()
+            return _router_error(upstream.status_code if upstream.status_code < 500 else 502, "upstream_error", error_summary or "Chutes upstream returned an error.")
+
+        try:
+            parsed = upstream.json()
+        except Exception:
+            error_summary = _safe_upstream_error(upstream.text)
+            next_model = candidates[index + 1] if index + 1 < len(candidates) else ""
+            attempt = _fallback_attempt_metadata(
+                reservation=reservation,
+                auth_record=auth_record,
+                requested_model=model,
+                primary_model=upstream_model,
+                attempted_model=candidate_model,
+                next_model=next_model,
+                status_code=502,
+                stream=False,
+                outcome="retrying" if next_model else "failed",
+                error_summary=error_summary,
+                attempt_index=index,
+                retryable=bool(next_model),
+            )
+            fallback_attempts.append(attempt)
+            _record_fallback_attempt_event(config, attempt)
+            if next_model:
+                continue
+            conn = _open_control_conn(config)
+            try:
+                _record_router_usage(
+                    conn,
+                    config,
+                    reservation=reservation,
+                    auth_record=auth_record,
+                    model=candidate_model,
+                    stream=False,
+                    status="failed",
+                    input_tokens=int(reservation.get("input_token_estimate") or 0),
+                    output_tokens=0,
+                    total_tokens=int(reservation.get("input_token_estimate") or 0),
+                    source_kind="invalid_upstream_json",
+                    error_summary=error_summary,
+                    fallback_attempts=fallback_attempts,
+                )
+            finally:
+                conn.close()
+            return _router_error(502, "invalid_upstream_response", "Chutes upstream returned invalid JSON.")
+        data = parsed if isinstance(parsed, dict) else {}
+        source_kind = "provider_usage"
+        break
 
     input_tokens, output_tokens, total_tokens, source_kind = _usage_from_payload(
         data,
@@ -1500,123 +1653,123 @@ async def _stream_upstream_response(
     streaming_fallback = ""
     yielded_any = False
     try:
-        async with _upstream_client(config, request.app.state) as client:
-            for index, candidate_model in enumerate(candidates):
-                final_model = candidate_model
-                try:
-                    async with client.stream(
-                        "POST",
-                        _upstream_url(config, "chat/completions"),
-                        json=_prepare_upstream_payload(payload, model=candidate_model),
-                        headers=_upstream_headers(config),
-                    ) as upstream:
-                        if upstream.status_code >= 400:
-                            status = "failed"
-                            error_summary = _safe_upstream_error(await upstream.aread())
-                            retryable = _upstream_status_is_retryable(config, upstream.status_code)
-                            next_model = candidates[index + 1] if retryable and index + 1 < len(candidates) else ""
-                            attempt = _fallback_attempt_metadata(
-                                reservation=reservation,
-                                auth_record=auth_record,
-                                requested_model=model,
-                                primary_model=upstream_model,
-                                attempted_model=candidate_model,
-                                next_model=next_model,
-                                status_code=upstream.status_code,
-                                stream=True,
-                                outcome="retrying" if next_model else "failed",
-                                error_summary=error_summary,
-                                attempt_index=index,
-                                retryable=retryable,
-                            )
-                            fallback_attempts.append(attempt)
-                            _record_fallback_attempt_event(config, attempt)
-                            if next_model:
-                                streaming_fallback = "pre_stream"
-                                continue
-                            yield _sse_data(
-                                {
-                                    "error": {
-                                        "message": "Chutes upstream returned an error.",
-                                        "type": "arclink_router_error",
-                                        "code": "upstream_error",
-                                    },
-                                    "arclink_router": _router_metadata_for_response(
-                                        requested_model=model,
-                                        primary_model=upstream_model,
-                                        final_model=candidate_model,
-                                        fallback_attempts=fallback_attempts,
-                                        streaming_fallback=streaming_fallback or "not_available",
-                                    ),
-                                }
-                            )
-                            return
-                        if fallback_attempts or candidate_model != upstream_model:
-                            streaming_fallback = streaming_fallback or "pre_stream"
-                            yield _sse_data(
-                                {
-                                    "arclink_router": _router_metadata_for_response(
-                                        requested_model=model,
-                                        primary_model=upstream_model,
-                                        final_model=candidate_model,
-                                        fallback_attempts=fallback_attempts,
-                                        streaming_fallback=streaming_fallback,
-                                    )
-                                }
-                            )
-                        status = "succeeded"
-                        error_summary = ""
-                        async for chunk in upstream.aiter_bytes():
-                            usage = _usage_from_sse_chunk(chunk)
-                            if usage is not None:
-                                input_tokens, output_tokens, total_tokens = usage
-                                source_kind = "provider_usage"
-                            yielded_any = True
-                            yield chunk
+        client = _upstream_client(config, request.app.state)
+        for index, candidate_model in enumerate(candidates):
+            final_model = candidate_model
+            try:
+                async with client.stream(
+                    "POST",
+                    _upstream_url(config, "chat/completions"),
+                    json=_prepare_upstream_payload(payload, model=candidate_model),
+                    headers=_upstream_headers(config),
+                ) as upstream:
+                    if upstream.status_code >= 400:
+                        status = "failed"
+                        error_summary = _safe_upstream_error(await upstream.aread())
+                        retryable = _upstream_status_is_retryable(config, upstream.status_code)
+                        next_model = candidates[index + 1] if retryable and index + 1 < len(candidates) else ""
+                        attempt = _fallback_attempt_metadata(
+                            reservation=reservation,
+                            auth_record=auth_record,
+                            requested_model=model,
+                            primary_model=upstream_model,
+                            attempted_model=candidate_model,
+                            next_model=next_model,
+                            status_code=upstream.status_code,
+                            stream=True,
+                            outcome="retrying" if next_model else "failed",
+                            error_summary=error_summary,
+                            attempt_index=index,
+                            retryable=retryable,
+                        )
+                        fallback_attempts.append(attempt)
+                        _record_fallback_attempt_event(config, attempt)
+                        if next_model:
+                            streaming_fallback = "pre_stream"
+                            continue
+                        yield _sse_data(
+                            {
+                                "error": {
+                                    "message": "Chutes upstream returned an error.",
+                                    "type": "arclink_router_error",
+                                    "code": "upstream_error",
+                                },
+                                "arclink_router": _router_metadata_for_response(
+                                    requested_model=model,
+                                    primary_model=upstream_model,
+                                    final_model=candidate_model,
+                                    fallback_attempts=fallback_attempts,
+                                    streaming_fallback=streaming_fallback or "not_available",
+                                ),
+                            }
+                        )
                         return
-                except (httpx.HTTPError, OSError) as exc:
-                    status = "failed"
-                    error_summary = _safe_upstream_error(str(exc))
-                    next_model = candidates[index + 1] if (not yielded_any and index + 1 < len(candidates)) else ""
-                    outcome = "retrying" if next_model else ("failed_after_stream_started" if yielded_any else "failed")
-                    attempt = _fallback_attempt_metadata(
-                        reservation=reservation,
-                        auth_record=auth_record,
-                        requested_model=model,
-                        primary_model=upstream_model,
-                        attempted_model=candidate_model,
-                        next_model=next_model,
-                        status_code=502,
-                        stream=True,
-                        outcome=outcome,
-                        error_summary=error_summary,
-                        attempt_index=index,
-                        retryable=bool(next_model),
-                    )
-                    fallback_attempts.append(attempt)
-                    _record_fallback_attempt_event(config, attempt)
-                    if next_model:
-                        streaming_fallback = "pre_stream"
-                        continue
-                    if yielded_any:
-                        streaming_fallback = streaming_fallback or "unavailable_after_stream_started"
-                    yield _sse_data(
-                        {
-                            "error": {
-                                "message": "Chutes upstream request failed.",
-                                "type": "arclink_router_error",
-                                "code": "upstream_unavailable",
-                            },
-                            "arclink_router": _router_metadata_for_response(
-                                requested_model=model,
-                                primary_model=upstream_model,
-                                final_model=candidate_model,
-                                fallback_attempts=fallback_attempts,
-                                streaming_fallback=streaming_fallback or "not_available",
-                            ),
-                        }
-                    )
+                    if fallback_attempts or candidate_model != upstream_model:
+                        streaming_fallback = streaming_fallback or "pre_stream"
+                        yield _sse_data(
+                            {
+                                "arclink_router": _router_metadata_for_response(
+                                    requested_model=model,
+                                    primary_model=upstream_model,
+                                    final_model=candidate_model,
+                                    fallback_attempts=fallback_attempts,
+                                    streaming_fallback=streaming_fallback,
+                                )
+                            }
+                        )
+                    status = "succeeded"
+                    error_summary = ""
+                    async for chunk in upstream.aiter_bytes():
+                        usage = _usage_from_sse_chunk(chunk)
+                        if usage is not None:
+                            input_tokens, output_tokens, total_tokens = usage
+                            source_kind = "provider_usage"
+                        yielded_any = True
+                        yield chunk
                     return
+            except (httpx.HTTPError, OSError) as exc:
+                status = "failed"
+                error_summary = _safe_upstream_error(str(exc))
+                next_model = candidates[index + 1] if (not yielded_any and index + 1 < len(candidates)) else ""
+                outcome = "retrying" if next_model else ("failed_after_stream_started" if yielded_any else "failed")
+                attempt = _fallback_attempt_metadata(
+                    reservation=reservation,
+                    auth_record=auth_record,
+                    requested_model=model,
+                    primary_model=upstream_model,
+                    attempted_model=candidate_model,
+                    next_model=next_model,
+                    status_code=502,
+                    stream=True,
+                    outcome=outcome,
+                    error_summary=error_summary,
+                    attempt_index=index,
+                    retryable=bool(next_model),
+                )
+                fallback_attempts.append(attempt)
+                _record_fallback_attempt_event(config, attempt)
+                if next_model:
+                    streaming_fallback = "pre_stream"
+                    continue
+                if yielded_any:
+                    streaming_fallback = streaming_fallback or "unavailable_after_stream_started"
+                yield _sse_data(
+                    {
+                        "error": {
+                            "message": "Chutes upstream request failed.",
+                            "type": "arclink_router_error",
+                            "code": "upstream_unavailable",
+                        },
+                        "arclink_router": _router_metadata_for_response(
+                            requested_model=model,
+                            primary_model=upstream_model,
+                            final_model=candidate_model,
+                            fallback_attempts=fallback_attempts,
+                            streaming_fallback=streaming_fallback or "not_available",
+                        ),
+                    }
+                )
+                return
     finally:
         if source_kind == "fallback_estimate" and status == "succeeded":
             output_tokens = int(reservation.get("output_token_estimate") or 0)
@@ -1653,29 +1806,37 @@ def create_app(
     app = FastAPI(title="ArcLink LLM Router", version="0.1.0")
     app.state.router_config = router_config
     app.state.router_upstream_transport = upstream_transport
+    app.state.router_upstream_clients = {}
+    app.state.router_upstream_warmup = {"status": "pending" if router_config.upstream_warmup_enabled else "disabled"}
     app.state.router_catalog_refresh = {"status": "pending" if router_config.refresh_model_catalog_on_startup else "disabled"}
 
     @app.on_event("startup")
-    async def refresh_model_catalog_on_startup() -> None:
-        if not router_config.refresh_model_catalog_on_startup:
+    async def router_startup() -> None:
+        app.state.router_upstream_warmup = await _warm_up_upstream_pool(router_config, app.state)
+        if router_config.refresh_model_catalog_on_startup:
+            try:
+                app.state.router_catalog_refresh = await asyncio.to_thread(
+                    _refresh_model_catalog_once,
+                    router_config,
+                    http_client=catalog_http_client,
+                )
+            except (ChutesCatalogError, sqlite3.Error, OSError, ValueError) as exc:
+                app.state.router_catalog_refresh = {
+                    "status": "failed",
+                    "error": _safe_upstream_error(str(exc)),
+                }
+        else:
             app.state.router_catalog_refresh = {"status": "disabled"}
-            return
-        try:
-            app.state.router_catalog_refresh = await asyncio.to_thread(
-                _refresh_model_catalog_once,
-                router_config,
-                http_client=catalog_http_client,
-            )
-        except (ChutesCatalogError, sqlite3.Error, OSError, ValueError) as exc:
-            app.state.router_catalog_refresh = {
-                "status": "failed",
-                "error": _safe_upstream_error(str(exc)),
-            }
+
+    @app.on_event("shutdown")
+    async def router_shutdown() -> None:
+        await _close_upstream_clients(app.state)
 
     @app.get("/health")
     async def health() -> JSONResponse:
         payload = router_config.public_status()
         payload["model_catalog_refresh"] = dict(getattr(app.state, "router_catalog_refresh", {}) or {})
+        payload["upstream_warmup"] = dict(getattr(app.state, "router_upstream_warmup", {}) or {})
         status_code = 200 if router_config.configured else 503
         return JSONResponse(status_code=status_code, content=payload)
 

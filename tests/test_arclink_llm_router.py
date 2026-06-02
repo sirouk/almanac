@@ -397,6 +397,116 @@ def test_health_and_models_report_configured_state_without_exposing_key() -> Non
     print("PASS test_health_and_models_report_configured_state_without_exposing_key")
 
 
+def test_upstream_pool_config_is_public_and_secret_safe() -> None:
+    import asyncio
+
+    tmp, db_path = temp_router_db()
+    try:
+        router = load_module("arclink_llm_router.py", "arclink_llm_router_pool_config_test")
+        config = router.load_router_config(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_CONNECT_TIMEOUT_SECONDS": "7",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS": "301",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_WRITE_TIMEOUT_SECONDS": "31",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_POOL_TIMEOUT_SECONDS": "6",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_MAX_CONNECTIONS": "11",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS": "22",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS": "77",
+                "ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "0",
+            }
+        )
+        app = router.create_app(config, upstream_transport=fake_upstream_transport())
+
+        async def run_startup() -> None:
+            for handler in getattr(app.router, "on_startup", []):
+                result = handler()
+                if hasattr(result, "__await__"):
+                    await result
+
+        async def run_shutdown() -> None:
+            for handler in getattr(app.router, "on_shutdown", []):
+                result = handler()
+                if hasattr(result, "__await__"):
+                    await result
+
+        asyncio.run(run_startup())
+        try:
+            client = _ASGITestClient(app)
+            health = client.get("/health")
+            payload = health.json()
+            expect(health.status_code == 200, health.text)
+            pool = payload["upstream_pool"]
+            expect(pool["connect_timeout_seconds"] == 7, str(pool))
+            expect(pool["read_timeout_seconds"] == 301, str(pool))
+            expect(pool["write_timeout_seconds"] == 31, str(pool))
+            expect(pool["pool_timeout_seconds"] == 6, str(pool))
+            expect(pool["max_connections"] == 11, str(pool))
+            expect(pool["max_keepalive_connections"] == 11, str(pool))
+            expect(pool["keepalive_expiry_seconds"] == 77, str(pool))
+            expect(pool["warmup_enabled"] is True, str(pool))
+            expect(payload["upstream_warmup"] == {"status": "skipped", "reason": "test_transport"}, str(payload))
+            expect("cpk_test_router_secret_123" not in health.text, health.text)
+        finally:
+            asyncio.run(run_shutdown())
+    finally:
+        tmp.cleanup()
+    print("PASS test_upstream_pool_config_is_public_and_secret_safe")
+
+
+def test_chat_reuses_upstream_client_pool_within_event_loop() -> None:
+    import asyncio
+
+    import httpx
+
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path)
+        upstream = fake_upstream_transport()
+        router = load_module("arclink_llm_router.py", "arclink_llm_router_pool_reuse_test")
+        config = router.load_router_config(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+                "ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "0",
+            }
+        )
+        app = router.create_app(config, upstream_transport=upstream)
+
+        async def exercise() -> None:
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                first = await client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {raw_key}"},
+                    json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
+                )
+                second = await client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {raw_key}"},
+                    json={"model": "model-a", "messages": [{"role": "user", "content": "hello again"}]},
+                )
+            expect(first.status_code == 200, first.text)
+            expect(second.status_code == 200, second.text)
+            clients = dict(getattr(app.state, "router_upstream_clients", {}) or {})
+            expect(len(clients) == 1, str(clients))
+            pooled = next(iter(clients.values()))
+            expect(not pooled.is_closed, "pooled upstream client should remain open for reuse")
+            await router._close_upstream_clients(app.state)
+            expect(pooled.is_closed, "pooled upstream client should close on shutdown")
+
+        asyncio.run(exercise())
+        expect(len(upstream.requests) == 2, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_reuses_upstream_client_pool_within_event_loop")
+
+
 def test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -1486,6 +1596,8 @@ def test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage() 
 def main() -> int:
     test_health_reports_unhealthy_without_central_chutes_key()
     test_health_and_models_report_configured_state_without_exposing_key()
+    test_upstream_pool_config_is_public_and_secret_safe()
+    test_chat_reuses_upstream_client_pool_within_event_loop()
     test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage()
     test_chat_usage_queues_raven_low_fuel_notice_once()
     test_low_fuel_notice_without_channel_does_not_poison_dedupe()
@@ -1504,7 +1616,7 @@ def main() -> int:
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 20 ArcLink LLM router tests")
+    print("PASS all 22 ArcLink LLM router tests")
     return 0
 
 

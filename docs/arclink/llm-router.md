@@ -74,6 +74,14 @@ resolved upstream model, token counts, estimated/actual cents, status, stream
 flag, source kind, safe error summary, and timestamps. It does not store raw
 prompts or completions.
 
+The upstream provider path is served through a bounded async keepalive pool, not
+a new network client per request. The pool is created per ASGI event loop,
+closed on shutdown, and warmed on startup by a safe `/models` probe when the
+router is configured. Health exposes only pool shape and warmup status, never
+provider credentials. Pool limits are intentionally separate from per-key,
+per-deployment, and per-Captain request limits: rate and budget policy decide
+who may ask, while the upstream pool protects the provider boundary under load.
+
 When `arclink_model_catalog` contains current Chutes pricing, reservations and
 settled usage use the selected model's `input_cents_per_million` and
 `output_cents_per_million`. The environment price values are only a fallback for
@@ -199,6 +207,14 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS` | `0` (router code default) / `2500` (Compose `control-llm-router` service default) | Router-side Chutes budget fallback. `load_router_config` floors this at `0` in code; the deployed `control-llm-router` Compose service overrides it to `2500`, so a Pod without an explicit configured budget inherits a `$25` fallback. Always treat the per-deployment configured budget as authoritative. |
 | `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_INPUT_TOKENS` | `95` | Fallback input-token cost estimate for the default Kimi lane |
 | `ARCLINK_LLM_ROUTER_CENTS_PER_MILLION_OUTPUT_TOKENS` | `400` | Fallback output-token cost estimate for the default Kimi lane |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_CONNECT_TIMEOUT_SECONDS` | `5` | Upstream TCP/TLS connect timeout |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_READ_TIMEOUT_SECONDS` | `300` | Upstream read timeout; long enough for streaming pauses without hanging forever |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_WRITE_TIMEOUT_SECONDS` | `30` | Upstream request-body write timeout |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_POOL_TIMEOUT_SECONDS` | `5` | Maximum wait for a free pooled upstream connection |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_MAX_CONNECTIONS` | `256` | Global upstream connection cap per router worker |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_MAX_KEEPALIVE_CONNECTIONS` | `64` | Idle upstream keepalive cap per router worker |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | `90` | Idle upstream connection lifetime |
+| `ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED` | `1` | Warm the provider pool on router startup when configured |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
 | `ARCLINK_ALLOW_DIRECT_CHUTES_IN_ARCPODS` | `0` | Compatibility flag to restore direct Chutes key mounting |
 | `ARCLINK_REFUEL_STRIPE_PRODUCT_ID` | none | Optional reusable Stripe Product id for ArcPod Refueling Checkout |

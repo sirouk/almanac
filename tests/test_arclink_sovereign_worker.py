@@ -589,6 +589,7 @@ def test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns() -
 def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_teardown")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_teardown")
+    boundary_mod = load_module("arclink_boundary.py", "arclink_boundary_sovereign_teardown")
     import arclink_executor as executor_mod
 
     conn = memory_db(control)
@@ -638,8 +639,9 @@ def test_sovereign_worker_tears_down_active_deployment_idempotently() -> None:
     expect(health_statuses == {"torn_down"}, str(health_statuses))
     health_detail = json.loads(conn.execute("SELECT detail_json FROM arclink_service_health WHERE service_name = 'dashboard'").fetchone()["detail_json"])
     expect(health_detail["chutes_status"] == "applied", str(health_detail))
-    expect(health_detail["secret_cleanup_status"] == "removed", str(health_detail))
-    expect(torn_down[0]["secret_cleanup"]["status"] == "removed", str(torn_down))
+    expect(health_detail["private_store_cleanup_status"] == "removed", str(health_detail))
+    expect(torn_down[0]["private_store_cleanup"]["status"] == "removed", str(torn_down))
+    boundary_mod.json_dumps_safe({"results": torn_down}, label="ArcLink Sovereign worker")
     event_types = {row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()}
     expect({"sovereign_teardown_started", "sovereign_teardown_completed", "dns_teardown"} <= event_types, str(event_types))
     print("PASS test_sovereign_worker_tears_down_active_deployment_idempotently")

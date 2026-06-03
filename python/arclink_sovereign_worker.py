@@ -1111,7 +1111,7 @@ def _teardown_deployment(
     elif chutes_secret_ref:
         chutes_status = "skipped_no_chutes_client"
 
-    secret_cleanup = _cleanup_deployment_secret_store(worker=worker, deployment_id=deployment_id)
+    private_store_cleanup = _cleanup_deployment_secret_store(worker=worker, deployment_id=deployment_id)
     removed_placement = remove_placement(conn, deployment_id=deployment_id)
     repaired_loads = reconcile_fleet_observed_loads(conn)
     _release_tailnet_service_ports(conn, deployment_id=deployment_id)
@@ -1124,7 +1124,7 @@ def _teardown_deployment(
             "compose_status": compose_status,
             "dns_status": dns_status,
             "chutes_status": chutes_status,
-            "secret_cleanup_status": secret_cleanup["status"],
+            "private_store_cleanup_status": private_store_cleanup["status"],
             "remove_volumes": remove_volumes,
         },
     )
@@ -1132,7 +1132,7 @@ def _teardown_deployment(
         "compose_status": compose_status,
         "dns_status": dns_status,
         "chutes_status": chutes_status,
-        "secret_cleanup": secret_cleanup,
+        "private_store_cleanup": private_store_cleanup,
         "dns_records": removed_dns,
         "placement_removed": removed_placement is not None,
         "repaired_fleet_loads": repaired_loads,

@@ -9708,7 +9708,7 @@ sync_control_docker_image_to_fleet_workers() {
       ssh-keyscan -H "$ssh_host" >>"$known_hosts" 2>/dev/null || true
       sort -u -o "$known_hosts" "$known_hosts" 2>/dev/null || true
     fi
-    remote_image_id="$(ssh "${ssh_opts[@]}" "$target" "docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true" 2>/dev/null || true)"
+    remote_image_id="$(ssh "${ssh_opts[@]}" "$target" "docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true" </dev/null 2>/dev/null || true)"
     if [[ "$remote_image_id" == "$local_image_id" ]]; then
       mark_control_fleet_worker_image_sync_state "$host_id" "active"
       continue

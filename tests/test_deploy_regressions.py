@@ -2094,6 +2094,7 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("ensure_control_local_fleet_worker_registered()" in text, "expected local starter worker to be auto-registered before readiness")
     expect("sync_control_docker_image_to_fleet_workers()" in text, "expected control upgrades to seed the ArcLink image to SSH workers")
     expect("docker image save \"$image\" | ssh" in text, "expected fleet image sync to use the private SSH lane")
+    expect("docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true\" </dev/null" in text, "expected fleet image inspect SSH not to consume the worker row stream")
     expect("metadata.get(\"private_dns_name\") or metadata.get(\"ssh_host\")" in text, "expected fleet image sync to prefer WireGuard/private mesh hosts")
     expect("image_sync_failed" in text and "last_health_state" in text, "expected image sync failures to make placement health fail closed")
     expect("run_control_fleet_ssh_key()" in text, "expected a first-class fleet public key command")

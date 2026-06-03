@@ -930,7 +930,7 @@ def test_remote_fleet_share_sync_mounts_worker_local_git_key() -> None:
     targets = {item["target"]: item for item in sync["volumes"]}
     expect(targets["/run/arclink-fleet-share/id_ed25519"]["source"] == "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519", str(sync))
     expect(targets["/run/arclink-fleet-share/id_ed25519"]["read_only"] is True, str(sync))
-    expect(targets["/run/arclink-fleet-share/known_hosts"]["read_only"] is True, str(sync))
+    expect(targets["/run/arclink-fleet-share/known_hosts"].get("read_only") is not True, str(sync))
     expect("GIT_SSH_COMMAND" in sync["environment"], str(sync["environment"]))
     expect("BatchMode=yes" in sync["environment"]["GIT_SSH_COMMAND"], str(sync["environment"]))
     print("PASS test_remote_fleet_share_sync_mounts_worker_local_git_key")

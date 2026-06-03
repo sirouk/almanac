@@ -49,7 +49,8 @@ def _truthy(value: Any) -> bool:
 
 
 def _csv_values(value: str) -> list[str]:
-    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+    normalized = str(value or "").replace("\\,", ",")
+    return [item.strip() for item in normalized.split(",") if item.strip()]
 
 
 def _host_metadata(host: Mapping[str, Any]) -> dict[str, Any]:

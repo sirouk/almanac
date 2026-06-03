@@ -6080,19 +6080,31 @@ def test_docker_operator_commands_are_present() -> None:
     expect("managed-context-install" in body and "--force-recreate hermes-gateway" in body and "--force-recreate hermes-dashboard" in body, body)
     refresh_block = extract(body, "docker_refresh_deployment_managed_plugins()", "\ndocker_reconcile()")
     expect(
-        "run --rm --no-deps managed-context-install </dev/null >/dev/null" in refresh_block
-        and "up -d --no-deps --force-recreate \"$service_name\" </dev/null >/dev/null" in refresh_block,
-        "deployment plugin refresh must not let docker compose consume the find-loop stdin and skip later ArcPods\n"
+        "_executor_for_host" in refresh_block
+        and "runner.run(" in refresh_block
+        and "arclink_deployment_placements" in refresh_block
+        and "host_metadata_json" in refresh_block,
+        "deployment plugin refresh must route through the fleet executor for the selected ArcPod host\n"
         + refresh_block,
     )
     expect(
-        "deployment_status" in refresh_block
-        and "operator_agent" in refresh_block
+        "run\", \"--rm\", \"--no-deps\", \"managed-context-install" in refresh_block
+        and "up\", \"-d\", \"--no-deps\", \"--force-recreate\", \"--remove-orphans" in refresh_block,
+        "deployment plugin refresh must rerun managed-context install and recreate dashboard-facing services\n"
+        + refresh_block,
+    )
+    expect(
+        "Skipping deployment plugin refresh for {deployment_id}: no active fleet placement." in refresh_block,
+        "active ArcPod plugin refresh must fail closed without an active fleet placement instead of creating local shadows\n"
+        + refresh_block,
+    )
+    expect(
+        "metadata.get(\"operator_agent\")" in refresh_block
         and "PRAGMA busy_timeout = 10000" in refresh_block
-        and "lookup_error" in refresh_block
         and "deployment status lookup failed" in refresh_block
-        and "down --remove-orphans </dev/null >/dev/null 2>&1" in refresh_block
-        and "torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed" in refresh_block,
+        and "(\"down\", \"--remove-orphans\")" in refresh_block
+        and "RETIRED_STATUSES" in refresh_block
+        and "teardown_complete" in refresh_block,
         "deployment plugin refresh must skip and stop retiring or retired ArcPods and the in-stack operator identity\n" + refresh_block,
     )
     expect("--force-recreate dashboard" in body, body)
@@ -6118,7 +6130,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect('services.pop("code-server", None)' in body, body)
     expect('compose_secrets.pop("code_server_password", None)' in body, body)
     expect('env.pop("CODE_SERVER_PASSWORD_REF", None)' in body, body)
-    expect('label=com.docker.compose.service=code-server' in body and "docker rm -f" in body, body)
+    expect("services.pop(\"code-server\", None)" in body and "\"--remove-orphans\"" in refresh_block, body)
     expect("Repaired Hermes dashboard plugin mounts" in body, body)
     expect("ensure_control_network(gateway, prefix=prefix, service_name=\"hermes-gateway\")" in body, body)
     expect("ARCLINK_TAILNET_SERVICE_PORT_BASE" in body, body)
@@ -6323,6 +6335,113 @@ docker_repair_deployment_dashboard_plugin_mounts
             expect(installer["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"] == dashboard["environment"]["ARCLINK_CREW_DASHBOARDS_JSON"], str(installer))
         expect(secrets_by_deployment["arcdep_one"] == secrets_by_deployment["arcdep_two"], str(secrets_by_deployment))
     print("PASS test_docker_repair_backfills_dashboard_sso_and_crew_links")
+
+
+def test_docker_repair_strips_control_network_for_remote_deployments() -> None:
+    snippet = extract(
+        read("bin/arclink-docker.sh"),
+        "docker_repair_deployment_dashboard_plugin_mounts() {",
+        "\ncompose_service_secrets_available() {",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        deployments = root / "deployments"
+        state = repo / "arclink-priv" / "state"
+        state.mkdir(parents=True)
+        (repo / "python").symlink_to(REPO / "python")
+        db_path = state / "arclink-control.sqlite3"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE arclink_deployments (
+                  deployment_id TEXT PRIMARY KEY,
+                  user_id TEXT,
+                  prefix TEXT,
+                  base_domain TEXT,
+                  agent_name TEXT,
+                  agent_title TEXT,
+                  status TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO arclink_deployments (
+                  deployment_id, user_id, prefix, base_domain, agent_name, agent_title,
+                  status, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    "arcdep_remote",
+                    "user_1",
+                    "remote-one",
+                    "example.test",
+                    "Remote",
+                    "Fleet Worker",
+                    json.dumps({"private_dns_name": "10.44.0.12", "fleet_host_hostname": "arclink-002"}),
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            conn.commit()
+        config = deployments / "arcdep_remote-remote-one" / "config"
+        config.mkdir(parents=True)
+        payload = {
+            "networks": {"arclink-control": {"external": True, "name": "arclink_default"}},
+            "services": {
+                "hermes-dashboard": {
+                    "command": ["legacy-dashboard"],
+                    "environment": {
+                        "ARCLINK_BASE_DOMAIN": "example.test",
+                        "ARCLINK_INGRESS_MODE": "domain",
+                        "ARCLINK_PREFIX": "remote-one",
+                    },
+                    "volumes": [],
+                },
+                "hermes-gateway": {
+                    "environment": {"ARCLINK_PREFIX": "remote-one", "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote"},
+                    "networks": {"default": {}, "arclink-control": {"aliases": ["arclink-remote-one-hermes-gateway"]}},
+                    "volumes": [],
+                },
+                "managed-context-install": {
+                    "command": ["legacy-installer"],
+                    "environment": {},
+                    "secrets": [],
+                    "volumes": [],
+                },
+            },
+            "secrets": {},
+        }
+        (config / "compose.yaml").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        script = f"""
+set -euo pipefail
+REPO_DIR={shlex.quote(str(repo))}
+configured_or_default() {{
+  case "$1" in
+    ARCLINK_STATE_ROOT_BASE) printf '%s\\n' {shlex.quote(str(deployments))} ;;
+    *) printf '%s\\n' "${{2:-}}" ;;
+  esac
+}}
+{snippet}
+docker_repair_deployment_dashboard_plugin_mounts
+"""
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            cwd=REPO,
+            env={**os.environ, "PYTHONPATH": str(REPO / "python")},
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        expect(result.returncode == 0, f"repair failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        repaired = json.loads((config / "compose.yaml").read_text(encoding="utf-8"))
+        expect("arclink-control" not in repaired.get("networks", {}), json.dumps(repaired, sort_keys=True))
+        gateway_networks = repaired["services"]["hermes-gateway"].get("networks", {})
+        expect(gateway_networks == {"default": {}}, json.dumps(gateway_networks, sort_keys=True))
+    print("PASS test_docker_repair_strips_control_network_for_remote_deployments")
 
 
 def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
@@ -7355,6 +7474,7 @@ def main() -> int:
     test_docker_agent_supervisor_delegates_process_launch_to_process_helper()
     test_docker_operator_commands_are_present()
     test_docker_repair_backfills_dashboard_sso_and_crew_links()
+    test_docker_repair_strips_control_network_for_remote_deployments()
     test_deployment_hermes_home_installer_seeds_runtime_knowledge()
     test_docker_tailnet_publish_failure_withholds_app_urls()
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()

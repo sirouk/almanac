@@ -526,7 +526,7 @@ class SshDockerComposeRunner:
         del deployment_id
         target = self._target()
         config_root = str(Path(compose_file).resolve().parent)
-        cleanup_required = bool(args and args[0] in {"up", "down"})
+        cleanup_required = bool(args and args[0] in {"up", "down", "run"})
         secrets_root = str((Path(compose_file).parent / "secrets").resolve())
         mkdir = subprocess.run(
             (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", config_root),
@@ -553,7 +553,7 @@ class SshDockerComposeRunner:
             if cleanup_error:
                 message = f"{message}; {cleanup_error}"
             raise ArcLinkExecutorError(message)
-        if args and args[0] == "up":
+        if args and args[0] in {"up", "run"}:
             prepare_error = self._prepare_remote_app_binds(
                 target=target,
                 env_file=env_file,

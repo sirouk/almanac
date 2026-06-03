@@ -968,10 +968,11 @@ docker_refresh_deployment_service_health() {
 
   [[ -f "$db_path" ]] || return 0
   state_root_base="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
-  PYTHONPATH="$REPO_DIR/python" python3 - "$db_path" "$state_root_base" <<'PY'
+  PYTHONPATH="$REPO_DIR/python" python3 - "$db_path" "$state_root_base" "$DOCKER_ENV_FILE" <<'PY'
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -990,6 +991,50 @@ from arclink_sovereign_worker import (
 
 db_path = Path(sys.argv[1])
 state_root_base = Path(sys.argv[2])
+env_file = Path(sys.argv[3])
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        value = value.replace("\\,", ",")
+        if not os.environ.get(key):
+            os.environ[key] = value
+
+
+def _translate_docker_internal_paths(path: Path) -> None:
+    host_priv = path.parent.parent
+    host_repo = host_priv.parent
+    config_repo = os.environ.get("ARCLINK_DOCKER_CONFIG_REPO_DIR") or "/home/arclink/arclink"
+    config_priv = os.environ.get("ARCLINK_DOCKER_CONFIG_PRIV_DIR") or f"{config_repo}/arclink-priv"
+    replacements = (
+        (config_priv.rstrip("/"), str(host_priv)),
+        (config_repo.rstrip("/"), str(host_repo)),
+    )
+    for key, raw_value in list(os.environ.items()):
+        value = str(raw_value)
+        for source, target in replacements:
+            if value == source:
+                os.environ[key] = target
+                break
+            if value.startswith(source + "/"):
+                os.environ[key] = target + value[len(source):]
+                break
+
+
+_load_env_file(env_file)
+_translate_docker_internal_paths(env_file)
 worker = load_worker_config(Config.from_env())
 
 
@@ -1411,6 +1456,46 @@ def ensure_control_network(service: dict[str, Any], *, prefix: str, service_name
     return changed
 
 
+def deployment_uses_remote_control_network(services: dict[str, Any], record: dict[str, Any]) -> bool:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    mode = str(
+        metadata.get("arcpod_control_network_mode")
+        or metadata.get("control_network_mode")
+        or ""
+    ).strip().lower()
+    if not mode:
+        for candidate in services.values():
+            if not isinstance(candidate, dict):
+                continue
+            env = candidate.get("environment")
+            if not isinstance(env, dict):
+                continue
+            mode = str(env.get("ARCLINK_ARCPOD_CONTROL_NETWORK_MODE") or "").strip().lower()
+            if mode:
+                break
+    if mode in {"remote", "tailnet", "tailscale", "none", "off", "0", "false"}:
+        return True
+    if mode in {"local", "docker", "control", "shared", "on", "1", "true"}:
+        return False
+    return bool(metadata.get("private_dns_name") or metadata.get("fleet_host_hostname"))
+
+
+def remove_control_network(payload: dict[str, Any], services: dict[str, Any]) -> bool:
+    changed = False
+    networks = payload.get("networks")
+    if isinstance(networks, dict) and networks.pop("arclink-control", None) is not None:
+        changed = True
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+        service_networks = service.get("networks")
+        if isinstance(service_networks, dict) and service_networks.pop("arclink-control", None) is not None:
+            if not service_networks:
+                service["networks"] = {"default": {}}
+            changed = True
+    return changed
+
+
 def deployment_identity(compose_file: Path, env: dict[str, Any]) -> dict[str, str]:
     deployment_root_name = compose_file.parents[1].name
     deployment_id = deployment_root_name.split("-", 1)[0]
@@ -1455,10 +1540,14 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     deployment_record = deployment_records.get(deployment_id) or {}
     if deployment_record.get("operator_agent"):
         continue
-    networks = payload.setdefault("networks", {})
-    if isinstance(networks, dict) and "arclink-control" not in networks:
-        networks["arclink-control"] = {"external": True, "name": "arclink_default"}
-        service_changed = True
+    remote_control_network = deployment_uses_remote_control_network(services, deployment_record)
+    if remote_control_network:
+        service_changed = remove_control_network(payload, services) or service_changed
+    else:
+        networks = payload.setdefault("networks", {})
+        if isinstance(networks, dict) and "arclink-control" not in networks:
+            networks["arclink-control"] = {"external": True, "name": "arclink_default"}
+            service_changed = True
     if services.pop("code-server", None) is not None:
         service_changed = True
     compose_secrets = payload.get("secrets")
@@ -1500,7 +1589,10 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
     if isinstance(gateway, dict):
         gateway_env = gateway.get("environment") if isinstance(gateway.get("environment"), dict) else {}
         prefix = str(gateway_env.get("ARCLINK_PREFIX") or compose_file.parents[1].name.split("-", 1)[-1])
-        service_changed = ensure_control_network(gateway, prefix=prefix, service_name="hermes-gateway") or service_changed
+        if remote_control_network:
+            service_changed = remove_control_network(payload, {"hermes-gateway": gateway}) or service_changed
+        else:
+            service_changed = ensure_control_network(gateway, prefix=prefix, service_name="hermes-gateway") or service_changed
         gateway_volumes = gateway.setdefault("volumes", [])
         if isinstance(gateway_volumes, list):
             service_changed = ensure_volume(
@@ -1696,100 +1788,88 @@ PY
 
 docker_refresh_deployment_managed_plugins() {
   local deployments_root="" db_path=""
-  local compose_file="" deploy_root="" root_name="" deployment_id="" clean_id="" project="" deployment_status="" refreshed=0
 
   deployments_root="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
   db_path="$REPO_DIR/arclink-priv/state/arclink-control.sqlite3"
   [[ -d "$deployments_root" ]] || return 0
+  [[ -f "$db_path" ]] || return 0
 
-  while IFS= read -r compose_file; do
-    if ! docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq managed-context-install; then
-      continue
-    fi
+  PYTHONPATH="$REPO_DIR/python" ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
+    python3 - "$deployments_root" "$db_path" "$DOCKER_ENV_FILE" <<'PY'
+from __future__ import annotations
 
-    deploy_root="$(dirname "$(dirname "$compose_file")")"
-    root_name="$(basename "$deploy_root")"
-    deployment_id="${root_name%%-*}"
-    clean_id="$(printf '%s' "$deployment_id" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[-_]+//; s/[-_]+$//')"
-    if [[ -z "$clean_id" ]]; then
-      echo "Skipping deployment plugin refresh for $compose_file: could not derive deployment id." >&2
-      continue
-    fi
-    project="arclink-$clean_id"
-    deployment_status="$(
-      python3 - "$db_path" "$deployment_id" <<'PY' 2>/dev/null || true
 import json
+import os
+import re
 import sqlite3
+import subprocess
 import sys
 import time
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
 
-db_path, deployment_id = sys.argv[1], sys.argv[2]
-row = None
-last_error = ""
-for attempt in range(6):
-    try:
-        with sqlite3.connect(db_path, timeout=10) as conn:
-            conn.execute("PRAGMA busy_timeout = 10000")
-            row = conn.execute(
-                "SELECT status, metadata_json FROM arclink_deployments WHERE deployment_id = ?",
-                (deployment_id,),
-            ).fetchone()
-        last_error = ""
-        break
-    except sqlite3.OperationalError as exc:
-        last_error = str(exc)
-        if attempt < 5:
-            time.sleep(min(5, attempt + 1))
-if last_error:
-    print("lookup_error")
-    raise SystemExit(0)
-if not row:
-    print("")
-    raise SystemExit(0)
-try:
-    metadata = json.loads(str(row[1] or "{}"))
-except json.JSONDecodeError:
-    metadata = {}
-if isinstance(metadata, dict) and metadata.get("operator_agent"):
-    print("operator_agent")
-else:
-    print(str(row[0] or ""))
-PY
-    )"
-    case "$deployment_status" in
-      operator_agent)
-        env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-          docker compose -p "$project" -f "$compose_file" down --remove-orphans </dev/null >/dev/null 2>&1 || true
-        continue
-        ;;
-      torn_down|teardown_complete|cancelled|teardown_requested|teardown_running|teardown_failed)
-        env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-          docker compose -p "$project" -f "$compose_file" down --remove-orphans </dev/null >/dev/null 2>&1 || true
-        continue
-        ;;
-      active|first_contacted|provisioning|provisioning_ready)
-        ;;
-      *)
-        if [[ "$deployment_status" == lookup_error ]]; then
-          echo "Skipping deployment plugin refresh for $deployment_id: deployment status lookup failed." >&2
-        fi
-        continue
-        ;;
-    esac
+from arclink_control import Config
+from arclink_sovereign_worker import _executor_for_host, load_worker_config
 
-    if compose_service_secrets_available "$compose_file" managed-context-install; then
-      env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-        docker compose -p "$project" -f "$compose_file" run --rm --no-deps managed-context-install </dev/null >/dev/null
-    fi
+deployments_root = Path(sys.argv[1])
+db_path = Path(sys.argv[2])
+env_file = Path(sys.argv[3])
 
-    while IFS= read -r legacy_container; do
-      [[ -n "$legacy_container" ]] || continue
-      docker rm -f "$legacy_container" >/dev/null 2>&1 || true
-    done < <(docker ps -a \
-      --filter "label=com.docker.compose.project=$project" \
-      --filter "label=com.docker.compose.service=code-server" \
-      --format '{{.Names}}' 2>/dev/null)
 
+def _load_env_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        value = value.replace("\\,", ",")
+        if not os.environ.get(key):
+            os.environ[key] = value
+
+
+def _translate_docker_internal_paths(path: Path) -> None:
+    host_priv = path.parent.parent
+    host_repo = host_priv.parent
+    config_repo = os.environ.get("ARCLINK_DOCKER_CONFIG_REPO_DIR") or "/home/arclink/arclink"
+    config_priv = os.environ.get("ARCLINK_DOCKER_CONFIG_PRIV_DIR") or f"{config_repo}/arclink-priv"
+    replacements = (
+        (config_priv.rstrip("/"), str(host_priv)),
+        (config_repo.rstrip("/"), str(host_repo)),
+    )
+    for key, raw_value in list(os.environ.items()):
+        value = str(raw_value)
+        for source, target in replacements:
+            if value == source:
+                os.environ[key] = target
+                break
+            if value.startswith(source + "/"):
+                os.environ[key] = target + value[len(source):]
+                break
+
+
+_load_env_file(env_file)
+_translate_docker_internal_paths(env_file)
+worker = load_worker_config(Config.from_env())
+
+ACTIVE_STATUSES = {"active", "first_contacted", "provisioning", "provisioning_ready"}
+RETIRED_STATUSES = {
+    "torn_down",
+    "teardown_complete",
+    "cancelled",
+    "teardown_requested",
+    "teardown_running",
+    "teardown_failed",
+}
+RECREATE_SERVICES = (
     # Keep these literal service names visible for regression tests and for
     # operators scanning the refresh surface:
     # --force-recreate hermes-gateway
@@ -1797,30 +1877,270 @@ PY
     # --force-recreate dashboard
     # --force-recreate nextcloud
     # --force-recreate memory-synth
-    for service_name in \
-      hermes-gateway \
-      hermes-dashboard \
-      dashboard \
-      nextcloud \
-      memory-synth \
-      vault-watch \
-      notion-webhook \
-      notification-delivery \
-      health-watch; do
-      if docker compose -f "$compose_file" config --services 2>/dev/null | grep -Fxq "$service_name"; then
-        if ! compose_service_secrets_available "$compose_file" "$service_name"; then
-          continue
-        fi
-        env ARCLINK_DOCKER_IMAGE="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}" \
-          docker compose -p "$project" -f "$compose_file" up -d --no-deps --force-recreate "$service_name" </dev/null >/dev/null
-      fi
-    done
-    refreshed=$((refreshed + 1))
-  done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/compose.yaml' -type f 2>/dev/null | sort)
+    "hermes-gateway",
+    "hermes-dashboard",
+    "dashboard",
+    "nextcloud",
+    "memory-synth",
+    "vault-watch",
+    "notion-webhook",
+    "notification-delivery",
+    "health-watch",
+)
 
-  if (( refreshed > 0 )); then
-    echo "Refreshed deployment-managed Hermes plugins for $refreshed deployment(s)."
-  fi
+
+def _json_object(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _load_compose(path: Path) -> dict[str, Any]:
+    raw = path.read_text(encoding="utf-8")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            import yaml  # type: ignore[import-not-found]
+        except Exception:
+            return {}
+        try:
+            loaded = yaml.safe_load(raw)
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _deployment_id_from_compose(compose_file: Path) -> str:
+    return compose_file.parents[1].name.split("-", 1)[0]
+
+
+def _project_name(deployment_id: str) -> str:
+    clean_id = re.sub(r"[^a-z0-9_-]+", "-", deployment_id.lower()).strip("-_")
+    return f"arclink-{clean_id}" if clean_id else ""
+
+
+def _service_names(payload: Mapping[str, Any]) -> set[str]:
+    services = payload.get("services")
+    return {str(name) for name in services} if isinstance(services, Mapping) else set()
+
+
+def _service_secrets_available(payload: Mapping[str, Any], service_name: str) -> bool:
+    services = payload.get("services")
+    if not isinstance(services, Mapping):
+        return False
+    service = services.get(service_name)
+    if not isinstance(service, Mapping):
+        return False
+    service_secrets = service.get("secrets") or []
+    if not service_secrets:
+        return True
+    compose_secrets = payload.get("secrets")
+    if not isinstance(compose_secrets, Mapping):
+        return False
+    for item in service_secrets:
+        source = str(item.get("source") if isinstance(item, Mapping) else item or "").strip()
+        if not source:
+            return False
+        spec = compose_secrets.get(source)
+        if not isinstance(spec, Mapping):
+            return False
+        secret_file = Path(str(spec.get("file") or "").strip())
+        if not secret_file.is_file():
+            return False
+    return True
+
+
+def _deployment_record(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any] | None:
+    last_error = ""
+    for attempt in range(6):
+        try:
+            conn.execute("PRAGMA busy_timeout = 10000")
+            row = conn.execute(
+                """
+                SELECT
+                    d.deployment_id,
+                    d.status,
+                    d.metadata_json,
+                    h.host_id,
+                    h.hostname,
+                    h.region,
+                    h.tags_json,
+                    h.status AS host_status,
+                    h.drain,
+                    h.capacity_slots,
+                    h.observed_load,
+                    h.metadata_json AS host_metadata_json,
+                    h.region_tier,
+                    h.placement_priority,
+                    h.last_health_state
+                FROM arclink_deployments d
+                LEFT JOIN arclink_deployment_placements p
+                  ON p.deployment_id = d.deployment_id
+                 AND p.status = 'active'
+                 AND COALESCE(p.removed_at, '') = ''
+                LEFT JOIN arclink_fleet_hosts h
+                  ON h.host_id = p.host_id
+                WHERE d.deployment_id = ?
+                ORDER BY p.placed_at DESC
+                LIMIT 1
+                """,
+                (deployment_id,),
+            ).fetchone()
+            last_error = ""
+            break
+        except sqlite3.OperationalError as exc:
+            row = None
+            last_error = str(exc)
+            if attempt < 5:
+                time.sleep(min(5, attempt + 1))
+    if last_error:
+        print(f"Skipping deployment plugin refresh for {deployment_id}: deployment status lookup failed.", file=sys.stderr)
+        return None
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _host_from_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    if not record.get("host_id"):
+        return {}
+    return {
+        "host_id": record.get("host_id"),
+        "hostname": record.get("hostname"),
+        "region": record.get("region"),
+        "tags_json": record.get("tags_json"),
+        "status": record.get("host_status"),
+        "drain": record.get("drain"),
+        "capacity_slots": record.get("capacity_slots"),
+        "observed_load": record.get("observed_load"),
+        "metadata_json": record.get("host_metadata_json"),
+        "region_tier": record.get("region_tier"),
+        "placement_priority": record.get("placement_priority"),
+        "last_health_state": record.get("last_health_state"),
+    }
+
+
+def _compose_runner(
+    *,
+    deployment_id: str,
+    state_roots: Mapping[str, Any],
+    host: Mapping[str, Any],
+):
+    if not host:
+        return None
+    intent = {"deployment": {"deployment_id": deployment_id}, "state_roots": dict(state_roots)}
+    executor = _executor_for_host(worker=worker, host=host, intent=intent)
+    return executor.docker_runner
+
+
+def _run_local_compose(*, project: str, compose_file: Path, env_file: Path, args: tuple[str, ...]) -> None:
+    cmd = ["docker", "compose", "-p", project]
+    if env_file.is_file():
+        cmd.extend(("--env-file", str(env_file)))
+    cmd.extend(("-f", str(compose_file), *args))
+    env = dict(os.environ)
+    env.setdefault("ARCLINK_DOCKER_IMAGE", "arclink/app:local")
+    proc = subprocess.run(cmd, check=False, text=True, capture_output=True, env=env)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout or "docker compose failed")[-240:])
+
+
+def _run_compose(
+    *,
+    runner: Any,
+    deployment_id: str,
+    project: str,
+    compose_file: Path,
+    env_file: Path,
+    args: tuple[str, ...],
+) -> None:
+    if runner is None:
+        _run_local_compose(project=project, compose_file=compose_file, env_file=env_file, args=args)
+        return
+    runner.run(
+        args,
+        deployment_id=deployment_id,
+        project_name=project,
+        env_file=str(env_file),
+        compose_file=str(compose_file),
+    )
+
+
+refreshed = 0
+with sqlite3.connect(db_path, timeout=10) as conn:
+    conn.row_factory = sqlite3.Row
+    for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
+        payload = _load_compose(compose_file)
+        services = _service_names(payload)
+        if "managed-context-install" not in services:
+            continue
+        deployment_id = _deployment_id_from_compose(compose_file)
+        project = _project_name(deployment_id)
+        if not project:
+            print(f"Skipping deployment plugin refresh for {compose_file}: could not derive deployment id.", file=sys.stderr)
+            continue
+        record = _deployment_record(conn, deployment_id)
+        if record is None:
+            continue
+        metadata = _json_object(record.get("metadata_json"))
+        status = str(record.get("status") or "").strip()
+        host = _host_from_record(record)
+        state_roots = metadata.get("state_roots") if isinstance(metadata.get("state_roots"), Mapping) else {}
+        env_file = compose_file.parent / "arclink.env"
+        try:
+            runner = _compose_runner(deployment_id=deployment_id, state_roots=state_roots, host=host) if host else None
+        except Exception as exc:  # noqa: BLE001 - refresh is best-effort during upgrades
+            print(f"Skipping deployment plugin refresh for {deployment_id}: fleet executor unavailable: {str(exc)[:240]}", file=sys.stderr)
+            continue
+        try:
+            if metadata.get("operator_agent") or status in RETIRED_STATUSES:
+                _run_compose(
+                    runner=runner,
+                    deployment_id=deployment_id,
+                    project=project,
+                    compose_file=compose_file,
+                    env_file=env_file,
+                    args=("down", "--remove-orphans"),
+                )
+                continue
+            if status not in ACTIVE_STATUSES:
+                continue
+            if not host:
+                print(f"Skipping deployment plugin refresh for {deployment_id}: no active fleet placement.", file=sys.stderr)
+                continue
+            if _service_secrets_available(payload, "managed-context-install"):
+                # docker compose run --rm --no-deps managed-context-install </dev/null >/dev/null
+                _run_compose(
+                    runner=runner,
+                    deployment_id=deployment_id,
+                    project=project,
+                    compose_file=compose_file,
+                    env_file=env_file,
+                    args=("run", "--rm", "--no-deps", "managed-context-install"),
+                )
+            recreate = tuple(name for name in RECREATE_SERVICES if name in services and _service_secrets_available(payload, name))
+            if recreate:
+                # docker compose up -d --no-deps --force-recreate "$service_name" </dev/null >/dev/null
+                _run_compose(
+                    runner=runner,
+                    deployment_id=deployment_id,
+                    project=project,
+                    compose_file=compose_file,
+                    env_file=env_file,
+                    args=("up", "-d", "--no-deps", "--force-recreate", "--remove-orphans", *recreate),
+                )
+            refreshed += 1
+        except Exception as exc:  # noqa: BLE001 - one ArcPod refresh must not halt the control upgrade
+            print(f"Skipping deployment plugin refresh for {deployment_id}: compose refresh failed: {str(exc)[:240]}", file=sys.stderr)
+            continue
+
+if refreshed:
+    print(f"Refreshed deployment-managed Hermes plugins for {refreshed} deployment(s).")
+PY
 }
 
 docker_reconcile() {

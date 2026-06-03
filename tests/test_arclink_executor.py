@@ -1664,6 +1664,80 @@ def test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure() -> None
     print("PASS test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure")
 
 
+def test_ssh_docker_runner_cleans_remote_secrets_after_compose_run() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_run_cleanup_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[tuple[str, ...]] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        call = tuple(str(part) for part in cmd)
+        calls.append(call)
+        return Proc(0, stdout="ok")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        compose_file = Path(tmpdir) / "dep" / "config" / "compose.yaml"
+        env_file = compose_file.parent / "arclink.env"
+        compose_file.parent.mkdir(parents=True)
+        compose_file.write_text(
+            json.dumps(
+                {
+                    "services": {
+                        "managed-context-install": {
+                            "volumes": [{"type": "bind", "source": str(Path(tmpdir) / "dep" / "vault"), "target": "/srv/vault"}]
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        env_file.write_text("", encoding="utf-8")
+        (compose_file.parent / "remote-prepare.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "paths": [
+                        {
+                            "path": str(Path(tmpdir) / "dep" / "vault"),
+                            "kind": "directory",
+                            "image": "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}",
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        try:
+            mod.subprocess.run = fake_run
+            runner = mod.SshDockerComposeRunner(
+                host="worker.example.test",
+                user="arclink",
+                allowed_hosts=("worker.example.test",),
+            )
+            runner.run(
+                ("run", "--rm", "--no-deps", "managed-context-install"),
+                deployment_id="dep",
+                project_name="arclink-dep",
+                env_file=str(env_file),
+                compose_file=str(compose_file),
+            )
+        finally:
+            mod.subprocess.run = original_run
+    rendered = [" ".join(call) for call in calls]
+    expect(any("ARCLINK_TARGET_UID" in item and "/mnt/arclink-bind" in item for item in rendered), str(calls))
+    expect(any("docker compose" in item and " run " in item for item in rendered), str(calls))
+    expect(any("rm -rf --" in item and "config/secrets" in item for item in rendered), str(calls))
+    print("PASS test_ssh_docker_runner_cleans_remote_secrets_after_compose_run")
+
+
 def test_ssh_docker_runner_syncs_only_compose_config_bundle() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_ssh_config_sync_test")
 
@@ -1897,6 +1971,7 @@ def main() -> int:
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
+    test_ssh_docker_runner_cleans_remote_secrets_after_compose_run()
     test_ssh_docker_runner_syncs_only_compose_config_bundle()
     test_ssh_docker_runner_requires_explicit_host_allowlist()
     test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata()
@@ -1904,7 +1979,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 36 ArcLink executor tests")
+    print("PASS all 37 ArcLink executor tests")
     return 0
 
 

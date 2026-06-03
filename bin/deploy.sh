@@ -9780,6 +9780,89 @@ finally:
 PY
 }
 
+lookup_control_fleet_share_worker_metadata_json() {
+  local hostname="$1"
+  local db_path=""
+
+  db_path="$(control_host_db_path)"
+  [[ -r "$db_path" ]] || return 0
+  ARCLINK_CONFIG_FILE="$(docker_env_file_path)" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "$db_path" "$hostname" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+hostname = sys.argv[2].strip().lower()
+conn = sqlite3.connect(str(db_path))
+try:
+    rows = []
+    for table in ("arclink_fleet_hosts", "arclink_inventory_machines"):
+        try:
+            rows.extend(conn.execute(f"SELECT metadata_json FROM {table} WHERE lower(hostname) = ?", (hostname,)).fetchall())
+        except sqlite3.Error:
+            pass
+    for (metadata_json,) in rows:
+        try:
+            metadata = json.loads(metadata_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        fleet_share = metadata.get("fleet_share") if isinstance(metadata, dict) else {}
+        if isinstance(fleet_share, dict) and (fleet_share.get("public_key") or fleet_share.get("ssh_key_path")):
+            print(json.dumps(fleet_share, sort_keys=True))
+            break
+finally:
+    conn.close()
+PY
+}
+
+authorize_control_fleet_share_git_key() {
+  local public_key="$1"
+  local user="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
+  local user_home="" user_group="" ssh_dir="" authorized_keys="" restricted_line=""
+
+  public_key="$(trim_control_value "$public_key")"
+  [[ -z "$public_key" ]] && return 0
+  case "$public_key" in
+    ssh-*|ecdsa-*|sk-ssh-*|sk-ecdsa-*) ;;
+    *)
+      echo "Skipping fleet-share git key authorization: public key is not SSH-key shaped." >&2
+      return 1
+      ;;
+  esac
+  if ! is_safe_local_fleet_user "$user"; then
+    echo "Skipping fleet-share git key authorization: unsafe control user '$user'." >&2
+    return 1
+  fi
+  if ! id -u "$user" >/dev/null 2>&1; then
+    echo "Skipping fleet-share git key authorization: control user '$user' does not exist yet." >&2
+    return 1
+  fi
+  user_home="$(resolve_user_home "$user" 2>/dev/null || getent passwd "$user" | awk -F: '{print $6}')"
+  user_group="$(id -gn "$user" 2>/dev/null || printf '%s' "$user")"
+  if [[ -z "$user_home" || ! -d "$user_home" ]]; then
+    echo "Skipping fleet-share git key authorization: could not resolve home for '$user'." >&2
+    return 1
+  fi
+  ssh_dir="$user_home/.ssh"
+  authorized_keys="$ssh_dir/authorized_keys"
+  install -d -m 0700 -o "$user" -g "$user_group" "$ssh_dir"
+  touch "$authorized_keys"
+  chown "$user:$user_group" "$authorized_keys"
+  chmod 0600 "$authorized_keys"
+  if grep -Fq "$public_key" "$authorized_keys" 2>/dev/null; then
+    return 0
+  fi
+  restricted_line="command=\"git-shell -c \\\"\$SSH_ORIGINAL_COMMAND\\\"\",no-agent-forwarding,no-X11-forwarding,no-port-forwarding,no-pty $public_key"
+  printf '%s\n' "$restricted_line" >>"$authorized_keys"
+  chown "$user:$user_group" "$authorized_keys"
+  chmod 0600 "$authorized_keys"
+  echo "Authorized worker-local fleet-share git key for $user on the control node."
+}
+
 run_remote_fleet_worker_bootstrap() {
   local hostname="$1"
   local final_ssh_host="$2"
@@ -9934,6 +10017,7 @@ register_control_remote_fleet_worker() {
   local remote_bootstrap="${ARCLINK_FLEET_REGISTER_REMOTE_BOOTSTRAP:-}" bootstrap_ssh_host="" bootstrap_ssh_user="${ARCLINK_FLEET_BOOTSTRAP_SSH_USER:-root}"
   local bootstrap_ssh_port="${ARCLINK_FLEET_BOOTSTRAP_SSH_PORT:-22}" bootstrap_control_url="${ARCLINK_FLEET_JOIN_CONTROL_URL:-}" bootstrap_token_ttl="${ARCLINK_FLEET_BOOTSTRAP_TOKEN_TTL_SECONDS:-3600}"
   local bootstrap_skip_prereqs="${ARCLINK_FLEET_BOOTSTRAP_SKIP_PREREQ_INSTALL:-0}" bootstrap_output=""
+  local fleet_share_metadata_json="" fleet_share_public_key=""
   local advanced_prompts="${ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS:-0}"
   local result_json="" json=0 noninteractive=0 no_smoke=0 smoke_requested=0 arg="" tags_mode="csv"
 
@@ -10279,6 +10363,11 @@ EOF
       ensure_control_wireguard_peer "$hostname" "$wireguard_private_cidr" "$wireguard_public_key"
       sync_control_wireguard_peers_from_inventory
     fi
+    fleet_share_metadata_json="$(lookup_control_fleet_share_worker_metadata_json "$hostname" | head -n 1)"
+    if [[ -n "$fleet_share_metadata_json" ]]; then
+      fleet_share_public_key="$(json_field "$fleet_share_metadata_json" "public_key")"
+      authorize_control_fleet_share_git_key "$fleet_share_public_key" || true
+    fi
   fi
 
   if [[ "$noninteractive" == "1" ]]; then
@@ -10330,7 +10419,7 @@ EOF
   db_path="$(control_host_db_path)"
   result_json="$(
     ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-      python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$ssh_host" "$private_dns_name" "$tailscale_dns_name" "$ssh_user" "$state_root_base" "$edge_target" "$tags" "$tags_mode" "$smoke_status" "$wireguard_private_ip" "$wireguard_private_cidr" "$wireguard_public_key" "$wireguard_interface" "$wireguard_control_endpoint" "$remote_bootstrap" "$bootstrap_ssh_host" "$bootstrap_ssh_user" <<'PY'
+      python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$ssh_host" "$private_dns_name" "$tailscale_dns_name" "$ssh_user" "$state_root_base" "$edge_target" "$tags" "$tags_mode" "$smoke_status" "$wireguard_private_ip" "$wireguard_private_cidr" "$wireguard_public_key" "$wireguard_interface" "$wireguard_control_endpoint" "$remote_bootstrap" "$bootstrap_ssh_host" "$bootstrap_ssh_user" "${fleet_share_metadata_json:-}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -10380,6 +10469,7 @@ wireguard_control_endpoint = sys.argv[18].strip()
 remote_bootstrap = sys.argv[19].strip() == "1"
 bootstrap_ssh_host = sys.argv[20].strip()
 bootstrap_ssh_user = sys.argv[21].strip()
+fleet_share_metadata_raw = sys.argv[22].strip()
 if not tailscale_dns_name and ssh_host.lower().endswith(".ts.net"):
     tailscale_dns_name = ssh_host.lower().strip(".")
 if not private_dns_name and wireguard_private_ip:
@@ -10422,6 +10512,10 @@ if remote_bootstrap:
         "bootstrap_ssh_host": bootstrap_ssh_host,
         "bootstrap_ssh_user": bootstrap_ssh_user,
     }
+if fleet_share_metadata_raw:
+    fleet_share = json.loads(fleet_share_metadata_raw)
+    if isinstance(fleet_share, dict):
+        metadata["fleet_share"] = fleet_share
 
 db_path.parent.mkdir(parents=True, exist_ok=True)
 conn = sqlite3.connect(str(db_path), timeout=15.0)

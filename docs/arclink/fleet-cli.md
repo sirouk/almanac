@@ -113,9 +113,11 @@ interface. If the worker public key is already known, pass
 `--tailscale-dns-name` is optional
 compatibility/access metadata; if `--ssh-host` already ends in `.ts.net`,
 ArcLink uses it as that MagicDNS name unless an explicit value is supplied.
-Remote ArcPods also require `ARCLINK_FLEET_SHARE_HUB_URL` to point at a remote
-git hub such as `ssh://hub.wg.internal/{user}/fleet-shared.git`, so a Captain's
-shared folder stays coherent when their Crew spans machines. With `--json`, the
+Remote ArcPods derive a WireGuard SSH git hub by default, such as
+`ssh://arclink@10.44.0.1/arcdata/captains/{user}/fleet-shared.git`, so a
+Captain's shared folder stays coherent when their Crew spans machines. Set
+`ARCLINK_FLEET_SHARE_HUB_URL` only when overriding that default with a dedicated
+git hub. With `--json`, the
 command does not restart control services; the response includes
 `restart_required: true`. JSON mode skips the live SSH smoke test by default so
 stdout remains parseable; add `--smoke-test` when that live proof is explicitly

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -491,6 +492,15 @@ def _control_public_base_url(env: Mapping[str, str] | None) -> str:
     return ""
 
 
+def _host_from_https_url(value: str) -> str:
+    text = str(value or "").strip()
+    if not text.startswith(("https://", "http://")):
+        return ""
+    hostport = text.split("://", 1)[1].split("/", 1)[0]
+    host = hostport.rsplit("@", 1)[-1].split(":", 1)[0].strip().lower().strip(".")
+    return host
+
+
 def _looks_like_control_docker_url(value: str) -> bool:
     text = str(value or "").strip().lower()
     return "://control-" in text or "://control_" in text or "://control." in text
@@ -581,10 +591,21 @@ def _fleet_share_hub_host_ref(env: Mapping[str, str] | None, *, user_id: str, co
             )
         return clean_ref
     if control_network_mode == "remote":
-        raise ArcLinkProvisioningError(
-            "Remote ArcPod rendering requires ARCLINK_FLEET_SHARE_HUB_URL with a remote git ref "
-            "for the Captain shared folder hub"
-        )
+        ssh_user = _safe_segment(str(source.get("ARCLINK_FLEET_SHARE_HUB_SSH_USER") or "arclink"))
+        host = str(source.get("ARCLINK_FLEET_SHARE_HUB_SSH_HOST") or "").strip().lower().strip(".")
+        if not host:
+            host = str(source.get("ARCLINK_WIREGUARD_CONTROL_IP") or "").strip().lower().strip(".")
+        if not host:
+            host = _host_from_https_url(_control_public_base_url(source))
+        if not host:
+            raise ArcLinkProvisioningError(
+                "Remote ArcPod rendering requires ARCLINK_FLEET_SHARE_HUB_URL or a private control "
+                "host such as ARCLINK_WIREGUARD_CONTROL_IP for the Captain shared folder hub"
+            )
+        root = str(source.get("ARCLINK_FLEET_SHARE_HUB_ROOT") or "/arcdata/captains").strip().rstrip("/") or "/arcdata/captains"
+        if not root.startswith("/") or root == "/":
+            raise ArcLinkProvisioningError("ArcLink fleet-share hub root must be an absolute non-root path")
+        return _clean_git_ref(f"ssh://{ssh_user}@{host}{root}/{clean_user}/fleet-shared.git", label="fleet-share hub ref")
     root = str(source.get("ARCLINK_FLEET_SHARE_HUB_ROOT") or "/arcdata/captains").strip().rstrip("/") or "/arcdata/captains"
     return _clean_git_ref(f"{root}/{clean_user}/fleet-shared.git", label="fleet-share hub ref")
 
@@ -594,6 +615,15 @@ def _fleet_share_hub_container_ref(host_ref: str) -> str:
     if _is_remote_git_ref(clean_ref):
         return clean_ref
     return CONTAINER_FLEET_SHARE_HUB_DIR
+
+
+def _safe_abs_host_path(value: Any, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.startswith("-") or "\x00" in text or "\r" in text or "\n" in text or not text.startswith("/") or text == "/":
+        raise ArcLinkProvisioningError(f"ArcLink {label} must be an absolute non-root host path")
+    return text
 
 
 def dashboard_password_secret_ref(*, deployment_id: str, user_id: str, metadata: Mapping[str, Any]) -> str:
@@ -1012,6 +1042,13 @@ def _render_services(
             "source": fleet_share_hub_host_ref,
             "target": CONTAINER_FLEET_SHARE_HUB_DIR,
         }
+    fleet_share_ssh_key_host_path = _safe_abs_host_path(env.get("ARCLINK_FLEET_SHARE_SSH_KEY_PATH", ""), label="fleet-share SSH key path")
+    fleet_share_known_hosts_host_path = _safe_abs_host_path(
+        env.get("ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE", ""),
+        label="fleet-share SSH known_hosts path",
+    )
+    fleet_share_ssh_key_target = "/run/arclink-fleet-share/id_ed25519"
+    fleet_share_known_hosts_target = "/run/arclink-fleet-share/known_hosts"
     fleet_share_sync_env = {
         key: str(env[key])
         for key in (
@@ -1023,9 +1060,28 @@ def _render_services(
         )
         if key in env
     }
+    if fleet_share_ssh_key_host_path:
+        ssh_command = [
+            "ssh",
+            "-i",
+            fleet_share_ssh_key_target,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+        ]
+        if fleet_share_known_hosts_host_path:
+            ssh_command.extend(["-o", f"UserKnownHostsFile={fleet_share_known_hosts_target}"])
+        fleet_share_sync_env["GIT_SSH_COMMAND"] = " ".join(shlex.quote(part) for part in ssh_command)
     fleet_share_sync_volumes = [fleet_shared_volume]
     if fleet_share_hub_volume is not None:
         fleet_share_sync_volumes.append(fleet_share_hub_volume)
+    if fleet_share_ssh_key_host_path:
+        fleet_share_sync_volumes.append({"source": fleet_share_ssh_key_host_path, "target": fleet_share_ssh_key_target, "read_only": True})
+    if fleet_share_known_hosts_host_path:
+        fleet_share_sync_volumes.append({"source": fleet_share_known_hosts_host_path, "target": fleet_share_known_hosts_target, "read_only": True})
     hermes_host_ports: list[str] = []
     if (
         str(env.get("ARCLINK_INGRESS_MODE") or "").strip().lower() == "tailscale"
@@ -1503,6 +1559,8 @@ def render_arclink_provisioning_intent(
         "ARCLINK_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
         "DRIVE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
         "CODE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
+        "ARCLINK_FLEET_SHARE_SSH_KEY_PATH": str(source_env.get("ARCLINK_FLEET_SHARE_SSH_KEY_PATH") or "").strip(),
+        "ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE": str(source_env.get("ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE") or "").strip(),
         "TERMINAL_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "TERMINAL_TUI_COMMAND": "/opt/arclink/runtime/hermes-venv/bin/hermes",
         "ARCLINK_DRIVE_ROOT": CONTAINER_VAULT_DIR,

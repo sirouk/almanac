@@ -35,7 +35,9 @@ the worker config, and appends the fleet SSH key without replacing
 remains useful as an access overlay or first-contact/domain alternative, but it
 is not the primary production dependency.
 When a Captain's Crew can span machines, configure `ARCLINK_FLEET_SHARE_HUB_URL`
-as a remote git hub so Fleet Shared stays unified.
+only when overriding the default WireGuard SSH git hub. Normal remote workers
+derive `ssh://arclink@<control-wg-ip>/<fleet-share-root>/{user}/fleet-shared.git`
+so Fleet Shared stays unified without another operator prompt.
 
 ## Current Architecture
 

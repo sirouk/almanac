@@ -126,10 +126,11 @@ instead of an enrollment token.
    the worker public key is already known, pass it to
    `register-worker --wireguard-public-key` and the peer is appended before
    bootstrap too.
-   Cross-machine Captain shared folders require a remote
-   `ARCLINK_FLEET_SHARE_HUB_URL`, for example
-   `ssh://hub.wg.internal/{user}/fleet-shared.git`; remote ArcPod renders
-   fail closed rather than creating one local hub per worker.
+   Cross-machine Captain shared folders use the Control Node WireGuard SSH git
+   hub by default, for example
+   `ssh://arclink@10.44.0.1/arcdata/captains/{user}/fleet-shared.git`. Set
+   `ARCLINK_FLEET_SHARE_HUB_URL` only to override that default with a dedicated
+   remote git hub.
 
    By default the join script runs the shared prerequisite installer. Use
    `--skip-prereq-install` only for a pre-hardened worker image where

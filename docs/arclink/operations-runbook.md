@@ -1389,9 +1389,9 @@ explicit public control URLs are configured. Worker join appends the fleet SSH
 key without replacing `authorized_keys`, changing `sshd_config`, or changing
 port 22. Tailscale can remain an access overlay/domain alternative through
 `tailscale_dns_name`, but it is not the preferred production dependency. Remote
-ArcPods do not join the control-node Docker network and require a remote
-`ARCLINK_FLEET_SHARE_HUB_URL` so the Captain shared folder does not split across
-worker-local disks.
+ArcPods do not join the control-node Docker network and derive a WireGuard SSH
+git hub for Fleet Shared by default. `ARCLINK_FLEET_SHARE_HUB_URL` is an
+override for a dedicated remote git hub, not a normal first-time setup prompt.
 
 **Read scale state:**
 

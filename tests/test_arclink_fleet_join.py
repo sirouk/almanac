@@ -112,8 +112,11 @@ def test_join_fake_root_is_idempotent_and_does_not_persist_token() -> None:
         expect((state_root.stat().st_mode & 0o777) == 0o755, oct(state_root.stat().st_mode & 0o777))
         deployment_root = root / "arcdata" / "deployments"
         fleet_share_root = root / "arcdata" / "captains"
+        fleet_share_key = state_root / "fleet-share-ssh" / "id_ed25519"
         expect(deployment_root.is_dir(), "join should create the ArcPod deployment root")
         expect(fleet_share_root.is_dir(), "join should create the fleet-share hub root")
+        expect(fleet_share_key.is_file(), "join should create a worker-local fleet-share SSH key")
+        expect((fleet_share_key.stat().st_mode & 0o777) == 0o600, oct(fleet_share_key.stat().st_mode & 0o777))
         expect((deployment_root.stat().st_mode & 0o777) == 0o755, oct(deployment_root.stat().st_mode & 0o777))
         expect((fleet_share_root.stat().st_mode & 0o777) == 0o755, oct(fleet_share_root.stat().st_mode & 0o777))
         callbacks = [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
@@ -124,6 +127,8 @@ def test_join_fake_root_is_idempotent_and_does_not_persist_token() -> None:
         expect(payload["private_dns_name"] == "worker-a.wg.internal", str(payload))
         expect(payload["tailscale_dns_name"] == "worker-a.tailnet.ts.net", str(payload))
         expect(payload["capacity_slots"] == 7, str(payload))
+        expect(payload["fleet_share_ssh_key_path"] == str(fleet_share_key), str(payload))
+        expect(payload["fleet_share_ssh_public_key"].startswith("ssh-ed25519 "), str(payload))
         rendered = json.dumps(callbacks, sort_keys=True)
         expect("safe-token-signature" not in rendered and "arcfleet_v1" not in rendered, rendered)
         authorized_keys = root / "home" / "arclink" / ".ssh" / "authorized_keys"

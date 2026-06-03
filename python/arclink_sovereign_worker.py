@@ -423,6 +423,14 @@ def _render_env_for_host(
         if control_url:
             render_env["ARCLINK_TAILSCALE_CONTROL_URL"] = control_url
             render_env.setdefault("ARCLINK_CONTROL_PRIVATE_BASE_URL", control_url)
+    fleet_share = host_meta.get("fleet_share") if isinstance(host_meta.get("fleet_share"), Mapping) else {}
+    if isinstance(fleet_share, Mapping):
+        key_path = str(fleet_share.get("ssh_key_path") or "").strip()
+        known_hosts = str(fleet_share.get("known_hosts_file") or "").strip()
+        if key_path:
+            render_env["ARCLINK_FLEET_SHARE_SSH_KEY_PATH"] = key_path
+        if known_hosts:
+            render_env["ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE"] = known_hosts
     return render_env
 
 

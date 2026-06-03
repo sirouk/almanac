@@ -33,6 +33,7 @@ DEFAULT_ENROLLMENT_TTL_SECONDS = 3600
 _FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9_.:=+/@-]{16,256}$")
 _WIREGUARD_PUBLIC_KEY_RE = re.compile(r"^[A-Za-z0-9+/=]{20,100}$")
 _WIREGUARD_IP_CIDR_RE = re.compile(r"^[A-Za-z0-9_.:-]+/[0-9]{1,3}$")
+_SSH_PUBLIC_KEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[A-Za-z0-9_-]+|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-[A-Za-z0-9_-]+@openssh.com) [A-Za-z0-9+/=]+(?: .*)?$")
 
 
 class ArcLinkFleetEnrollmentError(ValueError):
@@ -333,6 +334,24 @@ def _clean_optional_hostname(value: Any) -> str:
     return str(value or "").strip().lower().strip(".")
 
 
+def _clean_optional_abs_path(value: Any, *, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "\x00" in text or "\n" in text or "\r" in text or not text.startswith("/") or text == "/":
+        raise ArcLinkFleetEnrollmentError(f"invalid {label}")
+    return text[:512]
+
+
+def _clean_optional_ssh_public_key(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if not _SSH_PUBLIC_KEY_RE.fullmatch(text):
+        raise ArcLinkFleetEnrollmentError("invalid fleet-share SSH public key")
+    return text[:2048]
+
+
 def _safe_mapping(value: Any, *, label: str) -> dict[str, Any]:
     if value is None:
         return {}
@@ -449,6 +468,12 @@ def consume_fleet_enrollment(
     wireguard_interface = str(body.get("wireguard_interface") or "").strip()[:64]
     wireguard_control_endpoint = str(body.get("wireguard_control_endpoint") or "").strip()[:255]
     wireguard_firewall_status = str(body.get("wireguard_firewall_status") or "").strip()[:64]
+    fleet_share_ssh_key_path = _clean_optional_abs_path(body.get("fleet_share_ssh_key_path"), label="fleet-share SSH key path")
+    fleet_share_known_hosts_file = _clean_optional_abs_path(
+        body.get("fleet_share_ssh_known_hosts_file"),
+        label="fleet-share SSH known_hosts path",
+    )
+    fleet_share_public_key = _clean_optional_ssh_public_key(body.get("fleet_share_ssh_public_key"))
     try:
         wireguard_listen_port = int(body.get("wireguard_listen_port") or 0)
     except (TypeError, ValueError) as exc:
@@ -490,6 +515,13 @@ def consume_fleet_enrollment(
             "firewall_status": wireguard_firewall_status,
         }
         metadata["control_network_mode"] = "remote"
+    if fleet_share_ssh_key_path or fleet_share_public_key:
+        metadata["fleet_share"] = {
+            "ssh_key_path": fleet_share_ssh_key_path,
+            "known_hosts_file": fleet_share_known_hosts_file,
+            "public_key": fleet_share_public_key,
+            "transport": "worker-local-ssh-key",
+        }
     if source_ip:
         metadata["source_ip"] = source_ip
 
@@ -554,6 +586,7 @@ def consume_fleet_enrollment(
             "private_dns_name": private_dns_name,
             "tailscale_dns_name": tailscale_dns_name,
             "wireguard_private_ip": wireguard_private_ip,
+            "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
         },
     )
     verified = append_fleet_audit_chain_entry(
@@ -569,6 +602,7 @@ def consume_fleet_enrollment(
             "private_dns_name": private_dns_name,
             "tailscale_dns_name": tailscale_dns_name,
             "wireguard_private_ip": wireguard_private_ip,
+            "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
         },
     )
     conn.execute(
@@ -593,6 +627,7 @@ def consume_fleet_enrollment(
             "private_dns_name": private_dns_name,
             "tailscale_dns_name": tailscale_dns_name,
             "wireguard_private_ip": wireguard_private_ip,
+            "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
         },
         commit=False,
     )
@@ -608,6 +643,8 @@ def consume_fleet_enrollment(
         "wireguard_private_ip": wireguard_private_ip,
         "wireguard_private_cidr": wireguard_private_cidr,
         "wireguard_public_key": wireguard_public_key,
+        "fleet_share_ssh_public_key": fleet_share_public_key,
+        "fleet_share_ssh_key_path": fleet_share_ssh_key_path,
         "status": str(machine["status"]),
         "attested_at": str(machine["attested_at"]),
         "audit_chain_root": str(root["entry_id"]),

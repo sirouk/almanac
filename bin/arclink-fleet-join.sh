@@ -46,6 +46,8 @@ Options:
   --deployment-state-root-base PATH
                               ArcPod deployment root to create for the worker.
   --fleet-share-hub-root PATH Optional Captain fleet-share hub root to create for the worker.
+  --fleet-share-ssh-key-path PATH
+                              Worker-local SSH key used only by ArcPod Fleet sync jobs.
   --skip-prereq-install       Do not install prerequisites; record a skipped prereq summary.
   --json                      Print machine-readable status.
 
@@ -106,6 +108,9 @@ SYSTEM_ROOT="${ARCLINK_FLEET_JOIN_SYSTEM_ROOT:-}"
 STATE_ROOT="${ARCLINK_FLEET_STATE_ROOT:-}"
 DEPLOYMENT_STATE_ROOT_BASE="${ARCLINK_DEPLOYMENT_STATE_ROOT_BASE:-${ARCLINK_STATE_ROOT_BASE:-}}"
 FLEET_SHARE_HUB_ROOT="${ARCLINK_FLEET_SHARE_HUB_ROOT:-}"
+FLEET_SHARE_SSH_KEY_PATH="${ARCLINK_FLEET_SHARE_SSH_KEY_PATH:-}"
+FLEET_SHARE_SSH_PUBLIC_KEY=""
+FLEET_SHARE_SSH_KNOWN_HOSTS_FILE="${ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE:-}"
 SKIP_PREREQS="${ARCLINK_SKIP_PREREQ_INSTALL:-0}"
 JSON_OUTPUT=0
 
@@ -223,6 +228,10 @@ while (($#)); do
       FLEET_SHARE_HUB_ROOT="${2:-}"
       shift 2
       ;;
+    --fleet-share-ssh-key-path)
+      FLEET_SHARE_SSH_KEY_PATH="${2:-}"
+      shift 2
+      ;;
     --skip-prereq-install)
       SKIP_PREREQS=1
       shift
@@ -276,6 +285,12 @@ PREREQ_AUDIT_FILE="$STATE_ROOT/prereq-audit.jsonl"
 PAYLOAD_FILE="$STATE_ROOT/enrollment-callback-payload.json"
 PROBE_WRAPPER_SOURCE="$SCRIPT_DIR/arclink-fleet-probe-wrapper"
 PROBE_WRAPPER_TARGET="$USR_LOCAL_BIN/arclink-fleet-probe-wrapper"
+if [[ -z "$FLEET_SHARE_SSH_KEY_PATH" ]]; then
+  FLEET_SHARE_SSH_KEY_PATH="$STATE_ROOT/fleet-share-ssh/id_ed25519"
+fi
+if [[ -z "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE" ]]; then
+  FLEET_SHARE_SSH_KNOWN_HOSTS_FILE="$STATE_ROOT/fleet-share-ssh/known_hosts"
+fi
 
 if [[ -z "$CALLBACK_URL" ]]; then
   if [[ -z "$CONTROL_URL" ]]; then
@@ -511,8 +526,46 @@ install_probe_wrapper() {
     printf 'ARCLINK_FLEET_FINGERPRINT_FILE=%q\n' "$FINGERPRINT_FILE"
     printf 'ARCLINK_FLEET_HOSTNAME=%q\n' "$HOSTNAME_VALUE"
     printf 'ARCLINK_FLEET_SSH_PORT=%q\n' "$SSH_PORT"
+    printf 'ARCLINK_FLEET_SHARE_SSH_KEY_PATH=%q\n' "$FLEET_SHARE_SSH_KEY_PATH"
+    printf 'ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE=%q\n' "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE"
   } >"$CONFIG_FILE"
   chmod 644 "$CONFIG_FILE" 2>/dev/null || true
+}
+
+ensure_fleet_share_ssh_key() {
+  local key_dir="" user_group=""
+
+  if [[ "$FLEET_SHARE_SSH_KEY_PATH" != /* || "$FLEET_SHARE_SSH_KEY_PATH" == "/" ]]; then
+    fail "fleet-share SSH key path must be an absolute non-root path"
+    return 1
+  fi
+  if [[ "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE" != /* || "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE" == "/" ]]; then
+    fail "fleet-share SSH known_hosts path must be an absolute non-root path"
+    return 1
+  fi
+  key_dir="$(dirname "$FLEET_SHARE_SSH_KEY_PATH")"
+  mkdir -p "$key_dir" "$(dirname "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE")"
+  chmod 700 "$key_dir" 2>/dev/null || true
+  touch "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE"
+  chmod 600 "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE" 2>/dev/null || true
+  if [[ ! -f "$FLEET_SHARE_SSH_KEY_PATH" ]]; then
+    if ! command -v ssh-keygen >/dev/null 2>&1; then
+      fail "ssh-keygen is required to create the worker-local fleet-share SSH key"
+      return 1
+    fi
+    ssh-keygen -t ed25519 -N "" -C "arclink-fleet-share@$HOSTNAME_VALUE" -f "$FLEET_SHARE_SSH_KEY_PATH" >/dev/null
+  fi
+  chmod 600 "$FLEET_SHARE_SSH_KEY_PATH" 2>/dev/null || true
+  chmod 644 "$FLEET_SHARE_SSH_KEY_PATH.pub" 2>/dev/null || true
+  if [[ -z "$SYSTEM_ROOT" ]]; then
+    user_group="$(id -gn "$SSH_USER" 2>/dev/null || printf '%s' "$SSH_USER")"
+    chown -R "$SSH_USER:$user_group" "$key_dir" "$(dirname "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE")" 2>/dev/null || true
+  fi
+  IFS= read -r FLEET_SHARE_SSH_PUBLIC_KEY <"$FLEET_SHARE_SSH_KEY_PATH.pub" || FLEET_SHARE_SSH_PUBLIC_KEY=""
+  if [[ -z "$FLEET_SHARE_SSH_PUBLIC_KEY" ]]; then
+    fail "could not read worker-local fleet-share SSH public key"
+    return 1
+  fi
 }
 
 ensure_docker_group() {
@@ -659,7 +712,7 @@ PY
 
 build_payload() {
   local fingerprint="$1"
-  python3 - "$PAYLOAD_FILE" "$SYSTEM_ROOT" "$HOSTNAME_VALUE" "$SSH_HOST" "$PRIVATE_DNS_NAME" "$TAILSCALE_DNS_NAME" "$SSH_USER" "$SSH_PORT" "$REGION" "$CAPACITY_SLOTS" "$PROVIDER" "$fingerprint" "$PREREQ_AUDIT_FILE" "$WIREGUARD_INTERFACE" "$WIREGUARD_PRIVATE_IP" "$WIREGUARD_PRIVATE_CIDR" "$WIREGUARD_PUBLIC_KEY" "$WIREGUARD_CONTROL_ENDPOINT" "$WIREGUARD_LISTEN_PORT" "$WIREGUARD_FIREWALL_STATUS" <<'PY'
+  python3 - "$PAYLOAD_FILE" "$SYSTEM_ROOT" "$HOSTNAME_VALUE" "$SSH_HOST" "$PRIVATE_DNS_NAME" "$TAILSCALE_DNS_NAME" "$SSH_USER" "$SSH_PORT" "$REGION" "$CAPACITY_SLOTS" "$PROVIDER" "$fingerprint" "$PREREQ_AUDIT_FILE" "$WIREGUARD_INTERFACE" "$WIREGUARD_PRIVATE_IP" "$WIREGUARD_PRIVATE_CIDR" "$WIREGUARD_PUBLIC_KEY" "$WIREGUARD_CONTROL_ENDPOINT" "$WIREGUARD_LISTEN_PORT" "$WIREGUARD_FIREWALL_STATUS" "$FLEET_SHARE_SSH_KEY_PATH" "$FLEET_SHARE_SSH_KNOWN_HOSTS_FILE" "$FLEET_SHARE_SSH_PUBLIC_KEY" <<'PY'
 import json
 import os
 import platform
@@ -686,7 +739,10 @@ import sys
     wireguard_control_endpoint,
     wireguard_listen_port,
     wireguard_firewall_status,
-) = sys.argv[1:21]
+    fleet_share_ssh_key_path,
+    fleet_share_ssh_known_hosts_file,
+    fleet_share_ssh_public_key,
+) = sys.argv[1:24]
 os_release_path = os.path.join(system_root, "etc", "os-release") if system_root else "/etc/os-release"
 os_version = platform.platform()
 if os.path.exists(os_release_path):
@@ -728,6 +784,9 @@ payload = {
     "connectivity_summary": {"ok": True, "probe_wrapper": "installed"},
     "prereq_audit": prereq_summary,
     "tags": {"source": "arclink-fleet-join"},
+    "fleet_share_ssh_key_path": fleet_share_ssh_key_path,
+    "fleet_share_ssh_known_hosts_file": fleet_share_ssh_known_hosts_file,
+    "fleet_share_ssh_public_key": fleet_share_ssh_public_key,
 }
 if wireguard_private_ip or wireguard_public_key:
     payload["wireguard_interface"] = wireguard_interface
@@ -818,6 +877,7 @@ main() {
   repair_state_permissions
   install_authorized_key
   install_probe_wrapper
+  ensure_fleet_share_ssh_key
   ensure_docker_group
   configure_wireguard
   fingerprint="$(compute_fingerprint)"

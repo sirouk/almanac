@@ -17,6 +17,7 @@ class ArcLinkFleetError(ValueError):
 
 FLEET_HOST_STATUSES = frozenset({"active", "degraded", "offline"})
 PLACEMENT_STATUSES = frozenset({"active", "removed"})
+HEALTHY_HOST_STATES = frozenset({"", "active", "healthy", "ok", "ready"})
 
 
 def _fleet_id(prefix: str) -> str:
@@ -391,10 +392,24 @@ def place_deployment(
             raise ArcLinkFleetError(_placement_rejection_summary(hosts, region=region, required_tags=required_tags, strategy=strategy))
 
         if strategy == "standard_unit":
-            best = sorted(candidates, key=lambda h: (-float(h["asu_available"]), str(h["hostname"])))[0]
+            best = sorted(
+                candidates,
+                key=lambda h: (
+                    float(h.get("asu_consumed") or 0) / max(1.0, float(h.get("asu_capacity") or 0) or 1.0),
+                    -float(h["asu_available"]),
+                    str(h["hostname"]),
+                ),
+            )[0]
         else:
-            # Deterministic: pick host with most headroom, break ties by hostname.
-            best = sorted(candidates, key=lambda h: (-int(h["headroom"]), str(h["hostname"])))[0]
+            # Deterministic spread: lowest load ratio first, then most headroom.
+            best = sorted(
+                candidates,
+                key=lambda h: (
+                    int(h["observed_load"]) / max(1, int(h["capacity_slots"])),
+                    -int(h["headroom"]),
+                    str(h["hostname"]),
+                ),
+            )[0]
 
         placement_id = _fleet_id("plc")
         now = utc_now_iso()
@@ -481,6 +496,9 @@ def _filter_placement_candidates(
     for h in hosts:
         if h["status"] != "active":
             continue
+        health_state = str(h.get("last_health_state") or "").strip().lower()
+        if health_state not in HEALTHY_HOST_STATES:
+            continue
         if int(h.get("drain", 0)):
             continue
         asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
@@ -512,6 +530,10 @@ def _placement_rejection_summary(
     reasons: set[str] = set()
     for h in hosts:
         if h["status"] != "active":
+            reasons.add("unhealthy")
+            continue
+        health_state = str(h.get("last_health_state") or "").strip().lower()
+        if health_state not in HEALTHY_HOST_STATES:
             reasons.add("unhealthy")
             continue
         if int(h.get("drain", 0)):

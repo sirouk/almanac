@@ -151,10 +151,11 @@ compatibility lane, not the preferred production fabric. Remote ArcPods must
 render against the selected worker's private mesh name and reach control APIs
 through the generated `ARCLINK_CONTROL_PRIVATE_BASE_URL` /
 `ARCLINK_WIREGUARD_CONTROL_URL` path; do not assume the control-node Docker
-network exists on remote workers.
-For multi-machine Crew sharing, set `ARCLINK_FLEET_SHARE_HUB_URL` to a remote
-git ref such as `ssh://hub.wg.internal/{user}/fleet-shared.git`; remote
-ArcPod renders fail closed without it.
+network exists on remote workers. For multi-machine Crew sharing, remote
+ArcPods derive a WireGuard SSH git hub by default, normally
+`ssh://arclink@<control-wg-ip>/<fleet-share-root>/{user}/fleet-shared.git`.
+`ARCLINK_FLEET_SHARE_HUB_URL` remains the explicit override for a dedicated
+remote git hub.
 
 Organization profile ingestion is the operator-owned path for aligning agent
 baseline, roles, teams, boundaries, and per-agent context. The private source

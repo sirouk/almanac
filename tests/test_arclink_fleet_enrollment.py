@@ -138,6 +138,9 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     attestation["wireguard_public_key"] = WORKER_WG_PUBLIC_KEY
     attestation["wireguard_interface"] = "wg-arclink"
     attestation["wireguard_control_endpoint"] = "control.wg.example.test:51820"
+    attestation["fleet_share_ssh_key_path"] = "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519"
+    attestation["fleet_share_ssh_known_hosts_file"] = "/var/lib/arclink-fleet/fleet-share-ssh/known_hosts"
+    attestation["fleet_share_ssh_public_key"] = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestArcLinkFleetShareKey arclink-fleet-share@test"
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,
         method="POST",
@@ -155,6 +158,7 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     expect(worker["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(worker))
     expect(worker["wireguard_private_ip"] == "10.44.0.11", str(worker))
     expect(worker["wireguard_public_key"] == WORKER_WG_PUBLIC_KEY, str(worker))
+    expect(worker["fleet_share_ssh_public_key"].startswith("ssh-ed25519 "), str(worker))
     machine = conn.execute(
         "SELECT enrollment_id, machine_fingerprint, attested_at, machine_host_link, audit_trail_chain, metadata_json FROM arclink_inventory_machines WHERE machine_id = ?",
         (worker["machine_id"],),
@@ -169,6 +173,8 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     expect(machine_meta["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(machine_meta))
     expect(machine_meta["control_network_mode"] == "remote", str(machine_meta))
     expect(machine_meta["wireguard"]["public_key"] == WORKER_WG_PUBLIC_KEY, str(machine_meta))
+    expect(machine_meta["fleet_share"]["ssh_key_path"] == "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519", str(machine_meta))
+    expect(machine_meta["fleet_share"]["known_hosts_file"] == "/var/lib/arclink-fleet/fleet-share-ssh/known_hosts", str(machine_meta))
     host_meta = json.loads(
         conn.execute(
             "SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
@@ -179,6 +185,7 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     expect(host_meta["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(host_meta))
     expect(host_meta["control_network_mode"] == "remote", str(host_meta))
     expect(host_meta["wireguard"]["private_ip"] == "10.44.0.11", str(host_meta))
+    expect(host_meta["fleet_share"]["public_key"].startswith("ssh-ed25519 "), str(host_meta))
 
     verified = enrollment.verify_fleet_audit_chain(conn)
     expect(verified["ok"] is True and verified["checked_entries"] == 2, str(verified))

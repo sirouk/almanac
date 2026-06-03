@@ -883,27 +883,57 @@ def test_remote_private_mesh_worker_uses_private_control_urls_without_control_do
     print("PASS test_remote_private_mesh_worker_uses_private_control_urls_without_control_docker_network")
 
 
-def test_remote_worker_requires_remote_fleet_share_hub() -> None:
-    control = load_module("arclink_control.py", "arclink_control_provisioning_remote_share_fail_test")
-    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_remote_share_fail_test")
+def test_remote_worker_derives_wireguard_fleet_share_hub_when_unset() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_remote_share_default_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_remote_share_default_test")
     conn = memory_db(control)
     seed_deployment(control, conn)
-    try:
-        provisioning.render_arclink_provisioning_intent(
-            conn,
-            deployment_id="dep_1",
-            ingress_mode="tailscale",
-            tailscale_dns_name="worker-a.tailnet.ts.net",
-            env={
-                "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote",
-                "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
-            },
-        )
-    except provisioning.ArcLinkProvisioningError as exc:
-        expect("ARCLINK_FLEET_SHARE_HUB_URL" in str(exc), str(exc))
-    else:
-        raise AssertionError("remote ArcPod renders must require a remote fleet-share hub")
-    print("PASS test_remote_worker_requires_remote_fleet_share_hub")
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker-a.tailnet.ts.net",
+        env={
+            "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote",
+            "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
+            "ARCLINK_WIREGUARD_CONTROL_IP": "10.44.0.1",
+        },
+    )
+    sync = intent["compose"]["services"]["fleet-share-sync"]
+    expect(
+        sync["environment"]["ARCLINK_FLEET_SHARE_HUB_URL"] == "ssh://arclink@10.44.0.1/arcdata/captains/user_1/fleet-shared.git",
+        str(sync),
+    )
+    expect("/fleet-share-hub.git" not in {item["target"] for item in sync["volumes"]}, str(sync))
+    print("PASS test_remote_worker_derives_wireguard_fleet_share_hub_when_unset")
+
+
+def test_remote_fleet_share_sync_mounts_worker_local_git_key() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_remote_share_key_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_remote_share_key_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker-a.tailnet.ts.net",
+        env={
+            "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote",
+            "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
+            "ARCLINK_WIREGUARD_CONTROL_IP": "10.44.0.1",
+            "ARCLINK_FLEET_SHARE_SSH_KEY_PATH": "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519",
+            "ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE": "/var/lib/arclink-fleet/fleet-share-ssh/known_hosts",
+        },
+    )
+    sync = intent["compose"]["services"]["fleet-share-sync"]
+    targets = {item["target"]: item for item in sync["volumes"]}
+    expect(targets["/run/arclink-fleet-share/id_ed25519"]["source"] == "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519", str(sync))
+    expect(targets["/run/arclink-fleet-share/id_ed25519"]["read_only"] is True, str(sync))
+    expect(targets["/run/arclink-fleet-share/known_hosts"]["read_only"] is True, str(sync))
+    expect("GIT_SSH_COMMAND" in sync["environment"], str(sync["environment"]))
+    expect("BatchMode=yes" in sync["environment"]["GIT_SSH_COMMAND"], str(sync["environment"]))
+    print("PASS test_remote_fleet_share_sync_mounts_worker_local_git_key")
 
 
 def main() -> int:
@@ -923,8 +953,9 @@ def main() -> int:
     test_dashboard_theme_falls_back_to_agent_index_variant()
     test_fleet_share_remote_hub_uses_resolved_url_without_local_bind()
     test_remote_private_mesh_worker_uses_private_control_urls_without_control_docker_network()
-    test_remote_worker_requires_remote_fleet_share_hub()
-    print("PASS all 17 ArcLink provisioning tests")
+    test_remote_worker_derives_wireguard_fleet_share_hub_when_unset()
+    test_remote_fleet_share_sync_mounts_worker_local_git_key()
+    print("PASS all 18 ArcLink provisioning tests")
     return 0
 
 

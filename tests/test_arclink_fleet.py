@@ -187,6 +187,39 @@ def test_place_deployment_rejects_unhealthy_hosts() -> None:
     print("PASS test_place_deployment_rejects_unhealthy_hosts")
 
 
+def test_place_deployment_rejects_unreachable_last_health_state() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_last_health")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_last_health")
+    conn = memory_db(control)
+    host = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=10)
+    conn.execute(
+        "UPDATE arclink_fleet_hosts SET last_health_state = 'unreachable' WHERE host_id = ?",
+        (host["host_id"],),
+    )
+    conn.commit()
+    try:
+        fleet.place_deployment(conn, deployment_id="dep_1")
+        raise AssertionError("should reject host whose last health probe is unreachable")
+    except fleet.ArcLinkFleetError as exc:
+        expect("unhealthy" in str(exc), f"expected useful unhealthy error, got {exc}")
+    print("PASS test_place_deployment_rejects_unreachable_last_health_state")
+
+
+def test_place_deployment_spreads_empty_workers_before_stacking() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_spread")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_spread")
+    conn = memory_db(control)
+    hosts = [
+        fleet.register_fleet_host(conn, hostname="worker-a.test", capacity_slots=32),
+        fleet.register_fleet_host(conn, hostname="worker-b.test", capacity_slots=32),
+        fleet.register_fleet_host(conn, hostname="worker-c.test", capacity_slots=8),
+    ]
+    placements = [fleet.place_deployment(conn, deployment_id=f"dep_{idx}") for idx in range(1, 4)]
+    placed_hosts = {placement["host_id"] for placement in placements}
+    expect(placed_hosts == {host["host_id"] for host in hosts}, str(placements))
+    print("PASS test_place_deployment_spreads_empty_workers_before_stacking")
+
+
 def test_placement_idempotent() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_idem")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_idem")
@@ -390,6 +423,8 @@ if __name__ == "__main__":
     test_place_deployment_rejects_saturated_hosts()
     test_place_deployment_rejects_draining_hosts()
     test_place_deployment_rejects_unhealthy_hosts()
+    test_place_deployment_rejects_unreachable_last_health_state()
+    test_place_deployment_spreads_empty_workers_before_stacking()
     test_placement_idempotent()
     test_active_placement_unique_index_migrates_existing_duplicates()
     test_concurrent_placement_returns_one_active_row()
@@ -398,4 +433,4 @@ if __name__ == "__main__":
     test_placement_rejects_secret_required_tags()
     test_standard_unit_strategy_uses_inventory_asu_available()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
-    print(f"\nAll 18 fleet tests passed.")
+    print(f"\nAll 20 fleet tests passed.")

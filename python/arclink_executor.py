@@ -521,11 +521,11 @@ class SshDockerComposeRunner:
     ) -> Mapping[str, Any]:
         del deployment_id
         target = self._target()
-        root = str(Path(compose_file).resolve().parents[1])
+        config_root = str(Path(compose_file).resolve().parent)
         cleanup_required = bool(args and args[0] in {"up", "down"})
         secrets_root = str((Path(compose_file).parent / "secrets").resolve())
         mkdir = subprocess.run(
-            (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", root),
+            (self.ssh_binary, *self.ssh_options, target, "mkdir", "-p", config_root),
             check=False,
             text=True,
             capture_output=True,
@@ -534,7 +534,7 @@ class SshDockerComposeRunner:
             raise ArcLinkExecutorError(_safe_command_error("ssh mkdir", mkdir.stderr or mkdir.stdout))
         rsync_ssh = " ".join(_shell_quote(part) for part in (self.ssh_binary, *self.ssh_options))
         sync = subprocess.run(
-            (self.rsync_binary, "-a", "--delete", "-e", rsync_ssh, f"{root}/", f"{target}:{root}/"),
+            (self.rsync_binary, "-a", "--delete", "-e", rsync_ssh, f"{config_root}/", f"{target}:{config_root}/"),
             check=False,
             text=True,
             capture_output=True,
@@ -1820,6 +1820,8 @@ def _materialize_docker_compose_files(
         _ensure_volume_roots(services, allowed_root=root)
     elif volume_root_mode == "all":
         _ensure_volume_roots(services)
+    elif volume_root_mode == "none":
+        pass
     else:
         raise ArcLinkExecutorError("invalid ArcLink Docker Compose volume root materialization mode")
     env = {
@@ -1958,7 +1960,7 @@ def _require_allowed_ssh_host(host: str, allowed_hosts: tuple[str, ...]) -> None
 
 def _compose_volume_root_mode(*, adapter_name: str, docker_runner: DockerRunner) -> str:
     if str(adapter_name or "").strip().lower() == "ssh" or isinstance(docker_runner, SshDockerComposeRunner):
-        return "deployment"
+        return "none"
     return "all"
 
 

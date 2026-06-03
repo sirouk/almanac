@@ -9624,6 +9624,142 @@ test_remote_fleet_ssh_access() {
   return 1
 }
 
+mark_control_fleet_worker_image_sync_state() {
+  local host_id="$1"
+  local state="$2"
+  local db_path="$BOOTSTRAP_DIR/arclink-priv/state/arclink-control.sqlite3"
+
+  [[ -z "$host_id" || ! -f "$db_path" ]] && return 0
+  python3 - "$db_path" "$host_id" "$state" <<'PY' || true
+import datetime as dt
+import sqlite3
+import sys
+
+db_path, host_id, state = sys.argv[1:4]
+conn = sqlite3.connect(db_path)
+try:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(arclink_fleet_hosts)").fetchall()}
+    if "last_health_state" in columns:
+        conn.execute(
+            "UPDATE arclink_fleet_hosts SET last_health_state = ?, updated_at = ? WHERE host_id = ?",
+            (state, dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), host_id),
+        )
+        conn.commit()
+finally:
+    conn.close()
+PY
+}
+
+sync_control_docker_image_to_fleet_workers() {
+  local enabled="${ARCLINK_FLEET_IMAGE_SYNC_ENABLED:-1}"
+  local image="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
+  local db_path="$BOOTSTRAP_DIR/arclink-priv/state/arclink-control.sqlite3"
+  local key_path="" known_hosts="" local_image_id="" worker="" host_id="" hostname="" ssh_host="" ssh_user="" health_state=""
+  local remote_image_id="" q_image="" target="" sync_failed=0
+  local -a ssh_opts=()
+
+  [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "no" ]] && return 0
+  [[ -f "$db_path" ]] || return 0
+  if ! command -v docker >/dev/null 2>&1 || ! command -v ssh >/dev/null 2>&1; then
+    echo "Skipping fleet image sync: docker and ssh are required on the control node." >&2
+    return 0
+  fi
+  if ! local_image_id="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)"; then
+    echo "Skipping fleet image sync: local Docker image '$image' is not present." >&2
+    return 0
+  fi
+  ensure_control_fleet_ssh_key "0"
+  key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
+  known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE:-${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}}"
+  if [[ -z "$key_path" || ! -r "$key_path" ]]; then
+    echo "Skipping fleet image sync: missing Sovereign fleet SSH private key." >&2
+    return 0
+  fi
+  if [[ -n "$known_hosts" ]]; then
+    mkdir -p "$(dirname "$known_hosts")"
+    touch "$known_hosts"
+    chmod 0600 "$known_hosts" 2>/dev/null || true
+  fi
+  ssh_opts=(
+    -i "$key_path"
+    -o BatchMode=yes
+    -o ConnectTimeout=15
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=accept-new
+  )
+  if [[ -n "$known_hosts" ]]; then
+    ssh_opts+=(-o "UserKnownHostsFile=$known_hosts")
+  fi
+
+  printf -v q_image '%q' "$image"
+  while IFS=$'\t' read -r host_id hostname ssh_host ssh_user health_state; do
+    [[ -n "$host_id" && -n "$ssh_host" ]] || continue
+    if is_local_fleet_ssh_host "$ssh_host"; then
+      continue
+    fi
+    if [[ "$health_state" != "" && "$health_state" != "active" && "$health_state" != "healthy" && "$health_state" != "ok" && "$health_state" != "ready" && "$health_state" != "unknown" ]]; then
+      echo "Skipping fleet image sync for $hostname ($ssh_host): health is $health_state." >&2
+      continue
+    fi
+    ssh_user="${ssh_user:-arclink}"
+    target="$ssh_user@$ssh_host"
+    echo "Ensuring ArcLink image '$image' is present on fleet worker $target..."
+    if [[ -n "$known_hosts" ]] && command -v ssh-keyscan >/dev/null 2>&1; then
+      ssh-keyscan -H "$ssh_host" >>"$known_hosts" 2>/dev/null || true
+      sort -u -o "$known_hosts" "$known_hosts" 2>/dev/null || true
+    fi
+    remote_image_id="$(ssh "${ssh_opts[@]}" "$target" "docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true" 2>/dev/null || true)"
+    if [[ "$remote_image_id" == "$local_image_id" ]]; then
+      mark_control_fleet_worker_image_sync_state "$host_id" "active"
+      continue
+    fi
+    if docker image save "$image" | ssh "${ssh_opts[@]}" "$target" "docker image load >/tmp/arclink-image-load.log && docker image inspect --format '{{.Id}}' $q_image" >/dev/null; then
+      mark_control_fleet_worker_image_sync_state "$host_id" "active"
+    else
+      sync_failed=1
+      mark_control_fleet_worker_image_sync_state "$host_id" "image_sync_failed"
+      echo "Fleet image sync failed for $target; marking worker unhealthy for placement until the next successful sync/probe." >&2
+    fi
+  done < <(python3 - "$db_path" <<'PY'
+import json
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+healthy = {"", "active", "healthy", "ok", "ready", "unknown"}
+conn = sqlite3.connect(db_path)
+conn.row_factory = sqlite3.Row
+try:
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(arclink_fleet_hosts)").fetchall()}
+    health_expr = "last_health_state" if "last_health_state" in columns else "'' AS last_health_state"
+    rows = conn.execute(
+        f"""
+        SELECT host_id, hostname, metadata_json, {health_expr}
+        FROM arclink_fleet_hosts
+        WHERE status = 'active' AND drain = 0
+        ORDER BY hostname
+        """
+    ).fetchall()
+finally:
+    conn.close()
+for row in rows:
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    ssh_host = str(metadata.get("ssh_host") or "").strip()
+    ssh_user = str(metadata.get("ssh_user") or "arclink").strip() or "arclink"
+    health_state = str(row["last_health_state"] or "").strip().lower()
+    if not ssh_host or health_state not in healthy:
+        continue
+    print("\t".join([str(row["host_id"]), str(row["hostname"]), ssh_host, ssh_user, health_state]))
+PY
+)
+  if [[ "$sync_failed" == "1" ]]; then
+    return 1
+  fi
+}
+
 derive_control_worker_join_url() {
   local control_url="${ARCLINK_FLEET_JOIN_CONTROL_URL:-}"
   local base_domain=""
@@ -11501,6 +11637,7 @@ run_control_install_flow() {
   load_docker_runtime_config
   verify_control_docker_trusted_host_risk_accepted
   run_arclink_docker build
+  sync_control_docker_image_to_fleet_workers
   run_arclink_docker up
   load_docker_runtime_config
   ensure_control_local_fleet_worker_registered
@@ -11633,7 +11770,10 @@ finally:
 
 eligible = [
     host for host in summary["hosts"]
-    if host["status"] == "active" and not host["drain"] and int(host["headroom"]) > 0
+    if host["status"] == "active"
+    and not host["drain"]
+    and int(host["headroom"]) > 0
+    and str(host.get("last_health_state") or "").lower() in {"", "active", "healthy", "ok", "ready"}
 ]
 if eligible:
     print(

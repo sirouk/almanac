@@ -1352,7 +1352,7 @@ def test_live_docker_compose_file_preserves_service_ports() -> None:
     print("PASS test_live_docker_compose_file_preserves_service_ports")
 
 
-def test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roots() -> None:
+def test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_ssh_volume_roots_test")
     intent = sample_intent()
     secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
@@ -1399,7 +1399,7 @@ def test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roo
             mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="ssh-volume-roots-1")
         )
         compose_doc = json.loads(Path(result.compose_file).read_text(encoding="utf-8"))
-        expect((root / "nextcloud" / "db").is_dir(), "deployment-scoped directory volumes must be materialized for rsync")
+        expect(not (root / "nextcloud" / "db").exists(), "SSH apply must not materialize worker-owned state roots")
         expect(not outside_dir.exists(), f"worker-local directory bind must not be created on control: {outside_dir}")
         expect(not outside_key.exists(), f"worker-local file bind must not be created on control: {outside_key}")
         rendered_sources = {
@@ -1410,7 +1410,7 @@ def test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roo
         }
         expect(str(outside_dir) in rendered_sources and str(outside_key) in rendered_sources, str(compose_doc))
         expect(runner.runs and runner.runs[0]["args"] == ("up", "-d", "--remove-orphans"), str(runner.runs))
-    print("PASS test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roots")
+    print("PASS test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots")
 
 
 def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
@@ -1539,6 +1539,57 @@ def test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure() -> None
     expect(cleanup_calls, f"expected remote secret cleanup call, saw {calls}")
     expect(any("config/secrets" in " ".join(call) for call in cleanup_calls), str(cleanup_calls))
     print("PASS test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure")
+
+
+def test_ssh_docker_runner_syncs_only_compose_config_bundle() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_config_sync_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[tuple[str, ...]] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        call = tuple(str(part) for part in cmd)
+        calls.append(call)
+        return Proc(0, stdout="ok")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        compose_file = Path(tmpdir) / "dep" / "config" / "compose.yaml"
+        env_file = compose_file.parent / "arclink.env"
+        compose_file.parent.mkdir(parents=True)
+        compose_file.write_text("services: {}\n", encoding="utf-8")
+        env_file.write_text("", encoding="utf-8")
+        try:
+            mod.subprocess.run = fake_run
+            runner = mod.SshDockerComposeRunner(
+                host="worker.example.test",
+                user="arclink",
+                allowed_hosts=("worker.example.test",),
+            )
+            runner.run(
+                ("up", "-d", "--remove-orphans"),
+                deployment_id="dep",
+                project_name="arclink-dep",
+                env_file=str(env_file),
+                compose_file=str(compose_file),
+            )
+        finally:
+            mod.subprocess.run = original_run
+    rsync_calls = [call for call in calls if call and call[0] == "rsync"]
+    expect(len(rsync_calls) == 1, str(calls))
+    source = str(Path(tmpdir) / "dep" / "config") + "/"
+    root_source = str(Path(tmpdir) / "dep") + "/"
+    expect(source in rsync_calls[0], str(rsync_calls[0]))
+    expect(root_source not in rsync_calls[0], str(rsync_calls[0]))
+    config_root = str(Path(tmpdir) / "dep" / "config")
+    expect(any(call[-3:-1] == ("mkdir", "-p") and call[-1] == config_root for call in calls), str(calls))
+    print("PASS test_ssh_docker_runner_syncs_only_compose_config_bundle")
 
 
 def test_ssh_docker_runner_requires_explicit_host_allowlist() -> None:
@@ -1717,10 +1768,11 @@ def main() -> int:
     test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner()
     test_live_docker_compose_lifecycle_project_override_requires_config_flag()
     test_live_docker_compose_file_preserves_service_ports()
-    test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roots()
+    test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
+    test_ssh_docker_runner_syncs_only_compose_config_bundle()
     test_ssh_docker_runner_requires_explicit_host_allowlist()
     test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata()
     test_live_executor_requires_docker_runner()

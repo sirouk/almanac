@@ -219,6 +219,7 @@ def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
                 "drain": bool(int(h["drain"])),
                 "capacity_slots": int(h["capacity_slots"]),
                 "observed_load": int(h["observed_load"]),
+                "last_health_state": str(h.get("last_health_state") or ""),
                 "headroom": int(h["capacity_slots"]) - int(h["observed_load"]),
                 "asu_capacity": float(h.get("asu_capacity") or 0),
                 "asu_consumed": float(h.get("asu_consumed") or 0),

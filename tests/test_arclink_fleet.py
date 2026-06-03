@@ -112,6 +112,7 @@ def test_fleet_capacity_summary() -> None:
     expect(summary["total_hosts"] == 2, "two hosts")
     expect(summary["total_slots"] == 15, "total slots")
     expect(summary["available_slots"] == 15, "all available")
+    expect(all("last_health_state" in host for host in summary["hosts"]), str(summary))
     print("PASS test_fleet_capacity_summary")
 
 

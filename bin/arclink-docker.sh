@@ -239,6 +239,8 @@ bootstrap() {
   ensure_env_file_value ARCLINK_CONTROL_PRIVATE_BASE_URL ""
   ensure_env_file_value ARCLINK_WIREGUARD_CONTROL_URL ""
   ensure_env_file_value ARCLINK_PRIVATE_MESH_CONTROL_URL ""
+  ensure_env_file_value ARCLINK_CONTROL_PRIVATE_BIND_HOST ""
+  ensure_env_file_value ARCLINK_CONTROL_PRIVATE_HTTP_PORT ""
   ensure_env_file_value ARCLINK_CONTROL_PRIVATE_HTTPS_PORT "443"
   ensure_env_file_value ARCLINK_WIREGUARD_ENABLED "1"
   ensure_env_file_value ARCLINK_WIREGUARD_INTERFACE "wg-arclink"

@@ -105,6 +105,8 @@ ARCLINK_PRIVATE_MESH_DNS_NAME="${ARCLINK_PRIVATE_MESH_DNS_NAME:-}"
 ARCLINK_CONTROL_PRIVATE_BASE_URL="${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}"
 ARCLINK_WIREGUARD_CONTROL_URL="${ARCLINK_WIREGUARD_CONTROL_URL:-}"
 ARCLINK_PRIVATE_MESH_CONTROL_URL="${ARCLINK_PRIVATE_MESH_CONTROL_URL:-}"
+ARCLINK_CONTROL_PRIVATE_BIND_HOST="${ARCLINK_CONTROL_PRIVATE_BIND_HOST:-}"
+ARCLINK_CONTROL_PRIVATE_HTTP_PORT="${ARCLINK_CONTROL_PRIVATE_HTTP_PORT:-}"
 ARCLINK_CONTROL_PRIVATE_HTTPS_PORT="${ARCLINK_CONTROL_PRIVATE_HTTPS_PORT:-443}"
 ARCLINK_WIREGUARD_ENABLED="${ARCLINK_WIREGUARD_ENABLED:-1}"
 ARCLINK_WIREGUARD_INTERFACE="${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}"
@@ -2129,6 +2131,8 @@ emit_runtime_config() {
     write_kv ARCLINK_CONTROL_PRIVATE_BASE_URL "${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}"
     write_kv ARCLINK_WIREGUARD_CONTROL_URL "${ARCLINK_WIREGUARD_CONTROL_URL:-}"
     write_kv ARCLINK_PRIVATE_MESH_CONTROL_URL "${ARCLINK_PRIVATE_MESH_CONTROL_URL:-}"
+    write_kv ARCLINK_CONTROL_PRIVATE_BIND_HOST "${ARCLINK_CONTROL_PRIVATE_BIND_HOST:-}"
+    write_kv ARCLINK_CONTROL_PRIVATE_HTTP_PORT "${ARCLINK_CONTROL_PRIVATE_HTTP_PORT:-}"
     write_kv ARCLINK_CONTROL_PRIVATE_HTTPS_PORT "${ARCLINK_CONTROL_PRIVATE_HTTPS_PORT:-443}"
     write_kv ARCLINK_WIREGUARD_ENABLED "${ARCLINK_WIREGUARD_ENABLED:-1}"
     write_kv ARCLINK_WIREGUARD_INTERFACE "${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}"
@@ -8843,6 +8847,40 @@ derive_control_wireguard_endpoint() {
   printf '%s:%s\n' "$host" "$port"
 }
 
+control_private_base_url_from_bind() {
+  local host="$1"
+  local port="${2:-}"
+
+  [[ -z "$host" ]] && return 0
+  if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+    host="[$host]"
+  fi
+  if [[ -n "$port" && "$port" != "80" ]]; then
+    printf 'http://%s:%s\n' "$host" "$port"
+  else
+    printf 'http://%s\n' "$host"
+  fi
+}
+
+ensure_control_private_mesh_defaults() {
+  local url_host=""
+
+  [[ "${ARCLINK_WIREGUARD_ENABLED:-1}" == "0" ]] && return 0
+
+  ARCLINK_CONTROL_PRIVATE_BIND_HOST="${ARCLINK_CONTROL_PRIVATE_BIND_HOST:-${ARCLINK_WIREGUARD_CONTROL_IP:-10.44.0.1}}"
+  ARCLINK_CONTROL_PRIVATE_HTTP_PORT="${ARCLINK_CONTROL_PRIVATE_HTTP_PORT:-${ARCLINK_WEB_PORT:-3000}}"
+  if [[ -z "${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}" ]]; then
+    url_host="${ARCLINK_PRIVATE_DNS_NAME:-$ARCLINK_CONTROL_PRIVATE_BIND_HOST}"
+    ARCLINK_CONTROL_PRIVATE_BASE_URL="$(control_private_base_url_from_bind "$url_host" "$ARCLINK_CONTROL_PRIVATE_HTTP_PORT")"
+  fi
+  if [[ -z "${ARCLINK_WIREGUARD_CONTROL_URL:-}" && -n "${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}" ]]; then
+    ARCLINK_WIREGUARD_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
+  fi
+  if [[ -z "${ARCLINK_PRIVATE_MESH_CONTROL_URL:-}" && -n "${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}" ]]; then
+    ARCLINK_PRIVATE_MESH_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
+  fi
+}
+
 allow_control_wireguard_firewall_port() {
   local port="${ARCLINK_WIREGUARD_PORT:-51820}"
 
@@ -8989,12 +9027,7 @@ ensure_control_wireguard_ready() {
   if [[ -n "$endpoint" ]]; then
     ARCLINK_WIREGUARD_CONTROL_ENDPOINT="$endpoint"
   fi
-  if [[ -z "${ARCLINK_WIREGUARD_CONTROL_URL:-}" && -n "${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}" ]]; then
-    ARCLINK_WIREGUARD_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
-  fi
-  if [[ -z "${ARCLINK_PRIVATE_MESH_CONTROL_URL:-}" && -n "${ARCLINK_CONTROL_PRIVATE_BASE_URL:-}" ]]; then
-    ARCLINK_PRIVATE_MESH_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
-  fi
+  ensure_control_private_mesh_defaults
   write_control_wireguard_interface_config
   allow_control_wireguard_firewall_port
   activate_control_wireguard_interface
@@ -10806,13 +10839,8 @@ collect_control_install_answers() {
     ARCLINK_PRIVATE_DNS_NAME="$(trim_control_value "$default_private_dns")"
     ARCLINK_CONTROL_PRIVATE_BASE_URL="$(trim_control_value "$default_private_control_url")"
   fi
-  if [[ -z "$ARCLINK_CONTROL_PRIVATE_BASE_URL" && -n "$ARCLINK_PRIVATE_DNS_NAME" ]]; then
-    ARCLINK_CONTROL_PRIVATE_BASE_URL="https://$ARCLINK_PRIVATE_DNS_NAME"
-  fi
   ARCLINK_WIREGUARD_DNS_NAME="$ARCLINK_PRIVATE_DNS_NAME"
   ARCLINK_PRIVATE_MESH_DNS_NAME="$ARCLINK_PRIVATE_DNS_NAME"
-  ARCLINK_WIREGUARD_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
-  ARCLINK_PRIVATE_MESH_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
   ARCLINK_CONTROL_PRIVATE_HTTPS_PORT="${ARCLINK_CONTROL_PRIVATE_HTTPS_PORT:-443}"
   if [[ "${ARCLINK_CONTROL_ADVANCED_PROMPTS:-0}" == "1" ]]; then
     ARCLINK_WIREGUARD_ENABLED="$(ask_yes_no "Prepare WireGuard private mesh for fleet machines" "${ARCLINK_WIREGUARD_ENABLED:-1}")"
@@ -10839,6 +10867,7 @@ collect_control_install_answers() {
   ARCLINK_API_HOST="0.0.0.0"
   ARCLINK_API_PORT="$(ask "Control API local port" "$default_api_port")"
   ARCLINK_WEB_PORT="$(ask "Control web local port" "$default_web_port")"
+  ensure_control_private_mesh_defaults
   ARCLINK_CORS_ORIGIN="$(normalize_optional_answer "$(ask "Browser CORS origin (type none to clear)" "$default_cors_origin")")"
   ARCLINK_COOKIE_DOMAIN="$(normalize_optional_answer "$(ask "Session cookie domain (type none to clear)" "$default_cookie_domain")")"
   ARCLINK_FOUNDERS_PRICE_ID="$(normalize_optional_answer "$(ask "Stripe Limited 100 Founders price ID (USD 149/month)" "$default_founders_price_id")")"

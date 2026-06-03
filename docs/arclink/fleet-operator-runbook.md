@@ -76,9 +76,10 @@ instead of an enrollment token.
 
    The normal interactive flow asks for the inventory hostname and the
    first-contact SSH host only. ArcLink derives the WireGuard endpoint from the
-   control node, assigns the worker tunnel IP, configures the worker, registers
-   the worker's long-lived fleet address as the WireGuard IP, syncs the peer,
-   and smoke-tests the private mesh. Use
+   control node, publishes a WireGuard-bound private control ingress, generates
+   the private control URL from the control tunnel IP, assigns the worker tunnel
+   IP, configures the worker, registers the worker's long-lived fleet address
+   as the WireGuard IP, syncs the peer, and smoke-tests the private mesh. Use
    `ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only for unusual networks.
 
    Scriptable:
@@ -115,11 +116,14 @@ instead of an enrollment token.
    metadata, so ArcPods placed on this worker render their dashboard, Drive,
    Code, Terminal, and Notion links against the worker that actually owns the
    containers. `--tailscale-dns-name` is optional access compatibility metadata.
-   The bootstrap callback uses the public or Tailscale Control Node URL because
-   the Control Node cannot know the worker WireGuard public key before the fresh
-   worker generates it. After the callback, `register-worker` reads the
+   The bootstrap callback uses an internally selected public or Tailscale Control
+   Node URL because the Control Node cannot know the worker WireGuard public key
+   before the fresh worker generates it. The Operator is not prompted for this
+   value in the normal flow. After the callback, `register-worker` reads the
    callback-reported public key and syncs the peer into the Control Node config
-   and live interface. If the worker public key is already known, pass it to
+   and live interface; remote ArcPods then render control, share-broker, and
+   inference-router URLs through the generated WireGuard private control URL. If
+   the worker public key is already known, pass it to
    `register-worker --wireguard-public-key` and the peer is appended before
    bootstrap too.
    Cross-machine Captain shared folders require a remote

@@ -129,15 +129,17 @@ Remote production fleet machines should be addressed through the operator-owned
 private mesh, normally WireGuard. The normal interactive path is
 `./deploy.sh control register-worker`: after the operator adds the fleet public
 key to the fresh machine, ArcLink asks for the inventory hostname and
-first-contact SSH host, then derives the WireGuard endpoint, assigns the worker
-tunnel IP, joins the worker, syncs the peer, and smoke-tests the private mesh.
+first-contact SSH host, then derives the WireGuard endpoint, publishes the
+WireGuard-bound private control URL, assigns the worker tunnel IP, joins the
+worker, syncs the peer, and smoke-tests the private mesh.
 Use `ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only for unusual networks that
 need explicit tunnel, callback, state-root, or placement overrides.
 Scriptable bootstrap can still pass
 `--ssh-host <worker-private-ip-or-dns> --bootstrap-remote
 --bootstrap-ssh-host <first-contact-host> --bootstrap-ssh-user root`. Control
 install/reconfigure prepares the Control Node WireGuard keypair, auto-derived
-endpoint metadata, and firewall allowance. `register-worker --bootstrap-remote`
+endpoint metadata, private control ingress, generated private control URL, and
+firewall allowance. `register-worker --bootstrap-remote`
 mints the one-time enrollment token, stages only the worker join script plus
 its small helper assets over SSH, passes the token over stdin, and runs the
 join remotely as root or passwordless `sudo -n`. Fleet join generates a
@@ -147,7 +149,8 @@ SSH public key without replacing `authorized_keys`, changing `sshd_config`, or
 changing port 22. Tailscale is an access overlay/domain alternative and
 compatibility lane, not the preferred production fabric. Remote ArcPods must
 render against the selected worker's private mesh name and reach control APIs
-through the configured control URL; do not assume the control-node Docker
+through the generated `ARCLINK_CONTROL_PRIVATE_BASE_URL` /
+`ARCLINK_WIREGUARD_CONTROL_URL` path; do not assume the control-node Docker
 network exists on remote workers.
 For multi-machine Crew sharing, set `ARCLINK_FLEET_SHARE_HUB_URL` to a remote
 git ref such as `ssh://hub.wg.internal/{user}/fleet-shared.git`; remote

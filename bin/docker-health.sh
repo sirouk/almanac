@@ -118,9 +118,8 @@ check_optional_tcp_with_fallback() {
 }
 
 check_control_ingress_https() {
-  local mode="${ARCLINK_INGRESS_MODE:-domain}"
   local control_url="${ARCLINK_CONTROL_PRIVATE_BASE_URL:-${ARCLINK_WIREGUARD_CONTROL_URL:-${ARCLINK_PRIVATE_MESH_CONTROL_URL:-${ARCLINK_TAILSCALE_CONTROL_URL:-}}}}"
-  if [[ "$mode" == "tailscale" && "$control_url" == https://* ]]; then
+  if [[ "$control_url" == http://* || "$control_url" == https://* ]]; then
     pass "Traefik ingress (HTTPS) is delegated to the configured private/Tailscale route"
     return
   fi

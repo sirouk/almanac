@@ -386,9 +386,11 @@ include Captain report text, Markdown, or raw ledger snippets.
 | Var | Purpose |
 |-----|---------|
 | `ARCLINK_PRIVATE_DNS_NAME` | Preferred Control Node private mesh/WireGuard DNS or IP for remote ArcPods |
-| `ARCLINK_CONTROL_PRIVATE_BASE_URL` | Preferred HTTPS base URL remote ArcPods use for Control Node API and inference router access |
+| `ARCLINK_CONTROL_PRIVATE_BASE_URL` | Preferred private-mesh base URL remote ArcPods use for Control Node API and inference router access; install/reconfigure auto-generates a WireGuard URL when unset |
 | `ARCLINK_WIREGUARD_CONTROL_URL` | WireGuard-specific alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
 | `ARCLINK_PRIVATE_MESH_CONTROL_URL` | Generic private-mesh alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
+| `ARCLINK_CONTROL_PRIVATE_BIND_HOST` | Host/IP the Control Node ingress publishes on for private mesh traffic; defaults to the WireGuard control tunnel IP when WireGuard is enabled |
+| `ARCLINK_CONTROL_PRIVATE_HTTP_PORT` | Host port for private mesh control ingress; defaults to the Control web port when WireGuard is enabled |
 | `ARCLINK_WIREGUARD_ENABLED` | Enables Control Node WireGuard readiness during install/reconfigure, default `1` |
 | `ARCLINK_WIREGUARD_INTERFACE` | Control/worker WireGuard interface name, default `wg-arclink` |
 | `ARCLINK_WIREGUARD_NETWORK_CIDR` | Fleet tunnel subnet, default `10.44.0.0/24` |
@@ -1376,8 +1378,9 @@ Operator proof-gated.
 
 Remote worker addressing is private-mesh first. Control install/reconfigure
 generates the Control Node WireGuard keypair in private state, records the
-public key/endpoint, writes the control interface config, and opens only the
-configured WireGuard UDP port when `ufw` or `firewalld` is already active.
+public key/endpoint, writes the control interface config, publishes a
+WireGuard-bound private control URL, and opens only the configured WireGuard UDP
+port when `ufw` or `firewalld` is already active.
 Register production workers with a WireGuard/private-mesh `ssh_host` plus
 `wireguard_private_ip`; ArcPods placed on those hosts render against the
 selected worker's private tunnel address and derive control API/router URLs from

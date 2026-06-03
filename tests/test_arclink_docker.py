@@ -629,6 +629,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("/var/run/docker.sock" not in control_ingress_block, control_ingress_block)
     expect("group_add:" not in control_ingress_block, control_ingress_block)
     expect("./config/traefik-control.yaml:/etc/traefik/dynamic/arclink-control.yaml:ro" in control_ingress_block, control_ingress_block)
+    expect("${ARCLINK_CONTROL_PRIVATE_BIND_HOST:-127.0.0.1}:${ARCLINK_CONTROL_PRIVATE_HTTP_PORT:-13001}:8080" in control_ingress_block, control_ingress_block)
     for backend in ("notion-webhook", "control-web", "control-api", "control-llm-router"):
         expect(f"{backend}:" in control_ingress_block, control_ingress_block)
     for socket_service in (
@@ -793,6 +794,7 @@ def test_control_ingress_uses_static_traefik_config_without_docker_socket() -> N
     expect("group_add:" not in block, block)
     expect("./config/traefik-control.yaml:/etc/traefik/dynamic/arclink-control.yaml:ro" in block, block)
     expect("127.0.0.1:${ARCLINK_WEB_PORT:-3000}:8080" in block, block)
+    expect("${ARCLINK_CONTROL_PRIVATE_BIND_HOST:-127.0.0.1}:${ARCLINK_CONTROL_PRIVATE_HTTP_PORT:-13001}:8080" in block, block)
     for backend in ("notion-webhook", "control-web", "control-api", "control-llm-router"):
         expect(f"{backend}:\n        condition: service_healthy" in block, block)
     for removed_label in (
@@ -7132,9 +7134,11 @@ def test_docker_health_script_checks_container_runtime() -> None:
     expect("check_control_ingress_https()" in body, body)
     compose_body = read("compose.yaml")
     expect("--ping=true" in compose_body and "--ping.entrypoint=web" in compose_body, compose_body)
-    expect('ARCLINK_INGRESS_MODE:-domain' in body, body)
+    expect('"$control_url" == http://* || "$control_url" == https://*' in body, body)
     expect('ARCLINK_CONTROL_PRIVATE_BASE_URL:-' in body, body)
     expect('ARCLINK_WIREGUARD_CONTROL_URL:-' in body, body)
+    expect('ARCLINK_CONTROL_PRIVATE_BIND_HOST:-' in compose_body, compose_body)
+    expect('ARCLINK_CONTROL_PRIVATE_HTTP_PORT:-' in compose_body, compose_body)
     expect('ARCLINK_TAILSCALE_CONTROL_URL:-' in body, body)
     expect("configured private/Tailscale route" in body, body)
     expect('status in ("warn", "warning", "disabled")' in body, body)

@@ -58,9 +58,12 @@ gate execution; the private mesh is the transport, not a replacement for those
 controls. Tailscale can still be recorded as an access overlay or domain
 alternative through `--tailscale-dns-name`. Control install/reconfigure prepares
 the Control Node WireGuard keypair, auto-derived endpoint, UDP firewall
-allowance when a managed firewall is active, and runtime metadata. Worker setup
-appends the fleet SSH key; it does not replace `authorized_keys`, change
-`sshd_config`, or change port 22.
+allowance when a managed firewall is active, a WireGuard-bound private control
+ingress, and runtime metadata. The private control URL is generated from the
+control tunnel IP, so remote ArcPods use the encrypted mesh for control API,
+share broker, and inference-router traffic without Operator-entered callback
+configuration. Worker setup appends the fleet SSH key; it does not replace
+`authorized_keys`, change `sshd_config`, or change port 22.
 
 Interactive:
 
@@ -72,9 +75,10 @@ The normal interactive path asks only for the inventory hostname and the
 first-contact SSH host. ArcLink then SSHes in, joins the worker to WireGuard,
 registers the worker's long-lived fleet address as the WireGuard tunnel IP, and
 smoke-tests the private mesh. Internal values such as the worker tunnel IP,
-WireGuard public key, interface, callback URL, state root, and placement tags
-are derived automatically. Set `ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only
-when you need to override those internals.
+WireGuard public key, interface, callback URL, private control URL, state root,
+and placement tags are derived automatically. Set
+`ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only when you need to override those
+internals.
 
 Scriptable:
 

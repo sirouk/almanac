@@ -27,11 +27,13 @@ ArcPods as Docker deployments on registered fleet workers are the supported
 fleet shape. For production remote workers, prefer a self-owned private mesh
 such as WireGuard for `--ssh-host` and `--wireguard-private-ip`; SSH executor
 allowlists and machine-mode guards still apply. Control install/reconfigure
-prepares the Control Node WireGuard keypair and endpoint metadata. Worker join
-generates worker-local WireGuard keys, writes the worker config, and appends the
-fleet SSH key without replacing `authorized_keys`, modifying `sshd_config`, or
-changing port 22. Tailscale remains useful as an access overlay or domain
-alternative, but it is not the primary production dependency.
+prepares the Control Node WireGuard keypair, endpoint metadata, and a
+WireGuard-bound private control URL for remote ArcPod API, share-broker, and
+inference traffic. Worker join generates worker-local WireGuard keys, writes
+the worker config, and appends the fleet SSH key without replacing
+`authorized_keys`, modifying `sshd_config`, or changing port 22. Tailscale
+remains useful as an access overlay or first-contact/domain alternative, but it
+is not the primary production dependency.
 When a Captain's Crew can span machines, configure `ARCLINK_FLEET_SHARE_HUB_URL`
 as a remote git hub so Fleet Shared stays unified.
 
@@ -88,8 +90,9 @@ Register and inspect workers:
 
 The interactive worker flow asks for the inventory hostname and first-contact
 SSH host, then ArcLink derives the WireGuard endpoint, assigns the tunnel IP,
-joins the worker, syncs the peer, and smoke-tests the private mesh. Set
-`ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only for unusual networks.
+publishes the private control URL, joins the worker, syncs the peer, and
+smoke-tests the private mesh. Set `ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1`
+only for unusual networks.
 
 ## Upgrades
 

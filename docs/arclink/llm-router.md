@@ -223,7 +223,7 @@ Direct Chutes key mounting is retained only behind
 | `ARCLINK_LLM_ROUTER_UPSTREAM_KEEPALIVE_EXPIRY_SECONDS` | `90` | Idle upstream connection lifetime |
 | `ARCLINK_LLM_ROUTER_UPSTREAM_WARMUP_ENABLED` | `1` | Warm the provider pool on router startup when configured |
 | `ARCLINK_LLM_ROUTER_PUBLIC_BASE_URL` | none | Public/private ingress base URL for remote ArcPods |
-| `ARCLINK_CONTROL_PRIVATE_BASE_URL` | none | Preferred Control Node private mesh HTTPS base URL used by remote ArcPods for control API and router URLs |
+| `ARCLINK_CONTROL_PRIVATE_BASE_URL` | none | Preferred Control Node private mesh base URL used by remote ArcPods for control API and router URLs; install/reconfigure auto-generates a WireGuard URL when unset |
 | `ARCLINK_WIREGUARD_CONTROL_URL` | none | WireGuard-specific alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
 | `ARCLINK_PRIVATE_MESH_CONTROL_URL` | none | Generic private-mesh alias for `ARCLINK_CONTROL_PRIVATE_BASE_URL` |
 | `ARCLINK_TAILSCALE_CONTROL_URL` | none | Compatibility fallback Control Node Tailscale HTTPS base URL when private/public control URLs are not set |

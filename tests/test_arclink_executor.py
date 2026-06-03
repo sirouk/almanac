@@ -1352,6 +1352,67 @@ def test_live_docker_compose_file_preserves_service_ports() -> None:
     print("PASS test_live_docker_compose_file_preserves_service_ports")
 
 
+def test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roots() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_volume_roots_test")
+    intent = sample_intent()
+    secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "dep_1"
+        outside_dir = Path(tmpdir) / "worker-local" / "fleet-share"
+        outside_key = Path(tmpdir) / "worker-local" / "fleet-share-ssh" / "id_ed25519"
+        intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
+        intent["compose"]["services"]["dashboard"]["volumes"] = [
+            {"source": str(root / "config"), "target": "/config"},
+            {"source": str(outside_key), "target": "/run/arclink-fleet-share/id_ed25519", "read_only": True, "source_kind": "file"},
+            {"source": str(outside_dir), "target": "/fleet"},
+        ]
+        intent["compose"]["services"]["nextcloud-db"]["volumes"] = [
+            {"source": str(root / "nextcloud" / "db"), "target": "/var/lib/postgresql/data"}
+        ]
+
+        class RecordingRunner:
+            def __init__(self) -> None:
+                self.runs: list[dict[str, str | tuple[str, ...]]] = []
+
+            def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+                self.runs.append(
+                    {
+                        "args": tuple(args),
+                        "deployment_id": deployment_id,
+                        "project_name": project_name,
+                        "env_file": env_file,
+                        "compose_file": compose_file,
+                    }
+                )
+                return {"status": "ok"}
+
+        runner = RecordingRunner()
+        executor = mod.ArcLinkExecutor(
+            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="ssh", state_root_base=tmpdir),
+            secret_resolver=mod.FileMaterializingSecretResolver(
+                value_provider=lambda ref: "sk_test_secret" if ref == secret_ref else "",
+                materialization_root=root / "materialized",
+            ),
+            docker_runner=runner,
+        )
+        result = executor.docker_compose_apply(
+            mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="ssh-volume-roots-1")
+        )
+        compose_doc = json.loads(Path(result.compose_file).read_text(encoding="utf-8"))
+        expect((root / "nextcloud" / "db").is_dir(), "deployment-scoped directory volumes must be materialized for rsync")
+        expect(not outside_dir.exists(), f"worker-local directory bind must not be created on control: {outside_dir}")
+        expect(not outside_key.exists(), f"worker-local file bind must not be created on control: {outside_key}")
+        rendered_sources = {
+            item["source"]
+            for service in compose_doc["services"].values()
+            for item in service.get("volumes", [])
+            if isinstance(item, dict)
+        }
+        expect(str(outside_dir) in rendered_sources and str(outside_key) in rendered_sources, str(compose_doc))
+        expect(runner.runs and runner.runs[0]["args"] == ("up", "-d", "--remove-orphans"), str(runner.runs))
+    print("PASS test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roots")
+
+
 def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_secret_restart_test")
     intent = sample_intent()
@@ -1656,6 +1717,7 @@ def main() -> int:
     test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner()
     test_live_docker_compose_lifecycle_project_override_requires_config_flag()
     test_live_docker_compose_file_preserves_service_ports()
+    test_ssh_docker_compose_apply_only_materializes_deployment_scoped_volume_roots()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()

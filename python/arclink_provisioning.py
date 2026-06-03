@@ -1079,9 +1079,22 @@ def _render_services(
     if fleet_share_hub_volume is not None:
         fleet_share_sync_volumes.append(fleet_share_hub_volume)
     if fleet_share_ssh_key_host_path:
-        fleet_share_sync_volumes.append({"source": fleet_share_ssh_key_host_path, "target": fleet_share_ssh_key_target, "read_only": True})
+        fleet_share_sync_volumes.append(
+            {
+                "source": fleet_share_ssh_key_host_path,
+                "target": fleet_share_ssh_key_target,
+                "read_only": True,
+                "source_kind": "file",
+            }
+        )
     if fleet_share_known_hosts_host_path:
-        fleet_share_sync_volumes.append({"source": fleet_share_known_hosts_host_path, "target": fleet_share_known_hosts_target})
+        fleet_share_sync_volumes.append(
+            {
+                "source": fleet_share_known_hosts_host_path,
+                "target": fleet_share_known_hosts_target,
+                "source_kind": "file",
+            }
+        )
     hermes_host_ports: list[str] = []
     if (
         str(env.get("ARCLINK_INGRESS_MODE") or "").strip().lower() == "tailscale"

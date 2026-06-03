@@ -747,7 +747,15 @@ class ArcLinkExecutor:
         resolved = self._materialize_compose_secrets(compose_secrets)
         try:
             if not isinstance(self.docker_runner, FakeDockerRunner):
-                _materialize_docker_compose_files(intent=intent, plan=plan, resolved_secrets=resolved)
+                _materialize_docker_compose_files(
+                    intent=intent,
+                    plan=plan,
+                    resolved_secrets=resolved,
+                    volume_root_mode=_compose_volume_root_mode(
+                        adapter_name=self.config.adapter_name,
+                        docker_runner=self.docker_runner,
+                    ),
+                )
             self.docker_runner.run(
                 ("up", "-d", "--remove-orphans"),
                 deployment_id=request.deployment_id,
@@ -1788,6 +1796,7 @@ def _materialize_docker_compose_files(
     intent: Mapping[str, Any],
     plan: Mapping[str, Any],
     resolved_secrets: Mapping[str, ResolvedSecretFile],
+    volume_root_mode: str = "all",
 ) -> None:
     compose_file = Path(str(plan["compose_file"]))
     env_file = Path(str(plan["env_file"]))
@@ -1807,7 +1816,12 @@ def _materialize_docker_compose_files(
         )
 
     services = dict((intent.get("compose") or {}).get("services") or {}) if isinstance(intent.get("compose"), Mapping) else {}
-    _ensure_volume_roots(services)
+    if volume_root_mode == "deployment":
+        _ensure_volume_roots(services, allowed_root=root)
+    elif volume_root_mode == "all":
+        _ensure_volume_roots(services)
+    else:
+        raise ArcLinkExecutorError("invalid ArcLink Docker Compose volume root materialization mode")
     env = {
         str(k): str(v)
         for k, v in (intent.get("environment") or {}).items()
@@ -1942,10 +1956,34 @@ def _require_allowed_ssh_host(host: str, allowed_hosts: tuple[str, ...]) -> None
         raise ArcLinkExecutorError("ArcLink SSH Docker runner host is not in the explicit allowlist")
 
 
-def _ensure_volume_roots(services: Mapping[str, Any]) -> None:
-    for source in _compose_source_volumes(services):
-        if source.startswith("/"):
-            Path(source).mkdir(parents=True, exist_ok=True)
+def _compose_volume_root_mode(*, adapter_name: str, docker_runner: DockerRunner) -> str:
+    if str(adapter_name or "").strip().lower() == "ssh" or isinstance(docker_runner, SshDockerComposeRunner):
+        return "deployment"
+    return "all"
+
+
+def _ensure_volume_roots(services: Mapping[str, Any], *, allowed_root: Path | None = None) -> None:
+    normalized_allowed_root = allowed_root.resolve(strict=False) if allowed_root is not None else None
+    for service in services.values():
+        if not isinstance(service, Mapping):
+            continue
+        for volume in service.get("volumes", []) or []:
+            if not isinstance(volume, Mapping):
+                continue
+            source = str(volume.get("source") or "").strip()
+            if not source.startswith("/"):
+                continue
+            if str(volume.get("source_kind") or "").strip().lower() == "file":
+                continue
+            source_path = Path(source)
+            if normalized_allowed_root is not None:
+                try:
+                    source_path.resolve(strict=False).relative_to(normalized_allowed_root)
+                except ValueError:
+                    continue
+            if source_path.exists() and not source_path.is_dir():
+                continue
+            source_path.mkdir(parents=True, exist_ok=True)
 
 
 def _env_quote(value: str) -> str:

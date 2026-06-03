@@ -975,24 +975,104 @@ import json
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
-from arclink_control import upsert_arclink_service_health
+from arclink_control import Config, upsert_arclink_service_health
 from arclink_provisioning import ARCLINK_PROVISIONING_SERVICE_NAMES
-from arclink_sovereign_worker import _docker_compose_service_statuses, _parse_docker_compose_ps_json
+from arclink_sovereign_worker import (
+    _docker_compose_service_statuses,
+    _executor_for_host,
+    _parse_docker_compose_ps_json,
+    load_worker_config,
+)
 
 db_path = Path(sys.argv[1])
 state_root_base = Path(sys.argv[2])
+worker = load_worker_config(Config.from_env())
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _compose_ps_stdout(
+    *,
+    deployment_id: str,
+    project: str,
+    compose_file: Path,
+    env_file: Path,
+    state_roots: Mapping[str, Any],
+    host: Mapping[str, Any],
+) -> str:
+    if host:
+        intent = {"deployment": {"deployment_id": deployment_id}, "state_roots": dict(state_roots)}
+        executor = _executor_for_host(worker=worker, host=host, intent=intent)
+        if executor.docker_runner is not None:
+            ps_result = executor.docker_runner.run(
+                ("ps", "--all", "--format", "json"),
+                deployment_id=deployment_id,
+                project_name=project,
+                env_file=str(env_file),
+                compose_file=str(compose_file),
+            )
+            return str(ps_result.get("stdout") or "")
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-p",
+            project,
+            "-f",
+            str(compose_file),
+            "--env-file",
+            str(env_file),
+            "ps",
+            "--all",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
 
 with sqlite3.connect(db_path) as conn:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT deployment_id, prefix, metadata_json
-        FROM arclink_deployments
-        WHERE status IN ('active', 'provisioning', 'provisioning_ready')
-          AND COALESCE(metadata_json, '') NOT LIKE '%"operator_agent"%'
-        ORDER BY created_at, deployment_id
+        SELECT
+            d.deployment_id,
+            d.prefix,
+            d.metadata_json,
+            h.host_id,
+            h.hostname,
+            h.region,
+            h.tags_json,
+            h.status AS host_status,
+            h.drain,
+            h.capacity_slots,
+            h.observed_load,
+            h.metadata_json AS host_metadata_json,
+            h.region_tier,
+            h.placement_priority,
+            h.last_health_state
+        FROM arclink_deployments d
+        LEFT JOIN arclink_deployment_placements p
+          ON p.deployment_id = d.deployment_id
+         AND p.status = 'active'
+         AND COALESCE(p.removed_at, '') = ''
+        LEFT JOIN arclink_fleet_hosts h
+          ON h.host_id = p.host_id
+        WHERE d.status IN ('active', 'provisioning', 'provisioning_ready')
+          AND COALESCE(d.metadata_json, '') NOT LIKE '%"operator_agent"%'
+        ORDER BY d.created_at, d.deployment_id
         """
     ).fetchall()
     refreshed = 0
@@ -1000,32 +1080,39 @@ with sqlite3.connect(db_path) as conn:
         deployment_id = str(row["deployment_id"])
         prefix = str(row["prefix"])
         project = f"arclink-{deployment_id}"
+        metadata = _json_object(row["metadata_json"])
+        state_roots = metadata.get("state_roots") if isinstance(metadata.get("state_roots"), Mapping) else {}
+        host = {}
+        if row["host_id"]:
+            host = {
+                "host_id": row["host_id"],
+                "hostname": row["hostname"],
+                "region": row["region"],
+                "tags_json": row["tags_json"],
+                "status": row["host_status"],
+                "drain": row["drain"],
+                "capacity_slots": row["capacity_slots"],
+                "observed_load": row["observed_load"],
+                "metadata_json": row["host_metadata_json"],
+                "region_tier": row["region_tier"],
+                "placement_priority": row["placement_priority"],
+                "last_health_state": row["last_health_state"],
+            }
         config_dir = state_root_base / f"{deployment_id}-{prefix}" / "config"
         compose_file = config_dir / "compose.yaml"
         env_file = config_dir / "arclink.env"
         if not compose_file.is_file():
             continue
         try:
-            result = subprocess.run(
-                [
-                    "docker",
-                    "compose",
-                    "-p",
-                    project,
-                    "-f",
-                    str(compose_file),
-                    "--env-file",
-                    str(env_file),
-                    "ps",
-                    "--all",
-                    "--format",
-                    "json",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
+            stdout = _compose_ps_stdout(
+                deployment_id=deployment_id,
+                project=project,
+                compose_file=compose_file,
+                env_file=env_file,
+                state_roots=state_roots,
+                host=host,
             )
-            statuses = _docker_compose_service_statuses(_parse_docker_compose_ps_json(result.stdout))
+            statuses = _docker_compose_service_statuses(_parse_docker_compose_ps_json(stdout), project_name=project)
         except Exception as exc:  # noqa: BLE001 - status refresh should not break deploy flow
             for service_name in ARCLINK_PROVISIONING_SERVICE_NAMES:
                 upsert_arclink_service_health(

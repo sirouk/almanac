@@ -977,7 +977,11 @@ def _apply_deployment(
             )
     if _truthy(str(worker.env.get("ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HERMES_HOME_READY") or "1")):
         try:
-            hermes_ready = _validate_hermes_home_ready(deployment_id=deployment_id, intent=intent)
+            hermes_ready = _validate_hermes_home_ready(
+                deployment_id=deployment_id,
+                intent=intent,
+                executor=selected_executor,
+            )
         except ArcLinkSovereignWorkerError as exc:
             upsert_arclink_service_health(
                 conn,
@@ -1830,17 +1834,30 @@ def _docker_compose_service_statuses(rows: list[Mapping[str, Any]], *, project_n
     return statuses
 
 
-def _validate_hermes_home_ready(*, deployment_id: str, intent: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_hermes_home_ready(
+    *,
+    deployment_id: str,
+    intent: Mapping[str, Any],
+    executor: ArcLinkExecutor | None = None,
+) -> dict[str, Any]:
     state_roots = intent.get("state_roots") if isinstance(intent.get("state_roots"), Mapping) else {}
     hermes_home = str((state_roots or {}).get("hermes_home") or "").strip()
     if not hermes_home:
         raise ArcLinkSovereignWorkerError("ArcLink Hermes home readiness manifest missing state root")
     ready_file = Path(hermes_home) / "state" / "arclink-hermes-home-ready.json"
-    if not ready_file.is_file():
-        raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest missing: {ready_file}")
     try:
-        payload = json.loads(ready_file.read_text(encoding="utf-8"))
+        if ready_file.is_file():
+            ready_text = ready_file.read_text(encoding="utf-8")
+        else:
+            ready_text = _read_remote_hermes_home_ready_file(
+                ready_file=str(ready_file),
+                state_root=str((state_roots or {}).get("root") or ""),
+                executor=executor,
+            )
+        payload = json.loads(ready_text)
     except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, ArcLinkSovereignWorkerError):
+            raise
         raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest is unreadable: {type(exc).__name__}") from exc
     if not isinstance(payload, Mapping):
         raise ArcLinkSovereignWorkerError("ArcLink Hermes home readiness manifest is not an object")
@@ -1874,6 +1891,24 @@ def _validate_hermes_home_ready(*, deployment_id: str, intent: Mapping[str, Any]
         "ready_at": str(payload.get("ready_at") or ""),
         "required_plugins": sorted(REQUIRED_HERMES_HOME_PLUGIN_SURFACES),
     }
+
+
+def _read_remote_hermes_home_ready_file(
+    *,
+    ready_file: str,
+    state_root: str,
+    executor: ArcLinkExecutor | None,
+) -> str:
+    runner = getattr(executor, "docker_runner", None)
+    reader = getattr(runner, "read_text_file", None)
+    if not callable(reader):
+        raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest missing: {ready_file}")
+    if not str(state_root or "").strip():
+        raise ArcLinkSovereignWorkerError("ArcLink Hermes home readiness manifest missing state root")
+    try:
+        return str(reader(ready_file, allowed_root=state_root))
+    except ArcLinkExecutorError as exc:
+        raise ArcLinkSovereignWorkerError(f"ArcLink Hermes home readiness manifest is unreadable over SSH: {exc}") from exc
 
 
 def _docker_compose_row_status(*, service_name: str, state: str, health: str, exit_code: Any) -> str:

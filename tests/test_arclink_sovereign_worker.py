@@ -120,6 +120,57 @@ def test_hermes_home_ready_manifest_requires_dashboard_plugins() -> None:
     print("PASS test_hermes_home_ready_manifest_requires_dashboard_plugins")
 
 
+def test_remote_hermes_home_ready_manifest_reads_through_executor() -> None:
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_remote_hermes_ready_test")
+    ready_payload = {
+        "status": "ready",
+        "deployment_id": "dep_1",
+        "plugins": {
+            "drive": {"plugin": True, "module": True, "dashboard": True},
+            "code": {"plugin": True, "module": True, "dashboard": True},
+            "terminal": {"plugin": True, "module": True, "dashboard": True},
+            "arclink-managed-context": {"plugin": True, "module": True, "dashboard": False},
+        },
+    }
+
+    class Reader:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def read_text_file(self, path: str, *, allowed_root: str = "") -> str:
+            self.calls.append((path, allowed_root))
+            return json.dumps(ready_payload)
+
+    class Executor:
+        def __init__(self, reader: Reader) -> None:
+            self.docker_runner = reader
+
+    reader = Reader()
+    intent = {
+        "state_roots": {
+            "root": "/arcdata/deployments/dep_1-amber-vault-1234",
+            "hermes_home": "/arcdata/deployments/dep_1-amber-vault-1234/state/hermes-home",
+        }
+    }
+    result = worker_mod._validate_hermes_home_ready(
+        deployment_id="dep_1",
+        intent=intent,
+        executor=Executor(reader),
+    )
+    expect(
+        reader.calls
+        == [
+            (
+                "/arcdata/deployments/dep_1-amber-vault-1234/state/hermes-home/state/arclink-hermes-home-ready.json",
+                "/arcdata/deployments/dep_1-amber-vault-1234",
+            )
+        ],
+        str(reader.calls),
+    )
+    expect(result["ready_file"].endswith("/state/arclink-hermes-home-ready.json"), str(result))
+    print("PASS test_remote_hermes_home_ready_manifest_reads_through_executor")
+
+
 def test_crew_dashboard_access_state_refreshes_sibling_switchers() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_crew_refresh_test")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_crew_refresh_test")
@@ -1126,6 +1177,7 @@ def test_dashboard_password_hash_sync_only_when_secret_is_new() -> None:
 
 if __name__ == "__main__":
     test_hermes_home_ready_manifest_requires_dashboard_plugins()
+    test_remote_hermes_home_ready_manifest_reads_through_executor()
     test_crew_dashboard_access_state_refreshes_sibling_switchers()
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()

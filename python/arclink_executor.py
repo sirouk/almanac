@@ -621,6 +621,24 @@ class SshDockerComposeRunner:
                 return _safe_command_error("ssh prepare app bind mounts", prepare.stderr or prepare.stdout)
         return ""
 
+    def read_text_file(self, path: str, *, allowed_root: str = "") -> str:
+        clean_path = _normalized_remote_prepare_path(path)
+        if not clean_path:
+            raise ArcLinkExecutorError("ArcLink SSH file read path is invalid")
+        if allowed_root and not _remote_path_within(clean_path, allowed_root):
+            raise ArcLinkExecutorError("ArcLink SSH file read path is outside the allowed root")
+        target = self._target()
+        command = f"cat -- {_shell_quote(clean_path)}"
+        read = subprocess.run(
+            (self.ssh_binary, *self.ssh_options, target, command),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if read.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
+        return read.stdout
+
 
 def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:
     if "ps" in args and "json" in args:
@@ -2113,11 +2131,19 @@ def _remote_prepare_path_allowed(path: str, *, kind: str, deployment_root: Path)
     if not normalized or kind not in _REMOTE_PREPARE_KINDS:
         return False
     deployment_prefix = os.path.normpath(str(deployment_root.resolve(strict=False)))
-    if normalized == deployment_prefix or normalized.startswith(f"{deployment_prefix}/"):
+    if _remote_path_within(normalized, deployment_prefix):
         return True
     if kind == "file" and normalized.startswith("/var/lib/arclink-fleet/"):
         return True
     return False
+
+
+def _remote_path_within(path: str, root: str) -> bool:
+    normalized_path = _normalized_remote_prepare_path(path)
+    normalized_root = _normalized_remote_prepare_path(root)
+    if not normalized_path or not normalized_root:
+        return False
+    return normalized_path == normalized_root or normalized_path.startswith(f"{normalized_root}/")
 
 
 def _load_remote_prepare_entries(*, compose_file: str, env_file: str) -> list[dict[str, str]]:

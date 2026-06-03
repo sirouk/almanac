@@ -969,11 +969,39 @@ ensure_qmd_collection() {
     existing_mask="$(printf '%s\n' "$collection_info" | awk -F': *' '/Pattern:/{print $2; exit}')"
     if [[ "$existing_path" != "$collection_path" || "$existing_mask" != "$collection_mask" ]]; then
       qmd --index "$QMD_INDEX_NAME" collection remove "$collection_name" || true
-      qmd --index "$QMD_INDEX_NAME" collection add "$collection_path" --name "$collection_name" --mask "$collection_mask"
+      add_qmd_collection_idempotent "$collection_name" "$collection_path" "$collection_mask"
     fi
   else
-    qmd --index "$QMD_INDEX_NAME" collection add "$collection_path" --name "$collection_name" --mask "$collection_mask"
+    add_qmd_collection_idempotent "$collection_name" "$collection_path" "$collection_mask"
   fi
+}
+
+add_qmd_collection_idempotent() {
+  local collection_name="$1"
+  local collection_path="$2"
+  local collection_mask="$3"
+  local err_file="" rc=0
+
+  err_file="$(mktemp)"
+  if qmd --index "$QMD_INDEX_NAME" collection add "$collection_path" --name "$collection_name" --mask "$collection_mask" 2>"$err_file"; then
+    rm -f "$err_file"
+    return 0
+  fi
+  rc=$?
+
+  if grep -qi "already exists" "$err_file"; then
+    qmd --index "$QMD_INDEX_NAME" collection remove "$collection_name" >/dev/null 2>&1 || true
+    if qmd --index "$QMD_INDEX_NAME" collection add "$collection_path" --name "$collection_name" --mask "$collection_mask"; then
+      rm -f "$err_file"
+      return 0
+    fi
+    rc=$?
+  else
+    cat "$err_file" >&2 || true
+  fi
+
+  rm -f "$err_file"
+  return "$rc"
 }
 
 vault_source_file_count() {

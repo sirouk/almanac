@@ -209,6 +209,44 @@ printf 'pending=%s\\n' "$(qmd_pending_embeddings_count)"
     print("PASS test_qmd_pending_embeddings_count_reads_qmd_status_output")
 
 
+def test_qmd_collection_setup_recovers_from_duplicate_add() -> None:
+    body = COMMON_SH.read_text(encoding="utf-8")
+    snippet = extract(body, "ensure_qmd_collection() {", "\nvault_source_file_count() {")
+    script = f"""
+set -euo pipefail
+ensure_nvm() {{ :; }}
+QMD_INDEX_NAME=arclink
+add_calls=0
+remove_calls=0
+qmd() {{
+  if [[ "$1" == "--index" && "$3" == "collection" && "$4" == "show" ]]; then
+    return 1
+  fi
+  if [[ "$1" == "--index" && "$3" == "collection" && "$4" == "add" ]]; then
+    add_calls=$((add_calls + 1))
+    if [[ "$add_calls" == "1" ]]; then
+      echo "Collection 'vault' already exists." >&2
+      return 1
+    fi
+    return 0
+  fi
+  if [[ "$1" == "--index" && "$3" == "collection" && "$4" == "remove" ]]; then
+    remove_calls=$((remove_calls + 1))
+    return 0
+  fi
+  return 99
+}}
+{snippet}
+ensure_qmd_collection vault /vault '**/*.md'
+printf 'add_calls=%s remove_calls=%s\\n' "$add_calls" "$remove_calls"
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"qmd duplicate collection case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+    expect("add_calls=2 remove_calls=1" in result.stdout, result.stdout)
+    expect("already exists" in snippet, snippet)
+    print("PASS test_qmd_collection_setup_recovers_from_duplicate_add")
+
+
 def main() -> int:
     test_vault_watch_defaults_to_low_latency_debounce()
     test_vault_watch_accepts_fractional_debounce()
@@ -216,7 +254,8 @@ def main() -> int:
     test_vault_watch_requests_async_memory_synthesis_without_blocking()
     test_directory_events_only_trigger_pdf_reconcile_when_needed()
     test_qmd_pending_embeddings_count_reads_qmd_status_output()
-    print("PASS all 6 vault watch regression tests")
+    test_qmd_collection_setup_recovers_from_duplicate_add()
+    print("PASS all 7 vault watch regression tests")
     return 0
 
 

@@ -2194,10 +2194,17 @@ def _remote_prepare_commands(*, docker_binary: str, entries: list[dict[str, str]
             path = item["path"]
             if item["kind"] == "file":
                 parent = os.path.dirname(path)
+                quoted_path = _shell_quote(path)
                 lines.extend(
                     [
                         f"mkdir -p -- {_shell_quote(parent)}",
-                        f"touch -- {_shell_quote(path)}",
+                        (
+                            f"if [ -e {quoted_path} ] && [ ! -f {quoted_path} ]; then "
+                            f"echo {_shell_quote(f'ArcLink remote bind path is not a file: {path}')} >&2; "
+                            "exit 1; "
+                            "fi"
+                        ),
+                        f"if [ ! -e {quoted_path} ]; then touch -- {quoted_path}; fi",
                         (
                             '"$docker_bin" run --rm --entrypoint /bin/sh --user root '
                             '-e ARCLINK_TARGET_UID="$uid" -e ARCLINK_TARGET_GID="$gid" '

@@ -1487,6 +1487,8 @@ def test_ssh_docker_runner_prepares_app_binds_before_compose_up() -> None:
     prepare_call = rendered_calls[prepare_index]
     expect("registry.example/arclink/app:test" in prepare_call, prepare_call)
     expect("/mnt/arclink-bind-file" in prepare_call and "/mnt/arclink-bind" in prepare_call, prepare_call)
+    expect("[ ! -e /var/lib/arclink-fleet/fleet-share-ssh/known_hosts ]" in prepare_call, prepare_call)
+    expect("touch -- /var/lib/arclink-fleet/fleet-share-ssh/known_hosts" in prepare_call, prepare_call)
     print("PASS test_ssh_docker_runner_prepares_app_binds_before_compose_up")
 
 

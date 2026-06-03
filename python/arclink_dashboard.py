@@ -312,7 +312,7 @@ def control_node_provisioning_readiness(
     This helper is intentionally read-only. SSH, Docker, provider, ingress, and
     live worker probes stay under PG-FLEET/PG-PROVISION.
     """
-    from arclink_fleet import fleet_capacity_summary
+    from arclink_fleet import fleet_capacity_summary, host_is_placement_eligible
 
     source_env = env if env is not None else os.environ
     provisioner_enabled = _truthy(source_env.get("ARCLINK_CONTROL_PROVISIONER_ENABLED"))
@@ -325,12 +325,13 @@ def control_node_provisioning_readiness(
             "hostname": str(host.get("hostname") or ""),
             "region": str(host.get("region") or ""),
             "headroom": max(0, int(host.get("headroom") or 0)),
+            "effective_capacity_slots": max(0, int(host.get("effective_capacity_slots") or host.get("capacity_slots") or 0)),
+            "control_plane_reserve": bool(host.get("control_plane_reserve")),
+            "last_health_state": str(host.get("last_health_state") or ""),
             "executor_adapter": executor_adapter,
         }
         for host in hosts
-        if str(host.get("status") or "") == "active"
-        and not bool(host.get("drain"))
-        and int(host.get("headroom") or 0) > 0
+        if host_is_placement_eligible(host)
     ]
     eligible_slots = sum(int(host["headroom"]) for host in eligible_workers)
     blockers: list[dict[str, str]] = []

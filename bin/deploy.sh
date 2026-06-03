@@ -165,6 +165,7 @@ ARCLINK_LOCAL_FLEET_SSH_HOST="${ARCLINK_LOCAL_FLEET_SSH_HOST:-}"
 ARCLINK_LOCAL_FLEET_SSH_USER="${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
 ARCLINK_LOCAL_FLEET_REGION="${ARCLINK_LOCAL_FLEET_REGION:-}"
 ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS="${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
+ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS="${ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS:-2}"
 ARCLINK_FLEET_SSH_KEY_PATH="${ARCLINK_FLEET_SSH_KEY_PATH:-}"
 ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
 ARCLINK_FLEET_PLACEMENT_STRATEGY="${ARCLINK_FLEET_PLACEMENT_STRATEGY:-headroom}"
@@ -2224,6 +2225,7 @@ emit_runtime_config() {
     write_kv ARCLINK_LOCAL_FLEET_SSH_USER "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}"
     write_kv ARCLINK_LOCAL_FLEET_REGION "${ARCLINK_LOCAL_FLEET_REGION:-}"
   write_kv ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}"
+  write_kv ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS "${ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS:-2}"
   write_kv ARCLINK_FLEET_SSH_KEY_PATH "${ARCLINK_FLEET_SSH_KEY_PATH:-}"
   write_kv ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}"
   write_kv ARCLINK_FLEET_PLACEMENT_STRATEGY "${ARCLINK_FLEET_PLACEMENT_STRATEGY:-headroom}"
@@ -10574,6 +10576,8 @@ from arclink_fleet import register_fleet_host
 
 def parse_tags(raw: str) -> dict[str, object]:
     tags: dict[str, object] = {}
+    if raw.strip().lower() in {"", "none", "null", "{}"}:
+        return tags
     for part in raw.split(","):
         item = part.strip()
         if not item:
@@ -10716,7 +10720,7 @@ PY
 }
 
 ensure_control_local_fleet_worker_registered() {
-  local docker_env="" db_path="" hostname="" region="" capacity_slots="" state_root_base=""
+  local docker_env="" db_path="" hostname="" region="" capacity_slots="" state_root_base="" control_host_max_slots=""
   local edge_target="" ssh_host="" private_dns_name="" tailscale_dns_name="" ssh_user="" executor_adapter="" ingress_mode="" result_json=""
 
   docker_env="$(docker_env_file_path)"
@@ -10731,6 +10735,7 @@ ensure_control_local_fleet_worker_registered() {
   hostname="$(trim_control_value "${ARCLINK_LOCAL_FLEET_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}")"
   region="$(trim_control_value "${ARCLINK_LOCAL_FLEET_REGION:-}")"
   capacity_slots="$(trim_control_value "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
+  control_host_max_slots="$(trim_control_value "${ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS:-2}")"
   state_root_base="$(trim_control_value "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")"
   edge_target="$(trim_control_value "${ARCLINK_EDGE_TARGET:-}")"
   ssh_host="$(trim_control_value "${ARCLINK_LOCAL_FLEET_SSH_HOST:-}")"
@@ -10764,6 +10769,14 @@ ensure_control_local_fleet_worker_registered() {
     echo "Local starter worker capacity '$capacity_slots' is invalid; using 4." >&2
     capacity_slots="4"
   fi
+  if [[ ! "$control_host_max_slots" =~ ^[0-9]+$ || "$control_host_max_slots" -lt 1 ]]; then
+    echo "Control-host ArcPod slot cap '$control_host_max_slots' is invalid; using 2." >&2
+    control_host_max_slots="2"
+  fi
+  if (( capacity_slots > control_host_max_slots )); then
+    echo "Local starter worker capacity '$capacity_slots' exceeds the control-host reserve cap '$control_host_max_slots'; using $control_host_max_slots." >&2
+    capacity_slots="$control_host_max_slots"
+  fi
   if [[ "$state_root_base" != /* || "$state_root_base" == "/" ]]; then
     echo "Local starter worker state root '$state_root_base' is invalid; using /arcdata/deployments." >&2
     state_root_base="/arcdata/deployments"
@@ -10787,7 +10800,7 @@ ensure_control_local_fleet_worker_registered() {
   db_path="$(control_host_db_path)"
   result_json="$(
     ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-      python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$state_root_base" "$edge_target" "$ssh_host" "$private_dns_name" "$tailscale_dns_name" "$ssh_user" "$executor_adapter" "$ingress_mode" <<'PY'
+      python3 - "$db_path" "$hostname" "$region" "$capacity_slots" "$state_root_base" "$edge_target" "$ssh_host" "$private_dns_name" "$tailscale_dns_name" "$ssh_user" "$executor_adapter" "$ingress_mode" "$control_host_max_slots" <<'PY'
 from __future__ import annotations
 
 import json
@@ -10811,6 +10824,7 @@ tailscale_dns_name = sys.argv[9].strip().lower().strip(".")
 ssh_user = sys.argv[10].strip()
 executor_adapter = sys.argv[11].strip().lower() or "local"
 ingress_mode = sys.argv[12].strip().lower() or "domain"
+control_host_max_slots = int(sys.argv[13])
 
 metadata: dict[str, object] = {
     "executor": executor_adapter,
@@ -10818,6 +10832,9 @@ metadata: dict[str, object] = {
     "control_network_mode": "local",
     "edge_target": edge_target,
     "state_root_base": state_root_base,
+    "control_plane_host": True,
+    "placement_role": "control_reserve",
+    "max_arcpod_slots": control_host_max_slots,
     "registered_by": "deploy.sh control local starter auto-register",
 }
 if ssh_host:
@@ -11776,9 +11793,10 @@ eligible = [
     and str(host.get("last_health_state") or "").lower() in {"", "active", "healthy", "ok", "ready"}
 ]
 if eligible:
+    eligible_slots = sum(int(host.get("headroom") or 0) for host in eligible)
     print(
         "Sovereign provisioning readiness: ready to provision ArcPods "
-        f"({len(eligible)} eligible worker(s), {summary['available_slots']} available slot(s))."
+        f"({len(eligible)} eligible worker(s), {eligible_slots} available slot(s))."
     )
 else:
     print(

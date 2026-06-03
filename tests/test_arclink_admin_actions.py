@@ -443,6 +443,24 @@ def test_control_node_provisioning_readiness_surfaces_worker_capacity_without_li
     expect(local_ready["proof_gate"] == "PG-FLEET/PG-PROVISION", str(local_ready))
     expect("no SSH" in local_ready["note"], str(local_ready))
 
+    fleet.register_fleet_host(
+        conn,
+        host_id="host-unreachable",
+        hostname="unreachable-worker.example.test",
+        region="iad",
+        capacity_slots=99,
+    )
+    conn.execute(
+        "UPDATE arclink_fleet_hosts SET last_health_state = 'unreachable' WHERE host_id = 'host-unreachable'"
+    )
+    conn.commit()
+    local_ready_with_unreachable = dashboard.control_node_provisioning_readiness(
+        conn,
+        env={"ARCLINK_CONTROL_PROVISIONER_ENABLED": "1", "ARCLINK_EXECUTOR_ADAPTER": "local"},
+    )
+    expect(local_ready_with_unreachable["eligible_worker_count"] == 1, str(local_ready_with_unreachable))
+    expect(local_ready_with_unreachable["available_slots"] == 3, str(local_ready_with_unreachable))
+
     remote_pending = dashboard.control_node_provisioning_readiness(
         conn,
         env={"ARCLINK_CONTROL_PROVISIONER_ENABLED": "1", "ARCLINK_EXECUTOR_ADAPTER": "ssh"},

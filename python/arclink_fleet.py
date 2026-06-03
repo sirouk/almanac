@@ -18,6 +18,8 @@ class ArcLinkFleetError(ValueError):
 FLEET_HOST_STATUSES = frozenset({"active", "degraded", "offline"})
 PLACEMENT_STATUSES = frozenset({"active", "removed"})
 HEALTHY_HOST_STATES = frozenset({"", "active", "healthy", "ok", "ready"})
+CONTROL_HOST_MAX_ARCPOD_SLOTS_ENV = "ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS"
+DEFAULT_CONTROL_HOST_MAX_ARCPOD_SLOTS = 2
 
 
 def _fleet_id(prefix: str) -> str:
@@ -26,6 +28,82 @@ def _fleet_id(prefix: str) -> str:
 
 def _reject_secrets(value: Any, *, path: str = "$") -> None:
     reject_secret_material(value, path=path, label="ArcLink fleet", error_cls=ArcLinkFleetError)
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _positive_int(value: Any, default: int, *, minimum: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
+
+
+def _host_json(host: Mapping[str, Any], key: str) -> dict[str, Any]:
+    value = host.get(key)
+    if isinstance(value, Mapping):
+        return dict(value)
+    return json_loads_safe(str(value or "{}"))
+
+
+def control_host_max_arcpod_slots(env: Mapping[str, str] | None = None) -> int:
+    source = env if env is not None else os.environ
+    return _positive_int(
+        source.get(CONTROL_HOST_MAX_ARCPOD_SLOTS_ENV),
+        DEFAULT_CONTROL_HOST_MAX_ARCPOD_SLOTS,
+    )
+
+
+def host_is_control_plane_reserve(host: Mapping[str, Any]) -> bool:
+    metadata = _host_json(host, "metadata_json")
+    tags = _host_json(host, "tags_json")
+    role = str(metadata.get("placement_role") or metadata.get("fleet_role") or "").strip().lower()
+    if role in {"control", "control_plane", "control-plane", "control_reserve", "control-plane-reserve"}:
+        return True
+    if _truthy(metadata.get("control_plane_host") or metadata.get("control_host")):
+        return True
+    control_network_mode = str(metadata.get("control_network_mode") or "").strip().lower()
+    registered_by = str(metadata.get("registered_by") or "").strip().lower()
+    return (
+        control_network_mode == "local"
+        and (
+            _truthy(tags.get("local"))
+            or _truthy(tags.get("starter"))
+            or "local starter" in registered_by
+        )
+    )
+
+
+def _effective_capacity_slots(host: Mapping[str, Any]) -> int:
+    raw_capacity = _positive_int(host.get("capacity_slots"), 1)
+    if not host_is_control_plane_reserve(host):
+        return raw_capacity
+    return max(1, min(raw_capacity, control_host_max_arcpod_slots()))
+
+
+def _observed_load(host: Mapping[str, Any]) -> int:
+    return max(0, _positive_int(host.get("observed_load"), 0, minimum=0))
+
+
+def _host_headroom(host: Mapping[str, Any]) -> int:
+    return max(0, _effective_capacity_slots(host) - _observed_load(host))
+
+
+def host_is_placement_eligible(host: Mapping[str, Any], *, strategy: str = "") -> bool:
+    if str(host.get("status") or "") != "active":
+        return False
+    health_state = str(host.get("last_health_state") or "").strip().lower()
+    if health_state not in HEALTHY_HOST_STATES:
+        return False
+    if int(host.get("drain", 0)):
+        return False
+    placement_strategy = strategy or _placement_strategy()
+    if placement_strategy == "standard_unit":
+        return float(host.get("asu_available") or 0) >= 1
+    return int(host.get("headroom") if host.get("headroom") is not None else _host_headroom(host)) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +247,9 @@ def list_fleet_hosts(conn: sqlite3.Connection, *, status: str = "") -> list[dict
     hosts: list[dict[str, Any]] = []
     for row in rows:
         host = dict(row)
+        host["control_plane_reserve"] = host_is_control_plane_reserve(host)
+        host["effective_capacity_slots"] = _effective_capacity_slots(host)
+        host["headroom"] = _host_headroom(host)
         inv = conn.execute(
             """
             SELECT asu_capacity, asu_consumed
@@ -190,11 +271,13 @@ def list_fleet_hosts(conn: sqlite3.Connection, *, status: str = "") -> list[dict
                 (host["host_id"],),
             ).fetchone()["count"]
             host["asu_consumed"] = float(active or inv["asu_consumed"] or 0)
+            if host["control_plane_reserve"]:
+                host["asu_capacity"] = min(host["asu_capacity"], float(host["effective_capacity_slots"]))
             host["asu_available"] = float(host["asu_capacity"]) - float(host["asu_consumed"])
         else:
-            host["asu_capacity"] = float(host["capacity_slots"])
+            host["asu_capacity"] = float(host["effective_capacity_slots"])
             host["asu_consumed"] = float(host["observed_load"])
-            host["asu_available"] = float(host["capacity_slots"]) - float(host["observed_load"])
+            host["asu_available"] = float(host["effective_capacity_slots"]) - float(host["observed_load"])
         hosts.append(host)
     return hosts
 
@@ -202,14 +285,21 @@ def list_fleet_hosts(conn: sqlite3.Connection, *, status: str = "") -> list[dict
 def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
     hosts = list_fleet_hosts(conn)
     total_slots = sum(int(h["capacity_slots"]) for h in hosts)
+    effective_total_slots = sum(int(h.get("effective_capacity_slots") or h["capacity_slots"]) for h in hosts)
     total_load = sum(int(h["observed_load"]) for h in hosts)
     active_hosts = [h for h in hosts if h["status"] == "active" and not int(h["drain"])]
+    eligible_hosts = [h for h in hosts if host_is_placement_eligible(h)]
+    eligible_slots = sum(int(h.get("headroom") or 0) for h in eligible_hosts)
     return {
         "total_hosts": len(hosts),
         "active_hosts": len(active_hosts),
         "total_slots": total_slots,
+        "effective_total_slots": effective_total_slots,
         "total_load": total_load,
-        "available_slots": total_slots - total_load,
+        "raw_available_slots": total_slots - total_load,
+        "available_slots": eligible_slots,
+        "eligible_worker_count": len(eligible_hosts),
+        "eligible_slots": eligible_slots,
         "hosts": [
             {
                 "host_id": h["host_id"],
@@ -218,9 +308,11 @@ def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
                 "status": h["status"],
                 "drain": bool(int(h["drain"])),
                 "capacity_slots": int(h["capacity_slots"]),
+                "effective_capacity_slots": int(h.get("effective_capacity_slots") or h["capacity_slots"]),
                 "observed_load": int(h["observed_load"]),
                 "last_health_state": str(h.get("last_health_state") or ""),
-                "headroom": int(h["capacity_slots"]) - int(h["observed_load"]),
+                "headroom": int(h.get("headroom") or 0),
+                "control_plane_reserve": bool(h.get("control_plane_reserve")),
                 "asu_capacity": float(h.get("asu_capacity") or 0),
                 "asu_consumed": float(h.get("asu_consumed") or 0),
                 "asu_available": float(h.get("asu_available") or 0),
@@ -396,6 +488,8 @@ def place_deployment(
             best = sorted(
                 candidates,
                 key=lambda h: (
+                    int(h.get("placement_priority") or 100),
+                    1 if h.get("control_plane_reserve") else 0,
                     float(h.get("asu_consumed") or 0) / max(1.0, float(h.get("asu_capacity") or 0) or 1.0),
                     -float(h["asu_available"]),
                     str(h["hostname"]),
@@ -406,7 +500,9 @@ def place_deployment(
             best = sorted(
                 candidates,
                 key=lambda h: (
-                    int(h["observed_load"]) / max(1, int(h["capacity_slots"])),
+                    int(h.get("placement_priority") or 100),
+                    1 if h.get("control_plane_reserve") else 0,
+                    int(h["observed_load"]) / max(1, int(h.get("effective_capacity_slots") or h["capacity_slots"])),
                     -int(h["headroom"]),
                     str(h["hostname"]),
                 ),
@@ -503,7 +599,7 @@ def _filter_placement_candidates(
         if int(h.get("drain", 0)):
             continue
         asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
-        headroom = int(h["capacity_slots"]) - int(h["observed_load"])
+        headroom = int(h.get("headroom") if h.get("headroom") is not None else _host_headroom(h))
         if placement_strategy == "standard_unit":
             if asu_available < 1:
                 continue
@@ -512,7 +608,7 @@ def _filter_placement_candidates(
         if region and h.get("region", "") != region:
             continue
         if required_tags:
-            host_tags = json_loads_safe(h.get("tags_json", "{}"))
+            host_tags = _host_json(h, "tags_json")
             if not all(host_tags.get(k) == v for k, v in required_tags.items()):
                 continue
         result.append({**h, "headroom": headroom, "asu_available": asu_available})
@@ -541,7 +637,7 @@ def _placement_rejection_summary(
             reasons.add("draining")
             continue
         asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
-        headroom = int(h["capacity_slots"]) - int(h["observed_load"])
+        headroom = int(h.get("headroom") if h.get("headroom") is not None else _host_headroom(h))
         if (strategy or _placement_strategy()) == "standard_unit":
             if asu_available < 1:
                 reasons.add("asu_saturated")
@@ -553,7 +649,7 @@ def _placement_rejection_summary(
             reasons.add("region_mismatch")
             continue
         if required_tags:
-            host_tags = json_loads_safe(h.get("tags_json", "{}"))
+            host_tags = _host_json(h, "tags_json")
             if not all(host_tags.get(k) == v for k, v in required_tags.items()):
                 reasons.add("tag_mismatch")
                 continue

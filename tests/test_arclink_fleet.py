@@ -116,6 +116,71 @@ def test_fleet_capacity_summary() -> None:
     print("PASS test_fleet_capacity_summary")
 
 
+def test_fleet_capacity_summary_counts_only_eligible_available_slots() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_cap_eligible")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_cap_eligible")
+    conn = memory_db(control)
+    healthy = fleet.register_fleet_host(conn, hostname="healthy.test", capacity_slots=10)
+    unhealthy = fleet.register_fleet_host(conn, hostname="unreachable.test", capacity_slots=5)
+    conn.execute(
+        "UPDATE arclink_fleet_hosts SET last_health_state = 'unreachable' WHERE host_id = ?",
+        (unhealthy["host_id"],),
+    )
+    conn.commit()
+    summary = fleet.fleet_capacity_summary(conn)
+    expect(summary["total_slots"] == 15, str(summary))
+    expect(summary["raw_available_slots"] == 15, str(summary))
+    expect(summary["available_slots"] == 10, str(summary))
+    expect(summary["eligible_slots"] == 10, str(summary))
+    expect(summary["eligible_worker_count"] == 1, str(summary))
+    expect(summary["hosts"][0]["host_id"] == healthy["host_id"], str(summary))
+    print("PASS test_fleet_capacity_summary_counts_only_eligible_available_slots")
+
+
+def test_control_plane_reserve_is_capped_and_used_after_remote_capacity() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_control_reserve")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_control_reserve")
+    conn = memory_db(control)
+    old_cap = os.environ.get("ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS")
+    os.environ["ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS"] = "2"
+    try:
+        remote = fleet.register_fleet_host(conn, hostname="remote.test", capacity_slots=1)
+        local = fleet.register_fleet_host(
+            conn,
+            hostname="control.test",
+            capacity_slots=8,
+            tags={"local": True, "starter": True},
+            metadata={
+                "control_network_mode": "local",
+                "control_plane_host": True,
+                "placement_role": "control_reserve",
+            },
+        )
+        summary = fleet.fleet_capacity_summary(conn)
+        local_view = [host for host in summary["hosts"] if host["host_id"] == local["host_id"]][0]
+        expect(local_view["control_plane_reserve"] is True, str(local_view))
+        expect(local_view["effective_capacity_slots"] == 2, str(local_view))
+        expect(local_view["headroom"] == 2, str(local_view))
+
+        first = fleet.place_deployment(conn, deployment_id="dep_remote_first")
+        second = fleet.place_deployment(conn, deployment_id="dep_local_fallback")
+        third = fleet.place_deployment(conn, deployment_id="dep_local_second")
+        expect(first["host_id"] == remote["host_id"], str(first))
+        expect(second["host_id"] == local["host_id"], str(second))
+        expect(third["host_id"] == local["host_id"], str(third))
+        try:
+            fleet.place_deployment(conn, deployment_id="dep_no_capacity")
+            raise AssertionError("control host reserve should be saturated after its capped slots are used")
+        except fleet.ArcLinkFleetError as exc:
+            expect("saturated" in str(exc), str(exc))
+    finally:
+        if old_cap is None:
+            os.environ.pop("ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS", None)
+        else:
+            os.environ["ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS"] = old_cap
+    print("PASS test_control_plane_reserve_is_capped_and_used_after_remote_capacity")
+
+
 def test_reconcile_fleet_observed_loads_repairs_stale_load() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_reconcile")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_reconcile")
@@ -419,6 +484,8 @@ if __name__ == "__main__":
     test_register_rejects_empty_hostname()
     test_update_fleet_host_drain()
     test_fleet_capacity_summary()
+    test_fleet_capacity_summary_counts_only_eligible_available_slots()
+    test_control_plane_reserve_is_capped_and_used_after_remote_capacity()
     test_reconcile_fleet_observed_loads_repairs_stale_load()
     test_place_deployment_chooses_healthy_host()
     test_place_deployment_rejects_saturated_hosts()
@@ -434,4 +501,4 @@ if __name__ == "__main__":
     test_placement_rejects_secret_required_tags()
     test_standard_unit_strategy_uses_inventory_asu_available()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
-    print(f"\nAll 20 fleet tests passed.")
+    print(f"\nAll 22 fleet tests passed.")

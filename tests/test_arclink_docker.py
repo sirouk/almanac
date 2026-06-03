@@ -591,6 +591,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("./arclink-priv/secrets/ssh:/root/.ssh" not in body, body)
     expect("./arclink-priv/secrets/ssh:/home/arclink/.ssh" in body, body)
     expect("ARCLINK_LOCAL_FLEET_SSH_USER: ${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}" in body, body)
+    expect("ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS: ${ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS:-2}" in body, body)
     expect("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED: ${ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED:-0}" in body, body)
     expect("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST: ${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" in body, body)
     expect(
@@ -6052,6 +6053,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("http://127.0.0.1:8900/api/v1/health" in body and "http://127.0.0.1:3000" in body, body)
     expect("docker_provision_once()" in body and "arclink_sovereign_worker.py" in body, body)
     expect('ensure_env_file_value ARCLINK_LOCAL_FLEET_SSH_USER "arclink"' in body, body)
+    expect('ensure_env_file_value ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS "2"' in body, body)
     expect('ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED "0"' in body, body)
     expect('ensure_env_file_value ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST ""' in body, body)
     expect(

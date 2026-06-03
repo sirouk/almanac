@@ -1633,7 +1633,7 @@ def _plan_agent_count(plan: str) -> int:
 
 def _fleet_capacity_block(conn: sqlite3.Connection, *, required_slots: int, label: str) -> str:
     try:
-        from arclink_fleet import fleet_capacity_summary
+        from arclink_fleet import fleet_capacity_summary, host_is_placement_eligible
 
         summary = fleet_capacity_summary(conn)
     except Exception:
@@ -1644,7 +1644,7 @@ def _fleet_capacity_block(conn: sqlite3.Connection, *, required_slots: int, labe
     for host in summary.get("hosts") or []:
         if not isinstance(host, Mapping):
             continue
-        if str(host.get("status") or "") != "active" or bool(host.get("drain")):
+        if not host_is_placement_eligible(host):
             continue
         available += max(0, int(host.get("headroom") or 0))
     if available >= required_slots:

@@ -55,7 +55,14 @@ from arclink_executor import (
     ResolvedSecretFile,
     executor_for_fleet_host,
 )
-from arclink_fleet import ArcLinkFleetError, place_deployment, reconcile_fleet_observed_loads, register_fleet_host, remove_placement
+from arclink_fleet import (
+    ArcLinkFleetError,
+    control_host_max_arcpod_slots,
+    place_deployment,
+    reconcile_fleet_observed_loads,
+    register_fleet_host,
+    remove_placement,
+)
 from arclink_fleet_share import SubprocessGitRunner, ensure_fleet_share, ensure_hub_repo
 from arclink_ingress import arclink_dns_records_for_teardown, mark_arclink_dns_torn_down, persist_arclink_dns_records
 from arclink_provisioning import (
@@ -246,6 +253,9 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
         base_domain = tailscale_dns_name
     edge_target = str(source.get("ARCLINK_EDGE_TARGET") or (tailscale_dns_name if ingress_mode == "tailscale" else f"edge.{base_domain}")).strip().lower()
     local_hostname = str(source.get("ARCLINK_LOCAL_FLEET_HOSTNAME") or socket.getfqdn() or socket.gethostname()).strip().lower()
+    local_capacity_slots = max(1, int(source.get("ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS", "4")))
+    if _truthy(source.get("ARCLINK_REGISTER_LOCAL_FLEET_HOST", "0")):
+        local_capacity_slots = min(local_capacity_slots, control_host_max_arcpod_slots(source))
     return SovereignWorkerConfig(
         enabled=_truthy(source.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "1")),
         ingress_mode=ingress_mode,
@@ -266,7 +276,7 @@ def load_worker_config(cfg: Config, env: Mapping[str, str] | None = None) -> Sov
         local_ssh_host=str(source.get("ARCLINK_LOCAL_FLEET_SSH_HOST") or "").strip().lower(),
         local_ssh_user=str(source.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink").strip(),
         local_region=str(source.get("ARCLINK_LOCAL_FLEET_REGION") or "").strip().lower(),
-        local_capacity_slots=max(1, int(source.get("ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS", "4"))),
+        local_capacity_slots=local_capacity_slots,
         secret_store_dir=Path(source.get("ARCLINK_SECRET_STORE_DIR") or cfg.state_dir / "sovereign-secrets").resolve(),
         env=source,
     )
@@ -449,6 +459,9 @@ def process_sovereign_batch(
             "ingress_mode": worker.ingress_mode,
             "edge_target": worker.edge_target,
             "state_root_base": worker.state_root_base,
+            "control_plane_host": True,
+            "placement_role": "control_reserve",
+            "max_arcpod_slots": control_host_max_arcpod_slots(worker.env),
         }
         if worker.local_ssh_host:
             local_metadata["ssh_host"] = worker.local_ssh_host

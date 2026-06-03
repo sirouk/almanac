@@ -621,11 +621,12 @@ class SshDockerComposeRunner:
                 return _safe_command_error("ssh prepare app bind mounts", prepare.stderr or prepare.stdout)
         return ""
 
-    def read_text_file(self, path: str, *, allowed_root: str = "") -> str:
+    def read_text_file(self, path: str, *, allowed_root: str = "", image: str = "") -> str:
         clean_path = _normalized_remote_prepare_path(path)
         if not clean_path:
             raise ArcLinkExecutorError("ArcLink SSH file read path is invalid")
-        if allowed_root and not _remote_path_within(clean_path, allowed_root):
+        clean_allowed_root = _normalized_remote_prepare_path(allowed_root) if allowed_root else ""
+        if clean_allowed_root and not _remote_path_within(clean_path, clean_allowed_root):
             raise ArcLinkExecutorError("ArcLink SSH file read path is outside the allowed root")
         target = self._target()
         command = f"cat -- {_shell_quote(clean_path)}"
@@ -635,9 +636,29 @@ class SshDockerComposeRunner:
             text=True,
             capture_output=True,
         )
-        if read.returncode != 0:
-            raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
-        return read.stdout
+        if read.returncode == 0:
+            return read.stdout
+        if clean_allowed_root:
+            fallback = subprocess.run(
+                (
+                    self.ssh_binary,
+                    *self.ssh_options,
+                    target,
+                    _remote_read_text_file_command(
+                        docker_binary=self.docker_binary,
+                        image=image or "arclink/app:local",
+                        path=clean_path,
+                        allowed_root=clean_allowed_root,
+                    ),
+                ),
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            if fallback.returncode == 0:
+                return fallback.stdout
+            raise ArcLinkExecutorError(_safe_command_error("ssh read file", fallback.stderr or fallback.stdout))
+        raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
 
 
 def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:
@@ -2144,6 +2165,33 @@ def _remote_path_within(path: str, root: str) -> bool:
     if not normalized_path or not normalized_root:
         return False
     return normalized_path == normalized_root or normalized_path.startswith(f"{normalized_root}/")
+
+
+def _remote_read_text_file_command(
+    *,
+    docker_binary: str,
+    image: str,
+    path: str,
+    allowed_root: str,
+) -> str:
+    clean_path = _normalized_remote_prepare_path(path)
+    clean_root = _normalized_remote_prepare_path(allowed_root)
+    if not clean_path or not clean_root or not _remote_path_within(clean_path, clean_root):
+        raise ArcLinkExecutorError("ArcLink SSH Docker file read path is outside the allowed root")
+    clean_image = str(image or "").strip() or "arclink/app:local"
+    if not _IMAGE_REF_RE.fullmatch(clean_image) or "$" in clean_image:
+        raise ArcLinkExecutorError("ArcLink SSH Docker file read image reference is invalid")
+    relative_path = clean_path[len(clean_root) :].lstrip("/")
+    if not relative_path:
+        raise ArcLinkExecutorError("ArcLink SSH Docker file read path must name a file below the allowed root")
+    container_path = f"/mnt/arclink-read-root/{relative_path}"
+    read_script = 'cat -- "$1"'
+    root_mount = f"{clean_root}:/mnt/arclink-read-root:ro"
+    return (
+        f"{_shell_quote(docker_binary or 'docker')} run --rm --entrypoint /bin/sh --user root "
+        f"-v {_shell_quote(root_mount)} "
+        f"{_shell_quote(clean_image)} -lc {_shell_quote(read_script)} -- {_shell_quote(container_path)}"
+    )
 
 
 def _load_remote_prepare_entries(*, compose_file: str, env_file: str) -> list[dict[str, str]]:

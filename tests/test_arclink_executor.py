@@ -1492,6 +1492,50 @@ def test_ssh_docker_runner_prepares_app_binds_before_compose_up() -> None:
     print("PASS test_ssh_docker_runner_prepares_app_binds_before_compose_up")
 
 
+def test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_read_file_fallback_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[tuple[str, ...]] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        call = tuple(str(part) for part in cmd)
+        calls.append(call)
+        remote_command = call[-1]
+        if "docker run" in remote_command:
+            return Proc(0, stdout='{"status":"ready"}\n')
+        return Proc(1, stderr="cat: Permission denied\n")
+
+    try:
+        mod.subprocess.run = fake_run
+        runner = mod.SshDockerComposeRunner(
+            host="worker.example.test",
+            user="arclink",
+            allowed_hosts=("worker.example.test",),
+        )
+        text = runner.read_text_file(
+            "/arcdata/deployments/dep_1/state/hermes-home/state/arclink-hermes-home-ready.json",
+            allowed_root="/arcdata/deployments/dep_1",
+        )
+    finally:
+        mod.subprocess.run = original_run
+
+    expect(text == '{"status":"ready"}\n', text)
+    expect(len(calls) == 2, str(calls))
+    fallback_command = calls[1][-1]
+    expect("docker run" in fallback_command, fallback_command)
+    expect("-v /arcdata/deployments/dep_1:/mnt/arclink-read-root:ro" in fallback_command, fallback_command)
+    expect("/mnt/arclink-read-root/state/hermes-home/state/arclink-hermes-home-ready.json" in fallback_command, fallback_command)
+    print("PASS test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback")
+
+
 def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_secret_restart_test")
     intent = sample_intent()
@@ -1849,6 +1893,7 @@ def main() -> int:
     test_live_docker_compose_file_preserves_service_ports()
     test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots()
     test_ssh_docker_runner_prepares_app_binds_before_compose_up()
+    test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()

@@ -9747,7 +9747,7 @@ for row in rows:
         metadata = json.loads(row["metadata_json"] or "{}")
     except json.JSONDecodeError:
         metadata = {}
-    ssh_host = str(metadata.get("ssh_host") or "").strip()
+    ssh_host = str(metadata.get("private_dns_name") or metadata.get("ssh_host") or "").strip()
     ssh_user = str(metadata.get("ssh_user") or "arclink").strip() or "arclink"
     health_state = str(row["last_health_state"] or "").strip().lower()
     if not ssh_host or health_state not in healthy:

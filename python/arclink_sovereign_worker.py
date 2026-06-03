@@ -332,6 +332,14 @@ def _host_is_remote_worker(
     return worker.executor_adapter == "ssh" and bool(ssh_host)
 
 
+def _host_requests_local_executor(host_meta: Mapping[str, Any]) -> bool:
+    executor = str(host_meta.get("executor") or "").strip().lower()
+    if executor != "local":
+        return False
+    mode = str(host_meta.get("control_network_mode") or host_meta.get("arcpod_control_network_mode") or "").strip().lower()
+    return bool(host_meta.get("control_plane_host")) or mode in {"local", "docker", "control", "shared", "on", "1", "true"}
+
+
 def _host_tailscale_dns_name(
     *,
     worker: SovereignWorkerConfig,
@@ -455,7 +463,8 @@ def process_sovereign_batch(
         return [{"status": "disabled", "reason": "ARCLINK_CONTROL_PROVISIONER_ENABLED is not set"}]
     if worker.register_local_host:
         local_metadata: dict[str, Any] = {
-            "executor": worker.executor_adapter,
+            "executor": "local",
+            "provisioner_executor_adapter": worker.executor_adapter,
             "ingress_mode": worker.ingress_mode,
             "edge_target": worker.edge_target,
             "state_root_base": worker.state_root_base,
@@ -1323,6 +1332,9 @@ def _executor_for_host(
     intent: Mapping[str, Any],
 ) -> ArcLinkExecutor:
     adapter = worker.executor_adapter
+    host_meta = json_loads_safe(str(host.get("metadata_json") or "{}"))
+    if adapter != "fake" and isinstance(host_meta, Mapping) and _host_requests_local_executor(host_meta):
+        adapter = "local"
     if adapter == "fake":
         refs = _secret_refs(intent)
         deployment_id = str((intent.get("deployment") or {}).get("deployment_id") or "")

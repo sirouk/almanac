@@ -2203,6 +2203,8 @@ def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
     reconfigure_flow = extract(text, "run_control_reconfigure_flow() {", "control_host_priv_dir() {")
     expect("ARCLINK_REGISTER_LOCAL_FLEET_HOST" in helper, "helper should honor the local starter flag")
     expect("register_fleet_host" in helper, "helper should persist a fleet host row")
+    expect('"executor": "local"' in helper, "local starter worker should persist the container-safe local executor")
+    expect('"provisioner_executor_adapter": executor_adapter' in helper, "local starter metadata should retain the global provisioner adapter for diagnostics")
     expect('"registered_by": "deploy.sh control local starter auto-register"' in helper, "helper should tag auto-registration metadata")
     expect("tags={\"starter\": True, \"local\": True}" in helper, "helper should tag the local starter worker")
     expect("ensure_control_fleet_ssh_key" in helper, "helper should resolve host-side fleet SSH key paths before local starter repair")

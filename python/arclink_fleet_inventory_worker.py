@@ -104,6 +104,20 @@ def _is_local_ssh_host(ssh_host: str) -> bool:
     return str(ssh_host or "").strip().lower().rstrip(".") in LOCAL_SSH_HOST_ALIASES
 
 
+def _is_docker_local_starter_host(host: Mapping[str, Any], metadata: Mapping[str, Any], executor: str) -> bool:
+    if not _truthy_env("ARCLINK_DOCKER_MODE"):
+        return False
+    ssh_host = str(host.get("ssh_host") or metadata.get("ssh_host") or "").strip()
+    if not _is_local_ssh_host(ssh_host):
+        return False
+    mode = str(metadata.get("control_network_mode") or metadata.get("arcpod_control_network_mode") or "").strip().lower()
+    return (
+        executor == "local"
+        or bool(metadata.get("control_plane_host"))
+        or mode in {"local", "docker", "control", "shared", "on", "1", "true"}
+    )
+
+
 def _int_value(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -198,10 +212,10 @@ def _host_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             executor = str(metadata.get("executor") or "").strip().lower()
         else:
             executor = ""
-        host["_arclink_docker_local_starter_probe"] = bool(
-            _truthy_env("ARCLINK_DOCKER_MODE")
-            and executor == "local"
-            and _is_local_ssh_host(str(host.get("ssh_host") or ""))
+        host["_arclink_docker_local_starter_probe"] = _is_docker_local_starter_host(
+            host,
+            metadata if isinstance(metadata, Mapping) else {},
+            executor,
         )
         normalized.append(host)
     return normalized

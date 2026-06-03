@@ -10827,7 +10827,8 @@ ingress_mode = sys.argv[12].strip().lower() or "domain"
 control_host_max_slots = int(sys.argv[13])
 
 metadata: dict[str, object] = {
-    "executor": executor_adapter,
+    "executor": "local",
+    "provisioner_executor_adapter": executor_adapter,
     "ingress_mode": ingress_mode,
     "control_network_mode": "local",
     "edge_target": edge_target,

@@ -927,12 +927,16 @@ def test_sovereign_worker_repairs_stale_local_host_load() -> None:
         results = worker_mod.process_sovereign_batch(conn, worker=worker_config(worker_mod, tmpdir))
     expect(results[0]["status"] == "applied", str(results))
     refreshed = conn.execute(
-        "SELECT region, capacity_slots, observed_load FROM arclink_fleet_hosts WHERE host_id = ?",
+        "SELECT region, capacity_slots, observed_load, metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
         (host["host_id"],),
     ).fetchone()
     expect(refreshed["region"] == "us-east", str(dict(refreshed)))
     expect(int(refreshed["capacity_slots"]) == 2, str(dict(refreshed)))
     expect(int(refreshed["observed_load"]) == 1, str(dict(refreshed)))
+    metadata = json.loads(str(refreshed["metadata_json"] or "{}"))
+    expect(metadata.get("executor") == "local", str(metadata))
+    expect(metadata.get("provisioner_executor_adapter") == "fake", str(metadata))
+    expect(metadata.get("control_plane_host") is True, str(metadata))
     dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
     expect(dep["status"] == "active", str(dict(dep)))
     print("PASS test_sovereign_worker_repairs_stale_local_host_load")

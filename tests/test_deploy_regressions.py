@@ -2527,6 +2527,7 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     expect("ensure_control_wireguard_ready" in register, "worker registration should prepare control WireGuard material")
     expect("ensure_control_wireguard_peer" in register, "worker registration should append known worker peers to control WireGuard config")
     expect("activate_control_wireguard_interface" in text, "control install/reconfigure should activate the control WireGuard interface")
+    expect("ArcLink WireGuard fleet git SSH" in text and "to any port 22 proto tcp" in text, "control WireGuard setup should allow fleet Git SSH only from the private mesh subnet")
     expect("ARCLINK_WIREGUARD_ACTIVATE" in text, "control WireGuard activation should be explicitly configurable")
     expect("detect_control_wireguard_public_host" in text, "control WireGuard endpoint should be auto-derived for normal operators")
     expect("curl -4fsS --max-time 4 https://api.ipify.org" in text, "endpoint derivation should have a bounded public IPv4 probe")

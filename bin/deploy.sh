@@ -8883,6 +8883,7 @@ ensure_control_private_mesh_defaults() {
 
 allow_control_wireguard_firewall_port() {
   local port="${ARCLINK_WIREGUARD_PORT:-51820}"
+  local fleet_subnet="${ARCLINK_WIREGUARD_NETWORK_CIDR:-10.44.0.0/24}"
 
   if [[ "${ARCLINK_WIREGUARD_APPLY_FIREWALL:-1}" != "1" ]]; then
     return 0
@@ -8893,13 +8894,17 @@ allow_control_wireguard_firewall_port() {
   fi
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
     ufw allow "$port/udp" comment 'ArcLink WireGuard fleet mesh' >/dev/null || true
+    ufw allow in from "$fleet_subnet" to any port 22 proto tcp comment 'ArcLink WireGuard fleet git SSH' >/dev/null || true
     echo "Allowed additive WireGuard UDP firewall rule through ufw: $port/udp"
+    echo "Allowed additive WireGuard-only fleet Git SSH rule through ufw: $fleet_subnet -> tcp/22"
     return 0
   fi
   if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
     firewall-cmd --permanent --add-port="$port/udp" >/dev/null || true
+    firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"$fleet_subnet\" port protocol=\"tcp\" port=\"22\" accept" >/dev/null || true
     firewall-cmd --reload >/dev/null || true
     echo "Allowed additive WireGuard UDP firewall rule through firewalld: $port/udp"
+    echo "Allowed additive WireGuard-only fleet Git SSH rule through firewalld: $fleet_subnet -> tcp/22"
     return 0
   fi
   echo "No active ufw/firewalld manager detected for WireGuard; leaving firewall unchanged." >&2

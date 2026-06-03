@@ -2396,6 +2396,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
     ):
         _ensure_column(conn, "arclink_fleet_hosts", column, ddl)
     _migrate_fleet_enrollments_schema(conn)
+    _migrate_fleet_audit_chain_schema(conn)
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS arclink_fleet_enrollments (
@@ -2669,6 +2670,80 @@ def _migrate_fleet_host_probes_schema(conn: sqlite3.Connection) -> None:
         ALTER TABLE arclink_fleet_host_probes__new RENAME TO arclink_fleet_host_probes;
         """
     )
+    conn.commit()
+
+
+def _migrate_fleet_audit_chain_schema(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_audit_chain'"
+    ).fetchone()
+    if row is None:
+        return
+    columns = set(_table_columns(conn, "arclink_fleet_audit_chain"))
+    required = {"entry_id", "inventory_id", "event", "actor", "event_at", "prev_hash", "entry_hash", "metadata_json"}
+    if required <= columns:
+        return
+
+    backup = "arclink_fleet_audit_chain__legacy"
+    existing_tables = {
+        str(table_row["name"])
+        for table_row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    }
+    if backup in existing_tables:
+        suffix = 1
+        while f"arclink_fleet_audit_chain__legacy_{suffix}" in existing_tables:
+            suffix += 1
+        backup = f"arclink_fleet_audit_chain__legacy_{suffix}"
+
+    event_expr = "'verified'"
+    legacy_event = "event" if "event" in columns else "event_type" if "event_type" in columns else ""
+    if legacy_event:
+        event_expr = (
+            f"CASE WHEN {legacy_event} IN ('enrolled', 'verified', 'activated', 'degraded', "
+            "'drained', 'resumed', 'removed', 're-attested') "
+            f"THEN {legacy_event} WHEN {legacy_event} IN ('warning', 'failed', 'error') "
+            "THEN 'degraded' ELSE 'verified' END"
+        )
+
+    select_columns = [
+        _sql_column_expr(columns, "entry_id", _sql_column_expr(columns, "chain_id", "'fachain_legacy_' || lower(hex(randomblob(12)))")),
+        _sql_column_expr(columns, "inventory_id", _sql_column_expr(columns, "inventory_machine_id", _sql_column_expr(columns, "host_id", "''"))),
+        event_expr,
+        _sql_column_expr(columns, "actor", "'legacy'"),
+        _sql_column_expr(columns, "event_at", _sql_column_expr(columns, "created_at", "datetime('now')")),
+        _sql_column_expr(columns, "prev_hash", _sql_column_expr(columns, "previous_hash", "''")),
+        _sql_column_expr(columns, "entry_hash", "'legacy_' || lower(hex(randomblob(16)))"),
+        _sql_column_expr(columns, "metadata_json", "'{}'"),
+    ]
+
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS idx_arclink_fleet_audit_chain_inventory_time;
+        DROP INDEX IF EXISTS idx_arclink_fleet_audit_chain_host_time;
+        DROP TABLE IF EXISTS arclink_fleet_audit_chain__new;
+        CREATE TABLE arclink_fleet_audit_chain__new (
+          entry_id TEXT PRIMARY KEY,
+          inventory_id TEXT NOT NULL,
+          event TEXT NOT NULL CHECK (event IN ('enrolled', 'verified', 'activated', 'degraded', 'drained', 'resumed', 'removed', 're-attested')),
+          actor TEXT NOT NULL,
+          event_at TEXT NOT NULL,
+          prev_hash TEXT NOT NULL DEFAULT '',
+          entry_hash TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO arclink_fleet_audit_chain__new (
+          entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
+        )
+        SELECT {', '.join(select_columns)}
+        FROM arclink_fleet_audit_chain
+        """
+    )
+    conn.execute(f"ALTER TABLE arclink_fleet_audit_chain RENAME TO {backup}")
+    conn.execute("ALTER TABLE arclink_fleet_audit_chain__new RENAME TO arclink_fleet_audit_chain")
     conn.commit()
 
 

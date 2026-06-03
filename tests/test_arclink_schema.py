@@ -141,6 +141,74 @@ def test_fleet_enrollment_legacy_schema_migrates_to_current_contract() -> None:
     print("PASS test_fleet_enrollment_legacy_schema_migrates_to_current_contract")
 
 
+def test_fleet_audit_chain_legacy_schema_migrates_to_current_contract() -> None:
+    mod = load_control()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE arclink_fleet_audit_chain (
+          chain_id TEXT PRIMARY KEY,
+          inventory_machine_id TEXT NOT NULL DEFAULT '',
+          host_id TEXT NOT NULL DEFAULT '',
+          previous_hash TEXT NOT NULL DEFAULT '',
+          entry_hash TEXT NOT NULL,
+          entry_kind TEXT NOT NULL DEFAULT 'transition' CHECK (entry_kind IN ('root', 'transition', 'warning')),
+          event_type TEXT NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_arclink_fleet_audit_chain_inventory_time
+        ON arclink_fleet_audit_chain (inventory_machine_id, created_at);
+        CREATE INDEX idx_arclink_fleet_audit_chain_host_time
+        ON arclink_fleet_audit_chain (host_id, created_at);
+        INSERT INTO arclink_fleet_audit_chain (
+          chain_id, inventory_machine_id, host_id, previous_hash,
+          entry_hash, entry_kind, event_type, metadata_json, created_at
+        ) VALUES (
+          'fachain_legacy_live_shape', 'machine_live', 'host_live', '',
+          'hash_live', 'transition', 'enrolled', '{"legacy":true}',
+          '2026-06-03T02:00:00+00:00'
+        );
+        """
+    )
+
+    mod.ensure_schema(conn)
+
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(arclink_fleet_audit_chain)").fetchall()}
+    for name in ("entry_id", "inventory_id", "event", "actor", "event_at", "prev_hash"):
+        expect(name in columns, str(columns))
+    migrated = conn.execute(
+        """
+        SELECT entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
+        FROM arclink_fleet_audit_chain
+        WHERE entry_id = ?
+        """,
+        ("fachain_legacy_live_shape",),
+    ).fetchone()
+    expect(dict(migrated) == {
+        "entry_id": "fachain_legacy_live_shape",
+        "inventory_id": "machine_live",
+        "event": "enrolled",
+        "actor": "legacy",
+        "event_at": "2026-06-03T02:00:00+00:00",
+        "prev_hash": "",
+        "entry_hash": "hash_live",
+        "metadata_json": '{"legacy":true}',
+    }, str(dict(migrated)))
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_audit_chain (
+          entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
+        ) VALUES (
+          'fachain_current_insert', 'machine_live', 'verified', 'worker-bootstrap',
+          '2026-06-03T02:01:00+00:00', 'hash_live', 'hash_current', '{}'
+        )
+        """
+    )
+    print("PASS test_fleet_audit_chain_legacy_schema_migrates_to_current_contract")
+
+
 def test_arc_pod_captain_console_wave0_columns_and_indexes_exist() -> None:
     mod = load_control()
     conn = memory_db(mod)
@@ -480,6 +548,7 @@ def test_arc_pod_captain_console_status_drift_checks() -> None:
 def main() -> int:
     test_arclink_schema_creates_expected_tables_and_is_idempotent()
     test_fleet_enrollment_legacy_schema_migrates_to_current_contract()
+    test_fleet_audit_chain_legacy_schema_migrates_to_current_contract()
     test_arc_pod_captain_console_wave0_columns_and_indexes_exist()
     test_pod_migration_wave3_columns_and_indexes_exist()
     test_deployment_prefix_reservation_is_unique()
@@ -489,7 +558,7 @@ def main() -> int:
     test_subscription_health_and_provisioning_helpers()
     test_arclink_drift_detection_reports_missing_linked_rows()
     test_arc_pod_captain_console_status_drift_checks()
-    print("PASS all 11 ArcLink schema tests")
+    print("PASS all 12 ArcLink schema tests")
     return 0
 
 

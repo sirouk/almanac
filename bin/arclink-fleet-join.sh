@@ -43,6 +43,9 @@ Options:
   --capacity-slots N          Placement capacity slots. Default: 4.
   --provider NAME             Inventory provider. Default: manual.
   --state-root PATH           Worker state root. Default: /var/lib/arclink-fleet.
+  --deployment-state-root-base PATH
+                              ArcPod deployment root to create for the worker.
+  --fleet-share-hub-root PATH Optional Captain fleet-share hub root to create for the worker.
   --skip-prereq-install       Do not install prerequisites; record a skipped prereq summary.
   --json                      Print machine-readable status.
 
@@ -101,6 +104,8 @@ CAPACITY_SLOTS="4"
 PROVIDER="manual"
 SYSTEM_ROOT="${ARCLINK_FLEET_JOIN_SYSTEM_ROOT:-}"
 STATE_ROOT="${ARCLINK_FLEET_STATE_ROOT:-}"
+DEPLOYMENT_STATE_ROOT_BASE="${ARCLINK_DEPLOYMENT_STATE_ROOT_BASE:-${ARCLINK_STATE_ROOT_BASE:-}}"
+FLEET_SHARE_HUB_ROOT="${ARCLINK_FLEET_SHARE_HUB_ROOT:-}"
 SKIP_PREREQS="${ARCLINK_SKIP_PREREQ_INSTALL:-0}"
 JSON_OUTPUT=0
 
@@ -208,6 +213,14 @@ while (($#)); do
       ;;
     --state-root)
       STATE_ROOT="${2:-}"
+      shift 2
+      ;;
+    --deployment-state-root-base|--state-root-base)
+      DEPLOYMENT_STATE_ROOT_BASE="${2:-}"
+      shift 2
+      ;;
+    --fleet-share-hub-root)
+      FLEET_SHARE_HUB_ROOT="${2:-}"
       shift 2
       ;;
     --skip-prereq-install)
@@ -419,12 +432,33 @@ ensure_user() {
 }
 
 repair_state_permissions() {
+  local root_path="" effective_path=""
   if [[ -n "$SYSTEM_ROOT" ]]; then
     chmod 755 "$STATE_ROOT" 2>/dev/null || true
+    for root_path in "$DEPLOYMENT_STATE_ROOT_BASE" "$FLEET_SHARE_HUB_ROOT"; do
+      [[ -z "$root_path" ]] && continue
+      if [[ "$root_path" != /* || "$root_path" == "/" ]]; then
+        fail "worker root path must be an absolute non-root path: $root_path"
+        return 1
+      fi
+      effective_path="$SYSTEM_ROOT$root_path"
+      mkdir -p "$effective_path"
+      chmod 755 "$effective_path" 2>/dev/null || true
+    done
     return 0
   fi
   chown -R "$SSH_USER:$SSH_USER" "$STATE_ROOT" 2>/dev/null || true
   chmod 700 "$STATE_ROOT" 2>/dev/null || true
+  for root_path in "$DEPLOYMENT_STATE_ROOT_BASE" "$FLEET_SHARE_HUB_ROOT"; do
+    [[ -z "$root_path" ]] && continue
+    if [[ "$root_path" != /* || "$root_path" == "/" ]]; then
+      fail "worker root path must be an absolute non-root path: $root_path"
+      return 1
+    fi
+    mkdir -p "$root_path"
+    chown "$SSH_USER:$SSH_USER" "$root_path" 2>/dev/null || true
+    chmod 755 "$root_path" 2>/dev/null || true
+  done
 }
 
 user_home_dir() {

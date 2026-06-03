@@ -9074,6 +9074,58 @@ ensure_control_wireguard_peer() {
       printf 'PersistentKeepalive = %s\n' "$keepalive"
     } >>"$config_path"
     chmod 600 "$config_path" 2>/dev/null || true
+  else
+    python3 - "$config_path" "$worker_public_key" "$worker_cidr" "$keepalive" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+public_key = sys.argv[2]
+worker_cidr = sys.argv[3]
+keepalive = sys.argv[4]
+lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+out: list[str] = []
+block: list[str] = []
+
+
+def flush(block_lines: list[str]) -> None:
+    if not block_lines:
+        return
+    if not any(line.strip() == f"PublicKey = {public_key}" for line in block_lines):
+        out.extend(block_lines)
+        return
+    saw_allowed = False
+    saw_keepalive = False
+    for line in block_lines:
+        stripped = line.strip()
+        if stripped.startswith("AllowedIPs ="):
+            out.append(f"AllowedIPs = {worker_cidr}")
+            saw_allowed = True
+        elif stripped.startswith("PersistentKeepalive ="):
+            out.append(f"PersistentKeepalive = {keepalive}")
+            saw_keepalive = True
+        else:
+            out.append(line)
+    if not saw_allowed:
+        out.append(f"AllowedIPs = {worker_cidr}")
+    if not saw_keepalive:
+        out.append(f"PersistentKeepalive = {keepalive}")
+
+
+for line in lines:
+    if line.strip() == "[Peer]":
+        flush(block)
+        block = [line]
+    elif block:
+        block.append(line)
+    else:
+        out.append(line)
+flush(block)
+path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+PY
+    chmod 600 "$config_path" 2>/dev/null || true
   fi
   if [[ ${EUID:-$(id -u)} -eq 0 ]] && command -v wg >/dev/null 2>&1 && wg show "$iface" >/dev/null 2>&1; then
     wg set "$iface" peer "$worker_public_key" allowed-ips "$worker_cidr" persistent-keepalive "$keepalive" >/dev/null || true
@@ -9679,6 +9731,55 @@ finally:
 PY
 }
 
+lookup_control_wireguard_worker_private_cidr() {
+  local hostname="$1"
+  local db_path=""
+
+  db_path="$(control_host_db_path)"
+  [[ -r "$db_path" ]] || return 0
+  ARCLINK_CONFIG_FILE="$(docker_env_file_path)" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 - "$db_path" "$hostname" <<'PY'
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+db_path = Path(sys.argv[1])
+hostname = sys.argv[2].strip().lower()
+conn = sqlite3.connect(str(db_path))
+try:
+    rows = conn.execute(
+        """
+        SELECT metadata_json
+        FROM arclink_fleet_hosts
+        WHERE status != 'removed' AND (LOWER(hostname) = ? OR LOWER(json_extract(metadata_json, '$.ssh_host')) = ?)
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        (hostname, hostname),
+    ).fetchall()
+    for (metadata_json,) in rows:
+        try:
+            metadata = json.loads(metadata_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        wireguard = metadata.get("wireguard") if isinstance(metadata, dict) else {}
+        if not isinstance(wireguard, dict):
+            continue
+        private_cidr = str(wireguard.get("private_cidr") or "").strip()
+        private_ip = str(wireguard.get("private_ip") or "").strip()
+        if private_cidr:
+            print(private_cidr)
+            break
+        if private_ip:
+            print(f"{private_ip}/32")
+            break
+finally:
+    conn.close()
+PY
+}
+
 run_remote_fleet_worker_bootstrap() {
   local hostname="$1"
   local final_ssh_host="$2"
@@ -9696,12 +9797,14 @@ run_remote_fleet_worker_bootstrap() {
   local control_url="${14}"
   local ttl_seconds="${15}"
   local skip_prereq_install="${16}"
+  local state_root_base="${17}"
+  local fleet_share_hub_root="${18}"
   local key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
   local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE:-${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}}"
   local local_stage="" remote_stage="" mint_json="" enrollment_token="" enrollment_id="" output=""
   local remote_prepare="" remote_join="" remote_runner="" arg="" q_remote_stage="" q_control_url="" q_hostname="" q_final_ssh_host=""
   local q_worker_user="" q_region="" q_capacity_slots="" q_private_dns_name="" q_tailscale_dns_name="" q_wireguard_worker_ip=""
-  local q_wireguard_interface="" q_wireguard_control_endpoint="" q_control_pub_key="" q_skip_arg=""
+  local q_wireguard_interface="" q_wireguard_control_endpoint="" q_control_pub_key="" q_state_root_base="" q_fleet_share_hub_root="" q_skip_arg=""
   local -a ssh_opts=()
 
   if [[ -z "$bootstrap_host" || -z "$bootstrap_user" || -z "$bootstrap_port" ]]; then
@@ -9804,11 +9907,13 @@ run_remote_fleet_worker_bootstrap() {
   printf -v q_wireguard_interface '%q' "$wireguard_interface"
   printf -v q_wireguard_control_endpoint '%q' "$wireguard_control_endpoint"
   printf -v q_control_pub_key '%q' "$ARCLINK_WIREGUARD_CONTROL_PUBLIC_KEY"
+  printf -v q_state_root_base '%q' "$state_root_base"
+  printf -v q_fleet_share_hub_root '%q' "$fleet_share_hub_root"
   q_skip_arg=""
   if [[ "$skip_prereq_install" == "1" ]]; then
     q_skip_arg=" --skip-prereq-install"
   fi
-  remote_join="set -euo pipefail; trap 'rm -rf $q_remote_stage' EXIT; printf 'ArcLink remote worker join starting on %s\n' '$bootstrap_host' >&2; $remote_runner bash $q_remote_stage/bin/arclink-fleet-join.sh --control-url $q_control_url --token-stdin --authorized-key-file $q_remote_stage/control-fleet-key.pub --hostname $q_hostname --ssh-host $q_final_ssh_host --ssh-user $q_worker_user --region $q_region --capacity-slots $q_capacity_slots --private-dns-name $q_private_dns_name --tailscale-dns-name $q_tailscale_dns_name --wireguard-worker-ip $q_wireguard_worker_ip --wireguard-control-public-key $q_control_pub_key --wireguard-control-endpoint $q_wireguard_control_endpoint --wireguard-interface $q_wireguard_interface$q_skip_arg --json"
+  remote_join="set -euo pipefail; trap 'rm -rf $q_remote_stage' EXIT; printf 'ArcLink remote worker join starting on %s\n' '$bootstrap_host' >&2; $remote_runner bash $q_remote_stage/bin/arclink-fleet-join.sh --control-url $q_control_url --token-stdin --authorized-key-file $q_remote_stage/control-fleet-key.pub --hostname $q_hostname --ssh-host $q_final_ssh_host --ssh-user $q_worker_user --region $q_region --capacity-slots $q_capacity_slots --private-dns-name $q_private_dns_name --tailscale-dns-name $q_tailscale_dns_name --wireguard-worker-ip $q_wireguard_worker_ip --wireguard-control-public-key $q_control_pub_key --wireguard-control-endpoint $q_wireguard_control_endpoint --wireguard-interface $q_wireguard_interface --deployment-state-root-base $q_state_root_base --fleet-share-hub-root $q_fleet_share_hub_root$q_skip_arg --json"
   if ! output="$(printf '%s\n' "$enrollment_token" | ssh "${ssh_opts[@]}" "$bootstrap_user@$bootstrap_host" "$remote_join" 2>&1)"; then
     unset enrollment_token
     revoke_control_fleet_enrollment_id "$enrollment_id"
@@ -10013,8 +10118,13 @@ EOF
     wireguard_control_endpoint="${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-}"
   fi
   if [[ "$remote_bootstrap" == "1" && -z "$wireguard_private_ip" && "${ARCLINK_WIREGUARD_ENABLED:-1}" != "0" ]]; then
-    wireguard_private_ip="$(next_control_wireguard_worker_ip)"
-    wireguard_private_cidr="$wireguard_private_ip/32"
+    wireguard_private_cidr="$(lookup_control_wireguard_worker_private_cidr "$hostname" | head -n 1)"
+    if [[ -n "$wireguard_private_cidr" ]]; then
+      wireguard_private_ip="${wireguard_private_cidr%%/*}"
+    else
+      wireguard_private_ip="$(next_control_wireguard_worker_ip)"
+      wireguard_private_cidr="$wireguard_private_ip/32"
+    fi
     [[ -z "$private_dns_name" ]] && private_dns_name="$wireguard_private_ip"
   fi
   if [[ -n "$wireguard_private_ip" ]] && ! is_safe_control_fleet_host_value "${wireguard_private_ip%%/*}"; then
@@ -10073,8 +10183,13 @@ EOF
   [[ -z "$bootstrap_ssh_host" ]] && bootstrap_ssh_host="$ssh_host"
   [[ -z "$bootstrap_control_url" ]] && bootstrap_control_url="$(derive_control_worker_join_url)"
   if [[ "$remote_bootstrap" == "1" && -z "$wireguard_private_ip" && "${ARCLINK_WIREGUARD_ENABLED:-1}" != "0" ]]; then
-    wireguard_private_ip="$(next_control_wireguard_worker_ip)"
-    wireguard_private_cidr="$wireguard_private_ip/32"
+    wireguard_private_cidr="$(lookup_control_wireguard_worker_private_cidr "$hostname" | head -n 1)"
+    if [[ -n "$wireguard_private_cidr" ]]; then
+      wireguard_private_ip="${wireguard_private_cidr%%/*}"
+    else
+      wireguard_private_ip="$(next_control_wireguard_worker_ip)"
+      wireguard_private_cidr="$wireguard_private_ip/32"
+    fi
     [[ -z "$private_dns_name" ]] && private_dns_name="$wireguard_private_ip"
   fi
   if [[ "$noninteractive" != "1" && "$advanced_prompts" != "1" && "$remote_bootstrap" == "1" && -n "$wireguard_private_ip" && "${ARCLINK_WIREGUARD_ENABLED:-1}" != "0" ]]; then
@@ -10150,7 +10265,8 @@ EOF
         "$hostname" "$ssh_host" "$bootstrap_ssh_host" "$bootstrap_ssh_user" "$bootstrap_ssh_port" \
         "$ssh_user" "$region" "$capacity_slots" "$private_dns_name" "$tailscale_dns_name" \
         "${wireguard_private_cidr:-$wireguard_private_ip}" "$wireguard_interface" "$wireguard_control_endpoint" \
-        "$bootstrap_control_url" "$bootstrap_token_ttl" "$bootstrap_skip_prereqs"
+        "$bootstrap_control_url" "$bootstrap_token_ttl" "$bootstrap_skip_prereqs" \
+        "$state_root_base" "${ARCLINK_FLEET_SHARE_HUB_ROOT:-/arcdata/captains}"
     )" || {
       [[ "$json" == "1" ]] || printf '%s\n' "$bootstrap_output" >&2
       return 1
@@ -10222,7 +10338,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from arclink_control import ensure_schema
+from arclink_control import ensure_schema, utc_now_iso
 from arclink_fleet import register_fleet_host
 
 
@@ -10322,6 +10438,17 @@ try:
         capacity_slots=capacity_slots,
         metadata=metadata,
     )
+    if smoke_status == "passed":
+        conn.execute(
+            """
+            UPDATE arclink_fleet_hosts
+            SET status = 'active', drain = 0, last_health_state = 'active', updated_at = ?
+            WHERE host_id = ?
+            """,
+            (utc_now_iso(), str(row["host_id"])),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (str(row["host_id"]),)).fetchone()
     print(json.dumps({"host_id": row["host_id"], "hostname": row["hostname"], "capacity_slots": row["capacity_slots"], "smoke_status": smoke_status, "private_dns_name": private_dns_name, "tailscale_dns_name": tailscale_dns_name, "wireguard_private_ip": wireguard_private_ip, "remote_bootstrap": remote_bootstrap}, sort_keys=True))
 finally:
     conn.close()

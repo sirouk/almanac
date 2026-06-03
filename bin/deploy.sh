@@ -9588,6 +9588,35 @@ derive_control_worker_join_url() {
   fi
 }
 
+ensure_control_fleet_enrollment_secret_ready() {
+  local docker_env="${1:-$(docker_env_file_path)}"
+
+  if [[ -r "$docker_env" ]]; then
+    # shellcheck disable=SC1090
+    source "$docker_env"
+  fi
+  if [[ -z "${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" || "${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" == "change-me" ]]; then
+    write_docker_runtime_config "$docker_env"
+    # shellcheck disable=SC1090
+    source "$docker_env"
+  fi
+  if [[ -z "${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" || "${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" == "change-me" ]]; then
+    echo "Could not prepare the Sovereign fleet enrollment HMAC root." >&2
+    return 1
+  fi
+}
+
+run_control_fleet_enrollment_cli() {
+  local docker_env="$1"
+  shift
+
+  ensure_control_fleet_enrollment_secret_ready "$docker_env" || return 1
+  ARCLINK_CONFIG_FILE="$docker_env" \
+  ARCLINK_FLEET_ENROLLMENT_SECRET="${ARCLINK_FLEET_ENROLLMENT_SECRET:-}" \
+  PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" "$@"
+}
+
 mint_control_fleet_enrollment_json() {
   local ttl_seconds="${1:-3600}"
   local docker_env="" db_path="" actor=""
@@ -9595,8 +9624,7 @@ mint_control_fleet_enrollment_json() {
   docker_env="$(docker_env_file_path)"
   db_path="$(control_host_db_path)"
   actor="${ARCLINK_OPERATOR_ID:-${USER:-operator}}"
-  ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" mint --actor "$actor" --ttl-seconds "$ttl_seconds" --json
+  run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" mint --actor "$actor" --ttl-seconds "$ttl_seconds" --json
 }
 
 revoke_control_fleet_enrollment_id() {
@@ -9607,8 +9635,7 @@ revoke_control_fleet_enrollment_id() {
   docker_env="$(docker_env_file_path)"
   db_path="$(control_host_db_path)"
   actor="${ARCLINK_OPERATOR_ID:-${USER:-operator}}"
-  ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" revoke --actor "$actor" "$enrollment_id" --json >/dev/null 2>&1 || true
+  run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" revoke --actor "$actor" "$enrollment_id" --json >/dev/null 2>&1 || true
 }
 
 lookup_control_wireguard_worker_public_key() {
@@ -10494,29 +10521,23 @@ run_control_enrollment() {
   case "$subcommand" in
     mint)
       if [[ -n "$forced_command" ]]; then
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" mint --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" mint --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]}"
       else
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" mint --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]:1}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" mint --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]:1}"
       fi
       ;;
     list)
       if [[ -n "$forced_command" ]]; then
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" list "${CONTROL_DEPLOY_ARGS[@]}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" list "${CONTROL_DEPLOY_ARGS[@]}"
       else
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" list "${CONTROL_DEPLOY_ARGS[@]:1}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" list "${CONTROL_DEPLOY_ARGS[@]:1}"
       fi
       ;;
     revoke)
       if [[ -n "$forced_command" ]]; then
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" revoke --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" revoke --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]}"
       else
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" revoke --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]:1}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" revoke --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]:1}"
       fi
       ;;
     rotate-secret|rotate-hmac-root|rotate-root)
@@ -10530,20 +10551,16 @@ run_control_enrollment() {
       # shellcheck disable=SC1090
       source "$docker_env"
       if [[ -n "$forced_command" ]]; then
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" rotate-secret --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" rotate-secret --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]}"
       else
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" rotate-secret --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]:1}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" rotate-secret --actor "$actor" "${CONTROL_DEPLOY_ARGS[@]:1}"
       fi
       ;;
     verify-audit-chain)
       if [[ -n "$forced_command" ]]; then
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" verify-audit-chain "${CONTROL_DEPLOY_ARGS[@]}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" verify-audit-chain "${CONTROL_DEPLOY_ARGS[@]}"
       else
-        ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-          python3 "$BOOTSTRAP_DIR/python/arclink_fleet_enrollment.py" --db "$db_path" verify-audit-chain "${CONTROL_DEPLOY_ARGS[@]:1}"
+        run_control_fleet_enrollment_cli "$docker_env" --db "$db_path" verify-audit-chain "${CONTROL_DEPLOY_ARGS[@]:1}"
       fi
       ;;
     *)

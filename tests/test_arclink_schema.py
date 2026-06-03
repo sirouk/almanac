@@ -85,6 +85,62 @@ def test_arclink_schema_creates_expected_tables_and_is_idempotent() -> None:
     print("PASS test_arclink_schema_creates_expected_tables_and_is_idempotent")
 
 
+def test_fleet_enrollment_legacy_schema_migrates_to_current_contract() -> None:
+    mod = load_control()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE arclink_fleet_enrollments (
+          enrollment_id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'minted' CHECK (status IN ('minted', 'used', 'revoked', 'expired')),
+          hostname TEXT NOT NULL DEFAULT '',
+          ssh_host TEXT NOT NULL DEFAULT '',
+          ssh_user TEXT NOT NULL DEFAULT '',
+          region TEXT NOT NULL DEFAULT '',
+          machine_fingerprint TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT NOT NULL DEFAULT '',
+          revoked_at TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_arclink_fleet_enrollments_status_expiry
+        ON arclink_fleet_enrollments (status, expires_at, created_at);
+        CREATE UNIQUE INDEX idx_arclink_fleet_enrollments_token_hash
+        ON arclink_fleet_enrollments (token_hash);
+        INSERT INTO arclink_fleet_enrollments (
+          enrollment_id, token_hash, status, expires_at, consumed_at, created_at, updated_at
+        ) VALUES (
+          'flenr_legacy_live_shape', 'hmac_sha256_v1$abc', 'minted',
+          '2026-06-03T02:00:00+00:00', '', '2026-06-03T01:00:00+00:00',
+          '2026-06-03T01:00:00+00:00'
+        );
+        """
+    )
+
+    mod.ensure_schema(conn)
+
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(arclink_fleet_enrollments)").fetchall()}
+    for name in ("created_by_user_id", "redeemed_by_inventory_id", "audit_ref"):
+        expect(name in columns, str(columns))
+    migrated = conn.execute(
+        "SELECT status, created_by_user_id FROM arclink_fleet_enrollments WHERE enrollment_id = ?",
+        ("flenr_legacy_live_shape",),
+    ).fetchone()
+    expect(dict(migrated) == {"status": "pending", "created_by_user_id": "legacy"}, str(dict(migrated)))
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_enrollments (
+          enrollment_id, token_hash, created_by_user_id, created_at, expires_at, status
+        ) VALUES ('flenr_current_insert', 'hmac_sha256_v1$def', 'operator', 'now', 'later', 'pending')
+        """
+    )
+    print("PASS test_fleet_enrollment_legacy_schema_migrates_to_current_contract")
+
+
 def test_arc_pod_captain_console_wave0_columns_and_indexes_exist() -> None:
     mod = load_control()
     conn = memory_db(mod)
@@ -423,6 +479,7 @@ def test_arc_pod_captain_console_status_drift_checks() -> None:
 
 def main() -> int:
     test_arclink_schema_creates_expected_tables_and_is_idempotent()
+    test_fleet_enrollment_legacy_schema_migrates_to_current_contract()
     test_arc_pod_captain_console_wave0_columns_and_indexes_exist()
     test_pod_migration_wave3_columns_and_indexes_exist()
     test_deployment_prefix_reservation_is_unique()
@@ -432,7 +489,7 @@ def main() -> int:
     test_subscription_health_and_provisioning_helpers()
     test_arclink_drift_detection_reports_missing_linked_rows()
     test_arc_pod_captain_console_status_drift_checks()
-    print("PASS all 10 ArcLink schema tests")
+    print("PASS all 11 ArcLink schema tests")
     return 0
 
 

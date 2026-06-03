@@ -2395,6 +2395,7 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         ("last_health_state", "TEXT NOT NULL DEFAULT ''"),
     ):
         _ensure_column(conn, "arclink_fleet_hosts", column, ddl)
+    _migrate_fleet_enrollments_schema(conn)
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS arclink_fleet_enrollments (
@@ -2526,6 +2527,87 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
 
 def _sql_column_expr(columns: set[str], column: str, fallback: str) -> str:
     return column if column in columns else fallback
+
+
+def _migrate_fleet_enrollments_schema(conn: sqlite3.Connection) -> None:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_enrollments'"
+    ).fetchone()
+    if row is None:
+        return
+    sql = str(row["sql"] or "")
+    columns = set(_table_columns(conn, "arclink_fleet_enrollments"))
+    required = {
+        "enrollment_id",
+        "token_hash",
+        "created_by_user_id",
+        "created_at",
+        "expires_at",
+        "consumed_at",
+        "redeemed_by_inventory_id",
+        "status",
+        "audit_ref",
+    }
+    if required <= columns and "'pending'" in sql and "'consumed'" in sql:
+        return
+
+    backup = "arclink_fleet_enrollments__legacy"
+    suffix = 0
+    while conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (backup,)).fetchone():
+        suffix += 1
+        backup = f"arclink_fleet_enrollments__legacy_{suffix}"
+
+    status_expr = "CASE LOWER(COALESCE(status, '')) "
+    status_expr += "WHEN 'pending' THEN 'pending' "
+    status_expr += "WHEN 'minted' THEN 'pending' "
+    status_expr += "WHEN 'consumed' THEN 'consumed' "
+    status_expr += "WHEN 'used' THEN 'consumed' "
+    status_expr += "WHEN 'revoked' THEN 'revoked' "
+    status_expr += "WHEN 'expired' THEN 'expired' "
+    status_expr += "ELSE 'expired' END"
+    select_columns = [
+        _sql_column_expr(columns, "enrollment_id", "'flenr_legacy_' || lower(hex(randomblob(12)))"),
+        _sql_column_expr(columns, "token_hash", "''"),
+        _sql_column_expr(columns, "created_by_user_id", "'legacy'"),
+        _sql_column_expr(columns, "created_at", "datetime('now')"),
+        _sql_column_expr(columns, "expires_at", "datetime('now')"),
+        _sql_column_expr(columns, "consumed_at", "''"),
+        _sql_column_expr(columns, "redeemed_by_inventory_id", "''"),
+        status_expr,
+        _sql_column_expr(columns, "audit_ref", "''"),
+    ]
+
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS idx_arclink_fleet_enrollments_status_expiry;
+        DROP INDEX IF EXISTS idx_arclink_fleet_enrollments_token_hash;
+        DROP TABLE IF EXISTS arclink_fleet_enrollments__new;
+        CREATE TABLE arclink_fleet_enrollments__new (
+          enrollment_id TEXT PRIMARY KEY,
+          token_hash TEXT NOT NULL,
+          created_by_user_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          consumed_at TEXT NOT NULL DEFAULT '',
+          redeemed_by_inventory_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL CHECK (status IN ('pending', 'consumed', 'expired', 'revoked')),
+          audit_ref TEXT NOT NULL DEFAULT ''
+        );
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO arclink_fleet_enrollments__new (
+          enrollment_id, token_hash, created_by_user_id, created_at, expires_at,
+          consumed_at, redeemed_by_inventory_id, status, audit_ref
+        )
+        SELECT {', '.join(select_columns)}
+        FROM arclink_fleet_enrollments
+        """
+    )
+    conn.execute(f"ALTER TABLE arclink_fleet_enrollments RENAME TO {backup}")
+    conn.execute("ALTER TABLE arclink_fleet_enrollments__new RENAME TO arclink_fleet_enrollments")
+    conn.commit()
 
 
 def _migrate_fleet_host_probes_schema(conn: sqlite3.Connection) -> None:

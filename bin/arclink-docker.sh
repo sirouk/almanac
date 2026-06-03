@@ -361,6 +361,34 @@ ensure_docker_app_bind_permissions() {
     && chown -R 70:70 "$REPO_DIR/arclink-priv/state/operator/nextcloud/db" 2>/dev/null || true
 }
 
+docker_repair_deployment_compose_secret_dirs() {
+  local uid="" gid="" deployments_root="" secret_dir="" current="" changed=0
+
+  uid="$(configured_or_default ARCLINK_DOCKER_UID "$(docker_default_runtime_uid)")"
+  gid="$(configured_or_default ARCLINK_DOCKER_GID "$(docker_default_runtime_gid)")"
+  deployments_root="$(configured_or_default ARCLINK_STATE_ROOT_BASE /arcdata/deployments)"
+  [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || return 1
+  [[ -d "$deployments_root" ]] || return 0
+
+  while IFS= read -r secret_dir; do
+    [[ -n "$secret_dir" && -d "$secret_dir" && ! -L "$secret_dir" ]] || continue
+    current="$(stat -c '%u:%g:%a' "$secret_dir" 2>/dev/null || true)"
+    if [[ "$current" != "$uid:$gid:700" ]]; then
+      chown -h "$uid:$gid" "$secret_dir" 2>/dev/null || true
+      chmod 700 "$secret_dir" 2>/dev/null || true
+      changed=$((changed + 1))
+    fi
+    find "$secret_dir" -mindepth 1 -maxdepth 1 ! -type d \
+      -exec chown -h "$uid:$gid" {} + 2>/dev/null || true
+    find "$secret_dir" -mindepth 1 -maxdepth 1 -type f \
+      -exec chmod 600 {} + 2>/dev/null || true
+  done < <(find "$deployments_root" -mindepth 3 -maxdepth 3 -path '*/config/secrets' -type d 2>/dev/null | sort)
+
+  if (( changed > 0 )); then
+    echo "Repaired ArcPod compose secret directories for $changed deployment(s)."
+  fi
+}
+
 env_file_value() {
   local key="$1"
   [[ -f "$DOCKER_ENV_FILE" ]] || return 1
@@ -1720,6 +1748,7 @@ docker_reconcile() {
   fi
   wait_for_docker_agent_reconcile ||
     echo "Docker agent supervisor is still reconciling; docker health will report details if it remains incomplete."
+  docker_repair_deployment_compose_secret_dirs || true
   docker_repair_deployment_dashboard_plugin_mounts || true
   docker_refresh_deployment_managed_plugins || true
   compose_service_command control-provisioner python3 bin/sync-dashboard-user-passwords.py || true
@@ -1732,6 +1761,7 @@ docker_provision_once() {
   local rc=0
   prepare_compose
   compose run --rm --no-deps control-provisioner python3 python/arclink_sovereign_worker.py --once --json "$@" || rc=$?
+  docker_repair_deployment_compose_secret_dirs || true
   docker_repair_deployment_dashboard_plugin_mounts || true
   docker_refresh_deployment_managed_plugins || true
   docker_publish_tailnet_deployment_apps || true
@@ -2598,6 +2628,7 @@ main() {
       repair_docker_app_named_volumes
       compose up -d --no-build "$@"
       docker_retire_legacy_operator_arcpod_project || true
+      docker_repair_deployment_compose_secret_dirs || true
       docker_repair_deployment_dashboard_plugin_mounts || true
       docker_refresh_deployment_managed_plugins || true
       ;;

@@ -93,6 +93,20 @@
     return String((item && (item.root || item.root_id)) || "workspace");
   }
 
+  function rootById(rootId) {
+    const roots = (state.status && state.status.roots) || [];
+    return roots.filter(function (root) { return root.id === rootId; })[0] || {};
+  }
+
+  function rootLabel(rootId) {
+    const root = rootById(rootId);
+    return root.label || rootId || "Workspace";
+  }
+
+  function rootTooltip(root) {
+    return String((root && (root.tooltip || root.description)) || "");
+  }
+
   function itemKey(item) {
     return itemRoot(item) + ":" + String((item && item.path) || "/");
   }
@@ -196,6 +210,20 @@
         title: item.kind === "folder" ? "Folder" : label ? label + " file" : "File",
       },
       item.kind === "folder" ? null : h("span", { className: "hermes-code-fileext" }, label)
+    );
+  }
+
+  function renderRootIcon(root) {
+    const icon = String((root && (root.icon || root.id)) || "workspace").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+    return h(
+      "span",
+      {
+        className: "hermes-code-fileicon folder hermes-code-rooticon root-" + icon,
+        title: rootTooltip(root) || (root && root.label) || "Root",
+      },
+      h("span", { className: "hermes-code-rootmark" }),
+      h("span", { className: "hermes-code-rootmark secondary" }),
+      h("span", { className: "hermes-code-rootmark tertiary" })
     );
   }
 
@@ -1248,6 +1276,7 @@
         const children = item.children || [];
         const isFolder = item.kind === "folder";
         const isExpanded = !!state.expanded[itemKey(item)];
+        const rootMeta = item.path === "/" ? (item.root_meta || rootById(root)) : null;
         const displayName = item.path === "/" ? (item.name || item.root_label || "Root") : item.name;
         return h(
           "div",
@@ -1257,6 +1286,7 @@
             {
               className: "hermes-code-item hermes-code-tree-node " + (isSelected ? "selected" : ""),
               draggable: item.path !== "/",
+              title: rootMeta ? rootTooltip(rootMeta) : "",
               onContextMenu: function (event) {
                 openContextMenu(event, item);
               },
@@ -1314,7 +1344,7 @@
                     isExpanded ? "v" : ">"
                   )
                 : h("span", { className: "hermes-code-caret spacer" }),
-              renderFileIcon(item),
+              rootMeta ? renderRootIcon(rootMeta) : renderFileIcon(item),
               h("span", { className: "hermes-code-item-name" }, displayName),
               h("span", { className: "hermes-code-item-lang" }, item.kind === "folder" ? (children.length ? children.length : "") : item.language)
             )
@@ -1331,7 +1361,7 @@
           h("button", { type: "button", onClick: function () { loadItems(parentPath(state.path), state.root); }, disabled: state.path === "/" }, "Up"),
           h("button", { type: "button", onClick: function () { loadItems(state.path, state.root); } }, "Refresh")
         ),
-        h("div", { className: "hermes-code-path" }, (state.root === "vault" ? "Vault" : "Workspace") + " " + state.path),
+        h("div", { className: "hermes-code-path" }, rootLabel(state.root) + " " + state.path),
         h(
           "div",
           { className: "hermes-code-items", onClick: function () { if (state.contextMenu) patch({ contextMenu: null }); } },
@@ -1340,7 +1370,7 @@
             : (state.status && state.status.roots || []).filter(function (root) { return root.available; }).length
               ? (state.status.roots || []).filter(function (root) { return root.available; }).map(function (root) {
                   const tree = (state.trees || {})[root.id] || { root: root.id, kind: "folder", path: "/", name: root.label, children: [] };
-                  return renderTreeNode(Object.assign({}, tree, { root: root.id, name: root.label }), 0);
+                  return renderTreeNode(Object.assign({}, tree, { root: root.id, name: root.label, root_meta: root }), 0);
                 })
               : h("div", { className: "hermes-code-empty" }, "No files")
         ),
@@ -1360,7 +1390,7 @@
         },
         h("input", {
           value: state.searchQuery,
-          placeholder: "Search Workspace and Vault",
+          placeholder: "Search Workspace, Fleet, and Linked",
           onChange: function (event) {
             scheduleSearch(event.target.value);
           },
@@ -1651,6 +1681,7 @@
         });
         const isExpanded = !!state.expanded[itemKey(item)];
         const isSelected = state.sourcePickerPath === item.path && state.sourcePickerRoot === root;
+        const rootMeta = item.path === "/" ? (item.root_meta || rootById(root)) : null;
         return h(
           "div",
           { key: "picker:" + itemKey(item), className: "hermes-code-picker-node-wrap" },
@@ -1660,6 +1691,7 @@
               type: "button",
               className: "hermes-code-picker-node " + (isSelected ? "selected" : ""),
               style: { paddingLeft: 0.4 + depth * 0.8 + "rem" },
+              title: rootMeta ? rootTooltip(rootMeta) : "",
               onClick: function () {
                 patch({ sourcePickerRoot: root, sourcePickerPath: item.path, sourcePickerMessage: "" });
               },
@@ -1680,7 +1712,7 @@
                   isExpanded ? "v" : ">"
                 )
               : h("span", { className: "hermes-code-caret spacer" }),
-            renderFileIcon(Object.assign({}, item, { kind: "folder" })),
+            rootMeta ? renderRootIcon(rootMeta) : renderFileIcon(Object.assign({}, item, { kind: "folder" })),
             h("span", { className: "hermes-code-item-name" }, label || item.name || item.path)
           ),
           isExpanded && children.length
@@ -1697,16 +1729,16 @@
           "section",
           { className: "hermes-code-modal", role: "dialog", "aria-modal": "true", "aria-label": "Open source repository" },
           h("h2", null, "Open Source"),
-          h("p", null, "Choose a Workspace or Vault folder that contains a .git directory."),
+          h("p", null, "Choose a Workspace, Fleet, or Linked folder that contains a .git directory."),
           h(
             "div",
             { className: "hermes-code-picker" },
             roots.map(function (root) {
               const tree = (state.trees || {})[root.id] || { root: root.id, kind: "folder", path: "/", name: root.label, children: [] };
-              return renderPickerNode(Object.assign({}, tree, { root: root.id, name: root.label }), 0, root.label);
+              return renderPickerNode(Object.assign({}, tree, { root: root.id, name: root.label, root_meta: root }), 0, root.label);
             })
           ),
-          h("div", { className: "hermes-code-picker-path" }, (state.sourcePickerRoot === "vault" ? "Vault" : "Workspace") + " " + (state.sourcePickerPath || "/")),
+          h("div", { className: "hermes-code-picker-path" }, rootLabel(state.sourcePickerRoot) + " " + (state.sourcePickerPath || "/")),
           state.sourcePickerMessage ? h("div", { className: "hermes-code-picker-message" }, state.sourcePickerMessage) : null,
           h(
             "div",

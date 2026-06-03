@@ -432,6 +432,89 @@
   width: 0.5rem;
 }
 
+.hermes-code-rooticon {
+  --root-accent: var(--hermes-code-editor-accent, #61afef);
+}
+
+.hermes-code-rooticon .hermes-code-rootmark {
+  display: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.hermes-code-rooticon.root-workspace .hermes-code-rootmark {
+  background: color-mix(in srgb, var(--background-base) 88%, #fff);
+  border: 1px solid color-mix(in srgb, var(--root-accent) 76%, var(--midground));
+  border-radius: 3px;
+  display: block;
+  height: 0.42rem;
+  right: -0.02rem;
+  top: 0.02rem;
+  width: 0.48rem;
+}
+
+.hermes-code-rooticon.root-workspace .hermes-code-rootmark::before {
+  background:
+    radial-gradient(circle at 30% 58%, var(--root-accent) 0 0.045rem, transparent 0.052rem),
+    radial-gradient(circle at 70% 58%, var(--root-accent) 0 0.045rem, transparent 0.052rem);
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
+.hermes-code-rooticon.root-workspace .hermes-code-rootmark::after {
+  background: color-mix(in srgb, var(--root-accent) 76%, var(--midground));
+  content: "";
+  height: 0.16rem;
+  left: 50%;
+  position: absolute;
+  top: -0.16rem;
+  transform: translateX(-50%);
+  width: 1px;
+}
+
+.hermes-code-rooticon.root-fleet .hermes-code-rootmark {
+  background: color-mix(in srgb, #7dd3fc 70%, var(--background-base));
+  border: 1px solid color-mix(in srgb, #7dd3fc 82%, var(--midground));
+  border-radius: 999px;
+  display: block;
+  height: 0.17rem;
+  right: -0.03rem;
+  top: 0.08rem;
+  width: 0.42rem;
+}
+
+.hermes-code-rooticon.root-fleet .hermes-code-rootmark.secondary {
+  height: 0.14rem;
+  right: 0.3rem;
+  top: 0;
+  width: 0.34rem;
+}
+
+.hermes-code-rooticon.root-fleet .hermes-code-rootmark.tertiary {
+  height: 0.14rem;
+  right: 0.2rem;
+  top: 0.28rem;
+  width: 0.34rem;
+}
+
+.hermes-code-rooticon.root-linked .hermes-code-rootmark,
+.hermes-code-rooticon.root-linked .hermes-code-rootmark.secondary {
+  border: 1px solid color-mix(in srgb, #a7f3d0 82%, var(--midground));
+  border-radius: 999px;
+  display: block;
+  height: 0.22rem;
+  right: -0.04rem;
+  top: 0.08rem;
+  transform: rotate(-32deg);
+  width: 0.4rem;
+}
+
+.hermes-code-rooticon.root-linked .hermes-code-rootmark.secondary {
+  right: 0.18rem;
+  top: 0.23rem;
+}
+
 .hermes-code-item-name {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -254,7 +254,7 @@
       roots: [],
       root: "",
       path: "/",
-      location: "files",
+      location: "roots",
       query: "",
       favoritesOnly: false,
       view: "list",
@@ -354,10 +354,13 @@
     }
 
     function rootSortValue(root) {
+      if (root && typeof root.order === "number") return String(root.order).padStart(3, "0") + "-" + String(root.id || root.label || "");
       const value = String((root && (root.id || root.label)) || "").toLowerCase();
       if (value.indexOf("workspace") !== -1) return "0-" + value;
-      if (value.indexOf("vault") !== -1) return "1-" + value;
-      return "2-" + value;
+      if (value.indexOf("fleet") !== -1) return "1-" + value;
+      if (value.indexOf("linked") !== -1) return "2-" + value;
+      if (value.indexOf("vault") !== -1) return "3-" + value;
+      return "4-" + value;
     }
 
     function orderedRoots(roots) {
@@ -370,6 +373,62 @@
       return (state.roots || []).filter(function (root) {
         return root.id === rootId;
       })[0] || {};
+    }
+
+    function rootTooltip(root) {
+      return String((root && (root.tooltip || root.description)) || "");
+    }
+
+    function renderRootIcon(root) {
+      const icon = String((root && (root.icon || root.id)) || "workspace").replace(/[^a-z0-9_-]/gi, "-").toLowerCase();
+      return h(
+        "span",
+        {
+          className: "hermes-drive-fileicon folder hermes-drive-rooticon root-" + icon,
+          title: rootTooltip(root) || (root && root.label) || "Root",
+        },
+        h("span", { className: "hermes-drive-rootmark" }),
+        h("span", { className: "hermes-drive-rootmark secondary" }),
+        h("span", { className: "hermes-drive-rootmark tertiary" })
+      );
+    }
+
+    function rootOverviewItems(roots) {
+      return orderedRoots(roots).map(function (root) {
+        return {
+          root: root.id,
+          kind: "folder",
+          name: root.label || root.id,
+          path: "/",
+          mime: "folder",
+          size: 0,
+          modified: "",
+          root_overview: true,
+          description: root.description || root.tooltip || "",
+          child_count: root.child_count,
+          child_count_truncated: root.child_count_truncated,
+        };
+      });
+    }
+
+    function showRootOverview(roots) {
+      const nextRoots = orderedRoots(roots || state.roots);
+      patch({
+        root: "",
+        path: "/",
+        query: "",
+        favoritesOnly: false,
+        location: "roots",
+        items: rootOverviewItems(nextRoots),
+        searchResults: [],
+        searching: false,
+        loading: false,
+        selected: null,
+        selectedPaths: {},
+        selectionAnchor: null,
+        preview: null,
+        contextMenu: null,
+      });
     }
 
     function rootCanReceiveCopy(root) {
@@ -590,7 +649,11 @@
       patch({ query: clean, favoritesOnly: !!favoritesOnly, location: "files", errorMessage: "" });
       if (!clean) {
         patch({ searchResults: [], searching: false });
-        loadItems(state.path, "", !!favoritesOnly, state.root);
+        if (state.location === "roots" || !state.root) {
+          showRootOverview();
+        } else {
+          loadItems(state.path, "", !!favoritesOnly, state.root);
+        }
         return;
       }
       patch({ searching: true, loading: false, selected: null, selectedPaths: {}, selectionAnchor: null });
@@ -649,18 +712,21 @@
             return String(candidate.id || candidate.label || "").toLowerCase().indexOf("workspace") !== -1;
           })[0];
           const root = (preferredRoot && preferredRoot.id) || status.default_root || (roots[0] && roots[0].id) || "";
-          patch({ status: status, roots: roots, root: root, loading: false, expanded: {} });
-          if (status.available) {
-            const params = new URLSearchParams({ path: "/", query: "" });
-            if (root) params.set("root", root);
-            fetchJSON(api("/items?" + params.toString()))
-              .then(function (data) {
-                patch({ loading: false, items: decorateItems(root, data.items || []), path: data.path || "/", location: "files", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null });
-              })
-              .catch(function (error) {
-                patch({ loading: false, items: [], selected: null, preview: null, errorMessage: error.message || "Unable to load Drive" });
-              });
-          }
+          patch({
+            status: status,
+            roots: roots,
+            root: "",
+            defaultRoot: root,
+            path: "/",
+            location: "roots",
+            items: rootOverviewItems(roots),
+            loading: false,
+            expanded: {},
+            selected: null,
+            selectedPaths: {},
+            selectionAnchor: null,
+            preview: null,
+          });
         })
         .catch(function () {
           patch({ status: { available: false }, loading: false });
@@ -671,6 +737,10 @@
       patch({ contextMenu: null });
       if (item.trashed) {
         patch({ selected: item, preview: null });
+        return;
+      }
+      if (item.root_overview) {
+        selectFolder(itemRoot(item), "/");
         return;
       }
       if (item.kind === "folder") {
@@ -964,6 +1034,10 @@
     }
 
     function handleListItemClick(item, event, index, list) {
+      if (item.root_overview) {
+        selectItemOnly(item);
+        return;
+      }
       selectListItem(item, event, index, list);
     }
 
@@ -1087,6 +1161,11 @@
     }
 
     function breadcrumbs() {
+      if (state.location === "roots") {
+        return [
+          h("button", { key: "root-overview", type: "button", onClick: function () { showRootOverview(); } }, "Drive"),
+        ];
+      }
       const parts = String(state.path || "/").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
       const rootLabel = currentRoot.label || state.root || "Drive";
       const nodes = [
@@ -1179,6 +1258,9 @@
     }
 
     function renderFileIcon(item) {
+      if (item && item.root_overview) {
+        return renderRootIcon(rootById(itemRoot(item)));
+      }
       const ext = fileExtension(item);
       const label = fileExtLabel(item);
       return h(
@@ -1463,8 +1545,10 @@
                     key: root.id,
                     type: "button",
                     className: root.id === dialog.root ? "active" : "",
+                    title: rootTooltip(root),
                     onClick: function () { setDestinationFolder(root.id, "/"); },
                   },
+                  renderRootIcon(root),
                   root.label || root.id
                 );
               })
@@ -1633,6 +1717,7 @@
             type: "button",
             className: "hermes-drive-tree-node root " + (active ? "active " : "") + (selectedRoot ? "selected" : ""),
             style: { paddingLeft: "0.2rem" },
+            title: rootTooltip(root),
             onClick: function () {
               selectFolder(rootId, "/");
             },
@@ -1641,7 +1726,7 @@
             },
           },
           renderCaret(rootId, null, 0),
-          renderFileIcon({ kind: "folder", name: root.label || rootId }),
+          renderRootIcon(root),
           h("span", { className: "hermes-drive-tree-name" }, root.label || rootId),
           h("span", { className: "hermes-drive-tree-count" }, treeCountLabel(rootId, "/", root.child_count, root.child_count_truncated))
         ),
@@ -1654,6 +1739,7 @@
         return h("div", { className: "hermes-drive-details empty" }, "Select a file or folder to see details.");
       }
       const detailRoot = rootById(itemRoot(selected));
+      const isRootOverview = !!selected.root_overview;
       return h(
         "div",
         { className: "hermes-drive-details" },
@@ -1662,8 +1748,8 @@
           "div",
           { className: "hermes-drive-file-facts" },
           h("span", null, detailRoot.label || itemRoot(selected) || "Drive"),
-          h("span", null, selected.kind || "item"),
-          h("span", null, selected.mime || "file"),
+          h("span", null, isRootOverview ? "root" : selected.kind || "item"),
+          h("span", null, isRootOverview ? selected.description || rootTooltip(detailRoot) : selected.mime || "file"),
           h("span", null, displaySize(selected.size)),
           h("span", null, selected.modified || selected.deleted_at || ""),
           h("span", null, selected.path || "")
@@ -1674,13 +1760,16 @@
           selected.trashed
             ? h("button", { type: "button", onClick: function () { restoreItem(selected); } }, "Restore")
             : null,
-          !selected.trashed && selected.kind === "file"
+          isRootOverview
+            ? h("button", { type: "button", onClick: function () { selectFolder(itemRoot(selected), "/"); } }, "Open")
+            : null,
+          !isRootOverview && !selected.trashed && selected.kind === "file"
             ? h("a", { href: api("/download?path=" + encodeURIComponent(selected.path) + "&root=" + encodeURIComponent(itemRoot(selected) || "")), target: "_blank", rel: "noreferrer" }, "Download")
             : null,
-          selected.trashed ? null : h("button", { type: "button", onClick: function () { duplicateItem(selected); } }, "Duplicate"),
-          selected.trashed ? null : h("button", { type: "button", onClick: function () { copyItemWithPrompt(selected); } }, "Copy"),
-          selected.trashed ? null : h("button", { type: "button", onClick: function () { renameItem(selected); } }, "Rename"),
-          selected.trashed ? null : h("button", { type: "button", onClick: function () { moveItemWithPrompt(selected); } }, "Move")
+          isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { duplicateItem(selected); } }, "Duplicate"),
+          isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { copyItemWithPrompt(selected); } }, "Copy"),
+          isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { renameItem(selected); } }, "Rename"),
+          isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { moveItemWithPrompt(selected); } }, "Move")
         ),
         renderPreviewPanel()
       );
@@ -1778,7 +1867,7 @@
     const contextItem = state.contextMenu && state.contextMenu.item;
     const selectedCount = selectedPathList().length;
     const currentRoot = (state.roots || []).filter(function (root) { return root.id === state.root; })[0] || {};
-    const canWrite = !state.busy && state.location !== "trash" && status.available && (!currentRoot.capabilities || currentRoot.capabilities.upload !== false);
+    const canWrite = !!state.root && !state.busy && state.location !== "trash" && state.location !== "roots" && status.available && (!currentRoot.capabilities || currentRoot.capabilities.upload !== false);
     const visibleItems = sortedItems();
     const confirmDialog = state.confirmDialog;
     const confirmBlocked = !!(confirmDialog && confirmDialog.expectedText && confirmDialog.typedText !== confirmDialog.expectedText);
@@ -1799,7 +1888,7 @@
           { className: "hermes-drive-title" },
           h("h1", null, "Drive"),
           h("div", { className: "hermes-drive-path" }, breadcrumbs()),
-          h("p", null, currentRoot.label ? currentRoot.label + " - " + (currentRoot.path || "/") : status.backend ? status.backend + " - " + (status.local_root || status.mount || "/") : "Agent knowledge")
+          h("p", null, state.location === "roots" ? "Workspace, Fleet, and Linked" : currentRoot.label ? currentRoot.label + " - " + (currentRoot.path || "/") : status.backend ? status.backend + " - " + (status.local_root || status.mount || "/") : "Agent knowledge")
         ),
         h(
           "div",
@@ -1824,7 +1913,7 @@
                 )
               : null
           ),
-          h("button", { type: "button", onClick: function () { loadItems(state.path, "", false, state.root); }, disabled: !status.available }, "Refresh"),
+          h("button", { type: "button", onClick: function () { state.location === "roots" ? showRootOverview() : loadItems(state.path, "", false, state.root); }, disabled: !status.available }, "Refresh"),
           h("input", {
             ref: fileInput,
             type: "file",
@@ -1863,7 +1952,7 @@
                 : h("input", {
                     className: "hermes-drive-search",
                     value: state.query,
-                    placeholder: "Search Workspace and Vault",
+                    placeholder: "Search Workspace, Fleet, and Linked",
                     onChange: function (event) {
                       const value = event.target.value;
                       patch({ query: value });
@@ -1894,8 +1983,9 @@
               h(
                 "div",
                 { className: "hermes-drive-tree-tools" },
-                h("button", { type: "button", className: state.location === "trash" ? "active" : "", onClick: loadTrash }, "Trash"),
-                h("button", { type: "button", onClick: function () { switchRoot(state.root); }, disabled: !state.root }, "Refresh")
+	                h("button", { type: "button", className: state.location === "roots" ? "active" : "", onClick: function () { showRootOverview(); } }, "Roots"),
+	                h("button", { type: "button", className: state.location === "trash" ? "active" : "", onClick: loadTrash, disabled: !state.root }, "Trash"),
+	                h("button", { type: "button", onClick: function () { switchRoot(state.root); }, disabled: !state.root }, "Refresh")
               )
             ),
             h(
@@ -1903,20 +1993,20 @@
               {
                 className: "hermes-drive-content" + (selected ? " has-selection" : ""),
                 onDragOver: function (event) {
-                  if (state.location !== "trash" && (hasFiles(event) || state.draggingItem)) {
+	                  if (state.location !== "trash" && state.location !== "roots" && (hasFiles(event) || state.draggingItem)) {
                     event.preventDefault();
                     event.dataTransfer.dropEffect = hasFiles(event) ? "copy" : "move";
                   }
                 },
                 onDragEnter: function (event) {
-                  if (state.location !== "trash" && hasFiles(event)) patch({ dropActive: true });
+	                  if (state.location !== "trash" && state.location !== "roots" && hasFiles(event)) patch({ dropActive: true });
                 },
                 onDragLeave: function (event) {
                   if (!event.currentTarget.contains(event.relatedTarget)) patch({ dropActive: false });
                 },
                 onDrop: function (event) {
                   event.preventDefault();
-                  if (state.location === "trash") {
+	                  if (state.location === "trash" || state.location === "roots") {
                     patch({ dropActive: false });
                     return;
                   }
@@ -1943,17 +2033,19 @@
                   h(
                     "p",
                     { className: "hermes-drive-current-summary" },
-                    state.location === "trash"
-                      ? "Deleted items for " + (currentRoot.label || state.root || "Drive")
-                      : state.query
-                        ? "Search across Workspace and Vault"
+	                    state.location === "roots"
+	                      ? "Choose Workspace, Fleet, or Linked"
+	                      : state.location === "trash"
+	                      ? "Deleted items for " + (currentRoot.label || state.root || "Drive")
+	                      : state.query
+                        ? "Search across Workspace, Fleet, and Linked"
                         : (currentRoot.label || state.root || "Drive") + " " + (state.path || "/")
                   )
                 ),
                 h(
                   "div",
                   { className: "hermes-drive-filters" },
-                  h("button", { type: "button", onClick: function () { selectFolder(state.root, parentPath(state.path)); }, disabled: state.path === "/" || state.location === "trash" }, "Up"),
+	                  h("button", { type: "button", onClick: function () { selectFolder(state.root, parentPath(state.path)); }, disabled: state.path === "/" || state.location === "trash" || state.location === "roots" }, "Up"),
                   h("select", { value: state.sortKey, onChange: function (event) { patch({ sortKey: event.target.value }); } },
                     h("option", { value: "name" }, "Name"),
                     h("option", { value: "kind" }, "Kind"),
@@ -1975,10 +2067,12 @@
                           {
                             key: itemKey(item),
                             type: "button",
-                            draggable: true,
-                            className:
-                              "hermes-drive-item " +
-                              (selected && itemKey(selected) === itemKey(item) ? "selected " : "") +
+	                            draggable: !item.root_overview,
+	                            title: item.root_overview ? rootTooltip(rootById(itemRoot(item))) : item.name,
+	                            className:
+	                              "hermes-drive-item " +
+	                              (item.root_overview ? "root-overview " : "") +
+	                              (selected && itemKey(selected) === itemKey(item) ? "selected " : "") +
                               (state.selectedPaths[itemKey(item)] ? "checked " : "") +
                               (state.draggingItem === item.path ? "dragging" : ""),
                             onClick: function (event) {
@@ -1990,8 +2084,12 @@
                             onContextMenu: function (event) {
                               openContextMenu(item, event);
                             },
-                            onDragStart: function (event) {
-                              event.dataTransfer.effectAllowed = "move";
+	                            onDragStart: function (event) {
+	                              if (item.root_overview) {
+	                                event.preventDefault();
+	                                return;
+	                              }
+	                              event.dataTransfer.effectAllowed = "move";
                               event.dataTransfer.setData("application/x-hermes-drive-path", item.path);
                               event.dataTransfer.setData("application/x-hermes-drive-root", itemRoot(item));
                               event.dataTransfer.setData("text/plain", item.path);
@@ -2026,8 +2124,15 @@
                           },
                           renderFileIcon(item),
                           h("span", { className: "hermes-drive-name" }, item.name),
-                          state.query ? h("span", { className: "hermes-drive-root-chip" }, (rootById(itemRoot(item)).label || itemRoot(item) || "Drive")) : null,
-                          h("span", { className: "hermes-drive-meta" }, item.trashed ? "Deleted " + (item.deleted_at || "") : item.kind === "folder" ? "Folder" : displaySize(item.size)),
+                          state.query
+                            ? h(
+                                "span",
+                                { className: "hermes-drive-root-chip" },
+                                renderRootIcon(rootById(itemRoot(item))),
+                                rootById(itemRoot(item)).label || itemRoot(item) || "Drive"
+                              )
+                            : null,
+	                          h("span", { className: "hermes-drive-meta" }, item.root_overview ? item.description || rootTooltip(rootById(itemRoot(item))) : item.trashed ? "Deleted " + (item.deleted_at || "") : item.kind === "folder" ? "Folder" : displaySize(item.size)),
                           item.trashed
                             ? h("span", { className: "hermes-drive-row-action", onClick: function (event) { event.stopPropagation(); restoreItem(item); } }, "Restore")
                             : null
@@ -2097,19 +2202,24 @@
             },
             state.contextMenu.mode === "background"
               ? h(React.Fragment, null,
-                  h("span", { className: "hermes-drive-context-label" }, currentRoot.label || "Drive"),
+	                  h("span", { className: "hermes-drive-context-label" }, state.location === "roots" ? "Roots" : currentRoot.label || "Drive"),
                   h("button", { type: "button", role: "menuitem", onClick: createFolder, disabled: !canWrite }, "New Folder"),
                   h("button", { type: "button", role: "menuitem", onClick: createFile, disabled: !canWrite }, "New File"),
                   h("button", { type: "button", role: "menuitem", onClick: openUploadFiles, disabled: !canWrite }, "Upload Files"),
                   h("button", { type: "button", role: "menuitem", onClick: openUploadFolder, disabled: !canWrite }, "Upload Folder"),
-                  h("button", { type: "button", role: "menuitem", onClick: function () { loadItems(state.path); } }, "Refresh")
+	                  h("button", { type: "button", role: "menuitem", onClick: function () { state.location === "roots" ? showRootOverview() : loadItems(state.path); } }, "Refresh")
                 )
               : state.contextMenu.mode === "selection"
                 ? h(React.Fragment, null,
                     h("span", { className: "hermes-drive-context-label" }, selectedCount + " selected"),
                     state.location === "trash"
                       ? h("button", { type: "button", role: "menuitem", onClick: restoreSelected }, "Restore Selected")
-                      : h(React.Fragment, null,
+	                : contextItem.root_overview
+	                  ? h(React.Fragment, null,
+	                      h("span", { className: "hermes-drive-context-label" }, contextItem.name),
+	                      h("button", { type: "button", role: "menuitem", onClick: function () { selectFolder(itemRoot(contextItem), "/"); } }, "Open")
+	                    )
+	                  : h(React.Fragment, null,
                           h("button", { type: "button", role: "menuitem", onClick: copySelectedWithPrompt }, "Copy"),
                           h("button", { type: "button", role: "menuitem", onClick: moveSelectedWithPrompt }, "Move"),
                           h("button", { type: "button", role: "menuitem", onClick: trashSelected }, "Trash Selected")

@@ -103,6 +103,29 @@ _GIT_TIMEOUT_SECONDS = 15
 _TRASH_INDEX_VERSION = 1
 _LINKED_MANIFEST_NAME = ".arclink-linked-resources.json"
 _SHARE_REQUEST_BROKER_TOKEN_HEADER = "X-ArcLink-Share-Request-Broker-Token"
+_ROOT_METADATA = {
+    "workspace": {
+        "label": "Workspace",
+        "icon": "workspace",
+        "tooltip": "This Hermes Agent's own writable workspace: Projects, Repos, Research, and local knowledge.",
+        "description": "This Hermes Agent's own writable workspace: Projects, Repos, Research, and local knowledge.",
+        "order": 10,
+    },
+    "fleet": {
+        "label": "Fleet",
+        "icon": "fleet",
+        "tooltip": "Shared read/write space for this Captain's fleet of ArcPods, synced across machines.",
+        "description": "Shared read/write space for this Captain's fleet of ArcPods, synced across machines.",
+        "order": 20,
+    },
+    "linked": {
+        "label": "Linked",
+        "icon": "linked",
+        "tooltip": "Folders shared with you from other Captains or ArcPods; accepted read/write shares can be edited here.",
+        "description": "Folders shared with you from other Captains or ArcPods; accepted read/write shares can be edited here.",
+        "order": 30,
+    },
+}
 
 
 def _hermes_home() -> Path:
@@ -344,8 +367,38 @@ def _share_request_state() -> dict[str, Any]:
     }
 
 
+def _candidate_workspace_roots() -> list[Path]:
+    home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
+    candidates: list[Path] = []
+    for value in (
+        os.environ.get("ARCLINK_WORKSPACE_ROOT"),
+        os.environ.get("ARCLINK_CODE_WORKSPACE_ROOT"),
+        os.environ.get("CODE_WORKSPACE_ROOT"),
+        os.environ.get("DRIVE_WORKSPACE_ROOT"),
+        os.environ.get("ARCLINK_DRIVE_ROOT"),
+        os.environ.get("DRIVE_ROOT"),
+        os.environ.get("KNOWLEDGE_VAULT_ROOT"),
+        os.environ.get("VAULT_DIR"),
+    ):
+        if value:
+            candidates.append(Path(value).expanduser())
+    candidates.extend([home / "Vault", _hermes_home() / "Vault", _hermes_home() / "workspace"])
+    return candidates
+
+
 def _workspace_root() -> Path:
-    explicit = _env_first("CODE_WORKSPACE_ROOT", "DRIVE_WORKSPACE_ROOT")
+    root = _first_existing_dir(_candidate_workspace_roots())
+    if root is not None:
+        return root
+    explicit = _env_first(
+        "ARCLINK_WORKSPACE_ROOT",
+        "ARCLINK_CODE_WORKSPACE_ROOT",
+        "CODE_WORKSPACE_ROOT",
+        "DRIVE_WORKSPACE_ROOT",
+        "ARCLINK_DRIVE_ROOT",
+        "DRIVE_ROOT",
+        "VAULT_DIR",
+    )
     if explicit:
         return Path(explicit).expanduser().resolve(strict=False)
     return (_hermes_home() / "workspace").expanduser().resolve(strict=False)
@@ -356,6 +409,7 @@ def _candidate_vault_roots() -> list[Path]:
     candidates: list[Path] = []
     for value in (
         os.environ.get("CODE_VAULT_ROOT"),
+        os.environ.get("ARCLINK_WORKSPACE_ROOT"),
         os.environ.get("DRIVE_ROOT"),
         os.environ.get("KNOWLEDGE_VAULT_ROOT"),
         os.environ.get("VAULT_DIR"),
@@ -400,6 +454,15 @@ def _first_existing_dir(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _same_root(left: Path | None, right: Path | None) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return False
+
+
 def _vault_root() -> Path | None:
     return _first_existing_dir(_candidate_vault_roots())
 
@@ -410,7 +473,7 @@ def _root_descriptors() -> list[dict[str, Any]]:
     linked = _first_existing_dir(_candidate_linked_roots())
     fleet = _first_existing_dir(_candidate_fleet_roots())
     workspace_available = workspace.is_dir() and not _is_sensitive_path(workspace)
-    vault_available = bool(vault and vault.is_dir())
+    workspace_resource_root = "vault" if _same_root(workspace, vault) else "workspace"
     share_request_enabled = bool(_share_request_state().get("enabled"))
     writable_capabilities = {
         "read": True,
@@ -433,54 +496,75 @@ def _root_descriptors() -> list[dict[str, Any]]:
         "share_request": False,
         "sharing": False,
     }
-    return [
-        {
-            "id": "workspace",
-            "label": "Workspace",
-            "path": str(workspace),
+    def descriptor(
+        root_id: str,
+        root: Path | None,
+        *,
+        capabilities: dict[str, bool],
+        read_only: bool = False,
+        resource_root: str = "",
+    ) -> dict[str, Any]:
+        metadata = _ROOT_METADATA.get(root_id, {})
+        return {
+            "id": root_id,
+            "label": str(metadata.get("label") or root_id.title()),
+            "icon": str(metadata.get("icon") or root_id),
+            "tooltip": str(metadata.get("tooltip") or ""),
+            "description": str(metadata.get("description") or ""),
+            "order": int(metadata.get("order") or 100),
+            "path": str(root or ""),
             "display_path": "/",
-            "available": workspace_available,
-            "read_only": False,
-            "capabilities": {
+            "resource_root": resource_root or root_id,
+            "available": bool(root and root.is_dir()) and not _is_sensitive_path(root),
+            "read_only": read_only,
+            "capabilities": capabilities,
+        }
+
+    return [
+        descriptor(
+            "workspace",
+            workspace,
+            resource_root=workspace_resource_root,
+            capabilities={
                 **writable_capabilities,
                 "share_request": bool(workspace_available and share_request_enabled),
             },
-        },
-        {
-            "id": "vault",
-            "label": "Vault",
-            "path": str(vault or ""),
-            "display_path": "/",
-            "available": vault_available,
-            "read_only": False,
-            "capabilities": {
-                **writable_capabilities,
-                "share_request": bool(vault_available and share_request_enabled),
-            },
-        },
-        {
-            "id": "fleet",
-            "label": "Fleet",
-            "path": str(fleet or ""),
-            "display_path": "/",
-            "available": bool(fleet and fleet.is_dir()),
-            "read_only": False,
-            "capabilities": dict(writable_capabilities),
-        },
-        {
-            "id": "linked",
-            "label": "Linked",
-            "path": str(linked or ""),
-            "display_path": "/",
-            "available": bool(linked and linked.is_dir()),
-            "read_only": False,
-            "capabilities": linked_capabilities,
-        },
+        ),
+        descriptor("fleet", fleet, capabilities=dict(writable_capabilities)),
+        descriptor("linked", linked, capabilities=linked_capabilities),
     ]
 
 
 def _root_context(raw_root: Any = None) -> dict[str, Any]:
     root_id = str(raw_root or "workspace").strip().lower()
+    if root_id == "vault":
+        vault = _vault_root()
+        if not (vault and vault.is_dir()):
+            raise HTTPException(status_code=404, detail="Workspace root is not available")
+        share_request_enabled = bool(_share_request_state().get("enabled"))
+        return {
+            "id": "workspace",
+            "label": "Workspace",
+            "icon": "workspace",
+            "tooltip": _ROOT_METADATA["workspace"]["tooltip"],
+            "description": _ROOT_METADATA["workspace"]["description"],
+            "order": _ROOT_METADATA["workspace"]["order"],
+            "path": str(vault),
+            "display_path": "/",
+            "resource_root": "vault",
+            "available": True,
+            "read_only": False,
+            "capabilities": {
+                "read": True,
+                "preview": True,
+                "search": True,
+                "write": True,
+                "git_read": True,
+                "git_mutation": True,
+                "share_request": share_request_enabled,
+                "sharing": False,
+            },
+        }
     if root_id not in {"workspace", "vault", "fleet", "linked"}:
         raise HTTPException(status_code=400, detail="Unknown Code root")
     for root in _root_descriptors():
@@ -513,7 +597,7 @@ def _share_request_payload(payload: dict[str, Any], root_ctx: dict[str, Any], ta
         "contract": "arclink-share-grants",
         "source_plugin": "code",
         "owner_deployment_id": owner_deployment,
-        "resource_root": str(root_ctx.get("id") or "workspace"),
+        "resource_root": str(root_ctx.get("resource_root") or root_ctx.get("id") or "workspace"),
         "resource_path": _display_path(relative),
         "resource_kind": "code",
         "item_kind": _share_item_kind(target),
@@ -727,7 +811,7 @@ def _copy_confined(source: Path, destination: Path) -> None:
 
 def _default_writable_root_id() -> str:
     for root in _root_descriptors():
-        if root.get("id") in {"workspace", "vault"} and root.get("available") and not root.get("read_only"):
+        if root.get("id") == "workspace" and root.get("available") and not root.get("read_only"):
             return str(root["id"])
     raise HTTPException(status_code=404, detail="No writable Code root is available")
 

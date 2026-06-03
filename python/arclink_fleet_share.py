@@ -44,6 +44,14 @@ DEFAULT_AUTHOR_EMAIL = "fleet@arclink.local"
 DEFAULT_HUB_ROOT = "/arcdata/captains"
 _GIT_TIMEOUT_SECONDS = 120
 _SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+FLEET_LAYOUT_READMES = {
+    "Projects": "Shared project workspaces for the Captain's fleet. Prefer one folder per collaborative project.\n",
+    "Research": "Fleet-wide research notes, source maps, and durable findings that multiple agents can reuse.\n",
+    "Repos": "Fleet-visible repository notes and managed mirrors. Avoid concurrent edits inside the same repo without pulling first.\n",
+    "Agents_KB": "Fleet-wide agent knowledge base material, including shared operating references and reusable role notes.\n",
+    "Agents_Skills": "Fleet-shared Hermes skill workspaces. Contributing agents may enable skills explicitly in their own Hermes config.\n",
+    "Agents_Plugins": "Fleet-shared plugin notes and rollout records. Runtime plugin enablement remains per agent.\n",
+}
 
 
 class ArcLinkFleetShareError(ValueError):
@@ -200,6 +208,28 @@ def ensure_hub_repo(runner: Any, hub_ref: str) -> bool:
     return True
 
 
+def ensure_default_fleet_layout(working_path: str | Path) -> dict[str, int]:
+    """Seed the Fleet root with durable shared-resource folders.
+
+    The function is additive and never overwrites Captain or Agent content. The
+    normal fleet sync cycle commits the created files, so all ArcPods converge
+    through the existing multi-writer git path.
+    """
+    work = Path(working_path).expanduser()
+    created_dirs = 0
+    created_files = 0
+    for dirname, body in FLEET_LAYOUT_READMES.items():
+        directory = work / dirname
+        if not directory.exists():
+            directory.mkdir(parents=True, exist_ok=True)
+            created_dirs += 1
+        readme = directory / "README.md"
+        if not readme.exists():
+            readme.write_text(f"# {dirname}\n\n{body}", encoding="utf-8")
+            created_files += 1
+    return {"created_dirs": created_dirs, "created_files": created_files}
+
+
 def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, branch: str = DEFAULT_BRANCH) -> None:
     """Ensure ``working_path`` is a git working copy whose origin is ``hub_ref``."""
     ref = _assert_safe_git_arg(hub_ref, label="hub reference")
@@ -214,6 +244,7 @@ def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, 
                 _git(runner, ["remote", "add", "origin", ref], cwd=str(work))
             elif current.stdout.strip() != ref:
                 _git(runner, ["remote", "set-url", "origin", ref], cwd=str(work))
+            ensure_default_fleet_layout(work)
             return
         # A partially-corrupt .git (e.g. files deleted via the writable Fleet root)
         # would otherwise wedge forever. Preserve the user's files and re-clone.
@@ -221,6 +252,7 @@ def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, 
     work.mkdir(parents=True, exist_ok=True)
     clone = _git(runner, ["-c", f"init.defaultBranch={branch}", "clone", ref, str(work)])
     if clone.ok:
+        ensure_default_fleet_layout(work)
         return
     # Hub unreachable as a clone source (e.g. brand-new empty local bare repo on
     # some git versions): fall back to init + remote add so the first sync seeds it.
@@ -228,6 +260,7 @@ def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, 
     if not init.ok:
         raise ArcLinkFleetShareError(f"failed to initialize fleet share working copy: {init.stderr.strip() or clone.stderr.strip()}")
     _git(runner, ["remote", "add", "origin", ref], cwd=str(work))
+    ensure_default_fleet_layout(work)
 
 
 def sync_member(

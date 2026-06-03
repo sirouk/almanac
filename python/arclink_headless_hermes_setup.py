@@ -132,6 +132,10 @@ def _org_skill_library_bases(hermes_home: Path) -> list[Path]:
         value = str(os.environ.get(env_key) or "").strip()
         if value:
             bases.append(Path(value).expanduser() / "Agents_Skills")
+    for env_key in ("ARCLINK_FLEET_SHARED_ROOT", "DRIVE_FLEET_SHARED_ROOT", "CODE_FLEET_SHARED_ROOT"):
+        value = str(os.environ.get(env_key) or "").strip()
+        if value:
+            bases.append(Path(value).expanduser() / "Agents_Skills")
     home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     bases.extend(
         [
@@ -535,7 +539,9 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
                 "private/shared-vault questions as qmd-first work: start with [managed:qmd-ref] "
                 "and the current user's local ArcLink state, not repo-wide searches to rediscover "
                 "the rail. Only inspect deployment docs or qmd daemon files if the qmd path "
-                "itself fails or the user is explicitly debugging ArcLink. Treat "
+                "itself fails or the user is explicitly debugging ArcLink. Drive and Code expose "
+                "Workspace, Fleet, and Linked roots: create new agent-local work in Workspace/Projects, "
+                "put multi-agent Crew material in Fleet, and use Linked only for accepted shares from others. Treat "
                 "[managed:resource-ref], [managed:notion-ref], [managed:recall-stubs], [managed:notion-stub], and [managed:today-plate] as the authoritative shared-rail "
                 "snapshot even when human-facing setup copy leaves machine-facing rails out for "
                 "brevity. The arclink-managed-context plugin can inject refreshed local ArcLink "

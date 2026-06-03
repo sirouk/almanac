@@ -1410,6 +1410,7 @@ for compose_file in sorted(deployments_root.glob("*/config/compose.yaml")):
         crew_json = crew_dashboards_json(compose_file, env, deployment_record)
         for key, value in {
             "VAULT_DIR": "/srv/vault",
+            "ARCLINK_WORKSPACE_ROOT": "/srv/vault",
             "DRIVE_ROOT": "/srv/vault",
             "CODE_WORKSPACE_ROOT": "/workspace",
             "TERMINAL_WORKSPACE_ROOT": "/workspace",

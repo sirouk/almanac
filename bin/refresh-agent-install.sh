@@ -474,6 +474,7 @@ ensure_systemd_workspace_env() {
   local unit="$TARGET_USER_SYSTEMD_DIR/arclink-user-agent-dashboard.service"
   local before="$SYSTEMD_ENV_UPDATED"
   mkdir -p "$TARGET_LINKED_DIR"
+  ensure_unit_environment_line "$unit" "Environment=ARCLINK_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
   ensure_unit_environment_line "$unit" "Environment=DRIVE_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
   ensure_unit_environment_line "$unit" "Environment=CODE_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"
   ensure_unit_environment_line "$unit" "Environment=TERMINAL_WORKSPACE_ROOT=$TARGET_WORKSPACE_DIR"

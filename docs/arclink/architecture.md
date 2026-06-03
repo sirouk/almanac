@@ -192,7 +192,7 @@ arclink_agent_access.py  Agent access helpers
 plugins/hermes-agent/
   arclink-theme/             No-tab ArcLink dashboard theme plugin
   arclink-managed-context/   Managed agent context, recall budget tiers, ArcLink MCP bootstrap injection
-  drive/                     Hermes Dashboard file manager (Vault/Workspace/Fleet/Linked roots)
+  drive/                     Hermes Dashboard file manager (Workspace/Fleet/Linked roots; vault alias is compatibility-only)
   code/                      Hermes Dashboard native code workspace and git surface
   terminal/                  Managed-pty / tmux-pty persistent-session terminal surface
 ```
@@ -349,7 +349,7 @@ core patches:
   `CODE_WORKSPACE_ROOT`, guards text saves with a SHA-256 expected hash,
   scans bounded workspace depth for git repositories, and exposes source
   control status, stage, unstage, confirmed discard, and commit operations on
-  writable Workspace/Vault roots. Its `Linked` root allows file reads, saves
+  writable Workspace/Fleet roots. Its `Linked` root allows file reads, saves
   inside accepted shared folders, previews, duplicate/copy into owned roots,
   repository discovery, git status, and git diff, while rejecting reshare and
   git mutations. It remains a

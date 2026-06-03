@@ -504,10 +504,15 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             "# Linked Project Brief\n\nRead-only shared context.\n",
             encoding="utf-8",
         )
+        fleet_root = hermes_home / "fleet-shared"
+        (fleet_root / "Agents_KB").mkdir(parents=True, exist_ok=True)
+        (fleet_root / "Agents_KB" / "crew.md").write_text("# Crew\n\nFleet context.\n", encoding="utf-8")
         os.environ["HERMES_HOME"] = str(hermes_home)
         os.environ["HOME"] = str(workspace_home)
-        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace_home)
+        os.environ["ARCLINK_WORKSPACE_ROOT"] = str(workspace_home / "Vault")
         os.environ["ARCLINK_LINKED_RESOURCES_ROOT"] = str(linked_root)
+        os.environ["ARCLINK_FLEET_SHARED_ROOT"] = str(fleet_root)
+        os.environ["TERMINAL_WORKSPACE_ROOT"] = str(workspace_home)
         os.environ["TERMINAL_ALLOW_ROOT"] = "1"
         try:
             knowledge_api = load_module(
@@ -532,23 +537,27 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(knowledge["mount"] == "/Vault", str(knowledge))
             expect(knowledge["username"] == "", str(knowledge))
             expect(knowledge["backend"] == "local-roots", str(knowledge))
-            expect(knowledge["default_root"] == "vault", str(knowledge))
+            expect(knowledge["default_root"] == "workspace", str(knowledge))
             root_map = {item["id"]: item for item in knowledge["roots"]}
-            expect(set(root_map) == {"vault", "workspace", "fleet", "linked"}, str(knowledge))
+            expect(set(root_map) == {"workspace", "fleet", "linked"}, str(knowledge))
             expect(root_map["fleet"]["label"] == "Fleet", str(root_map["fleet"]))
             expect(root_map["fleet"]["read_only"] is False, str(root_map["fleet"]))
-            expect(root_map["vault"]["label"] == "Vault", str(root_map["vault"]))
+            expect(root_map["fleet"]["icon"] == "fleet", str(root_map["fleet"]))
+            expect("synced across machines" in root_map["fleet"]["tooltip"], str(root_map["fleet"]))
             expect(root_map["workspace"]["label"] == "Workspace", str(root_map["workspace"]))
+            expect(root_map["workspace"]["icon"] == "workspace", str(root_map["workspace"]))
+            expect(root_map["workspace"]["resource_root"] == "vault", str(root_map["workspace"]))
             expect(root_map["linked"]["label"] == "Linked", str(root_map["linked"]))
+            expect(root_map["linked"]["icon"] == "linked", str(root_map["linked"]))
             expect(root_map["linked"]["available"] is True, str(root_map["linked"]))
             expect(root_map["linked"]["read_only"] is False, str(root_map["linked"]))
-            expect(root_map["vault"]["capabilities"]["sharing"] is False, str(root_map["vault"]))
+            expect(root_map["workspace"]["capabilities"]["sharing"] is False, str(root_map["workspace"]))
             expect(root_map["linked"]["capabilities"]["upload"] is True, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["folder_upload"] is True, str(root_map["workspace"]))
             expect(root_map["linked"]["capabilities"]["folder_upload"] is True, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["trash"] is True, str(root_map["workspace"]))
-            expect(root_map["vault"]["child_count"] == 2, str(root_map["vault"]))
-            expect(root_map["vault"]["child_count_truncated"] is False, str(root_map["vault"]))
+            expect(root_map["workspace"]["child_count"] == 2, str(root_map["workspace"]))
+            expect(root_map["workspace"]["child_count_truncated"] is False, str(root_map["workspace"]))
             expect(knowledge["capabilities"]["drag_drop_upload"] is True, str(knowledge))
             _assert_no_secret_status(knowledge, "Drive")
             drive_items = asyncio.run(knowledge_api.items(root="vault", path="/"))
@@ -558,7 +567,9 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(projects_item["child_count"] == 2, str(projects_item))
             expect(projects_item["child_count_truncated"] is False, str(projects_item))
             workspace_items = asyncio.run(knowledge_api.items(root="workspace", path="/"))
-            expect(any(item["name"] == "hello.py" for item in workspace_items["items"]), str(workspace_items))
+            expect(any(item["name"] == "agent-notes.md" for item in workspace_items["items"]), str(workspace_items))
+            fleet_items = asyncio.run(knowledge_api.items(root="fleet", path="/"))
+            expect(any(item["name"] == "Agents_KB" for item in fleet_items["items"]), str(fleet_items))
             linked_items = asyncio.run(knowledge_api.items(root="linked", path="/"))
             expect(any(item["name"] == "share_001-project-brief" for item in linked_items["items"]), str(linked_items))
             linked_content = asyncio.run(knowledge_api.content(root="linked", path="/share_001-project-brief/overview.md"))
@@ -575,21 +586,25 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(code["url"] == "", str(code))
             expect(code["full_ide_available"] is False, str(code))
             code_root_map = {item["id"]: item for item in code["roots"]}
-            expect(set(code_root_map) == {"workspace", "vault", "fleet", "linked"}, str(code))
+            expect(set(code_root_map) == {"workspace", "fleet", "linked"}, str(code))
             expect(code_root_map["fleet"]["label"] == "Fleet", str(code_root_map["fleet"]))
             expect(code_root_map["fleet"]["read_only"] is False, str(code_root_map["fleet"]))
+            expect(code_root_map["fleet"]["icon"] == "fleet", str(code_root_map["fleet"]))
             expect(code_root_map["linked"]["label"] == "Linked", str(code_root_map["linked"]))
             expect(code_root_map["linked"]["available"] is True, str(code_root_map["linked"]))
             expect(code_root_map["linked"]["read_only"] is False, str(code_root_map["linked"]))
             expect(code_root_map["workspace"]["capabilities"]["sharing"] is False, str(code_root_map["workspace"]))
-            expect(code_root_map["vault"]["capabilities"]["sharing"] is False, str(code_root_map["vault"]))
+            expect(code_root_map["workspace"]["icon"] == "workspace", str(code_root_map["workspace"]))
+            expect(code_root_map["workspace"]["resource_root"] == "vault", str(code_root_map["workspace"]))
             expect(code_root_map["linked"]["capabilities"]["sharing"] is False, str(code_root_map["linked"]))
             expect(code_root_map["linked"]["capabilities"]["write"] is True, str(code_root_map["linked"]))
-            expect(code["workspace_root"].endswith("/home/alex"), str(code))
+            expect(code["workspace_root"].endswith("/home/alex/Vault"), str(code))
             code_items = asyncio.run(code_api.items(path="/", root="workspace"))
-            expect(any(item["name"] == "hello.py" for item in code_items["items"]), str(code_items))
+            expect(any(item["name"] == "agent-notes.md" for item in code_items["items"]), str(code_items))
             vault_code_items = asyncio.run(code_api.items(path="/", root="vault"))
             expect(any(item["name"] == "agent-notes.md" for item in vault_code_items["items"]), str(vault_code_items))
+            fleet_code_items = asyncio.run(code_api.items(path="/", root="fleet"))
+            expect(any(item["name"] == "Agents_KB" for item in fleet_code_items["items"]), str(fleet_code_items))
             linked_code_items = asyncio.run(code_api.items(path="/", root="linked"))
             expect(any(item["name"] == "share_001-project-brief" for item in linked_code_items["items"]), str(linked_code_items))
             linked_code_file = asyncio.run(code_api.file(path="/share_001-project-brief/overview.md", root="linked"))
@@ -600,9 +615,9 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
                 expect(getattr(exc, "status_code", None) == 403, f"expected linked Code write rejection, got {exc!r}")
             else:
                 raise AssertionError("expected linked Code write rejection")
-            code_file = asyncio.run(code_api.file(path="/hello.py", root="workspace"))
-            expect(code_file["language"] == "python", str(code_file))
-            expect("print('hi')" in code_file["content"], str(code_file))
+            code_file = asyncio.run(code_api.file(path="/projects/alpha.md", root="workspace"))
+            expect(code_file["language"] == "markdown", str(code_file))
+            expect("# Alpha" in code_file["content"], str(code_file))
             _assert_no_secret_status(code, "Code")
             expect(terminal["plugin"] == "terminal", str(terminal))
             expect(terminal["status_contract"] == 1, str(terminal))
@@ -761,8 +776,8 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
                     )
                 )
             )
-            expect(copied_from_linked["destination_root"] == "vault", str(copied_from_linked))
-            expect((vault / "Copied Live Brief" / "overview.md").is_file(), "linked copy should land in owned Vault")
+            expect(copied_from_linked["destination_root"] == "workspace", str(copied_from_linked))
+            expect((vault / "Copied Live Brief" / "overview.md").is_file(), "linked copy should land in owned Workspace/vault")
             expect(not (vault / "Copied Live Brief" / ".env").exists(), "linked directory copies must skip generic env files")
             try:
                 asyncio.run(drive_api.delete(JsonRequest({"root": "linked", "path": "/shared-note.md"})))
@@ -952,7 +967,9 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
             expect(code_status["share_request"]["enabled"] is False, str(code_status["share_request"]))
             drive_roots = {item["id"]: item for item in drive_status["roots"]}
             code_roots = {item["id"]: item for item in code_status["roots"]}
-            for root_id in ("vault", "workspace", "linked"):
+            expect(set(drive_roots) == {"workspace", "fleet", "linked"}, str(drive_status))
+            expect(set(code_roots) == {"workspace", "fleet", "linked"}, str(code_status))
+            for root_id in ("workspace", "fleet", "linked"):
                 expect(drive_roots[root_id]["capabilities"]["share_request"] is False, str(drive_roots[root_id]))
                 expect(code_roots[root_id]["capabilities"]["share_request"] is False, str(code_roots[root_id]))
                 expect(drive_roots[root_id]["capabilities"]["sharing"] is False, str(drive_roots[root_id]))
@@ -1047,7 +1064,7 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
             expect("auth" in url_only_code["share_request"]["reason"].lower(), str(url_only_code["share_request"]))
             url_only_drive_roots = {item["id"]: item for item in url_only_drive["roots"]}
             url_only_code_roots = {item["id"]: item for item in url_only_code["roots"]}
-            expect(url_only_drive_roots["vault"]["capabilities"]["share_request"] is False, str(url_only_drive_roots["vault"]))
+            expect(url_only_drive_roots["workspace"]["capabilities"]["share_request"] is False, str(url_only_drive_roots["workspace"]))
             expect(url_only_code_roots["workspace"]["capabilities"]["share_request"] is False, str(url_only_code_roots["workspace"]))
             try:
                 asyncio.run(
@@ -1093,7 +1110,7 @@ def test_arclink_drive_code_share_request_broker_contract() -> None:
             expect(auth_value not in json.dumps(enabled_code, sort_keys=True), "Code status leaked broker auth material")
             enabled_drive_roots = {item["id"]: item for item in enabled_drive["roots"]}
             enabled_code_roots = {item["id"]: item for item in enabled_code["roots"]}
-            expect(enabled_drive_roots["vault"]["capabilities"]["share_request"] is True, str(enabled_drive_roots["vault"]))
+            expect(enabled_drive_roots["workspace"]["capabilities"]["share_request"] is True, str(enabled_drive_roots["workspace"]))
             expect(enabled_code_roots["workspace"]["capabilities"]["share_request"] is True, str(enabled_code_roots["workspace"]))
             expect(enabled_drive_roots["linked"]["capabilities"]["share_request"] is False, str(enabled_drive_roots["linked"]))
             expect(enabled_code_roots["linked"]["capabilities"]["share_request"] is False, str(enabled_code_roots["linked"]))
@@ -1194,8 +1211,8 @@ def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
             )
             status = asyncio.run(drive_api.status())
             root_map = {item["id"]: item for item in status["roots"]}
-            expect(status["default_root"] == "vault", str(status))
-            expect(root_map["vault"]["path"] == str(vault.resolve(strict=False)), str(root_map["vault"]))
+            expect(status["default_root"] == "workspace", str(status))
+            expect(set(root_map) == {"workspace", "fleet", "linked"}, str(status))
             expect(root_map["workspace"]["path"] == str(workspace.resolve(strict=False)), str(root_map["workspace"]))
 
             listing = asyncio.run(drive_api.items(root="vault", path="/Docs"))
@@ -1400,7 +1417,7 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
             os.environ["DRIVE_ROOT"] = str(missing_vault)
             unavailable = asyncio.run(drive_api.status())
             unavailable_roots = {item["id"]: item for item in unavailable["roots"]}
-            expect(unavailable_roots["vault"]["available"] is False, str(unavailable_roots["vault"]))
+            expect("vault" not in unavailable_roots, str(unavailable_roots))
             expect(unavailable_roots["workspace"]["available"] is True, str(unavailable_roots["workspace"]))
             try:
                 asyncio.run(drive_api.items(root="vault", path="/"))
@@ -1547,11 +1564,15 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect('function restoreItem(item)' in body and 'requestJSON("/restore"' in body, "Drive UI should expose restore")
     expect('function restoreSelected()' in body and 'state.location === "trash"' in body, "Drive UI should support trash selection state")
     expect("const visibleItems = sortedItems();" in body and "visibleItems.map" in body, "Trash view should render sorted trash items")
-    expect('state.location !== "trash" && hasFiles(event)' in body, "Trash view should not advertise or accept uploads")
+    expect('state.location !== "trash" && state.location !== "roots" && hasFiles(event)' in body, "Trash and root overview should not advertise or accept background uploads")
     expect("function collectDroppedUploadItems(dataTransfer)" in body and "webkitGetAsEntry" in body, "Drive drag/drop should traverse browser-exposed folders")
     expect("webkitdirectory" in body and "folderInput" in body, "Drive upload button should expose browser folder selection")
     expect('body.append("relative_paths"' in body and 'body.append("directories"' in body, "Drive uploads should preserve folder relative paths")
     expect("Drop files or folders to upload" in body, "Drive drop overlay should advertise folder uploads")
+    expect("function rootOverviewItems(roots)" in body and 'location: "roots"' in body, "Drive should present Workspace/Fleet/Linked as first-class center-pane parent folders")
+    expect("function showRootOverview(roots)" in body and "Choose Workspace, Fleet, or Linked" in body, "Drive should let Captains return to the root overview")
+    expect("item.root_overview ? rootTooltip(rootById(itemRoot(item)))" in body, "Drive root overview rows should carry root tooltips")
+    expect("renderRootIcon(rootById(itemRoot(item)))" in body, "Drive center-pane root rows should use the same root icons as the tree")
     expect("hermes-drive-confirm" in body and "expectedText" in body, "Risky Drive actions should use in-app typed confirmations")
     expect('requestJSON("/batch", { action: "restore"' in body, "Drive UI should use batch restore so partial failures are visible")
     expect('function copySelectedWithPrompt()' in body and 'openDestinationDialog("copy"' in body, "Drive UI should expose selected batch copy")
@@ -1596,6 +1617,7 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect("z-index: 2147483000" in style, "Drive fullscreen preview should sit above the Hermes nav")
     expect(".hermes-drive-pdf-preview" in style and ".hermes-drive-browser-preview" in style and ".hermes-drive-table-preview" in style and ".hermes-drive-preview-fullscreen" in style, "Drive CSS should style inline and fullscreen previews")
     expect(".hermes-drive-selection-actions" in style and "flex-wrap: nowrap" in style, "Drive selected actions should stay on one row under the count")
+    expect(".hermes-drive-item.root-overview" in style and ".hermes-drive-items.grid .hermes-drive-item.root-overview" in style, "Drive CSS should make root parent folders readable in list and grid views")
     expect(".hermes-drive-destination" in style and ".hermes-drive-destination-body" in style, "Drive CSS should style the destination picker modal")
     expect("@media (max-width: 900px)" in style and ".hermes-drive-destination-body" in style and "grid-template-columns: 1fr;" in style, "Drive destination picker should collapse on mobile")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
@@ -1919,7 +1941,14 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             os.environ["CODE_WORKSPACE_ROOT"] = str(hermes_home / "secrets")
             code_sensitive_root_status = asyncio.run(code_api.status())
             code_sensitive_roots = {item["id"]: item for item in code_sensitive_root_status["roots"]}
-            expect(code_sensitive_roots["workspace"]["available"] is False, str(code_sensitive_root_status))
+            expect(code_sensitive_roots["workspace"]["available"] is True, str(code_sensitive_root_status))
+            expect(code_sensitive_roots["workspace"]["path"] == str(default_workspace), str(code_sensitive_root_status))
+            try:
+                asyncio.run(code_api.items(path="/", root="vault"))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 404, f"expected hidden vault alias to reject missing safe vault, got {exc!r}")
+            else:
+                raise AssertionError("expected hidden vault alias to reject missing safe vault")
             os.environ["TERMINAL_WORKSPACE_ROOT"] = str(hermes_home / "secrets")
             terminal_sensitive_status = asyncio.run(terminal_api.status())
             expect(terminal_sensitive_status["workspace_root_available"] is False, str(terminal_sensitive_status))
@@ -3996,6 +4025,7 @@ def main() -> int:
     test_install_arclink_plugins_prunes_legacy_dashboard_plugin_aliases()
     test_arclink_dashboard_plugins_expose_sanitized_access_state()
     test_arclink_drive_and_code_expose_writable_linked_shared_folders()
+    test_arclink_drive_code_share_request_broker_contract()
     test_arclink_drive_local_backend_file_operations_are_recoverable()
     test_arclink_drive_api_hardens_roots_uploads_and_batch_failures()
     test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore()

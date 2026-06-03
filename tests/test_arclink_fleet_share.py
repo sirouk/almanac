@@ -167,6 +167,27 @@ def test_sync_engine_converges_read_write_across_agents_and_flags_conflicts() ->
     print("PASS test_sync_engine_converges_read_write_across_agents_and_flags_conflicts")
 
 
+def test_member_working_copy_seeds_fleet_shared_resource_layout() -> None:
+    fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_layout_test")
+    tmp = Path(tempfile.mkdtemp())
+    hub = str(tmp / "hub.git")
+    working = tmp / "agent_a"
+    runner = fleet.SubprocessGitRunner()
+    fleet.ensure_hub_repo(runner, hub)
+    fleet.ensure_member_working_copy(runner, hub_ref=hub, working_path=str(working))
+    expected = {"Projects", "Research", "Repos", "Agents_KB", "Agents_Skills", "Agents_Plugins"}
+    for dirname in expected:
+        readme = working / dirname / "README.md"
+        expect(readme.is_file(), f"missing Fleet layout readme: {dirname}")
+    fleet.sync_member(runner, working_path=str(working), hub_ref=hub, deployment_id="dep_a")
+    clone = tmp / "agent_b"
+    fleet.ensure_member_working_copy(runner, hub_ref=hub, working_path=str(clone))
+    fleet.sync_member(runner, working_path=str(clone), hub_ref=hub, deployment_id="dep_b")
+    for dirname in expected:
+        expect((clone / dirname / "README.md").is_file(), f"Fleet layout should sync to peer: {dirname}")
+    print("PASS test_member_working_copy_seeds_fleet_shared_resource_layout")
+
+
 def test_worker_cycle_reconciles_and_syncs_all_agents() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_worker_test")
     fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_worker_test")
@@ -334,13 +355,14 @@ def main() -> int:
     test_ensure_share_and_membership_crud_is_idempotent()
     test_reconcile_tracks_active_agents_and_deregisters_removed_without_touching_hub()
     test_sync_engine_converges_read_write_across_agents_and_flags_conflicts()
+    test_member_working_copy_seeds_fleet_shared_resource_layout()
     test_worker_cycle_reconciles_and_syncs_all_agents()
     test_corrupt_working_copy_is_quarantined_and_recloned()
     test_git_arg_guard_rejects_option_injection()
     test_sync_member_surfaces_commit_failure_without_pushing()
     test_sync_local_is_env_driven_and_needs_no_db()
     test_reconcile_all_covers_every_captain_with_an_active_share()
-    print("PASS all 10 ArcLink fleet-share tests")
+    print("PASS all 11 ArcLink fleet-share tests")
     return 0
 
 

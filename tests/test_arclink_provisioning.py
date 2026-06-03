@@ -163,6 +163,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["ARCLINK_AGENT_TITLE"] == "the right hand", str(intent["environment"]))
     expect(intent["environment"]["HERMES_HOME"] == "/home/arclink/.hermes", str(intent["environment"]))
     expect(intent["environment"]["VAULT_DIR"] == "/srv/vault", str(intent["environment"]))
+    expect(intent["environment"]["ARCLINK_WORKSPACE_ROOT"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["DRIVE_ROOT"] == "/srv/vault", str(intent["environment"]))
     expect(intent["environment"]["CODE_WORKSPACE_ROOT"] == "/workspace", str(intent["environment"]))
     expect(intent["environment"]["DRIVE_LINKED_ROOT"] == "/linked-resources", str(intent["environment"]))
@@ -223,7 +224,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(intent["environment"]["QMD_REFRESH_LOCK_FILE"] == "/srv/memory/qmd-refresh.lock", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_MEMORY_SYNTH_STATUS_FILE"] == "/srv/memory/memory-synth/status.json", str(intent["environment"]))
     expect(intent["environment"]["ARCLINK_BACKEND_ALLOWED_CIDRS"] == "172.16.0.0/12", str(intent["environment"]))
-    for key in ("HERMES_HOME", "VAULT_DIR", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "DRIVE_LINKED_ROOT", "CODE_LINKED_ROOT", "ARCLINK_LINKED_RESOURCES_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
+    for key in ("HERMES_HOME", "VAULT_DIR", "ARCLINK_WORKSPACE_ROOT", "DRIVE_ROOT", "CODE_WORKSPACE_ROOT", "DRIVE_LINKED_ROOT", "CODE_LINKED_ROOT", "ARCLINK_LINKED_RESOURCES_ROOT", "TERMINAL_WORKSPACE_ROOT", "ARCLINK_DRIVE_ROOT", "ARCLINK_CODE_WORKSPACE_ROOT", "QMD_STATE_DIR", "STATE_DIR", "ARCLINK_MEMORY_SYNTH_STATE_DIR"):
         expect(not intent["environment"][key].startswith("/arcdata/"), f"{key} leaked host root")
     expect(services["nextcloud"]["volumes"][0]["source"] == intent["state_roots"]["nextcloud_html"], str(services["nextcloud"]))
     expect(services["nextcloud"]["environment"]["POSTGRES_HOST"] == "nextcloud-db", str(services["nextcloud"]))
@@ -348,6 +349,9 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         services["managed-context-install"]["environment"]["ARCLINK_HERMES_DOCS_VAULT_DIR"] == "/srv/vault/Agents_KB/hermes-agent-docs",
         str(services["managed-context-install"]),
     )
+    managed_context_volumes = {item["target"]: item["source"] for item in services["managed-context-install"]["volumes"]}
+    expect(managed_context_volumes["/fleet-shared"] == intent["state_roots"]["fleet_shared"], str(services["managed-context-install"]))
+    expect(services["managed-context-install"]["environment"]["ARCLINK_FLEET_SHARED_ROOT"] == "/fleet-shared", str(services["managed-context-install"]))
     expect({"source": "llm_router_api_key", "target": "/run/secrets/llm_router_api_key"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "dashboard_password", "target": "/run/secrets/dashboard_password"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))
     expect({"source": "dashboard_sso_secret", "target": "/run/secrets/dashboard_sso_secret"} in services["managed-context-install"]["secrets"], str(services["managed-context-install"]))

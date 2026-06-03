@@ -192,7 +192,7 @@ session, and accepted resources are listed at
 Accepted grants create living linked-resource projections backed by a manifest,
 owner revoke removes the projection and manifest entry, and Drive/Code allow
 recipient writes inside accepted shared folders plus copy/duplicate into the
-recipient's own Vault or Workspace without allowing reshare from the `Linked`
+recipient's own Workspace without allowing reshare from the `Linked`
 source. Linked git mutations remain blocked. Direct right-click browser
 share-link generation remains disabled. Drive and Code can expose a brokered
 `Share` action only when `ARCLINK_SHARE_REQUEST_BROKER_URL` or the

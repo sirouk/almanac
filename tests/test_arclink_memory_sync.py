@@ -309,7 +309,7 @@ def test_curator_fanout_writes_managed_payload_and_activation_trigger() -> None:
             expect("Agents_Skills/*/skills" in managed_payload["arclink-skill-ref"], managed_payload["arclink-skill-ref"])
             expect("Use arclink-ssot" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
             expect("start with this rail before searching repo files, docs" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
-            expect("qmd indexes text-like files anywhere under the shared vault root" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
+            expect("qmd indexes text-like files anywhere under the Workspace/vault root" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
             expect("Moves and renames change qmd\nsource paths" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
             expect("Raw qmd MCP initialize/session-id details are for explicit ArcLink" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])
             expect("retry the\nsame brokered ArcLink MCP tool once" in managed_payload["qmd-ref"], managed_payload["qmd-ref"])

@@ -12,10 +12,11 @@ Hermes `v2026.4.30` or newer.
 
 ## Roots
 
-- Workspace uses `CODE_WORKSPACE_ROOT` or `DRIVE_WORKSPACE_ROOT` when set,
-  otherwise `$HERMES_HOME/workspace`.
-- Vault uses `CODE_VAULT_ROOT`, `DRIVE_ROOT`,
-  `KNOWLEDGE_VAULT_ROOT`, `VAULT_DIR`, `~/Vault`, or `$HERMES_HOME/Vault`.
+- Workspace uses the first existing directory from `ARCLINK_WORKSPACE_ROOT`,
+  `ARCLINK_DRIVE_ROOT`, `DRIVE_ROOT`, `KNOWLEDGE_VAULT_ROOT`, `VAULT_DIR`,
+  `ARCLINK_CODE_WORKSPACE_ROOT`, `CODE_WORKSPACE_ROOT`, `DRIVE_WORKSPACE_ROOT`,
+  `~/Vault`, `$HERMES_HOME/Vault`, or `$HERMES_HOME/workspace`. `vault`
+  remains a hidden compatibility alias for older callers.
 - Fleet (the git-synced fleet shared folder) uses the first existing directory
   from `CODE_FLEET_SHARED_ROOT`, `ARCLINK_FLEET_SHARED_ROOT`, or
   `$HERMES_HOME/fleet-shared`.
@@ -24,8 +25,7 @@ Hermes `v2026.4.30` or newer.
 
 ## Behavior
 
-- Workspace, Vault, Fleet, and Linked are browsable as sibling roots when
-  available.
+- Workspace, Fleet, and Linked are browsable as sibling roots when available.
 - Search is inline above the tree.
 - File clicks open a rotating preview tab; double-click pins a tab.
 - Saves are explicit and protected by disk-hash conflict checks.
@@ -38,7 +38,7 @@ Hermes `v2026.4.30` or newer.
 - Direct share-link creation is not exposed from Code. When
   `CODE_SHARE_REQUEST_BROKER_URL` or `ARCLINK_SHARE_REQUEST_BROKER_URL` is
   configured together with `CODE_SHARE_REQUEST_BROKER_TOKEN_FILE` or
-  `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE`, writable Workspace/Vault items
+  `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE`, writable Workspace items
   expose a brokered `Request Share` action that posts to `/share/request` using
   ArcLink share-grant semantics. The payload includes the owner deployment id
   from `ARCLINK_DEPLOYMENT_ID` or `state/arclink-web-access.json`, and the route
@@ -50,7 +50,7 @@ Hermes `v2026.4.30` or newer.
   while keeping the Linked root itself system-managed. File reads, previews,
   repository discovery, git status, and git diff are allowed; sharing and git
   mutations from Linked are rejected. Duplicate from Linked can still write a
-  new owned copy into Workspace or Vault without granting reshare.
+  new owned copy into Workspace or Fleet without granting reshare.
 - Text, Markdown, PDF, image, audio, and video previews can open in tabs and
   full-screen preview mode when browser-supported.
 

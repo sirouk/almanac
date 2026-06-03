@@ -399,6 +399,7 @@ Description=ArcLink Hermes dashboard for $AGENT_ID
 [Service]
 $(systemd_env_line HERMES_HOME "$HERMES_HOME")
 $(systemd_utf8_env_lines)
+$(systemd_env_line ARCLINK_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
 $(systemd_env_line DRIVE_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
 $(systemd_env_line CODE_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")
 $(systemd_env_line TERMINAL_WORKSPACE_ROOT "$ARCLINK_AGENT_WORKSPACE_DIR")

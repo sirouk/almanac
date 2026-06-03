@@ -135,6 +135,29 @@ _MAX_TEXT_BYTES = 1_000_000
 _SEARCH_LIMIT = 300
 _MAX_CHILD_COUNT = 999
 _SHARE_REQUEST_BROKER_TOKEN_HEADER = "X-ArcLink-Share-Request-Broker-Token"
+_ROOT_METADATA = {
+    "workspace": {
+        "label": "Workspace",
+        "icon": "workspace",
+        "tooltip": "This Hermes Agent's own writable workspace: Projects, Repos, Research, and local knowledge.",
+        "description": "This Hermes Agent's own writable workspace: Projects, Repos, Research, and local knowledge.",
+        "order": 10,
+    },
+    "fleet": {
+        "label": "Fleet",
+        "icon": "fleet",
+        "tooltip": "Shared read/write space for this Captain's fleet of ArcPods, synced across machines.",
+        "description": "Shared read/write space for this Captain's fleet of ArcPods, synced across machines.",
+        "order": 20,
+    },
+    "linked": {
+        "label": "Linked",
+        "icon": "linked",
+        "tooltip": "Folders shared with you from other Captains or ArcPods; accepted read/write shares can be edited here.",
+        "description": "Folders shared with you from other Captains or ArcPods; accepted read/write shares can be edited here.",
+        "order": 30,
+    },
+}
 
 
 def _hermes_home() -> Path:
@@ -303,6 +326,7 @@ def _candidate_vault_roots() -> list[Path]:
     home = Path(os.environ.get("HOME") or str(Path.home())).expanduser()
     candidates: list[Path] = []
     for value in (
+        os.environ.get("ARCLINK_WORKSPACE_ROOT"),
         os.environ.get("DRIVE_ROOT"),
         os.environ.get("KNOWLEDGE_VAULT_ROOT"),
         os.environ.get("AGENT_VAULT_DIR"),
@@ -322,7 +346,14 @@ def _candidate_vault_roots() -> list[Path]:
 def _candidate_workspace_roots() -> list[Path]:
     candidates: list[Path] = []
     for value in (
+        os.environ.get("ARCLINK_WORKSPACE_ROOT"),
         os.environ.get("DRIVE_WORKSPACE_ROOT"),
+        os.environ.get("ARCLINK_DRIVE_ROOT"),
+        os.environ.get("DRIVE_ROOT"),
+        os.environ.get("KNOWLEDGE_VAULT_ROOT"),
+        os.environ.get("AGENT_VAULT_DIR"),
+        os.environ.get("VAULT_DIR"),
+        os.environ.get("ARCLINK_CODE_WORKSPACE_ROOT"),
         os.environ.get("CODE_WORKSPACE_ROOT"),
     ):
         if value:
@@ -470,6 +501,15 @@ def _first_existing_dir(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _same_root(left: Path | None, right: Path | None) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return False
+
+
 def _local_root() -> Path | None:
     return _first_existing_dir(_candidate_vault_roots())
 
@@ -538,15 +578,23 @@ def _root_descriptor(
     webdav_available: bool = False,
     read_only: bool = False,
     share_request_enabled: bool = False,
+    resource_root: str = "",
 ) -> dict[str, Any]:
     available = root is not None
     child_count, child_count_truncated = _visible_child_count(root_id, root, root) if root is not None else (0, False)
+    metadata = _ROOT_METADATA.get(root_id, {})
     return {
         "id": root_id,
-        "label": label,
+        "label": str(metadata.get("label") or label),
+        "icon": str(metadata.get("icon") or root_id),
+        "tooltip": str(metadata.get("tooltip") or ""),
+        "description": str(metadata.get("description") or ""),
+        "order": int(metadata.get("order") or 100),
         "available": available,
         "backend": "local" if available else "unavailable",
         "path": str(root) if root else "",
+        "display_path": "/",
+        "resource_root": resource_root or root_id,
         "child_count": child_count,
         "child_count_truncated": child_count_truncated,
         "read_only": read_only,
@@ -561,20 +609,17 @@ def _root_descriptor(
 
 
 def _local_root_descriptors(webdav_available: bool = False, share_request_enabled: bool = False) -> list[dict[str, Any]]:
+    vault = _first_existing_dir(_candidate_vault_roots())
+    workspace = _first_existing_dir(_candidate_workspace_roots()) or vault
+    workspace_resource_root = "vault" if _same_root(workspace, vault) else "workspace"
     return [
-        _root_descriptor(
-            "vault",
-            "Vault",
-            _first_existing_dir(_candidate_vault_roots()),
-            webdav_available=webdav_available,
-            share_request_enabled=share_request_enabled,
-        ),
         _root_descriptor(
             "workspace",
             "Workspace",
-            _first_existing_dir(_candidate_workspace_roots()),
+            workspace,
             webdav_available=webdav_available,
             share_request_enabled=share_request_enabled,
+            resource_root=workspace_resource_root,
         ),
         _root_descriptor(
             "fleet",
@@ -591,7 +636,7 @@ def _local_root_descriptors(webdav_available: bool = False, share_request_enable
 
 
 def _default_root_id(roots: list[dict[str, Any]]) -> str:
-    for preferred in ("vault", "workspace"):
+    for preferred in ("workspace", "fleet", "linked"):
         for root in roots:
             if root.get("id") == preferred and root.get("available"):
                 return preferred
@@ -603,6 +648,17 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
     roots = _local_root_descriptors()
     if not root_id:
         root_id = _default_root_id(roots)
+    if root_id == "vault":
+        vault = _first_existing_dir(_candidate_vault_roots())
+        if vault is None:
+            raise HTTPException(status_code=404, detail="Workspace root is not available")
+        return _root_descriptor(
+            "workspace",
+            "Workspace",
+            vault,
+            share_request_enabled=bool(_share_request_state().get("enabled")),
+            resource_root="vault",
+        )
     if root_id not in {"vault", "workspace", "fleet", "linked"}:
         raise HTTPException(status_code=400, detail="Unknown Drive root")
     for root in roots:
@@ -635,7 +691,7 @@ def _share_request_payload(payload: dict[str, Any], ctx: dict[str, Any], target:
         "contract": "arclink-share-grants",
         "source_plugin": "drive",
         "owner_deployment_id": owner_deployment,
-        "resource_root": str(ctx.get("id") or "vault"),
+        "resource_root": str(ctx.get("resource_root") or ctx.get("id") or "vault"),
         "resource_path": _display_path(relative),
         "resource_kind": "drive",
         "item_kind": _share_item_kind(target),

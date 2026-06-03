@@ -620,7 +620,7 @@ Captain a clean next move.
 
 The complete ArcPod dashboard should make Hermes feel like a real workstation:
 
-- Drive: browse Workspace, Vault, and Linked roots; upload files and folders;
+- Drive: browse Workspace, Fleet, and Linked roots; upload files and folders;
   preview common content; create, rename, move, delete, restore, search, and
   request shares; clearly mark writable accepted shared folders under Linked.
 - Code: edit workspace files, browse repos, preview content, inspect git

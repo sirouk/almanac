@@ -1219,6 +1219,9 @@ def _render_services(
                 "HERMES_HOME": env["HERMES_HOME"],
                 "RUNTIME_DIR": "/opt/arclink/runtime",
                 "VAULT_DIR": CONTAINER_VAULT_DIR,
+                "ARCLINK_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
+                "DRIVE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
+                "CODE_FLEET_SHARED_ROOT": CONTAINER_FLEET_SHARED_DIR,
                 "ARCLINK_HERMES_DOCS_STATE_DIR": "/tmp/arclink-hermes-docs-src",
                 "ARCLINK_HERMES_DOCS_VAULT_DIR": f"{CONTAINER_VAULT_DIR}/Agents_KB/hermes-agent-docs",
                 "ARCLINK_DEPLOYMENT_ID": deployment_id,
@@ -1260,6 +1263,7 @@ def _render_services(
             volumes=[
                 {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
                 vault_volume,
+                fleet_shared_volume,
             ],
             secrets=[
                 {"source": provider_secret_name, "target": secret_target[provider_secret_name]},
@@ -1489,6 +1493,7 @@ def render_arclink_provisioning_intent(
         "NEXTCLOUD_DB_PASSWORD_REF": secret_refs["nextcloud_db_password"],
         "HERMES_HOME": CONTAINER_HERMES_HOME,
         "VAULT_DIR": CONTAINER_VAULT_DIR,
+        "ARCLINK_WORKSPACE_ROOT": CONTAINER_VAULT_DIR,
         "DRIVE_ROOT": CONTAINER_VAULT_DIR,
         "CODE_WORKSPACE_ROOT": CONTAINER_CODE_WORKSPACE_DIR,
         "DRIVE_LINKED_ROOT": CONTAINER_LINKED_RESOURCES_DIR,

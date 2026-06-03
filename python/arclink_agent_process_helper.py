@@ -353,6 +353,7 @@ def _require_env(env: Any, *, unix_user: str, home: Path, hermes_home: Path, wor
         "USER": unix_user,
         "LOGNAME": unix_user,
         "HERMES_HOME": str(hermes_home),
+        "ARCLINK_WORKSPACE_ROOT": str(workspace),
         "DRIVE_WORKSPACE_ROOT": str(workspace),
         "CODE_WORKSPACE_ROOT": str(workspace),
         "TERMINAL_WORKSPACE_ROOT": str(workspace),

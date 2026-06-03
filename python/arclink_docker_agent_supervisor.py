@@ -614,6 +614,7 @@ def user_env(cfg: Config, agent: dict[str, Any], home: Path, hermes_home: Path) 
             "USER": unix_user,
             "LOGNAME": unix_user,
             "HERMES_HOME": str(hermes_home),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace_root),
             "DRIVE_WORKSPACE_ROOT": str(workspace_root),
             "CODE_WORKSPACE_ROOT": str(workspace_root),
             "TERMINAL_WORKSPACE_ROOT": str(workspace_root),

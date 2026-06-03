@@ -11,14 +11,14 @@ Hermes `v2026.4.30` or newer.
 
 ## Roots
 
-Drive exposes four sibling tree roots in this order: Vault, Workspace, Fleet,
-and Linked. The default selected root is Vault, then Workspace.
+Drive exposes three sibling tree roots in this order: Workspace, Fleet, and
+Linked. `vault` remains a hidden compatibility alias for older callers.
 
-- Vault uses the first existing directory from `DRIVE_ROOT`,
-  `KNOWLEDGE_VAULT_ROOT`, `AGENT_VAULT_DIR`, `VAULT_DIR`, `~/Vault`, or
-  `$HERMES_HOME/Vault`.
-- Workspace uses the first existing directory from `DRIVE_WORKSPACE_ROOT`,
-  `CODE_WORKSPACE_ROOT`, or `$HERMES_HOME/workspace`.
+- Workspace uses the first existing directory from `ARCLINK_WORKSPACE_ROOT`,
+  `DRIVE_WORKSPACE_ROOT`, `ARCLINK_DRIVE_ROOT`, `DRIVE_ROOT`,
+  `KNOWLEDGE_VAULT_ROOT`, `AGENT_VAULT_DIR`, `VAULT_DIR`,
+  `ARCLINK_CODE_WORKSPACE_ROOT`, `CODE_WORKSPACE_ROOT`, or
+  `$HERMES_HOME/workspace`.
 - Fleet (the read-write git-synced fleet shared folder) uses the first existing
   directory from `DRIVE_FLEET_SHARED_ROOT`, `ARCLINK_FLEET_SHARED_ROOT`, or
   `$HERMES_HOME/fleet-shared`.
@@ -29,7 +29,7 @@ and Linked. The default selected root is Vault, then Workspace.
 
 ## Behavior
 
-- Vault, Workspace, Fleet, and Linked are sibling tree roots when available.
+- Workspace, Fleet, and Linked are sibling tree roots when available.
   Workspace and Fleet are writable; the Fleet root is the git-synced fleet
   shared folder. Linked is system-managed (see below).
 - Search traverses available roots.
@@ -40,7 +40,7 @@ and Linked. The default selected root is Vault, then Workspace.
 - Direct share-link creation is not exposed from Drive. When
   `DRIVE_SHARE_REQUEST_BROKER_URL` or `ARCLINK_SHARE_REQUEST_BROKER_URL` is
   configured together with `DRIVE_SHARE_REQUEST_BROKER_TOKEN_FILE` or
-  `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE`, writable Vault/Workspace items
+  `ARCLINK_SHARE_REQUEST_BROKER_TOKEN_FILE`, writable Workspace items
   expose a brokered `Request Share` action that posts to `/share/request` using
   ArcLink share-grant semantics. The payload includes the owner deployment id
   from `ARCLINK_DEPLOYMENT_ID` or `state/arclink-web-access.json`, and the route
@@ -52,7 +52,7 @@ and Linked. The default selected root is Vault, then Workspace.
   root itself system-managed. Browse, search, preview, download, upload, folder
   creation, rename, move, delete, and restore are confined to the accepted
   folder source. Sharing from Linked stays disabled, and copy/duplicate can
-  still create owned copies in Vault or Workspace without granting reshare.
+  still create owned copies in Workspace or Fleet without granting reshare.
 - Delete moves local files into `.drive-trash`.
 - Text, Markdown, JSON, CSV/TSV, PDF, image, audio, video, and browser-native
   file previews render in place when browser-supported.

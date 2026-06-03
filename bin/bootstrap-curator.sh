@@ -657,6 +657,10 @@ def discover_org_skill_external_dirs(home: Path) -> list[str]:
         value = str(os.environ.get(env_key) or "").strip()
         if value:
             bases.append(Path(value).expanduser() / "Agents_Skills")
+    for env_key in ("ARCLINK_FLEET_SHARED_ROOT", "DRIVE_FLEET_SHARED_ROOT", "CODE_FLEET_SHARED_ROOT"):
+        value = str(os.environ.get(env_key) or "").strip()
+        if value:
+            bases.append(Path(value).expanduser() / "Agents_Skills")
     bases.append(Path(os.environ.get("HOME") or str(Path.home())).expanduser() / "ArcLink" / "Agents_Skills")
     bases.append(home / "ArcLink" / "Agents_Skills")
     bases.append(home / "Vault" / "Agents_Skills")

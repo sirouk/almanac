@@ -931,11 +931,57 @@ def test_remote_fleet_share_sync_mounts_worker_local_git_key() -> None:
     expect(targets["/run/arclink-fleet-share/id_ed25519"]["source"] == "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519", str(sync))
     expect(targets["/run/arclink-fleet-share/id_ed25519"]["read_only"] is True, str(sync))
     expect(targets["/run/arclink-fleet-share/id_ed25519"]["source_kind"] == "file", str(sync))
+    expect(targets["/run/arclink-fleet-share/id_ed25519"]["remote_prepare"] == "file", str(sync))
     expect(targets["/run/arclink-fleet-share/known_hosts"]["source_kind"] == "file", str(sync))
     expect(targets["/run/arclink-fleet-share/known_hosts"].get("read_only") is not True, str(sync))
+    expect(targets["/run/arclink-fleet-share/known_hosts"]["remote_prepare"] == "file", str(sync))
     expect("GIT_SSH_COMMAND" in sync["environment"], str(sync["environment"]))
     expect("BatchMode=yes" in sync["environment"]["GIT_SSH_COMMAND"], str(sync["environment"]))
     print("PASS test_remote_fleet_share_sync_mounts_worker_local_git_key")
+
+
+def test_remote_arcpod_marks_app_writable_binds_for_ssh_prepare() -> None:
+    control = load_module("arclink_control.py", "arclink_control_provisioning_remote_prepare_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_remote_prepare_test")
+    conn = memory_db(control)
+    seed_deployment(control, conn)
+    intent = provisioning.render_arclink_provisioning_intent(
+        conn,
+        deployment_id="dep_1",
+        ingress_mode="tailscale",
+        tailscale_dns_name="worker-a.tailnet.ts.net",
+        env={
+            "ARCLINK_ARCPOD_CONTROL_NETWORK_MODE": "remote",
+            "ARCLINK_CONTROL_PRIVATE_BASE_URL": "https://control.wg.internal",
+            "ARCLINK_WIREGUARD_CONTROL_IP": "10.44.0.1",
+        },
+    )
+    services = intent["compose"]["services"]
+    expected_targets = {
+        "/home/arclink/.hermes",
+        "/home/arclink/.qmd",
+        "/srv/memory",
+        "/srv/vault",
+        "/workspace",
+        "/linked-resources",
+        "/fleet-shared",
+    }
+    seen: dict[str, dict] = {}
+    for service in services.values():
+        for volume in service.get("volumes", []):
+            if volume.get("target") in expected_targets:
+                seen[volume["target"]] = volume
+    expect(expected_targets == set(seen), str(seen))
+    for target, volume in seen.items():
+        expect(volume["remote_prepare"] == "directory", f"{target}: {volume}")
+        expect(volume["remote_prepare_image"] == "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}", f"{target}: {volume}")
+    nextcloud_db_targets = {
+        volume["target"]: volume
+        for volume in services["nextcloud-db"]["volumes"]
+    }
+    expect("/var/lib/postgresql/data" in nextcloud_db_targets, str(nextcloud_db_targets))
+    expect("remote_prepare" not in nextcloud_db_targets["/var/lib/postgresql/data"], str(nextcloud_db_targets))
+    print("PASS test_remote_arcpod_marks_app_writable_binds_for_ssh_prepare")
 
 
 def main() -> int:
@@ -957,7 +1003,8 @@ def main() -> int:
     test_remote_private_mesh_worker_uses_private_control_urls_without_control_docker_network()
     test_remote_worker_derives_wireguard_fleet_share_hub_when_unset()
     test_remote_fleet_share_sync_mounts_worker_local_git_key()
-    print("PASS all 18 ArcLink provisioning tests")
+    test_remote_arcpod_marks_app_writable_binds_for_ssh_prepare()
+    print("PASS all 19 ArcLink provisioning tests")
     return 0
 
 

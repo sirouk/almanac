@@ -37,6 +37,10 @@ _SECRET_REF_RE = re.compile(r"^secret://[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
 _RUN_SECRET_RE = re.compile(r"^/run/secrets/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _DEPLOYMENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _COMPOSE_PROJECT_RE = re.compile(r"^arclink-[a-z0-9][a-z0-9_-]{0,127}$")
+_REMOTE_PREPARE_FILE = "remote-prepare.json"
+_REMOTE_PREPARE_KINDS = {"directory", "file"}
+_IMAGE_EXPR_RE = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|-)([^}]*))?\}$")
+_IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]*$")
 DEPLOYMENT_EXEC_BROKER_TOKEN_HEADER = "X-ArcLink-Deployment-Exec-Broker-Token"
 
 
@@ -549,6 +553,18 @@ class SshDockerComposeRunner:
             if cleanup_error:
                 message = f"{message}; {cleanup_error}"
             raise ArcLinkExecutorError(message)
+        if args and args[0] == "up":
+            prepare_error = self._prepare_remote_app_binds(
+                target=target,
+                env_file=env_file,
+                compose_file=compose_file,
+            )
+            if prepare_error:
+                cleanup_error = self._cleanup_remote_secrets(target=target, secrets_root=secrets_root)
+                message = prepare_error
+                if cleanup_error:
+                    message = f"{message}; {cleanup_error}"
+                raise ArcLinkExecutorError(message)
         remote_cmd = " ".join(
             _shell_quote(part)
             for part in (
@@ -588,6 +604,21 @@ class SshDockerComposeRunner:
         )
         if cleanup.returncode != 0:
             return _safe_command_error("ssh cleanup compose secrets", cleanup.stderr or cleanup.stdout)
+        return ""
+
+    def _prepare_remote_app_binds(self, *, target: str, env_file: str, compose_file: str) -> str:
+        entries = _load_remote_prepare_entries(compose_file=compose_file, env_file=env_file)
+        if not entries:
+            return ""
+        for command in _remote_prepare_commands(docker_binary=self.docker_binary, entries=entries):
+            prepare = subprocess.run(
+                (self.ssh_binary, *self.ssh_options, target, command),
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            if prepare.returncode != 0:
+                return _safe_command_error("ssh prepare app bind mounts", prepare.stderr or prepare.stdout)
         return ""
 
 
@@ -1846,6 +1877,13 @@ def _materialize_docker_compose_files(
         compose_doc["secrets"] = compose_secrets
     compose_file.write_text(json.dumps(compose_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     compose_file.chmod(0o600)
+    remote_prepare_doc = _compose_remote_prepare_doc(services, deployment_root=root)
+    remote_prepare_file = config_root / _REMOTE_PREPARE_FILE
+    if remote_prepare_doc["paths"]:
+        remote_prepare_file.write_text(json.dumps(remote_prepare_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        remote_prepare_file.chmod(0o600)
+    elif remote_prepare_file.exists():
+        remote_prepare_file.unlink()
 
 
 def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
@@ -1891,6 +1929,26 @@ def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
     if secrets:
         out["secrets"] = secrets
     return out
+
+
+def _compose_remote_prepare_doc(services: Mapping[str, Any], *, deployment_root: Path) -> dict[str, Any]:
+    paths: dict[str, dict[str, str]] = {}
+    for service in services.values():
+        if not isinstance(service, Mapping):
+            continue
+        service_image = str(service.get("image") or "arclink/app:local").strip() or "arclink/app:local"
+        for volume in service.get("volumes", []) or []:
+            if not isinstance(volume, Mapping):
+                continue
+            kind = str(volume.get("remote_prepare") or "").strip().lower()
+            if kind not in _REMOTE_PREPARE_KINDS:
+                continue
+            source = _normalized_remote_prepare_path(str(volume.get("source") or ""))
+            if not _remote_prepare_path_allowed(source, kind=kind, deployment_root=deployment_root):
+                continue
+            image = str(volume.get("remote_prepare_image") or service_image).strip() or service_image
+            paths[source] = {"path": source, "kind": kind, "image": image}
+    return {"version": 1, "paths": sorted(paths.values(), key=lambda item: (item["path"], item["kind"]))}
 
 
 def _materialize_compose_secret_file(*, name: str, resolved: ResolvedSecretFile, secrets_root: Path) -> str:
@@ -1999,6 +2057,151 @@ def _env_quote(value: str) -> str:
 
 def _shell_quote(value: str) -> str:
     return shlex.quote(str(value))
+
+
+def _normalized_remote_prepare_path(value: str) -> str:
+    clean = str(value or "").strip()
+    if not clean.startswith("/") or clean == "/" or "\x00" in clean or "\n" in clean:
+        return ""
+    normalized = os.path.normpath(clean)
+    if normalized in {"", ".", "/"}:
+        return ""
+    return normalized
+
+
+def _read_compose_env_file(path: str) -> dict[str, str]:
+    env_path = Path(path)
+    values: dict[str, str] = {}
+    if not env_path.exists():
+        return values
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        clean_key = key.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean_key):
+            continue
+        try:
+            parsed = shlex.split(value, posix=True)
+        except ValueError:
+            parsed = [value]
+        values[clean_key] = parsed[0] if parsed else ""
+    return values
+
+
+def _resolve_remote_prepare_image(image: str, env: Mapping[str, str]) -> str:
+    clean = str(image or "").strip() or "arclink/app:local"
+    match = _IMAGE_EXPR_RE.fullmatch(clean)
+    if match:
+        variable, operator, default = match.groups()
+        value = str(env.get(variable) or "")
+        if not operator:
+            clean = value
+        elif value or (operator == "-" and variable in env):
+            clean = value
+        else:
+            clean = default or ""
+    clean = clean.strip() or "arclink/app:local"
+    if not _IMAGE_REF_RE.fullmatch(clean) or "$" in clean:
+        raise ArcLinkExecutorError("ArcLink remote bind prepare image reference is invalid")
+    return clean
+
+
+def _remote_prepare_path_allowed(path: str, *, kind: str, deployment_root: Path) -> bool:
+    normalized = _normalized_remote_prepare_path(path)
+    if not normalized or kind not in _REMOTE_PREPARE_KINDS:
+        return False
+    deployment_prefix = os.path.normpath(str(deployment_root.resolve(strict=False)))
+    if normalized == deployment_prefix or normalized.startswith(f"{deployment_prefix}/"):
+        return True
+    if kind == "file" and normalized.startswith("/var/lib/arclink-fleet/"):
+        return True
+    return False
+
+
+def _load_remote_prepare_entries(*, compose_file: str, env_file: str) -> list[dict[str, str]]:
+    manifest_path = Path(compose_file).resolve().parent / _REMOTE_PREPARE_FILE
+    if not manifest_path.exists():
+        return []
+    try:
+        doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ArcLinkExecutorError("ArcLink remote bind prepare manifest is invalid JSON") from exc
+    raw_paths = doc.get("paths") if isinstance(doc, Mapping) else None
+    if not isinstance(raw_paths, list):
+        raise ArcLinkExecutorError("ArcLink remote bind prepare manifest is missing paths")
+    env = _read_compose_env_file(env_file)
+    deployment_root = Path(compose_file).resolve().parents[1]
+    entries: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in raw_paths:
+        if not isinstance(raw, Mapping):
+            raise ArcLinkExecutorError("ArcLink remote bind prepare manifest path is invalid")
+        kind = str(raw.get("kind") or "").strip().lower()
+        path = _normalized_remote_prepare_path(str(raw.get("path") or ""))
+        if not _remote_prepare_path_allowed(path, kind=kind, deployment_root=deployment_root):
+            raise ArcLinkExecutorError("ArcLink remote bind prepare path is outside allowed ArcPod roots")
+        image = _resolve_remote_prepare_image(str(raw.get("image") or ""), env)
+        key = (path, kind, image)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append({"path": path, "kind": kind, "image": image})
+    return entries
+
+
+def _remote_prepare_commands(*, docker_binary: str, entries: list[dict[str, str]]) -> list[str]:
+    by_image: dict[str, list[dict[str, str]]] = {}
+    for entry in entries:
+        by_image.setdefault(entry["image"], []).append(entry)
+    commands: list[str] = []
+    for image, items in sorted(by_image.items()):
+        lines = [
+            "set -eu",
+            f"docker_bin={_shell_quote(docker_binary or 'docker')}",
+            f"image={_shell_quote(image)}",
+            'uid="$("$docker_bin" run --rm --entrypoint /bin/sh --user root "$image" -lc \'id -u arclink\')"',
+            'gid="$("$docker_bin" run --rm --entrypoint /bin/sh --user root "$image" -lc \'id -g arclink\')"',
+        ]
+        for item in sorted(items, key=lambda value: (value["kind"], value["path"])):
+            path = item["path"]
+            if item["kind"] == "file":
+                parent = os.path.dirname(path)
+                lines.extend(
+                    [
+                        f"mkdir -p -- {_shell_quote(parent)}",
+                        f"touch -- {_shell_quote(path)}",
+                        (
+                            '"$docker_bin" run --rm --entrypoint /bin/sh --user root '
+                            '-e ARCLINK_TARGET_UID="$uid" -e ARCLINK_TARGET_GID="$gid" '
+                            f"-v {_shell_quote(f'{path}:/mnt/arclink-bind-file')} "
+                            '"$image" -lc '
+                            + _shell_quote(
+                                'chown "$ARCLINK_TARGET_UID:$ARCLINK_TARGET_GID" /mnt/arclink-bind-file '
+                                '&& chmod u+rw,go-rwx /mnt/arclink-bind-file'
+                            )
+                        ),
+                    ]
+                )
+            else:
+                lines.extend(
+                    [
+                        f"mkdir -p -- {_shell_quote(path)}",
+                        (
+                            '"$docker_bin" run --rm --entrypoint /bin/sh --user root '
+                            '-e ARCLINK_TARGET_UID="$uid" -e ARCLINK_TARGET_GID="$gid" '
+                            f"-v {_shell_quote(f'{path}:/mnt/arclink-bind')} "
+                            '"$image" -lc '
+                            + _shell_quote(
+                                'chown "$ARCLINK_TARGET_UID:$ARCLINK_TARGET_GID" /mnt/arclink-bind '
+                                '&& chmod u+rwx,g+rx /mnt/arclink-bind'
+                            )
+                        ),
+                    ]
+                )
+        commands.append("\n".join(lines))
+    return commands
 
 
 def _safe_command_error(operation: str, output: str) -> str:

@@ -1362,9 +1362,9 @@ def test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots() -> 
         outside_key = Path(tmpdir) / "worker-local" / "fleet-share-ssh" / "id_ed25519"
         intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
         intent["compose"]["services"]["dashboard"]["volumes"] = [
-            {"source": str(root / "config"), "target": "/config"},
+            {"source": str(root / "config"), "target": "/config", "remote_prepare": "directory"},
             {"source": str(outside_key), "target": "/run/arclink-fleet-share/id_ed25519", "read_only": True, "source_kind": "file"},
-            {"source": str(outside_dir), "target": "/fleet"},
+            {"source": str(outside_dir), "target": "/fleet", "remote_prepare": "directory"},
         ]
         intent["compose"]["services"]["nextcloud-db"]["volumes"] = [
             {"source": str(root / "nextcloud" / "db"), "target": "/var/lib/postgresql/data"}
@@ -1402,6 +1402,11 @@ def test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots() -> 
         expect(not (root / "nextcloud" / "db").exists(), "SSH apply must not materialize worker-owned state roots")
         expect(not outside_dir.exists(), f"worker-local directory bind must not be created on control: {outside_dir}")
         expect(not outside_key.exists(), f"worker-local file bind must not be created on control: {outside_key}")
+        prepare_doc = json.loads((root / "config" / "remote-prepare.json").read_text(encoding="utf-8"))
+        prepare_paths = {item["path"] for item in prepare_doc["paths"]}
+        expect(str(root / "config") in prepare_paths, str(prepare_doc))
+        expect(str(outside_dir) not in prepare_paths, str(prepare_doc))
+        expect(str(root / "nextcloud" / "db") not in prepare_paths, str(prepare_doc))
         rendered_sources = {
             item["source"]
             for service in compose_doc["services"].values()
@@ -1411,6 +1416,78 @@ def test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots() -> 
         expect(str(outside_dir) in rendered_sources and str(outside_key) in rendered_sources, str(compose_doc))
         expect(runner.runs and runner.runs[0]["args"] == ("up", "-d", "--remove-orphans"), str(runner.runs))
     print("PASS test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots")
+
+
+def test_ssh_docker_runner_prepares_app_binds_before_compose_up() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_remote_prepare_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[tuple[str, ...]] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        call = tuple(str(part) for part in cmd)
+        calls.append(call)
+        return Proc(0, stdout="ok")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        compose_file = Path(tmpdir) / "dep" / "config" / "compose.yaml"
+        env_file = compose_file.parent / "arclink.env"
+        compose_file.parent.mkdir(parents=True)
+        compose_file.write_text("services: {}\n", encoding="utf-8")
+        env_file.write_text("ARCLINK_DOCKER_IMAGE='registry.example/arclink/app:test'\n", encoding="utf-8")
+        (compose_file.parent / "remote-prepare.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "paths": [
+                        {
+                            "path": str(Path(tmpdir) / "dep" / "state" / "hermes-home"),
+                            "kind": "directory",
+                            "image": "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}",
+                        },
+                        {
+                            "path": "/var/lib/arclink-fleet/fleet-share-ssh/known_hosts",
+                            "kind": "file",
+                            "image": "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}",
+                        },
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        try:
+            mod.subprocess.run = fake_run
+            runner = mod.SshDockerComposeRunner(
+                host="worker.example.test",
+                user="arclink",
+                allowed_hosts=("worker.example.test",),
+            )
+            runner.run(
+                ("up", "-d", "--remove-orphans"),
+                deployment_id="dep",
+                project_name="arclink-dep",
+                env_file=str(env_file),
+                compose_file=str(compose_file),
+            )
+        finally:
+            mod.subprocess.run = original_run
+
+    rendered_calls = [" ".join(call) for call in calls]
+    prepare_index = next(i for i, call in enumerate(rendered_calls) if "ssh prepare" not in call and "ARCLINK_TARGET_UID" in call)
+    compose_index = next(i for i, call in enumerate(rendered_calls) if "docker compose" in call)
+    expect(prepare_index < compose_index, str(rendered_calls))
+    prepare_call = rendered_calls[prepare_index]
+    expect("registry.example/arclink/app:test" in prepare_call, prepare_call)
+    expect("/mnt/arclink-bind-file" in prepare_call and "/mnt/arclink-bind" in prepare_call, prepare_call)
+    print("PASS test_ssh_docker_runner_prepares_app_binds_before_compose_up")
 
 
 def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
@@ -1769,6 +1846,7 @@ def main() -> int:
     test_live_docker_compose_lifecycle_project_override_requires_config_flag()
     test_live_docker_compose_file_preserves_service_ports()
     test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots()
+    test_ssh_docker_runner_prepares_app_binds_before_compose_up()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
@@ -1779,7 +1857,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 35 ArcLink executor tests")
+    print("PASS all 36 ArcLink executor tests")
     return 0
 
 

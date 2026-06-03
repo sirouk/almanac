@@ -938,6 +938,20 @@ def _service_networks(prefix: str, service_name: str, *, use_control_network: bo
     return _control_network(prefix, service_name)
 
 
+def _app_owned_volume(source: str, target: str, *, source_kind: str = "directory", read_only: bool = False) -> dict[str, Any]:
+    volume: dict[str, Any] = {
+        "source": source,
+        "target": target,
+        "remote_prepare": source_kind,
+        "remote_prepare_image": "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}",
+    }
+    if source_kind == "file":
+        volume["source_kind"] = "file"
+    if read_only:
+        volume["read_only"] = True
+    return volume
+
+
 def _service(
     *,
     image: str,
@@ -1025,23 +1039,16 @@ def _render_services(
     secret_target = {name: str(spec["target"]) for name, spec in compose_secrets.items()}
     provider_secret_name = "chutes_api_key" if "chutes_api_key" in secret_target else "llm_router_api_key"
     nextcloud_db_name = _postgres_db_name(prefix="nextcloud", deployment_id=deployment_id)
-    memory_volume = {"source": roots["memory"], "target": CONTAINER_MEMORY_STATE_DIR}
-    vault_volume = {"source": roots["vault"], "target": CONTAINER_VAULT_DIR}
-    workspace_volume = {"source": roots["code_workspace"], "target": CONTAINER_CODE_WORKSPACE_DIR}
-    linked_resources_volume = {
-        "source": roots["linked_resources"],
-        "target": CONTAINER_LINKED_RESOURCES_DIR,
-    }
-    fleet_shared_volume = {
-        "source": roots["fleet_shared"],
-        "target": CONTAINER_FLEET_SHARED_DIR,
-    }
+    memory_volume = _app_owned_volume(roots["memory"], CONTAINER_MEMORY_STATE_DIR)
+    vault_volume = _app_owned_volume(roots["vault"], CONTAINER_VAULT_DIR)
+    hermes_home_volume = _app_owned_volume(roots["hermes_home"], CONTAINER_HERMES_HOME)
+    qmd_volume = _app_owned_volume(roots["qmd"], CONTAINER_QMD_STATE_DIR)
+    workspace_volume = _app_owned_volume(roots["code_workspace"], CONTAINER_CODE_WORKSPACE_DIR)
+    linked_resources_volume = _app_owned_volume(roots["linked_resources"], CONTAINER_LINKED_RESOURCES_DIR)
+    fleet_shared_volume = _app_owned_volume(roots["fleet_shared"], CONTAINER_FLEET_SHARED_DIR)
     fleet_share_hub_volume = None
     if fleet_share_hub_host_ref and not _is_remote_git_ref(fleet_share_hub_host_ref):
-        fleet_share_hub_volume = {
-            "source": fleet_share_hub_host_ref,
-            "target": CONTAINER_FLEET_SHARE_HUB_DIR,
-        }
+        fleet_share_hub_volume = _app_owned_volume(fleet_share_hub_host_ref, CONTAINER_FLEET_SHARE_HUB_DIR)
     fleet_share_ssh_key_host_path = _safe_abs_host_path(env.get("ARCLINK_FLEET_SHARE_SSH_KEY_PATH", ""), label="fleet-share SSH key path")
     fleet_share_known_hosts_host_path = _safe_abs_host_path(
         env.get("ARCLINK_FLEET_SHARE_SSH_KNOWN_HOSTS_FILE", ""),
@@ -1080,20 +1087,20 @@ def _render_services(
         fleet_share_sync_volumes.append(fleet_share_hub_volume)
     if fleet_share_ssh_key_host_path:
         fleet_share_sync_volumes.append(
-            {
-                "source": fleet_share_ssh_key_host_path,
-                "target": fleet_share_ssh_key_target,
-                "read_only": True,
-                "source_kind": "file",
-            }
+            _app_owned_volume(
+                fleet_share_ssh_key_host_path,
+                fleet_share_ssh_key_target,
+                source_kind="file",
+                read_only=True,
+            )
         )
     if fleet_share_known_hosts_host_path:
         fleet_share_sync_volumes.append(
-            {
-                "source": fleet_share_known_hosts_host_path,
-                "target": fleet_share_known_hosts_target,
-                "source_kind": "file",
-            }
+            _app_owned_volume(
+                fleet_share_known_hosts_host_path,
+                fleet_share_known_hosts_target,
+                source_kind="file",
+            )
         )
     hermes_host_ports: list[str] = []
     if (
@@ -1123,7 +1130,7 @@ def _render_services(
             command=["hermes", "gateway", "run", "--replace"],
             environment=env,
             volumes=[
-                {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
+                hermes_home_volume,
                 vault_volume,
                 memory_volume,
                 workspace_volume,
@@ -1143,7 +1150,7 @@ def _render_services(
             command=["./bin/run-hermes-dashboard-proxy.sh"],
             environment=env,
             volumes=[
-                {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
+                hermes_home_volume,
                 vault_volume,
                 memory_volume,
                 workspace_volume,
@@ -1166,7 +1173,7 @@ def _render_services(
             environment=env,
             volumes=[
                 vault_volume,
-                {"source": roots["qmd"], "target": CONTAINER_QMD_STATE_DIR},
+                qmd_volume,
                 memory_volume,
             ],
             deploy=_limits("qmd-mcp"),
@@ -1330,7 +1337,7 @@ def _render_services(
                 "ARCLINK_CREW_DASHBOARDS_JSON": env.get("ARCLINK_CREW_DASHBOARDS_JSON", "[]"),
             },
             volumes=[
-                {"source": roots["hermes_home"], "target": CONTAINER_HERMES_HOME},
+                hermes_home_volume,
                 vault_volume,
                 fleet_shared_volume,
             ],

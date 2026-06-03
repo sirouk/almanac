@@ -56,6 +56,7 @@ from arclink_executor import (
     executor_for_fleet_host,
 )
 from arclink_fleet import ArcLinkFleetError, place_deployment, reconcile_fleet_observed_loads, register_fleet_host, remove_placement
+from arclink_fleet_share import SubprocessGitRunner, ensure_fleet_share, ensure_hub_repo
 from arclink_ingress import arclink_dns_records_for_teardown, mark_arclink_dns_torn_down, persist_arclink_dns_records
 from arclink_provisioning import (
     ARCLINK_PROVISIONING_SERVICE_NAMES,
@@ -648,6 +649,7 @@ def process_sovereign_deployment(
         metadata={"job_id": str(job["job_id"])},
     )
     try:
+        _ensure_deployment_fleet_share_hub(conn, deployment=deployment)
         deployment = _ensure_tailnet_service_ports(conn, deployment=deployment, worker=worker)
         result = _apply_deployment(conn, deployment=deployment, job=job, worker=worker, executor=executor)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
@@ -688,6 +690,17 @@ def process_sovereign_deployment(
             metadata={"job_id": str(job["job_id"]), "error": error},
         )
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "failed", "error": error}
+
+
+def _ensure_deployment_fleet_share_hub(conn: sqlite3.Connection, *, deployment: Mapping[str, Any]) -> dict[str, Any]:
+    user_id = str(deployment.get("user_id") or "").strip()
+    if not user_id:
+        raise ArcLinkSovereignWorkerError("deployment has no Captain user id for Fleet shared folder")
+    share = ensure_fleet_share(conn, owner_user_id=user_id)
+    hub_ref = str(share.get("hub_ref") or "").strip()
+    if hub_ref:
+        ensure_hub_repo(SubprocessGitRunner(), hub_ref)
+    return share
 
 
 def process_sovereign_teardown(

@@ -83,6 +83,7 @@ def worker_config(worker_mod, tmpdir, *, enabled=True, register_local=True, ingr
             "ARCLINK_CHUTES_BASE_URL": "https://llm.chutes.ai/v1",
             "ARCLINK_CHUTES_DEFAULT_MODEL": "moonshotai/Kimi-K2.6-TEE",
             "ARCLINK_SOVEREIGN_HANDOFF_REQUIRES_HERMES_HOME_READY": "0",
+            "ARCLINK_FLEET_SHARE_HUB_ROOT": f"{tmpdir}/captains",
         },
     )
 
@@ -238,6 +239,9 @@ def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     expect(len(results) == 1, str(results))
     result = results[0]
     expect(result["status"] == "applied", str(result))
+    share = conn.execute("SELECT owner_user_id, hub_ref, status FROM arclink_fleet_shares WHERE owner_user_id = 'user_1'").fetchone()
+    expect(share is not None and share["status"] == "active", str(dict(share or {})))
+    expect((Path(share["hub_ref"]) / "HEAD").is_file(), str(dict(share)))
     expect(result["placement"]["hostname"] == "worker-1.example.test", str(result))
     expect("dashboard" in result["services"], str(result))
     dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()

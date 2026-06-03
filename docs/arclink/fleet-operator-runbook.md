@@ -68,6 +68,21 @@ instead of an enrollment token.
 
 2. Run push-button registration from the Control Node:
 
+   Interactive:
+
+   ```bash
+   ./deploy.sh control register-worker
+   ```
+
+   The normal interactive flow asks for the inventory hostname and the
+   first-contact SSH host only. ArcLink derives the WireGuard endpoint from the
+   control node, assigns the worker tunnel IP, configures the worker, registers
+   the worker's long-lived fleet address as the WireGuard IP, syncs the peer,
+   and smoke-tests the private mesh. Use
+   `ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only for unusual networks.
+
+   Scriptable:
+
    ```bash
    ./deploy.sh control register-worker \
      --hostname worker-1 \
@@ -75,10 +90,7 @@ instead of an enrollment token.
      --bootstrap-remote \
      --bootstrap-ssh-host 203.0.113.10 \
      --bootstrap-ssh-user root \
-     --wireguard-private-ip 10.44.0.11 \
-     --tailscale-dns-name worker-1.tailnet.ts.net \
      --ssh-user arclink \
-     --region iad \
      --capacity-slots 4 \
      --json
    ```
@@ -95,15 +107,14 @@ instead of an enrollment token.
    state before callback and admits the worker only after the control callback
    succeeds.
 
-   Prefer a production private mesh/WireGuard address for `--ssh-host` and
-   `--wireguard-worker-ip`. The callback persists that private DNS/IP into
-   inventory and fleet-host metadata, so ArcPods placed on this worker render
-   their dashboard, Drive, Code, Terminal, and Notion links against the worker
-   that actually owns the containers. The control-node URL used by remote pods
-   for API and inference should be the control machine's private mesh ingress,
-   normally `ARCLINK_CONTROL_PRIVATE_BASE_URL` or
-   `ARCLINK_WIREGUARD_CONTROL_URL`. `--tailscale-dns-name` is optional access
-   compatibility metadata.
+   Prefer a production private mesh/WireGuard address for scriptable
+   `--ssh-host`; use `--bootstrap-ssh-host` for the provider/public first-contact
+   address. If `--wireguard-worker-ip` is omitted during remote bootstrap,
+   ArcLink assigns the next tunnel IP and uses it as the worker private DNS/IP.
+   The callback persists that private DNS/IP into inventory and fleet-host
+   metadata, so ArcPods placed on this worker render their dashboard, Drive,
+   Code, Terminal, and Notion links against the worker that actually owns the
+   containers. `--tailscale-dns-name` is optional access compatibility metadata.
    The bootstrap callback uses the public or Tailscale Control Node URL because
    the Control Node cannot know the worker WireGuard public key before the fresh
    worker generates it. After the callback, `register-worker` reads the

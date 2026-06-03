@@ -574,7 +574,7 @@ Sovereign Control Node:
   deploy.sh control fleet-key       # print the Sovereign fleet SSH public key
   deploy.sh control fleet-key --rotate --json
   deploy.sh control register-worker # SSH into and join a remote fleet worker
-  deploy.sh control register-worker --hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --wireguard-private-ip 10.44.0.11 --json
+  deploy.sh control register-worker --hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --json
   deploy.sh control enrollment mint # mint a one-time worker enrollment token
   deploy.sh control enrollment rotate-secret # rotate HMAC root and revoke pending tokens
   deploy.sh control inventory list  # list inventory machines and ASU load
@@ -8742,6 +8742,79 @@ control_wireguard_host_path() {
   esac
 }
 
+is_public_ipv4_literal() {
+  local ip="${1:-}" a="" b="" c="" d="" octet=""
+
+  [[ "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  a="${BASH_REMATCH[1]}"
+  b="${BASH_REMATCH[2]}"
+  c="${BASH_REMATCH[3]}"
+  d="${BASH_REMATCH[4]}"
+  for octet in "$a" "$b" "$c" "$d"; do
+    (( octet >= 0 && octet <= 255 )) || return 1
+  done
+  (( a == 0 || a == 10 || a == 127 || a >= 224 )) && return 1
+  (( a == 169 && b == 254 )) && return 1
+  (( a == 172 && b >= 16 && b <= 31 )) && return 1
+  (( a == 192 && b == 168 )) && return 1
+  (( a == 100 && b >= 64 && b <= 127 )) && return 1
+  return 0
+}
+
+first_public_ipv4_from_text() {
+  local token=""
+
+  for token in $*; do
+    token="${token//,/ }"
+    token="${token%%/*}"
+    if is_public_ipv4_literal "$token"; then
+      printf '%s\n' "$token"
+      return 0
+    fi
+  done
+  return 1
+}
+
+detect_control_wireguard_public_host() {
+  local candidate="" route_line="" host_ips=""
+
+  for candidate in \
+    "${ARCLINK_WIREGUARD_ENDPOINT_HOST:-}" \
+    "${ARCLINK_WIREGUARD_CONTROL_HOST:-}" \
+    "${ARCLINK_CONTROL_PUBLIC_IP:-}" \
+    "${ARCLINK_PUBLIC_IP:-}" \
+    "${ARCLINK_PUBLIC_IPV4:-}"
+  do
+    candidate="${candidate#http://}"
+    candidate="${candidate#https://}"
+    candidate="${candidate%%/*}"
+    candidate="${candidate%%:*}"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  if command -v curl >/dev/null 2>&1 && [[ "${ARCLINK_WIREGUARD_SKIP_PUBLIC_IP_PROBE:-0}" != "1" ]]; then
+    candidate="$(curl -4fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+    candidate="$(trim_control_value "$candidate")"
+    if is_public_ipv4_literal "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  if command -v ip >/dev/null 2>&1; then
+    route_line="$(ip -4 route get 1.1.1.1 2>/dev/null || true)"
+    candidate="$(printf '%s\n' "$route_line" | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+    if is_public_ipv4_literal "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  host_ips="$(hostname -I 2>/dev/null || true)"
+  first_public_ipv4_from_text "$host_ips"
+}
+
 derive_control_wireguard_endpoint() {
   local candidate="${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-}"
   local host=""
@@ -8749,6 +8822,11 @@ derive_control_wireguard_endpoint() {
 
   if [[ -n "$candidate" ]]; then
     printf '%s\n' "$candidate"
+    return 0
+  fi
+  host="$(detect_control_wireguard_public_host)"
+  if [[ -n "$host" ]]; then
+    printf '%s:%s\n' "$host" "$port"
     return 0
   fi
   host="${ARCLINK_PRIVATE_DNS_NAME:-${ARCLINK_WIREGUARD_DNS_NAME:-${ARCLINK_PRIVATE_MESH_DNS_NAME:-}}}"
@@ -8928,7 +9006,7 @@ print_control_wireguard_guidance() {
   cat <<EOF
 ArcLink WireGuard control mesh
   Control public key: ${ARCLINK_WIREGUARD_CONTROL_PUBLIC_KEY}
-  Control endpoint: ${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-<set ARCLINK_WIREGUARD_CONTROL_ENDPOINT>}
+  Control endpoint: ${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-auto-detect pending}
   Control tunnel IP: ${ARCLINK_WIREGUARD_CONTROL_IP:-10.44.0.1}
   Fleet subnet: ${ARCLINK_WIREGUARD_NETWORK_CIDR:-10.44.0.0/24}
   Interface: ${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}
@@ -9691,6 +9769,7 @@ register_control_remote_fleet_worker() {
   local remote_bootstrap="${ARCLINK_FLEET_REGISTER_REMOTE_BOOTSTRAP:-}" bootstrap_ssh_host="" bootstrap_ssh_user="${ARCLINK_FLEET_BOOTSTRAP_SSH_USER:-root}"
   local bootstrap_ssh_port="${ARCLINK_FLEET_BOOTSTRAP_SSH_PORT:-22}" bootstrap_control_url="${ARCLINK_FLEET_JOIN_CONTROL_URL:-}" bootstrap_token_ttl="${ARCLINK_FLEET_BOOTSTRAP_TOKEN_TTL_SECONDS:-3600}"
   local bootstrap_skip_prereqs="${ARCLINK_FLEET_BOOTSTRAP_SKIP_PREREQ_INSTALL:-0}" bootstrap_output=""
+  local advanced_prompts="${ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS:-0}"
   local result_json="" json=0 noninteractive=0 no_smoke=0 smoke_requested=0 arg="" tags_mode="csv"
 
   while [[ $# -gt 0 ]]; do
@@ -9819,15 +9898,16 @@ EOF
     cat <<'EOF'
 ArcLink Sovereign remote fleet worker registration
 
-Before continuing, make sure the remote machine is reachable over SSH by a
-root account or an account with passwordless sudo. Append this public key to
-that first-contact account. Do not replace authorized_keys; ArcLink will not
-change sshd_config, will not change port 22, and will not delete other SSH
-keys. The remote joiner installs or verifies Docker, WireGuard, and helper
-prerequisites through the controlled prereq lane.
+Before continuing, make sure the remote machine is reachable over SSH by root
+or an account with passwordless sudo. Append this public key to that
+first-contact account. Do not replace authorized_keys; ArcLink will not change
+sshd_config, will not change port 22, and will not delete other SSH keys.
+
+ArcLink will SSH in once, install or verify Docker and WireGuard, create the
+worker service account, join the private WireGuard mesh, and then use the mesh
+for ongoing ArcPod fleet work.
 EOF
     print_control_fleet_ssh_key_guidance
-    print_control_wireguard_guidance
 
     hostname="$(normalize_optional_answer "$(ask "Fleet inventory hostname" "")")"
     hostname="$(trim_control_value "$hostname")"
@@ -9841,7 +9921,11 @@ EOF
     return 1
   fi
   if [[ "$noninteractive" != "1" ]]; then
-    ssh_host="$(normalize_optional_answer "$(ask "SSH host" "$hostname")")"
+    if [[ "$advanced_prompts" == "1" ]]; then
+      ssh_host="$(normalize_optional_answer "$(ask "SSH host" "$hostname")")"
+    else
+      ssh_host="$(normalize_optional_answer "$(ask "First-contact SSH host" "$hostname")")"
+    fi
     ssh_host="$(trim_control_value "$ssh_host")"
     [[ -z "$ssh_host" ]] && ssh_host="$hostname"
   fi
@@ -9849,7 +9933,7 @@ EOF
     echo "SSH host may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
     return 1
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     wireguard_private_ip="$(normalize_optional_answer "$(ask "Worker WireGuard tunnel IP/CIDR (type none to skip)" "$(next_control_wireguard_worker_ip)")")"
     wireguard_private_ip="$(trim_control_value "$wireguard_private_ip")"
     wireguard_private_cidr="$wireguard_private_ip"
@@ -9863,6 +9947,9 @@ EOF
     wireguard_public_key="$(trim_control_value "$wireguard_public_key")"
     wireguard_interface="$(normalize_optional_answer "$(ask "Worker WireGuard interface" "${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}")")"
     wireguard_interface="$(trim_control_value "${wireguard_interface:-wg-arclink}")"
+    wireguard_control_endpoint="${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-}"
+  elif [[ "$noninteractive" != "1" ]]; then
+    wireguard_interface="${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}"
     wireguard_control_endpoint="${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-}"
   fi
   if [[ "$remote_bootstrap" == "1" && -z "$wireguard_private_ip" && "${ARCLINK_WIREGUARD_ENABLED:-1}" != "0" ]]; then
@@ -9881,7 +9968,7 @@ EOF
   if [[ -n "$wireguard_private_cidr" && -n "$wireguard_public_key" ]]; then
     ensure_control_wireguard_peer "$hostname" "$wireguard_private_cidr" "$wireguard_public_key"
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     private_dns_name="$(normalize_optional_answer "$(ask "Production private mesh DNS/IP (WireGuard; type none to clear)" "${private_dns_name:-$ssh_host}")")"
     private_dns_name="$(trim_control_value "$private_dns_name")"
   fi
@@ -9889,7 +9976,7 @@ EOF
     echo "Production private mesh DNS/IP may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
     return 1
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     tail_default=""
     if [[ "$ssh_host" == *.ts.net ]]; then
       tail_default="$ssh_host"
@@ -9897,11 +9984,14 @@ EOF
     tailscale_dns_name="$(normalize_optional_answer "$(ask "Tailscale MagicDNS name (type none to clear)" "$tail_default")")"
     tailscale_dns_name="$(trim_control_value "$tailscale_dns_name")"
   fi
+  if [[ -z "$tailscale_dns_name" && "$ssh_host" == *.ts.net ]]; then
+    tailscale_dns_name="$ssh_host"
+  fi
   if [[ -n "$tailscale_dns_name" ]] && ! is_safe_control_fleet_host_value "$tailscale_dns_name"; then
     echo "Tailscale MagicDNS name may contain only letters, numbers, dots, dashes, underscores, or colons." >&2
     return 1
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     remote_bootstrap="$(ask_yes_no "SSH into this worker and run the full ArcLink join now" "${remote_bootstrap:-1}")"
     if [[ "$remote_bootstrap" == "1" ]]; then
       bootstrap_ssh_host="$(normalize_optional_answer "$(ask "Bootstrap SSH host for first contact" "${bootstrap_ssh_host:-$ssh_host}")")"
@@ -9913,6 +10003,12 @@ EOF
       bootstrap_control_url="$(normalize_optional_answer "$(ask "Control URL for the worker enrollment callback" "${bootstrap_control_url:-$(derive_control_worker_join_url)}")")"
       bootstrap_control_url="$(trim_control_value "$bootstrap_control_url")"
     fi
+  elif [[ "$noninteractive" != "1" ]]; then
+    remote_bootstrap="${remote_bootstrap:-1}"
+    bootstrap_ssh_host="${bootstrap_ssh_host:-$ssh_host}"
+    bootstrap_ssh_user="${bootstrap_ssh_user:-root}"
+    bootstrap_ssh_port="${bootstrap_ssh_port:-22}"
+    bootstrap_control_url="${bootstrap_control_url:-$(derive_control_worker_join_url)}"
   fi
   [[ -z "$bootstrap_ssh_host" ]] && bootstrap_ssh_host="$ssh_host"
   [[ -z "$bootstrap_control_url" ]] && bootstrap_control_url="$(derive_control_worker_join_url)"
@@ -9920,6 +10016,10 @@ EOF
     wireguard_private_ip="$(next_control_wireguard_worker_ip)"
     wireguard_private_cidr="$wireguard_private_ip/32"
     [[ -z "$private_dns_name" ]] && private_dns_name="$wireguard_private_ip"
+  fi
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" != "1" && "$remote_bootstrap" == "1" && -n "$wireguard_private_ip" && "${ARCLINK_WIREGUARD_ENABLED:-1}" != "0" ]]; then
+    bootstrap_ssh_host="${bootstrap_ssh_host:-$ssh_host}"
+    ssh_host="${wireguard_private_ip%%/*}"
   fi
   if [[ "$remote_bootstrap" == "1" ]]; then
     if [[ -z "$bootstrap_ssh_host" ]] || ! is_safe_control_fleet_host_value "$bootstrap_ssh_host"; then
@@ -9939,38 +10039,48 @@ EOF
       return 1
     fi
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     ssh_user="$(normalize_optional_answer "$(ask "SSH user" "${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}")")"
     ssh_user="$(trim_control_value "$ssh_user")"
     [[ -z "$ssh_user" ]] && ssh_user="arclink"
+  elif [[ "$noninteractive" != "1" ]]; then
+    ssh_user="${ARCLINK_FLEET_WORKER_USER:-${ARCLINK_LOCAL_FLEET_SSH_USER:-arclink}}"
   fi
   if ! is_safe_local_fleet_user "$ssh_user"; then
     echo "Refusing unsafe SSH user: $ssh_user" >&2
     return 1
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     region="$(normalize_optional_answer "$(ask "Fleet region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
     region="$(trim_control_value "$region")"
     capacity_slots="$(ask "Fleet capacity slots" "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
     capacity_slots="$(trim_control_value "$capacity_slots")"
+  elif [[ "$noninteractive" != "1" ]]; then
+    region="$(trim_control_value "${ARCLINK_LOCAL_FLEET_REGION:-}")"
+    capacity_slots="$(trim_control_value "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
   fi
   if [[ ! "$capacity_slots" =~ ^[0-9]+$ || "$capacity_slots" -lt 1 ]]; then
     echo "Fleet capacity slots must be a positive integer." >&2
     return 1
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     state_root_base="$(normalize_optional_answer "$(ask "Remote deployment state root base" "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")")"
     state_root_base="$(trim_control_value "$state_root_base")"
     [[ -z "$state_root_base" ]] && state_root_base="/arcdata/deployments"
+  elif [[ "$noninteractive" != "1" ]]; then
+    state_root_base="$(trim_control_value "${ARCLINK_STATE_ROOT_BASE:-/arcdata/deployments}")"
   fi
   if [[ "$state_root_base" != /* || "$state_root_base" == "/" ]]; then
     echo "Remote deployment state root base must be an absolute non-root path." >&2
     return 1
   fi
-  if [[ "$noninteractive" != "1" ]]; then
+  if [[ "$noninteractive" != "1" && "$advanced_prompts" == "1" ]]; then
     edge_target="$(normalize_optional_answer "$(ask "Worker edge target override (type none to clear)" "${ARCLINK_EDGE_TARGET:-}")")"
     edge_target="$(trim_control_value "$edge_target")"
     tags="$(normalize_optional_answer "$(ask "Placement tags, comma-separated key=value (type none to clear)" "")")"
+    tags="$(trim_control_value "$tags")"
+  elif [[ "$noninteractive" != "1" ]]; then
+    edge_target="$(trim_control_value "${ARCLINK_EDGE_TARGET:-}")"
     tags="$(trim_control_value "$tags")"
   fi
 
@@ -10000,6 +10110,8 @@ EOF
     if [[ "$no_smoke" != "1" && ( "$remote_bootstrap" == "1" || "$json" != "1" || "$smoke_requested" == "1" ) ]]; then
       setup_ssh=1
     fi
+  elif [[ "$advanced_prompts" != "1" ]]; then
+    setup_ssh=1
   else
     setup_ssh="$(ask_yes_no "Smoke-test SSH, Docker Compose, and state-root writability now" "1")"
   fi
@@ -10687,8 +10799,13 @@ collect_control_install_answers() {
     default_cors_origin="${ARCLINK_CORS_ORIGIN:-https://$ARCLINK_BASE_DOMAIN}"
     default_cookie_domain="${ARCLINK_COOKIE_DOMAIN:-.$ARCLINK_BASE_DOMAIN}"
   fi
-  ARCLINK_PRIVATE_DNS_NAME="$(normalize_optional_answer "$(ask "Production private mesh DNS/IP for this control node (WireGuard; type none to clear)" "$default_private_dns")")"
-  ARCLINK_CONTROL_PRIVATE_BASE_URL="$(normalize_optional_answer "$(ask "Production private mesh Control URL for remote ArcPods (type none to clear)" "$default_private_control_url")")"
+  if [[ "${ARCLINK_CONTROL_ADVANCED_PROMPTS:-0}" == "1" ]]; then
+    ARCLINK_PRIVATE_DNS_NAME="$(normalize_optional_answer "$(ask "Production private mesh DNS/IP for this control node (WireGuard; type none to clear)" "$default_private_dns")")"
+    ARCLINK_CONTROL_PRIVATE_BASE_URL="$(normalize_optional_answer "$(ask "Production private mesh Control URL for remote ArcPods (type none to clear)" "$default_private_control_url")")"
+  else
+    ARCLINK_PRIVATE_DNS_NAME="$(trim_control_value "$default_private_dns")"
+    ARCLINK_CONTROL_PRIVATE_BASE_URL="$(trim_control_value "$default_private_control_url")"
+  fi
   if [[ -z "$ARCLINK_CONTROL_PRIVATE_BASE_URL" && -n "$ARCLINK_PRIVATE_DNS_NAME" ]]; then
     ARCLINK_CONTROL_PRIVATE_BASE_URL="https://$ARCLINK_PRIVATE_DNS_NAME"
   fi
@@ -10697,18 +10814,27 @@ collect_control_install_answers() {
   ARCLINK_WIREGUARD_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
   ARCLINK_PRIVATE_MESH_CONTROL_URL="$ARCLINK_CONTROL_PRIVATE_BASE_URL"
   ARCLINK_CONTROL_PRIVATE_HTTPS_PORT="${ARCLINK_CONTROL_PRIVATE_HTTPS_PORT:-443}"
-  ARCLINK_WIREGUARD_ENABLED="$(ask_yes_no "Prepare WireGuard private mesh for fleet machines" "${ARCLINK_WIREGUARD_ENABLED:-1}")"
+  if [[ "${ARCLINK_CONTROL_ADVANCED_PROMPTS:-0}" == "1" ]]; then
+    ARCLINK_WIREGUARD_ENABLED="$(ask_yes_no "Prepare WireGuard private mesh for fleet machines" "${ARCLINK_WIREGUARD_ENABLED:-1}")"
+  else
+    ARCLINK_WIREGUARD_ENABLED="${ARCLINK_WIREGUARD_ENABLED:-1}"
+  fi
   if [[ "$ARCLINK_WIREGUARD_ENABLED" == "1" ]]; then
-    ARCLINK_WIREGUARD_INTERFACE="$(normalize_optional_answer "$(ask "WireGuard interface name" "${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}")")"
+    if [[ "${ARCLINK_CONTROL_ADVANCED_PROMPTS:-0}" == "1" ]]; then
+      ARCLINK_WIREGUARD_INTERFACE="$(normalize_optional_answer "$(ask "WireGuard interface name" "${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}")")"
+      ARCLINK_WIREGUARD_NETWORK_CIDR="$(normalize_optional_answer "$(ask "WireGuard fleet subnet" "${ARCLINK_WIREGUARD_NETWORK_CIDR:-10.44.0.0/24}")")"
+      ARCLINK_WIREGUARD_CONTROL_IP="$(normalize_optional_answer "$(ask "WireGuard control tunnel IP" "${ARCLINK_WIREGUARD_CONTROL_IP:-10.44.0.1}")")"
+      ARCLINK_WIREGUARD_PORT="$(ask "WireGuard UDP port" "${ARCLINK_WIREGUARD_PORT:-51820}")"
+    fi
     ARCLINK_WIREGUARD_INTERFACE="${ARCLINK_WIREGUARD_INTERFACE:-wg-arclink}"
-    ARCLINK_WIREGUARD_NETWORK_CIDR="$(normalize_optional_answer "$(ask "WireGuard fleet subnet" "${ARCLINK_WIREGUARD_NETWORK_CIDR:-10.44.0.0/24}")")"
     ARCLINK_WIREGUARD_NETWORK_CIDR="${ARCLINK_WIREGUARD_NETWORK_CIDR:-10.44.0.0/24}"
-    ARCLINK_WIREGUARD_CONTROL_IP="$(normalize_optional_answer "$(ask "WireGuard control tunnel IP" "${ARCLINK_WIREGUARD_CONTROL_IP:-10.44.0.1}")")"
     ARCLINK_WIREGUARD_CONTROL_IP="${ARCLINK_WIREGUARD_CONTROL_IP:-10.44.0.1}"
-    ARCLINK_WIREGUARD_PORT="$(ask "WireGuard UDP port" "${ARCLINK_WIREGUARD_PORT:-51820}")"
     ARCLINK_WIREGUARD_PORT="${ARCLINK_WIREGUARD_PORT:-51820}"
     ARCLINK_WIREGUARD_CONTROL_ALLOWED_IPS="${ARCLINK_WIREGUARD_CONTROL_ALLOWED_IPS:-${ARCLINK_WIREGUARD_CONTROL_IP}/32}"
-    ARCLINK_WIREGUARD_CONTROL_ENDPOINT="$(normalize_optional_answer "$(ask "WireGuard control endpoint host:port (type none to derive)" "$(derive_control_wireguard_endpoint)")")"
+    ARCLINK_WIREGUARD_CONTROL_ENDPOINT="${ARCLINK_WIREGUARD_CONTROL_ENDPOINT:-$(derive_control_wireguard_endpoint)}"
+    if [[ "${ARCLINK_CONTROL_ADVANCED_PROMPTS:-0}" == "1" ]]; then
+      ARCLINK_WIREGUARD_CONTROL_ENDPOINT="$(normalize_optional_answer "$(ask "WireGuard control endpoint host:port (type none to derive)" "$ARCLINK_WIREGUARD_CONTROL_ENDPOINT")")"
+    fi
   fi
   ARCLINK_API_HOST="0.0.0.0"
   ARCLINK_API_PORT="$(ask "Control API local port" "$default_api_port")"

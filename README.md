@@ -80,11 +80,16 @@ Register and inspect workers:
 ```bash
 ./deploy.sh control fleet-key
 ./deploy.sh control register-worker
-./deploy.sh control register-worker --hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --wireguard-private-ip 10.44.0.11 --json
+./deploy.sh control register-worker --hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --json
 ./deploy.sh control inventory list
 ./deploy.sh control inventory health --json
 ./deploy.sh control inventory probe-all --json
 ```
+
+The interactive worker flow asks for the inventory hostname and first-contact
+SSH host, then ArcLink derives the WireGuard endpoint, assigns the tunnel IP,
+joins the worker, syncs the peer, and smoke-tests the private mesh. Set
+`ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only for unusual networks.
 
 ## Upgrades
 

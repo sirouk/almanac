@@ -2503,8 +2503,8 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     expect("deploy.sh control fleet-key --rotate --json" in text, "usage should expose fleet key rotation JSON")
     expect("deploy.sh control register-worker" in text, "usage should expose register-worker")
     expect(
-        "--hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --wireguard-private-ip 10.44.0.11 --json" in text,
-        "usage should expose push-button WireGuard/private-mesh worker bootstrap",
+        "--hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --json" in text,
+        "usage should expose push-button worker bootstrap without requiring WireGuard internals",
     )
     expect("run_control_fleet_ssh_key()" in text, "expected first-class public key command")
     expect("--rotate" in fleet_key and '"rotated"' in fleet_key, "fleet-key should support audited scriptable rotation output")
@@ -2528,6 +2528,12 @@ def test_control_fleet_worker_registration_is_first_class() -> None:
     expect("ensure_control_wireguard_peer" in register, "worker registration should append known worker peers to control WireGuard config")
     expect("activate_control_wireguard_interface" in text, "control install/reconfigure should activate the control WireGuard interface")
     expect("ARCLINK_WIREGUARD_ACTIVATE" in text, "control WireGuard activation should be explicitly configurable")
+    expect("detect_control_wireguard_public_host" in text, "control WireGuard endpoint should be auto-derived for normal operators")
+    expect("curl -4fsS --max-time 4 https://api.ipify.org" in text, "endpoint derivation should have a bounded public IPv4 probe")
+    expect("ip -4 route get 1.1.1.1" in text, "endpoint derivation should fall back to the host outward IPv4")
+    expect("ARCLINK_CONTROL_ADVANCED_PROMPTS" in text, "control WireGuard internals should only prompt in advanced mode")
+    expect("ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS" in register, "worker registration internals should only prompt in advanced mode")
+    expect("ArcLink will SSH in once, install or verify Docker and WireGuard" in register, "default worker registration should explain the push-button join")
     expect("next_control_wireguard_worker_ip" in register, "interactive worker registration should suggest the next tunnel IP")
     expect("sync_control_wireguard_peers_from_inventory" in text, "control install/reconfigure should sync callback-reported WireGuard peers")
     expect('"control_network_mode"] = "remote"' in register, "remote worker registration should mark ArcPods as remote control-network renders")
@@ -2891,6 +2897,9 @@ def test_ensure_prereqs_wireguard_check_only_plans_tools() -> None:
         _write_executable(fakebin / "jq", "#!/bin/bash\nexit 0\n")
         _write_executable(fakebin / "rsync", "#!/bin/bash\nexit 0\n")
         _write_executable(fakebin / "ssh", "#!/bin/bash\nexit 0\n")
+        (fakebin / "dirname").symlink_to("/usr/bin/dirname")
+        (fakebin / "mkdir").symlink_to("/bin/mkdir")
+        (fakebin / "python3").symlink_to("/usr/bin/python3")
         _write_executable(
             fakebin / "docker",
             "#!/bin/bash\nif [[ ${1:-} == compose && ${2:-} == version ]]; then echo 'Docker Compose v2.0.0'; exit 0; fi\nexit 0\n",
@@ -2898,7 +2907,7 @@ def test_ensure_prereqs_wireguard_check_only_plans_tools() -> None:
         env = os.environ.copy()
         env.update(
             {
-                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "PATH": str(fakebin),
                 "STATE_DIR": str(state),
                 "ARCLINK_PREREQ_AUDIT_FILE": str(state / "audit.jsonl"),
                 "ARCLINK_PREREQ_WIREGUARD": "1",

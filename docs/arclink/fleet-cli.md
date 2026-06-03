@@ -57,16 +57,24 @@ addressing by default. SSH executor machine mode and the host allowlist still
 gate execution; the private mesh is the transport, not a replacement for those
 controls. Tailscale can still be recorded as an access overlay or domain
 alternative through `--tailscale-dns-name`. Control install/reconfigure prepares
-the Control Node WireGuard keypair, endpoint, UDP firewall allowance when a
-managed firewall is active, and runtime metadata. Worker setup appends the fleet
-SSH key; it does not replace `authorized_keys`, change `sshd_config`, or change
-port 22.
+the Control Node WireGuard keypair, auto-derived endpoint, UDP firewall
+allowance when a managed firewall is active, and runtime metadata. Worker setup
+appends the fleet SSH key; it does not replace `authorized_keys`, change
+`sshd_config`, or change port 22.
 
 Interactive:
 
 ```bash
 ./deploy.sh control register-worker
 ```
+
+The normal interactive path asks only for the inventory hostname and the
+first-contact SSH host. ArcLink then SSHes in, joins the worker to WireGuard,
+registers the worker's long-lived fleet address as the WireGuard tunnel IP, and
+smoke-tests the private mesh. Internal values such as the worker tunnel IP,
+WireGuard public key, interface, callback URL, state root, and placement tags
+are derived automatically. Set `ARCLINK_FLEET_REGISTER_ADVANCED_PROMPTS=1` only
+when you need to override those internals.
 
 Scriptable:
 
@@ -77,12 +85,8 @@ Scriptable:
   --bootstrap-remote \
   --bootstrap-ssh-host 203.0.113.10 \
   --bootstrap-ssh-user root \
-  --wireguard-private-ip 10.44.0.11 \
-  --tailscale-dns-name worker-1.tailnet.ts.net \
   --ssh-user arclink \
-  --region iad \
   --capacity-slots 4 \
-  --tags-json '{"tier":"standard"}' \
   --json
 ```
 
@@ -91,11 +95,14 @@ token, stages only the worker join script plus its probe/prereq helpers over
 SSH, runs the join through root or passwordless `sudo -n`, and passes the token
 over stdin so it never appears in argv. The bootstrap account is only the first
 contact account; `--ssh-user` remains the long-lived ArcLink worker/provisioning
-account created or repaired by the join script. `--wireguard-private-ip` is
-persisted into host metadata and is used as the private mesh address when
-`--private-dns-name` is omitted, causing ArcPods placed there to render against
-the worker that owns the containers instead of joining the control-node Docker
-network. When the worker reports its WireGuard public key by callback,
+account created or repaired by the join script. `--ssh-host` should be the
+worker's private WireGuard address for ongoing fleet work; `--bootstrap-ssh-host`
+is the first-contact public or provider address. If `--wireguard-private-ip` is
+omitted during remote bootstrap, ArcLink assigns the next private mesh address.
+That address is persisted into host metadata and used as the private mesh address
+when `--private-dns-name` is omitted, causing ArcPods placed there to render
+against the worker that owns the containers instead of joining the control-node
+Docker network. When the worker reports its WireGuard public key by callback,
 `register-worker` syncs that peer into the Control Node config and live
 interface. If the worker public key is already known, pass
 `--wireguard-public-key` and `deploy.sh` appends that peer before bootstrap.

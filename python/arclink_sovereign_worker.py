@@ -814,26 +814,36 @@ def _ensure_tailnet_service_ports(
     deployment: Mapping[str, Any],
     worker: SovereignWorkerConfig,
 ) -> dict[str, Any]:
+    # Kept as a pre-placement recheck hook before any fleet placement or DNS
+    # side effects. The actual port allocation needs the selected worker.
+    del conn
+    del worker
+    return dict(deployment)
+
+
+def _ensure_tailnet_service_ports_for_host(
+    conn: sqlite3.Connection,
+    *,
+    deployment: Mapping[str, Any],
+    worker: SovereignWorkerConfig,
+    host: Mapping[str, Any],
+    executor: ArcLinkExecutor | None = None,
+) -> dict[str, Any]:
     if worker.ingress_mode != "tailscale" or worker.tailscale_host_strategy != "path":
         return dict(deployment)
     roles = ("hermes",)
     deployment_id = str(deployment["deployment_id"])
     metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
     ports = _tailnet_ports_from_metadata(metadata)
-    if set(roles) <= set(ports):
-        return dict(deployment)
+    host_id = str(host.get("host_id") or "").strip()
+    if not host_id:
+        raise ArcLinkSovereignWorkerError("ArcLink tailnet service port allocation requires a fleet host")
 
-    used: set[int] = set()
-    for row in conn.execute(
-        """
-        SELECT deployment_id, metadata_json
-        FROM arclink_deployments
-        WHERE status NOT IN ('cancelled', 'torn_down', 'teardown_complete')
-        """
-    ).fetchall():
-        if str(row["deployment_id"]) == deployment_id:
-            continue
-        used.update(_tailnet_ports_from_metadata(json_loads_safe(str(row["metadata_json"] or "{}"))).values())
+    used = _tailnet_service_ports_used_on_host(conn, host_id=host_id, exclude_deployment_id=deployment_id)
+    live_ports = _tailnet_live_published_ports(executor)
+    used.update(live_ports)
+    if set(roles) <= set(ports) and all(port not in used for port in ports.values()):
+        return dict(deployment)
 
     try:
         next_block = int(str(worker.env.get("ARCLINK_TAILNET_SERVICE_PORT_BASE") or "8443"))
@@ -841,6 +851,7 @@ def _ensure_tailnet_service_ports(
         next_block = 8443
     if next_block < 1 or next_block + len(roles) >= 65536:
         next_block = 8443
+    previous_ports = dict(ports)
     while True:
         candidate = {role: next_block + offset for offset, role in enumerate(roles)}
         if all(0 < port < 65536 and port not in used for port in candidate.values()):
@@ -855,8 +866,13 @@ def _ensure_tailnet_service_ports(
             "tailscale_host_strategy": "path",
             "tailnet_service_ports": ports,
             "tailnet_service_ports_checked_at": utc_now_iso(),
+            "tailnet_service_ports_host_id": host_id,
+            "tailnet_service_ports_live_checked": bool(live_ports),
         }
     )
+    if previous_ports and previous_ports != ports:
+        metadata["tailnet_service_ports_previous"] = previous_ports
+        metadata["tailnet_service_ports_reassigned_at"] = utc_now_iso()
     conn.execute(
         "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
         (json.dumps(metadata, sort_keys=True), deployment_id),
@@ -865,6 +881,47 @@ def _ensure_tailnet_service_ports(
     updated = dict(deployment)
     updated["metadata_json"] = json.dumps(metadata, sort_keys=True)
     return updated
+
+
+def _tailnet_service_ports_used_on_host(
+    conn: sqlite3.Connection,
+    *,
+    host_id: str,
+    exclude_deployment_id: str,
+) -> set[int]:
+    used: set[int] = set()
+    rows = conn.execute(
+        """
+        SELECT d.deployment_id, d.status, d.metadata_json, p.host_id AS placement_host_id
+        FROM arclink_deployments d
+        LEFT JOIN arclink_deployment_placements p
+          ON p.deployment_id = d.deployment_id
+         AND p.status = 'active'
+        WHERE d.status NOT IN ('cancelled', 'torn_down', 'teardown_complete')
+        """
+    ).fetchall()
+    for row in rows:
+        deployment_id = str(row["deployment_id"] or "")
+        if deployment_id == exclude_deployment_id:
+            continue
+        metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+        metadata_host_id = str(metadata.get("fleet_host_id") or metadata.get("tailnet_service_ports_host_id") or "").strip()
+        placement_host_id = str(row["placement_host_id"] or "").strip()
+        if host_id not in {placement_host_id, metadata_host_id}:
+            continue
+        used.update(_tailnet_ports_from_metadata(metadata).values())
+    return used
+
+
+def _tailnet_live_published_ports(executor: ArcLinkExecutor | None) -> set[int]:
+    runner = getattr(executor, "docker_runner", None)
+    lister = getattr(runner, "list_published_host_ports", None)
+    if not callable(lister):
+        return set()
+    try:
+        return {_tailnet_port(port) for port in lister() if _tailnet_port(port)}
+    except ArcLinkExecutorError as exc:
+        raise ArcLinkSovereignWorkerError(f"ArcLink worker port inspection failed: {exc}") from exc
 
 
 def _apply_deployment(
@@ -906,6 +963,26 @@ def _apply_deployment(
         tailscale_notion_path=worker.tailscale_notion_path,
         env=render_env,
     )
+    selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
+    deployment = _ensure_tailnet_service_ports_for_host(
+        conn,
+        deployment=deployment,
+        worker=worker,
+        host=host,
+        executor=selected_executor,
+    )
+    intent = render_arclink_provisioning_intent(
+        conn,
+        deployment_id=deployment_id,
+        base_domain=render_base_domain,
+        edge_target=edge_target,
+        state_root_base=state_root_base,
+        ingress_mode=worker.ingress_mode,
+        tailscale_dns_name=host_tailscale_dns_name if worker.ingress_mode == "tailscale" else worker.tailscale_dns_name,
+        tailscale_host_strategy=worker.tailscale_host_strategy,
+        tailscale_notion_path=worker.tailscale_notion_path,
+        env=render_env,
+    )
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_deployment_runtime_metadata(
         conn,
@@ -933,7 +1010,6 @@ def _apply_deployment(
     _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
     _persist_dns_from_intent(conn, deployment_id=deployment_id, dns=intent["dns"])
     _ensure_llm_router_key_registered(conn, deployment=deployment, worker=worker, intent=intent)
-    selected_executor = executor or _executor_for_host(worker=worker, host=host, intent=intent)
     if worker.ingress_mode == "domain" and intent["dns"]:
         _reload_apply_ready_deployment(conn, deployment_id=deployment_id)
         dns_result = selected_executor.cloudflare_dns_apply(

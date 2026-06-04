@@ -368,6 +368,9 @@ class DockerRunner(Protocol):
     ) -> Mapping[str, Any]:
         ...
 
+    def list_published_host_ports(self) -> set[int]:
+        ...
+
 
 class ChutesKeyClient(Protocol):
     """Injectable interface for live Chutes key mutations."""
@@ -441,6 +444,7 @@ class StripeActionClient(Protocol):
 class FakeDockerRunner:
     """Records commands instead of executing them."""
     runs: list[dict[str, Any]] = field(default_factory=list)
+    published_host_ports: set[int] = field(default_factory=set)
 
     def run(
         self,
@@ -460,6 +464,9 @@ class FakeDockerRunner:
         }
         self.runs.append(record)
         return {"status": "ok", "args": args}
+
+    def list_published_host_ports(self) -> set[int]:
+        return set(self.published_host_ports)
 
 
 @dataclass(frozen=True)
@@ -493,6 +500,17 @@ class SubprocessDockerComposeRunner:
         if proc.returncode != 0:
             raise ArcLinkExecutorError(_safe_command_error("docker compose", proc.stderr or proc.stdout))
         return {"status": "ok", "returncode": proc.returncode, "stdout": _runner_stdout(args, proc.stdout)}
+
+    def list_published_host_ports(self) -> set[int]:
+        proc = subprocess.run(
+            (self.docker_binary, "ps", "--format", "{{.Ports}}"),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("docker ps", proc.stderr or proc.stdout))
+        return _published_host_ports_from_docker_ps(proc.stdout)
 
 
 @dataclass(frozen=True)
@@ -596,6 +614,22 @@ class SshDockerComposeRunner:
             raise ArcLinkExecutorError(cleanup_error)
         return {"status": "ok", "returncode": run.returncode, "stdout": _runner_stdout(args, run.stdout), "worker_host": self.host}
 
+    def list_published_host_ports(self) -> set[int]:
+        target = self._target()
+        remote_cmd = " ".join(
+            _shell_quote(part)
+            for part in (self.docker_binary, "ps", "--format", "{{.Ports}}")
+        )
+        proc = subprocess.run(
+            (self.ssh_binary, *self.ssh_options, target, remote_cmd),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if proc.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("ssh docker ps", proc.stderr or proc.stdout))
+        return _published_host_ports_from_docker_ps(proc.stdout)
+
     def _cleanup_remote_secrets(self, *, target: str, secrets_root: str) -> str:
         cleanup = subprocess.run(
             (self.ssh_binary, *self.ssh_options, target, f"rm -rf -- {_shell_quote(secrets_root)}"),
@@ -666,6 +700,18 @@ def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:
     if "ps" in args and "json" in args:
         return stdout
     return stdout[-2000:]
+
+
+def _published_host_ports_from_docker_ps(stdout: str) -> set[int]:
+    ports: set[int] = set()
+    for match in re.finditer(r"(?<!\d)(\d{1,5})->\d{1,5}/(?:tcp|udp)", str(stdout or "")):
+        try:
+            port = int(match.group(1))
+        except ValueError:
+            continue
+        if 0 < port < 65536:
+            ports.add(port)
+    return ports
 
 
 def _broker_operation_from_compose_args(args: tuple[str, ...]) -> tuple[str, bool, bool]:

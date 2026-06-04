@@ -1352,6 +1352,17 @@ def test_live_docker_compose_file_preserves_service_ports() -> None:
     print("PASS test_live_docker_compose_file_preserves_service_ports")
 
 
+def test_docker_ps_port_parser_reports_bound_host_ports() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_port_parser_test")
+    ports = mod._published_host_ports_from_docker_ps(
+        "127.0.0.1:8446->3210/tcp, :::9443->9443/tcp\n"
+        "3000/tcp\n"
+        "0.0.0.0:18080->80/tcp"
+    )
+    expect(ports == {8446, 9443, 18080}, str(ports))
+    print("PASS test_docker_ps_port_parser_reports_bound_host_ports")
+
+
 def test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_ssh_volume_roots_test")
     intent = sample_intent()
@@ -1982,6 +1993,7 @@ def main() -> int:
     test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner()
     test_live_docker_compose_lifecycle_project_override_requires_config_flag()
     test_live_docker_compose_file_preserves_service_ports()
+    test_docker_ps_port_parser_reports_bound_host_ports()
     test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots()
     test_ssh_docker_runner_prepares_app_binds_before_compose_up()
     test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback()
@@ -1997,7 +2009,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 38 ArcLink executor tests")
+    print("PASS all 39 ArcLink executor tests")
     return 0
 
 

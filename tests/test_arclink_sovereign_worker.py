@@ -740,6 +740,149 @@ def test_tailnet_port_allocation_ignores_released_deployments() -> None:
     print("PASS test_tailnet_port_allocation_ignores_released_deployments")
 
 
+def test_tailnet_port_allocation_avoids_same_worker_deployment_ports() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailnet_same_worker")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailnet_same_worker")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_1", email="user@example.test", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_old",
+        user_id="user_1",
+        prefix="old-agent",
+        base_domain="worker.example.test",
+        status="active",
+        metadata={"tailnet_service_ports": {"hermes": 8443}},
+    )
+    seed_ready_deployment(control, conn)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir, register_local=False)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                    "ARCLINK_TAILNET_SERVICE_PORT_BASE": "8443",
+                },
+            }
+        )
+        host = worker_mod.register_fleet_host(conn, hostname="worker-a", capacity_slots=4)
+        conn.execute(
+            """
+            INSERT INTO arclink_deployment_placements (placement_id, deployment_id, host_id, status, placed_at)
+            VALUES ('plc_old', 'dep_old', ?, 'active', ?)
+            """,
+            (host["host_id"], control.utc_now_iso()),
+        )
+        conn.commit()
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg)
+    expect(results[0]["status"] == "applied", str(results))
+    metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"])
+    expect(metadata["tailnet_service_ports"] == {"hermes": 8444}, str(metadata))
+    print("PASS test_tailnet_port_allocation_avoids_same_worker_deployment_ports")
+
+
+def test_tailnet_port_allocation_avoids_live_worker_ports_missing_from_db() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailnet_live_ports")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailnet_live_ports")
+    import arclink_executor as executor_mod
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    class AnySecretResolver:
+        def materialize(self, secret_ref: str, target_path: str):
+            return executor_mod.ResolvedSecretFile(secret_ref=secret_ref, target_path=target_path)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                    "ARCLINK_TAILNET_SERVICE_PORT_BASE": "8443",
+                },
+            }
+        )
+        runner = executor_mod.FakeDockerRunner(published_host_ports={8443})
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+            secret_resolver=AnySecretResolver(),
+            docker_runner=runner,
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+    expect(results[0]["status"] == "applied", str(results))
+    metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"])
+    expect(metadata["tailnet_service_ports"] == {"hermes": 8444}, str(metadata))
+    expect(metadata["tailnet_service_ports_live_checked"] is True, str(metadata))
+    print("PASS test_tailnet_port_allocation_avoids_live_worker_ports_missing_from_db")
+
+
+def test_tailnet_port_allocation_reassigns_existing_conflicting_port() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailnet_reassign")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailnet_reassign")
+    import arclink_executor as executor_mod
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    class AnySecretResolver:
+        def materialize(self, secret_ref: str, target_path: str):
+            return executor_mod.ResolvedSecretFile(secret_ref=secret_ref, target_path=target_path)
+
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = 'dep_1'",
+        (json.dumps({"tailnet_service_ports": {"hermes": 8443}}),),
+    )
+    conn.commit()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                    "ARCLINK_TAILNET_SERVICE_PORT_BASE": "8443",
+                },
+            }
+        )
+        runner = executor_mod.FakeDockerRunner(published_host_ports={8443})
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+            secret_resolver=AnySecretResolver(),
+            docker_runner=runner,
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+    expect(results[0]["status"] == "applied", str(results))
+    metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"])
+    expect(metadata["tailnet_service_ports"] == {"hermes": 8444}, str(metadata))
+    expect(metadata["tailnet_service_ports_previous"] == {"hermes": 8443}, str(metadata))
+    print("PASS test_tailnet_port_allocation_reassigns_existing_conflicting_port")
+
+
 def test_sovereign_worker_is_disabled_until_explicitly_enabled() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_disabled")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_disabled")
@@ -1192,6 +1335,9 @@ if __name__ == "__main__":
     test_sovereign_worker_tears_down_active_deployment_idempotently()
     test_sovereign_worker_retries_legacy_teardown_without_chutes_client()
     test_tailnet_port_allocation_ignores_released_deployments()
+    test_tailnet_port_allocation_avoids_same_worker_deployment_ports()
+    test_tailnet_port_allocation_avoids_live_worker_ports_missing_from_db()
+    test_tailnet_port_allocation_reassigns_existing_conflicting_port()
     test_sovereign_worker_is_disabled_until_explicitly_enabled()
     test_sovereign_worker_skips_operator_control_stack_identity()
     test_sovereign_worker_fails_closed_without_fleet_capacity()

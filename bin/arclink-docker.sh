@@ -1036,6 +1036,11 @@ def _translate_docker_internal_paths(path: Path) -> None:
 
 _load_env_file(env_file)
 _translate_docker_internal_paths(env_file)
+if os.environ.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN") and not os.environ.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_URL"):
+    # This helper runs on the control host. The deployment exec broker URL is
+    # container-internal by default, so a token without a host-reachable URL
+    # should not force the local executor down the brokered path.
+    os.environ.pop("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN", None)
 worker = load_worker_config(Config.from_env())
 
 
@@ -1859,6 +1864,11 @@ def _translate_docker_internal_paths(path: Path) -> None:
 
 _load_env_file(env_file)
 _translate_docker_internal_paths(env_file)
+if os.environ.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN") and not os.environ.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_URL"):
+    # This helper runs on the control host. The deployment exec broker URL is
+    # container-internal by default, so a token without a host-reachable URL
+    # should not force the local executor down the brokered path.
+    os.environ.pop("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN", None)
 worker = load_worker_config(Config.from_env())
 
 ACTIVE_STATUSES = {"active", "first_contacted", "provisioning", "provisioning_ready"}

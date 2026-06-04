@@ -3624,6 +3624,7 @@ def test_agent_helpers_reject_symlink_escaped_agent_paths() -> None:
                 "USER": "alex",
                 "LOGNAME": "alex",
                 "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+                "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -3913,6 +3914,7 @@ def test_agent_helpers_reject_symlinked_home_root_before_root_work() -> None:
                 "USER": "alex",
                 "LOGNAME": "alex",
                 "HERMES_HOME": str(hermes_home),
+                "ARCLINK_WORKSPACE_ROOT": str(workspace),
                 "DRIVE_WORKSPACE_ROOT": str(workspace),
                 "CODE_WORKSPACE_ROOT": str(workspace),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace),
@@ -4040,6 +4042,7 @@ def test_agent_process_helper_rejects_symlink_escaped_log_directory() -> None:
                 "USER": "alex",
                 "LOGNAME": "alex",
                 "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+                "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -4166,6 +4169,7 @@ def test_agent_process_helper_rejects_symlinked_or_missing_repo_command_targets_
                 "USER": "alex",
                 "LOGNAME": "alex",
                 "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+                "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -4399,6 +4403,7 @@ def test_agent_process_helper_rejects_raw_commands_and_runs_allowlisted_agent_op
             "USER": "alex",
             "LOGNAME": "alex",
             "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -4603,6 +4608,7 @@ def test_agent_process_helper_records_redacted_rejection_incident_before_subproc
             "USER": "alex",
             "LOGNAME": "alex",
             "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -4915,6 +4921,7 @@ def test_agent_process_helper_rejects_unapproved_agent_env_keys_before_subproces
             "USER": "alex",
             "LOGNAME": "alex",
             "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -5039,6 +5046,7 @@ def test_agent_process_helper_rejects_unsafe_dashboard_backend_host_before_subpr
             "USER": "alex",
             "LOGNAME": "alex",
             "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -5163,6 +5171,7 @@ def test_agent_process_helper_rejects_configured_root_mismatch() -> None:
                 "USER": "alex",
                 "LOGNAME": "alex",
                 "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+                "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -5309,6 +5318,7 @@ def test_agent_process_helper_rejects_symlinked_configured_roots_before_work() -
                 "USER": "alex",
                 "LOGNAME": "alex",
                 "HERMES_HOME": str(hermes_home),
+                "ARCLINK_WORKSPACE_ROOT": str(workspace),
                 "DRIVE_WORKSPACE_ROOT": str(workspace),
                 "CODE_WORKSPACE_ROOT": str(workspace),
                 "TERMINAL_WORKSPACE_ROOT": str(workspace),
@@ -5477,6 +5487,7 @@ def test_agent_process_helper_does_not_log_or_argv_env_values() -> None:
             "USER": "alex",
             "LOGNAME": "alex",
             "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -5565,6 +5576,7 @@ def test_agent_process_helper_restarts_processes_when_desired_signature_changes(
             "USER": "alex",
             "LOGNAME": "alex",
             "HERMES_HOME": str(hermes_home.resolve(strict=False)),
+            "ARCLINK_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "DRIVE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "CODE_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
             "TERMINAL_WORKSPACE_ROOT": str(workspace.resolve(strict=False)),
@@ -6087,6 +6099,16 @@ def test_docker_operator_commands_are_present() -> None:
         and "arclink_deployment_placements" in refresh_block
         and "host_metadata_json" in refresh_block,
         "deployment plugin refresh must route through the fleet executor for the selected ArcPod host\n"
+        + refresh_block,
+    )
+    expect(
+        'os.environ.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN")'
+        in refresh_block
+        and 'not os.environ.get("ARCLINK_DEPLOYMENT_EXEC_BROKER_URL")'
+        in refresh_block
+        and 'os.environ.pop("ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN", None)'
+        in refresh_block,
+        "host-side deployment plugin refresh must not inherit a container-only broker token without a host-reachable URL\n"
         + refresh_block,
     )
     expect(

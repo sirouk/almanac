@@ -780,6 +780,38 @@ docker_tailnet_forward_socket() {
   printf '%s/%s-%s.ctl\n' "$dir" "$deployment_id" "$port"
 }
 
+docker_stop_tailnet_forward_socket() {
+  local control_path="$1"
+  local pid=""
+
+  if [[ -S "$control_path" ]]; then
+    ssh -S "$control_path" -O exit localhost >/dev/null 2>&1 || true
+  fi
+  if command -v pgrep >/dev/null 2>&1; then
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      kill "$pid" >/dev/null 2>&1 || true
+    done < <(pgrep -f "ControlPath=$control_path" 2>/dev/null || true)
+  fi
+  rm -f "$control_path"
+}
+
+docker_prune_tailnet_forwards() {
+  local routes_file="$1"
+  local dir="$REPO_DIR/arclink-priv/state/tailnet-forwards"
+  local socket="" name="" desired=""
+  [[ -d "$dir" ]] || return 0
+  desired="$(awk -F '\t' 'NF >= 3 {print $1 "-" $3 ".ctl"}' "$routes_file" 2>/dev/null || true)"
+  shopt -s nullglob
+  for socket in "$dir"/*.ctl; do
+    name="$(basename "$socket")"
+    if ! grep -Fxq "$name" <<<"$desired"; then
+      docker_stop_tailnet_forward_socket "$socket"
+    fi
+  done
+  shopt -u nullglob
+}
+
 docker_ensure_tailnet_forward() {
   local deployment_id="$1"
   local port="$2"
@@ -810,8 +842,7 @@ docker_ensure_tailnet_forward() {
   control_path="$(docker_tailnet_forward_socket "$deployment_id" "$port")"
   target="${ssh_user:-arclink}@$ssh_host"
   if [[ -S "$control_path" ]]; then
-    ssh -S "$control_path" -O exit "$target" >/dev/null 2>&1 || true
-    rm -f "$control_path"
+    docker_stop_tailnet_forward_socket "$control_path"
   fi
   ssh \
     -i "$key_path" \
@@ -952,6 +983,8 @@ with sqlite3.connect(db_path) as conn:
             )
         )
 PY
+
+  docker_prune_tailnet_forwards "$routes_file"
 
   while IFS=$'\t' read -r deployment_id prefix hermes_port ssh_host ssh_user ssh_port; do
     [[ -n "$deployment_id" && -n "$prefix" ]] || continue

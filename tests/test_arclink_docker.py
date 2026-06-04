@@ -6088,7 +6088,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
     expect("docker_reconcile()" in body and "./bin/arclink-ctl org-profile apply --yes" in body, body)
     expect("docker_publish_tailnet_deployment_apps()" in body and "tailscale serve --bg --yes --https" in body, body)
-    expect("docker_ensure_tailnet_forward" in body and '-L "127.0.0.1:$port:127.0.0.1:$port"' in body, body)
+    expect(
+        "docker_ensure_tailnet_forward" in body
+        and "docker_prune_tailnet_forwards" in body
+        and '-L "127.0.0.1:$port:127.0.0.1:$port"' in body,
+        body,
+    )
     expect("docker_refresh_deployment_service_health()" in body and "docker compose" in body and "upsert_arclink_service_health" in body, body)
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
     expect("sync-dashboard-user-passwords.py" in body and "control-provisioner" in body, body)

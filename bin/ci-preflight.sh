@@ -3,8 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_ROOT="$(mktemp -d /tmp/arclink-preflight.XXXXXX)"
+PREFLIGHT_CHILD_PIDS=()
 
 cleanup() {
+  local pid=""
+  for pid in "${PREFLIGHT_CHILD_PIDS[@]:-}"; do
+    if [[ -n "$pid" ]]; then
+      pkill -TERM -P "$pid" 2>/dev/null || true
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "${PREFLIGHT_CHILD_PIDS[@]:-}"; do
+    if [[ -n "$pid" ]]; then
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
   rm -rf "$TMP_ROOT"
 }
 
@@ -497,6 +510,7 @@ EOF
 
   env ARCLINK_CONFIG_FILE="$config_file" bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/watch.log" 2>&1 &
   watcher_pid=$!
+  PREFLIGHT_CHILD_PIDS+=("$watcher_pid")
   sleep 1
 
   write_test_pdf "$vault_dir/Inbox/example-lattice-watch.pdf"
@@ -670,6 +684,7 @@ PY
     ARCLINK_CONFIG_FILE="$config_file" \
     bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/notify-watch.log" 2>&1 &
   watcher_pid=$!
+  PREFLIGHT_CHILD_PIDS+=("$watcher_pid")
   sleep 1
 
   write_test_pdf "$vault_dir/Projects/notify-me.pdf"
@@ -870,6 +885,7 @@ PY
     ARCLINK_CONFIG_FILE="$config_file" \
     bash "$bin_dir/vault-watch.sh" >"$TMP_ROOT/repo-sync-watch.log" 2>&1 &
   watcher_pid=$!
+  PREFLIGHT_CHILD_PIDS+=("$watcher_pid")
   sleep 1
 
   printf 'print("v2")\n' >"$source_repo/src/main.py"

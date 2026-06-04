@@ -164,6 +164,51 @@ def test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine(
     print("PASS test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine")
 
 
+def test_worker_prefers_private_mesh_endpoint_over_legacy_inventory_ssh_host() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_private_mesh_test")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_private_mesh_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_private_mesh_test")
+    conn = memory_db(control)
+    machine, host = _seed_machine(control, inventory, conn)
+    conn.execute(
+        "UPDATE arclink_inventory_machines SET ssh_host = '203.0.113.10' WHERE machine_id = ?",
+        (machine["machine_id"],),
+    )
+    conn.execute(
+        "UPDATE arclink_fleet_hosts SET metadata_json = ? WHERE host_id = ?",
+        (
+            json.dumps(
+                {
+                    "control_network_mode": "remote",
+                    "executor": "ssh",
+                    "private_dns_name": "10.44.0.11",
+                    "ssh_host": "203.0.113.10",
+                    "ssh_user": "arclink",
+                },
+                sort_keys=True,
+            ),
+            host["host_id"],
+        ),
+    )
+    conn.commit()
+    seen: list[str] = []
+
+    def runner(host_row, kind):
+        seen.append(str(host_row.get("ssh_host") or ""))
+        return worker.ProbeResult(ok=True, payload={"ok": True, "kind": kind, "observed_load": 0}, latency_ms=3)
+
+    result = worker.process_due_hosts(
+        conn,
+        runner=runner,
+        now_iso="2026-05-16T12:01:00+00:00",
+        force=True,
+        notify=False,
+    )
+    expect(result["probe_count"] == 3, str(result))
+    expect(seen == ["10.44.0.11", "10.44.0.11", "10.44.0.11"], str(seen))
+    print("PASS test_worker_prefers_private_mesh_endpoint_over_legacy_inventory_ssh_host")
+
+
 def test_worker_uses_container_safe_probe_for_docker_local_starter() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_docker_local_starter_test")
     worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_docker_local_starter_test")
@@ -337,6 +382,7 @@ if __name__ == "__main__":
     test_due_worker_records_probe_rows_and_updates_capacity()
     test_legacy_probe_schema_is_migrated_for_worker()
     test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine()
+    test_worker_prefers_private_mesh_endpoint_over_legacy_inventory_ssh_host()
     test_worker_uses_container_safe_probe_for_docker_local_starter()
     test_worker_uses_container_safe_probe_for_legacy_control_reserve()
     test_liveness_thresholds_degrade_unreachable_and_recover()

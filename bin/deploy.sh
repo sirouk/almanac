@@ -10953,6 +10953,7 @@ run_control_enrollment() {
 
 run_control_inventory() {
   local docker_env="" db_path="" subcommand="" forced_command="" provider="" target="" hostname="" ssh_host="" ssh_user="" region="" capacity_slots="" tags="" strategy="" arg_offset=0 tail_offset=0
+  local fleet_ssh_key_path="" fleet_ssh_known_hosts_file=""
   local -a saved_control_args=()
 
   docker_env="$(docker_env_file_path)"
@@ -10982,6 +10983,11 @@ run_control_inventory() {
     arg_offset=1
     tail_offset=2
   fi
+  if [[ "$subcommand" == "probe" || "$subcommand" == "probe-all" ]]; then
+    ensure_control_fleet_ssh_key "0"
+    fleet_ssh_key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
+    fleet_ssh_known_hosts_file="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE:-${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}}"
+  fi
   case "$subcommand" in
     list)
       ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
@@ -10997,11 +11003,11 @@ run_control_inventory() {
       else
         target="${CONTROL_DEPLOY_ARGS[1]:-}"
       fi
-      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" ARCLINK_FLEET_SSH_KEY_PATH="$fleet_ssh_key_path" ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="$fleet_ssh_known_hosts_file" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" probe "$target" "${CONTROL_DEPLOY_ARGS[@]:$tail_offset}"
       ;;
     probe-all)
-      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" ARCLINK_FLEET_SSH_KEY_PATH="$fleet_ssh_key_path" ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE="$fleet_ssh_known_hosts_file" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" probe-all "${CONTROL_DEPLOY_ARGS[@]:$arg_offset}"
       ;;
     add)

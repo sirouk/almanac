@@ -483,6 +483,84 @@ def test_live_sovereign_worker_reconciles_compose_ps_health() -> None:
     print("PASS test_live_sovereign_worker_reconciles_compose_ps_health")
 
 
+def test_sovereign_worker_blocks_handoff_when_dashboard_is_created() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_created_dashboard")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_created_dashboard")
+    import arclink_executor as executor_mod
+
+    class ComposePsRunner(executor_mod.FakeDockerRunner):
+        def __init__(self, stdout: str):
+            super().__init__()
+            self.stdout = stdout
+
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            self.runs.append(
+                {
+                    "args": args,
+                    "deployment_id": deployment_id,
+                    "project_name": project_name,
+                    "env_file": env_file,
+                    "compose_file": compose_file,
+                }
+            )
+            if tuple(args) == ("ps", "--all", "--format", "json"):
+                return {"status": "ok", "stdout": self.stdout}
+            return {"status": "ok", "stdout": ""}
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    rows = [
+        {"Service": service, "State": "running", "Health": "", "Status": "Up 1 second", "Name": f"{service}-1", "Project": "arclink-dep_1"}
+        for service in worker_mod.ARCLINK_PROVISIONING_SERVICE_NAMES
+    ]
+    for row in rows:
+        if row["Service"] == "nextcloud":
+            row["Health"] = "healthy"
+            row["Status"] = "Up 1 second (healthy)"
+        if row["Service"] == "managed-context-install":
+            row["State"] = "exited"
+            row["ExitCode"] = 0
+            row["Status"] = "Exited (0)"
+        if row["Service"] == "hermes-dashboard":
+            row["State"] = "created"
+            row["Status"] = "Created"
+    runner = ComposePsRunner("\n".join(json.dumps(row) for row in rows))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(
+                live_enabled=True,
+                adapter_name="local",
+                state_root_base=cfg.state_root_base,
+            ),
+            secret_resolver=AnySecretResolver(executor_mod),
+            docker_runner=runner,
+        )
+        cfg = worker_mod.SovereignWorkerConfig(
+            **{
+                **cfg.__dict__,
+                "ingress_mode": "tailscale",
+                "base_domain": "worker.example.test",
+                "edge_target": "worker.example.test",
+                "tailscale_dns_name": "worker.example.test",
+                "tailscale_host_strategy": "path",
+                "env": {
+                    **dict(cfg.env),
+                    "ARCLINK_INGRESS_MODE": "tailscale",
+                    "ARCLINK_TAILSCALE_DNS_NAME": "worker.example.test",
+                    "ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY": "path",
+                },
+            }
+        )
+        results = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+
+    expect(results[0]["status"] == "failed", str(results))
+    expect("hermes-dashboard=starting" in results[0]["error"], str(results))
+    deployment = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(deployment["status"] == "provisioning_failed", str(dict(deployment)))
+    print("PASS test_sovereign_worker_blocks_handoff_when_dashboard_is_created")
+
+
 def test_tailscale_sovereign_worker_skips_cloudflare_dns() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_tailscale")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailscale")
@@ -1330,6 +1408,7 @@ if __name__ == "__main__":
     test_crew_dashboard_access_state_refreshes_sibling_switchers()
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
+    test_sovereign_worker_blocks_handoff_when_dashboard_is_created()
     test_tailscale_sovereign_worker_skips_cloudflare_dns()
     test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns()
     test_sovereign_worker_tears_down_active_deployment_idempotently()

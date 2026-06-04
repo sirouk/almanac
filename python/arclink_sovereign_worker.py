@@ -1066,7 +1066,7 @@ def _apply_deployment(
         blockers = {
             service: status
             for service, status in service_statuses.items()
-            if status in {"failed", "unhealthy", "missing"}
+            if status in {"failed", "unhealthy", "missing", "starting"}
         }
         if blockers:
             raise ArcLinkSovereignWorkerError(

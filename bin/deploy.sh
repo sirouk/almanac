@@ -26,8 +26,6 @@ MODE=""
 PRIVILEGED_MODE=""
 CONTROL_DEPLOY_COMMAND=""
 CONTROL_DEPLOY_ARGS=()
-DOCKER_DEPLOY_COMMAND=""
-DOCKER_DEPLOY_ARGS=()
 DISCOVERED_CONFIG=""
 ARCLINK_REEXEC_ATTEMPTED=0
 ARCLINK_NAME="${ARCLINK_NAME:-arclink}"
@@ -558,7 +556,7 @@ Usage:
   deploy.sh control reset-production
   deploy.sh control fleet-key
   deploy.sh control register-worker
-  deploy.sh control enrollment [mint|list|revoke|rotate-secret]
+  deploy.sh control enrollment [mint|list|revoke|rotate-secret|verify-audit-chain]
   deploy.sh control inventory [list|health|probe|probe-all|add|drain|remove|rotate-key|re-attest|set-strategy]
 
 Sovereign Control Node:
@@ -580,6 +578,7 @@ Sovereign Control Node:
   deploy.sh control register-worker --hostname worker-1 --ssh-host 10.44.0.11 --bootstrap-remote --bootstrap-ssh-host 203.0.113.10 --bootstrap-ssh-user root --ssh-user arclink --json
   deploy.sh control enrollment mint # mint a one-time worker enrollment token
   deploy.sh control enrollment rotate-secret # rotate HMAC root and revoke pending tokens
+  deploy.sh control enrollment verify-audit-chain --json
   deploy.sh control inventory list  # list inventory machines and ASU load
   deploy.sh control inventory health --json
   deploy.sh control inventory probe-all --json
@@ -703,25 +702,11 @@ while [[ $# -gt 0 ]]; do
     docker)
       MODE="legacy-docker"
       shift
-      if [[ $# -gt 0 ]]; then
-        case "$1" in
-          -h|--help)
-            DOCKER_DEPLOY_COMMAND="help"
-            shift
-            ;;
-          *)
-            DOCKER_DEPLOY_COMMAND="$1"
-            shift
-            ;;
-        esac
-      fi
-      DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
     docker-install|docker-upgrade|docker-reconfigure|docker-bootstrap|docker-config|docker-build|docker-up|docker-down|docker-ps|docker-ports|docker-logs|docker-health|docker-teardown|docker-write-config|docker-remove|docker-notion-ssot|docker-notion-migrate|docker-notion-transfer|docker-enrollment-status|docker-enrollment-trace|docker-enrollment-align|docker-enrollment-reset|docker-curator-setup|docker-rotate-nextcloud-secrets|docker-agent-payload|docker-pins-show|docker-pins-check|docker-pin-upgrade-notify|docker-hermes-upgrade|docker-hermes-upgrade-check|docker-qmd-upgrade|docker-qmd-upgrade-check|docker-nextcloud-upgrade|docker-nextcloud-upgrade-check|docker-postgres-upgrade|docker-postgres-upgrade-check|docker-redis-upgrade|docker-redis-upgrade-check|docker-nvm-upgrade|docker-nvm-upgrade-check|docker-node-upgrade|docker-node-upgrade-check)
       MODE="legacy-docker"
       shift
-      DOCKER_DEPLOY_ARGS=("$@")
       break
       ;;
     notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|write-config|remove)
@@ -1226,6 +1211,7 @@ Usage:
   deploy.sh control enrollment list
   deploy.sh control enrollment revoke <enrollment-id>
   deploy.sh control enrollment rotate-secret
+  deploy.sh control enrollment verify-audit-chain --json
   deploy.sh control inventory list
   deploy.sh control inventory health --json
   deploy.sh control inventory probe <machine-id|hostname>
@@ -1255,14 +1241,6 @@ Shortcut aliases:
   deploy.sh control-inventory
   deploy.sh control-inventory-list
 EOF
-}
-
-docker_usage() {
-  retired_shared_host_docker_mode
-}
-
-choose_docker_mode() {
-  retired_shared_host_docker_mode
 }
 
 choose_control_mode() {
@@ -8240,54 +8218,6 @@ run_agent_payload() {
   print_agent_install_payload
 }
 
-docker_command_from_mode() {
-  case "$1" in
-    docker-install) printf '%s\n' "install" ;;
-    docker-upgrade) printf '%s\n' "upgrade" ;;
-    docker-reconfigure) printf '%s\n' "reconfigure" ;;
-    docker-bootstrap) printf '%s\n' "bootstrap" ;;
-    docker-config) printf '%s\n' "config" ;;
-    docker-build) printf '%s\n' "build" ;;
-    docker-up) printf '%s\n' "up" ;;
-    docker-down) printf '%s\n' "down" ;;
-    docker-ps) printf '%s\n' "ps" ;;
-    docker-ports) printf '%s\n' "ports" ;;
-    docker-logs) printf '%s\n' "logs" ;;
-    docker-health) printf '%s\n' "health" ;;
-    docker-teardown) printf '%s\n' "teardown" ;;
-    docker-write-config) printf '%s\n' "write-config" ;;
-    docker-remove) printf '%s\n' "remove" ;;
-    docker-notion-ssot) printf '%s\n' "notion-ssot" ;;
-    docker-notion-migrate) printf '%s\n' "notion-migrate" ;;
-    docker-notion-transfer) printf '%s\n' "notion-transfer" ;;
-    docker-enrollment-status) printf '%s\n' "enrollment-status" ;;
-    docker-enrollment-trace) printf '%s\n' "enrollment-trace" ;;
-    docker-enrollment-align) printf '%s\n' "enrollment-align" ;;
-    docker-enrollment-reset) printf '%s\n' "enrollment-reset" ;;
-    docker-curator-setup) printf '%s\n' "curator-setup" ;;
-    docker-rotate-nextcloud-secrets) printf '%s\n' "rotate-nextcloud-secrets" ;;
-    docker-agent-payload) printf '%s\n' "agent-payload" ;;
-    docker-pins-show) printf '%s\n' "pins-show" ;;
-    docker-pins-check) printf '%s\n' "pins-check" ;;
-    docker-pin-upgrade-notify) printf '%s\n' "pin-upgrade-notify" ;;
-    docker-hermes-upgrade) printf '%s\n' "hermes-upgrade" ;;
-    docker-hermes-upgrade-check) printf '%s\n' "hermes-upgrade-check" ;;
-    docker-qmd-upgrade) printf '%s\n' "qmd-upgrade" ;;
-    docker-qmd-upgrade-check) printf '%s\n' "qmd-upgrade-check" ;;
-    docker-nextcloud-upgrade) printf '%s\n' "nextcloud-upgrade" ;;
-    docker-nextcloud-upgrade-check) printf '%s\n' "nextcloud-upgrade-check" ;;
-    docker-postgres-upgrade) printf '%s\n' "postgres-upgrade" ;;
-    docker-postgres-upgrade-check) printf '%s\n' "postgres-upgrade-check" ;;
-    docker-redis-upgrade) printf '%s\n' "redis-upgrade" ;;
-    docker-redis-upgrade-check) printf '%s\n' "redis-upgrade-check" ;;
-    docker-nvm-upgrade) printf '%s\n' "nvm-upgrade" ;;
-    docker-nvm-upgrade-check) printf '%s\n' "nvm-upgrade-check" ;;
-    docker-node-upgrade) printf '%s\n' "node-upgrade" ;;
-    docker-node-upgrade-check) printf '%s\n' "node-upgrade-check" ;;
-    *) printf '%s\n' "" ;;
-  esac
-}
-
 run_arclink_docker() {
   local helper="$BOOTSTRAP_DIR/bin/arclink-docker.sh"
 
@@ -8378,207 +8308,6 @@ write_docker_runtime_config() {
   chmod 600 "$target"
 }
 
-maybe_run_docker_org_profile_builder() {
-  local saved_priv_config_dir="${ARCLINK_PRIV_CONFIG_DIR:-}"
-  local saved_priv_dir="${ARCLINK_PRIV_DIR:-}"
-
-  ARCLINK_PRIV_DIR="$BOOTSTRAP_DIR/arclink-priv"
-  ARCLINK_PRIV_CONFIG_DIR="$BOOTSTRAP_DIR/arclink-priv/config"
-  maybe_run_org_profile_builder "$BOOTSTRAP_DIR"
-  ARCLINK_PRIV_DIR="$saved_priv_dir"
-  ARCLINK_PRIV_CONFIG_DIR="$saved_priv_config_dir"
-}
-
-collect_docker_install_answers() {
-  local docker_env="" default_domain="" default_nextcloud_port="" default_nextcloud_admin_user=""
-  local default_enable_nextcloud="" default_enable_private_git="" default_enable_quarto="" default_seed_vault=""
-  local default_enable_tailscale_serve="" default_tailscale_serve_port=""
-  local default_enable_tailscale_notion_webhook_funnel="" default_tailscale_notion_webhook_funnel_port=""
-  local default_tailscale_notion_webhook_funnel_path="" default_tailscale_operator_user=""
-  local default_pdf_vision_endpoint="" default_pdf_vision_model="" default_pdf_vision_api_key=""
-  local default_git_name="" default_git_email="" current_postgres_password="" current_nextcloud_admin_password=""
-  local nextcloud_state_present="0" nextcloud_admin_password_input="" default_org_profile_builder="0"
-
-  docker_env="$(docker_env_file_path)"
-  load_docker_runtime_config
-
-  echo "ArcLink deploy: Shared Host Docker install / repair from current checkout"
-  echo
-  echo "This is the operator-led Shared Host substrate in Docker. It does not"
-  echo "configure ArcPod ingress or ask Cloudflare vs Tailscale."
-  echo "For the Dockerized paid control node, run: ./deploy.sh control install"
-  echo
-  echo "Shared Host Docker mode uses fixed container paths and the current checkout as the host bind mount:"
-  echo "  host repo:    $BOOTSTRAP_DIR"
-  echo "  host private: $BOOTSTRAP_DIR/arclink-priv"
-  echo "  container:    /home/arclink/arclink"
-  echo
-
-  default_nextcloud_port="${NEXTCLOUD_PORT:-18080}"
-  default_git_name="${BACKUP_GIT_AUTHOR_NAME:-ArcLink Backup}"
-  default_git_email="${BACKUP_GIT_AUTHOR_EMAIL:-arclink@localhost}"
-  default_enable_nextcloud="${ENABLE_NEXTCLOUD:-1}"
-  default_enable_tailscale_serve="${ENABLE_TAILSCALE_SERVE:-0}"
-  default_tailscale_serve_port="${TAILSCALE_SERVE_PORT:-443}"
-  default_enable_tailscale_notion_webhook_funnel="${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}"
-  default_tailscale_notion_webhook_funnel_port="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}"
-  default_tailscale_notion_webhook_funnel_path="$(normalize_http_path "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}")"
-  default_tailscale_operator_user="${TAILSCALE_OPERATOR_USER:-$(id -un)}"
-  default_enable_private_git="${ENABLE_PRIVATE_GIT:-1}"
-  default_enable_quarto="${ENABLE_QUARTO:-0}"
-  default_seed_vault="${SEED_SAMPLE_VAULT:-1}"
-  default_nextcloud_admin_user="${NEXTCLOUD_ADMIN_USER:-admin}"
-  default_pdf_vision_endpoint="${PDF_VISION_ENDPOINT:-}"
-  default_pdf_vision_model="${PDF_VISION_MODEL:-}"
-  default_pdf_vision_api_key="${PDF_VISION_API_KEY:-}"
-
-  print_tailscale_https_certificate_guidance() {
-    cat <<'EOF'
-Tailscale Serve/Funnel prerequisite
-  Before enabling Tailscale HTTPS routes here, open:
-    https://login.tailscale.com/admin/dns
-  In the same tailnet as this host, enable MagicDNS and HTTPS Certificates.
-  Without HTTPS Certificates, Tailscale Serve/Funnel will pause on a browser
-  consent URL or fail before ArcLink can publish the routes.
-  If the installer prints a Tailscale approval URL later:
-    https://login.tailscale.com/f/funnel?...  for the shared-host Notion webhook
-    https://login.tailscale.com/f/serve?...   for tailnet-only Nextcloud/MCP
-  open it as a tailnet admin, approve the feature for this node, then return
-  to this terminal and press ENTER so ArcLink can retry the route.
-
-EOF
-  }
-
-  ARCLINK_ORG_NAME="$(normalize_optional_answer "$(ask "Organization name (type none to clear)" "${ARCLINK_ORG_NAME:-}")")"
-  ARCLINK_ORG_MISSION="$(normalize_optional_answer "$(ask "Organization mission (type none to clear)" "${ARCLINK_ORG_MISSION:-}")")"
-  ARCLINK_ORG_PRIMARY_PROJECT="$(normalize_optional_answer "$(ask "Primary project or focus (type none to clear)" "${ARCLINK_ORG_PRIMARY_PROJECT:-}")")"
-  ARCLINK_ORG_TIMEZONE="$(ask_validated_optional "Organization timezone (IANA, e.g. America/New_York; type none to clear)" "${ARCLINK_ORG_TIMEZONE:-Etc/UTC}" validate_org_timezone "Please enter a valid IANA timezone like America/New_York or type none.")"
-  ARCLINK_ORG_QUIET_HOURS="$(ask_validated_optional "Organization quiet hours in local time (HH:MM-HH:MM, optional note; type none to clear)" "${ARCLINK_ORG_QUIET_HOURS:-}" validate_org_quiet_hours "Please enter quiet hours like 22:00-08:00 or 22:00-08:00 weekdays, or type none.")"
-  collect_org_provider_answers
-
-  if [[ ! -f "$BOOTSTRAP_DIR/arclink-priv/config/org-profile.yaml" ]]; then
-    default_org_profile_builder="1"
-  fi
-  ARCLINK_ORG_PROFILE_BUILDER_ENABLED="$(ask_yes_no "Build or edit the private operating profile interactively now" "$default_org_profile_builder")"
-
-  QMD_INDEX_NAME="${QMD_INDEX_NAME:-arclink}"
-  QMD_COLLECTION_NAME="${QMD_COLLECTION_NAME:-vault}"
-  QMD_RUN_EMBED="${QMD_RUN_EMBED:-1}"
-  QMD_MCP_PORT="${QMD_MCP_PORT:-8181}"
-  ARCLINK_MCP_PORT="${ARCLINK_MCP_PORT:-8282}"
-  ARCLINK_NOTION_WEBHOOK_PORT="${ARCLINK_NOTION_WEBHOOK_PORT:-8283}"
-  BACKUP_GIT_BRANCH="${BACKUP_GIT_BRANCH:-main}"
-  ARCLINK_UPSTREAM_REPO_URL="${ARCLINK_UPSTREAM_REPO_URL:-$(canonical_arclink_upstream_repo_url)}"
-  use_detected_upstream_repo_url_if_placeholder
-  ARCLINK_UPSTREAM_BRANCH="${ARCLINK_UPSTREAM_BRANCH:-arclink}"
-  collect_upstream_git_answers
-
-  BACKUP_GIT_DEPLOY_KEY_PATH="${BACKUP_GIT_DEPLOY_KEY_PATH:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-ed25519}"
-  BACKUP_GIT_KNOWN_HOSTS_FILE="${BACKUP_GIT_KNOWN_HOSTS_FILE:-/home/arclink/arclink/arclink-priv/secrets/arclink-backup-known_hosts}"
-  collect_backup_git_answers
-  BACKUP_GIT_AUTHOR_NAME="$(ask "Git author name" "$default_git_name")"
-  BACKUP_GIT_AUTHOR_EMAIL="$(ask "Git author email" "$default_git_email")"
-  NEXTCLOUD_PORT="$(ask "Nextcloud local port" "$default_nextcloud_port")"
-
-  detect_tailscale
-  default_domain="${NEXTCLOUD_TRUSTED_DOMAIN:-localhost}"
-  if [[ -n "$TAILSCALE_DNS_NAME" ]]; then
-    default_domain="$TAILSCALE_DNS_NAME"
-    default_enable_tailscale_serve="1"
-    echo "Detected Tailscale DNS name: $TAILSCALE_DNS_NAME"
-    echo
-  elif [[ -n "$TAILSCALE_TAILNET" ]]; then
-    default_domain="$TAILSCALE_TAILNET"
-    default_enable_tailscale_serve="1"
-    echo "Detected Tailscale tailnet:  $TAILSCALE_TAILNET"
-    echo
-  fi
-  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "$default_enable_tailscale_serve" == "1" || "$default_enable_tailscale_notion_webhook_funnel" == "1" ]]; then
-    print_tailscale_https_certificate_guidance
-  fi
-
-  NEXTCLOUD_TRUSTED_DOMAIN="$(ask "Nextcloud trusted domain / Tailscale hostname" "$default_domain")"
-  POSTGRES_DB="${POSTGRES_DB:-nextcloud}"
-  POSTGRES_USER="${POSTGRES_USER:-nextcloud}"
-  NEXTCLOUD_VAULT_MOUNT_POINT="${NEXTCLOUD_VAULT_MOUNT_POINT:-/Vault}"
-  ENABLE_NEXTCLOUD="$(ask_yes_no "Enable Nextcloud" "$default_enable_nextcloud")"
-  if [[ "$ENABLE_NEXTCLOUD" == "1" ]]; then
-    ENABLE_TAILSCALE_SERVE="$(ask_yes_no "Enable Tailscale HTTPS proxy for Nextcloud (tailnet only)" "$default_enable_tailscale_serve")"
-  else
-    ENABLE_TAILSCALE_SERVE="0"
-  fi
-  if [[ -n "$TAILSCALE_DNS_NAME" || -n "$TAILSCALE_TAILNET" || "${ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL:-0}" == "1" ]]; then
-    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="$(ask_yes_no "Enable public Tailscale Funnel for the shared-host Notion webhook only" "$default_enable_tailscale_notion_webhook_funnel")"
-    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$(ask "Public Tailscale Funnel HTTPS port for the shared-host Notion webhook" "$default_tailscale_notion_webhook_funnel_port")"
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$(normalize_http_path "$(ask "Public Tailscale Funnel path for the shared-host Notion webhook" "$default_tailscale_notion_webhook_funnel_path")")"
-    else
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
-      TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
-    fi
-  else
-    ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL="0"
-    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT="$default_tailscale_notion_webhook_funnel_port"
-    TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH="$default_tailscale_notion_webhook_funnel_path"
-  fi
-  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" ]]; then
-    if [[ "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" == "$default_tailscale_serve_port" ]]; then
-      default_tailscale_serve_port="8443"
-    fi
-    TAILSCALE_SERVE_PORT="$(ask "Tailnet-only Tailscale HTTPS port for Nextcloud and internal MCP routes" "$default_tailscale_serve_port")"
-  else
-    TAILSCALE_SERVE_PORT="$default_tailscale_serve_port"
-  fi
-  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" && "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" && "${TAILSCALE_SERVE_PORT:-443}" == "${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PORT:-443}" ]]; then
-    echo "Tailscale Serve and the shared-host Notion webhook Funnel cannot share the same HTTPS port." >&2
-    echo "Choose different values for the private tailnet port and the public webhook port." >&2
-    return 1
-  fi
-  if [[ "$ENABLE_TAILSCALE_SERVE" == "1" || "$ENABLE_TAILSCALE_NOTION_WEBHOOK_FUNNEL" == "1" ]]; then
-    TAILSCALE_OPERATOR_USER="$(ask "Tailscale operator user for serve/funnel management" "$default_tailscale_operator_user")"
-  else
-    TAILSCALE_OPERATOR_USER=""
-  fi
-
-  if docker_nextcloud_state_has_existing_data; then
-    nextcloud_state_present="1"
-  fi
-  current_postgres_password="${POSTGRES_PASSWORD:-}"
-  if [[ -z "$current_postgres_password" || "$nextcloud_state_present" != "1" ]]; then
-    POSTGRES_PASSWORD="$(preserve_or_randomize_secret "$current_postgres_password")"
-  else
-    POSTGRES_PASSWORD="$current_postgres_password"
-  fi
-  NEXTCLOUD_ADMIN_USER="$(ask "Nextcloud admin user" "$default_nextcloud_admin_user")"
-  current_nextcloud_admin_password="${NEXTCLOUD_ADMIN_PASSWORD:-}"
-  if [[ -z "$current_nextcloud_admin_password" || "$nextcloud_state_present" != "1" ]]; then
-    NEXTCLOUD_ADMIN_PASSWORD="$(preserve_or_randomize_secret "$current_nextcloud_admin_password")"
-  else
-    NEXTCLOUD_ADMIN_PASSWORD="$current_nextcloud_admin_password"
-  fi
-  nextcloud_admin_password_input="$(ask_secret_keep_default "Nextcloud admin password (ENTER keeps current)" "$NEXTCLOUD_ADMIN_PASSWORD")"
-  NEXTCLOUD_ADMIN_PASSWORD="${nextcloud_admin_password_input:-$NEXTCLOUD_ADMIN_PASSWORD}"
-
-  ENABLE_PRIVATE_GIT="$(ask_yes_no "Initialize arclink-priv as a git repo" "$default_enable_private_git")"
-  ENABLE_QUARTO="$(ask_yes_no "Enable Quarto job container" "$default_enable_quarto")"
-  SEED_SAMPLE_VAULT="$(ask_yes_no "Seed a starter vault structure" "$default_seed_vault")"
-  collect_qmd_embedding_answers
-  PDF_VISION_ENDPOINT="$(normalize_optional_answer "$(ask "OpenAI-compatible vision endpoint for PDF page captions (base /v1 or full /v1/chat/completions; type none to disable)" "$default_pdf_vision_endpoint")")"
-  PDF_VISION_MODEL="$(normalize_optional_answer "$(ask "Vision model name for PDF page captions (type none to disable)" "$default_pdf_vision_model")")"
-  PDF_VISION_API_KEY="$(ask_secret_with_default "Vision API key for PDF page captions (ENTER keeps current, type none to clear)" "$default_pdf_vision_api_key")"
-  PDF_VISION_MAX_PAGES="${PDF_VISION_MAX_PAGES:-6}"
-  if [[ -z "$PDF_VISION_ENDPOINT" && -z "$PDF_VISION_MODEL" && -z "$PDF_VISION_API_KEY" ]]; then
-    PDF_VISION_ENDPOINT=""
-    PDF_VISION_MODEL=""
-    PDF_VISION_API_KEY=""
-  fi
-
-  write_docker_runtime_config "$docker_env"
-  maybe_run_docker_org_profile_builder
-  CONFIG_TARGET="$docker_env"
-  echo
-  echo "Wrote Docker config to: $docker_env"
-}
 
 normalize_control_ingress_mode() {
   local value="${1:-domain}"
@@ -11491,34 +11220,6 @@ collect_control_install_answers() {
   echo "Wrote Sovereign Control Node config to: $docker_env"
 }
 
-run_docker_install_flow() {
-  local run_curator_setup="${1:-1}"
-  local operation="docker-upgrade"
-
-  if [[ "$run_curator_setup" == "1" ]]; then
-    operation="docker-install"
-  fi
-  begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/arclink-priv/state"
-  trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
-
-  echo "Installing or repairing ArcLink Docker stack from this checkout..."
-  run_arclink_docker bootstrap
-  if [[ "$run_curator_setup" == "1" && "${ARCLINK_DOCKER_SKIP_OPERATOR_CONFIG:-0}" != "1" && -t 0 ]]; then
-    collect_docker_install_answers
-  fi
-  run_arclink_docker build
-  run_arclink_docker up
-  if [[ "$run_curator_setup" == "1" && "${ARCLINK_DOCKER_SKIP_CURATOR_SETUP:-0}" != "1" ]]; then
-    run_arclink_docker curator-setup
-  fi
-  run_arclink_docker reconcile
-  run_arclink_docker record-release
-  run_arclink_docker ports
-  run_arclink_docker health
-  run_arclink_docker live-smoke
-  finish_deploy_operation
-  trap 'arclink_deploy_stable_copy_cleanup' EXIT
-}
 
 register_control_public_bot_actions() {
   local docker_env=""
@@ -12915,51 +12616,6 @@ run_control_deploy_flow() {
   esac
 }
 
-run_docker_reconfigure_flow() {
-  echo "Refreshing ArcLink Docker generated config and port assignments..."
-  run_arclink_docker bootstrap
-  run_arclink_docker config -q
-  run_arclink_docker ports
-}
-
-run_docker_deploy_flow() {
-  local command="${DOCKER_DEPLOY_COMMAND:-}"
-
-  if [[ "$MODE" != "docker" ]]; then
-    command="$(docker_command_from_mode "$MODE")"
-  fi
-  if [[ -z "$command" || "$command" == "menu" ]]; then
-    if choose_docker_mode; then
-      command="${DOCKER_DEPLOY_COMMAND:-}"
-    else
-      choose_mode
-      return 0
-    fi
-  fi
-
-  case "$command" in
-    help|-h|--help)
-      docker_usage
-      ;;
-    install)
-      run_docker_install_flow 1
-      ;;
-    upgrade)
-      run_docker_install_flow 0
-      ;;
-    reconfigure)
-      run_docker_reconfigure_flow
-      ;;
-    bootstrap|write-config|config|build|up|reconcile|down|ps|ports|logs|health|record-release|live-smoke|teardown|remove|notion-ssot|notion-migrate|notion-transfer|enrollment-status|enrollment-trace|enrollment-align|enrollment-reset|curator-setup|rotate-nextcloud-secrets|agent-payload|agent|pins-show|pins-check|pin-upgrade-notify|hermes-upgrade|hermes-upgrade-check|qmd-upgrade|qmd-upgrade-check|nextcloud-upgrade|nextcloud-upgrade-check|postgres-upgrade|postgres-upgrade-check|redis-upgrade|redis-upgrade-check|nvm-upgrade|nvm-upgrade-check|node-upgrade|node-upgrade-check)
-      run_arclink_docker "$command" ${DOCKER_DEPLOY_ARGS[@]+"${DOCKER_DEPLOY_ARGS[@]}"}
-      ;;
-    *)
-      echo "Unknown Docker deploy command: ${command:-<empty>}" >&2
-      docker_usage >&2
-      return 2
-      ;;
-  esac
-}
 
 run_install_flow() {
   local reexec_status=""

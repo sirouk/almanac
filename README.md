@@ -49,8 +49,8 @@ so Fleet Shared stays unified without another operator prompt.
 | Operator | Platform owner/admin surface. Operator Raven owns powerful control commands; Operator Hermes runs as a first-class Control Node stack service, not a Captain ArcPod. | Operator Telegram/Discord, `./deploy.sh control ...`, `/upgrade`, `/action_status` |
 | Hermes Agent Runtime | Captain and Operator agent homes, plugins, skills, MCP, qmd, vault, memory synthesis, dashboard access, and command menus maintained by ArcLink installers. | `bin/install-deployment-hermes-home.sh`, rollout/upgrade rails |
 
-The Control Node still uses Docker Compose internally. That does not mean
-`./deploy.sh docker ...` is a supported public mode. Use `./deploy.sh control ...`
+The Control Node still uses Docker Compose internally. The old
+`./deploy.sh docker ...` public mode remains retired; use `./deploy.sh control ...`
 so the Operator has one control center and ArcPods stay under fleet management.
 
 ## Control Node Quick Start

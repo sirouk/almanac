@@ -43,8 +43,8 @@ close live proof, policy, or security-hardening work by description.
 
 Reviewer acceptance checklist for this atlas:
 
-- The reader can name the three operating modes and keep Control Node,
-  Shared Host, and Shared Host Docker separate.
+- The reader can name the single public Control Node lane and keep retained
+  Shared Host and Docker substrate/migration helpers separate from it.
 - The reader can follow the Captain path from public entry through Raven,
   checkout, provisioning, dashboard, Hermes workspace, sharing, provider
   state, operations, and recovery.
@@ -85,8 +85,8 @@ handoffs, and requires live behavior to stay proof-gated until proven
 
 ## Whole System Map
 
-ArcLink has three operating modes, and the journey must not collapse them into
-one mental model.
+ArcLink has one public product lane, with two retained substrate/migration
+surfaces that must not be mistaken for active install modes.
 
 1. Sovereign Control Node is the paid self-serve product path. Users enter from
    web, Telegram, or Discord, complete Stripe checkout, and receive an ArcPod
@@ -94,14 +94,13 @@ one mental model.
    webhooks, Stripe, fleet placement, provisioning, dashboards, and admin
    operations (`docs/arclink/sovereign-control-node.md:3-7`,
    `docs/arclink/sovereign-control-node.md:21-36`).
-2. Shared Host is the operator-led systemd path for Curator, enrolled Unix
-   users, per-user Hermes homes, shared vault, qmd, Notion, backups, and live
-   host repairs. Its canonical commands are still the bare `deploy.sh` commands
-   in the agent operating guide.
-3. Shared Host Docker is containerized validation of the shared-host substrate,
-   not the paid ArcPod control surface. Control Node work uses
-   `./deploy.sh control ...`, while shared-host Docker uses
-   `./deploy.sh docker ...` (`docs/arclink/sovereign-control-node.md:42-49`,
+2. Shared Host/systemd state is retained for migration, archival recovery,
+   tests, and installer reuse. It is not the public install lane, and bare
+   `./deploy.sh install`, `./deploy.sh upgrade`, and `./deploy.sh health`
+   intentionally route to the Control Node.
+3. The Docker helper is the Control Node substrate and trusted-host test/migration
+   helper. Operators use `./deploy.sh control ...`; the retired
+   `./deploy.sh docker ...` lane fails closed (`docs/arclink/sovereign-control-node.md:42-49`,
    `docs/arclink/control-node-production-runbook.md:29-32`).
 
 The actor names are part of the product contract. The paying owner is the
@@ -616,24 +615,22 @@ cancel, and comp, with operation kind, required adapter, proof boundary, and
 fail-closed reason visible to the UI and runbooks (`python/arclink_dashboard.py`,
 `web/src/app/admin/page.tsx`, `docs/arclink/control-node-production-runbook.md`).
 
-Shared Host operators still use the canonical bare deploy commands for install,
-upgrade, health, enrollment trace/reset, org profile, Notion migration/transfer,
-service repair, deploy keys, and release state. Docker shared-host validation
-uses the `./deploy.sh docker ...` family. Live ArcPod product operations use the
-`./deploy.sh control ...` family.
+Operators use `./deploy.sh control ...` for install, upgrade, health,
+enrollment, inventory, backup, reset, and provision-once flows. Trusted Docker
+substrate helpers remain in `bin/arclink-docker.sh` for Control Node internals,
+tests, and migration repair; they are not a public journey. The retired
+`./deploy.sh docker ...` spellings fail closed so an operator cannot
+accidentally leave the Control Node lane.
 
-Shared Host fresh install remains a maintained operator path, not a deprecated
-leftover. Its source path runs system bootstrap, repo/private-state setup,
-system and user service installation, Curator bootstrap, agent realignment,
-strict health, and live-agent smoke when present. What is not current in this
-handoff is a fresh host-mutating install/enrollment proof: `GAP-028` and
-`PG-SHARED-HOST` own the need for an authorized `./test.sh` or
-`bin/ci-install-smoke.sh` run before calling that mode freshly smoke-proven.
+Shared Host fresh install is now a migration/test substrate path rather than a
+public handoff target. Historical source paths still exist for recovery and
+compatibility, but the current user journey and live deployment proof belong to
+the Sovereign Control Node and registered fleet workers.
 
-Those upgrade paths are locally modeled and regression-tested, but live upgrade
-readiness is still governed by `GAP-026` and `PG-UPGRADE`: the relevant
-shared-host, Docker, Control Node, or component-pin upgrade needs redacted
-release-state, health, and smoke evidence before the claim can move to `real`.
+Control Node and component-pin upgrade paths are locally modeled and
+regression-tested. Live readiness is governed by redacted release-state, health,
+fleet, and smoke evidence from the Control Node upgrade path before the claim
+can move to `real`.
 
 Backups are documented for control database, per-deployment state roots,
 Nextcloud/Postgres volumes, vault git history, and configuration, with a

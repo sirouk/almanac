@@ -676,7 +676,7 @@ def test_install_and_upgrade_mark_deploy_operation_window() -> None:
     text = DEPLOY_SH.read_text()
     install_snippet = extract(text, "run_root_install() {", "run_root_upgrade() {")
     upgrade_snippet = extract(text, "run_root_upgrade() {", "run_root_remove() {")
-    docker_snippet = extract(text, "run_docker_install_flow() {", "run_docker_reconfigure_flow() {")
+    control_snippet = extract(text, "run_control_install_flow() {", "ensure_control_operator_agent() {")
     expect("begin_deploy_operation() {" in text, "expected deploy-operation marker helper")
     expect("arclink-deploy-operation.json" in text, "expected deploy-operation marker file")
     expect("arclink-deploy-operation.lock" in text, "expected deploy-operation lock file")
@@ -687,10 +687,10 @@ def test_install_and_upgrade_mark_deploy_operation_window() -> None:
     expect('begin_deploy_operation "upgrade" "$STATE_DIR"' in upgrade_snippet, upgrade_snippet)
     expect("finish_deploy_operation" in install_snippet, install_snippet)
     expect("finish_deploy_operation" in upgrade_snippet, upgrade_snippet)
-    expect('operation="docker-install"' in docker_snippet, docker_snippet)
-    expect('operation="docker-upgrade"' in docker_snippet, docker_snippet)
-    expect('begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/arclink-priv/state"' in docker_snippet, docker_snippet)
-    expect("finish_deploy_operation" in docker_snippet, docker_snippet)
+    expect('operation="control-install"' in control_snippet, control_snippet)
+    expect('operation="control-upgrade"' in control_snippet, control_snippet)
+    expect('begin_deploy_operation "$operation" "$BOOTSTRAP_DIR/arclink-priv/state"' in control_snippet, control_snippet)
+    expect("finish_deploy_operation" in control_snippet, control_snippet)
     print("PASS test_install_and_upgrade_mark_deploy_operation_window")
 
 
@@ -1360,28 +1360,27 @@ printf 'PROMPTS_END\\n'
     print("PASS test_collect_install_answers_moves_tailnet_serve_when_public_notion_funnel_uses_443")
 
 
-def test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows() -> None:
+def test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_flow_only() -> None:
     text = DEPLOY_SH.read_text()
     native_snippet = extract(text, "collect_install_answers() {", "collect_remove_answers() {")
-    docker_snippet = extract(text, "collect_docker_install_answers() {", "run_docker_install_flow() {")
-    for label, snippet in (("native", native_snippet), ("docker", docker_snippet)):
-        expect(
-            "https://login.tailscale.com/admin/dns" in snippet,
-            f"expected {label} onboarding to point operators to the Tailscale DNS admin page",
-        )
-        expect(
-            "MagicDNS and HTTPS Certificates" in snippet,
-            f"expected {label} onboarding to name the required Tailscale settings",
-        )
-        expect(
-            "https://login.tailscale.com/f/funnel" in snippet,
-            f"expected {label} onboarding to explain the Tailscale Funnel approval URL",
-        )
-        expect(
-            "tailnet-only Nextcloud/MCP" in snippet,
-            f"expected {label} onboarding to distinguish public Funnel from tailnet-only Serve",
-        )
-    print("PASS test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows")
+    expect(
+        "https://login.tailscale.com/admin/dns" in native_snippet,
+        "expected native migration onboarding to point operators to the Tailscale DNS admin page",
+    )
+    expect(
+        "MagicDNS and HTTPS Certificates" in native_snippet,
+        "expected native migration onboarding to name the required Tailscale settings",
+    )
+    expect(
+        "https://login.tailscale.com/f/funnel" in native_snippet,
+        "expected native migration onboarding to explain the Tailscale Funnel approval URL",
+    )
+    expect(
+        "tailnet-only Nextcloud/MCP" in native_snippet,
+        "expected native migration onboarding to distinguish public Funnel from tailnet-only Serve",
+    )
+    expect("collect_docker_install_answers()" not in text, "retired Docker answer collector should stay removed")
+    print("PASS test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_flow_only")
 
 
 def test_collect_install_answers_does_not_prompt_for_telegram_token_up_front() -> None:
@@ -2051,10 +2050,9 @@ def test_write_answers_file_persists_host_dependency_choices() -> None:
     print("PASS test_write_answers_file_persists_host_dependency_choices")
 
 
-def test_deploy_sh_exposes_docker_control_center() -> None:
+def test_deploy_sh_retires_public_docker_control_center() -> None:
     text = DEPLOY_SH.read_text()
     control_menu = extract(text, "choose_control_mode() {", "detect_tailscale() {")
-    docker_menu = extract(text, "choose_docker_mode() {", "choose_control_mode() {")
     usage_snippet = extract(text, "usage() {", "retired_shared_host_mode() {")
     expect("deploy.sh control install" in text, "expected Sovereign Control Node install command in deploy usage")
     expect("deploy.sh control backup" in text, "expected Sovereign Control Node runtime backup command in deploy usage")
@@ -2143,18 +2141,21 @@ def test_deploy_sh_exposes_docker_control_center() -> None:
     expect("write_kv ARCLINK_LLM_ROUTER_ALLOWED_MODELS" in text, "expected runtime config to persist router allowed models")
     expect("write_kv ARCLINK_LLM_ROUTER_FALLBACK_MODELS" in text, "expected runtime config to persist router fallback models")
     expect("deploy.sh docker install" not in usage_snippet, "Shared Host Docker install must not be advertised in deploy usage")
-    expect("Shared Host Docker control center" not in docker_menu, "Shared Host Docker submenu should be retired")
-    expect("retired_shared_host_docker_mode" in docker_menu, "Shared Host Docker function should fail closed through the retired-mode helper")
-    expect('MODE="docker"' not in text and 'DOCKER_DEPLOY_COMMAND="menu"' not in text, "main menu must not route to Shared Host Docker")
+    expect("choose_docker_mode()" not in text, "retired Shared Host Docker submenu should be removed")
+    expect("docker_usage()" not in text, "retired Shared Host Docker usage wrapper should be removed")
+    expect("run_docker_deploy_flow()" not in text, "retired Shared Host Docker deploy wrapper should be removed")
+    expect("run_docker_install_flow()" not in text, "retired Shared Host Docker install flow should be removed")
+    expect("run_docker_reconfigure_flow()" not in text, "retired Shared Host Docker reconfigure flow should be removed")
+    expect("docker_command_from_mode()" not in text, "retired Shared Host Docker shortcut mapper should be removed")
+    expect("DOCKER_DEPLOY_COMMAND" not in text and "DOCKER_DEPLOY_ARGS" not in text, "retired Docker parser state should be removed")
+    expect('MODE="docker"' not in text, "main menu and parser must not route to Shared Host Docker")
     expect("docker-install|docker-upgrade|docker-reconfigure" in text, "parser should still recognize retired Docker shortcut aliases")
     expect('local helper="$BOOTSTRAP_DIR/bin/arclink-docker.sh"' in text, "expected deploy.sh to delegate to Docker helper")
-    expect("run_docker_install_flow()" in text, "expected idempotent Docker install flow")
-    expect("run_docker_reconfigure_flow()" in text, "expected Docker reconfigure flow")
-    expect("run_arclink_docker reconcile" in text, "expected Docker install flow to apply org-profile/agent reconciliation")
-    expect("run_arclink_docker record-release" in text, "expected Docker install flow to record release state")
-    expect("run_arclink_docker health" in text, "expected Docker install flow to run health")
-    expect("run_arclink_docker live-smoke" in text, "expected Docker install flow to run live agent smoke")
-    print("PASS test_deploy_sh_exposes_docker_control_center")
+    expect("retired_shared_host_docker_mode" in text, "retired Docker aliases must fail closed")
+    expect("run_arclink_docker build" in text, "expected Control Node install to build through Docker helper")
+    expect("run_arclink_docker record-release" in text, "expected Control Node install to record release state through Docker helper")
+    expect("run_arclink_docker health" in text, "expected Control Node install to run health through Docker helper")
+    print("PASS test_deploy_sh_retires_public_docker_control_center")
 
 
 def test_control_deployment_style_aliases_are_normalized() -> None:
@@ -2239,7 +2240,7 @@ def test_control_reconfigure_autoregisters_local_starter_worker() -> None:
 def test_control_install_collects_trusted_host_acknowledgement_before_build() -> None:
     text = DEPLOY_SH.read_text()
     helpers = extract(text, "docker_trusted_host_risk_accepted() {", "ensure_control_fleet_ssh_key() {")
-    collect = extract(text, "collect_control_install_answers() {", "run_docker_install_flow() {")
+    collect = extract(text, "collect_control_install_answers() {", "run_control_install_flow() {")
     install_flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
     reconfigure_flow = extract(text, "run_control_reconfigure_flow() {", "control_host_priv_dir() {")
     expect("Accept GAP-019 trusted-host residual risk for this operator machine" in helpers, "expected explicit trusted-host prompt")
@@ -2501,7 +2502,7 @@ def test_control_reset_modes_have_separate_confirmations() -> None:
     text = DEPLOY_SH.read_text()
     chooser = extract(text, "choose_control_mode() {", "detect_tailscale() {")
     commands = extract(text, "control_command_from_mode() {", "run_control_deploy_flow() {")
-    dispatch = extract(text, "run_control_deploy_flow() {", "run_docker_reconfigure_flow() {")
+    dispatch = extract(text, "run_control_deploy_flow() {", "run_install_flow() {")
     confirm = extract(text, "confirm_control_runtime_reset() {", "stop_control_runtime_writers() {")
     operator_confirm = extract(text, "confirm_control_operator_runtime_reset() {", "stop_control_runtime_writers() {")
     expect('CONTROL_DEPLOY_COMMAND="reset-sandbox"' in chooser, "menu should route sandbox reset explicitly")
@@ -2626,6 +2627,7 @@ def test_control_enrollment_submenu_and_secret_are_first_class() -> None:
     enrollment = extract(text, "run_control_enrollment() {", "run_control_inventory() {")
 
     expect("deploy.sh control enrollment mint" in text, "usage should expose enrollment mint")
+    expect("deploy.sh control enrollment verify-audit-chain" in text, "usage should expose fleet enrollment audit-chain verification")
     expect("control-enrollment-mint" in text, "shortcut alias should expose enrollment mint")
     expect("control-enrollment-rotate-secret" in text, "shortcut alias should expose enrollment HMAC root rotation")
     expect("python/arclink_fleet_enrollment.py" in text, "control enrollment should route through Python enrollment CLI")
@@ -4330,7 +4332,7 @@ def main() -> int:
         test_collect_install_answers_preserves_placeholder_passwords_during_stateful_repair,
         test_collect_install_answers_guides_backup_remote_setup,
         test_collect_install_answers_guides_upstream_deploy_key_setup,
-        test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_and_docker_flows,
+        test_tailscale_onboarding_guidance_mentions_https_certificates_in_native_flow_only,
         test_upstream_deploy_key_flow_prints_key_and_verifies_read_write_access,
         test_upstream_deploy_key_flow_offers_reuse_when_existing_key_already_works,
         test_collect_install_answers_reuses_private_repo_backup_remote_when_config_is_unreadable,
@@ -4338,7 +4340,7 @@ def main() -> int:
         test_require_supported_host_mode_guides_wsl_without_systemd,
         test_collect_install_answers_records_missing_host_dependency_choices,
         test_write_answers_file_persists_host_dependency_choices,
-        test_deploy_sh_exposes_docker_control_center,
+        test_deploy_sh_retires_public_docker_control_center,
         test_control_deployment_style_aliases_are_normalized,
         test_control_reconfigure_prompt_normalization_is_shell_safe,
         test_control_reconfigure_autoregisters_local_starter_worker,

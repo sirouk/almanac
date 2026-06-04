@@ -2535,9 +2535,9 @@ PY
   rm -f "$onboarding_file" "$provision_file"
   echo
   echo "Repair commands:"
-  echo "  ./deploy.sh docker enrollment-trace --unix-user <unix-user>"
-  echo "  ./deploy.sh docker enrollment-align"
-  echo "  ./deploy.sh docker enrollment-reset --unix-user <unix-user>"
+  echo "  ./bin/arclink-docker.sh enrollment-trace --unix-user <unix-user>"
+  echo "  ./bin/arclink-docker.sh enrollment-align"
+  echo "  ./bin/arclink-docker.sh enrollment-reset --unix-user <unix-user>"
 }
 
 resolve_enrollment_trace_selector() {
@@ -3028,7 +3028,7 @@ main() {
         compose config "$@"
       else
         echo "Refusing to print Docker Compose config because it may expose generated passwords and tokens." >&2
-        echo "Use './deploy.sh docker config -q' to validate, or '--unsafe-print' for explicit local debugging." >&2
+        echo "Use './bin/arclink-docker.sh config -q' to validate, or '--unsafe-print' for explicit local debugging." >&2
         return 2
       fi
       ;;

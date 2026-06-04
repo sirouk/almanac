@@ -426,6 +426,56 @@ def test_memory_synthesizer_local_fallback_runs_without_llm_config() -> None:
             os.environ.update(old_env)
 
 
+def test_memory_synthesizer_ingests_academy_memory_seeds() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        values = local_fallback_config(root)
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ.update(values)
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            academy_dir = root / "vault" / "Academy" / "systems-practice-engineer"
+            academy_dir.mkdir(parents=True)
+            (academy_dir / "Memory_Seeds.md").write_text(
+                "# ArcLink Academy Memory Seeds\n\n"
+                "- Specialist posture: cite the canonical training vault before answering.\n"
+                "- Method: maintain weekly continuing education with source retirement review.\n",
+                encoding="utf-8",
+            )
+            with control.connect_db(cfg) as conn:
+                insert_agent(conn, root)
+                settings = synth.load_settings(cfg)
+                candidates = synth.build_candidates(conn, cfg, settings)
+                academy = next(candidate for candidate in candidates if candidate.source_kind == "academy")
+                expect(academy.source_key == "Academy/systems-practice-engineer/Memory_Seeds.md", str(academy))
+                prompt = synth._candidate_prompt(academy, settings)
+                expect("Specialist posture" in prompt and "weekly continuing education" in prompt, prompt)
+
+            result = synth.run_once(cfg)
+            expect(result["status"] == "ok", str(result))
+            with control.connect_db(cfg) as conn:
+                row = conn.execute(
+                    """
+                    SELECT card_text
+                    FROM memory_synthesis_cards
+                    WHERE source_kind = 'academy'
+                      AND source_key = 'Academy/systems-practice-engineer/Memory_Seeds.md'
+                    """
+                ).fetchone()
+                expect(row is not None, "Academy memory seeds should synthesize a memory card")
+                text = str(row["card_text"] or "")
+                expect("Academy systems-practice-engineer memory seeds" in text, text)
+                expect("Retrieval rail: Academy memory seeds; source key: Academy/systems-practice-engineer/Memory_Seeds.md." in text, text)
+                expect("Specialist posture" in text, text)
+            print("PASS test_memory_synthesizer_ingests_academy_memory_seeds")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_memory_synthesizer_picks_up_linked_and_fleet_shared_documents() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -685,12 +735,13 @@ def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
     test_memory_synthesizer_local_fallback_runs_without_llm_config()
+    test_memory_synthesizer_ingests_academy_memory_seeds()
     test_memory_synthesizer_picks_up_linked_and_fleet_shared_documents()
     test_memory_synthesizer_falls_back_when_llm_returns_malformed_json()
     test_memory_synthesizer_notion_paths_stay_inside_index_root()
     test_memory_synthesizer_redacts_secret_material_before_truncation()
     test_memory_synthesizer_rejects_unsafe_model_output()
-    print("PASS all 8 memory synthesizer tests")
+    print("PASS all 9 memory synthesizer tests")
     return 0
 
 

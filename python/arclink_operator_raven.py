@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Operator Raven command surface: read/dry-run previews plus real action queueing.
 
-Read commands (``status``, ``fleet_list``, ``user_lookup``, ``academy_status``,
-``upgrade_check``, ``upgrade_policy``, ``action_status``) never mutate. The
+Read commands (``status``, ``fleet_list``, ``user_lookup``, ``billing_status``,
+``backup_status``, ``workspace_status``, ``academy_status``, ``upgrade_check``,
+``upgrade_policy``, ``action_status``) never mutate. The
 mutation commands (``pod_repair``, ``rollout``, ``host_upgrade``,
 ``pin_upgrade``, ``upgrade_sweep``, ``fleet_drain``, ``fleet_resume``) behave in four
 ways:
@@ -102,6 +103,33 @@ _COMMAND_ALIASES = {
     "user_lookup": "user_lookup",
     "userlookup": "user_lookup",
     "user": "user_lookup",
+    "billing_status": "billing_status",
+    "billingstatus": "billing_status",
+    "operator_billing": "billing_status",
+    "operatorbilling": "billing_status",
+    "billing": "billing_status",
+    "credit_status": "billing_status",
+    "creditstatus": "billing_status",
+    "credits_status": "billing_status",
+    "creditsstatus": "billing_status",
+    "backup_status": "backup_status",
+    "backupstatus": "backup_status",
+    "operator_backup": "backup_status",
+    "operatorbackup": "backup_status",
+    "backups": "backup_status",
+    "backup": "backup_status",
+    "workspace_status": "workspace_status",
+    "workspacestatus": "workspace_status",
+    "operator_workspace": "workspace_status",
+    "operatorworkspace": "workspace_status",
+    "memory_status": "workspace_status",
+    "memorystatus": "workspace_status",
+    "qmd_status": "workspace_status",
+    "qmdstatus": "workspace_status",
+    "notion_status": "workspace_status",
+    "notionstatus": "workspace_status",
+    "ssot_status": "workspace_status",
+    "ssotstatus": "workspace_status",
     "pod_repair": "pod_repair",
     "podrepair": "pod_repair",
     "repair_pod": "pod_repair",
@@ -321,6 +349,9 @@ def dispatch_operator_raven_command(
         "fleet_resume": _handle_fleet_resume,
         "worker_probe": _handle_worker_probe,
         "user_lookup": _handle_user_lookup,
+        "billing_status": _handle_billing_status,
+        "backup_status": _handle_backup_status,
+        "workspace_status": _handle_workspace_status,
         "pod_repair": _handle_pod_repair,
         "upgrade_check": _handle_upgrade_check,
         "upgrade_policy": _handle_upgrade_policy,
@@ -423,7 +454,7 @@ def _handle_status(
         f"Queued/running operator actions: {_format_counts(action_counts)}",
         "Live actions honor ARCLINK_EXECUTOR_ADAPTER (fake = record-only); set it to local/ssh after the live proof gate.",
         "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component>, /upgrade_sweep, /fleet_drain <worker>, /fleet_resume <worker> (add --dry-run to preview; append confirm or the operator approval code to queue or apply)",
-        "Next: /upgrade_policy, /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
+        "Next: /billing_status, /backup_status, /workspace_status, /upgrade_policy, /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
         "Live proof still required for live mutation: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
     ]
     return {
@@ -731,6 +762,172 @@ def _handle_user_lookup(
     if len(rows) == 5:
         lines.append("Showing first 5 matches.")
     return {"message": "\n".join(lines), "users": rows}
+
+
+def _handle_billing_status(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    entitlement_counts = _group_counts(conn, "arclink_users", "entitlement_state")
+    subscription_counts = _group_counts(conn, "arclink_subscriptions", "status")
+    deployment_counts = _group_counts(conn, "arclink_deployments", "status")
+    credit_counts = _group_counts(conn, "arclink_refuel_credits", "status")
+    remaining_cents = _sum_int(conn, "arclink_refuel_credits", "remaining_cents", where="status = 'active'")
+    total_credit_cents = _sum_int(conn, "arclink_refuel_credits", "credit_cents")
+    active_users = _count_rows(conn, "arclink_users", where="status = 'active'")
+    lines = [
+        "Operator Raven billing status",
+        f"Users: active={active_users}; entitlement={_format_counts(entitlement_counts)}",
+        f"Subscriptions: {_format_counts(subscription_counts)}",
+        f"ArcPods: {_format_counts(deployment_counts)}",
+        f"Refuel credits: {_format_counts(credit_counts)}; remaining=${remaining_cents / 100:.2f}; issued=${total_credit_cents / 100:.2f}",
+        "No Stripe, provider, budget, or entitlement mutation was run.",
+        "Next: /user_lookup <query> for one Captain, /action_status for queued billing-adjacent work, /upgrade_policy router for inference policy.",
+    ]
+    return {
+        "message": "\n".join(lines),
+        "billing_status": {
+            "entitlements": entitlement_counts,
+            "subscriptions": subscription_counts,
+            "deployments": deployment_counts,
+            "refuel_credits": credit_counts,
+            "remaining_credit_cents": remaining_cents,
+            "issued_credit_cents": total_credit_cents,
+        },
+    }
+
+
+def _handle_backup_status(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    try:
+        from arclink_dashboard import _deployment_backup_setup
+    except Exception:  # noqa: BLE001 - keep the operator surface fail-closed.
+        _deployment_backup_setup = None  # type: ignore[assignment]
+
+    rows = [row for row in _deployment_rows(conn) if not _deployment_is_operator(row)]
+    counts: dict[str, int] = {}
+    github_checks: dict[str, int] = {}
+    activation_counts: dict[str, int] = {}
+    flagged: list[dict[str, str]] = []
+    for row in rows:
+        deployment_id = str(row.get("deployment_id") or "")
+        metadata = _deployment_metadata(row)
+        if _deployment_backup_setup is not None:
+            setup = _safe_call(
+                lambda row=row, metadata=metadata: _deployment_backup_setup(  # type: ignore[misc]
+                    conn,
+                    deployment_id=str(row.get("deployment_id") or ""),
+                    deployment_metadata=metadata,
+                ),
+                default={"status": "unavailable", "verification": {}},
+            )
+        else:
+            setup = {"status": "unavailable", "verification": {}}
+        verification = setup.get("verification") if isinstance(setup, Mapping) else {}
+        status = str((setup if isinstance(setup, Mapping) else {}).get("status") or "unknown")
+        github = str((verification if isinstance(verification, Mapping) else {}).get("github_write_check") or "unknown")
+        activation = str((verification if isinstance(verification, Mapping) else {}).get("backup_activation") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+        github_checks[github] = github_checks.get(github, 0) + 1
+        activation_counts[activation] = activation_counts.get(activation, 0) + 1
+        if status not in {"not_requested", "active", "verified"} or github in {"failed_closed", "failed"}:
+            flagged.append(
+                {
+                    "deployment_id": deployment_id,
+                    "user_id": str(row.get("user_id") or ""),
+                    "status": status,
+                    "github_write_check": github,
+                    "backup_activation": activation,
+                }
+            )
+    lines = [
+        "Operator Raven backup status",
+        f"Deployments: {len(rows)} Captain ArcPod(s)",
+        f"Backup setup: {_format_counts(counts)}",
+        f"GitHub write checks: {_format_counts(github_checks)}",
+        f"Activation: {_format_counts(activation_counts)}",
+    ]
+    if flagged:
+        lines.append("Needs attention:")
+        for item in flagged[:8]:
+            lines.append(
+                f"- {item['deployment_id']} user={item['user_id']} "
+                f"status={item['status']} write_check={item['github_write_check']} activation={item['backup_activation']}"
+            )
+        if len(flagged) > 8:
+            lines.append(f"... {len(flagged) - 8} more backup item(s) omitted.")
+    else:
+        lines.append("Needs attention: none from local metadata.")
+    lines.append("No GitHub, SSH, deploy-key, or backup mutation was run.")
+    return {
+        "message": "\n".join(lines),
+        "backup_status": {
+            "deployments": len(rows),
+            "counts": counts,
+            "github_write_checks": github_checks,
+            "activation": activation_counts,
+            "flagged": flagged,
+        },
+    }
+
+
+def _handle_workspace_status(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    qmd_health = _service_status_counts(conn, "qmd-mcp")
+    memory_health = _service_status_counts(conn, "memory-synth")
+    context_health = _service_status_counts(conn, "managed-context")
+    notion_docs = _count_rows(conn, "notion_index_documents", where="state = 'active'")
+    memory_cards = _group_counts(conn, "memory_synthesis_cards", "status")
+    refresh_jobs = _group_counts(conn, "refresh_jobs", "last_status")
+    share_grants = _group_counts(conn, "arclink_share_grants", "status")
+    recent_changed = _recent_workspace_events(conn)
+    lines = [
+        "Operator Raven workspace status",
+        f"qmd service health: {_format_counts(qmd_health)}",
+        f"Memory synthesis service health: {_format_counts(memory_health)}",
+        f"Managed context health: {_format_counts(context_health)}",
+        f"Memory cards: {_format_counts(memory_cards)}",
+        f"Shared Notion index: {notion_docs} active document(s)",
+        f"Refresh jobs: {_format_counts(refresh_jobs)}",
+        f"Share grants: {_format_counts(share_grants)}",
+    ]
+    if recent_changed:
+        lines.append("Recent workspace-related events:")
+        for item in recent_changed[:6]:
+            lines.append(f"- {item.get('event_type')} {item.get('subject_kind')}:{item.get('subject_id')}")
+    lines.append("No qmd, Notion, memory, share, filesystem, or provider mutation was run.")
+    return {
+        "message": "\n".join(lines),
+        "workspace_status": {
+            "qmd_health": qmd_health,
+            "memory_health": memory_health,
+            "managed_context_health": context_health,
+            "notion_index_active_documents": notion_docs,
+            "memory_cards": memory_cards,
+            "refresh_jobs": refresh_jobs,
+            "share_grants": share_grants,
+            "recent_events": recent_changed,
+        },
+    }
 
 
 def _handle_academy_status(
@@ -1584,7 +1781,7 @@ def _batch_size_arg(args: Sequence[str]) -> int | None:
 def _safe_call(func: Callable[[], Any], *, default: Any) -> Any:
     try:
         return func()
-    except sqlite3.Error:
+    except Exception:  # noqa: BLE001 - read-only Operator status surfaces fail closed.
         return default
 
 
@@ -1602,6 +1799,113 @@ def _count_by_status(conn: sqlite3.Connection, table: str) -> dict[str, int]:
     except sqlite3.Error:
         return {}
     return {str(row["status"] or "unknown"): int(row["count"] or 0) for row in rows}
+
+
+_GROUPABLE_COLUMNS = {
+    "arclink_users": {"status", "entitlement_state"},
+    "arclink_subscriptions": {"status"},
+    "arclink_deployments": {"status"},
+    "arclink_refuel_credits": {"status"},
+    "memory_synthesis_cards": {"status"},
+    "refresh_jobs": {"last_status"},
+    "arclink_share_grants": {"status"},
+}
+
+_COUNTABLE_TABLES = frozenset(_GROUPABLE_COLUMNS) | {"notion_index_documents"}
+
+
+def _group_counts(conn: sqlite3.Connection, table: str, column: str) -> dict[str, int]:
+    if column not in _GROUPABLE_COLUMNS.get(table, set()):
+        return {}
+    try:
+        rows = conn.execute(
+            f"SELECT {column} AS value, COUNT(*) AS count FROM {table} GROUP BY {column} ORDER BY {column}"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(row["value"] or "unknown"): int(row["count"] or 0) for row in rows}
+
+
+def _count_rows(conn: sqlite3.Connection, table: str, *, where: str = "") -> int:
+    if table not in _COUNTABLE_TABLES:
+        return 0
+    allowed_where = {
+        "": "",
+        "status = 'active'": "status = 'active'",
+        "state = 'active'": "state = 'active'",
+    }
+    clause = allowed_where.get(str(where or "").strip())
+    if clause is None:
+        return 0
+    sql = f"SELECT COUNT(*) AS count FROM {table}"
+    if clause:
+        sql += f" WHERE {clause}"
+    try:
+        row = conn.execute(sql).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row["count"] if row is not None else 0)
+
+
+def _sum_int(conn: sqlite3.Connection, table: str, column: str, *, where: str = "") -> int:
+    allowed = {
+        ("arclink_refuel_credits", "remaining_cents"),
+        ("arclink_refuel_credits", "credit_cents"),
+    }
+    if (table, column) not in allowed:
+        return 0
+    allowed_where = {"": "", "status = 'active'": "status = 'active'"}
+    clause = allowed_where.get(str(where or "").strip())
+    if clause is None:
+        return 0
+    sql = f"SELECT COALESCE(SUM({column}), 0) AS total FROM {table}"
+    if clause:
+        sql += f" WHERE {clause}"
+    try:
+        row = conn.execute(sql).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row["total"] if row is not None else 0)
+
+
+def _service_status_counts(conn: sqlite3.Connection, service_name: str) -> dict[str, int]:
+    clean = str(service_name or "").strip()
+    if clean not in {"qmd-mcp", "memory-synth", "managed-context"}:
+        return {}
+    try:
+        rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM arclink_service_health
+            WHERE service_name = ?
+            GROUP BY status
+            ORDER BY status
+            """,
+            (clean,),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(row["status"] or "unknown"): int(row["count"] or 0) for row in rows}
+
+
+def _recent_workspace_events(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT subject_kind, subject_id, event_type
+            FROM arclink_events
+            WHERE event_type LIKE 'qmd_%'
+               OR event_type LIKE 'memory_%'
+               OR event_type LIKE 'notion_%'
+               OR event_type LIKE 'share_%'
+               OR event_type LIKE 'academy_%'
+            ORDER BY created_at DESC, event_id DESC
+            LIMIT 6
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [dict(row) for row in rows]
 
 
 def _operator_action_status_counts(conn: sqlite3.Connection) -> dict[str, int]:

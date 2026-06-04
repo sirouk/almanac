@@ -106,8 +106,9 @@ token into Operator Raven. A missing/wrong code fails closed with "Operator code
 required for this action"; a missing `confirm`/code from a verified actor fails
 closed and queues nothing. Read-only Operator Raven commands (`status`,
 `agents`, `fleet_list`, `worker_probe`, `user_lookup`, `action_status`,
-`upgrade_check`, `academy_status`, `academy_roster`) never require confirmation
-and never mutate.
+`upgrade_check`, `upgrade_policy`, `academy_status`, `academy_roster`,
+`billing_status`, `backup_status`, and `workspace_status`) never require
+confirmation and never mutate.
 
 Discord Curator operator actions are gated by the configured operator channel;
 when an operator approval code is configured, mutating Discord commands must
@@ -1309,10 +1310,16 @@ proof gate (`PG-PROVISION` restart/reprovision, `PG-INGRESS` dns_repair,
 `PG-UPGRADE/PG-HERMES` rollout, `PG-PROVIDER` chutes, `PG-STRIPE` refund/cancel,
 `PG-BACKUP` backup_write_check). Read commands (`status`, `agents`,
 `fleet_list`, `worker_probe` dry-run only, `user_lookup`, `action_status`,
-`upgrade_check`, `upgrade_policy`, `academy_status`, `academy_roster`) never
-mutate. `fleet_drain`/`fleet_resume` are local control-DB mutations with audit
-and event rows; they do not run SSH, Docker, provider, firewall, or port-22
-changes from chat. Draining the last eligible worker is blocked unless the
+`upgrade_check`, `upgrade_policy`, `academy_status`, `academy_roster`,
+`billing_status`, `backup_status`, and `workspace_status`) never mutate.
+`billing_status` reads entitlement, subscription, deployment, and refuel-credit
+posture; `backup_status` reads backup setup/write-check/activation posture;
+`workspace_status` reads qmd, memory, Notion, share, and workspace-event
+posture. These readouts do not call Stripe, providers, backup remotes, Docker,
+SSH, or Agent files.
+`fleet_drain`/`fleet_resume` are local control-DB mutations with audit and event
+rows; they do not run SSH, Docker, provider, firewall, or port-22 changes from
+chat. Draining the last eligible worker is blocked unless the
 operator explicitly adds `--force` after previewing the capacity impact. The
 residual of `GAP-029` is breadth and authorized live proof, not a read-only
 limitation.
@@ -1529,18 +1536,24 @@ Plan or run the ordered live journeys:
 
 ```bash
 bin/arclink-live-proof --json
+ARCLINK_E2E_LIVE=1 bin/arclink-live-proof --journey router --live --json
 bin/arclink-live-proof --journey workspace --live --json
 bin/arclink-live-proof --journey external --live --json
 ARCLINK_E2E_LIVE=1 PYTHONPATH=python python3 -m pytest tests/test_arclink_e2e_live.py -v
 ```
 
-The hosted journey covers onboarding/provider readiness. The workspace journey
-covers Docker upgrade/health plus Drive, Code, and Terminal browser proof. The
-external journey covers named provider and live-service rows: Stripe,
-Telegram, Discord, Hermes dashboard landing, Chutes provider OAuth, Chutes
-provider usage, Chutes key CRUD, Chutes account registration, Chutes balance
-transfer, Notion shared-root SSOT, Cloudflare, and Tailscale. Without
-credentials, all steps skip or report missing environment names cleanly.
+The hosted journey covers onboarding/provider readiness. The router journey is
+a no-secret local proof of the real LLM router's fallback path: it seeds a
+temporary deployment/key, runs the router against a fake upstream `429` followed
+by a fallback success, verifies sanitized fallback audit and reservation
+settlement, and records no raw prompt, router key, provider secret, or provider
+error body. The workspace journey covers Docker upgrade/health plus Drive,
+Code, and Terminal browser proof. The external journey covers named provider
+and live-service rows: Stripe, Telegram, Discord, Hermes dashboard landing,
+Chutes provider OAuth, Chutes provider usage, Chutes key CRUD, Chutes account
+registration, Chutes balance transfer, Notion shared-root SSOT, Cloudflare, and
+Tailscale. Without credentials, all steps skip or report missing environment
+names cleanly.
 Evidence template at
 `docs/arclink/live-e2e-evidence-template.md`.
 

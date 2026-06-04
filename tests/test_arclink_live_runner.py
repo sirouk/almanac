@@ -56,6 +56,11 @@ _WORKSPACE_ENV: dict[str, str] = {
     "ARCLINK_WORKSPACE_PROOF_AUTH": "session_fake_secret",
 }
 
+_ROUTER_ENV: dict[str, str] = {
+    **_BASE_ENV,
+    "ARCLINK_E2E_LIVE": "1",
+}
+
 _EXTERNAL_CHUTES_OAUTH_ENV: dict[str, str] = {
     **_BASE_ENV,
     "ARCLINK_E2E_LIVE": "1",
@@ -328,6 +333,44 @@ class TestWorkspaceProofJourney(unittest.TestCase):
         self.assertIn('openPluginPage(page, "Terminal", "Sessions")', script)
         self.assertIn("captureSanitizedScreenshot", script)
         self.assertIn("ARCLINK_WORKSPACE_PROOF_SCREENSHOT_DIR", script)
+
+
+class TestRouterProofJourney(unittest.TestCase):
+    """Router mode runs a no-secret local fallback proof without provider access."""
+
+    def test_router_missing_env_is_only_live_gate(self):
+        result = run_live_proof(env=_BASE_ENV, skip_ports=True, journey="router")
+        self.assertEqual(result.status, "blocked_missing_credentials")
+        self.assertEqual(result.journey, "router")
+        self.assertEqual(result.missing_env, ["ARCLINK_E2E_LIVE"])
+
+    def test_router_live_uses_default_local_fallback_runner(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = run_live_proof(
+                env=_ROUTER_ENV,
+                skip_ports=True,
+                live=True,
+                artifact_dir=tmpdir,
+                journey="router",
+            )
+            self.assertEqual(result.status, "live_executed")
+            self.assertEqual(result.exit_code, 0)
+            steps = result.journey_summary["steps"]
+            self.assertEqual(len(steps), 1)
+            evidence = steps[0]["evidence"]
+            self.assertEqual(evidence["proof"], "llm_router_local_fallback")
+            self.assertFalse(evidence["live_provider"])
+            self.assertTrue(evidence["fallback_used"])
+            self.assertEqual(evidence["primary_model"], "model-a")
+            self.assertEqual(evidence["final_model"], "model-b")
+            self.assertEqual(evidence["request_count"], 2)
+            self.assertEqual(evidence["open_reservations"], 0)
+            with open(result.evidence_path) as f:
+                raw = json.dumps(json.load(f))
+            self.assertNotIn("acpod_live_", raw)
+            self.assertNotIn("router local proof prompt", raw)
+            self.assertNotIn("cpk_local_router_proof_secret", raw)
+            self.assertNotIn("sk-live", raw)
 
 
 class TestExternalProofJourney(unittest.TestCase):

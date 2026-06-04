@@ -14,19 +14,24 @@ HTTPS Hermes dashboard. Use
 `bin/arclink-live-proof --journey external` to plan provider-specific proof
 rows, or `bin/arclink-live-proof --journey external --live --json` only after
 the operator explicitly authorizes the named provider rows and supplies the
-required secret references or live credentials.
+required secret references or live credentials. Use
+`bin/arclink-live-proof --journey router --live --json` for the no-secret local
+router fallback proof: it runs the real router app against a fake upstream that
+returns a retryable `429` before succeeding on a fallback model, then records
+only redacted counts, model labels, and reservation/audit status.
 
 **Important — the external journey is a plan/catalog, not an executable proof.**
-Only the `workspace` journey ships executable runners
-(`build_workspace_live_runners` in `python/arclink_live_runner.py`). The
-`external` rows in `python/arclink_live_journey.py` have **no registered
-runners**: even with every credential present, `bin/arclink-live-proof --journey
-external --live` returns the runner status `blocked_no_registered_runner` (each
-step is skipped with "live proof requested but no runner is registered") and
-exits 1. Treat `--journey external` as a credential-planning catalog only. The
-`hosted` journey likewise has no registered runners today; the workspace journey
-(PG-HERMES) is the only one that can reach `live_executed` against a real Hermes
-dashboard. The fake E2E harness
+Only the `workspace` and `router` journeys ship executable default runners
+(`build_workspace_live_runners` and `build_router_live_runners` in
+`python/arclink_live_runner.py`). The `router` journey is local proof only and
+does not contact Chutes. The `external` rows in `python/arclink_live_journey.py`
+have **no registered runners**: even with every credential present,
+`bin/arclink-live-proof --journey external --live` returns the runner status
+`blocked_no_registered_runner` (each step is skipped with "live proof requested
+but no runner is registered") and exits 1. Treat `--journey external` as a
+credential-planning catalog only. The `hosted` journey likewise has no
+registered runners today; the workspace journey (PG-HERMES) is the only one
+that can reach `live_executed` against a real Hermes dashboard. The fake E2E harness
 (`tests/test_arclink_e2e_fake.py`) passes without credentials. Provider live
 checks in `tests/test_arclink_e2e_live.py` skip cleanly when credentials are
 absent. The ordered journey model (`python/arclink_live_journey.py`) and
@@ -100,6 +105,23 @@ Optional workspace proof timeouts:
 | `ARCLINK_WORKSPACE_PROOF_DOCKER_TIMEOUT_SECONDS` | 2700 | Docker upgrade/reconcile timeout |
 | `ARCLINK_WORKSPACE_PROOF_HEALTH_TIMEOUT_SECONDS` | 900 | Docker health timeout |
 | `ARCLINK_WORKSPACE_PROOF_BROWSER_TIMEOUT_SECONDS` | 300 | Per desktop/mobile browser proof timeout |
+
+## Router Proof Env Vars
+
+The router journey requires only `ARCLINK_E2E_LIVE=1` and no live provider
+credential:
+
+```bash
+ARCLINK_E2E_LIVE=1 bin/arclink-live-proof --journey router --live --json
+```
+
+It creates a temporary SQLite control DB, seeds one active deployment and
+router key, sends a chat request through the real ASGI router, observes a fake
+upstream `429`, retries the configured fallback model, verifies usage and
+fallback audit rows, and confirms no open budget reservation remains. Evidence
+does not include raw router keys, prompt text, central provider credentials, or
+provider error bodies. This advances local `GAP-031` proof; authorized live
+provider overload proof remains `PG-PROVIDER`.
 
 ## External Proof Env Vars
 

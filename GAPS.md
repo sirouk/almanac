@@ -301,12 +301,12 @@ closure is required before a launch or core journey claim can move forward.
 | `GAP-018` | Admin buttons may be confused with live side effects | Authorized live proof after local matrix repair | Source-owned readiness matrix is local; next closure requires proving the smallest safe live action subset. |
 | `GAP-026` | Upgrade paths cannot be called live-ready | Authorized live proof | Run `PG-UPGRADE` across the relevant shared-host, Docker, Control Node, and component-pin upgrade path with release-state, health, and smoke evidence. |
 | `GAP-028` | Shared Host fresh install/enrollment cannot be called currently smoke-proven | Authorized host-mutating proof | Run `PG-SHARED-HOST` on a supported Linux/systemd host with redacted install, health, enrollment, and cleanup evidence. |
-| `GAP-029` | Sovereign Operator Raven is not yet a full-service control plane | Product buildout plus operator-security policy | Typed, authorized, audited local mutations now exist; expand breadth only through action-worker/broker commands with live proof. |
-| `GAP-030` | Control Node install can be up before worker capacity is proven | Fleet/provisioning live proof after local readiness surfacing | Run `PG-FLEET`/`PG-PROVISION` for the chosen worker path now that admin/dashboard and Operator Raven expose the same fail-closed readiness state. |
+| `GAP-029` | Sovereign Operator Raven is not yet a full-service control plane | Product buildout plus operator-security policy | Typed, authorized, audited local mutations plus billing, backup, and workspace readouts now exist; expand breadth only through action-worker/broker commands with live proof. |
+| `GAP-030` | Control Node install can be up before worker capacity is proven | Fleet/provisioning live proof after local readiness surfacing | Run `PG-FLEET`/`PG-PROVISION` for the chosen worker path now that deploy, admin/dashboard, and Operator Raven expose the same fail-closed readiness state. |
 | `GAP-031` | Router/provider failover needs live overload proof | Provider proof after local fallback repair | Local non-streaming and pre-streaming fallback semantics, sanitized attempt audit, fallback-aware reservations, and final-model pricing labels exist; prove overload recovery without raw prompt leakage. |
 | `GAP-032` | Hermes/ArcPod updates are not yet rolling from the Control Node | Orchestrator buildout plus upgrade proof | Dry-run planning, typed rollout jobs, and bounded fake/local batch records exist; next closure requires authorized real refresh/apply execution plus health/smoke proof. |
-| `GAP-033` | Cross-surface experience quality needs live finish proof | Local quality gate exists; browser/chat/workspace proof remains | Keep the shared finish gate in place and run representative `PG-BOTS`, `PG-HERMES`, and product browser proof before treating polish as product-real. |
-| `GAP-034` | Academy Trainer is not yet a full live subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Captain-facing `/academy` now stages per-Agent local training plans with Train All / one-by-one Skip, identity projection, source-lane registry, fake acquisition adapters, no-write application plan, continuing-education gates, dashboard status, and Operator Raven status; run authorized source/provider/workspace proof before claiming graduated trained experts. |
+| `GAP-033` | Cross-surface experience quality needs live finish proof | Local quality gate exists; browser/chat/workspace proof remains | Keep the shared finish gate and updated Operator command menus in place, then run representative `PG-BOTS`, `PG-HERMES`, and product browser proof before treating polish as product-real. |
+| `GAP-034` | Academy Trainer is not yet a full live subject-matter corpus and continuing education pipeline | Product buildout plus data/source policy | Captain-facing `/academy` now stages per-Agent local training plans with source governance, continuing education, local apply, post-apply handoff validation, and Academy memory seed ingestion; run authorized source/provider/workspace proof before claiming graduated trained experts. |
 | `GAP-011` | Closed locally: foundation docs now align with Control Node boundaries | Documentation repair plus truth test | Keep `tests/test_documentation_truths.py` guarding stale prototype wording. |
 | `GAP-025` | Closed locally: broad Python suite is green | Regression triage and repair | Keep `python3 -m pytest -q tests` as the broad no-secret local validation gate. |
 
@@ -1878,10 +1878,14 @@ when they were active blockers during this buildout pass. Treat rows marked
   non-executable component name, adds `/upgrade_sweep` for one confirmed
   stateless detector-payload sweep, holds stateful pin payloads behind
   `--include-stateful`, and documents `/fleet_drain` as a placement-only
-  control-DB switch rather than a remote shutdown path. Public Academy
-  Observatory and fleet enrollment callback routes now have source-IP route
-  rate limits, and legacy fleet audit-chain migration rebuilds a verifiable
-  canonical hash chain.
+  control-DB switch rather than a remote shutdown path. A follow-on
+  2026-06-04 slice adds read-only `/billing_status`, `/backup_status`, and
+  `/workspace_status` commands so chat can inspect entitlement/credit,
+  backup-write, qmd/memory/Notion/share, and recent workspace event posture
+  without touching Stripe, providers, backup remotes, Docker, SSH, or Agent
+  files. Public Academy Observatory and fleet enrollment callback routes now
+  have source-IP rate limits, and legacy fleet audit-chain migration rebuilds
+  a verifiable canonical hash chain.
   Telegram and Discord operator adapters now route those commands through the
   shared schema while preserving existing Telegram operator approval-code
   behavior and Discord operator-channel gating
@@ -1890,7 +1894,9 @@ when they were active blockers during this buildout pass. Treat rows marked
   secret-free output, no action queueing for dry-run/read-only commands,
   fake/local upgrade-check injection, upgrade-policy truth, local audited fleet
   drain/resume gates, and adapter authorization boundaries
-  (`tests/test_arclink_operator_raven.py`).
+  (`tests/test_arclink_operator_raven.py`). Telegram/Discord operator command
+  menus include the new readouts (`python/arclink_curator_onboarding.py`,
+  `python/arclink_curator_discord_onboarding.py`, `python/arclink_telegram.py`).
 - Missing proof/tests: broader action schemas and live proof remain for
   fleet admission/probe remote execution, user suspend/restore, pod
   repair/rollback/teardown execution, billing/provider state mutation,
@@ -1929,9 +1935,14 @@ when they were active blockers during this buildout pass. Treat rows marked
   the provisioner only after a passed smoke test. `run_control_inventory()`
   provides manual/provider worker registration, probe, drain, remove,
   rotate-key, and strategy commands. Control install, reconfigure, and worker
-  registration now print a provisioning readiness summary that separates
-  "ready to provision ArcPods" from blocked/control-plane-only states. A
-  2026-05-27 local slice adds `control_node_provisioning_readiness(conn,
+  registration now print a provisioning readiness summary from the same
+  `control_node_provisioning_readiness(conn, env=...)` helper used by the
+  dashboard and Operator Raven, separating "ready to provision ArcPods" from
+  blocked/control-plane-only states instead of duplicating eligibility logic.
+  Worker registration now marks skipped or failed registration smoke as
+  `degraded` with a non-eligible `last_health_state`, so placement fails
+  closed until a worker probe repairs the state. A 2026-05-27 local slice added
+  `control_node_provisioning_readiness(conn,
   env=...)`, threads it into the admin dashboard read model, scale operations
   snapshot, Operator Raven status, and the admin web page, and proves
   no-worker/control-plane-only, blocked no-worker, local-ready, pending-SSH,
@@ -1979,7 +1990,15 @@ when they were active blockers during this buildout pass. Treat rows marked
   the highest configured fallback candidate price when catalog prices are
   available, labels streaming fallback as unavailable once a stream has already
   started, and preserves prompt/secret non-storage
-  (`tests/test_arclink_llm_router.py`).
+  (`tests/test_arclink_llm_router.py`). The live-proof runner now has a
+  no-secret local router journey (`bin/arclink-live-proof --journey router
+  --live --json`) that seeds a temporary deployment/key, runs the real ASGI
+  router against a fake upstream `429` followed by a fallback success, verifies
+  sanitized fallback audit plus reservation settlement, and writes redacted
+  evidence without raw router keys, prompt text, provider secrets, or provider
+  error bodies (`python/arclink_live_journey.py`,
+  `python/arclink_live_runner.py`, `tests/test_arclink_live_journey.py`,
+  `tests/test_arclink_live_runner.py`).
 - Missing proof/tests: live/provider overload proof against the actual provider
   and any source defects that proof reveals.
 - Impact: local router fallback behavior is explicit and audited, but live
@@ -2083,7 +2102,10 @@ when they were active blockers during this buildout pass. Treat rows marked
   secret-looking values, raw tracebacks, and stale Captain-facing technical
   terms. The slice also repairs Captain-visible launch/product copy from
   lower-case Agent/Pod and "deployment"/"user" wording to ArcPod, Pod, Agent,
-  Captain, Raven, and ArcLink support where appropriate.
+  Captain, Raven, and ArcLink support where appropriate. Operator Telegram and
+  Discord command menus now expose the expanded status read surface for
+  billing, backup, and workspace posture so chat surfaces do not lag the shared
+  Operator Raven command schema.
 - Missing proof/tests: authorized representative `PG-BOTS`, `PG-HERMES`, and
   product browser proof for Telegram/Discord rendering, dashboard/plugin text
   fit and non-overlap, and any source defects those proof rows reveal.
@@ -2167,27 +2189,37 @@ when they were active blockers during this buildout pass. Treat rows marked
   to materialize the marker-bounded Academy SOUL overlay, governed
   `Vault/Academy/...` markdown, `state/arclink-academy-memory-seeds.json`,
   `state/arclink-academy-approved-skills.json`, the private apply receipt, and
-  `state/arclink-academy-post-apply-refresh.json`, a durable no-inline-exec
-  request plus `refresh_jobs` row for qmd indexing, memory synthesis, and
-  explicit skill activation proof (`python/arclink_action_worker.py`,
-  `tests/test_arclink_action_worker.py`).
+  `state/arclink-academy-post-apply-refresh.json`, a durable handoff plus
+  `refresh_jobs` row for qmd indexing, memory synthesis, and explicit skill
+  activation proof. The post-apply handoff consumer now validates the applied
+  paths are still inside the target Hermes home/vault/state roots, records
+  verified/missing paths, marks refresh items `validated_pending_runner` when
+  no runner is authorized, can execute injected qmd/memory/skill proof runners,
+  and fails closed on missing files, unsafe paths, or missing approved-skill
+  state (`python/arclink_action_worker.py`, `tests/test_arclink_action_worker.py`).
+  Academy `Memory_Seeds.md` files now become bounded `academy` memory-synthesis
+  candidates under the normal vault synthesis cache, and the public source-lane
+  example is tested against the runtime source-lane registry so docs cannot
+  drift from lane policy (`python/arclink_memory_synthesizer.py`,
+  `config/academy-source-lanes.example.json`,
+  `tests/test_memory_synthesizer.py`, `tests/test_arclink_academy_trainer.py`).
   The target remains specified in `docs/arclink/academy-trainer.md` and
   summarized in `docs/arclink/sovereign-control-node-symphony.md`.
-- Missing proof/tests: downstream qmd refresh execution, memory-synthesis
-  ingestion execution, explicit Hermes skill activation, hosted weekly
-  scheduler proof, live/provider proof for Academy generation, source-governance
-  policy, and workspace proof for the trained Agent.
+- Missing proof/tests: downstream real qmd refresh execution, explicit Hermes
+  skill activation execution, hosted weekly scheduler proof, live/provider
+  proof for Academy generation/acquisition, source-governance policy, and
+  workspace proof for the trained Agent.
 - Impact: a Captain can create a Crew Recipe, run `/academy`, pick one Agent or
   walk the whole Crew one by one with Skip, and ArcLink can now build a
   reviewable local Academy plan from governed fake acquisition fixtures, stage
   that plan per Agent on the Crew Recipe, project compact specialist identity
   into the Agent's managed context when local, queue an audited no-write
   application preview, apply the authorized SOUL/vault/state package, persist a
-  weekly local review/gate summary, and see honest dashboard/Raven status, but
-  ArcLink still cannot claim it exhaustively equips a Crew member with
-  live-acquired sources, executed qmd/memory/skill refreshes,
-  provider-generated synthesis, hosted
-  scheduling, or trained-Agent workspace
+  weekly local review/gate summary, validate the post-apply refresh handoff,
+  feed Academy memory seeds into memory synthesis, and see honest
+  dashboard/Raven status, but ArcLink still cannot claim it exhaustively equips
+  a Crew member with live-acquired sources, executed qmd/skill refreshes,
+  provider-generated synthesis, hosted scheduling, or trained-Agent workspace
   behavior until the remaining policy and proof gates pass.
 - Owner/surface: Academy Trainer, Crew Training, memory synthesis, vault/qmd,
   skills, managed context, dashboard/Raven, source governance.

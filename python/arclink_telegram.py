@@ -114,6 +114,9 @@ ARCLINK_OPERATOR_TELEGRAM_COMMANDS: tuple[dict[str, str], ...] = (
     {"command": "fleet_list", "description": "Operator: fleet and capacity"},
     {"command": "worker_probe", "description": "Operator: worker proof dry run"},
     {"command": "user_lookup", "description": "Operator: find Captain or Pod"},
+    {"command": "billing_status", "description": "Operator: billing and credits"},
+    {"command": "backup_status", "description": "Operator: backups"},
+    {"command": "workspace_status", "description": "Operator: qmd and memory"},
     {"command": "pod_repair", "description": "Operator: repair an ArcPod"},
     {"command": "upgrade_check", "description": "Operator: upgrade state"},
     {"command": "upgrade", "description": "Operator: apply host/control upgrade"},
@@ -1095,6 +1098,9 @@ def _operator_raven_intro_reply() -> str:
         "- /operator_fleet - worker capacity and placement readiness\n"
         "- /worker_probe <host-id> --dry-run - preview a worker probe\n"
         "- /user_lookup <query> - inspect Captain/account state without secrets\n"
+        "- /billing_status - billing, subscriptions, and refuel credit posture\n"
+        "- /backup_status - private backup setup and verification posture\n"
+        "- /workspace_status - qmd, memory, Notion index, and share freshness\n"
         "- /upgrade_check - read upgrade availability\n"
         "- /action_status [id] - track queued actions and rollouts\n"
         "- /academy_status <query> - read Academy training state\n\n"

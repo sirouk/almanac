@@ -140,7 +140,12 @@ queueing and control-state changes.
 Read commands (never mutate): `status`, `agents`, `fleet_list`, `worker_probe`
 (dry-run only in this slice; no live SSH/Docker/health probe), `user_lookup`,
 `academy_status`, `academy_roster`, `upgrade_check` (fail-closed unless an
-upgrade-check runner is injected), `upgrade_policy`, and `action_status`.
+upgrade-check runner is injected), `upgrade_policy`, `action_status`,
+`billing_status`, `backup_status`, and `workspace_status`.
+`billing_status` is DB-only entitlement/credit posture, `backup_status` is
+backup setup/write-check/activation posture, and `workspace_status` is
+qmd/memory/Notion/share posture; none of them touch external providers or Agent
+files.
 `/upgrade_policy [component]` is an explainer only: it returns the source-owned
 strategy, order, downtime posture, preflight checks, proof gates, and rollback
 contract for the named component or for the full dependency family. It never

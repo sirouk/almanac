@@ -281,8 +281,16 @@ The same no-replay invariant applies to non-streaming fallback only in that it
 never reuses an already-emitted response: non-streaming requests retry the next
 candidate cleanly because nothing was sent to the Captain yet. Live provider
 proof of this cascade remains tracked by `GAP-031` behind the `PG-PROVIDER`
-proof gate; the local fallback semantics above are implemented and tested
-locally with the fake async upstream transport.
+proof gate. The local fallback semantics above are implemented and tested with
+the fake async upstream transport, and can be exercised as a redacted evidence
+journey with:
+
+```bash
+ARCLINK_E2E_LIVE=1 bin/arclink-live-proof --journey router --live --json
+```
+
+That local journey uses a temporary SQLite control DB and fake upstream. It is
+not live Chutes proof.
 
 ## Model Catalog And Promotion
 

@@ -632,6 +632,42 @@ def build_vault_candidates(cfg: Config, settings: SynthesisSettings) -> list[Sou
     return candidates
 
 
+def build_academy_memory_seed_candidates(cfg: Config, settings: SynthesisSettings) -> list[SourceCandidate]:
+    academy_root = cfg.vault_dir / "Academy"
+    if not academy_root.is_dir() or academy_root.is_symlink():
+        return []
+    candidates: list[SourceCandidate] = []
+    max_chars = min(settings.max_source_chars, 2400)
+    for path in _bounded_walk_files(academy_root, suffixes={".md", ".txt"}, limit=120):
+        if path.name.casefold() != "memory_seeds.md":
+            continue
+        stat = _safe_stat(path)
+        snippet = _read_file_snippet(path, max_chars=max_chars)
+        if not snippet:
+            continue
+        rel_path = _path_rel(path, cfg.vault_dir)
+        role = path.parent.name or "Academy"
+        payload = {
+            "source": "academy_memory_seed",
+            "path": rel_path,
+            "academy_role": role,
+            "text_files": [rel_path],
+            "snippets": [{"path": rel_path, "snippet": snippet}],
+            **_fingerprint_digest([_file_fingerprint("academy", path, cfg.vault_dir, stat)]),
+        }
+        candidates.append(
+            _candidate_from_payload(
+                "academy",
+                rel_path,
+                f"Academy {role} memory seeds",
+                payload,
+                source_count=1,
+            )
+        )
+    candidates.sort(key=lambda item: item.source_key.casefold())
+    return candidates
+
+
 def _unique_existing_roots(names: Sequence[str]) -> list[Path]:
     roots: list[Path] = []
     seen: set[str] = set()
@@ -998,6 +1034,7 @@ def build_notion_candidates(conn: sqlite3.Connection, cfg: Config, settings: Syn
 
 def build_candidates(conn: sqlite3.Connection, cfg: Config, settings: SynthesisSettings) -> list[SourceCandidate]:
     candidates = build_vault_candidates(cfg, settings)
+    candidates.extend(build_academy_memory_seed_candidates(cfg, settings))
     candidates.extend(build_shared_document_candidates(settings))
     candidates.extend(build_notion_candidates(conn, cfg, settings))
     return candidates
@@ -1412,6 +1449,8 @@ def _retrieval_rail_for_candidate(candidate: SourceCandidate) -> str:
         return "Drive/Code Linked root"
     if source_kind == "fleet":
         return "Drive/Code Fleet root"
+    if source_kind == "academy":
+        return "Academy memory seeds"
     return "knowledge.search-and-fetch"
 
 
@@ -1573,7 +1612,7 @@ def _mark_stale_cards(conn: sqlite3.Connection, active_keys: set[tuple[str, str]
         SELECT source_kind, source_key
         FROM memory_synthesis_cards
         WHERE status != 'stale'
-          AND source_kind IN ('vault', 'notion', 'linked', 'fleet')
+          AND source_kind IN ('vault', 'notion', 'linked', 'fleet', 'academy')
         """
     ).fetchall()
     stale = [

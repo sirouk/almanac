@@ -216,7 +216,10 @@ in-stack **operator Hermes agent** (`python/arclink_operator_agent.py`).
   `ARCLINK_OPERATOR_APPROVAL_CODE`) are verified with a constant-time compare.
   Read commands (`status`, `agents`, `fleet_list`, `worker_probe` (dry-run
   only), `user_lookup`, `academy_status`, `academy_roster`, `upgrade_check`,
-  `upgrade_policy`, `action_status`) never mutate. `/upgrade_policy
+  `upgrade_policy`, `action_status`, `billing_status`, `backup_status`,
+  `workspace_status`) never mutate. `/billing_status`, `/backup_status`, and
+  `/workspace_status` read only control-plane posture and do not call external
+  providers or Agent files. `/upgrade_policy
   [component]` explains source-owned upgrade posture only. `/pin_upgrade
   <component>` refuses unless an active detector payload with concrete target
   pins exists, and `/upgrade_sweep` queues pending stateless detector payloads

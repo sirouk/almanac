@@ -397,6 +397,120 @@ def test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secret
         cleanup_db(tmp, old_env)
 
 
+def test_operator_raven_billing_backup_and_workspace_statuses_are_read_only() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        now = "2026-06-04T00:00:00+00:00"
+        conn.execute(
+            """
+            INSERT INTO arclink_subscriptions (
+              subscription_id, user_id, stripe_customer_id, stripe_subscription_id,
+              status, current_period_end, raw_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("sub-local", "user-alex", "cus_should_not_render", "sub_should_not_render", "active", now, "{}", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_refuel_credits (
+              credit_id, user_id, deployment_id, source_kind, source_id,
+              credit_cents, remaining_cents, status, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("refuel-local", "user-alex", "dep-alex", "operator", "local", 2500, 1400, "active", "{}", now, now),
+        )
+        conn.execute(
+            """
+            UPDATE arclink_deployments
+            SET metadata_json = ?
+            WHERE deployment_id = 'dep-rollout-1'
+            """,
+            (
+                json.dumps(
+                    {
+                        "backup_owner_repo": "sirouk/arclink-agent-backup",
+                        "backup_github_write_check": "failed_closed",
+                        "backup_activation": "not_active",
+                        "backup_github_write_check_reason": "secret://must-not-render",
+                    },
+                    sort_keys=True,
+                ),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO arclink_service_health (
+              deployment_id, service_name, status, checked_at
+            ) VALUES
+              ('dep-rollout-1', 'memory-synth', 'healthy', ?),
+              ('dep-rollout-1', 'managed-context', 'healthy', ?)
+            """,
+            (now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_synthesis_cards (
+              card_id, source_kind, source_key, source_title, source_signature,
+              prompt_version, model, status, card_json, card_text, source_count,
+              token_estimate, last_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("card-local", "vault", "Vault/Academy/Memory_Seeds.md", "Academy seeds", "sig", "v1", "local", "active", "{}", "seed", 1, 10, "", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO notion_index_documents (
+              doc_key, root_id, source_page_id, source_page_url, source_kind,
+              file_path, page_title, section_heading, section_ordinal,
+              breadcrumb_json, owners_json, last_edited_time, content_hash,
+              indexed_at, state
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("notion-local", "root", "page", "https://www.notion.so/public", "page", "/tmp/notion.md", "Runbook", "", 0, "[]", "[]", now, "hash", now, "active"),
+        )
+        conn.execute(
+            """
+            INSERT INTO refresh_jobs (
+              job_name, job_kind, target_id, schedule, last_run_at, last_status, last_note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("academy-post-apply", "academy", "dep-rollout-1", "", now, "queued", "pending refresh"),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_share_grants (
+              grant_id, owner_user_id, recipient_user_id, resource_kind, resource_root,
+              resource_path, display_name, access_mode, status, expires_at, approved_at,
+              accepted_at, revoked_at, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("share-local", "user-alex", "user-alex", "drive", "vault", "Fleet", "Fleet", "write", "accepted", "", now, now, "", "{}", now, now),
+        )
+        conn.commit()
+
+        before_intents = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        before_operator_actions = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+        billing = raven.dispatch_operator_raven_command(conn, "/billing_status")
+        backup = raven.dispatch_operator_raven_command(conn, "/backup_status")
+        workspace = raven.dispatch_operator_raven_command(conn, "/workspace_status")
+        combined = "\n".join([billing["message"], backup["message"], workspace["message"]])
+        expect("Operator Raven billing status" in billing["message"], billing["message"])
+        expect("remaining=$14.00" in billing["message"], billing["message"])
+        expect("Operator Raven backup status" in backup["message"], backup["message"])
+        expect("failed_closed" in backup["message"], backup["message"])
+        expect("Operator Raven workspace status" in workspace["message"], workspace["message"])
+        expect("Shared Notion index: 1 active document" in workspace["message"], workspace["message"])
+        expect("accepted=1" in workspace["message"], workspace["message"])
+        expect("No qmd, Notion, memory, share, filesystem, or provider mutation was run." in workspace["message"], workspace["message"])
+        expect("cus_should_not_render" not in combined and "sub_should_not_render" not in combined, combined)
+        expect("secret://" not in combined, combined)
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_intents, "readouts must not queue admin actions")
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before_operator_actions, "readouts must not queue operator actions")
+        print("PASS test_operator_raven_billing_backup_and_workspace_statuses_are_read_only")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
 def test_operator_raven_upgrade_check_is_injected_and_fail_closed() -> None:
     tmp, old_env, conn, raven = with_seeded_db()
     try:
@@ -760,6 +874,9 @@ def test_operator_raven_mutation_helpers_and_approval_code() -> None:
     expect(raven.operator_raven_command_is_mutating("/pod_repair dep-alex restart") is True, "pod_repair is mutating")
     expect(raven.operator_raven_command_is_mutating("/pod_repair dep-alex --dry-run") is False, "dry-run pod_repair is not mutating")
     expect(raven.operator_raven_command_is_mutating("/operator_status") is False, "status is not mutating")
+    expect(raven.operator_raven_command_is_mutating("/billing_status") is False, "billing_status is read-only")
+    expect(raven.operator_raven_command_is_mutating("/backup_status") is False, "backup_status is read-only")
+    expect(raven.operator_raven_command_is_mutating("/workspace_status") is False, "workspace_status is read-only")
     expect(raven.operator_raven_command_is_mutating("/rollout v2.0.0") is True, "rollout is mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade") is True, "upgrade is mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade confirm") is True, "confirmed upgrade is mutating")
@@ -802,6 +919,9 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
         try:
             cfg = control.Config.from_env()
             expect(telegram._operator_command_requested("/operator_status"), "Telegram should recognize Operator Raven commands")
+            expect(telegram._operator_command_requested("/billing_status"), "Telegram should recognize Operator Raven billing status")
+            expect(telegram._operator_command_requested("/backup_status"), "Telegram should recognize Operator Raven backup status")
+            expect(telegram._operator_command_requested("/workspace_status"), "Telegram should recognize Operator Raven workspace status")
             expect(telegram._operator_command_requested("/agents"), "Telegram operator /agents should resolve to Operator Raven, not Hermes internals")
             allowed = {"chat": {"id": "42", "type": "private"}, "from": {"id": "42"}}
             denied = {"chat": {"id": "99", "type": "private"}, "from": {"id": "99"}}
@@ -816,6 +936,9 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
     expect('dispatch_text = f"{dispatch_text} --confirm"' in discord_text, "Discord approval code should satisfy the Operator Raven confirmation token")
     expect("@tree.command(name=\"operator-status\"" in discord_text, "Discord should expose an operator status command")
     expect("@tree.command(name=\"operator-agents\"" in discord_text, "Discord should expose an operator ArcLink agents command")
+    expect("@tree.command(name=\"billing-status\"" in discord_text, "Discord should expose operator billing status")
+    expect("@tree.command(name=\"backup-status\"" in discord_text, "Discord should expose operator backup status")
+    expect("@tree.command(name=\"workspace-status\"" in discord_text, "Discord should expose operator workspace status")
     expect("@tree.command(name=\"upgrade\"" in discord_text and "/upgrade --dry-run" in discord_text, "Discord /upgrade should preview before queueing")
     expect("@tree.command(name=\"pin-upgrade\"" in discord_text, "Discord should expose a confirmed pinned-component upgrade command")
     expect("_queue_upgrade_operator_action" not in discord_text, "Discord /upgrade must not bypass Operator Raven confirmation")
@@ -835,6 +958,7 @@ if __name__ == "__main__":
     test_operator_raven_upgrade_policy_is_read_only_and_component_specific()
     test_operator_raven_fleet_drain_and_resume_are_gated_and_audited()
     test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secrets()
+    test_operator_raven_billing_backup_and_workspace_statuses_are_read_only()
     test_operator_raven_upgrade_check_is_injected_and_fail_closed()
     test_operator_raven_rollout_plan_is_dry_run_only()
     test_operator_raven_academy_status_is_read_only_and_proof_gated()
@@ -846,4 +970,4 @@ if __name__ == "__main__":
     test_operator_raven_action_status_reads_both_queues()
     test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
-    print("PASS all 16 Operator Raven tests")
+    print("PASS all 17 Operator Raven tests")

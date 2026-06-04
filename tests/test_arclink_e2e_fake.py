@@ -235,6 +235,7 @@ def test_full_fake_journey():
                                   "target_id": deployment_id,
                                   "reason": "e2e fake test",
                                   "idempotency_key": "e2e-fake-restart-1",
+                                  "confirm": True,
                               })
     expect(status == 202, f"admin action: expected 202 got {status}: {payload}")
     expect(payload["action"]["status"] == "queued", f"admin action: expected queued got {payload['action']}")

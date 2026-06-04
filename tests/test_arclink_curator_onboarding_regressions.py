@@ -468,12 +468,23 @@ def test_telegram_operator_upgrade_command_queues_upgrade_action() -> None:
             )
 
             row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'upgrade'").fetchone()
+            expect(row is None, "bare /upgrade should fail closed until explicit confirmation")
+            expect(outbound and "append `confirm`" in outbound[-1], str(outbound))
+
+            curator._handle_operator_command(
+                cfg=cfg,
+                bot_token="test-token",
+                text="/upgrade confirm",
+                message={"chat": {"id": "42"}, "from": {"id": "42", "username": "operator"}},
+            )
+
+            row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'upgrade'").fetchone()
             expect(row is not None, "expected /upgrade to queue an operator upgrade action")
             expect(row["requested_target"] == "", str(dict(row)))
             expect(row["requested_by"] == "@operator", str(dict(row)))
             # /upgrade is now a first-class Operator Raven action on every operator surface.
             expect(row["request_source"] == "operator-raven", str(dict(row)))
-            expect(outbound and "queued an ArcLink upgrade/repair" in outbound[0], str(outbound))
+            expect(outbound and "queued an ArcLink upgrade/repair" in outbound[-1], str(outbound))
             print("PASS test_telegram_operator_upgrade_command_queues_upgrade_action")
         finally:
             os.environ.clear()

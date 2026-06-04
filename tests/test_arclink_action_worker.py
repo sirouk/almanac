@@ -878,6 +878,10 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         refresh_request = applied["post_apply_refresh_request"]
         expect(refresh_request["status"] == "requested", str(refresh_request))
         expect(refresh_request["deployment_id"] == deployment_id, str(refresh_request))
+        refresh_result = applied["post_apply_refresh_result"]
+        expect(refresh_result["status"] == "validated", str(refresh_result))
+        expect("SOUL.md" in refresh_result["verified_paths"], str(refresh_result))
+        expect(refresh_result["missing_paths"] == [], str(refresh_result))
         refresh_kinds = {item["kind"]: item for item in refresh_request["refreshes"]}
         expect(refresh_kinds["qmd_index"]["status"] == "requested", str(refresh_kinds))
         expect(refresh_kinds["memory_synthesis"]["status"] == "requested", str(refresh_kinds))
@@ -892,13 +896,50 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(state["post_apply_refresh_request"]["request_id"] == refresh_request["request_id"], str(state))
         refresh_file = json.loads((hermes_home / "state" / "arclink-academy-post-apply-refresh.json").read_text(encoding="utf-8"))
         expect(refresh_file["request_id"] == refresh_request["request_id"], str(refresh_file))
+        expect(refresh_file["status"] == "validated", str(refresh_file))
+        expect({item["status"] for item in refresh_file["refreshes"]} <= {"validated_pending_runner", "not_requested"}, str(refresh_file))
         expect("Docker" in refresh_file["queue_policy"] and "inline" in refresh_file["queue_policy"], str(refresh_file))
         refresh_job = conn.execute(
             "SELECT * FROM refresh_jobs WHERE job_name = ?",
             (f"academy-post-apply-refresh:{deployment_id}",),
         ).fetchone()
         expect(refresh_job is not None, "Academy apply should record a control-plane post-apply refresh job")
-        expect(refresh_job["target_id"] == deployment_id and refresh_request["request_id"] in refresh_job["last_note"], str(dict(refresh_job)))
+        expect(refresh_job["target_id"] == deployment_id and refresh_job["last_status"] == "validated" and refresh_request["request_id"] in refresh_job["last_note"], str(dict(refresh_job)))
+        runner_calls: list[dict[str, str]] = []
+
+        def _proof_runner(payload: dict[str, object]) -> dict[str, object]:
+            runner_calls.append({key: str(payload.get(key) or "") for key in ("kind", "deployment_id", "request_id")})
+            return {"status": "succeeded", "summary": "local injected proof runner completed"}
+
+        consumed = worker.run_academy_post_apply_refresh(
+            conn,
+            deployment_id=deployment_id,
+            qmd_runner=_proof_runner,
+            memory_runner=_proof_runner,
+            skill_runner=_proof_runner,
+            requested_by="test:academy-refresh",
+        )
+        expect(consumed["status"] == "succeeded", str(consumed))
+        expect({"qmd_index", "memory_synthesis"} <= {item["kind"] for item in runner_calls}, str(runner_calls))
+        refreshed_file = json.loads((hermes_home / "state" / "arclink-academy-post-apply-refresh.json").read_text(encoding="utf-8"))
+        expect(refreshed_file["status"] == "succeeded", str(refreshed_file))
+        expect("secret://" not in json.dumps(refreshed_file, sort_keys=True), str(refreshed_file))
+        tampered = dict(refreshed_file)
+        tampered["applied_paths"] = ["vault"]
+        (hermes_home / "state" / "arclink-academy-post-apply-refresh.json").write_text(
+            json.dumps(tampered, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            worker.run_academy_post_apply_refresh(
+                conn,
+                deployment_id=deployment_id,
+                requested_by="test:academy-refresh-tamper",
+            )
+        except worker.ArcLinkActionWorkerError as exc:
+            expect("no file component" in str(exc), str(exc))
+        else:
+            raise AssertionError("Academy post-apply refresh should reject root-only applied paths")
         academy_files = list((root / "vault" / "Academy").rglob("*.md"))
         expect(academy_files, "Academy apply should materialize governed vault markdown")
         rendered_vault = "\n".join(path.read_text(encoding="utf-8") for path in academy_files)

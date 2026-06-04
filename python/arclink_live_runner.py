@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import textwrap
@@ -495,6 +496,147 @@ def build_workspace_live_runners(env: Mapping[str, str]) -> dict[str, Any]:
     return runners
 
 
+def _llm_router_local_fallback_runner(env: Mapping[str, str]) -> dict[str, Any]:
+    """Run a no-secret router fallback proof through the real ASGI app.
+
+    This is intentionally not live provider proof. It uses a fake upstream that
+    first returns a retryable 429 and then returns a successful fallback-model
+    response, while the real router code handles auth, policy, reservation,
+    fallback metadata, sanitized audit, and settlement.
+    """
+    import asyncio
+    import httpx
+
+    import arclink_control as control
+    import arclink_llm_router as router
+
+    async def _run() -> dict[str, Any]:
+        requests: list[dict[str, Any]] = []
+
+        async def upstream_handler(request: httpx.Request) -> httpx.Response:
+            try:
+                payload = json.loads(request.content.decode("utf-8") if request.content else "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            requests.append({"model": str(payload.get("model") or ""), "url": str(request.url)})
+            if len(requests) == 1:
+                return httpx.Response(429, content=b"rate limited token=sk-live-redacted-by-router")
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl_local_router_fallback_proof",
+                    "object": "chat.completion",
+                    "model": "model-b",
+                    "choices": [{"message": {"role": "assistant", "content": "fallback ok"}}],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+                },
+            )
+
+        with tempfile.TemporaryDirectory(prefix="arclink-router-proof-") as tmpdir:
+            db_path = str(Path(tmpdir) / "router-proof.sqlite3")
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                control.ensure_schema(conn)
+                control.upsert_arclink_user(
+                    conn,
+                    user_id="router-proof-user",
+                    email="router-proof@example.test",
+                    entitlement_state="paid",
+                )
+                control.reserve_arclink_deployment_prefix(
+                    conn,
+                    deployment_id="router-proof-deployment",
+                    user_id="router-proof-user",
+                    prefix="router-proof-1a2b",
+                    base_domain="example.test",
+                    status="active",
+                    metadata={"chutes": {"monthly_budget_cents": 1000, "used_cents": 0}},
+                )
+                raw_key = control.generate_llm_router_raw_key()
+                control.ensure_llm_router_key(
+                    conn,
+                    deployment_id="router-proof-deployment",
+                    user_id="router-proof-user",
+                    secret_ref="secret://arclink/llm-router/router-proof-deployment/api-key",
+                    raw_key=raw_key,
+                    allowed_models=["model-a"],
+                )
+            finally:
+                conn.close()
+
+            proof_env = {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_local_router_proof_secret",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MODEL": "model-a",
+                "ARCLINK_LLM_ROUTER_ALLOWED_MODELS": "model-a",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "model-b",
+                "ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES": "429",
+                "ARCLINK_LLM_ROUTER_REFRESH_MODEL_CATALOG_ON_STARTUP": "0",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            }
+            config = router.load_router_config({**dict(env), **proof_env})
+            app = router.create_app(config, upstream_transport=httpx.MockTransport(upstream_handler))
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://router-proof.local") as client:
+                response = await client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {raw_key}"},
+                    json={
+                        "model": "model-a",
+                        "messages": [{"role": "user", "content": "router local proof prompt must not persist"}],
+                    },
+                )
+                body = response.json()
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                open_reservations = conn.execute(
+                    "SELECT COUNT(*) AS count FROM arclink_llm_budget_reservations WHERE status = 'reserved'"
+                ).fetchone()["count"]
+                usage_count = conn.execute("SELECT COUNT(*) AS count FROM arclink_llm_usage_events").fetchone()["count"]
+                fallback_count = conn.execute(
+                    "SELECT COUNT(*) AS count FROM arclink_events WHERE event_type = 'llm_router:fallback_attempt'"
+                ).fetchone()["count"]
+            finally:
+                conn.close()
+
+        router_meta = body.get("arclink_router") if isinstance(body, dict) else {}
+        if response.status_code != 200:
+            raise RuntimeError(f"router local fallback proof returned HTTP {response.status_code}")
+        if not isinstance(router_meta, dict) or router_meta.get("fallback_used") is not True:
+            raise RuntimeError("router local fallback proof did not report fallback_used")
+        if open_reservations:
+            raise RuntimeError("router local fallback proof leaked an open reservation")
+        if usage_count != 1 or fallback_count != 1:
+            raise RuntimeError("router local fallback proof did not record usage and fallback audit")
+        final_model = str(router_meta.get("upstream_model") or "")
+        if final_model != "model-b":
+            raise RuntimeError("router local fallback proof did not settle on fallback model")
+        return {
+            "proof": "llm_router_local_fallback",
+            "live_provider": False,
+            "status_code": response.status_code,
+            "request_count": len(requests),
+            "primary_model": str(router_meta.get("primary_model") or ""),
+            "final_model": final_model,
+            "fallback_used": True,
+            "fallback_attempt_count": fallback_count,
+            "usage_count": usage_count,
+            "fallback_audit_count": fallback_count,
+            "open_reservations": open_reservations,
+        }
+
+    return asyncio.run(_run())
+
+
+def build_router_live_runners(env: Mapping[str, str]) -> dict[str, Any]:
+    """Build no-secret local router proof runners."""
+    return {"llm_router_local_fallback_proof": lambda _step: _llm_router_local_fallback_runner(env)}
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -541,6 +683,8 @@ def run_live_proof(
     effective_runners = runners
     if effective_runners is None and journey == "workspace":
         effective_runners = build_workspace_live_runners(source)
+    if effective_runners is None and journey == "router":
+        effective_runners = build_router_live_runners(source)
 
     # Determine status
     live_requested = bool(live)
@@ -651,7 +795,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--journey",
-        choices=("hosted", "external", "workspace", "all"),
+        choices=("hosted", "external", "router", "workspace", "all"),
         default="hosted",
         help="Proof journey to plan or execute (default: hosted)",
     )

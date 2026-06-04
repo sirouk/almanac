@@ -253,6 +253,7 @@ def _all_lane_fixture_records() -> list[dict[str, Any]]:
 def test_default_registry_declares_governed_local_lanes() -> None:
     academy = _academy()
     registry = academy.default_source_lane_registry()
+    example = json.loads((REPO / "config" / "academy-source-lanes.example.json").read_text(encoding="utf-8"))
     expected = {
         "video_transcript",
         "reddit_discussion",
@@ -264,9 +265,11 @@ def test_default_registry_declares_governed_local_lanes() -> None:
         "organization_private",
     }
     expect(set(registry) == expected, sorted(registry))
+    expect(set(example["lanes"]) == expected, sorted(example["lanes"]))
     for lane_id in expected:
         lane = registry[lane_id]
         data = lane.to_dict()
+        example_lane = example["lanes"][lane_id]
         for field in (
             "lane_id",
             "label",
@@ -277,8 +280,11 @@ def test_default_registry_declares_governed_local_lanes() -> None:
             "live_proof_boundary",
             "fake_fixture_supported",
             "live_actions_enabled",
+            "required_metadata",
+            "quality_weight",
         ):
             expect(data.get(field) not in (None, ""), f"{lane_id} missing {field}: {data}")
+            expect(example_lane.get(field) == data.get(field), f"{lane_id} example drift for {field}: {example_lane} vs {data}")
         expect(data["fake_fixture_supported"] is True, data)
         expect(data["live_actions_enabled"] is False, data)
         expect("PG-" in data["live_proof_boundary"] or "policy" in data["live_proof_boundary"], data)

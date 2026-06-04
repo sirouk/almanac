@@ -52,8 +52,11 @@ skill as "named and shipped; live plugin/runtime presence unverified
    is paired with a control-plane
    `refresh_jobs` row named `academy-post-apply-refresh:<deployment_id>` and is
    the explicit handoff for qmd re-index, memory-synthesis ingestion, and skill
-   activation proof. The action worker does not run those follow-up jobs inline;
-   they remain planned/proof-gated and inspectable. The scheduler records intent
+   activation proof. The action worker immediately consumes the handoff in
+   validation mode: it checks every applied path stays inside the deployment
+   Hermes home, vault, or state roots, records verified/missing paths, and marks
+   follow-up refreshes `validated_pending_runner` unless an authorized qmd,
+   memory, or skill runner is explicitly injected. The scheduler records intent
    and arms the next review; it never writes to the Agent.
 
 **Commit ("everything put in its place").** When the **Captain ends the mode**,
@@ -66,9 +69,11 @@ the deployment Hermes home. It also writes governed `Vault/Academy/{role}/`
 markdown, `state/arclink-academy-memory-seeds.json`, and
 `state/arclink-academy-approved-skills.json` when the staged plan includes those
 intents. It also writes
-`state/arclink-academy-post-apply-refresh.json`, a no-inline-execution request
-for qmd indexing, memory synthesis, and explicit Hermes skill activation proof,
-and records the matching `refresh_jobs` status row for operator visibility.
+`state/arclink-academy-post-apply-refresh.json`, a runner-gated request for qmd
+indexing, memory synthesis, and explicit Hermes skill activation proof, records
+the matching `refresh_jobs` status row for operator visibility, and validates
+the handoff without running unauthorized Docker, SSH, provider, qmd, memory, or
+skill activation work inline.
 Live source acquisition and provider curation remain behind
 `PG-PROVIDER`. See `GAPS.md` for the authoritative gap taxonomy.
 
@@ -384,15 +389,17 @@ deployment Hermes home **additively**. The current implemented slice is explicit
   `Academy/<role>/` as an additive namespace.
 - **Memory**: implemented as staged artifacts. `academy_apply` writes
   `Academy/<role>/Memory_Seeds.md` plus
-  `state/arclink-academy-memory-seeds.json`; routing those seeds through
-  `arclink_memory_synthesizer` remains planned.
+  `state/arclink-academy-memory-seeds.json`; `arclink_memory_synthesizer`
+  ingests bounded `Academy/**/Memory_Seeds.md` files as `academy` recall
+  candidates so the next synthesis pass can turn them into managed recall cards.
 - **Skills**: implemented as reviewed records, not activation. `academy_apply`
   writes `Academy/<role>/Approved_Skills.md` and
   `state/arclink-academy-approved-skills.json`; future installer work should
   enable/apply approved role skills via the supported Hermes/ArcLink flow and
   never remove existing skills.
-- **qmd**: staged/planned orchestration. The markdown files land; future writes
-  should trigger `bin/qmd-refresh.sh` after files land.
+- **qmd**: runner-gated orchestration. The markdown files land and the
+  post-apply handoff validates the qmd refresh request; actual qmd execution is
+  still proof/runner gated.
 - **Managed context**: surface the active Major through the managed-context
   plugin.
 

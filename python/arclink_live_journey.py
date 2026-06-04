@@ -204,6 +204,14 @@ _WORKSPACE_JOURNEY_STEPS: list[dict[str, Any]] = [
     },
 ]
 
+_ROUTER_JOURNEY_STEPS: list[dict[str, Any]] = [
+    {
+        "name": "llm_router_local_fallback_proof",
+        "description": "No-secret local proof of router 429 fallback, sanitized audit, and reservation settlement with a fake upstream",
+        "required_env": ["ARCLINK_E2E_LIVE"],
+    },
+]
+
 
 _EXTERNAL_PROOF_STEPS: list[dict[str, Any]] = [
     {
@@ -301,8 +309,9 @@ def build_journey(kind: str = "hosted", env: dict[str, str] | None = None) -> li
     Args:
         kind: ``hosted`` for the public onboarding/provider journey,
             ``workspace`` for native Drive/Code/Terminal TLS proof,
-            ``external`` for opt-in provider/live-service rows, or ``all``
-            for hosted, external, and workspace in order.
+            ``external`` for opt-in provider/live-service rows,
+            ``router`` for no-secret local router fallback proof, or ``all``
+            for hosted, external, router, and workspace in order.
         env: Optional environment mapping used to resolve deployment-specific
             proof steps such as Cloudflare-vs-Tailscale ingress.
     """
@@ -312,8 +321,10 @@ def build_journey(kind: str = "hosted", env: dict[str, str] | None = None) -> li
         specs = _WORKSPACE_JOURNEY_STEPS
     elif kind == "external":
         specs = _EXTERNAL_PROOF_STEPS
+    elif kind == "router":
+        specs = _ROUTER_JOURNEY_STEPS
     elif kind == "all":
-        specs = [*_hosted_journey_steps(env), *_EXTERNAL_PROOF_STEPS, *_WORKSPACE_JOURNEY_STEPS]
+        specs = [*_hosted_journey_steps(env), *_EXTERNAL_PROOF_STEPS, *_ROUTER_JOURNEY_STEPS, *_WORKSPACE_JOURNEY_STEPS]
     else:
         raise ValueError(f"unknown journey kind: {kind}")
     return [JourneyStep(**spec) for spec in specs]

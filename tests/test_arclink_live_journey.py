@@ -106,6 +106,7 @@ class TestBuildJourney(unittest.TestCase):
         self.assertEqual(names[0], "web_onboarding_start")
         self.assertIn("tailscale_ingress_health_check", names)
         self.assertIn("chutes_oauth_connect_proof", names)
+        self.assertIn("llm_router_local_fallback_proof", names)
         self.assertIn("workspace_control_upgrade", names)
         self.assertLess(
             names.index("discord_bot_check"),
@@ -113,8 +114,17 @@ class TestBuildJourney(unittest.TestCase):
         )
         self.assertLess(
             names.index("chutes_oauth_connect_proof"),
+            names.index("llm_router_local_fallback_proof"),
+        )
+        self.assertLess(
+            names.index("llm_router_local_fallback_proof"),
             names.index("workspace_control_upgrade"),
         )
+
+    def test_router_journey_contains_no_secret_local_fallback_proof(self):
+        steps = journey_mod.build_journey("router")
+        self.assertEqual([step.name for step in steps], ["llm_router_local_fallback_proof"])
+        self.assertEqual(steps[0].required_env, ["ARCLINK_E2E_LIVE"])
 
     def test_external_journey_contains_opt_in_provider_proofs(self):
         steps = journey_mod.build_journey("external")

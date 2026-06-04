@@ -10418,6 +10418,18 @@ try:
         )
         conn.commit()
         row = conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (str(row["host_id"]),)).fetchone()
+    else:
+        failed_state = "registration_smoke_failed" if smoke_status == "failed" else "registration_smoke_skipped"
+        conn.execute(
+            """
+            UPDATE arclink_fleet_hosts
+            SET status = 'degraded', drain = 0, last_health_state = ?, updated_at = ?
+            WHERE host_id = ?
+            """,
+            (failed_state, utc_now_iso(), str(row["host_id"])),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (str(row["host_id"]),)).fetchone()
     print(json.dumps({"host_id": row["host_id"], "hostname": row["hostname"], "capacity_slots": row["capacity_slots"], "smoke_status": smoke_status, "private_dns_name": private_dns_name, "tailscale_dns_name": tailscale_dns_name, "wireguard_private_ip": wireguard_private_ip, "remote_bootstrap": remote_bootstrap}, sort_keys=True))
 finally:
     conn.close()
@@ -11471,7 +11483,7 @@ import sys
 from pathlib import Path
 
 from arclink_control import ensure_schema
-from arclink_fleet import fleet_capacity_summary
+from arclink_dashboard import control_node_provisioning_readiness
 
 
 def truthy(value: str) -> bool:
@@ -11491,28 +11503,24 @@ conn = sqlite3.connect(str(db_path), timeout=15.0)
 conn.row_factory = sqlite3.Row
 try:
     ensure_schema(conn)
-    summary = fleet_capacity_summary(conn)
+    readiness = control_node_provisioning_readiness(conn, env=os.environ)
 finally:
     conn.close()
 
-eligible = [
-    host for host in summary["hosts"]
-    if host["status"] == "active"
-    and not host["drain"]
-    and int(host["headroom"]) > 0
-    and str(host.get("last_health_state") or "").lower() in {"", "active", "healthy", "ok", "ready"}
-]
-if eligible:
-    eligible_slots = sum(int(host.get("headroom") or 0) for host in eligible)
-    print(
-        "Sovereign provisioning readiness: ready to provision ArcPods "
-        f"({len(eligible)} eligible worker(s), {eligible_slots} available slot(s))."
-    )
+summary = str(readiness.get("summary") or "ArcPod provisioning status unavailable").rstrip(".")
+state = str(readiness.get("state") or "unknown")
+next_action = str(readiness.get("next_action") or "").rstrip(".")
+if state == "ready_to_provision":
+    ready_prefix = "Sovereign provisioning readiness: ready to provision ArcPods"
+    if summary.startswith("ready to provision ArcPods"):
+        print(f"{ready_prefix}{summary[len('ready to provision ArcPods'):]}.")
+    else:
+        print(f"Sovereign provisioning readiness: {summary}.")
 else:
-    print(
-        "Sovereign provisioning readiness: blocked, no active non-drained worker "
-        "with available capacity. Run ./deploy.sh control register-worker or inventory probe."
-    )
+    detail = summary
+    if next_action:
+        detail = f"{detail}. {next_action}"
+    print(f"Sovereign provisioning readiness: blocked, {detail}.")
 PY
 }
 

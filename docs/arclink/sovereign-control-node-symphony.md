@@ -206,7 +206,8 @@ Current source already does more than a read-only preview.
 `arclink_operator_raven.py` ships a real-but-fenced operator command layer with
 a broad read surface (`status`, `agents`, `fleet_list`, `worker_probe` dry-run,
 `user_lookup`, `academy_status`, `academy_roster`, `upgrade_check`,
-`upgrade_policy`, `action_status`) and a real mutation layer. The mutating
+`upgrade_policy`, `action_status`, `billing_status`, `backup_status`,
+`workspace_status`) and a real mutation layer. The mutating
 commands (`pod_repair`, `rollout`, `host_upgrade`, `pin_upgrade`,
 `upgrade_sweep`, `fleet_drain`, `fleet_resume`, the `MUTATING_COMMANDS` set)
 follow a four-mode contract: a `--dry-run` preview changes nothing; a real run
@@ -217,7 +218,9 @@ fleet-state mutation. `pod_repair` and `rollout` queue into
 `arclink_action_intents` (drained by `arclink_action_worker.py`);
 `host_upgrade`, detector-token `pin_upgrade`, and `upgrade_sweep` queue into
 `operator_actions` (drained by the enrollment-provisioner root maintenance
-loop). `/upgrade_policy [component]` is read-only explanatory policy.
+loop). `billing_status`, `backup_status`, and `workspace_status` are read-model
+summaries only; they do not call Stripe, providers, backup remotes, Docker,
+SSH, or Agent files. `/upgrade_policy [component]` is read-only explanatory policy.
 `/pin_upgrade <component>` resolves an active detector payload token with
 concrete target pins instead of queueing a bare component name, and
 `/upgrade_sweep` queues pending stateless detector payloads while requiring
@@ -584,8 +587,10 @@ The separate `academy_apply` action now materializes the Academy SOUL overlay,
 receipt, governed `Vault/Academy/...` artifacts, and a durable
 `state/arclink-academy-post-apply-refresh.json` handoff for qmd indexing,
 memory synthesis, and explicit skill activation proof only when PG-HERMES
-authorization is present; record-only or unauthorized adapters stage/fail
-closed. It fails closed for
+authorization is present. The action worker validates that handoff against the
+target Hermes home/vault/state roots, records verified/missing applied paths,
+and leaves actual qmd/memory/skill execution runner-gated; record-only or
+unauthorized adapters stage/fail closed. It fails closed for
 disabled lanes, unsupported lanes, requested live actions, missing
 license/permission or required lane metadata, raw-storage violations,
 unreviewed public skills, secret-looking fixture material, deletion/tombstone

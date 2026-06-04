@@ -289,6 +289,9 @@ def test_telegram_registers_operator_command_scope() -> None:
     expect(calls[0].get("scope") == {"type": "chat", "chat_id": 99}, str(calls[0]))
     command_names = {item["command"] for item in calls[0]["commands"]}
     expect("operator_status" in command_names, str(command_names))
+    expect("billing_status" in command_names, str(command_names))
+    expect("backup_status" in command_names, str(command_names))
+    expect("workspace_status" in command_names, str(command_names))
     expect("upgrade" in command_names, str(command_names))
     expect("pin_upgrade" in command_names, str(command_names))
     expect("action_status" in command_names, str(command_names))

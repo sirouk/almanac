@@ -85,11 +85,14 @@ The Operator Telegram command set is the registered
 `ARCLINK_OPERATOR_TELEGRAM_COMMANDS` in `arclink_telegram.py`:
 `/operator_status`, `/agents`, `/fleet_list`, `/worker_probe`, `/user_lookup`,
 `/pod_repair`, `/upgrade_check`, `/upgrade`, `/pin_upgrade`, `/rollout`,
-`/action_status`, and `/academy_status`. These dispatch through
+`/action_status`, `/academy_status`, `/billing_status`, `/backup_status`, and
+`/workspace_status`. These dispatch through
 `dispatch_operator_raven_command` in `arclink_operator_raven.py`. Read commands
 (`operator_status`, `fleet_list`, `user_lookup`, `academy_status`,
-`upgrade_check`, `action_status`, and `worker_probe`, which is dry-run only)
-never mutate. The mutating commands (`pod_repair`, `rollout`, `upgrade`/host
+`academy_roster`, `upgrade_check`, `upgrade_policy`, `action_status`,
+`billing_status`, `backup_status`, `workspace_status`, and `worker_probe`,
+which is dry-run only) never mutate. The mutating commands (`pod_repair`,
+`rollout`, `upgrade`/host
 upgrade, `pin_upgrade`) are NOT read-only: they use a four-mode contract where
 `--dry-run` previews, no-dry-run without an operator actor fails closed, and
 no-dry-run with the operator actor but no second confirmation fails closed. A

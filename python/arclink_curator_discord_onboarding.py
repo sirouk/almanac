@@ -605,6 +605,24 @@ async def main() -> None:
             return
         await interaction.response.send_message(_operator_raven_response(f"/user_lookup {query.strip()}"))
 
+    @tree.command(name="billing-status", description="Show billing and refuel credit posture.")
+    async def billing_status_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/billing_status"))
+
+    @tree.command(name="backup-status", description="Show private-backup setup posture.")
+    async def backup_status_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/backup_status"))
+
+    @tree.command(name="workspace-status", description="Show qmd, memory, Notion, and share posture.")
+    async def workspace_status_command(interaction) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        await interaction.response.send_message(_operator_raven_response("/workspace_status"))
+
     @tree.command(name="pod-repair", description="Dry-run an ArcPod repair plan.")
     @app_commands.describe(deployment_id="ArcPod deployment id")
     async def pod_repair_command(interaction, deployment_id: str) -> None:  # type: ignore[no-untyped-def]

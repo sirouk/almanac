@@ -1,6 +1,145 @@
 {
   "description": "Fictional public example for Academy source governance. Live acquisition remains proof-gated.",
+  "lanes": {
+    "github_repository": {
+      "authorization_required": "public or organization-approved repository access and license review",
+      "deletion_policy": "track commit/tag and repository archived/deleted state",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "GitHub repositories and systems practice",
+      "lane_id": "github_repository",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "PG-HERMES workspace proof for applied repo-derived training",
+      "permission_policy": "license and selected-file manifest required before copying code or docs",
+      "quality_weight": 11,
+      "raw_storage_policy": "raw files only when license and product policy allow; derived patterns preferred",
+      "required_metadata": [
+        "repo",
+        "commit_or_tag",
+        "license"
+      ]
+    },
+    "organization_private": {
+      "authorization_required": "Captain/operator supplied material and private data governance approval",
+      "deletion_policy": "honor owner deletion, retention, and audience-scope changes before updates",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Organization-provided private material",
+      "lane_id": "organization_private",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "policy decision plus PG-HERMES workspace proof",
+      "permission_policy": "organization policy decides reuse, retention, and Agent audience boundaries",
+      "quality_weight": 9,
+      "raw_storage_policy": "private raw storage only with explicit operator policy and scoped access",
+      "required_metadata": [
+        "owner",
+        "audience_scope"
+      ]
+    },
+    "reddit_discussion": {
+      "authorization_required": "official API/OAuth access and platform retention policy",
+      "deletion_policy": "deleted or removed content must be tombstoned before Agent update",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Reddit and practitioner discussion",
+      "lane_id": "reddit_discussion",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "policy decision plus PG-PROVIDER/PG-BOTS proof where used",
+      "permission_policy": "raw user content is restricted; derived non-identifying lessons require policy approval",
+      "quality_weight": 7,
+      "raw_storage_policy": "never in the unattended local slice",
+      "required_metadata": [
+        "subreddit",
+        "thread_quality"
+      ]
+    },
+    "scholarly_standard": {
+      "authorization_required": "open-access, standards-body, or operator-approved full text rights",
+      "deletion_policy": "track superseded, retracted, contradicted, and replaced documents",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Scholarly, standards, and whitepapers",
+      "lane_id": "scholarly_standard",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "PG-PROVIDER for provider-assisted synthesis from bounded source metadata",
+      "permission_policy": "metadata/abstract allowed when full text is not licensed for storage",
+      "quality_weight": 13,
+      "raw_storage_policy": "metadata-only by default; raw full text only with open-access or approved rights",
+      "required_metadata": [
+        "identifier",
+        "venue_or_body"
+      ]
+    },
+    "skill_tool_catalog": {
+      "authorization_required": "local, bundled, organization, or reviewed public skill source",
+      "deletion_policy": "remove or quarantine unapproved/superseded skills before Agent updates",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Skills, MCP servers, tools, and templates",
+      "lane_id": "skill_tool_catalog",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "PG-HERMES for trained workspace behavior after skills are staged",
+      "permission_policy": "public skills must be reviewed before they influence an Agent",
+      "quality_weight": 8,
+      "raw_storage_policy": "metadata-only until skill review accepts code/content storage",
+      "required_metadata": [
+        "skill_id",
+        "review_status"
+      ]
+    },
+    "video_transcript": {
+      "authorization_required": "creator, platform, Captain, or operator transcript authorization",
+      "deletion_policy": "tombstone transcript snapshots when rights are revoked or source disappears",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Video and transcript",
+      "lane_id": "video_transcript",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "policy decision plus PG-PROVIDER transcription proof",
+      "permission_policy": "transcripts require explicit access rights; ASR requires separate approval",
+      "quality_weight": 10,
+      "raw_storage_policy": "raw transcript only with recorded authorization; derived summaries preferred",
+      "required_metadata": [
+        "transcript_source",
+        "transcript_confidence"
+      ]
+    },
+    "web_article": {
+      "authorization_required": "stable public URL, authorship/date, and allowed snapshot policy",
+      "deletion_policy": "mark removed pages as removed; archive only when policy allows",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Web articles, docs, blogs, newsletters, and threads",
+      "lane_id": "web_article",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "PG-PROVIDER for live search/acquisition and generated synthesis",
+      "permission_policy": "store metadata and derived lesson cards unless snapshot rights are explicit",
+      "quality_weight": 6,
+      "raw_storage_policy": "derived summaries by default; raw snapshots require policy approval",
+      "required_metadata": [
+        "author_or_org",
+        "published_at"
+      ]
+    },
+    "wikimedia": {
+      "authorization_required": "public API use with revision and license metadata",
+      "deletion_policy": "track revision and supersession; keep citation to the exact revision when possible",
+      "enabled": true,
+      "fake_fixture_supported": true,
+      "label": "Wikipedia and Wikimedia",
+      "lane_id": "wikimedia",
+      "live_actions_enabled": false,
+      "live_proof_boundary": "PG-PROVIDER for live generation, local fixtures only here",
+      "permission_policy": "CC/license metadata required; use as map and bibliography, not sole authority",
+      "quality_weight": 12,
+      "raw_storage_policy": "allowed with compatible license, but derived summaries preferred",
+      "required_metadata": [
+        "revision"
+      ]
+    }
+  },
   "local_fixture_shape": {
+    "notes": "Local fake acquisition fixtures are test artifacts only. They must preserve no_network/no_write and include each lane's required metadata before they can become AcademySource records.",
     "required": [
       "source_id",
       "lane_id",
@@ -11,58 +150,6 @@
       "permission_status",
       "storage_policy",
       "metadata"
-    ],
-    "notes": "Local fake acquisition fixtures are test artifacts only. They must preserve no_network/no_write and include each lane's required metadata before they can become AcademySource records."
-  },
-  "lanes": {
-    "video_transcript": {
-      "enabled": true,
-      "authorization_required": "creator, platform, Captain, or operator transcript authorization",
-      "raw_storage_policy": "raw transcript only with recorded authorization",
-      "live_actions_enabled": false
-    },
-    "reddit_discussion": {
-      "enabled": true,
-      "authorization_required": "official API/OAuth access and platform retention policy",
-      "raw_storage_policy": "never in unattended local fixtures",
-      "deletion_policy": "tombstone deleted or removed content before Agent update",
-      "live_actions_enabled": false
-    },
-    "wikimedia": {
-      "enabled": true,
-      "authorization_required": "public API use with revision and license metadata",
-      "raw_storage_policy": "allowed with compatible license; derived summaries preferred",
-      "live_actions_enabled": false
-    },
-    "github_repository": {
-      "enabled": true,
-      "authorization_required": "public or organization-approved repository access and license review",
-      "raw_storage_policy": "raw files only when license and product policy allow",
-      "live_actions_enabled": false
-    },
-    "scholarly_standard": {
-      "enabled": true,
-      "authorization_required": "open-access, standards-body, or operator-approved full text rights",
-      "raw_storage_policy": "metadata-only by default",
-      "live_actions_enabled": false
-    },
-    "web_article": {
-      "enabled": true,
-      "authorization_required": "stable public URL, authorship/date, and allowed snapshot policy",
-      "raw_storage_policy": "derived summaries by default",
-      "live_actions_enabled": false
-    },
-    "skill_tool_catalog": {
-      "enabled": true,
-      "authorization_required": "local, bundled, organization, or reviewed public skill source",
-      "raw_storage_policy": "metadata-only until skill review accepts code/content storage",
-      "live_actions_enabled": false
-    },
-    "organization_private": {
-      "enabled": true,
-      "authorization_required": "Captain/operator supplied material and private data governance approval",
-      "raw_storage_policy": "private raw storage only with explicit operator policy and scoped access",
-      "live_actions_enabled": false
-    }
+    ]
   }
 }

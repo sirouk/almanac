@@ -12,7 +12,7 @@ import secrets
 import sqlite3
 import tempfile
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from arclink_control import (
     ARCLINK_ACTION_ATTEMPT_STATUSES,
@@ -53,6 +53,9 @@ from arclink_rollout import (
 
 class ArcLinkActionWorkerError(ValueError):
     pass
+
+
+AcademyPostApplyRunner = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 
 
 # Action types that map to implemented executor or local control-plane calls.
@@ -1501,6 +1504,242 @@ def _academy_post_apply_refresh_request(
     }
 
 
+def _academy_refresh_handoff_path(roots: Mapping[str, Path]) -> Path:
+    return Path(roots["hermes_home"]) / "state" / "arclink-academy-post-apply-refresh.json"
+
+
+def _academy_resolve_refresh_applied_path(roots: Mapping[str, Path], raw_path: str) -> Path:
+    clean = str(raw_path or "").strip()
+    if not clean:
+        raise ArcLinkActionWorkerError("Academy post-apply refresh path is blank")
+    candidate = Path(clean)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise ArcLinkActionWorkerError(f"Academy post-apply refresh path is unsafe: {clean}")
+    if clean == "SOUL.md":
+        root = Path(roots["hermes_home"])
+        relative = Path("SOUL.md")
+    elif candidate.parts and candidate.parts[0] == "vault":
+        root = Path(roots["vault"])
+        relative = Path(*candidate.parts[1:]) if len(candidate.parts) > 1 else Path()
+    elif candidate.parts and candidate.parts[0] == "state":
+        root = Path(roots["hermes_home"]) / "state"
+        relative = Path(*candidate.parts[1:]) if len(candidate.parts) > 1 else Path()
+    else:
+        raise ArcLinkActionWorkerError(f"Academy post-apply refresh path has no supported root: {clean}")
+    if not relative.parts:
+        raise ArcLinkActionWorkerError(f"Academy post-apply refresh path has no file component: {clean}")
+    resolved = (root / relative).resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        raise ArcLinkActionWorkerError(f"Academy post-apply refresh path escapes deployment root: {clean}")
+    return resolved
+
+
+def _academy_refresh_runner_payload(
+    *,
+    deployment_id: str,
+    kind: str,
+    roots: Mapping[str, Path],
+    request: Mapping[str, Any],
+    existing_paths: list[str],
+) -> dict[str, Any]:
+    return {
+        "deployment_id": deployment_id,
+        "kind": kind,
+        "request_id": str(request.get("request_id") or ""),
+        "trainee_id": str(request.get("trainee_id") or ""),
+        "program_id": str(request.get("program_id") or ""),
+        "manifest_id": str(request.get("manifest_id") or ""),
+        "academy_specialist_uid": str(request.get("academy_specialist_uid") or ""),
+        "hermes_home": str(roots["hermes_home"]),
+        "vault": str(roots["vault"]),
+        "state": str(Path(roots["hermes_home"]) / "state"),
+        "applied_paths": list(existing_paths),
+    }
+
+
+def _academy_run_refresh_kind(
+    *,
+    refresh: Mapping[str, Any],
+    runner: AcademyPostApplyRunner | None,
+    payload: Mapping[str, Any],
+    blocked: bool,
+) -> dict[str, Any]:
+    item = dict(refresh)
+    kind = str(item.get("kind") or "unknown")
+    current_status = str(item.get("status") or "requested")
+    if current_status in {"not_requested", "succeeded"}:
+        return item
+    if blocked:
+        item["status"] = "blocked"
+        item["last_error"] = "Applied path validation failed; refresh runner was not invoked."
+        return item
+    if kind == "skill_activation" and int(item.get("skill_count") or 0) > 0:
+        state_path = Path(str(payload.get("state") or "")) / "arclink-academy-approved-skills.json"
+        if not state_path.is_file():
+            item["status"] = "blocked"
+            item["last_error"] = "Approved skill state file is missing; activation runner was not invoked."
+            return item
+    if runner is None:
+        item["status"] = "validated_pending_runner"
+        item["last_error"] = ""
+        return item
+    try:
+        result = runner(payload)
+    except Exception as exc:  # noqa: BLE001 - runner errors must be recorded safely.
+        item["status"] = "failed"
+        item["last_error"] = _safe_error_message(exc)
+        return item
+    result_map = dict(result or {})
+    item["status"] = str(result_map.get("status") or "succeeded")
+    item["last_error"] = redact_then_truncate(str(result_map.get("last_error") or ""), limit=240)
+    runner_result: dict[str, Any] = {}
+    for key in ("status", "summary", "changed", "proof"):
+        if key not in result_map:
+            continue
+        value = result_map[key]
+        runner_result[key] = redact_then_truncate(value, limit=240) if isinstance(value, str) else value
+    item["runner_result"] = runner_result
+    return item
+
+
+def run_academy_post_apply_refresh(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    qmd_runner: AcademyPostApplyRunner | None = None,
+    memory_runner: AcademyPostApplyRunner | None = None,
+    skill_runner: AcademyPostApplyRunner | None = None,
+    requested_by: str = "system:academy_post_apply_refresh",
+) -> dict[str, Any]:
+    """Consume and validate a deployment's Academy post-apply refresh handoff.
+
+    Runners are injectable proof hooks. Without runners this validates the
+    handoff and records ``validated_pending_runner`` refresh items; it does not
+    run qmd, memory synthesis, Hermes skill activation, Docker, SSH, or provider
+    calls inline.
+    """
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        raise ArcLinkActionWorkerError("Academy post-apply refresh requires a deployment id")
+    roots = _deployment_academy_roots(conn, deployment_id=clean_deployment)
+    refresh_path = _academy_refresh_handoff_path(roots)
+    try:
+        request = json.loads(refresh_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ArcLinkActionWorkerError("Academy post-apply refresh handoff is missing") from exc
+    except json.JSONDecodeError as exc:
+        raise ArcLinkActionWorkerError("Academy post-apply refresh handoff is invalid JSON") from exc
+    if not isinstance(request, dict):
+        raise ArcLinkActionWorkerError("Academy post-apply refresh handoff must be a JSON object")
+    if str(request.get("deployment_id") or "").strip() != clean_deployment:
+        raise ArcLinkActionWorkerError("Academy post-apply refresh handoff deployment mismatch")
+
+    applied_paths = [str(item or "").strip() for item in (request.get("applied_paths") or []) if str(item or "").strip()]
+    verified_paths: list[str] = []
+    missing_paths: list[str] = []
+    for raw_path in applied_paths:
+        resolved = _academy_resolve_refresh_applied_path(roots, raw_path)
+        if resolved.is_file():
+            verified_paths.append(raw_path)
+        else:
+            missing_paths.append(raw_path)
+    blocked = bool(missing_paths)
+    runner_payload = _academy_refresh_runner_payload(
+        deployment_id=clean_deployment,
+        kind="",
+        roots=roots,
+        request=request,
+        existing_paths=verified_paths,
+    )
+    runner_by_kind = {
+        "qmd_index": qmd_runner,
+        "memory_synthesis": memory_runner,
+        "skill_activation": skill_runner,
+    }
+    refreshes = []
+    for refresh in [item for item in (request.get("refreshes") or []) if isinstance(item, Mapping)]:
+        kind = str(refresh.get("kind") or "unknown")
+        payload = {**runner_payload, "kind": kind}
+        refreshes.append(
+            _academy_run_refresh_kind(
+                refresh=refresh,
+                runner=runner_by_kind.get(kind),
+                payload=payload,
+                blocked=blocked,
+            )
+        )
+    statuses = {str(item.get("status") or "") for item in refreshes}
+    if statuses & {"failed", "blocked"} or blocked:
+        status = "blocked"
+    elif statuses and statuses <= {"succeeded", "not_requested"}:
+        status = "succeeded"
+    else:
+        status = "validated"
+    consumed_at = utc_now_iso()
+    updated_request = {
+        **request,
+        "status": status,
+        "consumed_at": consumed_at,
+        "consumed_by": requested_by,
+        "verified_paths": verified_paths,
+        "missing_paths": missing_paths,
+        "refreshes": refreshes,
+    }
+    _write_private_text_atomic(refresh_path, json.dumps(updated_request, indent=2, sort_keys=True) + "\n")
+    note_refresh_job(
+        conn,
+        job_name=f"academy-post-apply-refresh:{clean_deployment}",
+        job_kind="academy-post-apply",
+        target_id=clean_deployment,
+        schedule="on demand after academy_apply",
+        status=status,
+        note=(
+            f"Academy post-apply refresh {status}: {request.get('request_id') or 'unknown'}; "
+            f"verified_paths={len(verified_paths)} missing_paths={len(missing_paths)}"
+        ),
+    )
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=clean_deployment,
+        event_type="academy_post_apply_refresh_consumed",
+        metadata={
+            "request_id": str(request.get("request_id") or ""),
+            "status": status,
+            "verified_paths": len(verified_paths),
+            "missing_paths": len(missing_paths),
+        },
+        commit=False,
+    )
+    append_arclink_audit(
+        conn,
+        action="academy_post_apply_refresh_consumed",
+        actor_id=requested_by,
+        target_kind="deployment",
+        target_id=clean_deployment,
+        reason="Academy post-apply refresh handoff consumed through validated runner hooks",
+        metadata={
+            "request_id": str(request.get("request_id") or ""),
+            "status": status,
+            "refresh_statuses": [str(item.get("status") or "") for item in refreshes],
+            "missing_paths": missing_paths,
+        },
+        commit=False,
+    )
+    conn.commit()
+    return {
+        "status": status,
+        "request_id": str(request.get("request_id") or ""),
+        "deployment_id": clean_deployment,
+        "verified_paths": verified_paths,
+        "missing_paths": missing_paths,
+        "refreshes": refreshes,
+        "handoff_path": str(refresh_path),
+        "live_execution_performed": bool(qmd_runner or memory_runner or skill_runner),
+    }
+
+
 def _materialize_academy_apply(
     conn: sqlite3.Connection,
     *,
@@ -1640,6 +1879,11 @@ def _materialize_academy_apply(
     ) + "\n"
     state_changed = _write_private_text_atomic(hermes_home / "state" / "arclink-academy-apply.json", state_body)
     changed_any = changed_any or state_changed
+    post_apply_refresh_result = run_academy_post_apply_refresh(
+        conn,
+        deployment_id=deployment_id,
+        requested_by="system:academy_apply",
+    )
     conn.execute(
         """
         UPDATE academy_specialist_subscriptions
@@ -1657,6 +1901,7 @@ def _materialize_academy_apply(
             "filesystem_mutation_performed": bool(changed_any),
             "applied_paths": applied_paths,
             "post_apply_refresh_request": refresh_request,
+            "post_apply_refresh_result": post_apply_refresh_result,
         }
     )
     return payload

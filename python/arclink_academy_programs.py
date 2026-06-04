@@ -28,6 +28,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
 
+from arclink_secrets_regex import redact_then_truncate
+
 
 class ArcLinkAcademyProgramError(ValueError):
     pass
@@ -1978,13 +1980,17 @@ def _read_trainer_router_key(env: Mapping[str, str] | None = None) -> str:
 
 def _compact_trainer_source(source: Mapping[str, Any]) -> dict[str, Any]:
     citations = _loads(source.get("citations_json"), default=[])
+    safe_citations: list[str] = []
+    if isinstance(citations, list):
+        for citation in citations[:8]:
+            safe_citations.append(redact_then_truncate(citation, limit=600))
     return {
-        "source_uid": str(source.get("source_uid") or "")[:120],
-        "lane_id": str(source.get("lane_id") or "")[:80],
-        "title": str(source.get("title") or "")[:240],
-        "canonical_url": str(source.get("canonical_url") or "")[:600],
-        "derived_notes": str(source.get("derived_notes") or "")[:1600],
-        "citations": citations[:8] if isinstance(citations, list) else [],
+        "source_uid": redact_then_truncate(source.get("source_uid") or "", limit=120),
+        "lane_id": redact_then_truncate(source.get("lane_id") or "", limit=80),
+        "title": redact_then_truncate(source.get("title") or "", limit=240),
+        "canonical_url": redact_then_truncate(source.get("canonical_url") or "", limit=600),
+        "derived_notes": redact_then_truncate(source.get("derived_notes") or "", limit=1600),
+        "citations": safe_citations,
     }
 
 

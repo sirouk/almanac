@@ -856,6 +856,20 @@ def test_agent_install_payload_tracks_current_agent_contract() -> None:
     print("PASS test_agent_install_payload_tracks_current_agent_contract")
 
 
+def test_compose_defaults_live_academy_trainer_on() -> None:
+    body = (REPO / "compose.yaml").read_text(encoding="utf-8")
+    expect(
+        "ARCLINK_ACADEMY_TRAINER_LIVE: ${ARCLINK_ACADEMY_TRAINER_LIVE:-1}" in body,
+        "control compose should enable the scoped live Academy Trainer by default",
+    )
+    expect(
+        "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY_FILE:" in body
+        and "state/operator/secrets/llm_router_api_key" in body,
+        "live Academy Trainer should use the scoped operator router key file",
+    )
+    print("PASS test_compose_defaults_live_academy_trainer_on")
+
+
 def test_emit_runtime_config_persists_org_interview_fields() -> None:
     config = render_runtime_config(
         "tui-only",
@@ -4366,6 +4380,7 @@ def main() -> int:
         test_ci_install_smoke_arms_notion_webhook_install_window,
         test_ci_install_smoke_removes_synthetic_control_plane_agents_before_final_health,
         test_ci_install_smoke_treats_qmd_embedding_backlog_as_retryable_after_search_proof,
+        test_compose_defaults_live_academy_trainer_on,
         test_health_checks_failed_systemd_units_and_stale_podman_transients,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,

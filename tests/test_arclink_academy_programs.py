@@ -1190,6 +1190,52 @@ def test_academy_router_trainer_client_uses_llm_router_key() -> None:
         cleanup(tmp, old_env)
 
 
+def test_academy_router_trainer_redacts_secret_shaped_payload_fields() -> None:
+    tmp, old_env, _conn, _control, ap = with_db()
+    old_urlopen = ap.urllib.request.urlopen
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return _FakeRouterResponse()
+
+    try:
+        key_file = Path(tmp.name) / "trainer-router-key"
+        key_file.write_text("acpod_live_test_router_key\n", encoding="utf-8")
+        client = ap.academy_trainer_client_from_env(
+            {
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_BASE_URL": "http://router.test/v1",
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY_FILE": str(key_file),
+            }
+        )
+        expect(client is not None, "expected router Trainer client")
+        ap.urllib.request.urlopen = fake_urlopen
+        client.review(
+            role_title="Research Analyst",
+            topic="safe review",
+            sources=[
+                {
+                    "source_uid": "asrc_secret",
+                    "lane_id": "web_article",
+                    "title": "token=sk-proj-" + "A" * 32,
+                    "canonical_url": "https://user:supersecret@example.test/source",
+                    "derived_notes": "Use CHUTES_API_KEY=cpk_test_secret_value_12345 for access.",
+                    "citations_json": json.dumps(["https://user:supersecret@example.test/source"]),
+                }
+            ],
+        )
+        expect(len(calls) == 1, str(calls))
+        body = json.loads(calls[0][0].data.decode("utf-8"))
+        content = body["messages"][1]["content"]
+        expect("[REDACTED]" in content, content)
+        for forbidden in ("sk-proj-", "cpk_test_secret", "supersecret"):
+            expect(forbidden not in content, content)
+        print("PASS test_academy_router_trainer_redacts_secret_shaped_payload_fields")
+    finally:
+        ap.urllib.request.urlopen = old_urlopen
+        cleanup(tmp, old_env)
+
+
 def test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -1319,6 +1365,7 @@ if __name__ == "__main__":
     test_academy_central_specialist_shared_and_deduped_across_captains()
     test_academy_public_cards_and_capsules_ignore_private_central_rows()
     test_academy_router_trainer_client_uses_llm_router_key()
+    test_academy_router_trainer_redacts_secret_shaped_payload_fields()
     test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized()
     test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live()
     test_academy_apply_stages_replaceable_soul_section()

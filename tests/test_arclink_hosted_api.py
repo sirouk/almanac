@@ -4217,6 +4217,13 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
 
 
+def test_academy_mode_actions_trigger_public_agent_live_delivery() -> None:
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_live_trigger_actions_test")
+    expect("academy_mode_opened" in hosted.PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS, str(hosted.PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS))
+    expect("academy_mode_steer_recorded" in hosted.PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS, str(hosted.PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS))
+    print("PASS test_academy_mode_actions_trigger_public_agent_live_delivery")
+
+
 def test_public_agent_live_trigger_backpressure_defers_to_delivery_worker() -> None:
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_live_trigger_backpressure_test")
     config = hosted.HostedApiConfig(
@@ -6135,6 +6142,7 @@ def main() -> int:
     test_telegram_operator_route_reads_generated_config_file()
     test_telegram_webhook_secret_boundary()
     test_telegram_webhook_sends_reply_when_transport_is_available()
+    test_academy_mode_actions_trigger_public_agent_live_delivery()
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
     test_telegram_fast_ack_backpressure_is_cosmetic()
     test_public_agent_live_trigger_auto_mode_defers_without_docker_socket()

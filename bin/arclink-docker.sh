@@ -744,6 +744,93 @@ health() {
   echo "Docker health passed."
 }
 
+docker_host_priv_path() {
+  local path="$1"
+  case "$path" in
+    /home/arclink/arclink/arclink-priv/*)
+      printf '%s/arclink-priv/%s\n' "$REPO_DIR" "${path#/home/arclink/arclink/arclink-priv/}"
+      ;;
+    *)
+      printf '%s\n' "$path"
+      ;;
+  esac
+}
+
+docker_is_local_ssh_host() {
+  local host="${1:-}"
+  case "$host" in
+    ""|localhost|localhost.localdomain|127.0.0.1|::1)
+      return 0
+      ;;
+  esac
+  if [[ "$host" == "$(hostname 2>/dev/null || true)" ]]; then
+    return 0
+  fi
+  if [[ "$host" == "$(hostname -f 2>/dev/null || true)" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+docker_tailnet_forward_socket() {
+  local deployment_id="$1"
+  local port="$2"
+  local dir="$REPO_DIR/arclink-priv/state/tailnet-forwards"
+  mkdir -p "$dir"
+  printf '%s/%s-%s.ctl\n' "$dir" "$deployment_id" "$port"
+}
+
+docker_ensure_tailnet_forward() {
+  local deployment_id="$1"
+  local port="$2"
+  local ssh_host="$3"
+  local ssh_user="${4:-arclink}"
+  local ssh_port="${5:-22}"
+  local key_path="" known_hosts="" control_path="" target=""
+
+  if docker_is_local_ssh_host "$ssh_host"; then
+    return 0
+  fi
+  if [[ -z "$ssh_host" ]]; then
+    return 1
+  fi
+
+  key_path="$(docker_host_priv_path "$(configured_or_default ARCLINK_FLEET_SSH_KEY_PATH "$REPO_DIR/arclink-priv/secrets/ssh/id_ed25519")")"
+  known_hosts="$(docker_host_priv_path "$(configured_or_default ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE "$REPO_DIR/arclink-priv/secrets/ssh/known_hosts")")"
+  if [[ ! -r "$key_path" ]]; then
+    echo "Fleet SSH key missing; cannot publish remote deployment $deployment_id over tailnet." >&2
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$known_hosts")"
+  touch "$known_hosts"
+  chmod 0600 "$known_hosts" 2>/dev/null || true
+  chmod 0600 "$key_path" 2>/dev/null || true
+
+  control_path="$(docker_tailnet_forward_socket "$deployment_id" "$port")"
+  target="${ssh_user:-arclink}@$ssh_host"
+  if [[ -S "$control_path" ]]; then
+    ssh -S "$control_path" -O exit "$target" >/dev/null 2>&1 || true
+    rm -f "$control_path"
+  fi
+  ssh \
+    -i "$key_path" \
+    -p "${ssh_port:-22}" \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o StrictHostKeyChecking=accept-new \
+    -o UserKnownHostsFile="$known_hosts" \
+    -o ControlMaster=yes \
+    -o ControlPath="$control_path" \
+    -o ControlPersist=yes \
+    -N -f \
+    -L "127.0.0.1:$port:127.0.0.1:$port" \
+    "$target" >/dev/null 2>&1
+}
+
 docker_publish_tailnet_deployment_apps() {
   local ingress_mode="" strategy="" host="" web_port="" base_port="" db_path="" routes_file=""
 
@@ -802,11 +889,18 @@ with sqlite3.connect(db_path) as conn:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT deployment_id, prefix, base_domain, metadata_json
-        FROM arclink_deployments
-        WHERE status IN ('active', 'provisioning', 'provisioning_ready')
-          AND COALESCE(metadata_json, '') NOT LIKE '%"operator_agent"%'
-        ORDER BY created_at, deployment_id
+        SELECT d.deployment_id, d.prefix, d.base_domain, d.metadata_json,
+               h.hostname AS worker_hostname,
+               h.metadata_json AS worker_metadata_json
+        FROM arclink_deployments d
+        LEFT JOIN arclink_deployment_placements p
+          ON p.deployment_id = d.deployment_id
+         AND p.status = 'active'
+        LEFT JOIN arclink_fleet_hosts h
+          ON h.host_id = p.host_id
+        WHERE d.status IN ('active', 'provisioning', 'provisioning_ready')
+          AND COALESCE(d.metadata_json, '') NOT LIKE '%"operator_agent"%'
+        ORDER BY d.created_at, d.deployment_id
         """
     ).fetchall()
     records: list[tuple[sqlite3.Row, dict[str, Any]]] = []
@@ -832,22 +926,41 @@ with sqlite3.connect(db_path) as conn:
                     next_block += len(roles)
                     break
                 next_block += len(roles)
+        worker_metadata = json.loads(row["worker_metadata_json"] or "{}") if row["worker_metadata_json"] else {}
+        if not isinstance(worker_metadata, dict):
+            worker_metadata = {}
+        ssh_host = str(
+            worker_metadata.get("ssh_host")
+            or worker_metadata.get("private_dns_name")
+            or worker_metadata.get("wireguard_dns_name")
+            or worker_metadata.get("private_mesh_dns_name")
+            or row["worker_hostname"]
+            or "localhost"
+        ).strip()
+        ssh_user = str(worker_metadata.get("ssh_user") or "arclink").strip() or "arclink"
+        ssh_port = str(worker_metadata.get("ssh_port") or "22").strip() or "22"
         print(
             "\t".join(
                 [
                     str(row["deployment_id"]),
                     prefix,
                     str(ports["hermes"]),
+                    ssh_host,
+                    ssh_user,
+                    ssh_port,
                 ]
             )
         )
 PY
 
-  while IFS=$'\t' read -r deployment_id prefix hermes_port; do
+  while IFS=$'\t' read -r deployment_id prefix hermes_port ssh_host ssh_user ssh_port; do
     [[ -n "$deployment_id" && -n "$prefix" ]] || continue
     local status="published"
     local successful_roles=()
-    if tailscale serve --bg --yes --https="$hermes_port" "http://127.0.0.1:$hermes_port" >/dev/null; then
+    if ! docker_ensure_tailnet_forward "$deployment_id" "$hermes_port" "$ssh_host" "$ssh_user" "$ssh_port"; then
+      status="unavailable"
+    fi
+    if [[ "$status" == "published" ]] && tailscale serve --bg --yes --https="$hermes_port" "http://127.0.0.1:$hermes_port" >/dev/null; then
       successful_roles+=(hermes)
     else
       status="unavailable"

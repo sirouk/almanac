@@ -6088,6 +6088,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
     expect("docker_reconcile()" in body and "./bin/arclink-ctl org-profile apply --yes" in body, body)
     expect("docker_publish_tailnet_deployment_apps()" in body and "tailscale serve --bg --yes --https" in body, body)
+    expect("docker_ensure_tailnet_forward" in body and '-L "127.0.0.1:$port:127.0.0.1:$port"' in body, body)
     expect("docker_refresh_deployment_service_health()" in body and "docker compose" in body and "upsert_arclink_service_health" in body, body)
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
     expect("sync-dashboard-user-passwords.py" in body and "control-provisioner" in body, body)
@@ -6487,7 +6488,7 @@ def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
 
 def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
     body = read("bin/arclink-docker.sh")
-    snippet = extract(body, "docker_publish_tailnet_deployment_apps() {", "docker_configure_deployment_nextcloud_overwrite() {")
+    snippet = extract(body, "docker_host_priv_path() {", "docker_configure_deployment_nextcloud_overwrite() {")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         repo = root / "repo"
@@ -6505,6 +6506,26 @@ def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
                   status TEXT,
                   metadata_json TEXT,
                   created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE arclink_deployment_placements (
+                  placement_id TEXT PRIMARY KEY,
+                  deployment_id TEXT,
+                  host_id TEXT,
+                  status TEXT,
+                  placed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE arclink_fleet_hosts (
+                  host_id TEXT PRIMARY KEY,
+                  hostname TEXT,
+                  metadata_json TEXT
                 )
                 """
             )

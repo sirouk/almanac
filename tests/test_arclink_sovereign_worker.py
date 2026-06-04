@@ -651,7 +651,7 @@ def test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns() -
 
     expect(results[0]["status"] == "applied", str(results))
     expect(results[0]["placement"]["hostname"] == "worker-a", str(results))
-    expect(results[0]["urls"]["dashboard"] == "https://worker-a.wg.internal:8443", str(results))
+    expect(results[0]["urls"]["dashboard"] == "https://worker-a.tailnet.ts.net:8443", str(results))
     metadata = json.loads(
         conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()["metadata_json"]
     )
@@ -659,7 +659,7 @@ def test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns() -
     expect(metadata["tailscale_dns_name"] == "worker-a.tailnet.ts.net", str(metadata))
     expect(metadata["control_network_mode"] == "remote", str(metadata))
     expect(metadata["fleet_host_hostname"] == "worker-a", str(metadata))
-    expect(metadata["access_urls"]["hermes"] == "https://worker-a.wg.internal:8443", str(metadata))
+    expect(metadata["access_urls"]["hermes"] == "https://worker-a.tailnet.ts.net:8443", str(metadata))
     expect(metadata["state_root_base"].endswith("/worker-a/deployments"), str(metadata))
     print("PASS test_private_mesh_sovereign_worker_uses_selected_remote_host_private_dns")
 

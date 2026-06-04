@@ -346,14 +346,25 @@ def _host_tailscale_dns_name(
     host: Mapping[str, Any],
     host_meta: Mapping[str, Any],
 ) -> str:
-    for key in ("private_dns_name", "wireguard_dns_name", "private_mesh_dns_name", "tailscale_dns_name", "tailnet_dns_name", "magicdns_name"):
+    for key in ("tailscale_dns_name", "tailnet_dns_name", "magicdns_name"):
         value = _clean_host_name(host_meta.get(key))
         if value:
             return value
     ssh_host = _clean_host_name(host_meta.get("ssh_host"))
-    if ssh_host and not _is_local_host_ref(ssh_host, worker=worker):
+    if ssh_host.endswith(".ts.net"):
         return ssh_host
     hostname = _clean_host_name(host.get("hostname"))
+    if hostname.endswith(".ts.net"):
+        return hostname
+    worker_tailnet = _clean_host_name(worker.tailscale_dns_name or worker.base_domain)
+    if worker_tailnet:
+        return worker_tailnet
+    for key in ("private_dns_name", "wireguard_dns_name", "private_mesh_dns_name"):
+        value = _clean_host_name(host_meta.get(key))
+        if value:
+            return value
+    if ssh_host and not _is_local_host_ref(ssh_host, worker=worker):
+        return ssh_host
     if hostname and not _is_local_host_ref(hostname, worker=worker):
         return hostname
     return _clean_host_name(worker.tailscale_dns_name or worker.base_domain)
@@ -889,14 +900,12 @@ def _tailnet_service_ports_used_on_host(
     host_id: str,
     exclude_deployment_id: str,
 ) -> set[int]:
+    del host_id
     used: set[int] = set()
     rows = conn.execute(
         """
-        SELECT d.deployment_id, d.status, d.metadata_json, p.host_id AS placement_host_id
+        SELECT d.deployment_id, d.status, d.metadata_json
         FROM arclink_deployments d
-        LEFT JOIN arclink_deployment_placements p
-          ON p.deployment_id = d.deployment_id
-         AND p.status = 'active'
         WHERE d.status NOT IN ('cancelled', 'torn_down', 'teardown_complete')
         """
     ).fetchall()
@@ -905,10 +914,10 @@ def _tailnet_service_ports_used_on_host(
         if deployment_id == exclude_deployment_id:
             continue
         metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
-        metadata_host_id = str(metadata.get("fleet_host_id") or metadata.get("tailnet_service_ports_host_id") or "").strip()
-        placement_host_id = str(row["placement_host_id"] or "").strip()
-        if host_id not in {placement_host_id, metadata_host_id}:
-            continue
+        # Tailnet path publication uses one control-node publication namespace in
+        # the common WireGuard fleet mode, even when the backing containers live
+        # on different workers. Keep ports globally unique; live Docker ports on
+        # the selected worker are still inspected separately for bind safety.
         used.update(_tailnet_ports_from_metadata(metadata).values())
     return used
 

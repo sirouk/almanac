@@ -11474,10 +11474,11 @@ print_control_provisioning_readiness_summary() {
   fi
   db_path="$(control_host_db_path)"
   ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 - "$db_path" <<'PY'
+    python3 - "$db_path" "$docker_env" <<'PY'
 from __future__ import annotations
 
 import os
+import shlex
 import sqlite3
 import sys
 from pathlib import Path
@@ -11490,8 +11491,33 @@ def truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        try:
+            parsed = shlex.split(raw_value, posix=True)
+            value = parsed[0] if len(parsed) == 1 else raw_value.strip()
+        except ValueError:
+            value = raw_value.strip()
+        values[key] = value
+    return values
+
+
 db_path = Path(sys.argv[1])
-provisioner_enabled = truthy(os.environ.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "1"))
+config_path = Path(sys.argv[2])
+source_env = {**os.environ, **load_env_file(config_path)}
+provisioner_enabled = truthy(source_env.get("ARCLINK_CONTROL_PROVISIONER_ENABLED", "1"))
 if not provisioner_enabled:
     print("Sovereign provisioning readiness: control plane up, ArcPod provisioning disabled until a worker is registered and smoke-tested.")
     raise SystemExit(0)
@@ -11503,7 +11529,7 @@ conn = sqlite3.connect(str(db_path), timeout=15.0)
 conn.row_factory = sqlite3.Row
 try:
     ensure_schema(conn)
-    readiness = control_node_provisioning_readiness(conn, env=os.environ)
+    readiness = control_node_provisioning_readiness(conn, env=source_env)
 finally:
     conn.close()
 

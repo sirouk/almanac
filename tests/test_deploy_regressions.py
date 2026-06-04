@@ -2124,7 +2124,7 @@ def test_deploy_sh_retires_public_docker_control_center() -> None:
     expect("ARCLINK_CONTROL_ALLOW_WORKERLESS_BOOTSTRAP" in text, "expected explicit workerless bootstrap override")
     expect('ARCLINK_CONTROL_PROVISIONER_ENABLED="0"' in text, "expected workerless bootstrap to disable provisioning")
     expect("print_control_provisioning_readiness_summary()" in text, "expected control flows to print provisioning readiness")
-    expect("control_node_provisioning_readiness(conn, env=os.environ)" in text, "expected deploy readiness to use dashboard truth model")
+    expect("control_node_provisioning_readiness(conn, env=source_env)" in text, "expected deploy readiness to use docker config and dashboard truth model")
     expect("Sovereign provisioning readiness: ready to provision ArcPods" in text, "expected ready-to-provision summary copy")
     expect("Sovereign provisioning readiness: blocked" in text, "expected blocked provisioning summary copy")
     expect("Operator Raven/control channel" in text, "expected Sovereign install to collect operator Raven channel intent")

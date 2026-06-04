@@ -10952,7 +10952,7 @@ run_control_enrollment() {
 }
 
 run_control_inventory() {
-  local docker_env="" subcommand="" forced_command="" provider="" target="" hostname="" ssh_host="" ssh_user="" region="" capacity_slots="" tags="" strategy="" arg_offset=0 tail_offset=0
+  local docker_env="" db_path="" subcommand="" forced_command="" provider="" target="" hostname="" ssh_host="" ssh_user="" region="" capacity_slots="" tags="" strategy="" arg_offset=0 tail_offset=0
   local -a saved_control_args=()
 
   docker_env="$(docker_env_file_path)"
@@ -10964,6 +10964,7 @@ run_control_inventory() {
     # shellcheck disable=SC1090
     source "$docker_env"
   fi
+  db_path="$(control_host_db_path)"
 
   forced_command="${1:-}"
   if [[ -n "$forced_command" ]]; then
@@ -10983,11 +10984,11 @@ run_control_inventory() {
   fi
   case "$subcommand" in
     list)
-      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" list "${CONTROL_DEPLOY_ARGS[@]:$arg_offset}"
       ;;
     health)
-      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" health "${CONTROL_DEPLOY_ARGS[@]:$arg_offset}"
       ;;
     probe)
@@ -10996,11 +10997,11 @@ run_control_inventory() {
       else
         target="${CONTROL_DEPLOY_ARGS[1]:-}"
       fi
-      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" probe "$target" "${CONTROL_DEPLOY_ARGS[@]:$tail_offset}"
       ;;
     probe-all)
-      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" probe-all "${CONTROL_DEPLOY_ARGS[@]:$arg_offset}"
       ;;
     add)
@@ -11023,13 +11024,13 @@ run_control_inventory() {
           region="$(normalize_optional_answer "$(ask "Region/tag (type none to clear)" "${ARCLINK_LOCAL_FLEET_REGION:-}")")"
           capacity_slots="$(ask "Legacy capacity slots" "${ARCLINK_LOCAL_FLEET_CAPACITY_SLOTS:-4}")"
           tags="$(normalize_optional_answer "$(ask "Placement tags as JSON object" "{}")")"
-          ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+          ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
             python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" add manual \
               --hostname "$hostname" --ssh-host "$ssh_host" --ssh-user "$ssh_user" \
               --region "$region" --capacity-slots "$capacity_slots" --tags-json "$tags"
           ;;
         hetzner|linode)
-          ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+          ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
             python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" add "$provider" "${CONTROL_DEPLOY_ARGS[@]:$tail_offset}"
           ;;
         *)
@@ -11044,7 +11045,7 @@ run_control_inventory() {
       else
         target="${CONTROL_DEPLOY_ARGS[1]:-}"
       fi
-      ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
+      ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env" PYTHONPATH="$BOOTSTRAP_DIR/python${PYTHONPATH:+:$PYTHONPATH}" \
         python3 "$BOOTSTRAP_DIR/python/arclink_inventory.py" "$subcommand" "$target" "${CONTROL_DEPLOY_ARGS[@]:$tail_offset}"
       ;;
     rotate-key)

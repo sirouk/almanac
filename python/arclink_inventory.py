@@ -25,7 +25,7 @@ from arclink_control import (
     reserve_arclink_operation_idempotency,
     utc_now_iso,
 )
-from arclink_fleet import register_fleet_host, update_fleet_host
+from arclink_fleet import list_fleet_hosts, register_fleet_host, update_fleet_host
 from arclink_secrets_regex import redact_then_truncate
 
 
@@ -254,6 +254,50 @@ def list_inventory_machines(
     if filters:
         machines = [machine for machine in machines if _matches_inventory_filters(machine, filters)]
     return machines
+
+
+def _matches_fleet_host_filters(row: Mapping[str, Any], filters: Sequence[str] | None) -> bool:
+    for raw in filters or []:
+        text = str(raw or "").strip().lower()
+        if not text:
+            continue
+        if "=" not in text:
+            haystack = " ".join(
+                str(row.get(key) or "").lower()
+                for key in ("host_id", "hostname", "region", "status", "last_health_state")
+            )
+            if text not in haystack:
+                return False
+            continue
+        key, value = [part.strip().lower() for part in text.split("=", 1)]
+        allowed = {"provider", "hostname", "region", "status", "host_id", "machine_host_link", "health_state"}
+        if key not in allowed:
+            raise ArcLinkInventoryError(f"unsupported inventory filter: {key}")
+        if key == "provider":
+            actual = "fleet"
+        elif key in {"host_id", "machine_host_link"}:
+            actual = str(row.get("host_id") or "").lower()
+        elif key == "health_state":
+            actual = str(row.get("last_health_state") or "").lower()
+        else:
+            actual = str(row.get(key) or "").lower()
+        if actual != value:
+            return False
+    return True
+
+
+def list_fleet_inventory_hosts(
+    conn: sqlite3.Connection,
+    *,
+    include_removed: bool = False,
+    filters: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    hosts = list_fleet_hosts(conn)
+    if not include_removed:
+        hosts = [host for host in hosts if str(host.get("status") or "") != "removed"]
+    if filters:
+        hosts = [host for host in hosts if _matches_fleet_host_filters(host, filters)]
+    return hosts
 
 
 def get_inventory_machine(conn: sqlite3.Connection, key: str) -> dict[str, Any]:
@@ -876,7 +920,6 @@ def fleet_inventory_health(conn: sqlite3.Connection, *, notify: bool = False) ->
 
 def _print_table(rows: list[dict[str, Any]]) -> None:
     if not rows:
-        print("No inventory machines registered.")
         return
     print("machine_id provider hostname status asu_capacity asu_consumed last_probed_at")
     for row in rows:
@@ -890,6 +933,30 @@ def _print_table(rows: list[dict[str, Any]]) -> None:
                     f"{float(row.get('asu_capacity') or 0):g}",
                     f"{float(row.get('asu_consumed') or 0):g}",
                     str(row.get("last_probed_at") or "-"),
+                ]
+            )
+        )
+
+
+def _print_fleet_hosts_table(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    print("host_id provider hostname status health capacity effective_capacity observed_load headroom reserve region")
+    for row in rows:
+        print(
+            " ".join(
+                [
+                    str(row.get("host_id") or ""),
+                    "fleet",
+                    str(row.get("hostname") or ""),
+                    str(row.get("status") or ""),
+                    str(row.get("last_health_state") or "-"),
+                    str(int(row.get("capacity_slots") or 0)),
+                    str(int(row.get("effective_capacity_slots") or row.get("capacity_slots") or 0)),
+                    str(int(row.get("observed_load") or 0)),
+                    str(int(row.get("headroom") or 0)),
+                    "yes" if bool(row.get("control_plane_reserve")) else "no",
+                    str(row.get("region") or "-"),
                 ]
             )
         )
@@ -1044,10 +1111,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         conn = _load_conn()
         if args.command == "list":
             rows = list_inventory_machines(conn, include_removed=args.all, filters=args.filter)
+            hosts = list_fleet_inventory_hosts(conn, include_removed=args.all, filters=args.filter)
             if args.json:
-                print(json.dumps({"machines": rows}, sort_keys=True))
+                print(json.dumps({"machines": rows, "fleet_hosts": hosts}, sort_keys=True))
             else:
-                _print_table(rows)
+                if not rows and not hosts:
+                    print("No inventory machines or fleet hosts registered.")
+                else:
+                    _print_table(rows)
+                    _print_fleet_hosts_table(hosts)
         elif args.command == "probe":
             row = probe_inventory_machine(
                 conn,

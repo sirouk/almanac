@@ -2605,6 +2605,8 @@ def test_control_inventory_submenu_and_aliases_are_first_class() -> None:
     expect("control-inventory-re-attest" in text, "shortcut alias should expose re-attestation")
     expect("python/arclink_inventory.py" in inventory, "inventory should route through the Python inventory CLI")
     expect("health" in inventory and "re-attest" in inventory, "inventory command should expose health and re-attest")
+    expect('db_path="$(control_host_db_path)"' in inventory, "inventory commands should translate container DB paths to host paths")
+    expect('ARCLINK_DB_PATH="$db_path" ARCLINK_CONFIG_FILE="$docker_env"' in inventory, "inventory CLI should use the host DB path override")
     expect("rotate-key" in inventory and "run_control_fleet_ssh_key" in inventory, "inventory rotate-key should route to fleet key rotation")
     expect("add manual" in inventory and "add hetzner" in text and "add linode" in text, "inventory providers should be exposed")
     expect("ARCLINK_FLEET_PLACEMENT_STRATEGY" in inventory, "set-strategy should persist placement strategy")

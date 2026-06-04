@@ -77,6 +77,36 @@ def test_inventory_list_filters_are_scriptable() -> None:
     print("PASS test_inventory_list_filters_are_scriptable")
 
 
+def test_inventory_list_includes_live_fleet_hosts() -> None:
+    control = load_module("arclink_control.py", "arclink_control_inventory_fleet_hosts")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_hosts")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_inventory_fleet_hosts")
+    conn = memory_db(control)
+
+    host = fleet.register_fleet_host(
+        conn,
+        hostname="fleet-live.example.test",
+        region="iad",
+        capacity_slots=8,
+        metadata={"control_network_mode": "remote"},
+    )
+    fleet.update_fleet_host(conn, host_id=host["host_id"], observed_load=2)
+
+    hosts = inventory.list_fleet_inventory_hosts(conn)
+    expect(len(hosts) == 1, str(hosts))
+    expect(hosts[0]["hostname"] == "fleet-live.example.test", str(hosts))
+    expect(hosts[0]["headroom"] == 6, str(hosts))
+
+    by_provider = inventory.list_fleet_inventory_hosts(conn, filters=["provider=fleet"])
+    expect(len(by_provider) == 1, str(by_provider))
+    by_region = inventory.list_fleet_inventory_hosts(conn, filters=["region=iad"])
+    expect(len(by_region) == 1, str(by_region))
+    hidden = inventory.list_fleet_inventory_hosts(conn, filters=["provider=manual"])
+    expect(hidden == [], str(hidden))
+
+    print("PASS test_inventory_list_includes_live_fleet_hosts")
+
+
 def test_cloud_inventory_lifecycle_contract_is_provider_parity() -> None:
     control = load_module("arclink_control.py", "arclink_control_inventory_lifecycle_parity")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_lifecycle_parity")
@@ -170,4 +200,5 @@ def test_cloud_inventory_lifecycle_contract_is_provider_parity() -> None:
 
 if __name__ == "__main__":
     test_inventory_list_filters_are_scriptable()
+    test_inventory_list_includes_live_fleet_hosts()
     test_cloud_inventory_lifecycle_contract_is_provider_parity()

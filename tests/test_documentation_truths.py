@@ -251,6 +251,20 @@ def test_foundation_docs_align_with_control_node_boundary() -> None:
     print("PASS test_foundation_docs_align_with_control_node_boundary")
 
 
+def test_production_frontend_source_of_truth_is_web_only() -> None:
+    expect(
+        not (REPO / "arclink-frontend").exists(),
+        "Do not keep the retired Vite/Bolt arclink-frontend checkout in this repo; production web lives in web/.",
+    )
+    dockerfile = (REPO / "Dockerfile").read_text(encoding="utf-8")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    symphony = (REPO / "docs" / "arclink" / "sovereign-control-node-symphony.md").read_text(encoding="utf-8")
+    expect("cd /home/arclink/arclink/web" in dockerfile, dockerfile)
+    expect("Do not add a parallel `arclink-frontend/` checkout" in readme, readme)
+    expect("`web/` is the only production frontend source of truth" in symphony, symphony)
+    print("PASS test_production_frontend_source_of_truth_is_web_only")
+
+
 def test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy() -> None:
     forbidden = (
         "Sovereign Pod",
@@ -317,8 +331,9 @@ def main() -> int:
     test_creative_brief_labels_live_external_proof_gates()
     test_shipped_docs_do_not_claim_live_external_proof_passed()
     test_foundation_docs_align_with_control_node_boundary()
+    test_production_frontend_source_of_truth_is_web_only()
     test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy()
-    print("PASS all 10 documentation truth tests")
+    print("PASS all 11 documentation truth tests")
     return 0
 
 

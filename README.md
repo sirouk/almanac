@@ -53,6 +53,10 @@ The Control Node still uses Docker Compose internally. The old
 `./deploy.sh docker ...` public mode remains retired; use `./deploy.sh control ...`
 so the Operator has one control center and ArcPods stay under fleet management.
 
+The production web/control surface lives in `web/` as the Next.js Control Node
+app. Do not add a parallel `arclink-frontend/` checkout in this repo; that
+legacy Vite/Bolt app is not part of the deploy, build, or test lane.
+
 ## Control Node Quick Start
 
 ```bash
@@ -107,6 +111,7 @@ Use Control Node upgrade for normal code deployments:
 Pinned component upgrades still use `config/pins.json` as the source of truth:
 
 ```bash
+./deploy.sh pin-upgrade-notify
 ./deploy.sh pins-check
 ./deploy.sh hermes-upgrade-check
 ./deploy.sh hermes-upgrade [--ref REF]
@@ -116,13 +121,18 @@ Pinned component upgrades still use `config/pins.json` as the source of truth:
 
 Component apply commands commit/push the pin change when configured and then
 re-enter `./deploy.sh upgrade`, which now means Control Node upgrade.
+Operator Raven mirrors this safely: `/upgrade_policy [component]` explains the
+contract, `/pin_upgrade <component> confirm` queues an active detector payload
+with concrete target pins, and `/upgrade_sweep confirm` queues all pending
+stateless detector payloads while holding stateful services for an explicit
+maintenance-window flag.
 
 ## Retired Modes
 
 These public modes are intentionally retired:
 
-- `./deploy.sh install` as a Shared Host/systemd/per-Unix-user installer
-- `./deploy.sh upgrade` as a Shared Host host-mutating upgrade
+- `./deploy.sh install` interpreted as a Shared Host/systemd/per-Unix-user installer
+- `./deploy.sh upgrade` interpreted as a Shared Host host-mutating upgrade
 - `./deploy.sh docker ...` as a Shared Host Docker control center
 - old operator-led enrollment commands that provisioned per-user Unix accounts
 

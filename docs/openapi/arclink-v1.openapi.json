@@ -33,6 +33,9 @@
         "responses": {
           "200": {
             "description": "Aggregate public Academy Observatory telemetry"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "Read public aggregate Academy training telemetry",
@@ -962,6 +965,9 @@
           },
           "401": {
             "description": "Invalid or unavailable enrollment token"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
           }
         },
         "summary": "Worker fleet enrollment attestation callback",

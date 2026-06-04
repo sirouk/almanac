@@ -248,6 +248,27 @@ class HostedApiConfig:
             minimum=1,
             maximum=10000,
         )
+        self.public_route_rate_limit_window_seconds: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ROUTE_RATE_LIMIT_WINDOW_SECONDS",
+            60,
+            minimum=1,
+            maximum=3600,
+        )
+        self.public_academy_observatory_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_PUBLIC_ACADEMY_OBSERVATORY_RATE_LIMIT",
+            120,
+            minimum=1,
+            maximum=10000,
+        )
+        self.fleet_enrollment_callback_rate_limit: int = _bounded_env_int(
+            e,
+            "ARCLINK_FLEET_ENROLLMENT_CALLBACK_RATE_LIMIT",
+            30,
+            minimum=1,
+            maximum=10000,
+        )
         self.default_price_id: str = str(
             e.get("ARCLINK_FOUNDERS_PRICE_ID")
             or e.get("ARCLINK_DEFAULT_PRICE_ID")
@@ -577,6 +598,36 @@ def _check_webhook_rate_limit(
         subject=subject,
         limit=_webhook_rate_limit_for_provider(config, provider),
         window_seconds=config.webhook_rate_limit_window_seconds,
+    )
+
+
+def _public_route_rate_limit_for(config: HostedApiConfig, route_key: str) -> int:
+    if route_key == "public_academy_observatory":
+        return config.public_academy_observatory_rate_limit
+    if route_key == "fleet_enrollment_callback":
+        return config.fleet_enrollment_callback_rate_limit
+    return 0
+
+
+def _check_public_route_rate_limit(
+    conn: sqlite3.Connection,
+    *,
+    config: HostedApiConfig,
+    route_key: str,
+    headers: Mapping[str, Any],
+    remote_addr: str,
+) -> None:
+    limit = _public_route_rate_limit_for(config, route_key)
+    if limit <= 0:
+        return
+    client_ip = _remote_ip_from_headers(config, headers, remote_addr)
+    subject = f"ip:{client_ip or 'unknown'}"
+    check_arclink_rate_limit(
+        conn,
+        scope=f"public-route:{route_key}",
+        subject=subject,
+        limit=limit,
+        window_seconds=config.public_route_rate_limit_window_seconds,
     )
 
 
@@ -2952,7 +3003,10 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
     "public_academy_observatory": {
         "summary": "Read public aggregate Academy training telemetry",
         "tags": ["academy"],
-        "responses": {"200": {"description": "Aggregate public Academy Observatory telemetry"}},
+        "responses": {
+            "200": {"description": "Aggregate public Academy Observatory telemetry"},
+            "429": {"description": "Rate limit exceeded"},
+        },
     },
     "stripe_webhook": {
         "summary": "Stripe webhook receiver",
@@ -2996,7 +3050,11 @@ _ROUTE_DESCRIPTIONS: dict[str, dict[str, Any]] = {
             "prereq_audit": {"type": "object"},
             "tags": {"type": "object"},
         }, required=["hostname", "machine_fingerprint"]),
-        "responses": {"201": {"description": "Worker attested"}, "401": {"description": "Invalid or unavailable enrollment token"}},
+        "responses": {
+            "201": {"description": "Worker attested"},
+            "401": {"description": "Invalid or unavailable enrollment token"},
+            "429": {"description": "Rate limit exceeded"},
+        },
     },
     "login": {
         "summary": "Login and resolve user or admin role",
@@ -3801,6 +3859,14 @@ def route_arclink_hosted_api(
     try:
         if route_key in {"stripe_webhook", "telegram_webhook", "discord_webhook"}:
             _check_webhook_rate_limit(
+                conn,
+                config=cfg,
+                route_key=route_key,
+                headers=headers,
+                remote_addr=remote_addr,
+            )
+        if route_key in {"public_academy_observatory", "fleet_enrollment_callback"}:
+            _check_public_route_rate_limit(
                 conn,
                 config=cfg,
                 route_key=route_key,

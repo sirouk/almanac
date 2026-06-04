@@ -5,6 +5,10 @@ the path for a dedicated control host: users arrive through the website,
 Telegram, or Discord, answer onboarding questions, complete Stripe checkout,
 and receive a separate ArcLink pod deployed onto the fleet.
 
+This is the concise shipped-state trace. Use
+`sovereign-control-node-symphony.md` for the full dream/evidence score and
+`control-node-production-runbook.md` for operator procedure.
+
 ## Deploy Path
 
 Use:
@@ -201,18 +205,28 @@ in-stack **operator Hermes agent** (`python/arclink_operator_agent.py`).
 
 - **Operator Raven queues real, audited, identity-gated actions** — it is not
   read-only or dry-run-only. Mutating commands (`pod_repair`, `rollout`,
-  `host_upgrade`, `pin_upgrade`) use a four-mode contract: `--dry-run` previews
-  and changes nothing; no `--dry-run` with no operator actor fails closed; no
-  `--dry-run` with an operator actor but no second confirmation fails closed; no
-  `--dry-run` with actor plus `confirm` or the configured operator approval code
-  queues a real intent. Approval codes (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`
-  or `ARCLINK_OPERATOR_APPROVAL_CODE`) are verified with a constant-time compare.
+  `host_upgrade`, detector-token `pin_upgrade`, `upgrade_sweep`,
+  `fleet_drain`, `fleet_resume`) use a four-mode contract: `--dry-run`
+  previews and changes nothing; no `--dry-run` with no operator actor fails
+  closed; no `--dry-run` with an operator actor but no second confirmation
+  fails closed; no `--dry-run` with actor plus `confirm` or the configured
+  operator approval code queues a real intent or applies a modeled local
+  fleet-state mutation. Approval codes
+  (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE` or
+  `ARCLINK_OPERATOR_APPROVAL_CODE`) are verified with a constant-time compare.
   Read commands (`status`, `agents`, `fleet_list`, `worker_probe` (dry-run
   only), `user_lookup`, `academy_status`, `academy_roster`, `upgrade_check`,
-  `action_status`) never mutate. Raven only *queues* intents; live mutation stays gated by
-  `ARCLINK_EXECUTOR_ADAPTER` and the per-action proof gates (e.g. PG-PROVISION,
-  PG-INGRESS, PG-UPGRADE, PG-HERMES). This corrects the stale "read-only
-  Operator Raven" framing (GAP-029, partially closed).
+  `upgrade_policy`, `action_status`) never mutate. `/upgrade_policy
+  [component]` explains source-owned upgrade posture only. `/pin_upgrade
+  <component>` refuses unless an active detector payload with concrete target
+  pins exists, and `/upgrade_sweep` queues pending stateless detector payloads
+  while holding Postgres/Redis/Nextcloud behind `--include-stateful`. Raven only
+  *queues* live intents; live mutation stays gated by `ARCLINK_EXECUTOR_ADAPTER`
+  and the per-action proof gates (e.g. PG-PROVISION, PG-INGRESS, PG-UPGRADE,
+  PG-HERMES). Fleet drain/resume is placement-only control-state mutation: it
+  does not SSH into workers, stop services, change firewalls, or touch port 22
+  from chat. This corrects the stale "read-only Operator Raven" framing
+  (GAP-029, partially closed).
 - **Two queues.** Operator Raven writes admin/operator intents to
   `arclink_action_intents` (drained by `python/arclink_action_worker.py`) and to
   `operator_actions` (drained by the enrollment-provisioner root maintenance

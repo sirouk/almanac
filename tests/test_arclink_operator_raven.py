@@ -149,6 +149,60 @@ def cleanup_db(tmp: tempfile.TemporaryDirectory, old_env: dict[str, str]) -> Non
     tmp.cleanup()
 
 
+def seed_pin_upgrade_payload(
+    conn,
+    *,
+    component: str,
+    current: str = "aaaa1111",
+    target: str = "bbbb2222",
+    throttle_target: str = "",
+    kind: str = "git-commit",
+) -> str:
+    import arclink_control as control
+
+    field = "ref" if kind.startswith("git") else "version"
+    effective_throttle = throttle_target or target
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO pin_upgrade_notifications (
+          component, field, current_pin, target_value, first_seen_at,
+          last_notified_at, notify_count, silenced, applied_at, extra_json
+        ) VALUES (?, ?, ?, ?, '2026-06-01T00:00:00+00:00', NULL, 1, 0, NULL, ?)
+        """,
+        (
+            component,
+            field,
+            current,
+            effective_throttle,
+            json.dumps({"raw_target": target, "throttle_target": effective_throttle}),
+        ),
+    )
+    conn.commit()
+    return control.register_pin_upgrade_action(
+        conn,
+        items=[
+            {
+                "component": component,
+                "kind": kind,
+                "field": field,
+                "current": current,
+                "target": target,
+                "throttle_target": effective_throttle,
+            }
+        ],
+        install_items=[
+            {
+                "component": component,
+                "kind": kind,
+                "field": field,
+                "current": current,
+                "target": target,
+                "throttle_target": effective_throttle,
+            }
+        ],
+    )
+
+
 def test_operator_raven_status_is_read_only_and_truthful() -> None:
     tmp, old_env, conn, raven = with_seeded_db()
     try:
@@ -227,6 +281,77 @@ def test_operator_raven_fleet_and_worker_probe_are_dry_run_only() -> None:
         expect("No SSH, provider, Docker, or health-probe command was run." in dry_run["message"], dry_run["message"])
         expect(dry_run["mutation_performed"] is False, str(dry_run))
         print("PASS test_operator_raven_fleet_and_worker_probe_are_dry_run_only")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_upgrade_policy_is_read_only_and_component_specific() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]
+        before_operator_actions = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+        catalog = raven.dispatch_operator_raven_command(conn, "/upgrade_policy")
+        text = catalog["message"]
+        expect("Operator Raven upgrade policy" in text, text)
+        expect("control plane first" in text, text)
+        expect("arcpod-runtime" in text and "stateful-infra" in text and "worker-fabric" in text, text)
+        expect("/pin_upgrade <component>" in text and "/fleet_drain <worker>" in text, text)
+        expect(catalog["mutation_performed"] is False, str(catalog))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "catalog must not queue admin action")
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before_operator_actions, "catalog must not queue operator action")
+
+        hermes = raven.dispatch_operator_raven_command(conn, "/upgrade_policy hermes")
+        hermes_text = hermes["message"]
+        expect("Hermes Runtime" in hermes_text, hermes_text)
+        expect("canary one ArcPod" in hermes_text, hermes_text)
+        expect("PG-UPGRADE" in hermes_text and "PG-HERMES" in hermes_text, hermes_text)
+        expect(hermes["upgrade_policy"]["policy"]["component"] == "hermes", str(hermes["upgrade_policy"]))
+
+        docker = raven.dispatch_operator_raven_command(conn, "/update_policy docker")
+        expect("/fleet_drain <worker>" in docker["message"], docker["message"])
+        expect("Drain one worker" in docker["message"] and "one worker at a time" in docker["message"], docker["message"])
+
+        bad = raven.dispatch_operator_raven_command(conn, "/upgrade_policy imaginary")
+        expect("unknown ArcLink upgrade component" in bad["message"], bad["message"])
+        print("PASS test_operator_raven_upgrade_policy_is_read_only_and_component_specific")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_fleet_drain_and_resume_are_gated_and_audited() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        before_audit = conn.execute("SELECT COUNT(*) AS n FROM arclink_audit_log").fetchone()["n"]
+        preview = raven.dispatch_operator_raven_command(conn, "/fleet_drain local-worker --dry-run")
+        expect("Fleet drain dry-run" in preview["message"], preview["message"])
+        expect("Blocked unless --force" in preview["message"], preview["message"])
+        expect("No fleet state" in preview["message"], preview["message"])
+        row = conn.execute("SELECT drain FROM arclink_fleet_hosts WHERE host_id = 'host-local'").fetchone()
+        expect(int(row["drain"]) == 0, str(dict(row)))
+
+        actorless = raven.dispatch_operator_raven_command(conn, "/fleet_drain local-worker --force confirm")
+        expect("requires a verified operator identity" in actorless["message"], actorless["message"])
+        expect(conn.execute("SELECT drain FROM arclink_fleet_hosts WHERE host_id = 'host-local'").fetchone()["drain"] == 0, "actorless drain must not mutate")
+
+        blocked = raven.dispatch_operator_raven_command(conn, "/fleet_drain local-worker confirm", actor_id="telegram:42")
+        expect("would leave zero active" in blocked["message"], blocked["message"])
+        expect(conn.execute("SELECT drain FROM arclink_fleet_hosts WHERE host_id = 'host-local'").fetchone()["drain"] == 0, "guarded drain must not mutate")
+
+        needs_confirm = raven.dispatch_operator_raven_command(conn, "/fleet_drain local-worker --force", actor_id="telegram:42")
+        expect("append `confirm`" in needs_confirm["message"], needs_confirm["message"])
+        expect(conn.execute("SELECT drain FROM arclink_fleet_hosts WHERE host_id = 'host-local'").fetchone()["drain"] == 0, "unconfirmed drain must not mutate")
+
+        drained = raven.dispatch_operator_raven_command(conn, "/fleet_drain local-worker --force confirm", actor_id="telegram:42")
+        expect("fleet drain applied" in drained["message"].lower(), drained["message"])
+        expect(drained["mutation_performed"] is True, str(drained))
+        expect(conn.execute("SELECT drain FROM arclink_fleet_hosts WHERE host_id = 'host-local'").fetchone()["drain"] == 1, "confirmed drain must set flag")
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_audit_log").fetchone()["n"] == before_audit + 1, "drain should audit")
+
+        resumed = raven.dispatch_operator_raven_command(conn, "/fleet_resume host-local confirm", actor_id="telegram:42")
+        expect("fleet resume applied" in resumed["message"].lower(), resumed["message"])
+        expect(conn.execute("SELECT drain FROM arclink_fleet_hosts WHERE host_id = 'host-local'").fetchone()["drain"] == 0, "resume must clear flag")
+        expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_audit_log").fetchone()["n"] == before_audit + 2, "resume should audit")
+        print("PASS test_operator_raven_fleet_drain_and_resume_are_gated_and_audited")
     finally:
         cleanup_db(tmp, old_env)
 
@@ -498,15 +623,82 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         expect(row["action_kind"] == "upgrade", dict(row))
         expect(row["requested_by"] == "telegram:42", dict(row))
 
+        no_payload = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
+        expect("no active detector payload" in no_payload["message"], no_payload["message"])
+
+        token = seed_pin_upgrade_payload(conn, component="hermes-agent", target="bbbb2222", throttle_target="v0.12.0")
+        pin_preview = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes --dry-run", actor_id="telegram:42")
+        expect(token in pin_preview["message"] and "No action was queued" in pin_preview["message"], pin_preview["message"])
+
         pin = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
         expect("pinned-component upgrade for hermes" in pin["message"], pin["message"])
+        expect(token in pin["message"], pin["message"])
         expect(pin["mutation_performed"] is True, str(pin))
         pin_row = conn.execute("SELECT action_kind, requested_target FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
-        expect(pin_row["action_kind"] == "pin-upgrade" and pin_row["requested_target"] == "hermes", dict(pin_row))
+        expect(pin_row["action_kind"] == "pin-upgrade" and pin_row["requested_target"] == token, dict(pin_row))
 
         bad = raven.dispatch_operator_raven_command(conn, "/pin_upgrade not-a-component", actor_id="telegram:42")
         expect("unknown component" in bad["message"], bad["message"])
         print("PASS test_operator_raven_host_and_pin_upgrade_queue_operator_actions")
+    finally:
+        cleanup_db(tmp, old_env)
+
+
+def test_operator_raven_upgrade_sweep_queues_pending_detector_payloads() -> None:
+    tmp, old_env, conn, raven = with_seeded_db()
+    try:
+        hermes_token = seed_pin_upgrade_payload(
+            conn,
+            component="hermes-agent",
+            target="bbbb2222",
+            throttle_target="v0.12.0",
+        )
+        qmd_token = seed_pin_upgrade_payload(
+            conn,
+            component="qmd",
+            current="v1.0.0",
+            target="v1.1.0",
+            kind="git-tag",
+        )
+        postgres_token = seed_pin_upgrade_payload(
+            conn,
+            component="postgres",
+            current="16",
+            target="17",
+            kind="container-image",
+        )
+        before = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+
+        preview = raven.dispatch_operator_raven_command(conn, "/upgrade_sweep --dry-run", actor_id="telegram:42")
+        text = preview["message"]
+        expect("Operator Raven upgrade sweep" in text, text)
+        expect(hermes_token in text and qmd_token in text, text)
+        expect(postgres_token in text and "Skipped stateful" in text, text)
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "dry-run sweep must not queue")
+
+        actorless = raven.dispatch_operator_raven_command(conn, "/upgrade_sweep")
+        expect("requires a verified operator identity" in actorless["message"], actorless["message"])
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "actorless sweep must not queue")
+
+        queued = raven.dispatch_operator_raven_command(conn, "/upgrade_sweep confirm", actor_id="telegram:42")
+        expect("Queued 2 pinned-component upgrade action" in queued["message"], queued["message"])
+        rows = conn.execute(
+            "SELECT action_kind, requested_target FROM operator_actions WHERE action_kind='pin-upgrade' ORDER BY requested_target"
+        ).fetchall()
+        targets = {row["requested_target"] for row in rows}
+        expect(targets == {hermes_token, qmd_token}, str(targets))
+
+        with_stateful = raven.dispatch_operator_raven_command(
+            conn,
+            "/upgrade_sweep --include-stateful confirm",
+            actor_id="telegram:42",
+        )
+        expect("Queued 1 pinned-component upgrade action" in with_stateful["message"], with_stateful["message"])
+        rows = conn.execute(
+            "SELECT requested_target FROM operator_actions WHERE action_kind='pin-upgrade'"
+        ).fetchall()
+        expect({row["requested_target"] for row in rows} == {hermes_token, qmd_token, postgres_token}, str(rows))
+        print("PASS test_operator_raven_upgrade_sweep_queues_pending_detector_payloads")
     finally:
         cleanup_db(tmp, old_env)
 
@@ -571,7 +763,13 @@ def test_operator_raven_mutation_helpers_and_approval_code() -> None:
     expect(raven.operator_raven_command_is_mutating("/rollout v2.0.0") is True, "rollout is mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade") is True, "upgrade is mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade confirm") is True, "confirmed upgrade is mutating")
+    expect(raven.operator_raven_command_is_mutating("/upgrade_sweep") is True, "upgrade_sweep is mutating")
+    expect(raven.operator_raven_command_is_mutating("/upgrade_sweep --dry-run") is False, "dry-run upgrade_sweep is not mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade_check") is False, "upgrade_check is read-only")
+    expect(raven.operator_raven_command_is_mutating("/upgrade_policy hermes") is False, "upgrade_policy is read-only")
+    expect(raven.operator_raven_command_is_mutating("/fleet_drain host-local") is True, "fleet_drain is mutating")
+    expect(raven.operator_raven_command_is_mutating("/fleet_drain host-local --dry-run") is False, "dry-run fleet_drain is not mutating")
+    expect(raven.operator_raven_command_is_mutating("/fleet_resume host-local") is True, "fleet_resume is mutating")
 
     # Component inference must skip option-value pairs, not return the flag value.
     parsed = raven.parse_operator_raven_command("/pin_upgrade --batch-size 2 hermes")
@@ -634,6 +832,8 @@ if __name__ == "__main__":
     test_operator_raven_status_is_read_only_and_truthful()
     test_operator_raven_agents_reports_arclink_arcpods_not_hermes_tasks()
     test_operator_raven_fleet_and_worker_probe_are_dry_run_only()
+    test_operator_raven_upgrade_policy_is_read_only_and_component_specific()
+    test_operator_raven_fleet_drain_and_resume_are_gated_and_audited()
     test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secrets()
     test_operator_raven_upgrade_check_is_injected_and_fail_closed()
     test_operator_raven_rollout_plan_is_dry_run_only()
@@ -641,8 +841,9 @@ if __name__ == "__main__":
     test_operator_raven_academy_roster_is_read_only()
     test_operator_raven_pod_repair_queues_real_intent_with_actor()
     test_operator_raven_host_and_pin_upgrade_queue_operator_actions()
+    test_operator_raven_upgrade_sweep_queues_pending_detector_payloads()
     test_operator_raven_rollout_queues_real_admin_action_with_actor()
     test_operator_raven_action_status_reads_both_queues()
     test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
-    print("PASS all 13 Operator Raven tests")
+    print("PASS all 16 Operator Raven tests")

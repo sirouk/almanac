@@ -2112,6 +2112,7 @@ def test_deploy_sh_retires_public_docker_control_center() -> None:
     expect("docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true\" </dev/null" in text, "expected fleet image inspect SSH not to consume the worker row stream")
     expect("metadata.get(\"private_dns_name\") or metadata.get(\"ssh_host\")" in text, "expected fleet image sync to prefer WireGuard/private mesh hosts")
     expect("image_sync_failed" in text and "last_health_state" in text, "expected image sync failures to make placement health fail closed")
+    expect("One or more fleet image syncs failed; affected workers were marked image_sync_failed" in text and "return 1" not in extract(text, "sync_control_docker_image_to_fleet_workers() {", "derive_control_worker_join_url() {"), "fleet image sync should degrade bad workers without aborting control upgrade")
     expect("run_control_fleet_ssh_key()" in text, "expected a first-class fleet public key command")
     expect("register_control_remote_fleet_worker()" in text, "expected interactive remote fleet worker registration")
     expect("register_fleet_host(" in text, "expected remote worker registration to persist fleet inventory")

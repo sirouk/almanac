@@ -874,12 +874,31 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(applied["filesystem_mutation_performed"] is True, str(applied))
         expect(any(path.startswith("vault/Academy/") for path in applied["applied_paths"]), str(applied))
         expect("state/arclink-academy-memory-seeds.json" in applied["applied_paths"], str(applied))
+        expect("state/arclink-academy-post-apply-refresh.json" in applied["applied_paths"], str(applied))
+        refresh_request = applied["post_apply_refresh_request"]
+        expect(refresh_request["status"] == "requested", str(refresh_request))
+        expect(refresh_request["deployment_id"] == deployment_id, str(refresh_request))
+        refresh_kinds = {item["kind"]: item for item in refresh_request["refreshes"]}
+        expect(refresh_kinds["qmd_index"]["status"] == "requested", str(refresh_kinds))
+        expect(refresh_kinds["memory_synthesis"]["status"] == "requested", str(refresh_kinds))
+        expect(refresh_kinds["skill_activation"]["status"] in {"staged", "not_requested"}, str(refresh_kinds))
+        expect(refresh_kinds["skill_activation"]["skill_count"] == len(applied["approved_skill_intents"]), str(refresh_kinds))
         soul = (hermes_home / "SOUL.md").read_text(encoding="utf-8")
         expect("Human-authored identity." in soul, soul)
         expect(org_profile.BEGIN_ACADEMY_MARKER in soul and "Live apply source" in soul, soul)
         state = json.loads((hermes_home / "state" / "arclink-academy-apply.json").read_text(encoding="utf-8"))
         expect(state["trainee_id"] == trainee["trainee_id"], str(state))
         expect(state["qmd_memory_seed_intents"], str(state))
+        expect(state["post_apply_refresh_request"]["request_id"] == refresh_request["request_id"], str(state))
+        refresh_file = json.loads((hermes_home / "state" / "arclink-academy-post-apply-refresh.json").read_text(encoding="utf-8"))
+        expect(refresh_file["request_id"] == refresh_request["request_id"], str(refresh_file))
+        expect("Docker" in refresh_file["queue_policy"] and "inline" in refresh_file["queue_policy"], str(refresh_file))
+        refresh_job = conn.execute(
+            "SELECT * FROM refresh_jobs WHERE job_name = ?",
+            (f"academy-post-apply-refresh:{deployment_id}",),
+        ).fetchone()
+        expect(refresh_job is not None, "Academy apply should record a control-plane post-apply refresh job")
+        expect(refresh_job["target_id"] == deployment_id and refresh_request["request_id"] in refresh_job["last_note"], str(dict(refresh_job)))
         academy_files = list((root / "vault" / "Academy").rglob("*.md"))
         expect(academy_files, "Academy apply should materialize governed vault markdown")
         rendered_vault = "\n".join(path.read_text(encoding="utf-8") for path in academy_files)

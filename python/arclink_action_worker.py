@@ -23,6 +23,7 @@ from arclink_control import (
     comp_arclink_subscription,
     connect_db,
     link_arclink_action_operation,
+    note_refresh_job,
     utc_now_iso,
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
@@ -1443,6 +1444,63 @@ def _academy_vault_body(intent: Mapping[str, Any], *, payload: Mapping[str, Any]
     )
 
 
+def _academy_post_apply_refresh_request(
+    *,
+    payload: Mapping[str, Any],
+    deployment_id: str,
+    applied_at: str,
+    applied_paths: list[str],
+    qmd_memory_seed_intents: list[dict[str, Any]],
+    approved_skill_intents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    request_seed = "|".join(
+        (
+            deployment_id,
+            str(payload.get("trainee_id") or ""),
+            str(payload.get("program_id") or ""),
+            str(payload.get("manifest_id") or ""),
+            str(payload.get("academy_capsule_version") or ""),
+            applied_at,
+        )
+    )
+    request_id = "academy_refresh_" + hashlib.sha256(request_seed.encode("utf-8")).hexdigest()[:24]
+    return {
+        "request_id": request_id,
+        "requested_at": applied_at,
+        "deployment_id": deployment_id,
+        "trainee_id": str(payload.get("trainee_id") or ""),
+        "program_id": str(payload.get("program_id") or ""),
+        "manifest_id": str(payload.get("manifest_id") or ""),
+        "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
+        "academy_capsule_version": int(payload.get("academy_capsule_version") or 0),
+        "status": "requested",
+        "queue_policy": "post-apply handoff only; the action worker does not run qmd, memory synthesis, Hermes skill enablement, Docker, SSH, or provider commands inline",
+        "refreshes": [
+            {
+                "kind": "qmd_index",
+                "status": "requested",
+                "reason": "Vault/Academy markdown changed and should be discoverable through qmd retrieval.",
+                "proof_gate": "PG-HERMES",
+            },
+            {
+                "kind": "memory_synthesis",
+                "status": "requested" if qmd_memory_seed_intents else "not_requested",
+                "reason": "Academy memory seeds were staged for recall-stub synthesis." if qmd_memory_seed_intents else "No Academy memory seed intents were staged.",
+                "proof_gate": "PG-HERMES",
+                "seed_count": len(qmd_memory_seed_intents),
+            },
+            {
+                "kind": "skill_activation",
+                "status": "staged" if approved_skill_intents else "not_requested",
+                "reason": "Approved Academy skills were recorded; activation stays explicit and proof-gated." if approved_skill_intents else "No approved skill intents were staged.",
+                "proof_gate": "PG-HERMES",
+                "skill_count": len(approved_skill_intents),
+            },
+        ],
+        "applied_paths": list(applied_paths),
+    }
+
+
 def _materialize_academy_apply(
     conn: sqlite3.Connection,
     *,
@@ -1533,13 +1591,6 @@ def _materialize_academy_apply(
         "evaluation_tasks": list(payload.get("evaluation_tasks") or []),
         "applied_paths": applied_paths,
     }
-    state_body = json.dumps(
-        state_payload,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
-    state_changed = _write_private_text_atomic(hermes_home / "state" / "arclink-academy-apply.json", state_body)
-    changed_any = changed_any or state_changed
     applied_paths.append("state/arclink-academy-apply.json")
     if qmd_memory_seed_intents:
         seeds_changed = _write_private_text_atomic(
@@ -1555,6 +1606,40 @@ def _materialize_academy_apply(
         )
         changed_any = changed_any or skills_changed
         applied_paths.append("state/arclink-academy-approved-skills.json")
+    refresh_request = _academy_post_apply_refresh_request(
+        payload=payload,
+        deployment_id=deployment_id,
+        applied_at=applied_at,
+        applied_paths=applied_paths,
+        qmd_memory_seed_intents=qmd_memory_seed_intents,
+        approved_skill_intents=approved_skill_intents,
+    )
+    refresh_changed = _write_private_text_atomic(
+        hermes_home / "state" / "arclink-academy-post-apply-refresh.json",
+        json.dumps(refresh_request, indent=2, sort_keys=True) + "\n",
+    )
+    changed_any = changed_any or refresh_changed
+    applied_paths.append("state/arclink-academy-post-apply-refresh.json")
+    note_refresh_job(
+        conn,
+        job_name=f"academy-post-apply-refresh:{deployment_id}",
+        job_kind="academy-post-apply",
+        target_id=deployment_id,
+        schedule="on demand after academy_apply",
+        status="warn",
+        note=(
+            f"Academy post-apply refresh requested: {refresh_request['request_id']} "
+            "(qmd index, memory synthesis, and skill activation proof stay out-of-band)."
+        ),
+    )
+    state_payload["post_apply_refresh_request"] = refresh_request
+    state_body = json.dumps(
+        state_payload,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+    state_changed = _write_private_text_atomic(hermes_home / "state" / "arclink-academy-apply.json", state_body)
+    changed_any = changed_any or state_changed
     conn.execute(
         """
         UPDATE academy_specialist_subscriptions
@@ -1571,6 +1656,7 @@ def _materialize_academy_apply(
             "workspace_mutation_performed": False,
             "filesystem_mutation_performed": bool(changed_any),
             "applied_paths": applied_paths,
+            "post_apply_refresh_request": refresh_request,
         }
     )
     return payload

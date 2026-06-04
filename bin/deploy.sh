@@ -9487,8 +9487,9 @@ for row in rows:
 PY
 )
   if [[ "$sync_failed" == "1" ]]; then
-    return 1
+    echo "One or more fleet image syncs failed; affected workers were marked image_sync_failed and will be avoided for new placement until they recover." >&2
   fi
+  return 0
 }
 
 derive_control_worker_join_url() {

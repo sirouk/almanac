@@ -189,6 +189,42 @@ def test_public_academy_observatory_is_aggregate_and_redacted() -> None:
     print("PASS test_public_academy_observatory_is_aggregate_and_redacted")
 
 
+def test_public_academy_observatory_rate_limit_returns_429() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_academy_public_rate_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_public_rate_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(
+        env={
+            "ARCLINK_BASE_DOMAIN": "example.test",
+            "ARCLINK_PUBLIC_ACADEMY_OBSERVATORY_RATE_LIMIT": "1",
+            "ARCLINK_PUBLIC_ROUTE_RATE_LIMIT_WINDOW_SECONDS": "60",
+        }
+    )
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/academy/observatory",
+        headers={},
+        config=config,
+        remote_addr="203.0.113.50",
+    )
+    expect(status == 200, f"first observatory request expected 200 got {status}: {payload}")
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/academy/observatory",
+        headers={},
+        config=config,
+        remote_addr="203.0.113.50",
+    )
+    expect(status == 429, f"second observatory request expected 429 got {status}: {payload}")
+    header_dict = {name.lower(): value for name, value in headers}
+    expect("x-ratelimit-limit" in header_dict and header_dict["x-ratelimit-limit"] == "1", str(headers))
+    scopes = {row[0] for row in conn.execute("SELECT DISTINCT scope FROM rate_limits").fetchall()}
+    expect("arclink:public-route:public_academy_observatory" in scopes, str(scopes))
+    print("PASS test_public_academy_observatory_rate_limit_returns_429")
+
+
 def test_user_dashboard_requires_session_auth() -> None:
     control = load_module("arclink_control.py", "arclink_control_hosted_user_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_user_test")
@@ -6090,6 +6126,7 @@ def test_onboarding_status_returns_scale_agent_progress() -> None:
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_public_academy_observatory_is_aggregate_and_redacted()
+    test_public_academy_observatory_rate_limit_returns_429()
     test_user_dashboard_requires_session_auth()
     test_user_backup_deploy_key_request_requires_session_and_csrf()
     test_user_backup_write_check_route_requires_session_csrf_and_never_activates()

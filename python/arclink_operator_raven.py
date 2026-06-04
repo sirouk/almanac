@@ -2,8 +2,9 @@
 """Operator Raven command surface: read/dry-run previews plus real action queueing.
 
 Read commands (``status``, ``fleet_list``, ``user_lookup``, ``academy_status``,
-``upgrade_check``, ``action_status``) never mutate. The mutation commands
-(``pod_repair``, ``rollout``, ``host_upgrade``, ``pin_upgrade``) behave in three
+``upgrade_check``, ``upgrade_policy``, ``action_status``) never mutate. The
+mutation commands (``pod_repair``, ``rollout``, ``host_upgrade``,
+``pin_upgrade``, ``upgrade_sweep``, ``fleet_drain``, ``fleet_resume``) behave in four
 ways:
 
 * ``--dry-run`` -> a preview that changes nothing (the historical behavior).
@@ -13,12 +14,11 @@ ways:
   token -> refuse. The operator must append ``confirm`` or the configured
   approval code after reviewing a dry-run preview.
 * no ``--dry-run`` with an operator ``actor_id`` and explicit confirmation ->
-  QUEUE a real, audited intent that the ArcLink action worker / enrollment
-  provisioner executes asynchronously, honoring the configured
-  ``ARCLINK_EXECUTOR_ADAPTER`` (``fake`` records only). Operator Raven never
-  runs Docker/SSH/provider commands inline; it only queues intents. Live
-  mutation stays gated by the executor adapter and the per-action live proof
-  gate.
+  QUEUE a real audited intent that the ArcLink action worker / enrollment
+  provisioner executes asynchronously, or apply the modeled local fleet-state
+  mutation with audit/event rows. Operator Raven never runs Docker/SSH/provider
+  commands inline. Live mutation stays gated by the executor adapter and the
+  per-action live proof gate.
 """
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ import secrets
 import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
+
+from arclink_upgrade_policy import PIN_UPGRADE_COMPONENTS, STATEFUL_PIN_UPGRADE_COMPONENTS
 
 
 class OperatorRavenError(ValueError):
@@ -71,6 +73,26 @@ _COMMAND_ALIASES = {
     "fleet": "fleet_list",
     "fleet_list": "fleet_list",
     "fleetlist": "fleet_list",
+    "fleet_drain": "fleet_drain",
+    "fleetdrain": "fleet_drain",
+    "drain_fleet": "fleet_drain",
+    "drainfleet": "fleet_drain",
+    "drain_worker": "fleet_drain",
+    "drainworker": "fleet_drain",
+    "worker_drain": "fleet_drain",
+    "workerdrain": "fleet_drain",
+    "fleet_resume": "fleet_resume",
+    "fleetresume": "fleet_resume",
+    "fleet_undrain": "fleet_resume",
+    "fleetundrain": "fleet_resume",
+    "undrain_fleet": "fleet_resume",
+    "undrainfleet": "fleet_resume",
+    "resume_worker": "fleet_resume",
+    "resumeworker": "fleet_resume",
+    "worker_resume": "fleet_resume",
+    "workerresume": "fleet_resume",
+    "worker_undrain": "fleet_resume",
+    "workerundrain": "fleet_resume",
     "worker_probe": "worker_probe",
     "workerprobe": "worker_probe",
     "probe_worker": "worker_probe",
@@ -92,6 +114,27 @@ _COMMAND_ALIASES = {
     "upgradehermes": "upgrade_check",
     "hermes_upgrade": "upgrade_check",
     "hermesupgrade": "upgrade_check",
+    "upgrade_policy": "upgrade_policy",
+    "upgradepolicy": "upgrade_policy",
+    "update_policy": "upgrade_policy",
+    "updatepolicy": "upgrade_policy",
+    "dependency_policy": "upgrade_policy",
+    "dependencypolicy": "upgrade_policy",
+    "dependency_updates": "upgrade_policy",
+    "dependencyupdates": "upgrade_policy",
+    "updates": "upgrade_policy",
+    "upgrade_sweep": "upgrade_sweep",
+    "upgradesweep": "upgrade_sweep",
+    "update_sweep": "upgrade_sweep",
+    "updatesweep": "upgrade_sweep",
+    "upgrade_all": "upgrade_sweep",
+    "upgradeall": "upgrade_sweep",
+    "update_all": "upgrade_sweep",
+    "updateall": "upgrade_sweep",
+    "apply_updates": "upgrade_sweep",
+    "applyupdates": "upgrade_sweep",
+    "pin_upgrade_all": "upgrade_sweep",
+    "pinupgradeall": "upgrade_sweep",
     "host_upgrade": "host_upgrade",
     "hostupgrade": "host_upgrade",
     "control_upgrade": "host_upgrade",
@@ -140,22 +183,11 @@ _COMMAND_ALIASES = {
     "roster": "academy_roster",
 }
 
-# Commands that, outside of --dry-run, queue a real audited intent. The adapter
-# must supply an operator actor identity plus an explicit confirmation token
-# (or clear any configured approval code) before these run for real.
-MUTATING_COMMANDS = frozenset({"pod_repair", "rollout", "host_upgrade", "pin_upgrade"})
-
-# Pinned components the operator can upgrade through Operator Raven. Mirrors the
-# component-upgrade rails in bin/deploy.sh / bin/component-upgrade.sh.
-PIN_UPGRADE_COMPONENTS = (
-    "hermes",
-    "qmd",
-    "nextcloud",
-    "postgres",
-    "redis",
-    "nvm",
-    "node",
-)
+# Commands that, outside of --dry-run, queue or apply a real audited mutation.
+# The adapter must supply an operator actor identity plus an explicit
+# confirmation token (or clear any configured approval code) before these run
+# for real.
+MUTATING_COMMANDS = frozenset({"pod_repair", "rollout", "host_upgrade", "pin_upgrade", "upgrade_sweep", "fleet_drain", "fleet_resume"})
 
 _POD_REPAIR_ACTIONS = ("restart", "reprovision", "dns_repair")
 
@@ -285,10 +317,14 @@ def dispatch_operator_raven_command(
         "status": _handle_status,
         "agents": _handle_agents,
         "fleet_list": _handle_fleet_list,
+        "fleet_drain": _handle_fleet_drain,
+        "fleet_resume": _handle_fleet_resume,
         "worker_probe": _handle_worker_probe,
         "user_lookup": _handle_user_lookup,
         "pod_repair": _handle_pod_repair,
         "upgrade_check": _handle_upgrade_check,
+        "upgrade_policy": _handle_upgrade_policy,
+        "upgrade_sweep": _handle_upgrade_sweep,
         "host_upgrade": _handle_host_upgrade,
         "pin_upgrade": _handle_pin_upgrade,
         "rollout": _handle_rollout,
@@ -386,8 +422,8 @@ def _handle_status(
         f"Admin actions: {queueable} queueable via {adapter}",
         f"Queued/running operator actions: {_format_counts(action_counts)}",
         "Live actions honor ARCLINK_EXECUTOR_ADAPTER (fake = record-only); set it to local/ssh after the live proof gate.",
-        "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component> (add --dry-run to preview; append confirm or the operator approval code to queue)",
-        "Next: /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
+        "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component>, /upgrade_sweep, /fleet_drain <worker>, /fleet_resume <worker> (add --dry-run to preview; append confirm or the operator approval code to queue or apply)",
+        "Next: /upgrade_policy, /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
         "Live proof still required for live mutation: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
     ]
     return {
@@ -488,6 +524,150 @@ def _handle_fleet_list(
     if len(hosts) > 10:
         lines.append(f"... {len(hosts) - 10} more worker(s) omitted.")
     return {"message": "\n".join(lines), "hosts": hosts}
+
+
+def _handle_fleet_drain(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    return _handle_fleet_drain_state(
+        conn,
+        command,
+        actor_id=actor_id,
+        drain=True,
+        command_label="Fleet drain",
+        verb="drain",
+    )
+
+
+def _handle_fleet_resume(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    return _handle_fleet_drain_state(
+        conn,
+        command,
+        actor_id=actor_id,
+        drain=False,
+        command_label="Fleet resume",
+        verb="resume",
+    )
+
+
+def _handle_fleet_drain_state(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    actor_id: str,
+    drain: bool,
+    command_label: str,
+    verb: str,
+) -> dict[str, Any]:
+    target = _first_non_option_arg(command.args)
+    if not target:
+        return {"message": f"Use /fleet_{verb} <host-id-or-hostname> (add --dry-run to preview)."}
+    host = _find_fleet_host(conn, target)
+    if host is None:
+        return {"message": f"{command_label}: no registered worker matches {target}."}
+
+    force = _has_force_flag(command.args)
+    guard = _fleet_last_capacity_guard(conn, host, drain=drain, force=force)
+    currently_drained = bool(int(host.get("drain") or 0))
+    desired_drained = bool(drain)
+
+    if command.dry_run:
+        lines = [
+            f"{command_label} dry-run",
+            f"Worker: {host.get('hostname')} ({host.get('host_id')})",
+            f"Current: status={host.get('status') or 'unknown'} drain={str(currently_drained).lower()}",
+            f"Would set drain={str(desired_drained).lower()}.",
+        ]
+        if guard:
+            lines.append(f"Blocked unless --force: {guard}")
+        lines.append("No fleet state, placement, SSH, Docker, provider, or firewall setting was changed.")
+        return {"message": "\n".join(lines), "host": host, "capacity_guard": guard}
+
+    blocked = _require_operator_actor(actor_id, command_label)
+    if blocked is not None:
+        return blocked
+    if guard:
+        return {
+            "message": (
+                f"{command_label} blocked: {guard} Re-run with --dry-run to inspect, add --force only during an explicit maintenance window, "
+                "then append confirm or the operator approval code. No fleet state changed."
+            ),
+        }
+    needs_confirm = _require_operator_confirmation(command)
+    if needs_confirm is not None:
+        return needs_confirm
+
+    if currently_drained == desired_drained:
+        state = "drained" if desired_drained else "accepting placements"
+        return {
+            "message": f"{command_label}: {host.get('hostname')} is already {state}. No fleet state changed.",
+            "host": host,
+        }
+
+    try:
+        from arclink_control import append_arclink_audit, append_arclink_event
+        from arclink_fleet import update_fleet_host
+
+        updated = update_fleet_host(conn, host_id=str(host.get("host_id") or ""), drain=desired_drained)
+        event_type = "fleet_worker_drained" if desired_drained else "fleet_worker_resumed"
+        append_arclink_event(
+            conn,
+            subject_kind="fleet_host",
+            subject_id=str(updated.get("host_id") or ""),
+            event_type=event_type,
+            metadata={
+                "hostname": str(updated.get("hostname") or ""),
+                "actor_id": actor_id,
+                "source": "operator_raven",
+                "force": force,
+            },
+            commit=False,
+        )
+        append_arclink_audit(
+            conn,
+            action=f"operator_raven:{event_type}",
+            actor_id=actor_id,
+            target_kind="fleet_host",
+            target_id=str(updated.get("host_id") or ""),
+            reason=f"Operator Raven {verb} worker request",
+            metadata={
+                "hostname": str(updated.get("hostname") or ""),
+                "previous_drain": currently_drained,
+                "new_drain": desired_drained,
+                "force": force,
+            },
+            commit=False,
+        )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"{command_label} failed closed: {exc}"}
+
+    state = "drained; new ArcPod placements will avoid it" if desired_drained else "resumed; placement eligibility still depends on health and capacity"
+    lines = [
+        f"Operator Raven {command_label.lower()} applied",
+        f"Worker: {updated.get('hostname')} ({updated.get('host_id')})",
+        f"State: {state}",
+        "No SSH, Docker, provider, firewall, or port-22 setting was changed by this chat command.",
+    ]
+    return {
+        "message": "\n".join(lines),
+        "mutation_performed": True,
+        "host": updated,
+    }
 
 
 def _handle_worker_probe(
@@ -795,8 +975,131 @@ def _handle_upgrade_check(
         lines.append(f"Available: {available[:12]}")
     if note:
         lines.append(f"Note: {note}")
-    lines.append("No upgrade was queued or run. Run /upgrade to apply the host upgrade, or /pin_upgrade <component>.")
+    lines.append("No upgrade was queued or run. Run /upgrade for the host upgrade, /pin_upgrade <component> for one pending detector target, or /upgrade_sweep for all pending detector targets.")
     return {"message": "\n".join(lines), "upgrade": result}
+
+
+def _handle_upgrade_policy(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    from arclink_upgrade_policy import policy_components_by_scope, upgrade_policy_summary
+
+    component = _first_non_option_arg(command.args)
+    try:
+        summary = upgrade_policy_summary(component)
+    except ValueError as exc:
+        return {"message": f"Operator Raven upgrade policy\nStatus: blocked\nRepair: {exc}"}
+
+    if summary["mode"] == "component":
+        policy = dict(summary["policy"])
+        lines = [
+            f"Operator Raven upgrade policy: {policy['label']}",
+            f"Component: {policy['component']} ({policy['scope']})",
+            f"Order: {policy['rollout_order']}",
+            f"Operator command: {policy['operator_command']}",
+            f"Strategy: {policy['strategy']}",
+            f"Downtime posture: {policy['downtime_posture']}",
+            f"Default batch: {policy['default_batch_size']}",
+            "Preflight: " + "; ".join(policy.get("preflight_checks") or []),
+            "Proof gates: " + ", ".join(policy.get("proof_gates") or []),
+            "Rollback: " + "; ".join(policy.get("rollback_contract") or []),
+            "No action was queued. Use the listed command with --dry-run before confirming any mutation.",
+        ]
+        return {"message": "\n".join(lines), "upgrade_policy": summary}
+
+    lines = [
+        "Operator Raven upgrade policy",
+        "Sequence: control plane first; ArcPod runtime in bounded batches; knowledge jobs async; stateful services in maintenance windows; worker fabric one drained worker at a time.",
+    ]
+    for scope, components in policy_components_by_scope(summary):
+        lines.append(f"- {scope}: {', '.join(components)}")
+    lines.extend(
+        [
+            "Commands: /upgrade, /pin_upgrade <component>, /upgrade_sweep, /rollout <target>, /fleet_drain <worker>, /fleet_resume <worker>.",
+            "No action was queued. Ask /upgrade_policy <component> for the exact preflight, proof, downtime, and rollback contract.",
+        ]
+    )
+    return {"message": "\n".join(lines), "upgrade_policy": summary}
+
+
+def _pin_payload_component_names(payload: Mapping[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for item in list(payload.get("items") or []) + list(payload.get("install_items") or []):
+        component = str(item.get("component") or "").strip().lower()
+        if component:
+            names.add(component)
+    return names
+
+
+def _pin_payload_operator_names(payload: Mapping[str, Any]) -> set[str]:
+    names = _pin_payload_component_names(payload)
+    operator_names = set(names)
+    if "hermes-agent" in names or "hermes-docs" in names:
+        operator_names.add("hermes")
+    return operator_names
+
+
+def _pin_payload_is_stateful(payload: Mapping[str, Any]) -> bool:
+    return bool(_pin_payload_operator_names(payload) & set(STATEFUL_PIN_UPGRADE_COMPONENTS))
+
+
+def _pin_payload_line(payload: Mapping[str, Any]) -> str:
+    token = str(payload.get("token") or "").strip()
+    parts: list[str] = []
+    for item in payload.get("install_items") or payload.get("items") or []:
+        component = str(item.get("component") or "").strip()
+        target = str(item.get("target") or "").strip()
+        if str(item.get("kind") or "") == "git-commit" and len(target) >= 12:
+            target = target[:12]
+        if component:
+            parts.append(f"{component}->{target or '?'}")
+    return f"{token}: " + ", ".join(parts or ["pending pinned component"])
+
+
+def _pending_pin_payloads_for_component(conn: sqlite3.Connection, component: str) -> list[dict[str, Any]]:
+    from arclink_control import list_pin_upgrade_action_payloads
+
+    return list_pin_upgrade_action_payloads(conn, component=component, active_only=True)
+
+
+def _pending_pin_payloads(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    from arclink_control import list_pin_upgrade_action_payloads
+
+    return list_pin_upgrade_action_payloads(conn, active_only=True)
+
+
+def _queue_pin_upgrade_payloads(
+    conn: sqlite3.Connection,
+    *,
+    payloads: Sequence[Mapping[str, Any]],
+    actor_id: str,
+) -> tuple[list[dict[str, Any]], int]:
+    from arclink_control import request_operator_action
+
+    queued: list[dict[str, Any]] = []
+    created_count = 0
+    for payload in payloads:
+        token = str(payload.get("token") or "").strip()
+        if not token:
+            continue
+        action_row, created = request_operator_action(
+            conn,
+            action_kind="pin-upgrade",
+            requested_by=actor_id,
+            request_source="operator-raven",
+            requested_target=token,
+            dedupe_by_target=True,
+        )
+        queued.append(action_row)
+        if created:
+            created_count += 1
+    return queued, created_count
 
 
 def _handle_host_upgrade(
@@ -873,11 +1176,25 @@ def _handle_pin_upgrade(
                 f"Pin upgrade: unknown component '{component}'. Choose one of {', '.join(PIN_UPGRADE_COMPONENTS)}."
             ),
         }
+    try:
+        payloads = _pending_pin_payloads_for_component(conn, component)
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"Could not inspect pending pinned-component upgrades: {exc}"}
+    if not payloads:
+        return {
+            "message": (
+                f"Pin upgrade: no active detector payload is pending for {component}. "
+                "Wait for the hourly detector or run the pinned-component check from the control node, then retry. "
+                "No action was queued."
+            ),
+        }
+    payload = payloads[0]
+    token = str(payload.get("token") or "").strip()
     if command.dry_run:
         return {
             "message": (
-                f"Pin upgrade dry-run for {component}: would queue an operator 'pin-upgrade' action that the root "
-                f"maintenance loop applies (config/pins.json bump + component upgrade). No action was queued."
+                f"Pin upgrade dry-run for {component}: would queue detector payload {_pin_payload_line(payload)}. "
+                "The root maintenance loop applies config/pins.json bumps plus the component upgrade. No action was queued."
             ),
         }
     blocked = _require_operator_actor(actor_id, "Pin upgrade")
@@ -887,29 +1204,114 @@ def _handle_pin_upgrade(
     if needs_confirm is not None:
         return needs_confirm
     try:
-        from arclink_control import request_operator_action
-
-        action_row, created = request_operator_action(
-            conn,
-            action_kind="pin-upgrade",
-            requested_by=actor_id,
-            request_source="operator-raven",
-            requested_target=component,
-            dedupe_by_target=True,
-        )
+        queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=[payload], actor_id=actor_id)
     except Exception as exc:  # noqa: BLE001
         return {"message": f"Could not queue pinned-component upgrade: {exc}"}
+    action_row = queued[0] if queued else {}
     status = str(action_row.get("status") or "pending")
-    if created:
-        message = f"Operator Raven queued a pinned-component upgrade for {component}. The root maintenance loop will apply it. Track it with /action_status."
+    if created_count:
+        message = f"Operator Raven queued a pinned-component upgrade for {component} ({_pin_payload_line(payload)}). The root maintenance loop will apply it. Track it with /action_status."
     elif status == "running":
         message = f"A {component} pinned-component upgrade is already running. Track it with /action_status."
     else:
         message = f"A {component} pinned-component upgrade is already queued. Track it with /action_status."
     return {
         "message": message,
-        "mutation_performed": bool(created),
+        "mutation_performed": bool(created_count),
         "operator_action": action_row,
+    }
+
+
+def _handle_upgrade_sweep(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    include_stateful = _has_include_stateful_flag(command.args)
+    try:
+        payloads = _pending_pin_payloads(conn)
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"Could not inspect pending pinned-component upgrades: {exc}"}
+
+    if not payloads:
+        return {
+            "message": (
+                "Upgrade sweep: no active pinned-component detector payloads are pending. "
+                "The hourly detector will notify the Operator when concrete targets exist. No action was queued."
+            ),
+        }
+
+    selected: list[dict[str, Any]] = []
+    skipped_stateful: list[dict[str, Any]] = []
+    seen_tokens: set[str] = set()
+    for payload in payloads:
+        token = str(payload.get("token") or "").strip()
+        if not token or token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+        if _pin_payload_is_stateful(payload) and not include_stateful:
+            skipped_stateful.append(payload)
+            continue
+        selected.append(payload)
+
+    if not selected:
+        return {
+            "message": (
+                "Upgrade sweep: only stateful pinned-component targets are pending. "
+                "Use /upgrade_sweep --include-stateful --dry-run during a maintenance window, then confirm. "
+                "No action was queued."
+            ),
+            "skipped_stateful": skipped_stateful,
+        }
+
+    lines = [
+        "Operator Raven upgrade sweep",
+        f"Pending detector payloads selected: {len(selected)}",
+    ]
+    lines.extend(f"- {_pin_payload_line(payload)}" for payload in selected)
+    if skipped_stateful:
+        lines.append("")
+        lines.append(
+            "Skipped stateful target(s): "
+            + "; ".join(_pin_payload_line(payload) for payload in skipped_stateful)
+        )
+        lines.append("Add --include-stateful only inside an explicit maintenance window.")
+    if command.dry_run:
+        lines.append("")
+        lines.append(
+            "Dry-run only: no action was queued. Confirming queues these detector payloads; the root maintenance loop applies them sequentially, then normal ArcPod rollouts remain bounded/canary controlled."
+        )
+        return {
+            "message": "\n".join(lines),
+            "payloads": selected,
+            "skipped_stateful": skipped_stateful,
+        }
+
+    blocked = _require_operator_actor(actor_id, "Upgrade sweep")
+    if blocked is not None:
+        return blocked
+    needs_confirm = _require_operator_confirmation(command)
+    if needs_confirm is not None:
+        return needs_confirm
+    try:
+        queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=selected, actor_id=actor_id)
+    except Exception as exc:  # noqa: BLE001
+        return {"message": f"Could not queue upgrade sweep: {exc}"}
+    lines.append("")
+    if created_count:
+        lines.append(f"Queued {created_count} pinned-component upgrade action(s).")
+    else:
+        lines.append("All selected pinned-component upgrade action(s) were already queued or running.")
+    lines.append("Track the sweep with /action_status.")
+    return {
+        "message": "\n".join(lines),
+        "mutation_performed": bool(created_count),
+        "operator_actions": queued,
+        "skipped_stateful": skipped_stateful,
     }
 
 
@@ -1095,6 +1497,51 @@ def _truthy(value: str | None) -> bool:
 def _has_execute_batch_flag(args: Sequence[str]) -> bool:
     flags = {"--execute", "--execute-batch", "--execute_batch", "--execute-local-batch", "--apply-batch"}
     return any(str(arg or "").strip().lower() in flags for arg in args)
+
+
+def _has_force_flag(args: Sequence[str]) -> bool:
+    return any(str(arg or "").strip().lower() in {"--force", "force"} for arg in args)
+
+
+def _has_include_stateful_flag(args: Sequence[str]) -> bool:
+    return any(
+        str(arg or "").strip().lower().replace("_", "-") in {
+            "--include-stateful",
+            "include-stateful",
+            "--stateful",
+            "stateful",
+        }
+        for arg in args
+    )
+
+
+def _fleet_last_capacity_guard(
+    conn: sqlite3.Connection,
+    host: Mapping[str, Any],
+    *,
+    drain: bool,
+    force: bool,
+) -> str:
+    if not drain or force:
+        return ""
+    host_id = str(host.get("host_id") or "")
+    try:
+        from arclink_fleet import host_is_placement_eligible, list_fleet_hosts
+
+        hosts = list_fleet_hosts(conn)
+    except Exception:  # noqa: BLE001 - keep Raven fail-closed and conservative.
+        return "could not prove other eligible worker capacity"
+    target = next((item for item in hosts if str(item.get("host_id") or "") == host_id), host)
+    if not host_is_placement_eligible(target):
+        return ""
+    other_eligible = [
+        item
+        for item in hosts
+        if str(item.get("host_id") or "") != host_id and host_is_placement_eligible(item)
+    ]
+    if other_eligible:
+        return ""
+    return "draining this worker would leave zero active, healthy, undrained workers with placement capacity"
 
 
 def _first_non_option_arg(args: Sequence[str]) -> str:

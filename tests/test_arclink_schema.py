@@ -186,6 +186,14 @@ def test_fleet_audit_chain_legacy_schema_migrates_to_current_contract() -> None:
         """,
         ("fachain_legacy_live_shape",),
     ).fetchone()
+    expected_hash = mod._fleet_audit_chain_hash(
+        inventory_id="machine_live",
+        event="enrolled",
+        actor="legacy",
+        event_at="2026-06-03T02:00:00+00:00",
+        prev_hash="",
+        metadata_json='{"legacy":true}',
+    )
     expect(dict(migrated) == {
         "entry_id": "fachain_legacy_live_shape",
         "inventory_id": "machine_live",
@@ -193,20 +201,66 @@ def test_fleet_audit_chain_legacy_schema_migrates_to_current_contract() -> None:
         "actor": "legacy",
         "event_at": "2026-06-03T02:00:00+00:00",
         "prev_hash": "",
-        "entry_hash": "hash_live",
+        "entry_hash": expected_hash,
         "metadata_json": '{"legacy":true}',
     }, str(dict(migrated)))
+    second_hash = mod._fleet_audit_chain_hash(
+        inventory_id="machine_live",
+        event="verified",
+        actor="worker-bootstrap",
+        event_at="2026-06-03T02:01:00+00:00",
+        prev_hash=expected_hash,
+        metadata_json="{}",
+    )
     conn.execute(
         """
         INSERT INTO arclink_fleet_audit_chain (
           entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
         ) VALUES (
           'fachain_current_insert', 'machine_live', 'verified', 'worker-bootstrap',
-          '2026-06-03T02:01:00+00:00', 'hash_live', 'hash_current', '{}'
+          '2026-06-03T02:01:00+00:00', ?, ?, '{}'
+        )
+        """,
+        (expected_hash, second_hash),
+    )
+    print("PASS test_fleet_audit_chain_legacy_schema_migrates_to_current_contract")
+
+
+def test_fleet_audit_chain_existing_legacy_backup_repairs_hash_chain_once() -> None:
+    mod = load_control()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    mod.ensure_schema(conn)
+    conn.execute(
+        """
+        INSERT INTO arclink_fleet_audit_chain (
+          entry_id, inventory_id, event, actor, event_at, prev_hash, entry_hash, metadata_json
+        ) VALUES (
+          'fachain_old_bad_hash', 'machine_live', 'enrolled', 'legacy',
+          '2026-06-03T02:00:00+00:00', '', 'legacy_bad_hash', '{"legacy":true}'
         )
         """
     )
-    print("PASS test_fleet_audit_chain_legacy_schema_migrates_to_current_contract")
+    conn.execute("CREATE TABLE arclink_fleet_audit_chain__legacy_1 (entry_id TEXT)")
+    conn.commit()
+
+    mod.ensure_schema(conn)
+
+    migrated = conn.execute(
+        "SELECT prev_hash, entry_hash FROM arclink_fleet_audit_chain WHERE entry_id = 'fachain_old_bad_hash'"
+    ).fetchone()
+    expected_hash = mod._fleet_audit_chain_hash(
+        inventory_id="machine_live",
+        event="enrolled",
+        actor="legacy",
+        event_at="2026-06-03T02:00:00+00:00",
+        prev_hash="",
+        metadata_json='{"legacy":true}',
+    )
+    expect(migrated["prev_hash"] == "" and migrated["entry_hash"] == expected_hash, str(dict(migrated)))
+    setting = conn.execute("SELECT value FROM settings WHERE key = 'fleet_audit_chain_hash_repair_v1'").fetchone()
+    expect(setting is not None and setting["value"] == "done", str(setting))
+    print("PASS test_fleet_audit_chain_existing_legacy_backup_repairs_hash_chain_once")
 
 
 def test_arc_pod_captain_console_wave0_columns_and_indexes_exist() -> None:
@@ -549,6 +603,7 @@ def main() -> int:
     test_arclink_schema_creates_expected_tables_and_is_idempotent()
     test_fleet_enrollment_legacy_schema_migrates_to_current_contract()
     test_fleet_audit_chain_legacy_schema_migrates_to_current_contract()
+    test_fleet_audit_chain_existing_legacy_backup_repairs_hash_chain_once()
     test_arc_pod_captain_console_wave0_columns_and_indexes_exist()
     test_pod_migration_wave3_columns_and_indexes_exist()
     test_deployment_prefix_reservation_is_unique()
@@ -558,7 +613,7 @@ def main() -> int:
     test_subscription_health_and_provisioning_helpers()
     test_arclink_drift_detection_reports_missing_linked_rows()
     test_arc_pod_captain_console_status_drift_checks()
-    print("PASS all 12 ArcLink schema tests")
+    print("PASS all 13 ArcLink schema tests")
     return 0
 
 

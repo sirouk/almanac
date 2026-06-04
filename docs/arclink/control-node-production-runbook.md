@@ -132,32 +132,57 @@ Before enabling live mutation paths, verify:
 
 Operator Raven (`python/arclink_operator_raven.py`) is the chat-native operator
 control console on the Operator's linked Telegram/Discord channel. It is no
-longer read-only or dry-run-only: mutating commands queue real, audited,
-identity-gated intents into the same rails described above. Treat this surface
-as proof-gated for live effect, but local-real for queueing.
+longer read-only or dry-run-only: mutating commands queue real audited intents
+or apply modeled local fleet-state mutations after identity and confirmation
+gates. Treat this surface as proof-gated for live effect, but local-real for
+queueing and control-state changes.
 
 Read commands (never mutate): `status`, `agents`, `fleet_list`, `worker_probe`
 (dry-run only in this slice; no live SSH/Docker/health probe), `user_lookup`,
 `academy_status`, `academy_roster`, `upgrade_check` (fail-closed unless an
-upgrade-check runner is injected), and `action_status`.
+upgrade-check runner is injected), `upgrade_policy`, and `action_status`.
+`/upgrade_policy [component]` is an explainer only: it returns the source-owned
+strategy, order, downtime posture, preflight checks, proof gates, and rollback
+contract for the named component or for the full dependency family. It never
+queues work.
 
 Mutating commands (`MUTATING_COMMANDS = {pod_repair, rollout, host_upgrade,
-pin_upgrade}`) use a four-mode contract:
+pin_upgrade, upgrade_sweep, fleet_drain, fleet_resume}`) use a four-mode
+contract:
 
 1. `--dry-run` previews and changes nothing.
 2. No `--dry-run` and no verified operator identity fails closed (read-only
    refusal).
 3. No `--dry-run` with verified operator identity but no `confirm`/approval code
    fails closed and queues nothing.
-4. No `--dry-run` with a verified operator identity plus confirmation queues a real, audited
-   intent that the action worker or the enrollment-provisioner root maintenance
-   loop executes asynchronously.
+4. No `--dry-run` with a verified operator identity plus confirmation queues a
+   real audited intent that the action worker or enrollment-provisioner root
+   maintenance loop executes asynchronously, or applies the modeled local
+   fleet-state mutation (`fleet_drain`/`fleet_resume`) with audit/event rows.
 
 Even when queued, live mutation stays gated by `ARCLINK_EXECUTOR_ADAPTER`
 (`fake` records only) and per-action proof gates: `pod_repair` actions
 (`restart`/`reprovision` PG-PROVISION, `dns_repair` PG-INGRESS), `rollout`
 (PG-UPGRADE/PG-HERMES), `host_upgrade`/`pin_upgrade` (operator-upgrade-broker,
-risk-accepted under GAP-019).
+risk-accepted under GAP-019). Fleet drain/resume does not run SSH, Docker,
+provider, firewall, or port-22 changes from chat; it only changes placement
+eligibility in the control DB, and draining the last eligible worker requires
+an explicit `--force` maintenance-window acknowledgement.
+
+Pinned-component upgrades are discovered hourly by
+`python/arclink_pin_upgrade_check.py` through
+`arclink-curator-refresh.timer` and can also be triggered from the control node
+with `./deploy.sh pin-upgrade-notify`. Detector notifications are digest-style
+and their buttons are preview/dismiss only. `/pin_upgrade <component> confirm`
+resolves an active detector payload token with concrete target pins and queues
+that token into `operator_actions`; if no active detector payload exists, Raven
+refuses and tells the operator to run/wait for the detector. `/upgrade_sweep`
+is the simple operator path for "apply the pending detector digest": dry-run
+lists the selected payloads; confirm queues the stateless payloads; stateful
+payloads (`postgres`, `redis`, `nextcloud`) require
+`--include-stateful` inside a maintenance window. The root maintenance loop
+applies queued pin payloads sequentially, while ArcPod runtime rollout remains
+bounded/canary-driven through `/rollout <target>`.
 
 ### Operator Confirmation
 
@@ -180,9 +205,10 @@ Operator Raven writes to two distinct queues, drained by different workers:
   `pod_repair` and `rollout` queue here via `queue_arclink_admin_action`, as do
   admin dashboard/API actions.
 - `operator_actions` is drained by the enrollment-provisioner root maintenance
-  loop. `host_upgrade` (`upgrade`) and `pin_upgrade` (`pin-upgrade`) queue here
-  via `request_operator_action`; in Docker component-upgrade mode the loop
-  reaches the host through `operator-upgrade-broker` (see the
+  loop. `host_upgrade` (`upgrade`) and detector-token `pin_upgrade`/
+  `upgrade_sweep` (`pin-upgrade`) queue here via `request_operator_action`; in
+  Docker component-upgrade mode the loop reaches the host through
+  `operator-upgrade-broker` (see the
   [operations runbook](operations-runbook.md) GAP-019 entries for the
   authoritative trusted-host boundary).
 

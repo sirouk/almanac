@@ -2673,6 +2673,71 @@ def _migrate_fleet_host_probes_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _fleet_audit_chain_hash(
+    *,
+    inventory_id: str,
+    event: str,
+    actor: str,
+    event_at: str,
+    prev_hash: str,
+    metadata_json: str,
+) -> str:
+    payload = {
+        "actor": actor,
+        "event": event,
+        "event_at": event_at,
+        "inventory_id": inventory_id,
+        "metadata": json_loads(metadata_json, {}),
+        "prev_hash": prev_hash,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _repair_fleet_audit_chain_hashes(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT rowid, inventory_id, event, actor, event_at, metadata_json
+        FROM arclink_fleet_audit_chain
+        ORDER BY inventory_id ASC, rowid ASC
+        """
+    ).fetchall()
+    prev_by_inventory: dict[str, str] = {}
+    for row in rows:
+        inventory_id = str(row["inventory_id"] or "")
+        prev_hash = prev_by_inventory.get(inventory_id, "")
+        entry_hash = _fleet_audit_chain_hash(
+            inventory_id=inventory_id,
+            event=str(row["event"] or ""),
+            actor=str(row["actor"] or ""),
+            event_at=str(row["event_at"] or ""),
+            prev_hash=prev_hash,
+            metadata_json=str(row["metadata_json"] or "{}"),
+        )
+        conn.execute(
+            """
+            UPDATE arclink_fleet_audit_chain
+            SET prev_hash = ?, entry_hash = ?
+            WHERE rowid = ?
+            """,
+            (prev_hash, entry_hash, int(row["rowid"])),
+        )
+        prev_by_inventory[inventory_id] = entry_hash
+    conn.commit()
+
+
+def _fleet_audit_chain_legacy_backup_exists(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name LIKE 'arclink_fleet_audit_chain__legacy%'
+        LIMIT 1
+        """
+    ).fetchone()
+    return row is not None
+
+
 def _migrate_fleet_audit_chain_schema(conn: sqlite3.Connection) -> None:
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'arclink_fleet_audit_chain'"
@@ -2682,6 +2747,12 @@ def _migrate_fleet_audit_chain_schema(conn: sqlite3.Connection) -> None:
     columns = set(_table_columns(conn, "arclink_fleet_audit_chain"))
     required = {"entry_id", "inventory_id", "event", "actor", "event_at", "prev_hash", "entry_hash", "metadata_json"}
     if required <= columns:
+        if (
+            _fleet_audit_chain_legacy_backup_exists(conn)
+            and get_setting(conn, "fleet_audit_chain_hash_repair_v1", "") != "done"
+        ):
+            _repair_fleet_audit_chain_hashes(conn)
+            upsert_setting(conn, "fleet_audit_chain_hash_repair_v1", "done")
         return
 
     backup = "arclink_fleet_audit_chain__legacy"
@@ -2745,6 +2816,8 @@ def _migrate_fleet_audit_chain_schema(conn: sqlite3.Connection) -> None:
     conn.execute(f"ALTER TABLE arclink_fleet_audit_chain RENAME TO {backup}")
     conn.execute("ALTER TABLE arclink_fleet_audit_chain__new RENAME TO arclink_fleet_audit_chain")
     conn.commit()
+    _repair_fleet_audit_chain_hashes(conn)
+    upsert_setting(conn, "fleet_audit_chain_hash_repair_v1", "done")
 
 
 def _migrate_arclink_rollouts_status_schema(conn: sqlite3.Connection) -> None:
@@ -9474,6 +9547,102 @@ def get_pin_upgrade_action_payload(conn: sqlite3.Connection, token: str) -> dict
         "install_items": install_items,
         "notify_limit": _normalize_pin_upgrade_notify_limit(payload.get("notify_limit")),
     }
+
+
+def _pin_upgrade_operator_component_names(component: str) -> set[str]:
+    normalized = str(component or "").strip().lower()
+    if not normalized:
+        return set()
+    if normalized == "hermes":
+        return {"hermes-agent", "hermes-docs"}
+    return {normalized}
+
+
+def _pin_upgrade_payload_matches_component(payload: Mapping[str, Any], component: str) -> bool:
+    names = _pin_upgrade_operator_component_names(component)
+    if not names:
+        return True
+    items = list(payload.get("install_items") or []) + list(payload.get("items") or [])
+    return any(str(item.get("component") or "").strip().lower() in names for item in items)
+
+
+def _active_pin_upgrade_targets(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    rows = conn.execute(
+        """
+        SELECT component, target_value
+        FROM pin_upgrade_notifications
+        WHERE applied_at IS NULL
+        """
+    ).fetchall()
+    return {
+        (str(row["component"] or "").strip(), str(row["target_value"] or "").strip())
+        for row in rows
+        if str(row["component"] or "").strip() and str(row["target_value"] or "").strip()
+    }
+
+
+def _pin_upgrade_payload_has_active_target(
+    payload: Mapping[str, Any],
+    active_targets: set[tuple[str, str]],
+) -> bool:
+    if not active_targets:
+        return False
+    for item in payload.get("items") or []:
+        component = str(item.get("component") or "").strip()
+        if not component:
+            continue
+        target = str(item.get("target") or "").strip()
+        throttle_target = str(item.get("throttle_target") or target).strip()
+        if (component, target) in active_targets or (component, throttle_target) in active_targets:
+            return True
+    return False
+
+
+def list_pin_upgrade_action_payloads(
+    conn: sqlite3.Connection,
+    *,
+    component: str = "",
+    active_only: bool = True,
+) -> list[dict[str, Any]]:
+    """Return detector-created pin-upgrade action payloads, newest first.
+
+    Operator Raven queues these opaque tokens rather than component names so
+    the executor receives concrete target pins from the detector. ``active_only``
+    filters out stale callback payloads after their notification rows have been
+    applied or cleared.
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT key, updated_at
+            FROM settings
+            WHERE key LIKE ?
+            ORDER BY updated_at DESC, key DESC
+            """,
+            (f"{_PIN_UPGRADE_ACTION_SETTING_PREFIX}%",),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+
+    active_targets = _active_pin_upgrade_targets(conn) if active_only else set()
+    payloads: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = str(row["key"] or "")
+        token = key.removeprefix(_PIN_UPGRADE_ACTION_SETTING_PREFIX).strip().lower()
+        if token in seen:
+            continue
+        payload = get_pin_upgrade_action_payload(conn, token)
+        if payload is None:
+            continue
+        if component and not _pin_upgrade_payload_matches_component(payload, component):
+            continue
+        if active_only and not _pin_upgrade_payload_has_active_target(payload, active_targets):
+            continue
+        payload["updated_at"] = str(row["updated_at"] or payload.get("created_at") or "")
+        payloads.append(payload)
+        seen.add(token)
+    return payloads
 
 
 def dismiss_pin_upgrade_action(conn: sqlite3.Connection, token: str) -> dict[str, Any]:

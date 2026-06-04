@@ -16,6 +16,10 @@ The current repository already contains the main Control Node spine:
 - `python/arclink_hosted_api.py`, `python/arclink_api_auth.py`,
   `python/arclink_dashboard.py`, and `web/` own the public API, sessions,
   dashboard, admin dashboard, and browser control surfaces.
+- `web/` is the only production frontend source of truth. The old adjacent
+  Vite/Bolt `arclink-frontend/` checkout is not a deploy, build, test, or
+  documentation dependency and should stay absent so ArcLink does not split its
+  web product between two app roots.
 - `python/arclink_public_bots.py`, `python/arclink_telegram.py`, and
   `python/arclink_discord.py` own Captain-facing Raven flows, channel linking,
   selected-agent command surfaces, share approvals, Crew Training, and managed
@@ -40,11 +44,17 @@ close. The highest-signal open product gaps are:
   verified worker-capacity proof.
 - `GAP-031`: the router has local fallback semantics, but not live provider
   overload proof.
-- `GAP-032`: Hermes and component upgrades exist, but there is not yet a
-  Control Node rolling update orchestrator across all ArcPods.
+- `GAP-032`: Hermes and component upgrades exist, source-owned dependency
+  policy plus `/upgrade_sweep` now guide component pins, and local ArcPod
+  rollout planning/materialization exists, but real refresh/apply execution and
+  live multi-Pod proof remain.
 - `GAP-033`: a local cross-surface polish gate now exists, but live
   browser/chat/workspace proof is still required before the experience is
   product-real.
+- `GAP-034`: Academy scaffolding is substantial, including sticky mode,
+  governed source review, weekly crawl observations, and authorized SOUL/vault
+  apply handoff, but live acquisition/provider synthesis and downstream
+  qmd/memory/skill refresh proof remain.
 
 ## North Star
 
@@ -192,30 +202,42 @@ Operator Raven must be powerful but fenced:
   must cross into system mutation only through the same audited broker/action
   rails as dashboards and CLIs.
 
-Current source already does more than a read-only preview. `arclink_operator_raven.py`
-ships a real-but-fenced operator command layer with a broad read surface
-(`status`, `agents`, `fleet_list`, `worker_probe` dry-run, `user_lookup`,
-`academy_status`, `academy_roster`, `upgrade_check`, `action_status`) AND a real
-mutation layer. The mutating commands (`pod_repair`, `rollout`, `host_upgrade`,
-`pin_upgrade`, the `MUTATING_COMMANDS` set) follow a four-mode contract: a
-`--dry-run` preview changes nothing; a real run with no operator actor fails
-closed (read-only refusal); a real run with a proven operator actor but no
-`confirm`/approval code fails closed; a real run with actor plus confirmation
-QUEUES a real, audited intent. `pod_repair` and `rollout` queue into `arclink_action_intents`
-(drained by `arclink_action_worker.py`); `host_upgrade` and `pin_upgrade` queue
-into `operator_actions` (drained by the enrollment-provisioner root maintenance
-loop). The second confirmation can be the literal `confirm` token, or the
-configured operator approval code
-(`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`/`ARCLINK_OPERATOR_APPROVAL_CODE`,
-constant-time compare) on the originating channel. The operator also gets exactly
-one in-stack Hermes agent (`arclink_operator_agent.py`, one-agent invariant,
-`control-stack` runtime) with a free-form chat bridge that routes operator
-messages to that Hermes through the `public-agent-turn` worker. Live mutation is
-still gated by `ARCLINK_EXECUTOR_ADAPTER` (`fake` records only) and the per-action
-proof gates (`PG-PROVISION`, `PG-INGRESS`, `PG-UPGRADE`/`PG-HERMES`, `PG-PROVIDER`,
+Current source already does more than a read-only preview.
+`arclink_operator_raven.py` ships a real-but-fenced operator command layer with
+a broad read surface (`status`, `agents`, `fleet_list`, `worker_probe` dry-run,
+`user_lookup`, `academy_status`, `academy_roster`, `upgrade_check`,
+`upgrade_policy`, `action_status`) and a real mutation layer. The mutating
+commands (`pod_repair`, `rollout`, `host_upgrade`, `pin_upgrade`,
+`upgrade_sweep`, `fleet_drain`, `fleet_resume`, the `MUTATING_COMMANDS` set)
+follow a four-mode contract: a `--dry-run` preview changes nothing; a real run
+with no operator actor fails closed; a real run with a proven operator actor
+but no `confirm`/approval code fails closed; a real run with actor plus
+confirmation queues a real, audited intent or applies a modeled local
+fleet-state mutation. `pod_repair` and `rollout` queue into
+`arclink_action_intents` (drained by `arclink_action_worker.py`);
+`host_upgrade`, detector-token `pin_upgrade`, and `upgrade_sweep` queue into
+`operator_actions` (drained by the enrollment-provisioner root maintenance
+loop). `/upgrade_policy [component]` is read-only explanatory policy.
+`/pin_upgrade <component>` resolves an active detector payload token with
+concrete target pins instead of queueing a bare component name, and
+`/upgrade_sweep` queues pending stateless detector payloads while requiring
+`--include-stateful` for Postgres, Redis, and Nextcloud maintenance windows.
+`/fleet_drain` and `/fleet_resume` mutate placement eligibility only; they do
+not SSH into workers, stop services, change firewalls, or touch port 22 from
+chat, and draining the last eligible worker requires `--force`. The second
+confirmation can be the literal `confirm` token, or the configured operator
+approval code (`ARCLINK_OPERATOR_TELEGRAM_APPROVAL_CODE`/
+`ARCLINK_OPERATOR_APPROVAL_CODE`, constant-time compare) on the originating
+channel. The operator also gets exactly one in-stack Hermes agent
+(`arclink_operator_agent.py`, one-agent invariant, `control-stack` runtime)
+with a free-form chat bridge that routes operator messages to that Hermes
+through the `public-agent-turn` worker. Live mutation is still gated by
+`ARCLINK_EXECUTOR_ADAPTER` (`fake` records only) and the per-action proof gates
+(`PG-PROVISION`, `PG-INGRESS`, `PG-UPGRADE`/`PG-HERMES`, `PG-PROVIDER`,
 `PG-STRIPE`, `PG-BACKUP`). What remains under `GAP-029` is breadth (fleet
-drain/admit/rotate, billing refuel from chat), one unified Raven/action policy,
-and authorized live proof — not a "read-only" limitation.
+admission/rotation, user suspend/restore, billing refuel from chat), one
+unified Raven/action policy, and authorized live proof — not a "read-only"
+limitation.
 
 ## Admin Dashboard, API, And CLI Control
 
@@ -260,6 +282,10 @@ The complete web/account story is:
 
 - The website explains the current plans, provider budget/refuel model, Raven
   surfaces, ArcPod isolation, and proof-gated limitations without overclaiming.
+- The Next.js `web/` app is the single web source for marketing, onboarding,
+  checkout status, login, Captain dashboard, admin dashboard, policy pages, and
+  Academy Observatory. No parallel frontend app should own product copy or
+  browser routes.
 - Onboarding collects the minimum product answers and creates a claimable
   session that cannot be hijacked without the required proof token.
 - Checkout, cancellation, success, portal, failed payment, refund/cancel, and
@@ -554,9 +580,12 @@ notifies Captains. It stores no raw crawled content and performs no Agent write.
 Live transcript/ASR, provider-assisted synthesis, source retirement, and Agent
 mutation remain under the acquisition, critic, PG-PROVIDER, and PG-HERMES gates
 described above.
-The separate `academy_apply` action now materializes the Academy SOUL overlay and
-receipt for a deployment only when PG-HERMES authorization is present; record-only
-or unauthorized adapters stage/fail closed. It fails closed for
+The separate `academy_apply` action now materializes the Academy SOUL overlay,
+receipt, governed `Vault/Academy/...` artifacts, and a durable
+`state/arclink-academy-post-apply-refresh.json` handoff for qmd indexing,
+memory synthesis, and explicit skill activation proof only when PG-HERMES
+authorization is present; record-only or unauthorized adapters stage/fail
+closed. It fails closed for
 disabled lanes, unsupported lanes, requested live actions, missing
 license/permission or required lane metadata, raw-storage violations,
 unreviewed public skills, secret-looking fixture material, deletion/tombstone
@@ -717,6 +746,16 @@ fake/local batch with `in_progress`, `completed`, or `failed` row truth, repair
 hints, and stop-on-failure behavior. It does not yet have real refresh/apply
 execution or live multi-Pod proof. That remains `GAP-032`.
 
+Upgrade policy is now source-owned in `python/arclink_upgrade_policy.py` and
+visible from Operator Raven through `/upgrade_policy [component]`. The policy
+separates control-plane upgrades, ArcPod runtime batches, knowledge-plane jobs,
+stateful infra maintenance, build-runtime pins, and worker-fabric drain/resume
+work. Stateful dependencies such as Postgres, Redis, and Nextcloud are not
+pretended to be stateless rolling jobs: they require backup/snapshot preflight,
+a maintenance posture, and rollback contracts. Worker runtime and WireGuard
+changes use `/fleet_drain <worker>` and `/fleet_resume <worker>` so new
+placements avoid a worker before maintenance starts.
+
 ## Billing, Entitlements, And Refuel
 
 The product path should keep money and capacity aligned:
@@ -832,9 +871,9 @@ The finished incident/evidence layer should provide:
 - No raw stack traces, secrets, private file paths, or prompt/completion
   payloads in public artifacts.
 
-This layer connects `GAP-029`, `GAP-030`, `GAP-031`, `GAP-032`, `GAP-033`, and
-the live proof gates. It is also the protection against beautiful docs drifting
-away from operational truth.
+This layer connects `GAP-029`, `GAP-030`, `GAP-031`, `GAP-032`, `GAP-033`,
+`GAP-034`, and the live proof gates. It is also the protection against
+beautiful docs drifting away from operational truth.
 
 ## Identity, Access, And Session Governance
 

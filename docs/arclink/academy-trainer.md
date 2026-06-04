@@ -45,12 +45,16 @@ skill as "named and shipped; live plugin/runtime presence unverified
    `writes_enabled=False`, `mutation_performed=False`). It does **not**
    self-maintain SOUL.md or skills: any Agent update applies **only** through
    the proof-gated `academy_apply` path. Today that authorized path materializes
-   the marker-bounded Academy SOUL section, private apply receipt, and additive
+   the marker-bounded Academy SOUL section, private apply receipt, additive
    `Vault/Academy/...` markdown artifacts for staged curriculum/source maps,
-   memory seeds, and approved-skill records when those intents exist. Hermes
-   skill activation, qmd re-index orchestration, and memory-synthesis ingestion
-   remain planned/proof-gated. The scheduler records intent and arms the next
-   review; it never writes to the Agent.
+   memory seeds, and approved-skill records when those intents exist, plus a
+   durable `state/arclink-academy-post-apply-refresh.json` request. That request
+   is paired with a control-plane
+   `refresh_jobs` row named `academy-post-apply-refresh:<deployment_id>` and is
+   the explicit handoff for qmd re-index, memory-synthesis ingestion, and skill
+   activation proof. The action worker does not run those follow-up jobs inline;
+   they remain planned/proof-gated and inspectable. The scheduler records intent
+   and arms the next review; it never writes to the Agent.
 
 **Commit ("everything put in its place").** When the **Captain ends the mode**,
 the staged plan is sealed and the trainee becomes a **graduate** with weekly
@@ -61,9 +65,11 @@ Academy SOUL overlay section and `state/arclink-academy-apply.json` receipt into
 the deployment Hermes home. It also writes governed `Vault/Academy/{role}/`
 markdown, `state/arclink-academy-memory-seeds.json`, and
 `state/arclink-academy-approved-skills.json` when the staged plan includes those
-intents. qmd refresh, memory-synthesis ingestion, and Hermes skill enablement
-remain separate planned/proof-gated follow-up actions. Live source acquisition
-and provider curation remain behind
+intents. It also writes
+`state/arclink-academy-post-apply-refresh.json`, a no-inline-execution request
+for qmd indexing, memory synthesis, and explicit Hermes skill activation proof,
+and records the matching `refresh_jobs` status row for operator visibility.
+Live source acquisition and provider curation remain behind
 `PG-PROVIDER`. See `GAPS.md` for the authoritative gap taxonomy.
 
 ## The Captain Experience

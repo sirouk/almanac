@@ -87,8 +87,30 @@ export SCRIPT_DIR ARCLINK_DB_PATH PYTHONPATH
     print("PASS test_docker_health_allows_stale_on_demand_operator_actions")
 
 
+def test_docker_health_requires_managed_agent_skills() -> None:
+    body = (REPO / "bin/docker-health.sh").read_text(encoding="utf-8")
+    snippet = extract(body, "check_docker_agent_mcp_auth() {", "\ncheck_docker_agent_mcp_auth\n")
+    for skill_name in (
+        "arclink-qmd-mcp",
+        "arclink-vault-reconciler",
+        "arclink-first-contact",
+        "arclink-vaults",
+        "arclink-ssot",
+        "arclink-notion-knowledge",
+        "arclink-ssot-connect",
+        "arclink-notion-mcp",
+        "arclink-academy",
+        "arclink-resources",
+    ):
+        expect(skill_name in snippet, f"missing Docker health skill guard for {skill_name}")
+    expect("Docker agent missing managed ArcLink skills" in snippet, snippet)
+    expect("Docker managed skills/plugin/SOUL present" in snippet, snippet)
+    print("PASS test_docker_health_requires_managed_agent_skills")
+
+
 def main() -> int:
     test_docker_health_allows_stale_on_demand_operator_actions()
+    test_docker_health_requires_managed_agent_skills()
     return 0
 
 

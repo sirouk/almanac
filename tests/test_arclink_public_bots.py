@@ -2088,6 +2088,22 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     expect(opened.action == "academy_mode_opened", opened.reply)
     expect("Academy Mode is open for Beacon" in opened.reply, opened.reply)
     expect("Shared Academy contribution" in opened.reply, opened.reply)
+    opened_turn = conn.execute(
+        """
+        SELECT target_kind, target_id, channel_kind, message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect(opened_turn is not None, "Academy Mode should wake the selected Agent")
+    expect(opened_turn["target_id"] == "tg:academy", str(dict(opened_turn)))
+    expect("Academy Mode opened for Beacon" in opened_turn["message"], str(dict(opened_turn)))
+    opened_extra = json.loads(str(opened_turn["extra_json"] or "{}"))
+    expect(opened_extra.get("source_kind") == "academy_mode", str(opened_extra))
+    expect(opened_extra.get("academy_event") == "opened", str(opened_extra))
+    expect(opened_extra.get("academy_skill_required") == "arclink-academy", str(opened_extra))
     trainee_row = conn.execute("SELECT * FROM academy_trainees WHERE deployment_id = ?", ("arcdep_academy_second",)).fetchone()
     expect(trainee_row is not None and trainee_row["status"] == "in_academy", str(dict(trainee_row or {})))
     open_row = conn.execute("SELECT * FROM academy_mode_sessions WHERE trainee_id = ? AND status = 'open'", (trainee_row["trainee_id"],)).fetchone()
@@ -2100,6 +2116,19 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
         text="Prioritize source freshness, licensing, and what should be checked every week.",
     )
     expect(note.action == "academy_mode_steer_recorded", note.reply)
+    note_turn = conn.execute(
+        """
+        SELECT message, extra_json
+        FROM notification_outbox
+        WHERE target_kind = 'public-agent-turn'
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    expect("Academy Mode steering update for Beacon" in note_turn["message"], str(dict(note_turn)))
+    note_extra = json.loads(str(note_turn["extra_json"] or "{}"))
+    expect(note_extra.get("source_kind") == "academy_mode", str(note_extra))
+    expect(note_extra.get("academy_event") == "steer_update", str(note_extra))
     trainee_after_note = conn.execute("SELECT captain_steer_json FROM academy_trainees WHERE trainee_id = ?", (trainee_row["trainee_id"],)).fetchone()
     steer = json.loads(trainee_after_note["captain_steer_json"])
     expect(steer["captain_notes"], str(steer))

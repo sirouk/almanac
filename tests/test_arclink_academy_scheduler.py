@@ -238,6 +238,54 @@ def test_forward_maintenance_rotates_shared_specialist_subscribers() -> None:
         cleanup(tmp, old_env)
 
 
+class _FakeWeeklyLiveTrainer:
+    live = True
+
+    def review(self, *, role_title, topic, sources):
+        return {
+            "engine": "weekly-live-router",
+            "live": True,
+            "summary": f"Weekly live review for {role_title}",
+            "verdicts": [{"source_uid": source["source_uid"], "verdict": "keep"} for source in sources],
+        }
+
+
+def test_forward_maintenance_can_run_live_trainer_review_without_agent_writes() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    old_factory = scheduler.academy_trainer_client_from_env
+    try:
+        programs.seed_default_academy_programs(conn)
+        t = programs.enroll_academy_trainee(conn, program_id="research_analyst", user_id="capt-live", deployment_id="dep-live")
+        s = programs.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-live")
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-live",
+            lane_id="web_article",
+            title="Weekly live Trainer source",
+            origin_url="https://example.test/weekly-live-trainer",
+            summary="Compressed source notes for weekly live Trainer review.",
+            proposed_by="agent-live",
+        )
+        programs.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-live", graduate=True)
+        scheduler.academy_trainer_client_from_env = lambda env=None: _FakeWeeklyLiveTrainer()
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0", "ARCLINK_ACADEMY_TRAINER_LIVE": "1"},
+            created_at="2026-06-02T00:00:00Z",
+        )
+        expect(result["trainer_reviews"] >= 1, str(result))
+        expect(result["live_trainer_reviews"] >= 1, str(result))
+        expect(result["no_write"] is True and result["writes_enabled"] is False, str(result))
+        row = conn.execute("SELECT enrichment_json FROM academy_corpus_specialists").fetchone()
+        enrichment = json.loads(row["enrichment_json"])
+        expect(enrichment["engine"] == "weekly-live-router", str(enrichment))
+        expect(enrichment["live"] is True, str(enrichment))
+        print("PASS test_forward_maintenance_can_run_live_trainer_review_without_agent_writes")
+    finally:
+        scheduler.academy_trainer_client_from_env = old_factory
+        cleanup(tmp, old_env)
+
+
 def test_forward_maintenance_live_crawls_public_sources_digest_only() -> None:
     tmp, old_env, conn, _control, programs, scheduler = with_db()
     try:
@@ -328,6 +376,7 @@ if __name__ == "__main__":
     test_forward_maintenance_limit_zero_processes_all()
     test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently()
     test_forward_maintenance_rotates_shared_specialist_subscribers()
+    test_forward_maintenance_can_run_live_trainer_review_without_agent_writes()
     test_forward_maintenance_live_crawls_public_sources_digest_only()
     test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching()
     print("PASS all academy scheduler tests")

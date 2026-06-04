@@ -1102,6 +1102,118 @@ class _FakeLiveTrainer:
         }
 
 
+class _FakeRouterResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def read(self, _limit: int = -1) -> bytes:
+        return json.dumps(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "summary": "Router Trainer selected the source set.",
+                                    "verdicts": [
+                                        {
+                                            "source_uid": "asrc_live",
+                                            "lane_id": "web_article",
+                                            "verdict": "watch",
+                                            "note": "Keep weekly watch.",
+                                        }
+                                    ],
+                                },
+                                sort_keys=True,
+                            )
+                        }
+                    }
+                ]
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+
+
+def test_academy_router_trainer_client_uses_llm_router_key() -> None:
+    tmp, old_env, _conn, _control, ap = with_db()
+    old_urlopen = ap.urllib.request.urlopen
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        return _FakeRouterResponse()
+
+    try:
+        key_file = Path(tmp.name) / "trainer-router-key"
+        key_file.write_text("acpod_live_test_router_key\n", encoding="utf-8")
+        client = ap.academy_trainer_client_from_env(
+            {
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_BASE_URL": "http://router.test/v1",
+                "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY_FILE": str(key_file),
+                "ARCLINK_ACADEMY_TRAINER_MODEL": "model-trainer",
+                "ARCLINK_ACADEMY_TRAINER_TIMEOUT_SECONDS": "9",
+            }
+        )
+        expect(client is not None and client.live is True, "expected router Trainer client")
+        ap.urllib.request.urlopen = fake_urlopen
+        review = client.review(
+            role_title="Research Analyst",
+            topic="systems research",
+            sources=[
+                {
+                    "source_uid": "asrc_live",
+                    "lane_id": "web_article",
+                    "title": "Live source",
+                    "canonical_url": "https://example.test/source",
+                    "derived_notes": "Derived notes only.",
+                    "citations_json": json.dumps(["https://example.test/source"]),
+                }
+            ],
+        )
+        expect(review["engine"] == "llm-router" and review["live"] is True, str(review))
+        expect(review["summary"] == "Router Trainer selected the source set.", str(review))
+        expect(review["verdicts"][0]["verdict"] == "watch", str(review))
+        expect(len(calls) == 1, str(calls))
+        request, timeout = calls[0]
+        expect(timeout == 9, str(timeout))
+        expect(request.full_url == "http://router.test/v1/chat/completions", request.full_url)
+        expect(request.headers.get("Authorization") == "Bearer acpod_live_test_router_key", str(request.headers))
+        body = json.loads(request.data.decode("utf-8"))
+        expect(body["model"] == "model-trainer", str(body))
+        expect("Derived notes only" in body["messages"][1]["content"], str(body))
+        print("PASS test_academy_router_trainer_client_uses_llm_router_key")
+    finally:
+        ap.urllib.request.urlopen = old_urlopen
+        cleanup(tmp, old_env)
+
+
+def test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized() -> None:
+    tmp, old_env, conn, _control, ap = with_db()
+    try:
+        ap.seed_default_academy_programs(conn)
+        t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="capt-live", deployment_id="dep-live")
+        s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-live")
+        _propose(ap, conn, "dep-live", lane_id="github_repository", title="Live mode-end source",
+                 origin_url="https://example.test/live-mode-end", summary="Derived live Trainer notes.")
+        ended = ap.end_academy_mode(
+            conn,
+            session_id=s["session"]["session_id"],
+            actor="capt-live",
+            graduate=True,
+            trainer_client=_FakeLiveTrainer(),
+            live_trainer_authorized=True,
+        )
+        cs = ended["session"]["commit_summary"]
+        expect(cs["central_trainer_engine"] == "live-router", str(cs))
+        expect(cs["central_trainer_live_status"] == "live_reviewed", str(cs))
+        print("PASS test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live() -> None:
     tmp, old_env, conn, _control, ap = with_db()
     try:
@@ -1206,6 +1318,8 @@ if __name__ == "__main__":
     test_academy_opt_out_private_capsule_can_apply_without_public_corpus()
     test_academy_central_specialist_shared_and_deduped_across_captains()
     test_academy_public_cards_and_capsules_ignore_private_central_rows()
+    test_academy_router_trainer_client_uses_llm_router_key()
+    test_academy_mode_end_uses_live_trainer_when_pg_provider_authorized()
     test_academy_trainer_deep_dive_reviews_and_stamps_and_supports_live()
     test_academy_apply_stages_replaceable_soul_section()
     test_academy_apply_validates_staged_contract_and_fails_closed_on_major_drift()

@@ -470,9 +470,12 @@ trainee becomes a **graduate** with weekly **forward-maintenance** (continuing
 education) armed. Mode-end itself still writes no Agent files. The separate
 `academy_apply` action is the PG-HERMES write path: when authorized, it merges
 the replaceable, marker-bounded Academy SOUL section into the deployment Hermes
-home and records a private apply receipt. Broader vault/qmd/skill deltas remain
-future/proof-gated; weekly maintenance refreshes review/capsule state and does
-not self-write the Agent. Captains can **browse Academy graduates** (ready
+home, records a private apply receipt, and writes governed `Vault/Academy/...`
+markdown/state artifacts for staged curriculum, memory-seed, and approved-skill
+records when present. qmd refresh, memory-synthesis ingestion, and active skill
+enablement remain future/proof-gated; weekly maintenance refreshes
+review/capsule state and does not self-write the Agent. Captains can **browse
+Academy graduates** (ready
 specialists) and adopt one, or **enroll a new Trainee** against a **Major**
 (specialist Program). Majors are pure data, so new trainee types are added as
 rows, not code. Crew Training still curates the roster/roles/personality and the

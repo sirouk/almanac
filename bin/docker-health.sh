@@ -365,10 +365,32 @@ with connect_db(cfg) as conn:
         agent_id = str(agent["agent_id"] or "")
         unix_user = str(agent["unix_user"] or "")
         hermes_home = Path(str(agent["hermes_home"] or ""))
+        required_skill_names = (
+            "arclink-qmd-mcp",
+            "arclink-vault-reconciler",
+            "arclink-first-contact",
+            "arclink-vaults",
+            "arclink-ssot",
+            "arclink-notion-knowledge",
+            "arclink-ssot-connect",
+            "arclink-notion-mcp",
+            "arclink-academy",
+            "arclink-resources",
+        )
         token_file = hermes_home / "secrets" / "arclink-bootstrap-token"
         managed_context_plugin = hermes_home / "plugins" / "arclink-managed-context" / "plugin.yaml"
         soul_file = hermes_home / "SOUL.md"
         vault_reconciler_state = hermes_home / "state" / "arclink-vault-reconciler.json"
+        skill_root = hermes_home / "skills"
+        missing_skills = [
+            skill_name
+            for skill_name in required_skill_names
+            if not (skill_root / skill_name / "SKILL.md").is_file()
+        ]
+        if missing_skills:
+            print(f"FAIL {agent_id}: Docker agent missing managed ArcLink skills in {skill_root}: {', '.join(missing_skills)}")
+            failures += 1
+            continue
         if not managed_context_plugin.is_file():
             print(f"FAIL {agent_id}: Docker managed-context plugin is missing at {managed_context_plugin}")
             failures += 1
@@ -423,7 +445,7 @@ with connect_db(cfg) as conn:
             print(f"FAIL {agent_id}: Docker user-agent refresh stale since {job['last_run_at']}")
             failures += 1
             continue
-        print(f"OK {agent_id}: unix_user={unix_user} Docker managed plugin/SOUL present, MCP token validates, and refresh={job['last_status']} at {job['last_run_at']}")
+        print(f"OK {agent_id}: unix_user={unix_user} Docker managed skills/plugin/SOUL present, MCP token validates, and refresh={job['last_status']} at {job['last_run_at']}")
 
 raise SystemExit(1 if failures else 0)
 PY

@@ -3662,6 +3662,72 @@ def _credential_handoff_required_turn(
     )
 
 
+def _queue_public_agent_turn(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    deployment: Mapping[str, Any],
+    message: str,
+    agent_label: str,
+    raven_display_name: str,
+    helm_url: str,
+    source_kind: str,
+    extra_metadata: Mapping[str, Any] | None = None,
+    event_metadata: Mapping[str, Any] | None = None,
+) -> None:
+    extra = {
+        "deployment_id": str(deployment.get("deployment_id") or ""),
+        "prefix": str(deployment.get("prefix") or ""),
+        "user_id": str(deployment.get("user_id") or ""),
+        "agent_label": agent_label,
+        "raven_display_name": raven_display_name,
+        "helm_url": helm_url,
+        "source_kind": source_kind,
+    }
+    for key, value in dict(extra_metadata or {}).items():
+        if value not in (None, ""):
+            extra[str(key)] = value
+    turn_metadata = deployment.get("_public_bot_metadata")
+    reply_to_message_id = str(deployment.get("_public_bot_reply_to_message_id") or "").strip()
+    if channel == "telegram" and reply_to_message_id:
+        extra["telegram_reply_to_message_id"] = reply_to_message_id
+    if channel == "telegram" and isinstance(turn_metadata, Mapping):
+        for key in (
+            "telegram_update_kind",
+            "telegram_update_json",
+            "telegram_native_callback",
+        ):
+            value = turn_metadata.get(key)
+            if value not in (None, ""):
+                extra[key] = value
+    if channel == "discord":
+        if isinstance(turn_metadata, Mapping):
+            for key in ("discord_channel_id", "discord_user_id", "discord_message_id", "discord_chat_type"):
+                value = str(turn_metadata.get(key) or "").strip()
+                if value:
+                    extra[key] = value
+        if reply_to_message_id and "discord_message_id" not in extra:
+            extra["discord_message_id"] = reply_to_message_id
+    queue_notification(
+        conn,
+        target_kind="public-agent-turn",
+        target_id=channel_identity,
+        channel_kind=channel,
+        message=str(message or ""),
+        extra=extra,
+    )
+    event_payload = {"channel": channel, "agent_label": agent_label, "source_kind": source_kind}
+    event_payload.update(dict(event_metadata or {}))
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=str(deployment.get("deployment_id") or ""),
+        event_type="public_bot:agent_turn_queued",
+        metadata=event_payload,
+    )
+
+
 def _aboard_freeform_reply(
     *,
     channel: str,
@@ -3684,50 +3750,16 @@ def _aboard_freeform_reply(
     access = _deployment_access(deployment)
     helm = _hermes_dashboard_url(access)
     if conn is not None:
-        extra = {
-            "deployment_id": str(deployment.get("deployment_id") or ""),
-            "prefix": str(deployment.get("prefix") or ""),
-            "user_id": str(deployment.get("user_id") or ""),
-            "agent_label": label,
-            "raven_display_name": raven,
-            "helm_url": helm,
-            "source_kind": source_kind,
-        }
-        turn_metadata = deployment.get("_public_bot_metadata")
-        reply_to_message_id = str(deployment.get("_public_bot_reply_to_message_id") or "").strip()
-        if channel == "telegram" and reply_to_message_id:
-            extra["telegram_reply_to_message_id"] = reply_to_message_id
-        if channel == "telegram" and isinstance(turn_metadata, Mapping):
-            for key in (
-                "telegram_update_kind",
-                "telegram_update_json",
-                "telegram_native_callback",
-            ):
-                value = turn_metadata.get(key)
-                if value not in (None, ""):
-                    extra[key] = value
-        if channel == "discord":
-            if isinstance(turn_metadata, Mapping):
-                for key in ("discord_channel_id", "discord_user_id", "discord_message_id", "discord_chat_type"):
-                    value = str(turn_metadata.get(key) or "").strip()
-                    if value:
-                        extra[key] = value
-            if reply_to_message_id and "discord_message_id" not in extra:
-                extra["discord_message_id"] = reply_to_message_id
-        queue_notification(
+        _queue_public_agent_turn(
             conn,
-            target_kind="public-agent-turn",
-            target_id=channel_identity,
-            channel_kind=channel,
+            channel=channel,
+            channel_identity=channel_identity,
+            deployment=deployment,
             message=str(deployment.get("_public_bot_message") or ""),
-            extra=extra,
-        )
-        append_arclink_event(
-            conn,
-            subject_kind="deployment",
-            subject_id=str(deployment.get("deployment_id") or ""),
-            event_type="public_bot:agent_turn_queued",
-            metadata={"channel": channel, "agent_label": label, "source_kind": source_kind},
+            agent_label=label,
+            raven_display_name=raven,
+            helm_url=helm,
+            source_kind=source_kind,
         )
     lines: list[str] = []
     if include_bridge_intro:
@@ -5073,6 +5105,90 @@ def _persist_academy_deployment_status(
     return refreshed
 
 
+def _academy_mode_open_agent_message(
+    *,
+    label: str,
+    program: Mapping[str, Any],
+    steer: Mapping[str, Any],
+) -> str:
+    lanes = steer.get("allowed_source_lanes") if isinstance(steer.get("allowed_source_lanes"), list) else program.get("source_lanes") or []
+    lane_text = ", ".join(str(lane) for lane in lanes if str(lane).strip()) or "Academy-approved public lanes"
+    outside_sources = str(steer.get("outside_sources") or "").strip() or "No outside sources were supplied yet."
+    share = str(steer.get("share") or "redacted_public")
+    share_text = "private to this Captain" if share == "private" else "public-lane derived notes after Trainer review"
+    return "\n".join(
+        [
+            f"Academy Mode opened for {label}.",
+            "",
+            f"Major: {program.get('label') or program.get('program_id') or 'Academy specialist'}",
+            f"Captain focus: {steer.get('focus') or 'Not specified yet.'}",
+            f"Outside source hints: {outside_sources}",
+            f"Allowed source lanes: {lane_text}",
+            f"Shared Academy policy: {share_text}",
+            "",
+            "Use the arclink-academy skill now. First search existing Academy graduates and shared specialists for reusable starting points, then gather public-safe derived resources, keep private strategy separate, and propose source/curriculum/skill records back through ArcLink for Trainer review. Ask the Captain clarifying questions before they graduate the session.",
+        ]
+    )
+
+
+def _academy_mode_steer_agent_message(
+    *,
+    label: str,
+    program: Mapping[str, Any] | None,
+    note: str,
+) -> str:
+    return "\n".join(
+        [
+            f"Academy Mode steering update for {label}.",
+            "",
+            f"Major: {(program or {}).get('label') or (program or {}).get('program_id') or 'Academy specialist'}",
+            f"Captain note: {str(note or '').strip()[:4000]}",
+            "",
+            "Integrate this into the active Academy plan. Continue using arclink-academy to keep public-source proposals, private Captain strategy, Trainer review, and weekly continuing education separated.",
+        ]
+    )
+
+
+def _queue_academy_agent_turn(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    deployment: Mapping[str, Any],
+    label: str,
+    message: str,
+    event: str,
+    trainee_id: str,
+    session_id: str,
+    program_id: str,
+) -> None:
+    access = _deployment_access(deployment)
+    _queue_public_agent_turn(
+        conn,
+        channel=channel,
+        channel_identity=channel_identity,
+        deployment=deployment,
+        message=message,
+        agent_label=label,
+        raven_display_name=ARCLINK_PUBLIC_BOT_DEFAULT_RAVEN_NAME,
+        helm_url=_hermes_dashboard_url(access),
+        source_kind="academy_mode",
+        extra_metadata={
+            "academy_mode": True,
+            "academy_event": event,
+            "academy_trainee_id": trainee_id,
+            "academy_session_id": session_id,
+            "academy_program_id": program_id,
+            "academy_skill_required": "arclink-academy",
+        },
+        event_metadata={
+            "academy_event": event,
+            "trainee_id": trainee_id,
+            "program_id": program_id,
+        },
+    )
+
+
 def _academy_agent_select_reply(
     conn: sqlite3.Connection,
     *,
@@ -5360,6 +5476,18 @@ def _academy_open_mode_reply(
         "session_id": str((opened.get("session") or {}).get("session_id") or ""),
     }
     updated = _academy_training_update(conn, session, workflow="academy_training_mode_open", data=next_data)
+    _queue_academy_agent_turn(
+        conn,
+        channel=channel,
+        channel_identity=channel_identity,
+        deployment=refreshed_deployment,
+        label=label,
+        message=_academy_mode_open_agent_message(label=label, program=program, steer=steer),
+        event="opened",
+        trainee_id=str(trainee.get("trainee_id") or ""),
+        session_id=str(next_data.get("session_id") or ""),
+        program_id=str(program.get("program_id") or ""),
+    )
     return _turn(
         channel=channel,
         channel_identity=channel_identity,
@@ -5795,12 +5923,24 @@ def _handle_academy_training_workflow(
                     summary="Academy Mode active. Captain added steering notes; Agent should incorporate them before proposing Academy resources.",
                     graduation_status="in_academy",
                 )
-                _persist_academy_deployment_status(
+                refreshed = _persist_academy_deployment_status(
                     conn,
                     deployment=target or {},
                     academy_status=status,
                     actor_id=user_id,
                     reason="Captain updated Academy Mode steering",
+                )
+                _queue_academy_agent_turn(
+                    conn,
+                    channel=channel,
+                    channel_identity=channel_identity,
+                    deployment=refreshed,
+                    label=label,
+                    message=_academy_mode_steer_agent_message(label=label, program=program, note=note),
+                    event="steer_update",
+                    trainee_id=trainee_id,
+                    session_id=str(data.get("session_id") or ""),
+                    program_id=str((program or {}).get("program_id") or data.get("program_id") or ""),
                 )
             except ArcLinkAcademyProgramError as exc:
                 return _turn(
@@ -5821,7 +5961,7 @@ def _handle_academy_training_workflow(
                 "Academy Mode remains open. The Agent should use `arclink-academy`, gather and compress proposed resources, submit them to ArcLink for Trainer review, and prepare weekly continuing education. Send `graduate` when the staged training plan is ready, or `cancel` / `exit` to leave."
             ),
             session=session,
-            deployment=deployment,
+            deployment=refreshed if note else deployment,
             buttons=(_button("Graduate", command="graduate"), _button("Exit", command="/cancel", style="secondary")),
         )
     if workflow == "academy_training_select":

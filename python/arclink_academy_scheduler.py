@@ -44,10 +44,13 @@ from arclink_control import (
 )
 from arclink_academy_programs import (
     academy_continuing_education,
+    academy_trainer_client_from_env,
+    academy_trainer_live_authorized_from_env,
     list_academy_trainees,
     read_academy_proposals,
     read_central_specialist_sources,
     refresh_specialist_capsule,
+    run_academy_trainer_review,
     seed_default_academy_programs,
 )
 from arclink_secrets_regex import contains_secret_material
@@ -942,6 +945,10 @@ def run_academy_forward_maintenance(
     # notes only; the live LLM Trainer enrichment + Agent-side observed-source sweep
     # layer on top behind PG-PROVIDER) and bump only when content actually changed.
     capsules_refreshed = 0
+    trainer_reviews = 0
+    live_trainer_reviews = 0
+    live_trainer_authorized = academy_trainer_live_authorized_from_env(clean_env)
+    live_trainer_client = academy_trainer_client_from_env(clean_env) if live_trainer_authorized else None
     specialist_uids = [
         str(row["specialist_uid"])
         for row in conn.execute(
@@ -951,10 +958,23 @@ def run_academy_forward_maintenance(
     ]
     for specialist_uid in specialist_uids:
         try:
-            result = refresh_specialist_capsule(
-                conn, specialist_uid=specialist_uid, actor="system:academy_scheduler",
-                only_if_changed=True, commit=False,
-            )
+            if live_trainer_authorized:
+                result = run_academy_trainer_review(
+                    conn,
+                    specialist_uid=specialist_uid,
+                    client=live_trainer_client,
+                    live_authorized=True,
+                    actor="system:academy_scheduler",
+                    commit=False,
+                )
+                trainer_reviews += 1
+                if result.get("live"):
+                    live_trainer_reviews += 1
+            else:
+                result = refresh_specialist_capsule(
+                    conn, specialist_uid=specialist_uid, actor="system:academy_scheduler",
+                    only_if_changed=True, commit=False,
+                )
             if result.get("changed"):
                 capsules_refreshed += 1
         except Exception as exc:  # noqa: BLE001 - one bad specialist must not abort the run
@@ -1003,6 +1023,8 @@ def run_academy_forward_maintenance(
         "reviews": reviews,
         "captains_notified": notified,
         "central_capsules_refreshed": capsules_refreshed,
+        "trainer_reviews": trainer_reviews,
+        "live_trainer_reviews": live_trainer_reviews,
         "live_crawl": crawl_totals,
         "no_write": True,
         "writes_enabled": False,

@@ -24,6 +24,8 @@ import os
 import hashlib
 import secrets
 import sqlite3
+import urllib.error
+import urllib.request
 from typing import Any, Mapping, Sequence
 
 
@@ -57,6 +59,7 @@ PROGRAM_DEPTHS = ("survey", "working", "deep")
 # Real Agent SOUL/skills/qmd/vault writes are gated; this module never performs
 # them. The commit at mode-end records intent + arms forward-maintenance.
 ACADEMY_APPLY_PROOF_GATES = ("PG-PROVIDER", "PG-HERMES")
+DEFAULT_ACADEMY_TRAINER_MODEL = "moonshotai/Kimi-K2.6-TEE"
 
 # Cross-tenant central-corpus access/promotion gate. Within one ArcLink instance
 # the redacted_public corpus is shared across the operator's captains and crew;
@@ -858,6 +861,8 @@ def end_academy_mode(
     staged_manifest_id: str = "",
     staged_plan_id: str = "",
     commit_summary: Mapping[str, Any] | None = None,
+    trainer_client: Any | None = None,
+    live_trainer_authorized: bool | None = None,
 ) -> dict[str, Any]:
     """End the sticky mode at the Captain's request.
 
@@ -886,6 +891,11 @@ def end_academy_mode(
     now = _now()
     resolved_manifest = str(staged_manifest_id or trainee.get("staged_manifest_id") or "").strip()
     resolved_plan = str(staged_plan_id or trainee.get("staged_plan_id") or "").strip()
+    live_trainer = (
+        academy_trainer_live_authorized_from_env()
+        if live_trainer_authorized is None
+        else bool(live_trainer_authorized)
+    )
     # On graduation the Trainer promotes the trainee's public-lane, public-safe
     # proposals into the CENTRAL deduplicated shared corpus (opt-out sharing) and
     # subscribes the trainee to its specialist. No Agent write happens here.
@@ -902,10 +912,17 @@ def end_academy_mode(
             summary.setdefault("central_share_scope", str(promotion.get("share_scope") or ""))
             summary.setdefault("central_capsule_version", int(promotion.get("capsule_version") or 0))
             # Trainer deep dive over the (now central) corpus. Deterministic by
-            # default; the live LLM Trainer (same inference model) is PG-PROVIDER
-            # gated, so the *live* deep dive remains queued below.
+            # default; the live LLM Trainer routes through the central ArcLink LLM
+            # router only when PG-PROVIDER is explicitly authorized.
             if specialist_uid:
-                trainer_result = run_academy_trainer_review(conn, specialist_uid=specialist_uid, actor=str(actor or ""), commit=False)
+                trainer_result = run_academy_trainer_review(
+                    conn,
+                    specialist_uid=specialist_uid,
+                    client=trainer_client,
+                    live_authorized=live_trainer,
+                    actor=str(actor or ""),
+                    commit=False,
+                )
                 summary.setdefault("central_trainer_reviewed", True)
                 summary.setdefault("central_trainer_engine", str(trainer_result.get("engine") or ""))
                 summary.setdefault("central_trainer_live_status", str(trainer_result.get("live_enrichment_status") or ""))
@@ -1923,6 +1940,219 @@ def refresh_specialist_capsule(
     }
 
 
+def _truthy_env(name: str, *, default: bool = False, env: Mapping[str, str] | None = None) -> bool:
+    raw = str((env or os.environ).get(name, "")).strip().lower()
+    if raw in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    if raw in {"0", "false", "no", "off", "disabled"}:
+        return False
+    return default
+
+
+def academy_trainer_live_authorized_from_env(env: Mapping[str, str] | None = None) -> bool:
+    """Return whether PG-PROVIDER live Trainer review is explicitly enabled."""
+    return _truthy_env("ARCLINK_ACADEMY_TRAINER_LIVE", default=False, env=env)
+
+
+def _trainer_env_text(env: Mapping[str, str] | None, *names: str, default: str = "") -> str:
+    source = env or os.environ
+    for name in names:
+        value = str(source.get(name) or "").strip()
+        if value:
+            return value
+    return default
+
+
+def _read_trainer_router_key(env: Mapping[str, str] | None = None) -> str:
+    key = _trainer_env_text(env, "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY")
+    if key:
+        return key
+    key_file = _trainer_env_text(env, "ARCLINK_ACADEMY_TRAINER_ROUTER_KEY_FILE")
+    if not key_file:
+        return ""
+    try:
+        return open(key_file, "r", encoding="utf-8").read().strip()
+    except OSError:
+        return ""
+
+
+def _compact_trainer_source(source: Mapping[str, Any]) -> dict[str, Any]:
+    citations = _loads(source.get("citations_json"), default=[])
+    return {
+        "source_uid": str(source.get("source_uid") or "")[:120],
+        "lane_id": str(source.get("lane_id") or "")[:80],
+        "title": str(source.get("title") or "")[:240],
+        "canonical_url": str(source.get("canonical_url") or "")[:600],
+        "derived_notes": str(source.get("derived_notes") or "")[:1600],
+        "citations": citations[:8] if isinstance(citations, list) else [],
+    }
+
+
+def _safe_trainer_verdicts(parsed: Mapping[str, Any], sources: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    by_uid = {str(source.get("source_uid") or "") for source in sources}
+    verdicts: list[dict[str, str]] = []
+    raw = parsed.get("verdicts")
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            uid = str(item.get("source_uid") or "").strip()
+            if uid not in by_uid:
+                continue
+            verdict = str(item.get("verdict") or "keep").strip().lower()
+            if verdict not in {"keep", "watch", "replace", "block"}:
+                verdict = "keep"
+            verdicts.append(
+                {
+                    "source_uid": uid,
+                    "lane_id": str(item.get("lane_id") or "")[:80],
+                    "verdict": verdict,
+                    "note": str(item.get("note") or "")[:500],
+                }
+            )
+    seen = {item["source_uid"] for item in verdicts}
+    for source in sources:
+        uid = str(source.get("source_uid") or "")
+        if uid and uid not in seen:
+            verdicts.append(
+                {
+                    "source_uid": uid,
+                    "lane_id": str(source.get("lane_id") or "")[:80],
+                    "verdict": "keep",
+                    "note": "Trainer retained this derived source; cite before advising.",
+                }
+            )
+    return verdicts
+
+
+class RouterAcademyTrainerClient:
+    """Live Academy Trainer client backed by the ArcLink LLM router.
+
+    This client is intentionally narrow: it sends compact derived source notes to
+    the control-plane router and never sees the upstream provider key directly.
+    """
+
+    live = True
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: int = 45,
+    ) -> None:
+        self.base_url = str(base_url or "").rstrip("/")
+        self.api_key = str(api_key or "").strip()
+        self.model = str(model or "").strip() or DEFAULT_ACADEMY_TRAINER_MODEL
+        self.timeout_seconds = max(5, min(120, int(timeout_seconds or 45)))
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "RouterAcademyTrainerClient | None":
+        base_url = _trainer_env_text(
+            env,
+            "ARCLINK_ACADEMY_TRAINER_ROUTER_BASE_URL",
+            "ARCLINK_LLM_ROUTER_BASE_URL",
+            default="http://control-llm-router:8090/v1",
+        ).rstrip("/")
+        api_key = _read_trainer_router_key(env)
+        if not base_url or not api_key:
+            return None
+        timeout_raw = _trainer_env_text(env, "ARCLINK_ACADEMY_TRAINER_TIMEOUT_SECONDS", default="45")
+        try:
+            timeout = int(timeout_raw)
+        except ValueError:
+            timeout = 45
+        return cls(
+            base_url=base_url,
+            api_key=api_key,
+            model=_trainer_env_text(
+                env,
+                "ARCLINK_ACADEMY_TRAINER_MODEL",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MODEL",
+                "ARCLINK_CHUTES_DEFAULT_MODEL",
+                default=DEFAULT_ACADEMY_TRAINER_MODEL,
+            ),
+            timeout_seconds=timeout,
+        )
+
+    def review(self, *, role_title: str, topic: str, sources: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        payload_sources = [_compact_trainer_source(source) for source in sources[:40]]
+        request_payload = {
+            "model": self.model,
+            "temperature": 0,
+            "max_tokens": 900,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are the ArcLink Academy Trainer. Review only the derived source notes supplied. "
+                        "Return strict JSON with summary and verdicts. Do not include secrets or raw source text."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "role_title": str(role_title or "")[:200],
+                            "topic": str(topic or "")[:1000],
+                            "sources": payload_sources,
+                            "verdict_schema": {
+                                "source_uid": "source identifier from input",
+                                "lane_id": "source lane from input",
+                                "verdict": "keep|watch|replace|block",
+                                "note": "short derived rationale",
+                            },
+                        },
+                        sort_keys=True,
+                    ),
+                },
+            ],
+        }
+        request = urllib.request.Request(
+            f"{self.base_url}/chat/completions",
+            data=json.dumps(request_payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310 - control router URL is operator-configured
+                response_body = response.read(262_144).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            body = exc.read(4096).decode("utf-8", errors="replace") if hasattr(exc, "read") else ""
+            raise RuntimeError(f"llm-router trainer request failed status={exc.code}: {body[:240]}") from exc
+        parsed = _loads(response_body, default={})
+        choices = parsed.get("choices") if isinstance(parsed, Mapping) else None
+        content = ""
+        if isinstance(choices, Sequence) and choices and isinstance(choices[0], Mapping):
+            message = choices[0].get("message")
+            if isinstance(message, Mapping):
+                content = str(message.get("content") or "")
+        content_json = _loads(content, default={})
+        summary = ""
+        if isinstance(content_json, Mapping):
+            summary = str(content_json.get("summary") or "")[:2000]
+        if not summary:
+            summary = content.strip()[:2000] or f"Live Trainer reviewed {len(payload_sources)} source(s)."
+        verdict_source = content_json if isinstance(content_json, Mapping) else {}
+        return {
+            "engine": "llm-router",
+            "live": True,
+            "summary": summary,
+            "verdicts": _safe_trainer_verdicts(verdict_source, sources),
+            "topic": topic,
+            "model": self.model,
+        }
+
+
+def academy_trainer_client_from_env(env: Mapping[str, str] | None = None) -> RouterAcademyTrainerClient | None:
+    return RouterAcademyTrainerClient.from_env(env)
+
+
 class DeterministicAcademyTrainer:
     """Default, no-network Academy Trainer.
 
@@ -1994,6 +2224,8 @@ def run_academy_trainer_review(
     topic = str(program.get("topic_map") or spec["topic_fingerprint"] or "")
     sources = [dict(r) for r in rows]
 
+    if bool(live_authorized) and client is None:
+        client = academy_trainer_client_from_env()
     use_live = bool(live_authorized) and client is not None and bool(getattr(client, "live", False))
     trainer = client if use_live else DeterministicAcademyTrainer()
     try:

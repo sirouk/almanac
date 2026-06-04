@@ -152,6 +152,14 @@ _TELEGRAM_FAST_ACK_EXECUTOR: ThreadPoolExecutor | None = None
 _TELEGRAM_FAST_ACK_EXECUTOR_WORKERS = 0
 _TELEGRAM_FAST_ACK_SEMAPHORE: threading.BoundedSemaphore | None = None
 _TELEGRAM_FAST_ACK_PENDING_LIMIT = 0
+PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS = frozenset(
+    {
+        "agent_message_queued",
+        "operator_agent_turn_queued",
+        "academy_mode_opened",
+        "academy_mode_steer_recorded",
+    }
+)
 
 # --- Configuration -----------------------------------------------------------
 
@@ -2791,7 +2799,7 @@ def _handle_telegram_webhook(
                 except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     live_triggered = False
-    if str(result.get("action") or "") in {"agent_message_queued", "operator_agent_turn_queued"}:
+    if str(result.get("action") or "") in PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS:
         fast_acknowledged = _kick_telegram_fast_agent_ack(
             config=config,
             telegram_config=telegram_config,
@@ -2856,7 +2864,7 @@ def _handle_discord_webhook(
         if str(exc) == "duplicate Discord interaction":
             return _json_response(200, {"type": 5}, request_id=request_id)
         return _json_response(401, {"error": str(exc)}, request_id=request_id)
-    if str(response.get("action") or "") == "agent_message_queued":
+    if str(response.get("action") or "") in PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS:
         _kick_public_agent_live_trigger(
             config=config,
             channel_kind="discord",

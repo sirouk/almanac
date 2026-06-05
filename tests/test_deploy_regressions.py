@@ -135,6 +135,8 @@ def render_runtime_config(
     arclink_private_dns_name: str = "",
     arclink_tailscale_control_url: str = "",
     telegram_webhook_url: str = "",
+    arclink_db_path: str = "",
+    executor_allowlist: str = "",
 ) -> str:
     text = DEPLOY_SH.read_text()
     snippet = extract(text, "write_kv() {", "write_runtime_config() {")
@@ -153,6 +155,7 @@ ARCLINK_TAILSCALE_CONTROL_URL={shlex.quote(arclink_tailscale_control_url)}
 TELEGRAM_WEBHOOK_URL={shlex.quote(telegram_webhook_url)}
 VAULT_DIR=/home/arclink/arclink/arclink-priv/vault
 STATE_DIR=/home/arclink/arclink/arclink-priv/state
+ARCLINK_DB_PATH={shlex.quote(arclink_db_path)}
 NEXTCLOUD_STATE_DIR=/home/arclink/arclink/arclink-priv/state/nextcloud
 RUNTIME_DIR=/home/arclink/arclink/arclink-priv/state/runtime
 PUBLISHED_DIR=/home/arclink/arclink/arclink-priv/published
@@ -208,6 +211,7 @@ QUARTO_PROJECT_DIR=/tmp/quarto
 QUARTO_OUTPUT_DIR=/tmp/published
 ARCLINK_CURATOR_CHANNELS={shlex.quote(channels)}
 OPERATOR_NOTIFY_CHANNEL_PLATFORM={shlex.quote(notify_platform)}
+ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST={shlex.quote(executor_allowlist)}
 ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED={shlex.quote(tg_flag)}
 ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED={shlex.quote(dc_flag)}
 ARCLINK_AGENT_ENABLE_TAILSCALE_SERVE={shlex.quote(agent_enable_tailscale_serve)}
@@ -486,6 +490,45 @@ def test_emit_runtime_config_persists_qmd_embedding_endpoint_fields() -> None:
     expect(source_value(config, "QMD_EMBED_DIMENSIONS") == "768", config)
     expect(source_value(config, "QMD_EMBED_FORCE_ON_NEXT_REFRESH") == "1", config)
     print("PASS test_emit_runtime_config_persists_qmd_embedding_endpoint_fields")
+
+
+def test_emit_runtime_config_reconciles_existing_fleet_private_endpoints_into_allowlist() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE arclink_fleet_hosts (
+              hostname TEXT,
+              metadata_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO arclink_fleet_hosts (hostname, metadata_json) VALUES (?, ?)",
+            (
+                "arclink-001",
+                (
+                    '{"ssh_host":"135.181.246.168",'
+                    '"private_dns_name":"10.44.0.11",'
+                    '"tailscale_dns_name":"worker-one.tailnet.test",'
+                    '"wireguard":{"private_ip":"10.44.0.11","private_cidr":"10.44.0.11/32"}}'
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        config = render_runtime_config(
+            "tui-only",
+            "tui-only",
+            arclink_db_path=str(db_path),
+            executor_allowlist="135.181.246.168,arclink-001",
+        )
+    line = next(item for item in config.splitlines() if item.startswith("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="))
+    expect("10.44.0.11" in line, line)
+    expect("worker-one.tailnet.test" in line, line)
+    expect(line.count("10.44.0.11") == 1, line)
+    print("PASS test_emit_runtime_config_reconciles_existing_fleet_private_endpoints_into_allowlist")
 
 
 def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
@@ -4287,6 +4330,7 @@ def main() -> int:
         test_emit_runtime_config_preserves_custom_hermes_docs_ref,
         test_emit_runtime_config_persists_extra_mcp_url,
         test_emit_runtime_config_persists_qmd_embedding_endpoint_fields,
+        test_emit_runtime_config_reconciles_existing_fleet_private_endpoints_into_allowlist,
         test_deploy_guides_explicit_notion_webhook_event_selection,
         test_deploy_uses_stable_copy_for_privileged_reexec,
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,

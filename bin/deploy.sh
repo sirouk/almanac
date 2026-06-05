@@ -2079,6 +2079,69 @@ normalize_runtime_config_defaults() {
   fi
 }
 
+reconcile_executor_allowlist_from_fleet_inventory() {
+  local db_path="${ARCLINK_DB_PATH:-}"
+  local merged=""
+  if [[ -z "$db_path" && -n "${STATE_DIR:-}" ]]; then
+    db_path="$STATE_DIR/arclink-control.sqlite3"
+  fi
+  [[ -n "$db_path" && -f "$db_path" ]] || return 0
+  merged="$(
+    python3 - "$db_path" "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" <<'PY'
+import json
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+current = sys.argv[2] if len(sys.argv) > 2 else ""
+
+def split_csv(value):
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+def append(items, value):
+    clean = str(value or "").strip()
+    if not clean:
+        return
+    lower = {item.lower() for item in items}
+    if clean.lower() not in lower:
+        items.append(clean)
+
+items = split_csv(current)
+try:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT hostname, metadata_json FROM arclink_fleet_hosts ORDER BY hostname").fetchall()
+except Exception:
+    print(",".join(items))
+    raise SystemExit(0)
+
+for row in rows:
+    append(items, row["hostname"])
+    try:
+        metadata = json.loads(row["metadata_json"] or "{}")
+    except Exception:
+        metadata = {}
+    for key in (
+        "ssh_host",
+        "private_dns_name",
+        "private_mesh_dns_name",
+        "wireguard_dns_name",
+        "tailscale_dns_name",
+        "edge_target",
+    ):
+        append(items, metadata.get(key))
+    wireguard = metadata.get("wireguard") if isinstance(metadata.get("wireguard"), dict) else {}
+    append(items, str(wireguard.get("private_ip") or "").split("/", 1)[0])
+    append(items, str(wireguard.get("private_cidr") or "").split("/", 1)[0])
+
+print(",".join(items))
+PY
+  )"
+  if [[ -n "$merged" ]]; then
+    ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$merged"
+  fi
+}
+
 emit_runtime_config() {
   local notion_funnel_path="${TAILSCALE_NOTION_WEBHOOK_FUNNEL_PATH:-/notion/webhook}"
   local hermes_agent_ref=""
@@ -2086,6 +2149,7 @@ emit_runtime_config() {
   local hermes_docs_ref=""
 
   normalize_runtime_config_defaults
+  reconcile_executor_allowlist_from_fleet_inventory
   hermes_agent_ref="$(deploy_pin_get_or_default hermes-agent ref "${ARCLINK_HERMES_AGENT_REF:-ce089169d578b96c82641f17186ba63c288b22d8}")"
   hermes_docs_repo_url="${ARCLINK_HERMES_DOCS_REPO_URL:-https://github.com/NousResearch/hermes-agent.git}"
   if [[ "$hermes_docs_repo_url" == "https://github.com/NousResearch/hermes-agent.git" ]]; then

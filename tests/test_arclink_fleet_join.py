@@ -211,6 +211,105 @@ def test_join_fake_root_configures_wireguard_without_ssh_surgery() -> None:
     print("PASS test_join_fake_root_configures_wireguard_without_ssh_surgery")
 
 
+def test_join_rejects_unsafe_wireguard_shapes_before_config_write() -> None:
+    cases = [
+        ("bad_ip", ["--wireguard-worker-ip", "10.44.0.999/32"], "worker IP"),
+        ("bad_prefix", ["--wireguard-worker-ip", "10.44.0.11/999"], "worker IP"),
+        ("bad_endpoint_port", ["--wireguard-control-endpoint", "control.wg.example.test:99999"], "endpoint port"),
+        ("bad_allowed_ips", ["--wireguard-control-allowed-ips", "10.44.0.1/32,bad/cidr"], "allowed IPs"),
+        ("bad_interface", ["--wireguard-interface", "wg-arclink-too-long"], "interface"),
+    ]
+    for suffix, override, expected in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "root"
+            sink = tmp_path / "callback.jsonl"
+            token_file = tmp_path / "token"
+            key_file = tmp_path / "fleet.pub"
+            state_root = root / "var" / "lib" / "arclink-fleet"
+            write(root / "etc" / "machine-id", f"{suffix}1234567890abcdef1234567890\n")
+            write(token_file, f"arcfleet_v1.flenr_test.{suffix}\n")
+            write(key_file, PUBLIC_KEY + "\n", mode=0o644)
+            cmd = [
+                str(JOIN_SH),
+                "--control-url",
+                "https://control.example.test",
+                "--token-file",
+                str(token_file),
+                "--authorized-key-file",
+                str(key_file),
+                "--hostname",
+                f"worker-{suffix}.example.test",
+                "--state-root",
+                str(state_root),
+                "--wireguard-worker-ip",
+                "10.44.0.11/32",
+                "--wireguard-control-public-key",
+                CONTROL_WG_PUBLIC_KEY,
+                "--wireguard-control-endpoint",
+                "control.wg.example.test:51820",
+                "--skip-prereq-install",
+            ]
+            if override[0] == "--wireguard-worker-ip":
+                index = cmd.index("--wireguard-worker-ip")
+                cmd[index:index + 2] = override
+            elif override[0] == "--wireguard-control-endpoint":
+                index = cmd.index("--wireguard-control-endpoint")
+                cmd[index:index + 2] = override
+            elif override[0] == "--wireguard-control-allowed-ips":
+                cmd.extend(override)
+            else:
+                cmd.extend(override)
+            result = run(cmd, env=base_env(root, sink))
+            expect(result.returncode == 2, f"{suffix} should fail validation: {result.stdout}\n{result.stderr}")
+            expect(expected in result.stderr, f"{suffix} missing expected error {expected!r}: {result.stderr}")
+            expect(not (root / "etc" / "wireguard" / "wg-arclink.conf").exists(), f"{suffix} wrote WireGuard config")
+    print("PASS test_join_rejects_unsafe_wireguard_shapes_before_config_write")
+
+
+def test_join_accepts_ipv6_wireguard_endpoint_shape() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        root = tmp_path / "root"
+        sink = tmp_path / "callback.jsonl"
+        token_file = tmp_path / "token"
+        key_file = tmp_path / "fleet.pub"
+        state_root = root / "var" / "lib" / "arclink-fleet"
+        write(root / "etc" / "machine-id", "ipv61234567890abcdef1234567890\n")
+        write(token_file, "arcfleet_v1.flenr_test.ipv6\n")
+        write(key_file, PUBLIC_KEY + "\n", mode=0o644)
+        cmd = [
+            str(JOIN_SH),
+            "--control-url",
+            "https://control.example.test",
+            "--token-file",
+            str(token_file),
+            "--authorized-key-file",
+            str(key_file),
+            "--hostname",
+            "worker-ipv6.example.test",
+            "--state-root",
+            str(state_root),
+            "--wireguard-worker-ip",
+            "fd44::11",
+            "--wireguard-control-public-key",
+            CONTROL_WG_PUBLIC_KEY,
+            "--wireguard-control-endpoint",
+            "[fd44::1]:51820",
+            "--wireguard-control-allowed-ips",
+            "fd44::1/128",
+            "--skip-prereq-install",
+        ]
+        result = run(cmd, env=base_env(root, sink))
+        expect(result.returncode == 0, result.stderr or result.stdout)
+        config = root / "etc" / "wireguard" / "wg-arclink.conf"
+        expect(config.exists(), "IPv6 WireGuard config was not written")
+        text = config.read_text(encoding="utf-8")
+        expect("Address = fd44::11/128" in text, text)
+        expect("Endpoint = [fd44::1]:51820" in text, text)
+    print("PASS test_join_accepts_ipv6_wireguard_endpoint_shape")
+
+
 def test_join_callback_failure_leaves_worker_non_admitting() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "root"
@@ -273,9 +372,11 @@ def main() -> int:
     test_join_rejects_enrollment_token_in_argv()
     test_join_fake_root_is_idempotent_and_does_not_persist_token()
     test_join_fake_root_configures_wireguard_without_ssh_surgery()
+    test_join_rejects_unsafe_wireguard_shapes_before_config_write()
+    test_join_accepts_ipv6_wireguard_endpoint_shape()
     test_join_callback_failure_leaves_worker_non_admitting()
     test_probe_wrapper_allowlist_outputs_json_and_rejects_unknown()
-    print("PASS all 5 ArcLink fleet join tests")
+    print("PASS all 7 ArcLink fleet join tests")
     return 0
 
 

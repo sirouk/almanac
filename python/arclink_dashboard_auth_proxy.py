@@ -54,6 +54,12 @@ MOUNTED_QUOTED_PATH_RE = re.compile(r"(?P<quote>\")(?P<path>/(?!/)[^\"\\]*(?:\\.
 MOUNTED_PUBLIC_PATH_ROOTS = ("/api/", "/assets/", "/dashboard-plugins/", "/ds-assets/", "/fonts/")
 BACKEND_SESSION_HEADER_NAME = "X-Hermes-Session-Token"
 BACKEND_SESSION_TOKEN_RE = re.compile(r'window\.__HERMES_SESSION_TOKEN__\s*=\s*"(?P<token>[^"]+)"')
+DEFAULT_MAX_LOGIN_BODY_BYTES = 64 * 1024
+DEFAULT_MAX_REQUEST_BODY_BYTES = 256 * 1024 * 1024
+DEFAULT_REWRITE_BUFFER_BYTES = 4 * 1024 * 1024
+MAX_REQUEST_BODY_BYTES_CEILING = 2 * 1024 * 1024 * 1024
+MAX_REWRITE_BUFFER_BYTES_CEILING = 64 * 1024 * 1024
+PROXY_COPY_CHUNK_BYTES = 1024 * 1024
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -334,6 +340,15 @@ def _mount_runtime_script(prefix: str) -> str:
 
 def _env_bool(name: str) -> bool:
     return str(os.environ.get(name) or "").strip().lower() in TRUE_VALUES
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = str(os.environ.get(name) or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
 
 
 def _managed_lifecycle_controls_enabled() -> bool:
@@ -879,13 +894,42 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _drain_request_body(self) -> None:
+    def _max_login_body_bytes(self) -> int:
+        return _env_int(
+            "ARCLINK_DASHBOARD_PROXY_MAX_LOGIN_BODY_BYTES",
+            DEFAULT_MAX_LOGIN_BODY_BYTES,
+            minimum=1,
+            maximum=1024 * 1024,
+        )
+
+    def _max_request_body_bytes(self) -> int:
+        return _env_int(
+            "ARCLINK_DASHBOARD_PROXY_MAX_REQUEST_BODY_BYTES",
+            DEFAULT_MAX_REQUEST_BODY_BYTES,
+            minimum=1,
+            maximum=MAX_REQUEST_BODY_BYTES_CEILING,
+        )
+
+    def _rewrite_buffer_bytes(self) -> int:
+        return _env_int(
+            "ARCLINK_DASHBOARD_PROXY_REWRITE_BUFFER_BYTES",
+            DEFAULT_REWRITE_BUFFER_BYTES,
+            minimum=1024,
+            maximum=MAX_REWRITE_BUFFER_BYTES_CEILING,
+        )
+
+    def _read_limited_body(self, *, limit: int) -> bytes | None:
         try:
             content_length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
             content_length = 0
-        if content_length > 0:
-            self.rfile.read(content_length)
+        if content_length < 0:
+            content_length = 0
+        if content_length > limit:
+            self.close_connection = True
+            self._send_body(413, b"Dashboard request body is too large.\n")
+            return None
+        return self.rfile.read(content_length) if content_length else b""
 
     def _login_form(self, *, status: int = 401, error: str = "", next_path: str = "") -> None:
         raw_next = next_path or parse_qs(urlsplit(self.path).query).get("next", [self.path])[0]
@@ -931,8 +975,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._send_body(status, body, content_type="text/html; charset=utf-8")
 
     def _handle_login_post(self) -> None:
-        content_length = int(self.headers.get("Content-Length") or "0")
-        raw_body = self.rfile.read(content_length) if content_length else b""
+        raw_body = self._read_limited_body(limit=self._max_login_body_bytes())
+        if raw_body is None:
+            return
         content_type = (self.headers.get("Content-Type") or "").lower()
         if "application/json" in content_type:
             try:
@@ -992,7 +1037,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         referer = self.headers.get("Referer") or ""
         if referer:
             return _origin_matches_host(referer, host)
-        return True
+        return False
 
     def _backend_session_token(self, *, force_refresh: bool = False) -> str:
         """Read Hermes' loopback-only dashboard token from the local backend.
@@ -1028,7 +1073,9 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     },
                 )
                 response = connection.getresponse()
-                payload = response.read()
+                payload = response.read(self._rewrite_buffer_bytes() + 1)
+                if len(payload) > self._rewrite_buffer_bytes():
+                    return ""
             except OSError:
                 return ""
             finally:
@@ -1064,7 +1111,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             and _managed_lifecycle_controls_enabled()
             and path.rstrip("/") in MANAGED_LIFECYCLE_ENDPOINTS
         ):
-            self._drain_request_body()
+            if self._read_limited_body(limit=self._max_request_body_bytes()) is None:
+                return
             payload = {
                 "ok": False,
                 "arclink_managed": True,
@@ -1081,10 +1129,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         proxy_path = self.path
         if target.path and target.path != "/":
             proxy_path = f"{target.path.rstrip('/')}/{self.path.lstrip('/')}"
-        body = b""
-        content_length = self.headers.get("Content-Length")
-        if content_length:
-            body = self.rfile.read(int(content_length))
         headers = {}
         for key, value in self.headers.items():
             lowered = key.lower()
@@ -1105,28 +1149,108 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             headers[BACKEND_SESSION_HEADER_NAME] = backend_token
         headers["Host"] = target.netloc
 
-        def request_backend(request_headers: dict[str, str]) -> tuple[int, str, list[tuple[str, str]], bytes]:
+        body = self._read_limited_body(limit=self._max_request_body_bytes())
+        if body is None:
+            return
+
+        def request_backend(request_headers: dict[str, str]) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
             connection = http.client.HTTPConnection(target.hostname, target.port, timeout=30)
             try:
                 connection.request(self.command, proxy_path, body=body or None, headers=request_headers)
-                response = connection.getresponse()
-                return response.status, response.reason, response.getheaders(), response.read()
-            finally:
+                return connection, connection.getresponse()
+            except BaseException:
                 connection.close()
+                raise
+
+        def response_header_map(response_headers: list[tuple[str, str]]) -> dict[str, str]:
+            return {key.lower(): value for key, value in response_headers}
+
+        def response_content_length(response_headers: list[tuple[str, str]]) -> int | None:
+            value = response_header_map(response_headers).get("content-length")
+            if value is None:
+                return None
+            try:
+                return max(0, int(value))
+            except ValueError:
+                return None
+
+        def response_can_be_rewritten(status: int, response_headers: list[tuple[str, str]]) -> bool:
+            if status != 200 or self.command != "GET":
+                return False
+            header_map = response_header_map(response_headers)
+            if header_map.get("content-encoding"):
+                return False
+            content_type = header_map.get("content-type", "").lower()
+            if not any(kind in content_type for kind in ("text/html", "text/css", "application/json")):
+                return False
+            content_length = response_content_length(response_headers)
+            return content_length is not None and content_length <= self._rewrite_buffer_bytes()
+
+        def send_proxy_headers(status: int, reason: str, response_headers: list[tuple[str, str]], *, content_length: int | None) -> None:
+            self.send_response(status, reason)
+            for key, value in response_headers:
+                lowered = key.lower()
+                if lowered in HOP_BY_HOP_HEADERS or lowered == "content-length":
+                    continue
+                self.send_header(key, value)
+            if content_length is not None:
+                self.send_header("Content-Length", str(content_length))
+            self.end_headers()
+
+        connection: http.client.HTTPConnection | None = None
+        response: http.client.HTTPResponse | None = None
 
         try:
-            status, reason, response_headers, payload = request_backend(headers)
+            connection, response = request_backend(headers)
+            status, reason, response_headers = response.status, response.reason, response.getheaders()
             if status == 401 and backend_token:
+                response.read(min(self._rewrite_buffer_bytes(), 1024 * 1024))
+                connection.close()
+                connection = None
+                response = None
                 refreshed = self._backend_session_token(force_refresh=True)
                 if refreshed and refreshed != backend_token:
                     retry_headers = dict(headers)
                     retry_headers[BACKEND_SESSION_HEADER_NAME] = refreshed
-                    status, reason, response_headers, payload = request_backend(retry_headers)
+                    connection, response = request_backend(retry_headers)
+                    status, reason, response_headers = response.status, response.reason, response.getheaders()
         except OSError as exc:
             payload = f"Dashboard backend unavailable: {exc}\n".encode("utf-8", "replace")
             response_headers = [("Content-Type", "text/plain; charset=utf-8")]
             reason = "Bad Gateway"
             status = 502
+            if connection is not None:
+                connection.close()
+            connection = None
+            response = None
+
+        if response is not None and not response_can_be_rewritten(status, response_headers):
+            content_length = response_content_length(response_headers)
+            if content_length is None:
+                self.close_connection = True
+            send_proxy_headers(status, reason, response_headers, content_length=content_length)
+            if self.command != "HEAD":
+                try:
+                    while True:
+                        chunk = response.read(PROXY_COPY_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                finally:
+                    if connection is not None:
+                        connection.close()
+            elif connection is not None:
+                connection.close()
+            return
+
+        if response is not None:
+            payload = response.read(self._rewrite_buffer_bytes() + 1)
+            if connection is not None:
+                connection.close()
+            if len(payload) > self._rewrite_buffer_bytes():
+                self._send_body(413, b"Dashboard response body is too large to rewrite.\n")
+                return
+
         if status == 200:
             payload = self._rewrite_mounted_html_paths(payload, response_headers)
             payload = self._rewrite_mounted_css_paths(payload, response_headers)
@@ -1135,14 +1259,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             payload = self._maybe_inject_crew_switcher(payload, response_headers)
             payload = self._maybe_inject_plugin_deeplink(payload, response_headers)
 
-        self.send_response(status, reason)
-        for key, value in response_headers:
-            lowered = key.lower()
-            if lowered in HOP_BY_HOP_HEADERS or lowered == "content-length":
-                continue
-            self.send_header(key, value)
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
+        send_proxy_headers(status, reason, response_headers, content_length=len(payload))
         if self.command != "HEAD":
             self.wfile.write(payload)
 

@@ -596,8 +596,8 @@ test.describe("Brand system", () => {
 
   test("landing page renders the imported marketing sections", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: /Raven runs your operations/i })).toBeVisible();
-    await expect(page.getByRole("heading", { name: /Hire Raven, an agent/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Hermes Agents run your operations/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /Hire a Hermes Agent/i })).toBeVisible();
     await expect(page.getByRole("heading", { name: /Watch Hermes Agents/i })).toBeVisible();
     await expect(page.getByRole("link", { name: "ACADEMY" })).toBeVisible();
     await expect(page.getByRole("heading", { name: /From idea to operating/i })).toBeVisible();

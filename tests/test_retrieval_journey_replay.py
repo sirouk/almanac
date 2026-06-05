@@ -133,6 +133,21 @@ def test_scorecard_records_accuracy_and_persona_timings() -> None:
     print("PASS test_scorecard_records_accuracy_and_persona_timings")
 
 
+def test_run_command_does_not_invoke_shell_metacharacters() -> None:
+    mod = load_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        marker = Path(tmp) / "shell-was-used"
+        command = (
+            f"{sys.executable} -c "
+            f"{json.dumps('import sys; sys.exit(0)')} ; "
+            f"{sys.executable} -c {json.dumps('from pathlib import Path; Path(%r).write_text(%r)' % (str(marker), 'pwned'))}"
+        )
+        result = mod.run_command(command)
+        expect(result is not None and result["returncode"] == 0, str(result))
+        expect(not marker.exists(), "command hook executed shell metacharacters")
+    print("PASS test_run_command_does_not_invoke_shell_metacharacters")
+
+
 def test_arclink_ctl_exposes_retrieval_replay_command() -> None:
     ctl = (REPO / "python" / "arclink_ctl.py").read_text(encoding="utf-8")
     wrapper = (REPO / "bin" / "arclink-ctl").read_text(encoding="utf-8")
@@ -151,8 +166,9 @@ def main() -> int:
     test_payload_texts_ignores_query_echo_and_checks_fetched_evidence()
     test_seed_vault_creates_repo_bulk_and_extractable_pdf()
     test_scorecard_records_accuracy_and_persona_timings()
+    test_run_command_does_not_invoke_shell_metacharacters()
     test_arclink_ctl_exposes_retrieval_replay_command()
-    print("PASS all 5 retrieval journey replay tests")
+    print("PASS all 6 retrieval journey replay tests")
     return 0
 
 

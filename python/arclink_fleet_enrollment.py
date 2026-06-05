@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -32,7 +33,10 @@ TOKEN_PREFIX = "arcfleet_v1"
 DEFAULT_ENROLLMENT_TTL_SECONDS = 3600
 _FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9_.:=+/@-]{16,256}$")
 _WIREGUARD_PUBLIC_KEY_RE = re.compile(r"^[A-Za-z0-9+/=]{20,100}$")
-_WIREGUARD_IP_CIDR_RE = re.compile(r"^[A-Za-z0-9_.:-]+/[0-9]{1,3}$")
+_HOST_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}$")
+_SSH_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+_WIREGUARD_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
+_WIREGUARD_FIREWALL_STATUS_RE = re.compile(r"^[A-Za-z0-9_.:@/+,-]{0,64}$")
 _SSH_PUBLIC_KEY_RE = re.compile(r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[A-Za-z0-9_-]+|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-[A-Za-z0-9_-]+@openssh.com) [A-Za-z0-9+/=]+(?: .*)?$")
 
 
@@ -134,10 +138,18 @@ def _clean_optional_wireguard_cidr(value: Any) -> str:
     if not clean:
         return ""
     if "/" not in clean:
-        clean = f"{clean}/32"
-    if not _WIREGUARD_IP_CIDR_RE.fullmatch(clean):
+        try:
+            prefix = 128 if ipaddress.ip_address(clean).version == 6 else 32
+        except ValueError:
+            prefix = 32
+        clean = f"{clean}/{prefix}"
+    if any(ch in clean for ch in "\x00\r\n"):
         raise ArcLinkFleetEnrollmentError("invalid WireGuard private CIDR")
-    return clean
+    try:
+        interface = ipaddress.ip_interface(clean)
+    except ValueError as exc:
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard private CIDR") from exc
+    return str(interface)
 
 
 def mint_fleet_enrollment(
@@ -323,15 +335,69 @@ def _clean_fingerprint(value: Any) -> str:
     return text
 
 
-def _clean_hostname(value: Any) -> str:
-    text = str(value or "").strip().lower()
+def _clean_host_value(value: Any, *, label: str, required: bool = False) -> str:
+    text = str(value or "").strip().lower().strip(".")
     if not text:
-        raise ArcLinkFleetEnrollmentError("worker hostname is required")
+        if required:
+            raise ArcLinkFleetEnrollmentError(f"{label} is required")
+        return ""
+    if any(ch in text for ch in "\x00\r\n") or not _HOST_VALUE_RE.fullmatch(text):
+        raise ArcLinkFleetEnrollmentError(f"invalid {label}")
     return text
 
 
+def _clean_hostname(value: Any) -> str:
+    return _clean_host_value(value, label="worker hostname", required=True)
+
+
 def _clean_optional_hostname(value: Any) -> str:
-    return str(value or "").strip().lower().strip(".")
+    return _clean_host_value(value, label="host name")
+
+
+def _clean_ssh_user(value: Any) -> str:
+    text = str(value or "arclink").strip()
+    if not _SSH_USER_RE.fullmatch(text):
+        raise ArcLinkFleetEnrollmentError("invalid SSH user")
+    return text
+
+
+def _clean_optional_wireguard_interface(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if any(ch in text for ch in "\x00\r\n") or not _WIREGUARD_INTERFACE_RE.fullmatch(text):
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard interface")
+    return text
+
+
+def _clean_optional_wireguard_endpoint(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if any(ch in text for ch in "\x00\r\n"):
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard control endpoint")
+    host, sep, port_text = text.rpartition(":")
+    if not sep or not host or not port_text:
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard control endpoint")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    _clean_host_value(host, label="WireGuard control endpoint host", required=True)
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard control endpoint") from exc
+    if port < 1 or port > 65535:
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard control endpoint")
+    if ":" in host:
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
+
+
+def _clean_optional_wireguard_firewall_status(value: Any) -> str:
+    text = str(value or "").strip().lower()[:64]
+    if any(ch in text for ch in "\x00\r\n") or not _WIREGUARD_FIREWALL_STATUS_RE.fullmatch(text):
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard firewall status")
+    return text
 
 
 def _clean_optional_abs_path(value: Any, *, label: str) -> str:
@@ -441,7 +507,7 @@ def consume_fleet_enrollment(
     body = dict(payload or {})
     fingerprint = _clean_fingerprint(body.get("machine_fingerprint") or body.get("fingerprint"))
     hostname = _clean_hostname(body.get("hostname"))
-    ssh_host = str(body.get("ssh_host") or hostname).strip()
+    ssh_host = _clean_host_value(body.get("ssh_host") or hostname, label="SSH host", required=True)
     tailscale_dns_name = _clean_optional_hostname(
         body.get("tailscale_dns_name")
         or body.get("tailnet_dns_name")
@@ -461,13 +527,23 @@ def consume_fleet_enrollment(
         or body.get("wireguard_private_ip")
         or ""
     )
-    wireguard_private_ip = str(body.get("wireguard_private_ip") or "").strip()
-    if not wireguard_private_ip and wireguard_private_cidr:
+    wireguard_private_ip = ""
+    wireguard_private_ip_raw = str(body.get("wireguard_private_ip") or "").strip()
+    if wireguard_private_ip_raw:
+        wireguard_private_ip_cidr = _clean_optional_wireguard_cidr(wireguard_private_ip_raw)
+        wireguard_private_ip = wireguard_private_ip_cidr.split("/", 1)[0]
+        if wireguard_private_cidr and wireguard_private_ip != wireguard_private_cidr.split("/", 1)[0]:
+            raise ArcLinkFleetEnrollmentError("WireGuard private IP does not match private CIDR")
+        if not wireguard_private_cidr:
+            wireguard_private_cidr = wireguard_private_ip_cidr
+    elif wireguard_private_cidr:
         wireguard_private_ip = wireguard_private_cidr.split("/", 1)[0]
     wireguard_public_key = _clean_optional_wireguard_public_key(body.get("wireguard_public_key") or "")
-    wireguard_interface = str(body.get("wireguard_interface") or "").strip()[:64]
-    wireguard_control_endpoint = str(body.get("wireguard_control_endpoint") or "").strip()[:255]
-    wireguard_firewall_status = str(body.get("wireguard_firewall_status") or "").strip()[:64]
+    wireguard_interface = _clean_optional_wireguard_interface(body.get("wireguard_interface") or "")
+    wireguard_control_endpoint = _clean_optional_wireguard_endpoint(body.get("wireguard_control_endpoint") or "")
+    wireguard_firewall_status = _clean_optional_wireguard_firewall_status(body.get("wireguard_firewall_status") or "")
+    if (wireguard_private_cidr or wireguard_public_key) and not wireguard_interface:
+        wireguard_interface = "wg-arclink"
     fleet_share_ssh_key_path = _clean_optional_abs_path(body.get("fleet_share_ssh_key_path"), label="fleet-share SSH key path")
     fleet_share_known_hosts_file = _clean_optional_abs_path(
         body.get("fleet_share_ssh_known_hosts_file"),
@@ -478,11 +554,13 @@ def consume_fleet_enrollment(
         wireguard_listen_port = int(body.get("wireguard_listen_port") or 0)
     except (TypeError, ValueError) as exc:
         raise ArcLinkFleetEnrollmentError("invalid WireGuard listen port") from exc
+    if wireguard_listen_port < 0 or wireguard_listen_port > 65535:
+        raise ArcLinkFleetEnrollmentError("invalid WireGuard listen port")
     if not private_dns_name and wireguard_private_ip:
         private_dns_name = _clean_optional_hostname(wireguard_private_ip)
     if not tailscale_dns_name and ssh_host.strip().lower().endswith(".ts.net"):
         tailscale_dns_name = _clean_optional_hostname(ssh_host)
-    ssh_user = str(body.get("ssh_user") or "arclink").strip()
+    ssh_user = _clean_ssh_user(body.get("ssh_user") or "arclink")
     region = str(body.get("region") or "").strip().lower()
     capacity_slots = max(1, int(body.get("capacity_slots") or 4))
     provider = str(body.get("provider") or "manual").strip().lower()

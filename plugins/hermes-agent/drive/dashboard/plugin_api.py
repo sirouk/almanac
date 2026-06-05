@@ -132,6 +132,10 @@ _SENSITIVE_FILE_NAMES = {
     "id_rsa",
 }
 _MAX_TEXT_BYTES = 1_000_000
+_MAX_JSON_BODY_BYTES = _MAX_TEXT_BYTES + 64_000
+_DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+_MAX_UPLOAD_BYTES_CEILING = 2 * 1024 * 1024 * 1024
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 _SEARCH_LIMIT = 300
 _MAX_CHILD_COUNT = 999
 _SHARE_REQUEST_BROKER_TOKEN_HEADER = "X-ArcLink-Share-Request-Broker-Token"
@@ -285,6 +289,135 @@ def _env_first(*keys: str) -> str:
         if value:
             return value
     return ""
+
+
+async def _request_body_limited(request: Request, *, max_bytes: int, label: str) -> bytes | None:
+    headers = getattr(request, "headers", {}) or {}
+    try:
+        content_length = int(str(headers.get("content-length") or headers.get("Content-Length") or "0"))
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length > max_bytes:
+        raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+    stream_reader = getattr(request, "stream", None)
+    if callable(stream_reader):
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in stream_reader():
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8")
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+            chunks.append(bytes(chunk))
+        return b"".join(chunks)
+    body_reader = getattr(request, "body", None)
+    if callable(body_reader):
+        raw = await body_reader()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+        return bytes(raw)
+    return None
+
+
+async def _request_json(request: Request, *, max_bytes: int = _MAX_JSON_BODY_BYTES) -> dict[str, Any]:
+    raw = await _request_body_limited(request, max_bytes=max_bytes, label="Drive")
+    if raw is not None:
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="Drive request body must be JSON") from None
+    else:
+        parsed = await request.json()
+        if parsed is None:
+            return {}
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="Drive request body must be a JSON object")
+    return parsed
+
+
+def _bounded_env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = str(os.environ.get(name) or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _max_upload_bytes() -> int:
+    return _bounded_env_int(
+        "DRIVE_MAX_UPLOAD_BYTES",
+        _DEFAULT_MAX_UPLOAD_BYTES,
+        minimum=1,
+        maximum=_MAX_UPLOAD_BYTES_CEILING,
+    )
+
+
+async def _read_upload_bytes(upload_file: UploadFile) -> bytes:
+    """Read one browser-uploaded file with a hard per-file memory ceiling."""
+    max_bytes = _max_upload_bytes()
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        unbounded_read = False
+        try:
+            chunk = await upload_file.read(_UPLOAD_READ_CHUNK_BYTES)  # type: ignore[call-arg]
+        except TypeError:
+            chunk = await upload_file.read()
+            unbounded_read = True
+        if not chunk:
+            break
+        if isinstance(chunk, str):
+            chunk = chunk.encode("utf-8")
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(status_code=413, detail="Upload file is too large")
+        chunks.append(bytes(chunk))
+        if unbounded_read or len(chunk) < _UPLOAD_READ_CHUNK_BYTES:
+            break
+    return b"".join(chunks)
+
+
+async def _write_upload_file_atomic(upload_file: UploadFile, target: Path) -> int:
+    """Write one browser upload to a local target without buffering the file in RAM."""
+    max_bytes = _max_upload_bytes()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.upload-", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            while True:
+                unbounded_read = False
+                try:
+                    chunk = await upload_file.read(_UPLOAD_READ_CHUNK_BYTES)  # type: ignore[call-arg]
+                except TypeError:
+                    chunk = await upload_file.read()
+                    unbounded_read = True
+                if not chunk:
+                    break
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8")
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail="Upload file is too large")
+                handle.write(bytes(chunk))
+                if unbounded_read or len(chunk) < _UPLOAD_READ_CHUNK_BYTES:
+                    break
+            handle.flush()
+        os.replace(tmp_path, target)
+        return total
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+        raise
 
 
 def _inline_content_disposition(filename: str) -> str:
@@ -1487,7 +1620,7 @@ async def status() -> dict[str, Any]:
 
 @router.post("/share/request")
 async def share_request(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     payload = payload if isinstance(payload, dict) else {}
     ctx = _root_context(payload.get("root") or payload.get("root_id"))
     if str(ctx.get("id") or "").strip().lower() == "linked":
@@ -1614,7 +1747,7 @@ async def preview(path: str, root: str = "") -> Any:
 
 @router.post("/mkdir")
 async def mkdir(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or ""
     path = payload.get("path") or "/"
     name = payload.get("name")
@@ -1639,7 +1772,7 @@ async def mkdir(request: Request) -> dict[str, Any]:
 
 @router.post("/move")
 async def move(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or ""
     destination_root = payload.get("destination_root") or root_id
     source_path = payload.get("path") or payload.get("source_path")
@@ -1661,7 +1794,7 @@ async def move(request: Request) -> dict[str, Any]:
 
 @router.post("/rename")
 async def rename(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or ""
     source_path = payload.get("path") or payload.get("source_path")
     if not source_path:
@@ -1680,7 +1813,7 @@ async def rename(request: Request) -> dict[str, Any]:
 
 @router.post("/favorite")
 async def favorite(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = str(payload.get("root") or "").strip().lower()
     if root_id:
         _root_context(root_id)
@@ -1707,7 +1840,7 @@ async def favorite(request: Request) -> dict[str, Any]:
 
 @router.post("/delete")
 async def delete(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or ""
     if root_id:
         ctx = _root_context(root_id)
@@ -1772,7 +1905,7 @@ async def trash(root: str = "") -> dict[str, Any]:
 
 @router.post("/restore")
 async def restore(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or ""
     if root_id:
         ctx = _root_context(root_id)
@@ -1904,7 +2037,6 @@ async def upload(
             _webdav_ensure_collections(backend["profile"], _join_display(target_dir_path, directory_path))
     for upload_file, relative_upload_path in zip(file_items, uploaded_paths, strict=True):
         display = _join_display(target_dir_path, relative_upload_path)
-        content_bytes = await upload_file.read()
         if ctx is not None:
             if ctx["id"] == "linked":
                 target, relative = _resolve_local(effective_root_path, _join_display(effective_target_dir, relative_upload_path), root_id="")
@@ -1912,21 +2044,20 @@ async def upload(
                 target, relative = _resolve_local(Path(ctx["path"]), display, root_id=ctx["id"])
             target = _resolve_conflict_destination(target, conflict=policy)
             relative = target.relative_to(effective_root_path if ctx["id"] == "linked" else Path(ctx["path"])).as_posix()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content_bytes)
+            size = await _write_upload_file_atomic(upload_file, target)
             uploaded.append({
                 "root": ctx["id"],
                 "path": _linked_display_path(linked_slug, relative) if ctx["id"] == "linked" else _display_path(relative),
-                "size": len(content_bytes),
+                "size": size,
             })
         elif backend["name"] == "local-vault":
             target, relative = _resolve_local(backend["root"], display, root_id="vault")
             target = _resolve_conflict_destination(target, conflict=policy)
             relative = target.relative_to(backend["root"]).as_posix()
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content_bytes)
-            uploaded.append({"root": "vault", "path": _display_path(relative), "size": len(content_bytes)})
+            size = await _write_upload_file_atomic(upload_file, target)
+            uploaded.append({"root": "vault", "path": _display_path(relative), "size": size})
         elif backend["name"] == "nextcloud-webdav":
+            content_bytes = await _read_upload_bytes(upload_file)
             headers = {"If-None-Match": "*"} if policy == "reject" else {}
             parent = posixpath.dirname(_clean_relative_path(display))
             _webdav_ensure_collections(backend["profile"], _display_path(parent))
@@ -1939,7 +2070,7 @@ async def upload(
 
 @router.post("/new-file")
 async def new_file(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     ctx = _root_context(payload.get("root"))
     _assert_writable_root(ctx["id"])
     parent = payload.get("path") or "/"
@@ -1960,7 +2091,7 @@ async def new_file(request: Request) -> dict[str, Any]:
 
 @router.post("/copy")
 async def copy(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root")
     ctx = _root_context(root_id)
     destination_root = payload.get("destination_root") or (_default_writable_root_id() if ctx["id"] == "linked" else ctx["id"])
@@ -1988,7 +2119,7 @@ async def copy(request: Request) -> dict[str, Any]:
 
 @router.post("/duplicate")
 async def duplicate(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     ctx = _root_context(payload.get("root"))
     source_path = payload.get("path") or payload.get("source_path")
     if not source_path:
@@ -2014,7 +2145,7 @@ async def duplicate(request: Request) -> dict[str, Any]:
 
 @router.post("/batch")
 async def batch(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     action = str(payload.get("action") or "").strip().lower()
     root_id = payload.get("root")
     paths = payload.get("paths") or []

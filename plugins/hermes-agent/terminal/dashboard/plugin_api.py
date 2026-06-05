@@ -53,6 +53,7 @@ router = APIRouter()
 _STATE_VERSION = 1
 _MAX_INPUT_BYTES = 8_000
 _MAX_READ_BYTES = 64_000
+_MAX_JSON_BODY_BYTES = 64_000
 _DEFAULT_MAX_SESSIONS = 6
 _DEFAULT_SCROLLBACK_BYTES = 8_000_000
 _DEFAULT_SCROLLBACK_LINES = 50_000
@@ -229,6 +230,53 @@ def _clean_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except ValueError:
         return default
     return max(minimum, min(maximum, parsed))
+
+
+async def _request_body_limited(request: Request, *, max_bytes: int, label: str) -> bytes | None:
+    headers = getattr(request, "headers", {}) or {}
+    try:
+        content_length = int(str(headers.get("content-length") or headers.get("Content-Length") or "0"))
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length > max_bytes:
+        raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+    stream_reader = getattr(request, "stream", None)
+    if callable(stream_reader):
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in stream_reader():
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8")
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+            chunks.append(bytes(chunk))
+        return b"".join(chunks)
+    body_reader = getattr(request, "body", None)
+    if callable(body_reader):
+        raw = await body_reader()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+        return bytes(raw)
+    return None
+
+
+async def _request_json(request: Request, *, max_bytes: int = _MAX_JSON_BODY_BYTES) -> dict[str, Any]:
+    raw = await _request_body_limited(request, max_bytes=max_bytes, label="Terminal")
+    if raw is not None:
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="Terminal request body must be JSON") from None
+    else:
+        parsed = await request.json()
+        if parsed is None:
+            return {}
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="Terminal request body must be a JSON object")
+    return parsed
 
 
 def _max_sessions() -> int:
@@ -932,9 +980,6 @@ def _start_runtime(entry: dict[str, Any]) -> None:
     cols = _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400)
     entry["rows"] = rows
     entry["cols"] = cols
-    master_fd, slave_fd = pty.openpty()
-    _set_pty_size(master_fd, rows, cols)
-    _set_pty_size(slave_fd, rows, cols)
     env = _terminal_env(os.environ)
     if str(env.get("TERM") or "").strip().lower() in {"", "dumb", "unknown"}:
         env["TERM"] = "xterm-256color"
@@ -1075,7 +1120,7 @@ async def create_session(request: Request) -> dict[str, Any]:
     status_payload = _status_payload()
     if not status_payload["available"]:
         raise HTTPException(status_code=503, detail="Terminal backend is unavailable")
-    body = await request.json()
+    body = await _request_json(request)
     with _STATE_LOCK:
         payload = _load_sessions()
         _poll_sessions(payload)
@@ -1117,7 +1162,7 @@ async def create_session(request: Request) -> dict[str, Any]:
 
 @router.post("/sessions/{session_id}/resize")
 async def resize_session(session_id: str, request: Request) -> dict[str, Any]:
-    body = await request.json()
+    body = await _request_json(request)
     with _STATE_LOCK:
         payload = _load_sessions()
         entry = _find_session(payload, _clean_session_id(session_id))
@@ -1242,7 +1287,7 @@ async def stream_session(session_id: str, request: Request) -> StreamingResponse
 
 @router.post("/sessions/{session_id}/input")
 async def send_input(session_id: str, request: Request) -> dict[str, Any]:
-    body = await request.json()
+    body = await _request_json(request, max_bytes=_MAX_INPUT_BYTES + 1024)
     with _STATE_LOCK:
         payload = _load_sessions()
         entry = _find_session(payload, _clean_session_id(session_id))
@@ -1274,7 +1319,7 @@ async def send_input(session_id: str, request: Request) -> dict[str, Any]:
 
 @router.post("/sessions/{session_id}/rename")
 async def rename_session(session_id: str, request: Request) -> dict[str, Any]:
-    body = await request.json()
+    body = await _request_json(request)
     with _STATE_LOCK:
         payload = _load_sessions()
         entry = _find_session(payload, _clean_session_id(session_id))
@@ -1292,7 +1337,7 @@ async def rename_session(session_id: str, request: Request) -> dict[str, Any]:
 
 @router.post("/sessions/{session_id}/close")
 async def close_session(session_id: str, request: Request) -> dict[str, Any]:
-    body = await request.json()
+    body = await _request_json(request)
     with _STATE_LOCK:
         payload = _load_sessions()
         entry = _find_session(payload, _clean_session_id(session_id))

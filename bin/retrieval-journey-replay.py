@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -362,7 +363,10 @@ def run_command(command: str | None) -> dict[str, Any] | None:
     if not command:
         return None
     started = time.perf_counter()
-    result = subprocess.run(command, shell=True, text=True, capture_output=True, check=False)
+    argv = shlex.split(command)
+    if not argv:
+        return None
+    result = subprocess.run(argv, text=True, capture_output=True, check=False)
     return {
         "command": command,
         "returncode": result.returncode,
@@ -416,8 +420,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token-file", required=True, help="Agent bootstrap token file readable by the current user.")
     parser.add_argument("--vault-root", default=str(Path.home() / "ArcLink"))
     parser.add_argument("--notion-index-root", default="", help="Optional notion-shared markdown root to seed.")
-    parser.add_argument("--after-seed-command", default="", help="Optional shell command after seeding, e.g. qmd-refresh for direct notion-index seeding.")
-    parser.add_argument("--after-cleanup-command", default="", help="Optional shell command after cleanup.")
+    parser.add_argument("--after-seed-command", default="", help="Optional argv command after seeding, e.g. qmd-refresh for direct notion-index seeding.")
+    parser.add_argument("--after-cleanup-command", default="", help="Optional argv command after cleanup.")
     parser.add_argument("--bulk-count", type=int, default=30)
     parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--poll-interval", type=float, default=0.25)

@@ -1178,6 +1178,22 @@ def test_request_id_propagation_and_cors() -> None:
     expect(forced_secure.cookie_secure is True, "explicit cookie secure override should win")
     expect(forced_secure.cookie_samesite == "Lax", "explicit SameSite compatibility override should win")
 
+    wildcard_config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_CORS_ORIGIN": "*",
+    })
+    status, payload, headers = hosted.route_arclink_hosted_api(
+        conn,
+        method="OPTIONS",
+        path="/api/v1/onboarding/start",
+        headers={},
+        config=wildcard_config,
+    )
+    expect(status == 204, f"wildcard preflight should still route, got {status}: {payload}")
+    wildcard_cors = {k.lower(): v for k, v in headers}
+    expect("access-control-allow-origin" not in wildcard_cors, str(wildcard_cors))
+    expect(wildcard_config.cors_origin == "", "wildcard CORS must fail closed for credentialed requests")
+
     print("PASS test_request_id_propagation_and_cors")
 
 

@@ -259,7 +259,11 @@ WIREGUARD_PRIVATE_IP="${WIREGUARD_WORKER_IP%%/*}"
 if [[ "$WIREGUARD_WORKER_IP" == */* ]]; then
   WIREGUARD_PRIVATE_CIDR="$WIREGUARD_WORKER_IP"
 elif [[ -n "$WIREGUARD_WORKER_IP" ]]; then
-  WIREGUARD_PRIVATE_CIDR="$WIREGUARD_WORKER_IP/32"
+  if [[ "$WIREGUARD_WORKER_IP" == *:* ]]; then
+    WIREGUARD_PRIVATE_CIDR="$WIREGUARD_WORKER_IP/128"
+  else
+    WIREGUARD_PRIVATE_CIDR="$WIREGUARD_WORKER_IP/32"
+  fi
 fi
 if [[ -z "$PRIVATE_DNS_NAME" && -n "$WIREGUARD_PRIVATE_IP" ]]; then
   PRIVATE_DNS_NAME="$WIREGUARD_PRIVATE_IP"
@@ -363,6 +367,7 @@ load_wireguard_control_public_key() {
 }
 
 validate_wireguard_args() {
+  local endpoint_port=""
   if [[ "$WIREGUARD_SKIP" == "1" ]]; then
     return 0
   fi
@@ -374,19 +379,67 @@ validate_wireguard_args() {
     fail "WireGuard setup requires worker IP, control public key, and control endpoint"
     return 1
   fi
-  if [[ ! "$WIREGUARD_PRIVATE_CIDR" =~ ^[A-Za-z0-9_.:-]+/[0-9]{1,3}$ ]]; then
+  if ! WIREGUARD_PRIVATE_CIDR="$(python3 - "$WIREGUARD_PRIVATE_CIDR" <<'PY'
+import ipaddress
+import sys
+
+try:
+    print(ipaddress.ip_interface(sys.argv[1]))
+except ValueError:
+    raise SystemExit(1)
+PY
+  )"; then
     fail "WireGuard worker IP must be an IP/CIDR such as 10.44.0.11/32"
     return 1
   fi
+  WIREGUARD_PRIVATE_IP="${WIREGUARD_PRIVATE_CIDR%%/*}"
   if [[ ! "$WIREGUARD_CONTROL_PUBLIC_KEY" =~ ^[A-Za-z0-9+/=]{20,100}$ ]]; then
     fail "WireGuard control public key is not a valid public-key-shaped value"
     return 1
   fi
-  if [[ ! "$WIREGUARD_CONTROL_ENDPOINT" =~ ^[A-Za-z0-9_.:-]+:[0-9]{1,5}$ ]]; then
+  if [[ "$WIREGUARD_CONTROL_ENDPOINT" =~ ^\[([0-9A-Fa-f:.]+)\]:([0-9]{1,5})$ ]]; then
+    endpoint_port="${BASH_REMATCH[2]}"
+    if ! python3 - "${BASH_REMATCH[1]}" <<'PY'
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_address(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+PY
+    then
+      fail "WireGuard control endpoint host is invalid"
+      return 1
+    fi
+  elif [[ "$WIREGUARD_CONTROL_ENDPOINT" =~ ^[A-Za-z0-9_.-]+:([0-9]{1,5})$ ]]; then
+    endpoint_port="${BASH_REMATCH[1]}"
+  else
     fail "WireGuard control endpoint must be host:port"
     return 1
   fi
-  if [[ ! "$WIREGUARD_INTERFACE" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  if (( endpoint_port < 1 || endpoint_port > 65535 )); then
+    fail "WireGuard control endpoint port is out of range"
+    return 1
+  fi
+  if ! python3 - "$WIREGUARD_CONTROL_ALLOWED_IPS" <<'PY'
+import ipaddress
+import sys
+
+for raw in sys.argv[1].split(","):
+    value = raw.strip()
+    if not value:
+        raise SystemExit(1)
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        raise SystemExit(1)
+PY
+  then
+    fail "WireGuard control allowed IPs must be a comma-separated CIDR list"
+    return 1
+  fi
+  if [[ ! "$WIREGUARD_INTERFACE" =~ ^[A-Za-z0-9_.-]+$ || ${#WIREGUARD_INTERFACE} -gt 15 ]]; then
     fail "WireGuard interface name is unsafe"
     return 1
   fi

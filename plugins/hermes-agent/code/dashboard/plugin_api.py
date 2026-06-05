@@ -90,6 +90,7 @@ _SENSITIVE_FILE_NAMES = {
     "id_rsa",
 }
 _MAX_TEXT_BYTES = 1_000_000
+_MAX_JSON_BODY_BYTES = _MAX_TEXT_BYTES + 64_000
 _MAX_DIFF_BYTES = 400_000
 _MAX_SEARCH_FILE_BYTES = 400_000
 _MAX_SEARCH_RESULTS = 80
@@ -264,6 +265,53 @@ def _env_first(*keys: str) -> str:
         if value:
             return value
     return ""
+
+
+async def _request_body_limited(request: Request, *, max_bytes: int, label: str) -> bytes | None:
+    headers = getattr(request, "headers", {}) or {}
+    try:
+        content_length = int(str(headers.get("content-length") or headers.get("Content-Length") or "0"))
+    except (TypeError, ValueError):
+        content_length = 0
+    if content_length > max_bytes:
+        raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+    stream_reader = getattr(request, "stream", None)
+    if callable(stream_reader):
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in stream_reader():
+            if isinstance(chunk, str):
+                chunk = chunk.encode("utf-8")
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+            chunks.append(bytes(chunk))
+        return b"".join(chunks)
+    body_reader = getattr(request, "body", None)
+    if callable(body_reader):
+        raw = await body_reader()
+        if len(raw) > max_bytes:
+            raise HTTPException(status_code=413, detail=f"{label} request body is too large")
+        return bytes(raw)
+    return None
+
+
+async def _request_json(request: Request, *, max_bytes: int = _MAX_JSON_BODY_BYTES) -> dict[str, Any]:
+    raw = await _request_body_limited(request, max_bytes=max_bytes, label="Code")
+    if raw is not None:
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="Code request body must be JSON") from None
+    else:
+        parsed = await request.json()
+        if parsed is None:
+            return {}
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="Code request body must be a JSON object")
+    return parsed
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -1353,7 +1401,7 @@ async def status() -> dict[str, Any]:
 
 @router.post("/share/request")
 async def share_request(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     payload = payload if isinstance(payload, dict) else {}
     root_ctx = _root_context(payload.get("root") or payload.get("root_id"))
     if str(root_ctx.get("id") or "").strip().lower() == "linked":
@@ -1383,7 +1431,7 @@ async def repos() -> dict[str, Any]:
 
 @router.post("/repos/open")
 async def open_repo(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     target, relative, root_ctx = _resolve_repo(payload.get("path") or "/", payload.get("root") or payload.get("root_id"))
     root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
     repo = _repo_item(root, target, str(root_ctx["id"]), str(root_ctx["label"]))
@@ -1425,7 +1473,7 @@ async def git_diff(repo: str = "/", path: str = "", root: str = "workspace", sta
 
 @router.post("/git/stage")
 async def git_stage(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     if bool(payload.get("all")):
         _run_git(repo, ["add", "-A"])
@@ -1437,7 +1485,7 @@ async def git_stage(request: Request) -> dict[str, Any]:
 
 @router.post("/git/unstage")
 async def git_unstage(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     has_head = _repo_has_head(repo)
     if bool(payload.get("all")):
@@ -1456,7 +1504,7 @@ async def git_unstage(request: Request) -> dict[str, Any]:
 
 @router.post("/git/discard")
 async def git_discard(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Discard requires explicit confirmation")
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
@@ -1475,7 +1523,7 @@ async def git_discard(request: Request) -> dict[str, Any]:
 
 @router.post("/git/commit")
 async def git_commit(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     message = _clean_text(payload.get("message"), 240)
     if not message:
@@ -1486,7 +1534,7 @@ async def git_commit(request: Request) -> dict[str, Any]:
 
 @router.post("/git/ignore")
 async def git_ignore(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
     path = _clean_repo_file_path(payload.get("path"))
     gitignore = repo / ".gitignore"
@@ -1499,7 +1547,7 @@ async def git_ignore(request: Request) -> dict[str, Any]:
 
 @router.post("/git/pull")
 async def git_pull(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Pull requires explicit confirmation")
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
@@ -1509,7 +1557,7 @@ async def git_pull(request: Request) -> dict[str, Any]:
 
 @router.post("/git/push")
 async def git_push(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Push requires explicit confirmation")
     repo, relative, root_ctx = _resolve_writable_repo(payload.get("repo") or "/", payload.get("root") or payload.get("root_id"))
@@ -1661,7 +1709,7 @@ async def preview(path: str, root: str = "workspace") -> Any:
 
 @router.post("/save")
 async def save(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     target, relative, root_ctx = _resolve(payload.get("path"), payload.get("root") or payload.get("root_id"))
     _assert_writable_root(root_ctx)
     _assert_linked_writable_path(root_ctx, target, relative)
@@ -1684,7 +1732,7 @@ async def save(request: Request) -> dict[str, Any]:
 
 @router.post("/mkdir")
 async def mkdir(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     target, relative, root_ctx = _resolve(payload.get("path"), payload.get("root") or payload.get("root_id"))
     _assert_writable_root(root_ctx)
     _assert_linked_writable_path(root_ctx, target, relative)
@@ -1694,7 +1742,7 @@ async def mkdir(request: Request) -> dict[str, Any]:
 
 @router.post("/ops/rename")
 async def rename_item(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     source, _relative, root_ctx = _require_operable_path(payload.get("path"), payload.get("root") or payload.get("root_id"))
     name = _clean_leaf_name(payload.get("name"))
     root_path = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
@@ -1706,7 +1754,7 @@ async def rename_item(request: Request) -> dict[str, Any]:
 
 @router.post("/ops/move")
 async def move_item(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or payload.get("root_id")
     source, _source_relative, root_ctx = _require_operable_path(payload.get("path"), root_id)
     destination, destination_relative, _destination_root = _require_destination(payload.get("destination"), root_ctx["id"])
@@ -1716,7 +1764,7 @@ async def move_item(request: Request) -> dict[str, Any]:
 
 @router.post("/ops/duplicate")
 async def duplicate_item(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     root_id = payload.get("root") or payload.get("root_id")
     source, source_relative, root_ctx = _resolve(payload.get("path"), root_id)
     if bool(root_ctx.get("read_only")) or str(root_ctx.get("id") or "") == "linked":
@@ -1759,7 +1807,7 @@ async def duplicate_item(request: Request) -> dict[str, Any]:
 
 @router.post("/ops/trash")
 async def trash_item(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     if payload.get("confirm") is not True:
         raise HTTPException(status_code=400, detail="Trash requires explicit confirmation")
     source, source_relative, root_ctx = _require_operable_path(payload.get("path"), payload.get("root") or payload.get("root_id"))
@@ -1789,7 +1837,7 @@ async def trash() -> dict[str, Any]:
 
 @router.post("/ops/restore")
 async def restore_item(request: Request) -> dict[str, Any]:
-    payload = await request.json()
+    payload = await _request_json(request)
     entry_id = str(payload.get("id") or "").strip()
     if not entry_id:
         raise HTTPException(status_code=400, detail="Trash id is required")

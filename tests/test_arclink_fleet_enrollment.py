@@ -192,6 +192,76 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     print("PASS test_callback_attests_worker_links_inventory_and_verifies_chain")
 
 
+def test_attestation_rejects_unsafe_network_identity_values() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_hardening_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_hardening_test")
+    conn = memory_db(control)
+    cases = [
+        ("hostname_control", {"hostname": "bad\nhost"}, "hostname"),
+        ("ssh_host_scheme", {"ssh_host": "https://worker.example.test"}, "SSH host"),
+        ("ssh_user_shell", {"ssh_user": "root;id"}, "SSH user"),
+        ("wg_bad_ip", {"wireguard_private_ip": "10.44.0.999"}, "private CIDR"),
+        ("wg_bad_prefix", {"wireguard_private_cidr": "10.44.0.11/999"}, "private CIDR"),
+        (
+            "wg_ip_mismatch",
+            {"wireguard_private_cidr": "10.44.0.11/32", "wireguard_private_ip": "10.44.0.12"},
+            "does not match",
+        ),
+        ("wg_bad_interface", {"wireguard_interface": "../../../wg"}, "interface"),
+        ("wg_bad_endpoint", {"wireguard_control_endpoint": "control.example.test:99999"}, "endpoint"),
+        ("wg_bad_listen", {"wireguard_listen_port": 70000}, "listen port"),
+        ("wg_bad_firewall", {"wireguard_firewall_status": "allowed\nok"}, "firewall"),
+    ]
+    for suffix, override, expected in cases:
+        enrollment_id = f"flenr_hardening_{suffix}"
+        minted = enrollment.mint_fleet_enrollment(
+            conn,
+            created_by_user_id="operator-1",
+            secret=SECRET,
+            enrollment_id=enrollment_id,
+        )
+        payload = _attestation_payload(f"worker-{suffix.replace('_', '-')}.example.test")
+        payload.update(override)
+        try:
+            enrollment.consume_fleet_enrollment(conn, token=minted["token"], payload=payload, secret=SECRET)
+        except enrollment.ArcLinkFleetEnrollmentError as exc:
+            expect(expected in str(exc), f"{suffix} expected {expected!r}, saw {exc!r}")
+        else:
+            raise AssertionError(f"{suffix} should fail closed")
+        row = conn.execute(
+            "SELECT status FROM arclink_fleet_enrollments WHERE enrollment_id = ?",
+            (enrollment_id,),
+        ).fetchone()
+        expect(row["status"] == "pending", f"{suffix} consumed or revoked token unexpectedly: {dict(row)}")
+    print("PASS test_attestation_rejects_unsafe_network_identity_values")
+
+
+def test_attestation_accepts_valid_ipv6_wireguard_defaults() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_ipv6_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_ipv6_test")
+    conn = memory_db(control)
+    minted = enrollment.mint_fleet_enrollment(
+        conn,
+        created_by_user_id="operator-1",
+        secret=SECRET,
+        enrollment_id="flenr_ipv6",
+    )
+    payload = _attestation_payload("worker-ipv6.example.test")
+    payload["wireguard_private_ip"] = "fd44::11"
+    payload["wireguard_public_key"] = WORKER_WG_PUBLIC_KEY
+    payload["wireguard_control_endpoint"] = "[fd44::1]:51820"
+    result = enrollment.consume_fleet_enrollment(conn, token=minted["token"], payload=payload, secret=SECRET)
+    expect(result["wireguard_private_ip"] == "fd44::11", str(result))
+    expect(result["wireguard_private_cidr"] == "fd44::11/128", str(result))
+    machine = conn.execute(
+        "SELECT metadata_json FROM arclink_inventory_machines WHERE machine_id = ?",
+        (result["machine_id"],),
+    ).fetchone()
+    metadata = json.loads(machine["metadata_json"])
+    expect(metadata["wireguard"]["control_endpoint"] == "[fd44::1]:51820", str(metadata))
+    print("PASS test_attestation_accepts_valid_ipv6_wireguard_defaults")
+
+
 def test_fingerprint_mismatch_requires_explicit_reattest() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_fp_test")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_enrollment_fp_test")
@@ -412,13 +482,15 @@ def main() -> int:
     test_mint_stores_only_hmac_hash_and_lists_without_token()
     test_tokens_fail_closed_when_malformed_wrong_revoked_expired_or_reused()
     test_callback_attests_worker_links_inventory_and_verifies_chain()
+    test_attestation_rejects_unsafe_network_identity_values()
+    test_attestation_accepts_valid_ipv6_wireguard_defaults()
     test_fingerprint_mismatch_requires_explicit_reattest()
     test_audit_chain_tampering_notifies_operator()
     test_cli_list_and_revoke_never_render_token_hash()
     test_hmac_root_rotation_revokes_pending_tokens_without_rendering_secret()
     test_inventory_health_verifies_chain_and_notifies_expired_enrollments()
     test_explicit_reattest_updates_fingerprint_without_rendering_it()
-    print("PASS all 9 ArcLink fleet enrollment tests")
+    print("PASS all 11 ArcLink fleet enrollment tests")
     return 0
 
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
+import re
 import secrets
 import shlex
 import sqlite3
@@ -37,6 +39,11 @@ RunFn = Callable[..., subprocess.CompletedProcess[str]]
 CLOUD_INVENTORY_PROVIDERS = frozenset({"hetzner", "linode"})
 FLEET_JOIN_SCRIPT = "bin/arclink-fleet-join.sh"
 FLEET_PREREQ_LIBRARY = "bin/lib/ensure-prereqs.sh"
+_HOST_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}$")
+_SSH_USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+_LABEL_RE = re.compile(r"^[A-Za-z0-9_.-]{0,96}$")
+_WIREGUARD_PUBLIC_KEY_RE = re.compile(r"^[A-Za-z0-9+/=]{20,100}$")
+_WIREGUARD_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 
 
 def _inventory_id() -> str:
@@ -64,6 +71,70 @@ def _clean_status(value: str) -> str:
     return status
 
 
+def _clean_host_value(value: Any, *, label: str, required: bool = False) -> str:
+    text = str(value or "").strip().lower().strip(".")
+    if not text:
+        if required:
+            raise ArcLinkInventoryError(f"{label} is required")
+        return ""
+    if any(ch in text for ch in "\x00\r\n") or not _HOST_VALUE_RE.fullmatch(text):
+        raise ArcLinkInventoryError(f"invalid {label}")
+    return text
+
+
+def _clean_ssh_user(value: Any, *, default: str = "") -> str:
+    text = str(value or default).strip()
+    if not text:
+        return ""
+    if not _SSH_USER_RE.fullmatch(text):
+        raise ArcLinkInventoryError("invalid SSH user")
+    return text
+
+
+def _clean_label(value: Any, *, label: str) -> str:
+    text = str(value or "").strip().lower()
+    if any(ch in text for ch in "\x00\r\n") or not _LABEL_RE.fullmatch(text):
+        raise ArcLinkInventoryError(f"invalid {label}")
+    return text
+
+
+def _clean_optional_wireguard_cidr(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "/" not in text:
+        try:
+            prefix = 128 if ipaddress.ip_address(text).version == 6 else 32
+        except ValueError:
+            prefix = 32
+        text = f"{text}/{prefix}"
+    if any(ch in text for ch in "\x00\r\n"):
+        raise ArcLinkInventoryError("invalid WireGuard private CIDR")
+    try:
+        return str(ipaddress.ip_interface(text))
+    except ValueError as exc:
+        raise ArcLinkInventoryError("invalid WireGuard private CIDR") from exc
+
+
+def _clean_optional_wireguard_public_key(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", "", text)
+    if not _WIREGUARD_PUBLIC_KEY_RE.fullmatch(text):
+        raise ArcLinkInventoryError("invalid WireGuard public key")
+    return text
+
+
+def _clean_optional_wireguard_interface(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if any(ch in text for ch in "\x00\r\n") or not _WIREGUARD_INTERFACE_RE.fullmatch(text):
+        raise ArcLinkInventoryError("invalid WireGuard interface")
+    return text
+
+
 def _safe_json(value: Mapping[str, Any] | None) -> str:
     return json_dumps_safe(value, label="ArcLink inventory", error_cls=ArcLinkInventoryError)
 
@@ -89,13 +160,11 @@ def register_inventory_machine(
     provider_billing_ref: str = "",
 ) -> dict[str, Any]:
     clean_provider = _clean_provider(provider)
-    clean_hostname = str(hostname or "").strip().lower()
-    if not clean_hostname:
-        raise ArcLinkInventoryError("inventory machines require a hostname")
+    clean_hostname = _clean_host_value(hostname, label="inventory hostname", required=True)
     clean_status = _clean_status(status)
-    clean_region = str(region or "").strip().lower()
-    clean_ssh_host = str(ssh_host or "").strip()
-    clean_ssh_user = str(ssh_user or "").strip()
+    clean_region = _clean_label(region, label="inventory region")
+    clean_ssh_host = _clean_host_value(ssh_host, label="SSH host")
+    clean_ssh_user = _clean_ssh_user(ssh_user)
     clean_resource_id = str(provider_resource_id or "").strip()
     clean_billing_ref = str(provider_billing_ref or "").strip()
     host_link = str(machine_host_link or "").strip()
@@ -363,8 +432,8 @@ def probe_inventory_machine(
     runner: RunFn = subprocess.run,
 ) -> dict[str, Any]:
     machine = get_inventory_machine(conn, key)
-    ssh_host = str(machine.get("ssh_host") or machine.get("hostname") or "").strip()
-    ssh_user = str(machine.get("ssh_user") or "arclink").strip()
+    ssh_host = _clean_host_value(machine.get("ssh_host") or machine.get("hostname") or "", label="SSH host", required=True)
+    ssh_user = _clean_ssh_user(machine.get("ssh_user") or "arclink", default="arclink")
     if not ssh_host:
         raise ArcLinkInventoryError("inventory machine has no SSH host")
     remote = "nproc; cat /proc/meminfo | head -3; df -BG / /var/lib/docker 2>/dev/null; docker --version; docker compose version"
@@ -1138,17 +1207,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"fleet_probe_all probes={result['probe_count']} pruned={result['pruned']}")
         elif args.command == "add" and args.provider == "manual":
             tags = json_loads_safe(args.tags_json)
-            ssh_host = args.ssh_host or args.hostname
-            private_dns_name = str(args.private_dns_name or "").strip().lower().strip(".")
-            tailscale_dns_name = str(args.tailscale_dns_name or "").strip().lower().strip(".")
-            wireguard_private_ip = str(args.wireguard_private_ip or "").strip()
-            wireguard_public_key = str(args.wireguard_public_key or "").strip()
-            wireguard_interface = str(args.wireguard_interface or "").strip()
+            ssh_host = _clean_host_value(args.ssh_host or args.hostname, label="SSH host", required=True)
+            ssh_user = _clean_ssh_user(args.ssh_user, default="arclink")
+            private_dns_name = _clean_host_value(args.private_dns_name, label="private DNS name")
+            tailscale_dns_name = _clean_host_value(args.tailscale_dns_name, label="Tailscale DNS name")
+            wireguard_private_ip = _clean_optional_wireguard_cidr(args.wireguard_private_ip)
+            wireguard_public_key = _clean_optional_wireguard_public_key(args.wireguard_public_key)
+            wireguard_interface = _clean_optional_wireguard_interface(args.wireguard_interface)
             if not private_dns_name and wireguard_private_ip:
                 private_dns_name = wireguard_private_ip.split("/", 1)[0].lower().strip(".")
             if not tailscale_dns_name and str(ssh_host).strip().lower().endswith(".ts.net"):
                 tailscale_dns_name = str(ssh_host).strip().lower().strip(".")
-            metadata = {"ssh_host": ssh_host, "ssh_user": args.ssh_user}
+            metadata = {"ssh_host": ssh_host, "ssh_user": ssh_user}
             if private_dns_name:
                 metadata["private_dns_name"] = private_dns_name
                 metadata["control_network_mode"] = "remote"
@@ -1159,7 +1229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 metadata["wireguard"] = {
                     "interface": wireguard_interface,
                     "private_ip": wireguard_private_ip.split("/", 1)[0],
-                    "private_cidr": wireguard_private_ip if "/" in wireguard_private_ip else (f"{wireguard_private_ip}/32" if wireguard_private_ip else ""),
+                    "private_cidr": wireguard_private_ip,
                     "public_key": wireguard_public_key,
                 }
                 metadata["control_network_mode"] = "remote"
@@ -1168,7 +1238,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 provider="manual",
                 hostname=args.hostname,
                 ssh_host=ssh_host,
-                ssh_user=args.ssh_user,
+                ssh_user=ssh_user,
                 region=args.region,
                 status="pending",
                 capacity_slots=args.capacity_slots,

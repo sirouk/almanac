@@ -88,6 +88,28 @@ class JsonRequest:
         return self.payload
 
 
+class RawBodyRequest:
+    def __init__(self, raw: bytes) -> None:
+        self.raw = raw
+        self.headers = {"content-length": str(len(raw))}
+
+    async def body(self) -> bytes:
+        return self.raw
+
+
+class StreamingRawBodyRequest:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.headers: dict[str, str] = {}
+
+    async def stream(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def json(self) -> dict:
+        raise AssertionError("streaming request body should be parsed without falling back to request.json()")
+
+
 class MemoryUpload:
     def __init__(self, filename: str, body: bytes) -> None:
         self.filename = filename
@@ -1516,6 +1538,23 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
             else:
                 raise AssertionError("expected unsupported upload conflict policy to be rejected")
 
+            os.environ["DRIVE_MAX_UPLOAD_BYTES"] = "4"
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        files=[MemoryUpload("too-large.md", b"abcde")],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 413, f"expected oversized upload rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected oversized upload to be rejected")
+            expect(not (docs / "too-large.md").exists(), "oversized upload must not write a partial file")
+            expect(not list(docs.glob(".too-large.md.upload-*.tmp")), "oversized upload must remove local temp files")
+            os.environ.pop("DRIVE_MAX_UPLOAD_BYTES", None)
+
             try:
                 asyncio.run(
                     drive_api.copy(
@@ -1937,6 +1976,24 @@ def test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths() -> No
             expect(code_status["workspace_root"] == str(default_workspace), str(code_status))
             terminal_status = asyncio.run(terminal_api.status())
             expect(terminal_status["workspace_root_available"] is True, str(terminal_status))
+            for label, parser in (
+                ("Drive", drive_api._request_json),
+                ("Code", code_api._request_json),
+            ):
+                try:
+                    asyncio.run(parser(RawBodyRequest(b'{"oversized":true}'), max_bytes=4))
+                except Exception as exc:
+                    expect(getattr(exc, "status_code", None) == 413, f"expected {label} JSON body cap, got {exc!r}")
+                else:
+                    raise AssertionError(f"expected {label} JSON body cap")
+                streamed = asyncio.run(parser(StreamingRawBodyRequest([b'{"streamed":', b"true}"]), max_bytes=64))
+                expect(streamed == {"streamed": True}, f"{label} should parse bounded streamed JSON bodies")
+                try:
+                    asyncio.run(parser(StreamingRawBodyRequest([b'{"oversized":', b"true}"]), max_bytes=4))
+                except Exception as exc:
+                    expect(getattr(exc, "status_code", None) == 413, f"expected {label} streamed JSON body cap, got {exc!r}")
+                else:
+                    raise AssertionError(f"expected {label} streamed JSON body cap")
 
             os.environ["CODE_WORKSPACE_ROOT"] = str(hermes_home / "secrets")
             code_sensitive_root_status = asyncio.run(code_api.status())
@@ -2121,6 +2178,20 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["limits"]["scrollback_lines"] == 50000, str(status))
             expect(status["limits"]["reattach_scrollback_lines"] == 4000, str(status))
             expect(status["transport"]["mode"] == "sse", str(status))
+            try:
+                asyncio.run(terminal_api._request_json(RawBodyRequest(b'{"oversized":true}'), max_bytes=4))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 413, f"expected terminal JSON body cap, got {exc!r}")
+            else:
+                raise AssertionError("expected terminal JSON body cap")
+            streamed_terminal = asyncio.run(terminal_api._request_json(StreamingRawBodyRequest([b'{"streamed":', b"true}"]), max_bytes=64))
+            expect(streamed_terminal == {"streamed": True}, "Terminal should parse bounded streamed JSON bodies")
+            try:
+                asyncio.run(terminal_api._request_json(StreamingRawBodyRequest([b'{"oversized":', b"true}"]), max_bytes=4))
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 413, f"expected terminal streamed JSON body cap, got {exc!r}")
+            else:
+                raise AssertionError("expected terminal streamed JSON body cap")
 
             created = asyncio.run(
                 terminal_api.create_session(JsonRequest({"name": "Build", "folder": "Work", "cwd": "/", "rows": 12, "cols": 80}))

@@ -107,6 +107,38 @@ def test_inventory_list_includes_live_fleet_hosts() -> None:
     print("PASS test_inventory_list_includes_live_fleet_hosts")
 
 
+def test_inventory_registration_rejects_unsafe_host_identity_values() -> None:
+    control = load_module("arclink_control.py", "arclink_control_inventory_hardening")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_hardening")
+    conn = memory_db(control)
+    cases = [
+        {"hostname": "worker\nbad.example.test"},
+        {"hostname": "worker-safe.example.test", "ssh_host": "https://worker-safe.example.test"},
+        {"hostname": "worker-safe.example.test", "ssh_user": "root;id"},
+        {"hostname": "worker-safe.example.test", "region": "iad\nx"},
+    ]
+    for idx, override in enumerate(cases):
+        payload = {
+            "provider": "manual",
+            "hostname": f"worker-hardening-{idx}.example.test",
+            "ssh_host": "10.0.0.10",
+            "ssh_user": "arclink",
+            "region": "iad",
+            "status": "ready",
+            "capacity_slots": 4,
+        }
+        payload.update(override)
+        try:
+            inventory.register_inventory_machine(conn, **payload)
+        except inventory.ArcLinkInventoryError:
+            pass
+        else:
+            raise AssertionError(f"unsafe inventory payload should fail: {payload}")
+    rows = conn.execute("SELECT COUNT(*) AS count FROM arclink_inventory_machines").fetchone()
+    expect(rows["count"] == 0, f"unsafe inventory rows were inserted: {dict(rows)}")
+    print("PASS test_inventory_registration_rejects_unsafe_host_identity_values")
+
+
 def test_cloud_inventory_lifecycle_contract_is_provider_parity() -> None:
     control = load_module("arclink_control.py", "arclink_control_inventory_lifecycle_parity")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_lifecycle_parity")
@@ -201,4 +233,5 @@ def test_cloud_inventory_lifecycle_contract_is_provider_parity() -> None:
 if __name__ == "__main__":
     test_inventory_list_filters_are_scriptable()
     test_inventory_list_includes_live_fleet_hosts()
+    test_inventory_registration_rejects_unsafe_host_identity_values()
     test_cloud_inventory_lifecycle_contract_is_provider_parity()

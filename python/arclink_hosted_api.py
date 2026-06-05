@@ -185,7 +185,7 @@ class HostedApiConfig:
         e = _load_hosted_api_env(env)
         self.env: dict[str, str] = e
         self.base_domain: str = default_base_domain(e)
-        self.cors_origin: str = str(e.get("ARCLINK_CORS_ORIGIN", "")).strip()
+        self.cors_origin: str = _normalize_cors_origin(e.get("ARCLINK_CORS_ORIGIN", ""))
         self.cookie_domain: str = str(e.get("ARCLINK_COOKIE_DOMAIN", "")).strip()
         self.cookie_samesite: str = _normalize_cookie_samesite(str(e.get("ARCLINK_COOKIE_SAMESITE", SESSION_COOKIE_SAMESITE)))
         cookie_secure_raw = str(e.get("ARCLINK_COOKIE_SECURE", "")).strip()
@@ -362,6 +362,28 @@ def _is_local_http_origin(origin: str) -> bool:
         return False
     host = (parsed.hostname or "").strip().lower()
     return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _normalize_cors_origin(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text == "*" or any(ch in text for ch in "\x00\r\n"):
+        if text == "*":
+            logger.warning("Ignoring wildcard ARCLINK_CORS_ORIGIN because ArcLink uses credentialed CORS.")
+        return ""
+    parsed = urlparse(text.rstrip("/"))
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.path
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        logger.warning("Ignoring invalid ARCLINK_CORS_ORIGIN value.")
+        return ""
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
 
 
 def _normalize_cookie_samesite(value: str) -> str:

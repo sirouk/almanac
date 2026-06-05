@@ -126,6 +126,21 @@ class TestBackend(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if self.path == "/large-json":
+            body = b'{"asset":"/assets/large.json","ok":true,"padding":"' + (b"x" * 2048) + b'"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path == "/download.bin":
+            body = b"binary-download-proof"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -330,6 +345,48 @@ def test_proxy_bridges_arclink_session_to_backend_hermes_api_token() -> None:
             print("PASS test_proxy_bridges_arclink_session_to_backend_hermes_api_token")
         finally:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
+def test_proxy_bounds_public_login_body_and_streams_large_backend_responses() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_streaming_body_limit_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_DASHBOARD_PROXY_MAX_LOGIN_BODY_BYTES"] = "16"
+        os.environ["ARCLINK_DASHBOARD_PROXY_REWRITE_BUFFER_BYTES"] = "16"
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            status, _headers, body = request(
+                proxy.server_port,
+                "/__arclink/login",
+                method="POST",
+                body="username=alex&password=this-body-is-too-large",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            expect(status == 413 and "too large" in body.lower(), f"expected capped login body, saw {status} {body!r}")
+
+            os.environ["ARCLINK_DASHBOARD_PROXY_MAX_LOGIN_BODY_BYTES"] = str(64 * 1024)
+            cookie = login(proxy.server_port)
+            status, _headers, body = request(
+                proxy.server_port,
+                "/large-json",
+                headers={"Cookie": cookie, "X-Forwarded-Prefix": "/agent/atlas"},
+            )
+            expect(status == 200, f"expected large JSON stream success, saw {status} {body!r}")
+            expect('"/assets/large.json"' in body, "large JSON should stream without mount-prefix rewriting")
+
+            status, _headers, body = request(proxy.server_port, "/download.bin", headers={"Cookie": cookie})
+            expect(status == 200 and body == "binary-download-proof", f"expected streamed binary response, saw {status} {body!r}")
+            print("PASS test_proxy_bounds_public_login_body_and_streams_large_backend_responses")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def test_proxy_login_normalizes_email_username_and_copied_password_whitespace() -> None:
@@ -692,6 +749,16 @@ def test_proxy_rejects_cross_origin_dashboard_mutations() -> None:
             )
             expect(status == 403, f"expected cross-origin mutation rejection, saw {status} {body!r}")
             expect("Cross-origin" in body, body)
+
+            status, _headers, body = request(
+                proxy.server_port,
+                "/api/mutate",
+                method="POST",
+                body="{}",
+                headers={"Cookie": cookie},
+            )
+            expect(status == 403, f"expected headerless mutation rejection, saw {status} {body!r}")
+            expect("Cross-origin" in body, body)
             print("PASS test_proxy_rejects_cross_origin_dashboard_mutations")
         finally:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
@@ -810,6 +877,7 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
         )
 
         previous = os.environ.get("ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS")
+        previous_body_cap = os.environ.get("ARCLINK_DASHBOARD_PROXY_MAX_REQUEST_BODY_BYTES")
         os.environ["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] = "1"
         backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
         try:
@@ -861,18 +929,33 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
                 expect(parsed.get("arclink_managed") is True, parsed)
             finally:
                 connection.close()
+
+            os.environ["ARCLINK_DASHBOARD_PROXY_MAX_REQUEST_BODY_BYTES"] = "4"
+            status, headers, body = request(
+                proxy.server_port,
+                "/api/gateway/restart",
+                method="POST",
+                body='{"body":"too-large"}',
+                headers={"Cookie": cookie, "Origin": same_origin, "Content-Type": "application/json"},
+            )
+            expect(status == 413 and "too large" in body.lower(), f"expected capped managed lifecycle body, saw {status} {body!r}")
             print("PASS test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations")
         finally:
             if previous is None:
                 os.environ.pop("ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS", None)
             else:
                 os.environ["ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS"] = previous
+            if previous_body_cap is None:
+                os.environ.pop("ARCLINK_DASHBOARD_PROXY_MAX_REQUEST_BODY_BYTES", None)
+            else:
+                os.environ["ARCLINK_DASHBOARD_PROXY_MAX_REQUEST_BODY_BYTES"] = previous_body_cap
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_bridges_arclink_session_to_backend_hermes_api_token()
+    test_proxy_bounds_public_login_body_and_streams_large_backend_responses()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
     test_proxy_scopes_session_cookie_per_dashboard_instance()
     test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards()
@@ -884,7 +967,7 @@ def main() -> int:
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 13 dashboard-auth-proxy regression tests")
+    print("PASS all 14 dashboard-auth-proxy regression tests")
     return 0
 
 

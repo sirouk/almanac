@@ -9512,7 +9512,9 @@ sync_control_docker_image_to_fleet_workers() {
   local image="${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
   local db_path="$BOOTSTRAP_DIR/arclink-priv/state/arclink-control.sqlite3"
   local key_path="" known_hosts="" local_image_id="" worker="" host_id="" hostname="" ssh_host="" ssh_user="" health_state=""
-  local remote_image_id="" q_image="" target="" sync_failed=0
+  local remote_image_id="" remote_probe="" probe_marker=$'arclink-ssh-ok\t' q_image="" target="" sync_failed=0
+  local inspect_timeout="${ARCLINK_FLEET_IMAGE_SYNC_INSPECT_TIMEOUT_SECONDS:-30}"
+  local load_timeout="${ARCLINK_FLEET_IMAGE_SYNC_LOAD_TIMEOUT_SECONDS:-900}"
   local -a ssh_opts=()
 
   [[ "$enabled" == "0" || "$enabled" == "false" || "$enabled" == "no" ]] && return 0
@@ -9542,6 +9544,8 @@ sync_control_docker_image_to_fleet_workers() {
     -o BatchMode=yes
     -o ConnectTimeout=15
     -o IdentitiesOnly=yes
+    -o ServerAliveInterval=5
+    -o ServerAliveCountMax=2
     -o StrictHostKeyChecking=accept-new
   )
   if [[ -n "$known_hosts" ]]; then
@@ -9565,12 +9569,20 @@ sync_control_docker_image_to_fleet_workers() {
       ssh-keyscan -H "$ssh_host" >>"$known_hosts" 2>/dev/null || true
       sort -u -o "$known_hosts" "$known_hosts" 2>/dev/null || true
     fi
-    remote_image_id="$(ssh "${ssh_opts[@]}" "$target" "docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true" </dev/null 2>/dev/null || true)"
+    remote_probe="$(timeout "$inspect_timeout" ssh "${ssh_opts[@]}" "$target" "printf 'arclink-ssh-ok\t'; docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true" </dev/null 2>/dev/null || true)"
+    if [[ "$remote_probe" != "$probe_marker"* ]]; then
+      sync_failed=1
+      mark_control_fleet_worker_image_sync_state "$host_id" "image_sync_failed"
+      echo "Fleet image sync probe failed for $target; marking worker unhealthy for placement until SSH recovers." >&2
+      continue
+    fi
+    remote_image_id="${remote_probe#"$probe_marker"}"
+    remote_image_id="${remote_image_id%%$'\n'*}"
     if [[ "$remote_image_id" == "$local_image_id" ]]; then
       mark_control_fleet_worker_image_sync_state "$host_id" "active"
       continue
     fi
-    if docker image save "$image" | ssh "${ssh_opts[@]}" "$target" "docker image load >/tmp/arclink-image-load.log && docker image inspect --format '{{.Id}}' $q_image" >/dev/null; then
+    if docker image save "$image" | timeout "$load_timeout" ssh "${ssh_opts[@]}" "$target" "docker image load >/tmp/arclink-image-load.log && docker image inspect --format '{{.Id}}' $q_image" >/dev/null; then
       mark_control_fleet_worker_image_sync_state "$host_id" "active"
     else
       sync_failed=1

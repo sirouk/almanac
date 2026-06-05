@@ -4360,6 +4360,8 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
     for maintenance_block in (vault_watch_block, memory_synth_block, wrapped_block):
         expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in maintenance_block,
                f"operator background maintenance job must read the control DB explicitly despite operator memory STATE_DIR\n{maintenance_block}")
+        expect("./arclink-priv/state:/home/arclink/arclink/arclink-priv/state" in maintenance_block,
+               f"operator background maintenance job must mount the global state directory so the control DB path exists\n{maintenance_block}")
     expect("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER: ${ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER:-}" in setup_block,
            "one-shot setup must hash the operator router key with the same optional router pepper as the router")
     expect("ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}" in setup_block,

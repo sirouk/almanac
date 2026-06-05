@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -350,6 +352,39 @@ def test_reconcile_all_covers_every_captain_with_an_active_share() -> None:
     print("PASS test_reconcile_all_covers_every_captain_with_an_active_share")
 
 
+def test_control_plane_cli_uses_env_config_for_db_connection() -> None:
+    fleet = load_module("arclink_fleet_share.py", "arclink_fleet_share_cli_config_test")
+    tmp = Path(tempfile.mkdtemp())
+    config_path = tmp / "arclink.env"
+    config_path.write_text(
+        "\n".join(
+            [
+                f"ARCLINK_REPO_DIR={REPO}",
+                f"ARCLINK_PRIV_DIR={tmp / 'priv'}",
+                f"STATE_DIR={tmp / 'state'}",
+                f"RUNTIME_DIR={tmp / 'runtime'}",
+                f"VAULT_DIR={tmp / 'vault'}",
+                f"ARCLINK_DB_PATH={tmp / 'state' / 'control.sqlite3'}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    old_env = dict(os.environ)
+    try:
+        os.environ.clear()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            rc = fleet.main(["reconcile", "--all"])
+        expect(rc == 0, f"expected reconcile CLI success, got {rc}: {stdout.getvalue()}")
+        expect(json.loads(stdout.getvalue()) == {"command": "reconcile", "shares": []}, stdout.getvalue())
+        expect((tmp / "state" / "control.sqlite3").is_file(), "CLI should create/connect to the env-configured DB")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_control_plane_cli_uses_env_config_for_db_connection")
+
+
 def main() -> int:
     test_default_hub_ref_is_captain_scoped_and_agent_independent()
     test_ensure_share_and_membership_crud_is_idempotent()
@@ -362,7 +397,8 @@ def main() -> int:
     test_sync_member_surfaces_commit_failure_without_pushing()
     test_sync_local_is_env_driven_and_needs_no_db()
     test_reconcile_all_covers_every_captain_with_an_active_share()
-    print("PASS all 11 ArcLink fleet-share tests")
+    test_control_plane_cli_uses_env_config_for_db_connection()
+    print("PASS all 12 ArcLink fleet-share tests")
     return 0
 
 

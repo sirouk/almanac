@@ -846,17 +846,17 @@ def _run_once(args) -> str:
             label="fleet share sync-local",
             error_cls=ArcLinkFleetShareError,
         )
-    conn = connect_db(Config())
+    conn = connect_db(Config.from_env())
     ensure_schema(conn)
     if args.command == "reconcile":
         if getattr(args, "all", False) or not args.user:
             summary = reconcile_all_fleet_shares(conn)
         else:
             summary = reconcile_fleet_share_membership(conn, owner_user_id=args.user)
-        return json_dumps_safe(summary, label="fleet share reconcile", error_cls=ArcLinkFleetShareError)
+        return json_dumps_safe({"command": "reconcile", "shares": summary}, label="fleet share reconcile", error_cls=ArcLinkFleetShareError)
     if args.command == "sync":
         summary = run_fleet_share_cycle(conn, owner_user_id=args.user, reconcile=not args.no_reconcile)
-        return json_dumps_safe(summary, label="fleet share sync", error_cls=ArcLinkFleetShareError)
+        return json_dumps_safe({"command": "sync", "shares": summary}, label="fleet share sync", error_cls=ArcLinkFleetShareError)
     return ""
 
 

@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from arclink_secrets_regex import redact_then_truncate
 
@@ -1963,7 +1963,11 @@ def _materialize_docker_compose_files(
         compose_doc["secrets"] = compose_secrets
     compose_file.write_text(json.dumps(compose_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     compose_file.chmod(0o600)
-    remote_prepare_doc = _compose_remote_prepare_doc(services, deployment_root=root)
+    remote_prepare_doc = _compose_remote_prepare_doc(
+        services,
+        deployment_root=root,
+        secret_file_paths=secret_file_paths.values(),
+    )
     remote_prepare_file = config_root / _REMOTE_PREPARE_FILE
     if remote_prepare_doc["paths"]:
         remote_prepare_file.write_text(json.dumps(remote_prepare_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -2017,7 +2021,12 @@ def _compose_service_for_file(service: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _compose_remote_prepare_doc(services: Mapping[str, Any], *, deployment_root: Path) -> dict[str, Any]:
+def _compose_remote_prepare_doc(
+    services: Mapping[str, Any],
+    *,
+    deployment_root: Path,
+    secret_file_paths: Iterable[str] = (),
+) -> dict[str, Any]:
     paths: dict[str, dict[str, str]] = {}
     for service in services.values():
         if not isinstance(service, Mapping):
@@ -2034,6 +2043,12 @@ def _compose_remote_prepare_doc(services: Mapping[str, Any], *, deployment_root:
                 continue
             image = str(volume.get("remote_prepare_image") or service_image).strip() or service_image
             paths[source] = {"path": source, "kind": kind, "image": image}
+    secret_prepare_image = "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
+    for raw_path in secret_file_paths:
+        path = _normalized_remote_prepare_path(str(raw_path or ""))
+        if not _remote_prepare_path_allowed(path, kind="file", deployment_root=deployment_root):
+            continue
+        paths[path] = {"path": path, "kind": "file", "image": secret_prepare_image}
     return {"version": 1, "paths": sorted(paths.values(), key=lambda item: (item["path"], item["kind"]))}
 
 
@@ -2243,17 +2258,21 @@ def _remote_read_text_file_command(
 
 def _load_remote_prepare_entries(*, compose_file: str, env_file: str) -> list[dict[str, str]]:
     manifest_path = Path(compose_file).resolve().parent / _REMOTE_PREPARE_FILE
+    raw_paths: list[Any] = []
     if not manifest_path.exists():
-        return []
-    try:
-        doc = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ArcLinkExecutorError("ArcLink remote bind prepare manifest is invalid JSON") from exc
-    raw_paths = doc.get("paths") if isinstance(doc, Mapping) else None
-    if not isinstance(raw_paths, list):
-        raise ArcLinkExecutorError("ArcLink remote bind prepare manifest is missing paths")
+        raw_paths = []
+    else:
+        try:
+            doc = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ArcLinkExecutorError("ArcLink remote bind prepare manifest is invalid JSON") from exc
+        manifest_paths = doc.get("paths") if isinstance(doc, Mapping) else None
+        if not isinstance(manifest_paths, list):
+            raise ArcLinkExecutorError("ArcLink remote bind prepare manifest is missing paths")
+        raw_paths.extend(manifest_paths)
     env = _read_compose_env_file(env_file)
     deployment_root = Path(compose_file).resolve().parents[1]
+    raw_paths.extend(_compose_secret_remote_prepare_paths(compose_file=compose_file, env=env))
     entries: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for raw in raw_paths:
@@ -2270,6 +2289,25 @@ def _load_remote_prepare_entries(*, compose_file: str, env_file: str) -> list[di
         seen.add(key)
         entries.append({"path": path, "kind": kind, "image": image})
     return entries
+
+
+def _compose_secret_remote_prepare_paths(*, compose_file: str, env: Mapping[str, str]) -> list[dict[str, str]]:
+    try:
+        doc = json.loads(Path(compose_file).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return []
+    secrets = doc.get("secrets") if isinstance(doc, Mapping) else None
+    if not isinstance(secrets, Mapping):
+        return []
+    image = str(env.get("ARCLINK_DOCKER_IMAGE") or "").strip() or "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}"
+    paths: list[dict[str, str]] = []
+    for spec in secrets.values():
+        if not isinstance(spec, Mapping):
+            continue
+        path = str(spec.get("file") or "").strip()
+        if path:
+            paths.append({"path": path, "kind": "file", "image": image})
+    return paths
 
 
 def _remote_prepare_commands(*, docker_binary: str, entries: list[dict[str, str]]) -> list[str]:

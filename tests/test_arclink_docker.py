@@ -6154,6 +6154,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect("run-hermes-dashboard-proxy.sh" in body, body)
     dashboard_proxy = read("bin/run-hermes-dashboard-proxy.sh")
     expect("yaml.safe_load" in dashboard_proxy and "config.plugins.enabled missing" in dashboard_proxy, dashboard_proxy)
+    deployment_install = read("bin/install-deployment-hermes-home.sh")
+    expect(
+        "secret file is configured but cannot be read" in deployment_install
+        and "secret file is configured but empty" in deployment_install,
+        "ArcPod dashboard credential install must fail closed when mounted secrets are unreadable or empty",
+    )
     expect("DRIVE_ROOT" in body and "CODE_WORKSPACE_ROOT" in body, body)
     expect("TERMINAL_ALLOW_ROOT" in body and "HERMES_TUI_DIR" in body, body)
     expect("ARCLINK_DASHBOARD_THEME" in body and "ARCLINK_DASHBOARD_AGENT_LABEL" in body, body)

@@ -1576,10 +1576,20 @@ def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_resta
         secret_copy = root / "materialized" / "nextcloud_db_password"
         compose_secret_copy = Path(result.compose_file).parent / "secrets" / "nextcloud_db_password"
         compose_doc = json.loads(Path(result.compose_file).read_text(encoding="utf-8"))
+        remote_prepare = json.loads((Path(result.compose_file).parent / "remote-prepare.json").read_text(encoding="utf-8"))
         expect(result.status == "applied", str(result))
         expect(secret_copy.is_file(), f"compose secret source must remain for docker restart: {secret_copy}")
         expect(compose_secret_copy.is_file(), f"compose-visible secret copy must remain for docker restart: {compose_secret_copy}")
         expect(compose_doc["secrets"]["nextcloud_db_password"]["file"] == str(compose_secret_copy), str(compose_doc))
+        expect(
+            {
+                "path": str(compose_secret_copy),
+                "kind": "file",
+                "image": "${ARCLINK_DOCKER_IMAGE:-arclink/app:local}",
+            }
+            in remote_prepare["paths"],
+            str(remote_prepare),
+        )
         expect(secret_copy.stat().st_mode & 0o777 == 0o600, oct(secret_copy.stat().st_mode & 0o777))
         expect(compose_secret_copy.stat().st_mode & 0o777 == 0o600, oct(compose_secret_copy.stat().st_mode & 0o777))
     print("PASS test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart")
@@ -1747,6 +1757,65 @@ def test_ssh_docker_runner_cleans_remote_secrets_after_compose_run() -> None:
     expect(any("docker compose" in item and " run " in item for item in rendered), str(calls))
     expect(any("rm -rf --" in item and "config/secrets" in item for item in rendered), str(calls))
     print("PASS test_ssh_docker_runner_cleans_remote_secrets_after_compose_run")
+
+
+def test_ssh_docker_runner_prepares_compose_secret_files_without_manifest() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_secret_prepare_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[tuple[str, ...]] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        call = tuple(str(part) for part in cmd)
+        calls.append(call)
+        return Proc(0, stdout="ok")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        compose_file = Path(tmpdir) / "dep" / "config" / "compose.yaml"
+        env_file = compose_file.parent / "arclink.env"
+        secret_file = compose_file.parent / "secrets" / "dashboard_password"
+        compose_file.parent.mkdir(parents=True)
+        compose_file.write_text(
+            json.dumps(
+                {
+                    "services": {
+                        "managed-context-install": {
+                            "secrets": [{"source": "dashboard_password", "target": "/run/secrets/dashboard_password"}]
+                        }
+                    },
+                    "secrets": {"dashboard_password": {"file": str(secret_file)}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        env_file.write_text("ARCLINK_DOCKER_IMAGE=arclink/app:test\n", encoding="utf-8")
+        try:
+            mod.subprocess.run = fake_run
+            runner = mod.SshDockerComposeRunner(
+                host="worker.example.test",
+                user="arclink",
+                allowed_hosts=("worker.example.test",),
+            )
+            runner.run(
+                ("run", "--rm", "--no-deps", "managed-context-install"),
+                deployment_id="dep",
+                project_name="arclink-dep",
+                env_file=str(env_file),
+                compose_file=str(compose_file),
+            )
+        finally:
+            mod.subprocess.run = original_run
+    rendered = [" ".join(call) for call in calls]
+    expect(any(str(secret_file) in item and "chown" in item and "arclink/app:test" in item for item in rendered), str(calls))
+    expect(any("docker compose" in item and " run " in item for item in rendered), str(calls))
+    print("PASS test_ssh_docker_runner_prepares_compose_secret_files_without_manifest")
 
 
 def test_ssh_docker_runner_syncs_only_compose_config_bundle() -> None:
@@ -2001,6 +2070,7 @@ def main() -> int:
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_run()
+    test_ssh_docker_runner_prepares_compose_secret_files_without_manifest()
     test_ssh_docker_runner_syncs_only_compose_config_bundle()
     test_ssh_docker_runner_requires_explicit_host_allowlist()
     test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata()
@@ -2009,7 +2079,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 39 ArcLink executor tests")
+    print("PASS all 40 ArcLink executor tests")
     return 0
 
 

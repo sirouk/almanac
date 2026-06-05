@@ -73,19 +73,24 @@ except Exception:
 username = str(os.environ.get("ARCLINK_DASHBOARD_USERNAME") or existing.get("username") or os.environ.get("ARCLINK_PREFIX") or "arclink").strip().lower()
 username = "".join(ch for ch in username if ch.isalnum() or ch in "@._-").strip(".-_") or "arclink"
 password_file = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD_FILE") or "").strip()
-def read_first_line(path_value: str) -> str:
+def read_first_line(path_value: str, *, label: str) -> str:
     if not path_value:
         return ""
+    path_obj = Path(path_value)
     try:
-        return Path(path_value).read_text(encoding="utf-8").splitlines()[0].strip()
-    except Exception:
-        return ""
+        lines = path_obj.read_text(encoding="utf-8").splitlines()
+    except Exception as exc:
+        raise SystemExit(f"{label} secret file is configured but cannot be read: {path_obj}") from exc
+    value = lines[0].strip() if lines else ""
+    if not value:
+        raise SystemExit(f"{label} secret file is configured but empty: {path_obj}")
+    return value
 
-password_from_file = read_first_line(password_file)
+password_from_file = read_first_line(password_file, label="ArcLink dashboard password")
 password = str(os.environ.get("ARCLINK_DASHBOARD_PASSWORD") or password_from_file or existing.get("password") or secrets.token_urlsafe(24))
 session_secret = str(existing.get("session_secret") or secrets.token_urlsafe(32))
 sso_secret_file = str(os.environ.get("ARCLINK_DASHBOARD_SSO_SECRET_FILE") or "").strip()
-sso_secret_from_file = read_first_line(sso_secret_file)
+sso_secret_from_file = read_first_line(sso_secret_file, label="ArcLink dashboard SSO")
 sso_session_secret = str(
     os.environ.get("ARCLINK_DASHBOARD_SSO_SECRET")
     or sso_secret_from_file

@@ -1463,6 +1463,66 @@ def test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode() ->
             os.environ.update(old_env)
 
 
+def test_operator_upgrade_broker_requests_are_signed_and_nonce_bound() -> None:
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_broker_signature_test")
+    old_env = os.environ.copy()
+    old_urlopen = provisioner.urllib.request.urlopen
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b'{"ok":true,"result":{"status":"queued"}}'
+
+    def fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["data"] = request.data
+        captured["headers"] = dict(request.header_items())
+        return FakeResponse()
+
+    try:
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_URL"] = "http://operator-upgrade-broker.test"
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "test-broker-token"
+        provisioner.urllib.request.urlopen = fake_urlopen
+        result = provisioner._operator_upgrade_broker_request(
+            "run_operator_upgrade",
+            {"log_path": "/var/lib/arclink/operator-actions/upgrade.log"},
+            timeout_seconds=60,
+        )
+        expect(result["status"] == "queued", str(result))
+        headers = {str(key).lower(): str(value) for key, value in dict(captured["headers"]).items()}
+        body_bytes = captured["data"]
+        expect(isinstance(body_bytes, bytes), str(captured))
+        timestamp = headers.get("x-arclink-operator-upgrade-timestamp", "")
+        nonce = headers.get("x-arclink-operator-upgrade-nonce", "")
+        signature = headers.get("x-arclink-operator-upgrade-signature", "")
+        expect(headers.get("x-arclink-operator-upgrade-broker-token") == "test-broker-token", str(headers))
+        expect(timestamp.isdigit(), str(headers))
+        expect(len(nonce) >= 16, str(headers))
+        expect(len(signature) == 64, str(headers))
+        import hashlib
+        import hmac
+
+        body_hash = hashlib.sha256(body_bytes).hexdigest()
+        expected_signature = hmac.new(
+            b"test-broker-token",
+            f"{timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        expect(signature == expected_signature, str(headers))
+        print("PASS test_operator_upgrade_broker_requests_are_signed_and_nonce_bound")
+    finally:
+        provisioner.urllib.request.urlopen = old_urlopen
+        os.environ.clear()
+        os.environ.update(old_env)
+
+
 def test_install_system_services_seeds_home_in_root_units() -> None:
     install_script = REPO / "bin" / "install-system-services.sh"
     text = install_script.read_text(encoding="utf-8")
@@ -1544,10 +1604,11 @@ def main() -> int:
     test_entrypoint_root_requirement_allows_docker_supervisor()
     test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode()
     test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode()
+    test_operator_upgrade_broker_requests_are_signed_and_nonce_bound()
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
     test_auto_provision_dashboard_probe_allows_cold_start_window()
-    print("PASS all 27 enrollment provisioner regression tests")
+    print("PASS all 28 enrollment provisioner regression tests")
     return 0
 
 

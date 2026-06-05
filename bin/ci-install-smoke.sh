@@ -1939,6 +1939,7 @@ cleanup_smoke_control_plane_agents() {
     env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
       "$ARCLINK_REPO_DIR/bin/arclink-ctl" --json user purge-enrollment "$unix_user" \
         --actor ci-install-smoke \
+        --yes "$unix_user" \
         --purge-rate-limits >/dev/null 2>&1 || true
   done
   rm -rf /tmp/arclink-smoke-agent-home /tmp/arclink-smoke-ssot-home

@@ -9,6 +9,7 @@ rejecting raw command input.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -17,6 +18,8 @@ import shutil
 import shlex
 import stat
 import subprocess
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,9 +33,15 @@ from arclink_rejection_incidents import private_state_rejection_path, record_rej
 
 
 MAX_REQUEST_BYTES = 16384
+REQUEST_SIGNATURE_TTL_SECONDS = 300
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8917
 OPERATOR_UPGRADE_BROKER_TOKEN_HEADER = "X-ArcLink-Operator-Upgrade-Broker-Token"
+OPERATOR_UPGRADE_BROKER_TIMESTAMP_HEADER = "X-ArcLink-Operator-Upgrade-Timestamp"
+OPERATOR_UPGRADE_BROKER_NONCE_HEADER = "X-ArcLink-Operator-Upgrade-Nonce"
+OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER = "X-ArcLink-Operator-Upgrade-Signature"
+_SEEN_SIGNATURE_NONCES: dict[str, float] = {}
+_SEEN_SIGNATURE_NONCES_LOCK = threading.Lock()
 SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
 ALLOWED_PIN_COMPONENTS = {"hermes-agent", "qmd", "nextcloud", "postgres", "redis", "nvm", "node"}
 PIN_UPGRADE_FLAGS = {
@@ -494,10 +503,46 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _is_authorized(headers: Any) -> bool:
+def _nonce_seen_or_record(nonce: str, now: float) -> bool:
+    cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
+    with _SEEN_SIGNATURE_NONCES_LOCK:
+        for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
+            if observed < cutoff:
+                _SEEN_SIGNATURE_NONCES.pop(key, None)
+        if nonce in _SEEN_SIGNATURE_NONCES:
+            return True
+        _SEEN_SIGNATURE_NONCES[nonce] = now
+        return False
+
+
+def _is_authorized(headers: Any, raw_body: bytes) -> bool:
     expected = _broker_token()
     supplied = str(headers.get(OPERATOR_UPGRADE_BROKER_TOKEN_HEADER) or "").strip()
-    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+    if not (expected and supplied and hmac.compare_digest(expected, supplied)):
+        return False
+    timestamp_raw = str(headers.get(OPERATOR_UPGRADE_BROKER_TIMESTAMP_HEADER) or "").strip()
+    nonce = str(headers.get(OPERATOR_UPGRADE_BROKER_NONCE_HEADER) or "").strip()
+    supplied_signature = str(headers.get(OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER) or "").strip()
+    if not (timestamp_raw and nonce and supplied_signature):
+        return False
+    try:
+        timestamp = int(timestamp_raw)
+    except (TypeError, ValueError):
+        return False
+    now = time.time()
+    if abs(now - timestamp) > REQUEST_SIGNATURE_TTL_SECONDS:
+        return False
+    if not re.fullmatch(r"[A-Za-z0-9_.~+/=-]{16,160}", nonce):
+        return False
+    if _nonce_seen_or_record(nonce, now):
+        return False
+    body_hash = hashlib.sha256(raw_body).hexdigest()
+    expected_signature = hmac.new(
+        expected.encode("utf-8"),
+        f"{timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected_signature, supplied_signature)
 
 
 class OperatorUpgradeBrokerHandler(BaseHTTPRequestHandler):
@@ -519,9 +564,6 @@ class OperatorUpgradeBrokerHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/operator-upgrade":
             _json_response(self, 404, {"ok": False, "error": "not found"})
             return
-        if not _is_authorized(self.headers):
-            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
-            return
         try:
             length = int(self.headers.get("Content-Length") or "0")
         except ValueError:
@@ -529,8 +571,12 @@ class OperatorUpgradeBrokerHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_REQUEST_BYTES:
             _json_response(self, 413, {"ok": False, "error": "invalid operator upgrade request size"})
             return
+        raw_body = self.rfile.read(length)
+        if not _is_authorized(self.headers, raw_body):
+            _json_response(self, 401, {"ok": False, "error": "unauthorized"})
+            return
         try:
-            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(raw_body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             _json_response(self, 400, {"ok": False, "error": "invalid JSON"})
             return

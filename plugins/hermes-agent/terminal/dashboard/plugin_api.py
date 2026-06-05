@@ -1094,6 +1094,8 @@ def _status_payload() -> dict[str, Any]:
             "ssh_sessions": available,
             "hermes_tui_sessions": available and tui_available,
             "clear_closed_sessions": True,
+            "full_pod_shell_authority": available,
+            "drive_code_path_filters_are_not_terminal_boundary": True,
         },
     }
 

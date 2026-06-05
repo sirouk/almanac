@@ -136,6 +136,11 @@ _MAX_JSON_BODY_BYTES = _MAX_TEXT_BYTES + 64_000
 _DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 _MAX_UPLOAD_BYTES_CEILING = 2 * 1024 * 1024 * 1024
 _UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+_DEFAULT_MAX_UPLOAD_FILES = 200
+_DEFAULT_MAX_UPLOAD_DIRECTORIES = 1000
+_DEFAULT_MAX_UPLOAD_METADATA_BYTES = 256 * 1024
+_DEFAULT_MAX_UPLOAD_TOTAL_BYTES = 1024 * 1024 * 1024
+_MAX_UPLOAD_TOTAL_BYTES_CEILING = 8 * 1024 * 1024 * 1024
 _SEARCH_LIMIT = 300
 _MAX_CHILD_COUNT = 999
 _SHARE_REQUEST_BROKER_TOKEN_HEADER = "X-ArcLink-Share-Request-Broker-Token"
@@ -353,6 +358,27 @@ def _max_upload_bytes() -> int:
         _DEFAULT_MAX_UPLOAD_BYTES,
         minimum=1,
         maximum=_MAX_UPLOAD_BYTES_CEILING,
+    )
+
+
+def _max_upload_files() -> int:
+    return _bounded_env_int("DRIVE_MAX_UPLOAD_FILES", _DEFAULT_MAX_UPLOAD_FILES, minimum=1, maximum=5000)
+
+
+def _max_upload_directories() -> int:
+    return _bounded_env_int("DRIVE_MAX_UPLOAD_DIRECTORIES", _DEFAULT_MAX_UPLOAD_DIRECTORIES, minimum=0, maximum=20000)
+
+
+def _max_upload_metadata_bytes() -> int:
+    return _bounded_env_int("DRIVE_MAX_UPLOAD_METADATA_BYTES", _DEFAULT_MAX_UPLOAD_METADATA_BYTES, minimum=0, maximum=4 * 1024 * 1024)
+
+
+def _max_upload_total_bytes() -> int:
+    return _bounded_env_int(
+        "DRIVE_MAX_UPLOAD_TOTAL_BYTES",
+        _DEFAULT_MAX_UPLOAD_TOTAL_BYTES,
+        minimum=1,
+        maximum=_MAX_UPLOAD_TOTAL_BYTES_CEILING,
     )
 
 
@@ -1164,6 +1190,17 @@ def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, m
     mime = "inode/directory" if is_dir else (mimetypes.guess_type(str(path))[0] or "application/octet-stream")
     display = _display_path(relative_path)
     child_count, child_count_truncated = _visible_child_count(root_id, root, path) if is_dir else (0, False)
+    can_write = root_id != "linked"
+    can_delete = can_write and bool(relative_path)
+    can_upload = can_write and is_dir
+    can_rename = can_delete
+    if root_id == "linked":
+        entry = _linked_manifest_entry(root, path)
+        can_write = bool(entry and _linked_entry_writable(entry))
+        share_root = bool(entry and len(Path(relative_path).parts) == 1)
+        can_upload = can_write and is_dir
+        can_delete = can_write and bool(relative_path) and not share_root
+        can_rename = can_delete
     return {
         "name": path.name or "Drive",
         "root": root_id,
@@ -1176,6 +1213,10 @@ def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, m
         "text": bool((not is_dir) and _is_text_item(path) and stat.st_size <= _MAX_TEXT_BYTES),
         "child_count": child_count,
         "child_count_truncated": child_count_truncated,
+        "can_write": can_write,
+        "can_upload": can_upload,
+        "can_delete": can_delete,
+        "can_rename": can_rename,
     }
 
 
@@ -1973,6 +2014,12 @@ async def upload(
     if policy not in {"reject", "keep-both"}:
         raise HTTPException(status_code=400, detail="Unsupported conflict policy")
     file_items = list(files or [])
+    if len(file_items) > _max_upload_files():
+        raise HTTPException(status_code=413, detail="Too many files in one upload")
+    if len(_form_value(relative_paths, "").encode("utf-8")) > _max_upload_metadata_bytes():
+        raise HTTPException(status_code=413, detail="Upload relative-path metadata is too large")
+    if len(_form_value(directories, "").encode("utf-8")) > _max_upload_metadata_bytes():
+        raise HTTPException(status_code=413, detail="Upload directory metadata is too large")
     relative_path_metadata = _json_list_form(_form_value(relative_paths, ""))
     uploaded_paths = [
         _clean_upload_relative_path(
@@ -1986,6 +2033,8 @@ async def upload(
         for item in _json_list_form(_form_value(directories, ""))
         if str(item or "").strip()
     ]
+    if len(directory_paths) > _max_upload_directories():
+        raise HTTPException(status_code=413, detail="Too many directories in one upload")
     if len(uploaded_paths) != len(file_items):
         raise HTTPException(status_code=400, detail="Upload file metadata is inconsistent")
     if not uploaded_paths and not directory_paths:
@@ -2035,6 +2084,9 @@ async def upload(
             raise HTTPException(status_code=400, detail="Keep-both upload conflict policy is only available for local Drive roots")
         for directory_path in directory_paths:
             _webdav_ensure_collections(backend["profile"], _join_display(target_dir_path, directory_path))
+    total_uploaded = 0
+    max_total = _max_upload_total_bytes()
+    local_written_targets: list[Path] = []
     for upload_file, relative_upload_path in zip(file_items, uploaded_paths, strict=True):
         display = _join_display(target_dir_path, relative_upload_path)
         if ctx is not None:
@@ -2045,6 +2097,19 @@ async def upload(
             target = _resolve_conflict_destination(target, conflict=policy)
             relative = target.relative_to(effective_root_path if ctx["id"] == "linked" else Path(ctx["path"])).as_posix()
             size = await _write_upload_file_atomic(upload_file, target)
+            if total_uploaded + size > max_total:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                for written_target in local_written_targets:
+                    try:
+                        written_target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                raise HTTPException(status_code=413, detail="Upload request is too large")
+            total_uploaded += size
+            local_written_targets.append(target)
             uploaded.append({
                 "root": ctx["id"],
                 "path": _linked_display_path(linked_slug, relative) if ctx["id"] == "linked" else _display_path(relative),
@@ -2055,9 +2120,25 @@ async def upload(
             target = _resolve_conflict_destination(target, conflict=policy)
             relative = target.relative_to(backend["root"]).as_posix()
             size = await _write_upload_file_atomic(upload_file, target)
+            if total_uploaded + size > max_total:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                for written_target in local_written_targets:
+                    try:
+                        written_target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                raise HTTPException(status_code=413, detail="Upload request is too large")
+            total_uploaded += size
+            local_written_targets.append(target)
             uploaded.append({"root": "vault", "path": _display_path(relative), "size": size})
         elif backend["name"] == "nextcloud-webdav":
             content_bytes = await _read_upload_bytes(upload_file)
+            if total_uploaded + len(content_bytes) > max_total:
+                raise HTTPException(status_code=413, detail="Upload request is too large")
+            total_uploaded += len(content_bytes)
             headers = {"If-None-Match": "*"} if policy == "reject" else {}
             parent = posixpath.dirname(_clean_relative_path(display))
             _webdav_ensure_collections(backend["profile"], _display_path(parent))

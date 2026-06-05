@@ -80,6 +80,76 @@ def test_due_worker_records_probe_rows_and_updates_capacity() -> None:
     print("PASS test_due_worker_records_probe_rows_and_updates_capacity")
 
 
+def test_liveness_probe_activates_pending_enrollment_before_placement() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_pending_enroll_test")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_pending_enroll_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_pending_enroll_test")
+    conn = memory_db(control)
+    machine, host = _seed_machine(control, inventory, conn)
+    metadata = json.loads(host["metadata_json"] or "{}")
+    metadata["enrollment_pending_probe"] = True
+    conn.execute(
+        """
+        UPDATE arclink_fleet_hosts
+        SET status = 'degraded', drain = 1, last_health_state = 'awaiting_control_probe',
+            metadata_json = ?
+        WHERE host_id = ?
+        """,
+        (json.dumps(metadata, sort_keys=True), host["host_id"]),
+    )
+    conn.execute(
+        "UPDATE arclink_inventory_machines SET status = 'pending' WHERE machine_id = ?",
+        (machine["machine_id"],),
+    )
+    conn.commit()
+
+    host_for_probe = _host(conn, host["host_id"])
+    host_for_probe["machine_id"] = machine["machine_id"]
+    worker.record_host_probe(
+        conn,
+        host=host_for_probe,
+        kind="liveness",
+        result=worker.ProbeResult(ok=True, payload={"ok": True}),
+        now_iso="2026-05-16T12:00:00+00:00",
+        notify=False,
+    )
+    activated = _host(conn, host["host_id"])
+    activated_meta = json.loads(activated["metadata_json"] or "{}")
+    expect(activated["status"] == "active" and int(activated["drain"]) == 0, str(activated))
+    expect(activated["last_health_state"] == "active", str(activated))
+    expect(activated_meta["enrollment_pending_probe"] is False, str(activated_meta))
+    expect(str(activated_meta.get("placement_activated_at") or ""), str(activated_meta))
+    machine_row = conn.execute(
+        "SELECT status FROM arclink_inventory_machines WHERE machine_id = ?",
+        (machine["machine_id"],),
+    ).fetchone()
+    expect(machine_row["status"] == "ready", str(dict(machine_row)))
+    print("PASS test_liveness_probe_activates_pending_enrollment_before_placement")
+
+
+def test_capacity_probe_caps_untrusted_worker_reported_slots() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_capacity_cap_test")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_capacity_cap_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_capacity_cap_test")
+    conn = memory_db(control)
+    _, host = _seed_machine(control, inventory, conn)
+
+    worker.record_host_probe(
+        conn,
+        host=_host(conn, host["host_id"]),
+        kind="capacity",
+        result=worker.ProbeResult(
+            ok=True,
+            payload={"ok": True, "capacity_slots": 100_000, "observed_load": 0},
+        ),
+        now_iso="2026-05-16T12:00:00+00:00",
+        notify=False,
+    )
+    capped = _host(conn, host["host_id"])
+    expect(int(capped["capacity_slots"]) == 64, str(capped))
+    print("PASS test_capacity_probe_caps_untrusted_worker_reported_slots")
+
+
 def test_legacy_probe_schema_is_migrated_for_worker() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_legacy_probe_test")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_legacy_probe_test")
@@ -380,6 +450,8 @@ def test_probe_errors_are_redacted_and_retention_is_pruned() -> None:
 
 if __name__ == "__main__":
     test_due_worker_records_probe_rows_and_updates_capacity()
+    test_liveness_probe_activates_pending_enrollment_before_placement()
+    test_capacity_probe_caps_untrusted_worker_reported_slots()
     test_legacy_probe_schema_is_migrated_for_worker()
     test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine()
     test_worker_prefers_private_mesh_endpoint_over_legacy_inventory_ssh_host()

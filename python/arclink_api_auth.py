@@ -431,6 +431,76 @@ def check_arclink_rate_limit(
     return {"scope": clean_scope, "subject": clean_subject, "remaining": max(0, int(limit) - int(count) - 1)}
 
 
+def _login_audit_subject(login_subject: str, clean_email: str) -> str:
+    return str(login_subject or clean_email).strip().lower()
+
+
+def _login_client_ip_subject(client_ip: str) -> str:
+    clean = str(client_ip or "").strip().lower()
+    if not clean or clean == "unknown":
+        return ""
+    return clean[:120]
+
+
+def _check_login_rate_limits(
+    conn: sqlite3.Connection,
+    *,
+    scope: str,
+    clean_email: str,
+    client_ip: str = "",
+    account_limit: int,
+    ip_limit: int,
+    window_seconds: int = 900,
+) -> None:
+    """Rate-limit logins by server-derived account and source buckets.
+
+    The optional login_subject field is retained only as audit metadata. It is
+    never trusted as the throttle key because callers can change it per guess.
+    """
+    clean_account = str(clean_email or "").strip().lower()
+    if not clean_account:
+        raise ArcLinkApiAuthError("ArcLink login requires an email")
+    clean_ip = _login_client_ip_subject(client_ip)
+    clean_scope_prefix = str(scope or "").strip().lower()
+    if not clean_scope_prefix:
+        raise ArcLinkApiAuthError("ArcLink login rate limit scope is required")
+    bucket_specs: list[tuple[str, str, int]] = [
+        (f"arclink:{clean_scope_prefix}:account", clean_account, account_limit),
+    ]
+    if clean_ip:
+        bucket_specs.extend(
+            [
+                (f"arclink:{clean_scope_prefix}:ip", clean_ip, ip_limit),
+                (f"arclink:{clean_scope_prefix}:account_ip", f"{clean_account}|{clean_ip}", account_limit),
+            ]
+        )
+    window = max(1, int(window_seconds or 1))
+    cutoff = (utc_now() - dt.timedelta(seconds=window)).replace(microsecond=0).isoformat()
+    for bucket_scope, bucket_subject, bucket_limit in bucket_specs:
+        effective_limit = max(1, int(bucket_limit or 1))
+        count = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM rate_limits
+            WHERE scope = ? AND subject = ? AND observed_at >= ?
+            """,
+            (bucket_scope, bucket_subject, cutoff),
+        ).fetchone()["n"]
+        if int(count) >= effective_limit:
+            raise ArcLinkRateLimitError(
+                "ArcLink rate limit exceeded",
+                limit=effective_limit,
+                remaining=0,
+                reset_seconds=window,
+            )
+    now = utc_now_iso()
+    conn.executemany(
+        "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+        [(bucket_scope, bucket_subject, now) for bucket_scope, bucket_subject, _limit in bucket_specs],
+    )
+    conn.commit()
+
+
 def upsert_arclink_admin(
     conn: sqlite3.Connection,
     *,
@@ -772,14 +842,22 @@ def create_arclink_admin_login_session_api(
     email: str,
     password: str,
     login_subject: str,
+    client_ip: str = "",
     mfa_verified: bool = False,
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
     clean_email = str(email or "").strip().lower()
-    clean_subject = str(login_subject or clean_email).strip().lower()
+    clean_subject = _login_audit_subject(login_subject, clean_email)
     if not clean_email:
         raise ArcLinkApiAuthError("ArcLink admin login requires an email")
-    check_arclink_rate_limit(conn, scope="admin_login", subject=clean_subject, limit=5, window_seconds=900)
+    _check_login_rate_limits(
+        conn,
+        scope="admin_login",
+        clean_email=clean_email,
+        client_ip=client_ip,
+        account_limit=5,
+        ip_limit=30,
+    )
     row = conn.execute(
         "SELECT admin_id, password_hash FROM arclink_admins WHERE LOWER(email) = LOWER(?) AND status = 'active'",
         (clean_email,),
@@ -794,7 +872,7 @@ def create_arclink_admin_login_session_api(
         conn,
         admin_id=str(row["admin_id"] or ""),
         mfa_verified=mfa_verified,
-        metadata={"login_subject": clean_subject, **dict(metadata or {})},
+        metadata={"login_subject": clean_subject, "login_client_ip": _login_client_ip_subject(client_ip), **dict(metadata or {})},
     )
     return ArcLinkApiResponse(status=201, payload={"session": session})
 
@@ -805,14 +883,22 @@ def create_arclink_login_session_api(
     email: str,
     password: str,
     login_subject: str = "",
+    client_ip: str = "",
     metadata: Mapping[str, Any] | None = None,
     allow_admin: bool = True,
 ) -> ArcLinkApiResponse:
     clean_email = str(email or "").strip().lower()
-    clean_subject = str(login_subject or clean_email).strip().lower()
+    clean_subject = _login_audit_subject(login_subject, clean_email)
     if not clean_email:
         raise ArcLinkApiAuthError("ArcLink login requires an email")
-    check_arclink_rate_limit(conn, scope="login", subject=clean_subject, limit=10, window_seconds=900)
+    _check_login_rate_limits(
+        conn,
+        scope="login",
+        clean_email=clean_email,
+        client_ip=client_ip,
+        account_limit=10,
+        ip_limit=50,
+    )
 
     if allow_admin:
         admin = conn.execute(
@@ -828,7 +914,7 @@ def create_arclink_login_session_api(
                 conn,
                 admin_id=str(admin["admin_id"] or ""),
                 mfa_verified=False,
-                metadata={"login_subject": clean_subject, **dict(metadata or {})},
+                metadata={"login_subject": clean_subject, "login_client_ip": _login_client_ip_subject(client_ip), **dict(metadata or {})},
             )
             return ArcLinkApiResponse(
                 status=201,
@@ -847,7 +933,7 @@ def create_arclink_login_session_api(
         session = create_arclink_user_session(
             conn,
             user_id=str(user["user_id"] or ""),
-            metadata={"login_subject": clean_subject, **dict(metadata or {})},
+            metadata={"login_subject": clean_subject, "login_client_ip": _login_client_ip_subject(client_ip), **dict(metadata or {})},
         )
         return ArcLinkApiResponse(
             status=201,
@@ -863,13 +949,21 @@ def create_arclink_user_login_session_api(
     email: str,
     password: str,
     login_subject: str = "",
+    client_ip: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> ArcLinkApiResponse:
     clean_email = str(email or "").strip().lower()
-    clean_subject = str(login_subject or clean_email).strip().lower()
+    clean_subject = _login_audit_subject(login_subject, clean_email)
     if not clean_email:
         raise ArcLinkApiAuthError("ArcLink user login requires an email")
-    check_arclink_rate_limit(conn, scope="user_login", subject=clean_subject, limit=10, window_seconds=900)
+    _check_login_rate_limits(
+        conn,
+        scope="user_login",
+        clean_email=clean_email,
+        client_ip=client_ip,
+        account_limit=10,
+        ip_limit=50,
+    )
     row = conn.execute(
         "SELECT user_id, password_hash FROM arclink_users WHERE LOWER(email) = LOWER(?) AND status = 'active'",
         (clean_email,),
@@ -883,7 +977,7 @@ def create_arclink_user_login_session_api(
     session = create_arclink_user_session(
         conn,
         user_id=str(row["user_id"] or ""),
-        metadata={"login_subject": clean_subject, **dict(metadata or {})},
+        metadata={"login_subject": clean_subject, "login_client_ip": _login_client_ip_subject(client_ip), **dict(metadata or {})},
     )
     return ArcLinkApiResponse(status=201, payload={"session": session})
 

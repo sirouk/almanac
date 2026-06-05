@@ -530,6 +530,51 @@ def test_user_passwords_are_hashed_and_required_for_login() -> None:
     print("PASS test_user_passwords_are_hashed_and_required_for_login")
 
 
+def test_login_rate_limit_uses_server_derived_account_not_client_subject() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_login_subject_rate_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_login_subject_rate_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_login_subject_rate_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    api.set_arclink_user_password(conn, user_id=prepared["user_id"], password="user-test-password")
+    for index in range(10):
+        try:
+            api.create_arclink_user_login_session_api(
+                conn,
+                email="api-user@example.test",
+                password="wrong-password",
+                login_subject=f"attacker-controlled-alias-{index}@example.test",
+                client_ip="198.51.100.10",
+            )
+        except api.ArcLinkApiAuthError as exc:
+            expect(str(exc) == "Invalid ArcLink user credentials", str(exc))
+        else:
+            raise AssertionError("expected wrong user password to fail")
+    try:
+        api.create_arclink_user_login_session_api(
+            conn,
+            email="api-user@example.test",
+            password="wrong-password",
+            login_subject="fresh-attacker-controlled-alias@example.test",
+            client_ip="198.51.100.10",
+        )
+    except api.ArcLinkRateLimitError as exc:
+        expect("rate limit exceeded" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected account-keyed login throttle to ignore caller login_subject changes")
+    rows = [
+        dict(row)
+        for row in conn.execute(
+            "SELECT scope, subject FROM rate_limits WHERE scope LIKE 'arclink:user_login:%' ORDER BY scope, subject"
+        ).fetchall()
+    ]
+    account_subjects = {row["subject"] for row in rows if row["scope"] == "arclink:user_login:account"}
+    expect(account_subjects == {"api-user@example.test"}, str(rows))
+    rendered = json.dumps(rows, sort_keys=True)
+    expect("attacker-controlled-alias" not in rendered, rendered)
+    print("PASS test_login_rate_limit_uses_server_derived_account_not_client_subject")
+
+
 def test_api_transport_helpers_extract_credentials_and_shape_safe_errors() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_transport_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_transport_test")
@@ -926,6 +971,7 @@ def main() -> int:
     test_admin_action_api_rate_limits_by_admin_and_target()
     test_admin_passwords_are_hashed_and_required_for_login()
     test_user_passwords_are_hashed_and_required_for_login()
+    test_login_rate_limit_uses_server_derived_account_not_client_subject()
     test_api_transport_helpers_extract_credentials_and_shape_safe_errors()
     test_session_hashes_upgrade_legacy_sha256_after_successful_verification()
     test_session_kind_prefixes_are_enforced()
@@ -936,7 +982,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 18 ArcLink API/auth tests")
+    print("PASS all 19 ArcLink API/auth tests")
     return 0
 
 

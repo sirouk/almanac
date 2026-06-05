@@ -60,6 +60,10 @@ DEFAULT_REWRITE_BUFFER_BYTES = 4 * 1024 * 1024
 MAX_REQUEST_BODY_BYTES_CEILING = 2 * 1024 * 1024 * 1024
 MAX_REWRITE_BUFFER_BYTES_CEILING = 64 * 1024 * 1024
 PROXY_COPY_CHUNK_BYTES = 1024 * 1024
+DEFAULT_LOGIN_FAILURE_LIMIT = 8
+DEFAULT_LOGIN_FAILURE_WINDOW_SECONDS = 15 * 60
+_LOGIN_FAILURE_LOCK = threading.Lock()
+_LOGIN_FAILURES: dict[tuple[str, str], list[float]] = {}
 
 
 class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -351,6 +355,64 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, value))
 
 
+def _login_failure_limit() -> int:
+    return _env_int(
+        "ARCLINK_DASHBOARD_PROXY_LOGIN_FAILURE_LIMIT",
+        DEFAULT_LOGIN_FAILURE_LIMIT,
+        minimum=1,
+        maximum=1000,
+    )
+
+
+def _login_failure_window_seconds() -> int:
+    return _env_int(
+        "ARCLINK_DASHBOARD_PROXY_LOGIN_FAILURE_WINDOW_SECONDS",
+        DEFAULT_LOGIN_FAILURE_WINDOW_SECONDS,
+        minimum=1,
+        maximum=24 * 60 * 60,
+    )
+
+
+def _login_failure_keys(client_ip: str, username: str) -> list[tuple[str, str]]:
+    clean_ip = str(client_ip or "unknown").strip().lower() or "unknown"
+    clean_user = _clean_login_username(username) or "blank"
+    return [("ip", clean_ip), ("user", clean_user), ("combo", f"{clean_user}|{clean_ip}")]
+
+
+def _prune_login_failures(now: float, window_seconds: int) -> None:
+    cutoff = now - window_seconds
+    for key, observed in list(_LOGIN_FAILURES.items()):
+        retained = [item for item in observed if item >= cutoff]
+        if retained:
+            _LOGIN_FAILURES[key] = retained
+        else:
+            _LOGIN_FAILURES.pop(key, None)
+
+
+def _login_throttled(client_ip: str, username: str) -> bool:
+    now = time.monotonic()
+    window = _login_failure_window_seconds()
+    limit = _login_failure_limit()
+    with _LOGIN_FAILURE_LOCK:
+        _prune_login_failures(now, window)
+        return any(len(_LOGIN_FAILURES.get(key, [])) >= limit for key in _login_failure_keys(client_ip, username))
+
+
+def _record_login_failure(client_ip: str, username: str) -> None:
+    now = time.monotonic()
+    window = _login_failure_window_seconds()
+    with _LOGIN_FAILURE_LOCK:
+        _prune_login_failures(now, window)
+        for key in _login_failure_keys(client_ip, username):
+            _LOGIN_FAILURES.setdefault(key, []).append(now)
+
+
+def _clear_login_failures(client_ip: str, username: str) -> None:
+    with _LOGIN_FAILURE_LOCK:
+        for key in _login_failure_keys(client_ip, username):
+            _LOGIN_FAILURES.pop(key, None)
+
+
 def _managed_lifecycle_controls_enabled() -> bool:
     return _env_bool("ARCLINK_DASHBOARD_MANAGED_LIFECYCLE_CONTROLS")
 
@@ -467,6 +529,15 @@ def _origin_matches_host(value: str, host: str) -> bool:
     parsed = urlsplit(origin)
     supplied = _normalize_host(parsed.netloc)
     return bool(supplied and hmac.compare_digest(supplied, expected))
+
+
+def _parse_cookie_header(value: str) -> SimpleCookie:
+    cookie = SimpleCookie()
+    try:
+        cookie.load(str(value or ""))
+    except Exception:
+        return SimpleCookie()
+    return cookie
 
 
 @dataclass(frozen=True)
@@ -588,8 +659,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         header = self.headers.get("Cookie") or ""
         if not header:
             return False
-        cookie = SimpleCookie()
-        cookie.load(header)
+        cookie = _parse_cookie_header(header)
         morsel = cookie.get(self._session_cookie_name(access))
         if morsel is None:
             return False
@@ -609,8 +679,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         header = self.headers.get("Cookie") or ""
         if not header:
             return False
-        cookie = SimpleCookie()
-        cookie.load(header)
+        cookie = _parse_cookie_header(header)
         morsel = cookie.get(self._sso_cookie_name(access))
         if morsel is None:
             return False
@@ -641,8 +710,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         header = self.headers.get("Cookie") or ""
         if not header:
             return None
-        cookie = SimpleCookie()
-        cookie.load(header)
+        cookie = _parse_cookie_header(header)
         for name in list(cookie):
             if (
                 name == SESSION_COOKIE_NAME
@@ -993,6 +1061,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         next_path = _safe_next(str(form.get("next", ["/"])[0] or "/"))
         if _is_login_path(next_path):
             next_path = self._public_path("/")
+        client_ip = str((self.client_address or ["unknown"])[0] or "unknown")
+        if _login_throttled(client_ip, username):
+            self._login_form(status=429, error="Too many sign-in attempts. Try again shortly.", next_path=next_path)
+            return
         access = load_access(self.access_file)
         access_username = _clean_login_username(access.get("username") or "")
         if not (
@@ -1001,9 +1073,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             and secrets.compare_digest(username, access_username)
             and secrets.compare_digest(password, access["password"])
         ):
+            _record_login_failure(client_ip, username)
             self._login_form(status=401, error="Invalid dashboard credentials.", next_path=next_path)
             return
 
+        _clear_login_failures(client_ip, username)
         self.send_response(303)
         self.send_header("Location", next_path)
         for cookie_header in self._clear_session_cookie_headers(access):

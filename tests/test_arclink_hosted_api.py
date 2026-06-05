@@ -3072,7 +3072,7 @@ def test_user_portal_link_route() -> None:
     # No auth -> 401
     status, _, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/user/portal", headers={},
-        body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
+        body=json.dumps({"return_url": "https://example.test/dashboard"}),
         config=config,
     )
     expect(status == 401, f"expected 401 got {status}")
@@ -3081,7 +3081,7 @@ def test_user_portal_link_route() -> None:
     status, _, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/user/portal",
         headers=auth_headers(session),
-        body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
+        body=json.dumps({"return_url": "https://example.test/dashboard"}),
         config=config,
     )
     expect(status == 401, f"expected 401 without CSRF got {status}")
@@ -3090,7 +3090,7 @@ def test_user_portal_link_route() -> None:
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/user/portal",
         headers=browser_auth_headers(session, csrf=True),
-        body=json.dumps({"return_url": "https://app.arclink.online/dashboard"}),
+        body=json.dumps({"return_url": "https://example.test/dashboard"}),
         config=config,
     )
     expect(status == 200, f"expected 200 got {status}: {payload}")
@@ -3348,8 +3348,8 @@ def test_public_onboarding_checkout_route() -> None:
         headers={},
         body=json.dumps({
             "session_id": session_id,
-            "success_url": "https://app.arclink.online/success",
-            "cancel_url": "https://app.arclink.online/cancel",
+            "success_url": "https://example.test/success",
+            "cancel_url": "https://example.test/cancel",
         }),
         config=config,
     )
@@ -3359,6 +3359,43 @@ def test_public_onboarding_checkout_route() -> None:
     expect(payload["session"]["checkout_url"].startswith("https://"), str(payload))
 
     print("PASS test_public_onboarding_checkout_route")
+
+
+def test_public_onboarding_checkout_rejects_external_redirect_urls() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_checkout_redirect_guard_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_checkout_redirect_guard_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/start",
+        headers={},
+        body=json.dumps({"channel": "web", "email": "redirect-guard@example.test", "plan_id": "sovereign"}),
+        config=config,
+    )
+    expect(status == 201, f"expected 201 got {status}: {payload}")
+    session_id = payload["session"]["session_id"]
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/onboarding/checkout",
+        headers={},
+        body=json.dumps(
+            {
+                "session_id": session_id,
+                "success_url": "https://evil.example/success",
+                "cancel_url": "https://example.test/cancel",
+            }
+        ),
+        config=config,
+    )
+    expect(status == 400, f"expected external redirect rejection got {status}: {payload}")
+    rendered = json.dumps(payload, sort_keys=True)
+    expect("evil.example" not in rendered, rendered)
+    print("PASS test_public_onboarding_checkout_rejects_external_redirect_urls")
 
 
 def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
@@ -3400,8 +3437,8 @@ def test_public_onboarding_checkout_resolves_live_stripe_from_config() -> None:
         headers={},
         body=json.dumps({
             "session_id": session_id,
-            "success_url": "https://app.arclink.online/success",
-            "cancel_url": "https://app.arclink.online/cancel",
+            "success_url": "https://example.test/success",
+            "cancel_url": "https://example.test/cancel",
         }),
         config=config,
     )
@@ -3455,8 +3492,8 @@ def test_public_onboarding_checkout_maps_package_price_ids() -> None:
             headers={},
             body=json.dumps({
                 "session_id": session_id,
-                "success_url": "https://app.arclink.online/success",
-                "cancel_url": "https://app.arclink.online/cancel",
+                "success_url": "https://example.test/success",
+                "cancel_url": "https://example.test/cancel",
             }),
             config=config,
         )
@@ -5478,19 +5515,35 @@ def test_rate_limit_returns_429_with_headers() -> None:
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
 
-    # Exhaust the admin login rate limit (5 per 15 min, same subject)
+    # Exhaust the admin login rate limit. Caller-controlled login_subject must
+    # not let a password guesser rotate throttle keys.
     for i in range(5):
         status, _, _ = hosted.route_arclink_hosted_api(
             conn, method="POST", path="/api/v1/auth/admin/login",
-            headers={}, body=json.dumps({"email": "ratelimit@example.test", "password": "admin-test-password"}),
+            headers={},
+            body=json.dumps(
+                {
+                    "email": "ratelimit@example.test",
+                    "password": "admin-test-password",
+                    "login_subject": f"caller-alias-{i}@example.test",
+                }
+            ),
             config=config,
         )
         # These will return 401 (unknown email), but rate limit counter increments
 
-    # 6th attempt with same subject should be rate limited -> 429
+    # 6th attempt with the same email but a fresh asserted subject should still
+    # be rate limited -> 429.
     status, payload, headers = hosted.route_arclink_hosted_api(
         conn, method="POST", path="/api/v1/auth/admin/login",
-        headers={}, body=json.dumps({"email": "ratelimit@example.test", "password": "admin-test-password"}),
+        headers={},
+        body=json.dumps(
+            {
+                "email": "ratelimit@example.test",
+                "password": "admin-test-password",
+                "login_subject": "fresh-caller-alias@example.test",
+            }
+        ),
         config=config,
     )
     expect(status == 429, f"expected 429 got {status}: {payload}")
@@ -6278,6 +6331,7 @@ def main() -> int:
     test_user_refuel_checkout_route_quotes_payment_checkout()
     test_user_login_sets_session_cookies_and_logout_clears_them()
     test_public_onboarding_checkout_route()
+    test_public_onboarding_checkout_rejects_external_redirect_urls()
     test_public_onboarding_checkout_resolves_live_stripe_from_config()
     test_public_onboarding_checkout_maps_package_price_ids()
     test_public_bot_checkout_button_redirects_to_stripe()

@@ -11,6 +11,7 @@ from arclink_control import (
     approve_ssot_pending_write,
     approve_onboarding_session,
     approve_request,
+    config_env_value,
     connect_db,
     deny_ssot_pending_write,
     deny_onboarding_session,
@@ -81,6 +82,17 @@ def _format_actor_label(author) -> str:  # type: ignore[no-untyped-def]
     return f"discord:{getattr(author, 'id', 'unknown')}"
 
 
+def _csv_env_values(*names: str) -> set[str]:
+    values: set[str] = set()
+    for name in names:
+        raw = str(os.environ.get(name) or config_env_value(name, "") or "").strip()
+        for item in raw.replace(";", ",").split(","):
+            clean = item.strip()
+            if clean:
+                values.add(clean)
+    return values
+
+
 async def main() -> None:
     cfg = Config.from_env()
     if not cfg.curator_discord_onboarding_enabled:
@@ -116,6 +128,35 @@ async def main() -> None:
         if (cfg.operator_notify_platform or "").strip().lower() != "discord":
             return ""
         return str(cfg.operator_notify_channel_id or "").strip()
+
+    def _operator_discord_user_ids() -> set[str]:
+        return _csv_env_values("ARCLINK_OPERATOR_DISCORD_USER_IDS", "OPERATOR_DISCORD_USER_IDS")
+
+    def _operator_discord_role_ids() -> set[str]:
+        return _csv_env_values("ARCLINK_OPERATOR_DISCORD_ROLE_IDS", "OPERATOR_DISCORD_ROLE_IDS")
+
+    def _operator_discord_subject_allowed(subject, *, guild) -> tuple[bool, str]:  # type: ignore[no-untyped-def]
+        user_id = str(getattr(subject, "id", "") or "").strip()
+        allowed_users = _operator_discord_user_ids()
+        allowed_roles = _operator_discord_role_ids()
+        if allowed_users or allowed_roles:
+            if user_id and user_id in allowed_users:
+                return True, ""
+            subject_roles = {
+                str(getattr(role, "id", "") or "").strip()
+                for role in getattr(subject, "roles", []) or []
+                if str(getattr(role, "id", "") or "").strip()
+            }
+            if subject_roles & allowed_roles:
+                return True, ""
+            return False, "This Discord user is not on the Operator Raven allowlist."
+        if guild is None:
+            return True, ""
+        return (
+            False,
+            "Discord Operator Raven requires ARCLINK_OPERATOR_DISCORD_USER_IDS or "
+            "ARCLINK_OPERATOR_DISCORD_ROLE_IDS for guild channels.",
+        )
 
     def _claim_discord_message_once(message_id: str) -> bool:
         normalized = str(message_id or "").strip()
@@ -222,6 +263,13 @@ async def main() -> None:
                 f"Run this in the configured operator channel <#{operator_channel_id}>.",
                 ephemeral=True,
             )
+            return False
+        allowed, reason = _operator_discord_subject_allowed(
+            getattr(interaction, "user", None),
+            guild=getattr(interaction, "guild", None),
+        )
+        if not allowed:
+            await interaction.response.send_message(reason, ephemeral=True)
             return False
         return True
 
@@ -361,6 +409,10 @@ async def main() -> None:
         operator_channel_id = _operator_channel_id()
         if not operator_channel_id or str(message.channel.id) != operator_channel_id:
             return False
+        allowed, reason = _operator_discord_subject_allowed(message.author, guild=getattr(message, "guild", None))
+        if not allowed:
+            await message.channel.send(reason)
+            return True
 
         parts = content.strip().split(maxsplit=2)
         command = parts[0].lower() if parts else ""

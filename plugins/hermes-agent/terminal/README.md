@@ -21,6 +21,9 @@ yet reconciled.
 
 - Workspace uses `TERMINAL_WORKSPACE_ROOT`, `CODE_WORKSPACE_ROOT`, or
   `DRIVE_WORKSPACE_ROOT` when set, otherwise `$HERMES_HOME/workspace`.
+- Terminal is a full ArcPod Unix-user shell surface. Drive and Code hide
+  sensitive paths for their file-browser workflows, but those filters are not a
+  security boundary once Terminal is enabled for the same dashboard principal.
 - Shell defaults to `$SHELL`, `/bin/bash`, then `/bin/sh`; set
   `TERMINAL_SHELL` to override.
 - Root execution is blocked unless `TERMINAL_ALLOW_ROOT=1`.

@@ -177,6 +177,7 @@ def parse_args() -> argparse.Namespace:
     deenroll = agent_sub.add_parser("deenroll")
     deenroll.add_argument("target")
     deenroll.add_argument("--actor", default=os.environ.get("USER", "operator"))
+    deenroll.add_argument("--yes", default="", help="Typed confirmation; must equal the target agent id or username.")
 
     vault = subparsers.add_parser("vault")
     vault_sub = vault.add_subparsers(dest="action", required=True)
@@ -210,6 +211,7 @@ def parse_args() -> argparse.Namespace:
     purge_enrollment.add_argument("--purge-rate-limits", action="store_true")
     purge_enrollment.add_argument("--remove-nextcloud-user", action="store_true")
     purge_enrollment.add_argument("--extra-rate-limit-subject", action="append", default=[])
+    purge_enrollment.add_argument("--yes", default="", help="Typed confirmation; must equal the Unix username being purged.")
 
     upgrade = subparsers.add_parser("upgrade")
     upgrade_sub = upgrade.add_subparsers(dest="action", required=True)
@@ -2040,6 +2042,8 @@ def main() -> None:
         dump_output(args, user_sync_access(cfg, args.unix_user, args.agent_id))
         return
     if args.domain == "user" and args.action == "purge-enrollment":
+        if str(args.yes or "").strip() != str(args.unix_user or "").strip():
+            raise SystemExit(f"user purge-enrollment requires --yes {args.unix_user}")
         dump_output(
             args,
             user_purge_enrollment(
@@ -2056,6 +2060,8 @@ def main() -> None:
         return
 
     if args.domain == "agent" and args.action == "deenroll":
+        if str(args.yes or "").strip() != str(args.target or "").strip():
+            raise SystemExit(f"agent deenroll requires --yes {args.target}")
         dump_output(args, agent_deenroll(cfg, args.target, args.actor))
         return
     if args.domain == "org-profile" and args.action == "validate":

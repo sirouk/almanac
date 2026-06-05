@@ -23,6 +23,8 @@ done
 
 if [[ "$domain_arg" == "user" && "$action_arg" == "prepare" ]]; then
   needs_root=1
+elif [[ "$domain_arg" == "user" && "$action_arg" == "purge-enrollment" ]]; then
+  needs_root=1
 elif [[ "$domain_arg" == "agent" && "$action_arg" == "deenroll" ]]; then
   needs_root=1
 elif [[ "$domain_arg" == "retrieval" && "$action_arg" == "replay" ]]; then

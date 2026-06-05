@@ -652,6 +652,8 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(terminal["capabilities"]["persistent_sessions"] is True, str(terminal))
             expect(terminal["capabilities"]["streaming_output"] is True, str(terminal))
             expect(terminal["capabilities"]["bounded_scrollback"] is True, str(terminal))
+            expect(terminal["capabilities"]["full_pod_shell_authority"] is True, str(terminal))
+            expect(terminal["capabilities"]["drive_code_path_filters_are_not_terminal_boundary"] is True, str(terminal))
             expect("reattach_sessions" in terminal["capabilities"], str(terminal))
             expect(terminal["transport"]["mode"] == "sse", str(terminal))
             expect(terminal["transport"]["fallback"] == "polling", str(terminal))
@@ -745,9 +747,15 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
             expect(drive_roots["linked"]["capabilities"]["preview"] is True, str(drive_roots["linked"]))
             expect(drive_roots["linked"]["capabilities"]["delete"] is True, str(drive_roots["linked"]))
             linked_items = asyncio.run(drive_api.items(root="linked", path="/"))
+            linked_items_by_name = {item["name"]: item for item in linked_items["items"]}
             expect(any(item["name"] == "shared-note.md" for item in linked_items["items"]), str(linked_items))
             expect(any(item["name"] == "live-brief" for item in linked_items["items"]), str(linked_items))
             expect(any(item["name"] == "legacy-brief" for item in linked_items["items"]), str(linked_items))
+            expect(linked_items_by_name["live-brief"]["can_write"] is True, str(linked_items_by_name["live-brief"]))
+            expect(linked_items_by_name["live-brief"]["can_upload"] is True, str(linked_items_by_name["live-brief"]))
+            expect(linked_items_by_name["live-brief"]["can_delete"] is False, str(linked_items_by_name["live-brief"]))
+            expect(linked_items_by_name["legacy-brief"]["can_write"] is False, str(linked_items_by_name["legacy-brief"]))
+            expect(linked_items_by_name["shared-note.md"]["can_write"] is False, str(linked_items_by_name["shared-note.md"]))
             linked_content = asyncio.run(drive_api.content(root="linked", path="/shared-note.md"))
             expect("Linked root proof" in linked_content["content"], str(linked_content))
             live_content = asyncio.run(drive_api.content(root="linked", path="/live-brief/overview.md"))
@@ -818,9 +826,15 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
             expect(code_roots["linked"]["read_only"] is False, str(code_roots["linked"]))
             expect(code_roots["linked"]["capabilities"]["write"] is True, str(code_roots["linked"]))
             code_items = asyncio.run(code_api.items(path="/", root="linked"))
+            code_items_by_name = {item["name"]: item for item in code_items["items"]}
             expect(any(item["name"] == "shared-note.md" for item in code_items["items"]), str(code_items))
             expect(any(item["name"] == "live-brief" for item in code_items["items"]), str(code_items))
             expect(any(item["name"] == "legacy-brief" for item in code_items["items"]), str(code_items))
+            expect(code_items_by_name["live-brief"]["can_write"] is True, str(code_items_by_name["live-brief"]))
+            expect(code_items_by_name["live-brief"]["can_upload"] is True, str(code_items_by_name["live-brief"]))
+            expect(code_items_by_name["live-brief"]["can_delete"] is False, str(code_items_by_name["live-brief"]))
+            expect(code_items_by_name["legacy-brief"]["can_write"] is False, str(code_items_by_name["legacy-brief"]))
+            expect(code_items_by_name["shared-note.md"]["can_write"] is False, str(code_items_by_name["shared-note.md"]))
             code_file = asyncio.run(code_api.file(path="/shared-note.md", root="linked"))
             expect("Linked root proof" in code_file["content"], str(code_file))
             code_live_file = asyncio.run(code_api.file(path="/live-brief/overview.md", root="linked"))
@@ -1554,6 +1568,62 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
             expect(not (docs / "too-large.md").exists(), "oversized upload must not write a partial file")
             expect(not list(docs.glob(".too-large.md.upload-*.tmp")), "oversized upload must remove local temp files")
             os.environ.pop("DRIVE_MAX_UPLOAD_BYTES", None)
+
+            os.environ["DRIVE_MAX_UPLOAD_FILES"] = "1"
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        files=[
+                            MemoryUpload("too-many-a.md", b"a\n"),
+                            MemoryUpload("too-many-b.md", b"b\n"),
+                        ],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 413, f"expected upload file-count rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected upload file-count cap to reject")
+            expect(not (docs / "too-many-a.md").exists() and not (docs / "too-many-b.md").exists(), "too-many upload should not write files")
+            os.environ.pop("DRIVE_MAX_UPLOAD_FILES", None)
+
+            os.environ["DRIVE_MAX_UPLOAD_METADATA_BYTES"] = "8"
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        relative_paths=json.dumps(["metadata-is-too-large.md"]),
+                        files=[MemoryUpload("metadata.md", b"metadata\n")],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 413, f"expected upload metadata cap rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected upload metadata cap to reject")
+            expect(not (docs / "metadata-is-too-large.md").exists(), "metadata-cap upload should not write files")
+            os.environ.pop("DRIVE_MAX_UPLOAD_METADATA_BYTES", None)
+
+            os.environ["DRIVE_MAX_UPLOAD_TOTAL_BYTES"] = "8"
+            try:
+                asyncio.run(
+                    drive_api.upload(
+                        path="/Docs",
+                        root="vault",
+                        files=[
+                            MemoryUpload("aggregate-a.md", b"aaaaa"),
+                            MemoryUpload("aggregate-b.md", b"bbbbb"),
+                        ],
+                    )
+                )
+            except Exception as exc:
+                expect(getattr(exc, "status_code", None) == 413, f"expected aggregate upload cap rejection, got {exc!r}")
+            else:
+                raise AssertionError("expected aggregate upload cap to reject")
+            expect(not (docs / "aggregate-a.md").exists(), "aggregate cap should roll back earlier local files")
+            expect(not (docs / "aggregate-b.md").exists(), "aggregate cap should remove the current local file")
+            os.environ.pop("DRIVE_MAX_UPLOAD_TOTAL_BYTES", None)
 
             try:
                 asyncio.run(

@@ -22,6 +22,7 @@ from arclink_secrets_regex import redact_secret_material, redact_then_truncate
 PROBE_KINDS = ("liveness", "capacity", "inventory")
 DEFAULT_CADENCES = {"liveness": 60, "capacity": 300, "inventory": 900}
 DEFAULT_RETENTION = 1000
+DEFAULT_MAX_PROBED_CAPACITY_SLOTS = 64
 LOCAL_SSH_HOST_ALIASES = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -77,6 +78,14 @@ def _redacted_json(value: Mapping[str, Any] | None) -> str:
         return json.dumps(_redact_json_value(dict(value or {})), sort_keys=True)
     except (TypeError, ValueError):
         return json.dumps({"raw": redact_then_truncate(str(value or {}), limit=1000)}, sort_keys=True)
+
+
+def _max_probed_capacity_slots() -> int:
+    try:
+        value = int(os.environ.get("ARCLINK_FLEET_PROBED_MAX_CAPACITY_SLOTS") or DEFAULT_MAX_PROBED_CAPACITY_SLOTS)
+    except (TypeError, ValueError):
+        value = DEFAULT_MAX_PROBED_CAPACITY_SLOTS
+    return max(1, value)
 
 
 def _now_from_iso(value: str | None):
@@ -274,10 +283,19 @@ def _apply_liveness_state(
     machine_id = _linked_machine_id(host)
     now = utc_now_iso()
     if result.ok:
-        conn.execute(
-            "UPDATE arclink_fleet_hosts SET status = 'active', last_health_state = 'active', updated_at = ? WHERE host_id = ?",
-            (now, host_id),
-        )
+        metadata = json_loads_safe(str(host.get("metadata_json") or "{}"))
+        if not isinstance(metadata, dict):
+            metadata = {}
+        host_sets = ["status = 'active'", "last_health_state = 'active'", "updated_at = ?"]
+        host_params: list[Any] = [now]
+        if bool(metadata.get("enrollment_pending_probe")):
+            metadata["enrollment_pending_probe"] = False
+            metadata["placement_activated_at"] = now
+            host_sets.append("drain = 0")
+            host_sets.append("metadata_json = ?")
+            host_params.append(_redacted_json(metadata))
+        host_params.append(host_id)
+        conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(host_sets)} WHERE host_id = ?", host_params)
         if machine_id:
             conn.execute(
                 "UPDATE arclink_inventory_machines SET status = 'ready', connectivity_summary_json = ?, last_probed_at = ? WHERE machine_id = ?",
@@ -329,7 +347,10 @@ def _apply_capacity_or_inventory(
         return
     payload = dict(result.payload or {})
     hardware = dict(payload.get("hardware_summary") or {}) if isinstance(payload.get("hardware_summary"), Mapping) else {}
-    capacity_slots = int(payload.get("capacity_slots") or hardware.get("vcpu_cores") or host.get("capacity_slots") or 1)
+    capacity_slots = min(
+        _max_probed_capacity_slots(),
+        max(1, int(payload.get("capacity_slots") or hardware.get("vcpu_cores") or host.get("capacity_slots") or 1)),
+    )
     observed_load = int(payload.get("observed_load") or _active_placement_count(conn, str(host["host_id"])))
     now = utc_now_iso()
     conn.execute(

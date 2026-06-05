@@ -128,6 +128,7 @@ from arclink_fleet_enrollment import (
     consume_fleet_enrollment,
 )
 from arclink_notification_delivery import run_public_agent_turns_once
+from arclink_onboarding import ArcLinkOnboardingError
 from arclink_pod_comms import list_all_pod_messages, list_pod_messages
 from arclink_product import base_domain as default_base_domain, chutes_default_model
 from arclink_secrets_regex import redact_then_truncate
@@ -493,6 +494,64 @@ def _cookie_value(headers: Mapping[str, Any], name: str) -> str:
     return str(morsel.value or "") if morsel is not None else ""
 
 
+def _configured_redirect_origin(config: HostedApiConfig) -> str:
+    raw = str(config.base_domain or default_base_domain(config.env) or "").strip().strip("/")
+    if not raw:
+        raw = "localhost"
+    parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc or parsed.path
+    return f"{scheme}://{netloc}".rstrip("/")
+
+
+def _configured_redirect_hosts(config: HostedApiConfig) -> set[str]:
+    hosts: set[str] = set()
+    for raw in (config.base_domain, config.cors_origin, config.cookie_domain):
+        text = str(raw or "").strip().strip("/")
+        if not text:
+            continue
+        if text.startswith("."):
+            text = text[1:]
+        parsed = urlparse(text if "://" in text else f"//{text}")
+        host = str(parsed.hostname or "").strip().lower()
+        if host:
+            hosts.add(host)
+    return hosts
+
+
+def _host_allowed_for_redirect(host: str, allowed_hosts: set[str]) -> bool:
+    clean = str(host or "").strip().lower()
+    for allowed in allowed_hosts:
+        if clean == allowed or clean.endswith(f".{allowed}"):
+            return True
+    return False
+
+
+def _safe_stripe_redirect_url(
+    config: HostedApiConfig,
+    raw_url: Any,
+    *,
+    default_path: str,
+    field: str,
+) -> str:
+    origin = _configured_redirect_origin(config)
+    value = str(raw_url or "").strip()
+    if not value:
+        value = default_path
+    parsed = urlparse(value)
+    if not parsed.scheme and not parsed.netloc:
+        if not value.startswith("/") or value.startswith("//"):
+            raise HostedApiBodyError(400, f"invalid_{field}")
+        return f"{origin}{value}"
+    if parsed.scheme != "https":
+        if parsed.scheme == "http" and (parsed.hostname or "").strip().lower() in {"localhost", "127.0.0.1", "::1"}:
+            return value
+        raise HostedApiBodyError(400, f"invalid_{field}")
+    if not _host_allowed_for_redirect(parsed.hostname or "", _configured_redirect_hosts(config)):
+        raise HostedApiBodyError(400, f"invalid_{field}")
+    return value
+
+
 def _onboarding_claim_cookie(token: str, *, config: HostedApiConfig) -> tuple[str, str]:
     return ("Set-Cookie", f"{ONBOARDING_CLAIM_COOKIE}={str(token or '')}{_cookie_flags(config)}")
 
@@ -713,13 +772,25 @@ def _handle_public_onboarding_checkout(
         price_id = config.sovereign_price_id
     if selected_plan_id == "scale" and config.scale_price_id:
         price_id = config.scale_price_id
+    success_url = _safe_stripe_redirect_url(
+        config,
+        body.get("success_url"),
+        default_path=f"/checkout/success?session={session_id}",
+        field="success_url",
+    )
+    cancel_url = _safe_stripe_redirect_url(
+        config,
+        body.get("cancel_url"),
+        default_path=f"/checkout/cancel?session={session_id}",
+        field="cancel_url",
+    )
     result = open_public_onboarding_checkout_api(
         conn,
         session_id=session_id,
         stripe_client=stripe_client,
         price_id=price_id,
-        success_url=str(body.get("success_url") or ""),
-        cancel_url=str(body.get("cancel_url") or ""),
+        success_url=success_url,
+        cancel_url=cancel_url,
         base_domain=config.base_domain,
     )
     return _json_response(result.status, result.payload, request_id=request_id)
@@ -1013,12 +1084,14 @@ def _handle_admin_login(
     body: dict[str, Any],
     request_id: str,
     config: HostedApiConfig,
+    client_ip: str = "",
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     result = create_arclink_admin_login_session_api(
         conn,
         email=str(body.get("email") or ""),
         password=str(body.get("password") or ""),
         login_subject=str(body.get("login_subject") or body.get("email") or ""),
+        client_ip=client_ip,
         mfa_verified=False,
         metadata=body.get("metadata"),
     )
@@ -1031,12 +1104,14 @@ def _handle_user_login(
     body: dict[str, Any],
     request_id: str,
     config: HostedApiConfig,
+    client_ip: str = "",
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     result = create_arclink_user_login_session_api(
         conn,
         email=str(body.get("email") or ""),
         password=str(body.get("password") or ""),
         login_subject=str(body.get("login_subject") or body.get("email") or ""),
+        client_ip=client_ip,
         metadata=body.get("metadata"),
     )
     cookies = _session_cookies(result.payload.get("session", {}), kind="user", config=config)
@@ -1050,12 +1125,14 @@ def _handle_login(
     config: HostedApiConfig,
     *,
     allow_admin: bool,
+    client_ip: str = "",
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     result = create_arclink_login_session_api(
         conn,
         email=str(body.get("email") or ""),
         password=str(body.get("password") or ""),
         login_subject=str(body.get("login_subject") or body.get("email") or ""),
+        client_ip=client_ip,
         metadata=body.get("metadata"),
         allow_admin=allow_admin,
     )
@@ -1191,7 +1268,12 @@ def _handle_user_portal_link(
     result = create_user_portal_link_api(
         conn, session_id=creds["session_id"], session_token=creds["session_token"],
         stripe_client=stripe_client,
-        return_url=str(body.get("return_url") or ""),
+        return_url=_safe_stripe_redirect_url(
+            config,
+            body.get("return_url"),
+            default_path="/dashboard?tab=billing",
+            field="return_url",
+        ),
     )
     return _json_response(result.status, result.payload, request_id=request_id)
 
@@ -1218,8 +1300,18 @@ def _handle_user_refuel_checkout(
         stripe_client=stripe_client,
         deployment_id=str(body.get("deployment_id") or ""),
         amount_cents=amount_cents,
-        success_url=str(body.get("success_url") or ""),
-        cancel_url=str(body.get("cancel_url") or ""),
+        success_url=_safe_stripe_redirect_url(
+            config,
+            body.get("success_url"),
+            default_path="/checkout/success?kind=refuel",
+            field="success_url",
+        ),
+        cancel_url=_safe_stripe_redirect_url(
+            config,
+            body.get("cancel_url"),
+            default_path="/dashboard?tab=billing",
+            field="cancel_url",
+        ),
         env=config.env,
     )
     return _json_response(result.status, result.payload, request_id=request_id)
@@ -3943,11 +4035,24 @@ def route_arclink_hosted_api(
                 request_id,
                 cfg,
                 allow_admin=_backend_client_allowed(cfg, login_client_ip),
+                client_ip=login_client_ip,
             )
         elif route_key == "admin_login":
-            result = _handle_admin_login(conn, parsed_body, request_id, cfg)
+            result = _handle_admin_login(
+                conn,
+                parsed_body,
+                request_id,
+                cfg,
+                client_ip=_remote_ip_from_headers(cfg, headers, remote_addr),
+            )
         elif route_key == "user_login":
-            result = _handle_user_login(conn, parsed_body, request_id, cfg)
+            result = _handle_user_login(
+                conn,
+                parsed_body,
+                request_id,
+                cfg,
+                client_ip=_remote_ip_from_headers(cfg, headers, remote_addr),
+            )
         elif route_key == "user_logout":
             result = _handle_logout(conn, headers, request_id, cfg, "user")
         elif route_key == "admin_logout":
@@ -4114,6 +4219,19 @@ def route_arclink_hosted_api(
         logger.warning(
             "api_academy_validation_error method=%s path=%s route=%s error=%s elapsed=%.3fs request_id=%s",
             clean_method, route_path, route_key, str(exc), elapsed, request_id,
+        )
+        cors = _cors_headers(cfg)
+        return _json_response(
+            400,
+            {"error": GENERIC_ARCLINK_API_ERROR, "request_id": request_id},
+            request_id=request_id,
+            extra_headers=cors,
+        )
+    except ArcLinkOnboardingError as exc:
+        elapsed = time.monotonic() - start
+        logger.warning(
+            "api_onboarding_validation_error method=%s path=%s route=%s error=%s elapsed=%.3fs request_id=%s",
+            clean_method, route_path, route_key, _log_error_text(exc, limit=160), elapsed, request_id,
         )
         cors = _cors_headers(cfg)
         return _json_response(

@@ -4,9 +4,12 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
+import hmac
 import json
 import os
 import pwd
+import secrets
 import shlex
 import sqlite3
 import subprocess
@@ -306,12 +309,24 @@ def _operator_upgrade_broker_request(
         )
     body = dict(payload)
     body["operation"] = operation
+    body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_urlsafe(18)
+    body_hash = hashlib.sha256(body_bytes).hexdigest()
+    signature = hmac.new(
+        broker_token.encode("utf-8"),
+        f"{timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
     request = urllib.request.Request(
         broker_url + "/v1/operator-upgrade",
-        data=json.dumps(body, sort_keys=True).encode("utf-8"),
+        data=body_bytes,
         headers={
             "Content-Type": "application/json",
             OPERATOR_UPGRADE_BROKER_TOKEN_HEADER: broker_token,
+            "X-ArcLink-Operator-Upgrade-Timestamp": timestamp,
+            "X-ArcLink-Operator-Upgrade-Nonce": nonce,
+            "X-ArcLink-Operator-Upgrade-Signature": signature,
         },
         method="POST",
     )

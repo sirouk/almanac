@@ -3047,7 +3047,7 @@ docker_enrollment_reset() {
     fi
   fi
 
-  purge_cmd=(./bin/arclink-ctl --json user purge-enrollment "$target_unix_user" --actor deploy-docker-enrollment-reset)
+  purge_cmd=(./bin/arclink-ctl --json user purge-enrollment "$target_unix_user" --actor deploy-docker-enrollment-reset --yes "$target_unix_user")
   if [[ "$remove_archives" == "1" ]]; then
     purge_cmd+=(--remove-archives)
   fi

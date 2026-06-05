@@ -31,6 +31,7 @@ from arclink_secrets_regex import redact_then_truncate
 
 TOKEN_PREFIX = "arcfleet_v1"
 DEFAULT_ENROLLMENT_TTL_SECONDS = 3600
+DEFAULT_MAX_ENROLLMENT_CAPACITY_SLOTS = 64
 _FINGERPRINT_RE = re.compile(r"^[A-Za-z0-9_.:=+/@-]{16,256}$")
 _WIREGUARD_PUBLIC_KEY_RE = re.compile(r"^[A-Za-z0-9+/=]{20,100}$")
 _HOST_VALUE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,254}$")
@@ -426,6 +427,26 @@ def _safe_mapping(value: Any, *, label: str) -> dict[str, Any]:
     return json.loads(json_dumps_safe(dict(value), label="ArcLink fleet enrollment", error_cls=ArcLinkFleetEnrollmentError))
 
 
+def _bounded_capacity_slots(value: Any) -> int:
+    try:
+        requested = int(value or 4)
+    except (TypeError, ValueError) as exc:
+        raise ArcLinkFleetEnrollmentError("invalid worker capacity slots") from exc
+    try:
+        maximum = int(os.environ.get("ARCLINK_FLEET_ENROLLMENT_MAX_CAPACITY_SLOTS") or DEFAULT_MAX_ENROLLMENT_CAPACITY_SLOTS)
+    except (TypeError, ValueError):
+        maximum = DEFAULT_MAX_ENROLLMENT_CAPACITY_SLOTS
+    return max(1, min(max(1, maximum), requested))
+
+
+def _audit_chain_secret(secret: str = "") -> str:
+    return str(
+        secret
+        or os.environ.get("ARCLINK_FLEET_AUDIT_CHAIN_SECRET", "")
+        or os.environ.get("ARCLINK_FLEET_ENROLLMENT_SECRET", "")
+    ).strip()
+
+
 def _chain_hash(
     *,
     inventory_id: str,
@@ -434,6 +455,7 @@ def _chain_hash(
     event_at: str,
     prev_hash: str,
     metadata_json: str,
+    secret: str = "",
 ) -> str:
     payload = {
         "actor": actor,
@@ -443,7 +465,11 @@ def _chain_hash(
         "metadata": json_loads_safe(metadata_json),
         "prev_hash": prev_hash,
     }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    key = _audit_chain_secret(secret)
+    if key:
+        return "hmac_sha256_v1$" + hmac.new(key.encode("utf-8"), encoded, hashlib.sha256).hexdigest()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def append_fleet_audit_chain_entry(
@@ -454,6 +480,7 @@ def append_fleet_audit_chain_entry(
     actor: str,
     metadata: Mapping[str, Any] | None = None,
     event_at: str = "",
+    audit_secret: str = "",
 ) -> dict[str, Any]:
     if event not in {"enrolled", "verified", "activated", "degraded", "drained", "resumed", "removed", "re-attested"}:
         raise ArcLinkFleetEnrollmentError(f"unsupported fleet audit-chain event: {event}")
@@ -481,6 +508,7 @@ def append_fleet_audit_chain_entry(
         event_at=clean_event_at,
         prev_hash=prev_hash,
         metadata_json=metadata_json,
+        secret=audit_secret,
     )
     entry_id = _chain_entry_id()
     conn.execute(
@@ -562,7 +590,7 @@ def consume_fleet_enrollment(
         tailscale_dns_name = _clean_optional_hostname(ssh_host)
     ssh_user = _clean_ssh_user(body.get("ssh_user") or "arclink")
     region = str(body.get("region") or "").strip().lower()
-    capacity_slots = max(1, int(body.get("capacity_slots") or 4))
+    capacity_slots = _bounded_capacity_slots(body.get("capacity_slots") or 4)
     provider = str(body.get("provider") or "manual").strip().lower()
     if provider not in {"local", "manual", "hetzner", "linode"}:
         raise ArcLinkFleetEnrollmentError("unsupported worker provider")
@@ -574,6 +602,7 @@ def consume_fleet_enrollment(
         "ssh_host": ssh_host,
         "ssh_user": ssh_user,
         "enrollment_id": str(enrollment["enrollment_id"]),
+        "enrollment_pending_probe": True,
         "prereq_audit": prereq_audit,
     }
     if tailscale_dns_name:
@@ -626,9 +655,13 @@ def consume_fleet_enrollment(
         ssh_host=ssh_host,
         ssh_user=ssh_user,
         region=region,
-        status="ready",
+        status="pending",
         hardware_summary=hardware,
-        connectivity_summary=connectivity,
+        connectivity_summary={
+            **connectivity,
+            "ok": False,
+            "status": "awaiting_control_probe",
+        },
         capacity_slots=capacity_slots,
         tags=tags,
         metadata=metadata,
@@ -642,6 +675,17 @@ def consume_fleet_enrollment(
         """,
         (str(enrollment["enrollment_id"]), fingerprint, now, now, str(machine["machine_id"])),
     )
+    host_id = str(machine.get("machine_host_link") or "").strip()
+    if host_id:
+        conn.execute(
+            """
+            UPDATE arclink_fleet_hosts
+            SET status = 'degraded', drain = 1, last_health_state = 'awaiting_control_probe',
+                capacity_slots = ?, updated_at = ?
+            WHERE host_id = ?
+            """,
+            (capacity_slots, now, host_id),
+        )
     consumed = conn.execute(
         """
         UPDATE arclink_fleet_enrollments
@@ -666,6 +710,7 @@ def consume_fleet_enrollment(
             "wireguard_private_ip": wireguard_private_ip,
             "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
         },
+        audit_secret=secret,
     )
     verified = append_fleet_audit_chain_entry(
         conn,
@@ -677,11 +722,13 @@ def consume_fleet_enrollment(
             "hostname": hostname,
             "region": region,
             "capacity_slots": capacity_slots,
+            "placement_state": "awaiting_control_probe",
             "private_dns_name": private_dns_name,
             "tailscale_dns_name": tailscale_dns_name,
             "wireguard_private_ip": wireguard_private_ip,
             "fleet_share_transport": "worker-local-ssh-key" if fleet_share_public_key else "",
         },
+        audit_secret=secret,
     )
     conn.execute(
         "UPDATE arclink_inventory_machines SET audit_trail_chain = ? WHERE machine_id = ?",
@@ -799,8 +846,10 @@ def verify_fleet_audit_chain(
     *,
     inventory_id: str = "",
     notify: bool = False,
+    secret: str = "",
 ) -> dict[str, Any]:
     clean_inventory = str(inventory_id or "").strip()
+    chain_secret = _audit_chain_secret(secret)
     params: list[Any] = []
     where = ""
     if clean_inventory:
@@ -829,12 +878,28 @@ def verify_fleet_audit_chain(
             event_at=str(row["event_at"] or ""),
             prev_hash=actual_prev,
             metadata_json=metadata_json,
+            secret=chain_secret,
         )
         actual_hash = str(row["entry_hash"] or "")
         if actual_prev != expected_prev:
             errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "prev_hash_mismatch"})
-        if not hmac.compare_digest(actual_hash, expected_hash):
-            errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "entry_hash_mismatch"})
+        if actual_hash.startswith("hmac_sha256_v1$"):
+            if not chain_secret:
+                errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "audit_hmac_secret_missing"})
+            elif not hmac.compare_digest(actual_hash, expected_hash):
+                errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "entry_hash_mismatch"})
+        else:
+            legacy_hash = _chain_hash(
+                inventory_id=inv,
+                event=str(row["event"] or ""),
+                actor=str(row["actor"] or ""),
+                event_at=str(row["event_at"] or ""),
+                prev_hash=actual_prev,
+                metadata_json=metadata_json,
+                secret="",
+            )
+            if not hmac.compare_digest(actual_hash, legacy_hash):
+                errors.append({"entry_id": str(row["entry_id"]), "inventory_id": inv, "error": "entry_hash_mismatch"})
         prev_by_inventory[inv] = actual_hash
     if errors and notify:
         queue_notification(

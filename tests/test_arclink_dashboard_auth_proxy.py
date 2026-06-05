@@ -347,6 +347,31 @@ def test_proxy_bridges_arclink_session_to_backend_hermes_api_token() -> None:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
+def test_proxy_treats_malformed_cookie_header_as_unauthorized() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_malformed_cookie_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            TestBackend.last_cookie = "not reset"
+            status, headers, body = request(
+                proxy.server_port,
+                "/",
+                headers={"Cookie": "arclink_dash_session=bogus; bad,key=2"},
+            )
+            expect(status == 401, f"expected malformed cookie to hit login gate, saw {status} {headers} {body!r}")
+            expect("<form" in body and "password" in body.lower(), body)
+            expect(TestBackend.last_cookie == "not reset", f"malformed cookie request should not reach backend, saw {TestBackend.last_cookie!r}")
+            print("PASS test_proxy_treats_malformed_cookie_header_as_unauthorized")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
 def test_proxy_bounds_public_login_body_and_streams_large_backend_responses() -> None:
     proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_streaming_body_limit_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -416,6 +441,46 @@ def test_proxy_login_normalizes_email_username_and_copied_password_whitespace() 
             print("PASS test_proxy_login_normalizes_email_username_and_copied_password_whitespace")
         finally:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
+def test_proxy_login_throttles_repeated_dashboard_failures() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_login_throttle_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password", "session_secret": "session-secret"}),
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_DASHBOARD_PROXY_LOGIN_FAILURE_LIMIT"] = "2"
+        os.environ["ARCLINK_DASHBOARD_PROXY_LOGIN_FAILURE_WINDOW_SECONDS"] = "900"
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            for index in range(2):
+                status, _headers, body = request(
+                    proxy.server_port,
+                    "/__arclink/login",
+                    method="POST",
+                    body=urlencode({"username": "alex", "password": f"wrong-{index}", "next": "/"}),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                expect(status == 401 and "Invalid dashboard credentials" in body, f"expected failed login {index}, saw {status} {body!r}")
+
+            status, headers, body = request(
+                proxy.server_port,
+                "/__arclink/login",
+                method="POST",
+                body=urlencode({"username": "alex", "password": "test-password", "next": "/"}),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            expect(status == 429 and "Too many sign-in attempts" in body, f"expected throttle, saw {status} {headers} {body!r}")
+            expect("Set-Cookie" not in headers, f"throttled login must not set a dashboard session: {headers}")
+            print("PASS test_proxy_login_throttles_repeated_dashboard_failures")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 def test_proxy_scopes_session_cookie_per_dashboard_instance() -> None:
@@ -955,8 +1020,10 @@ def test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations() -> No
 def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_bridges_arclink_session_to_backend_hermes_api_token()
+    test_proxy_treats_malformed_cookie_header_as_unauthorized()
     test_proxy_bounds_public_login_body_and_streams_large_backend_responses()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
+    test_proxy_login_throttles_repeated_dashboard_failures()
     test_proxy_scopes_session_cookie_per_dashboard_instance()
     test_proxy_accepts_user_scoped_sso_cookie_across_agent_dashboards()
     test_proxy_rejects_session_and_sso_cookies_after_revocation_epoch()
@@ -967,7 +1034,7 @@ def main() -> int:
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 14 dashboard-auth-proxy regression tests")
+    print("PASS all 15 dashboard-auth-proxy regression tests")
     return 0
 
 

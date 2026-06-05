@@ -6785,7 +6785,7 @@ PY
   if [[ "$agent_status" == "active" || "$agent_status" == "pending" ]]; then
     env ARCLINK_CONFIG_FILE="$CONFIG_TARGET" \
       "$ARCLINK_REPO_DIR/bin/arclink-ctl" agent deenroll "$target_unix_user" \
-      --actor deploy-enrollment-reset >/dev/null 2>&1 || true
+      --actor deploy-enrollment-reset --yes "$target_unix_user" >/dev/null 2>&1 || true
   fi
 
   rm -rf "$ARCLINK_AGENTS_STATE_DIR/$agent_id"

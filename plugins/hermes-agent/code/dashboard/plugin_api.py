@@ -939,13 +939,24 @@ def _entry_sort_key(path: Path) -> tuple[bool, str]:
     return (not (not path.is_symlink() and path.is_dir()), path.name.lower())
 
 
-def _item_for(path: Path, relative: str, root_id: str = "workspace") -> dict[str, Any]:
+def _item_for(path: Path, relative: str, root_id: str = "workspace", root: Path | None = None) -> dict[str, Any]:
     try:
         stat = path.stat()
     except OSError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     is_dir = path.is_dir()
     mime = "inode/directory" if is_dir else (mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+    can_write = root_id != "linked"
+    can_delete = can_write and bool(relative)
+    can_upload = can_write and is_dir
+    can_rename = can_delete
+    if root_id == "linked":
+        entry = _linked_manifest_entry(root, path) if root is not None else None
+        can_write = bool(entry and _linked_entry_writable(entry))
+        share_root = bool(entry and len(Path(relative).parts) == 1)
+        can_upload = can_write and is_dir
+        can_delete = can_write and bool(relative) and not share_root
+        can_rename = can_delete
     return {
         "name": path.name or "Root",
         "root": root_id,
@@ -956,18 +967,22 @@ def _item_for(path: Path, relative: str, root_id: str = "workspace") -> dict[str
         "mime": mime,
         "text": bool((not is_dir) and _is_text_file(path) and stat.st_size <= _MAX_TEXT_BYTES),
         "language": _language_for(relative),
+        "can_write": can_write,
+        "can_upload": can_upload,
+        "can_delete": can_delete,
+        "can_rename": can_rename,
     }
 
 
 def _tree_for(path: Path, relative: str, depth: int, root_ctx: dict[str, Any]) -> dict[str, Any]:
-    node = _item_for(path, relative, str(root_ctx["id"]))
+    root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
+    node = _item_for(path, relative, str(root_ctx["id"]), root)
     if not relative:
         node["name"] = str(root_ctx.get("label") or node["name"])
     if not path.is_dir():
         return node
     children: list[dict[str, Any]] = []
     if depth > 0:
-        root = Path(str(root_ctx["path"])).expanduser().resolve(strict=False)
         for child in sorted(path.iterdir(), key=_entry_sort_key):
             if len(children) >= _MAX_TREE_CHILDREN:
                 node["truncated"] = True
@@ -1579,7 +1594,7 @@ async def items(path: str = "/", root: str = "workspace") -> dict[str, Any]:
     for child in sorted(target.iterdir(), key=_entry_sort_key):
         if child.name in _SKIP_DIR_NAMES or (child.is_symlink() and not _allowed_linked_symlink(root_ctx, root_path, child)) or _is_sensitive_path(child):
             continue
-        entries.append(_item_for(child, child.relative_to(root_path).as_posix(), str(root_ctx["id"])))
+        entries.append(_item_for(child, child.relative_to(root_path).as_posix(), str(root_ctx["id"]), root_path))
     return {"root": str(root_ctx["id"]), "root_label": str(root_ctx["label"]), "path": _display_path(relative), "items": entries}
 
 
@@ -1655,7 +1670,7 @@ async def search(q: str = "", path: str = "/", root: str = "") -> dict[str, Any]
                         continue
                 elif child.is_dir() and lowered not in haystack_path:
                     continue
-                item = _item_for(child, relative, str(root_ctx["id"]))
+                item = _item_for(child, relative, str(root_ctx["id"]), root_path)
                 item["match"] = matched_line or "Path match"
                 item["root_label"] = str(root_ctx["label"])
                 results.append(item)

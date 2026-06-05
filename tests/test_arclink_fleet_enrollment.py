@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from arclink_test_helpers import expect, load_module, memory_db
 
@@ -175,21 +176,47 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     expect(machine_meta["wireguard"]["public_key"] == WORKER_WG_PUBLIC_KEY, str(machine_meta))
     expect(machine_meta["fleet_share"]["ssh_key_path"] == "/var/lib/arclink-fleet/fleet-share-ssh/id_ed25519", str(machine_meta))
     expect(machine_meta["fleet_share"]["known_hosts_file"] == "/var/lib/arclink-fleet/fleet-share-ssh/known_hosts", str(machine_meta))
-    host_meta = json.loads(
-        conn.execute(
-            "SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
-            (machine["machine_host_link"],),
-        ).fetchone()["metadata_json"]
-    )
+    host = conn.execute(
+        "SELECT status, drain, capacity_slots, last_health_state, metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
+        (machine["machine_host_link"],),
+    ).fetchone()
+    expect(host["status"] == "degraded", str(dict(host)))
+    expect(int(host["drain"]) == 1, str(dict(host)))
+    expect(host["last_health_state"] == "awaiting_control_probe", str(dict(host)))
+    expect(int(host["capacity_slots"]) == 6, str(dict(host)))
+    host_meta = json.loads(host["metadata_json"])
+    expect(host_meta["enrollment_pending_probe"] is True, str(host_meta))
     expect(host_meta["private_dns_name"] == "10.44.0.11", str(host_meta))
     expect(host_meta["tailscale_dns_name"] == "worker-1.tailnet.ts.net", str(host_meta))
     expect(host_meta["control_network_mode"] == "remote", str(host_meta))
     expect(host_meta["wireguard"]["private_ip"] == "10.44.0.11", str(host_meta))
     expect(host_meta["fleet_share"]["public_key"].startswith("ssh-ed25519 "), str(host_meta))
 
-    verified = enrollment.verify_fleet_audit_chain(conn)
+    verified = enrollment.verify_fleet_audit_chain(conn, secret=SECRET)
     expect(verified["ok"] is True and verified["checked_entries"] == 2, str(verified))
     print("PASS test_callback_attests_worker_links_inventory_and_verifies_chain")
+
+
+def test_attestation_capacity_is_capped_until_control_probe() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_capacity_cap_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_capacity_cap_test")
+    conn = memory_db(control)
+    minted = enrollment.mint_fleet_enrollment(
+        conn,
+        created_by_user_id="operator-1",
+        secret=SECRET,
+        enrollment_id="flenr_capacity_cap",
+    )
+    payload = _attestation_payload("worker-capacity.example.test")
+    payload["capacity_slots"] = 100_000
+    result = enrollment.consume_fleet_enrollment(conn, token=minted["token"], payload=payload, secret=SECRET)
+    host = conn.execute(
+        "SELECT status, drain, capacity_slots FROM arclink_fleet_hosts WHERE host_id = ?",
+        (result["host_id"],),
+    ).fetchone()
+    expect(host["status"] == "degraded" and int(host["drain"]) == 1, str(dict(host)))
+    expect(int(host["capacity_slots"]) == 64, str(dict(host)))
+    print("PASS test_attestation_capacity_is_capped_until_control_probe")
 
 
 def test_attestation_rejects_unsafe_network_identity_values() -> None:
@@ -313,7 +340,7 @@ def test_audit_chain_tampering_notifies_operator() -> None:
         (json.dumps({"tampered": True}, sort_keys=True), result["machine_id"]),
     )
     conn.commit()
-    verified = enrollment.verify_fleet_audit_chain(conn, notify=True)
+    verified = enrollment.verify_fleet_audit_chain(conn, notify=True, secret=SECRET)
     expect(verified["ok"] is False, str(verified))
     messages = [
         dict(row)
@@ -424,10 +451,16 @@ def test_inventory_health_verifies_chain_and_notifies_expired_enrollments() -> N
         secret=SECRET,
     )
 
-    health = inventory.fleet_inventory_health(conn, notify=True)
-    expect(health["ok"] is True, str(health))
-    expect(health["audit_chain"]["checked_entries"] == 2, str(health))
-    expect(health["enrollments"]["expired_now"] == 1, str(health))
+    old_env = os.environ.copy()
+    os.environ["ARCLINK_FLEET_ENROLLMENT_SECRET"] = SECRET
+    try:
+        health = inventory.fleet_inventory_health(conn, notify=True)
+        expect(health["ok"] is True, str(health))
+        expect(health["audit_chain"]["checked_entries"] == 2, str(health))
+        expect(health["enrollments"]["expired_now"] == 1, str(health))
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
     rendered = json.dumps(health, sort_keys=True)
     expect(expired["token"] not in rendered and active["token"] not in rendered, rendered)
     notification = conn.execute(
@@ -468,7 +501,7 @@ def test_explicit_reattest_updates_fingerprint_without_rendering_it() -> None:
         (worker["machine_id"],),
     ).fetchone()
     expect(stored["machine_fingerprint"] == new_fingerprint, str(dict(stored)))
-    verified = enrollment.verify_fleet_audit_chain(conn)
+    verified = enrollment.verify_fleet_audit_chain(conn, secret=SECRET)
     expect(verified["ok"] is True and verified["checked_entries"] == 3, str(verified))
     audit_json = json.dumps(
         [dict(row) for row in conn.execute("SELECT metadata_json FROM arclink_fleet_audit_chain").fetchall()],
@@ -482,6 +515,7 @@ def main() -> int:
     test_mint_stores_only_hmac_hash_and_lists_without_token()
     test_tokens_fail_closed_when_malformed_wrong_revoked_expired_or_reused()
     test_callback_attests_worker_links_inventory_and_verifies_chain()
+    test_attestation_capacity_is_capped_until_control_probe()
     test_attestation_rejects_unsafe_network_identity_values()
     test_attestation_accepts_valid_ipv6_wireguard_defaults()
     test_fingerprint_mismatch_requires_explicit_reattest()
@@ -490,7 +524,7 @@ def main() -> int:
     test_hmac_root_rotation_revokes_pending_tokens_without_rendering_secret()
     test_inventory_health_verifies_chain_and_notifies_expired_enrollments()
     test_explicit_reattest_updates_fingerprint_without_rendering_it()
-    print("PASS all 11 ArcLink fleet enrollment tests")
+    print("PASS all 12 ArcLink fleet enrollment tests")
     return 0
 
 

@@ -2080,12 +2080,21 @@ normalize_runtime_config_defaults() {
 }
 
 reconcile_executor_allowlist_from_fleet_inventory() {
-  local db_path="${ARCLINK_DB_PATH:-}"
+  local db_path=""
+  local candidate=""
   local merged=""
-  if [[ -z "$db_path" && -n "${STATE_DIR:-}" ]]; then
-    db_path="$STATE_DIR/arclink-control.sqlite3"
-  fi
-  [[ -n "$db_path" && -f "$db_path" ]] || return 0
+  for candidate in \
+    "${ARCLINK_DB_PATH:-}" \
+    "${ARCLINK_DOCKER_HOST_PRIV_DIR:-}/state/arclink-control.sqlite3" \
+    "${ARCLINK_DOCKER_HOST_REPO_DIR:-}/arclink-priv/state/arclink-control.sqlite3" \
+    "${BOOTSTRAP_DIR:-}/arclink-priv/state/arclink-control.sqlite3" \
+    "${STATE_DIR:-}/arclink-control.sqlite3"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      db_path="$candidate"
+      break
+    fi
+  done
+  [[ -n "$db_path" ]] || return 0
   merged="$(
     python3 - "$db_path" "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" <<'PY'
 import json
@@ -2096,7 +2105,8 @@ db_path = sys.argv[1]
 current = sys.argv[2] if len(sys.argv) > 2 else ""
 
 def split_csv(value):
-    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+    normalized = str(value or "").replace("\\,", ",")
+    return [item.strip().rstrip("\\").strip() for item in normalized.split(",") if item.strip()]
 
 def append(items, value):
     clean = str(value or "").strip()

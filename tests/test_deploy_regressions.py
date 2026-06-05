@@ -136,6 +136,8 @@ def render_runtime_config(
     arclink_tailscale_control_url: str = "",
     telegram_webhook_url: str = "",
     arclink_db_path: str = "",
+    arclink_docker_host_priv_dir: str = "",
+    arclink_docker_host_repo_dir: str = "",
     executor_allowlist: str = "",
 ) -> str:
     text = DEPLOY_SH.read_text()
@@ -156,6 +158,8 @@ TELEGRAM_WEBHOOK_URL={shlex.quote(telegram_webhook_url)}
 VAULT_DIR=/home/arclink/arclink/arclink-priv/vault
 STATE_DIR=/home/arclink/arclink/arclink-priv/state
 ARCLINK_DB_PATH={shlex.quote(arclink_db_path)}
+ARCLINK_DOCKER_HOST_PRIV_DIR={shlex.quote(arclink_docker_host_priv_dir)}
+ARCLINK_DOCKER_HOST_REPO_DIR={shlex.quote(arclink_docker_host_repo_dir)}
 NEXTCLOUD_STATE_DIR=/home/arclink/arclink/arclink-priv/state/nextcloud
 RUNTIME_DIR=/home/arclink/arclink/arclink-priv/state/runtime
 PUBLISHED_DIR=/home/arclink/arclink/arclink-priv/published
@@ -522,13 +526,53 @@ def test_emit_runtime_config_reconciles_existing_fleet_private_endpoints_into_al
             "tui-only",
             "tui-only",
             arclink_db_path=str(db_path),
-            executor_allowlist="135.181.246.168,arclink-001",
+            executor_allowlist=r"135.181.246.168\,arclink-001",
         )
     line = next(item for item in config.splitlines() if item.startswith("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="))
     expect("10.44.0.11" in line, line)
     expect("worker-one.tailnet.test" in line, line)
     expect(line.count("10.44.0.11") == 1, line)
     print("PASS test_emit_runtime_config_reconciles_existing_fleet_private_endpoints_into_allowlist")
+
+
+def test_emit_runtime_config_reconciles_docker_host_state_inventory_into_allowlist() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        host_priv = Path(tmpdir) / "arclink-priv"
+        state_dir = host_priv / "state"
+        state_dir.mkdir(parents=True)
+        db_path = state_dir / "arclink-control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE arclink_fleet_hosts (
+              hostname TEXT,
+              metadata_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO arclink_fleet_hosts (hostname, metadata_json) VALUES (?, ?)",
+            (
+                "arclink-001",
+                (
+                    '{"ssh_host":"135.181.246.168",'
+                    '"private_dns_name":"10.44.0.11",'
+                    '"wireguard":{"private_ip":"10.44.0.11","private_cidr":"10.44.0.11/32"}}'
+                ),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        config = render_runtime_config(
+            "tui-only",
+            "tui-only",
+            arclink_docker_host_priv_dir=str(host_priv),
+            executor_allowlist="135.181.246.168,arclink-001",
+        )
+    line = next(item for item in config.splitlines() if item.startswith("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="))
+    expect("10.44.0.11" in line, line)
+    expect(line.count("10.44.0.11") == 1, line)
+    print("PASS test_emit_runtime_config_reconciles_docker_host_state_inventory_into_allowlist")
 
 
 def test_deploy_guides_explicit_notion_webhook_event_selection() -> None:
@@ -4331,6 +4375,7 @@ def main() -> int:
         test_emit_runtime_config_persists_extra_mcp_url,
         test_emit_runtime_config_persists_qmd_embedding_endpoint_fields,
         test_emit_runtime_config_reconciles_existing_fleet_private_endpoints_into_allowlist,
+        test_emit_runtime_config_reconciles_docker_host_state_inventory_into_allowlist,
         test_deploy_guides_explicit_notion_webhook_event_selection,
         test_deploy_uses_stable_copy_for_privileged_reexec,
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,

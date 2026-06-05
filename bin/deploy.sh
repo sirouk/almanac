@@ -2084,9 +2084,9 @@ reconcile_executor_allowlist_from_fleet_inventory() {
   local candidate=""
   local merged=""
   for candidate in \
-    "${ARCLINK_DB_PATH:-}" \
     "${ARCLINK_DOCKER_HOST_PRIV_DIR:-}/state/arclink-control.sqlite3" \
     "${ARCLINK_DOCKER_HOST_REPO_DIR:-}/arclink-priv/state/arclink-control.sqlite3" \
+    "${ARCLINK_DB_PATH:-}" \
     "${BOOTSTRAP_DIR:-}/arclink-priv/state/arclink-control.sqlite3" \
     "${STATE_DIR:-}/arclink-control.sqlite3"; do
     if [[ -n "$candidate" && -f "$candidate" ]]; then

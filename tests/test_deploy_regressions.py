@@ -563,9 +563,22 @@ def test_emit_runtime_config_reconciles_docker_host_state_inventory_into_allowli
         )
         conn.commit()
         conn.close()
+        stale_db_path = Path(tmpdir) / "stale-container-path.sqlite3"
+        stale_conn = sqlite3.connect(stale_db_path)
+        stale_conn.execute(
+            """
+            CREATE TABLE arclink_fleet_hosts (
+              hostname TEXT,
+              metadata_json TEXT
+            )
+            """
+        )
+        stale_conn.commit()
+        stale_conn.close()
         config = render_runtime_config(
             "tui-only",
             "tui-only",
+            arclink_db_path=str(stale_db_path),
             arclink_docker_host_priv_dir=str(host_priv),
             executor_allowlist="135.181.246.168,arclink-001",
         )

@@ -74,6 +74,8 @@ Commands:
   ports       Show assigned Docker host ports
   logs        Follow or print Compose logs
   health      Validate Compose config, state directories, control API/web, and running services
+  tailnet-publish
+              Publish active ArcPod dashboard ports through the control host tailnet
   provision-once
               Run one Sovereign Control Node provisioner batch now
   record-release
@@ -3216,6 +3218,9 @@ main() {
       ;;
     health)
       health "$@"
+      ;;
+    tailnet-publish)
+      docker_publish_tailnet_deployment_apps "$@"
       ;;
     provision-once)
       docker_provision_once "$@"

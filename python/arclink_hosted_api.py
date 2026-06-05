@@ -2026,16 +2026,35 @@ def _handle_onboarding_status(
     deployment_id = str(row_dict.get("deployment_id") or "").strip()
     deployment_payloads: list[dict[str, Any]] = []
 
+    def deployment_dashboard_published(deployment: Mapping[str, Any], metadata: Mapping[str, Any]) -> bool:
+        ingress_mode = str(metadata.get("ingress_mode") or "").strip().lower()
+        base_domain = str(deployment.get("base_domain") or metadata.get("base_domain") or "").strip().lower()
+        if not ingress_mode:
+            ingress_mode = "tailscale" if base_domain.endswith(".ts.net") else "domain"
+        strategy = str(metadata.get("tailscale_host_strategy") or "path").strip().lower()
+        if ingress_mode != "tailscale" or strategy != "path":
+            return True
+        tailnet_ports = metadata.get("tailnet_service_ports") if isinstance(metadata.get("tailnet_service_ports"), Mapping) else {}
+        try:
+            hermes_port = int((tailnet_ports or {}).get("hermes") or 0)
+        except (TypeError, ValueError):
+            hermes_port = 0
+        if not (0 < hermes_port < 65536):
+            return True
+        publish_state = metadata.get("tailnet_app_publication")
+        return isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "published"
+
     def build_deployment_payload(deployment: Mapping[str, Any], *, include_sensitive: bool) -> dict[str, Any]:
         dep_id = str(deployment.get("deployment_id") or "").strip()
         metadata = json_loads_safe(str(deployment.get("metadata_json") or "{}"))
+        dashboard_published = deployment_dashboard_published(deployment, metadata)
         urls = (
             _deployment_urls(
                 str(deployment.get("prefix") or ""),
                 str(deployment.get("base_domain") or ""),
                 metadata,
             )
-            if include_sensitive
+            if include_sensitive and dashboard_published
             else {}
         )
         status = str(deployment.get("status") or "")
@@ -2064,7 +2083,7 @@ def _handle_onboarding_status(
         label = str(deployment.get("agent_name") or "").strip() or (f"Hermes Agent {index}" if index else "Hermes Agent")
         payload = {
             "status": status,
-            "ready": status == "active",
+            "ready": status == "active" and dashboard_published,
             "bundle_agent_index": index,
             "bundle_agent_count": count,
             "access": {"urls": urls},

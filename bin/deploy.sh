@@ -8229,6 +8229,58 @@ run_arclink_docker() {
   "$helper" "$@"
 }
 
+control_tailnet_publisher_interval() {
+  local value="${ARCLINK_TAILNET_PUBLISH_INTERVAL_SECONDS:-15}"
+  if [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]]; then
+    printf '%ss\n' "$value"
+  else
+    printf '%s\n' "15s"
+  fi
+}
+
+install_control_tailnet_publisher_timer() {
+  local docker_env="" interval="" service_file="" timer_file=""
+
+  if [[ ! -d /run/systemd/system ]] || ! command_exists systemctl; then
+    return 0
+  fi
+  docker_env="$(docker_env_file_path)"
+  interval="$(control_tailnet_publisher_interval)"
+  service_file="/etc/systemd/system/arclink-docker-tailnet-publisher.service"
+  timer_file="/etc/systemd/system/arclink-docker-tailnet-publisher.timer"
+
+  cat >"$service_file" <<EOF
+[Unit]
+Description=ArcLink Docker tailnet deployment publisher
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$BOOTSTRAP_DIR
+Environment=ARCLINK_DOCKER_ENV_FILE=$docker_env
+ExecStart=$BOOTSTRAP_DIR/bin/arclink-docker.sh tailnet-publish
+EOF
+
+  cat >"$timer_file" <<EOF
+[Unit]
+Description=Run ArcLink Docker tailnet deployment publisher
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=$interval
+AccuracySec=5s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload >/dev/null
+  systemctl enable --now arclink-docker-tailnet-publisher.timer >/dev/null
+  systemctl start arclink-docker-tailnet-publisher.service >/dev/null 2>&1 || true
+}
+
 docker_env_file_path() {
   printf '%s\n' "$BOOTSTRAP_DIR/arclink-priv/config/docker.env"
 }
@@ -11381,6 +11433,7 @@ run_control_install_flow() {
   load_docker_runtime_config
   ensure_control_local_fleet_worker_registered
   publish_control_tailscale_ingress
+  install_control_tailnet_publisher_timer
   register_control_public_bot_actions
   run_arclink_docker record-release
   run_arclink_docker ports
@@ -12488,6 +12541,7 @@ run_control_runtime_reset() {
   run_arclink_docker up
   load_docker_runtime_config
   publish_control_tailscale_ingress
+  install_control_tailnet_publisher_timer
   register_control_public_bot_actions
   run_arclink_docker record-release
   run_arclink_docker ports

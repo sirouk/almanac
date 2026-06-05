@@ -1718,6 +1718,44 @@ def test_public_bot_withholds_unpublished_tailnet_app_urls() -> None:
     print("PASS test_public_bot_withholds_unpublished_tailnet_app_urls")
 
 
+def test_public_bot_withholds_tailnet_urls_until_publication_record_exists() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bots_tailnet_missing_publish_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_tailnet_missing_publish_test")
+    conn = memory_db(control)
+    seeded = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:missing-publish",
+        prefix="arc-missing-publish",
+        base_domain="worker.example.ts.net",
+    )
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.ts.net",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8443},
+                },
+                sort_keys=True,
+            ),
+            seeded["deployment_id"],
+        ),
+    )
+    conn.commit()
+    deployment = dict(conn.execute("SELECT * FROM arclink_deployments WHERE deployment_id = ?", (seeded["deployment_id"],)).fetchone())
+    access = bots._deployment_access(deployment)
+    expect(access == {}, str(access))
+    print("PASS test_public_bot_withholds_tailnet_urls_until_publication_record_exists")
+
+
 def test_public_bot_canonicalizes_tailscale_path_resource_urls() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bots_tailscale_urls_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_tailscale_urls_test")
@@ -2179,6 +2217,7 @@ def main() -> int:
     test_public_bot_share_approval_buttons_are_owner_scoped()
     test_public_bot_ignores_cross_user_active_deployment_metadata()
     test_public_bot_withholds_unpublished_tailnet_app_urls()
+    test_public_bot_withholds_tailnet_urls_until_publication_record_exists()
     test_public_bot_canonicalizes_tailscale_path_resource_urls()
     test_public_bot_connect_notion_uses_shared_control_webhook_not_agent_port()
     test_public_bot_raven_display_name_is_channel_and_account_scoped()
@@ -2191,7 +2230,7 @@ def main() -> int:
     test_public_bot_train_crew_flow_and_whats_changed()
     test_public_bot_academy_training_walks_crew_with_skip()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
-    print("PASS all 35 ArcLink public bot tests")
+    print("PASS all 36 ArcLink public bot tests")
     return 0
 
 

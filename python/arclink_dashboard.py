@@ -777,6 +777,7 @@ def _deployment_urls(prefix: str, base_domain: str, metadata: Mapping[str, Any] 
         return {}
     meta = dict(metadata or {})
     publish_state = meta.get("tailnet_app_publication")
+    tailnet_apps_published = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "published"
     tailnet_apps_unavailable = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "unavailable"
     ingress_mode = str(meta.get("ingress_mode") or os.environ.get("ARCLINK_INGRESS_MODE") or "domain").strip().lower()
     tailscale_dns_name = str(
@@ -788,17 +789,19 @@ def _deployment_urls(prefix: str, base_domain: str, metadata: Mapping[str, Any] 
         or "path"
     ).strip()
     if ingress_mode == "tailscale" and tailscale_host_strategy == "path":
+        tailnet_ports = meta.get("tailnet_service_ports") if isinstance(meta.get("tailnet_service_ports"), Mapping) else None
+        try:
+            hermes_port = int((tailnet_ports or {}).get("hermes") or 0)
+        except (TypeError, ValueError):
+            hermes_port = 0
+        if 0 < hermes_port < 65536 and not tailnet_apps_published and not tailnet_apps_unavailable:
+            return {}
         if tailnet_apps_unavailable:
             host = tailscale_dns_name or base_domain
             return {
                 "dashboard": f"https://{host}/u/{prefix}",
                 "notion": f"https://{host}/u/{prefix}/notion/webhook",
             }
-        tailnet_ports = meta.get("tailnet_service_ports") if isinstance(meta.get("tailnet_service_ports"), Mapping) else None
-        try:
-            hermes_port = int((tailnet_ports or {}).get("hermes") or 0)
-        except (TypeError, ValueError):
-            hermes_port = 0
         if 0 < hermes_port < 65536:
             urls = arclink_access_urls(
                 prefix=prefix,

@@ -6017,6 +6017,7 @@ def test_docker_operator_commands_are_present() -> None:
         "ports)",
         "logs)",
         "health)",
+        "tailnet-publish)",
         "provision-once)",
         "notion-ssot)",
         "notion-migrate)",
@@ -6088,6 +6089,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
     expect("docker_reconcile()" in body and "./bin/arclink-ctl org-profile apply --yes" in body, body)
     expect("docker_publish_tailnet_deployment_apps()" in body and "tailscale serve --bg --yes --https" in body, body)
+    expect("tailnet-publish)" in body, "host-side tailnet publisher must be invokable without a health run")
     expect(
         "docker_ensure_tailnet_forward" in body
         and "docker_prune_tailnet_forwards" in body
@@ -6207,6 +6209,12 @@ def test_docker_operator_commands_are_present() -> None:
     expect("docker_component_upgrade_apply()" in body, body)
     expect("ARCLINK_COMPONENT_UPGRADE_MODE=docker" in body, body)
     expect("retired_shared_host_docker_mode()" in deploy and "legacy-docker" in deploy, deploy)
+    expect(
+        "arclink-docker-tailnet-publisher.service" in deploy
+        and "arclink-docker-tailnet-publisher.timer" in deploy
+        and "install_control_tailnet_publisher_timer" in deploy,
+        "control install/upgrade must install the host-side tailnet publisher loop\n" + deploy,
+    )
     expect("deploy.sh control install" in deploy and "control-install" in deploy and "control-provision-once" in deploy, deploy)
     expect("docker-enrollment-status" in deploy and "docker-rotate-nextcloud-secrets" in deploy, deploy)
     expect("qmd-upgrade-check" in deploy and "node-upgrade" in deploy, deploy)

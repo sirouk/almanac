@@ -755,6 +755,7 @@ def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
                     "tailscale_dns_name": "worker.example.test",
                     "tailscale_host_strategy": "path",
                     "tailnet_service_ports": {"hermes": 8443},
+                    "tailnet_app_publication": {"status": "published", "successful_roles": ["hermes"], "failed_roles": []},
                     "access_urls": urls,
                 },
                 sort_keys=True,
@@ -812,6 +813,43 @@ def test_user_dashboard_withholds_unpublished_tailnet_app_urls() -> None:
     expect(section_index["code"]["status"] == "pending" and not section_index["code"]["url"], str(section_index["code"]))
     expect(section_index["hermes"]["status"] == "pending" and not section_index["hermes"]["url"], str(section_index["hermes"]))
     print("PASS test_user_dashboard_withholds_unpublished_tailnet_app_urls")
+
+
+def test_user_dashboard_withholds_tailnet_urls_until_publication_record_exists() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_missing_publish_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_missing_publish_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_tailnet_missing_publish_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET metadata_json = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.test",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8443},
+                },
+                sort_keys=True,
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
+
+    view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    deployment = view["deployments"][0]
+    section_index = {section["section"]: section for section in deployment["sections"]}
+    expect(deployment["access"]["urls"] == {}, str(deployment))
+    expect(section_index["files"]["status"] == "pending" and not section_index["files"]["url"], str(section_index["files"]))
+    expect(section_index["code"]["status"] == "pending" and not section_index["code"]["url"], str(section_index["code"]))
+    expect(section_index["hermes"]["status"] == "pending" and not section_index["hermes"]["url"], str(section_index["hermes"]))
+    print("PASS test_user_dashboard_withholds_tailnet_urls_until_publication_record_exists")
 
 
 def test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures() -> None:
@@ -1064,10 +1102,11 @@ def main() -> int:
     test_operator_evidence_template_state_is_computed_from_template_file()
     test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
+    test_user_dashboard_withholds_tailnet_urls_until_publication_record_exists()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_scale_operations_snapshot_exposes_rollout_dry_run_plan()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 14 ArcLink dashboard tests")
+    print("PASS all 15 ArcLink dashboard tests")
     return 0
 
 

@@ -6123,6 +6123,83 @@ def test_onboarding_status_returns_scale_agent_progress() -> None:
     print("PASS test_onboarding_status_returns_scale_agent_progress")
 
 
+def test_onboarding_status_waits_for_tailnet_publication_before_ready() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tailnet_publish_gate_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_tailnet_publish_gate_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_tailnet_publish_gate_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tailnet_publish_gate_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "worker.example.ts.net"})
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    claim_token = "browser-claim-proof-tailnet-publish"
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET metadata_json = ? WHERE session_id = ?",
+        (json.dumps({"browser_claim_proof_hash": api._hash_token(claim_token)}), "onb_hosted"),
+    )
+    conn.execute(
+        """
+        UPDATE arclink_deployments
+        SET status = 'active',
+            base_domain = 'worker.example.ts.net',
+            metadata_json = ?,
+            updated_at = ?
+        WHERE deployment_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "ingress_mode": "tailscale",
+                    "tailscale_dns_name": "worker.example.ts.net",
+                    "tailscale_host_strategy": "path",
+                    "tailnet_service_ports": {"hermes": 8450},
+                },
+                sort_keys=True,
+            ),
+            control.utc_now_iso(),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/onboarding/status",
+        headers={},
+        query={"session_id": "onb_hosted", "claim_token": claim_token},
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["ready_count"] == 0, str(payload))
+    expect(payload["deployment"]["ready"] is False, str(payload))
+    expect(payload["deployment"]["access"]["urls"] == {}, str(payload))
+
+    metadata = json.loads(conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (prepared["deployment_id"],),
+    ).fetchone()["metadata_json"])
+    metadata["tailnet_app_publication"] = {"status": "published", "successful_roles": ["hermes"], "failed_roles": []}
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), control.utc_now_iso(), prepared["deployment_id"]),
+    )
+    conn.commit()
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/onboarding/status",
+        headers={},
+        query={"session_id": "onb_hosted", "claim_token": claim_token},
+        config=config,
+    )
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["ready_count"] == 1, str(payload))
+    expect(payload["deployment"]["ready"] is True, str(payload))
+    expect(payload["deployment"]["access"]["urls"]["hermes"] == "https://worker.example.ts.net:8450", str(payload))
+    print("PASS test_onboarding_status_waits_for_tailnet_publication_before_ready")
+
+
 def main() -> int:
     test_public_onboarding_routes_work_without_session_auth()
     test_public_academy_observatory_is_aggregate_and_redacted()
@@ -6221,6 +6298,7 @@ def main() -> int:
     test_onboarding_cancel_marks_session_cancelled()
     test_onboarding_status_returns_entitlement_and_identity()
     test_onboarding_status_returns_scale_agent_progress()
+    test_onboarding_status_waits_for_tailnet_publication_before_ready()
     print("PASS all ArcLink hosted API tests")
     return 0
 

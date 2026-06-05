@@ -3153,6 +3153,7 @@ def _raven_name_reply(
 def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     metadata = _metadata(deployment)
     publish_state = metadata.get("tailnet_app_publication")
+    tailnet_apps_published = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "published"
     tailnet_apps_unavailable = isinstance(publish_state, Mapping) and str(publish_state.get("status") or "") == "unavailable"
     base_domain = str(deployment.get("base_domain") or metadata.get("base_domain") or "").strip().lower().strip(".")
     ingress_mode = str(metadata.get("ingress_mode") or "").strip().lower()
@@ -3161,13 +3162,15 @@ def _deployment_access(deployment: Mapping[str, Any]) -> dict[str, str]:
     tailscale_dns_name = str(metadata.get("tailscale_dns_name") or base_domain).strip().lower().strip(".")
     tailscale_strategy = str(metadata.get("tailscale_host_strategy") or "path").strip().lower()
     if ingress_mode == "tailscale" and tailscale_strategy == "path":
-        if tailnet_apps_unavailable:
-            return {"dashboard": f"https://{tailscale_dns_name or base_domain}/u/{deployment.get('prefix') or ''}"}
         tailnet_ports = metadata.get("tailnet_service_ports") if isinstance(metadata.get("tailnet_service_ports"), Mapping) else None
         try:
             hermes_port = int((tailnet_ports or {}).get("hermes") or 0)
         except (TypeError, ValueError):
             hermes_port = 0
+        if 0 < hermes_port < 65536 and not tailnet_apps_published and not tailnet_apps_unavailable:
+            return {}
+        if tailnet_apps_unavailable:
+            return {"dashboard": f"https://{tailscale_dns_name or base_domain}/u/{deployment.get('prefix') or ''}"}
         if 0 < hermes_port < 65536:
             access = arclink_access_urls(
                 prefix=str(deployment.get("prefix") or ""),

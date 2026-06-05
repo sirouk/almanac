@@ -9484,22 +9484,39 @@ test_remote_fleet_ssh_access() {
 mark_control_fleet_worker_image_sync_state() {
   local host_id="$1"
   local state="$2"
+  local image_id="${3:-}"
   local db_path="$BOOTSTRAP_DIR/arclink-priv/state/arclink-control.sqlite3"
 
   [[ -z "$host_id" || ! -f "$db_path" ]] && return 0
-  python3 - "$db_path" "$host_id" "$state" <<'PY' || true
+  python3 - "$db_path" "$host_id" "$state" "$image_id" <<'PY' || true
 import datetime as dt
+import json
 import sqlite3
 import sys
 
-db_path, host_id, state = sys.argv[1:4]
+db_path, host_id, state, image_id = sys.argv[1:5]
 conn = sqlite3.connect(db_path)
 try:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(arclink_fleet_hosts)").fetchall()}
-    if "last_health_state" in columns:
+    if "metadata_json" in columns:
+        row = conn.execute(
+            "SELECT metadata_json FROM arclink_fleet_hosts WHERE host_id = ?",
+            (host_id,),
+        ).fetchone()
+        try:
+            metadata = json.loads((row[0] if row else "") or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        metadata["image_sync_state"] = state
+        metadata["image_sync_updated_at"] = now
+        if image_id:
+            metadata["image_sync_image_id"] = image_id
         conn.execute(
-            "UPDATE arclink_fleet_hosts SET last_health_state = ?, updated_at = ? WHERE host_id = ?",
-            (state, dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), host_id),
+            "UPDATE arclink_fleet_hosts SET metadata_json = ?, updated_at = ? WHERE host_id = ?",
+            (json.dumps(metadata, sort_keys=True, separators=(",", ":")), now, host_id),
         )
         conn.commit()
 finally:
@@ -9572,22 +9589,22 @@ sync_control_docker_image_to_fleet_workers() {
     remote_probe="$(timeout "$inspect_timeout" ssh "${ssh_opts[@]}" "$target" "printf 'arclink-ssh-ok\t'; docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true" </dev/null 2>/dev/null || true)"
     if [[ "$remote_probe" != "$probe_marker"* ]]; then
       sync_failed=1
-      mark_control_fleet_worker_image_sync_state "$host_id" "image_sync_failed"
+      mark_control_fleet_worker_image_sync_state "$host_id" "image_sync_failed" "$local_image_id"
       echo "Fleet image sync probe failed for $target; marking worker unhealthy for placement until SSH recovers." >&2
       continue
     fi
     remote_image_id="${remote_probe#"$probe_marker"}"
     remote_image_id="${remote_image_id%%$'\n'*}"
     if [[ "$remote_image_id" == "$local_image_id" ]]; then
-      mark_control_fleet_worker_image_sync_state "$host_id" "active"
+      mark_control_fleet_worker_image_sync_state "$host_id" "active" "$local_image_id"
       continue
     fi
     if docker image save "$image" | timeout "$load_timeout" ssh "${ssh_opts[@]}" "$target" "docker image load >/tmp/arclink-image-load.log && docker image inspect --format '{{.Id}}' $q_image" >/dev/null; then
-      mark_control_fleet_worker_image_sync_state "$host_id" "active"
+      mark_control_fleet_worker_image_sync_state "$host_id" "active" "$local_image_id"
     else
       sync_failed=1
-      mark_control_fleet_worker_image_sync_state "$host_id" "image_sync_failed"
-      echo "Fleet image sync failed for $target; marking worker unhealthy for placement until the next successful sync/probe." >&2
+      mark_control_fleet_worker_image_sync_state "$host_id" "image_sync_failed" "$local_image_id"
+      echo "Fleet image sync failed for $target; marking worker unhealthy for placement until the next successful image sync." >&2
     fi
   done < <(python3 - "$db_path" <<'PY'
 import json

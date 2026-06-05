@@ -18,6 +18,7 @@ class ArcLinkFleetError(ValueError):
 FLEET_HOST_STATUSES = frozenset({"active", "degraded", "offline"})
 PLACEMENT_STATUSES = frozenset({"active", "removed"})
 HEALTHY_HOST_STATES = frozenset({"", "active", "healthy", "ok", "ready"})
+BLOCKING_IMAGE_SYNC_STATES = frozenset({"image_sync_failed", "sync_failed", "failed", "error"})
 CONTROL_HOST_MAX_ARCPOD_SLOTS_ENV = "ARCLINK_CONTROL_HOST_MAX_ARCPOD_SLOTS"
 DEFAULT_CONTROL_HOST_MAX_ARCPOD_SLOTS = 2
 
@@ -130,6 +131,10 @@ def host_is_placement_eligible(host: Mapping[str, Any], *, strategy: str = "") -
         return False
     health_state = str(host.get("last_health_state") or "").strip().lower()
     if health_state not in HEALTHY_HOST_STATES:
+        return False
+    metadata = fleet_host_metadata(host)
+    image_sync_state = str(metadata.get("image_sync_state") or "").strip().lower()
+    if image_sync_state in BLOCKING_IMAGE_SYNC_STATES:
         return False
     if int(host.get("drain", 0)):
         return False
@@ -633,19 +638,10 @@ def _filter_placement_candidates(
     placement_strategy = strategy or _placement_strategy()
     result = []
     for h in hosts:
-        if h["status"] != "active":
-            continue
-        health_state = str(h.get("last_health_state") or "").strip().lower()
-        if health_state not in HEALTHY_HOST_STATES:
-            continue
-        if int(h.get("drain", 0)):
-            continue
         asu_available = float(h.get("asu_available") or (float(h.get("asu_capacity") or 0) - float(h.get("asu_consumed") or 0)))
         headroom = int(h.get("headroom") if h.get("headroom") is not None else _host_headroom(h))
-        if placement_strategy == "standard_unit":
-            if asu_available < 1:
-                continue
-        elif headroom <= 0:
+        candidate = {**h, "headroom": headroom, "asu_available": asu_available}
+        if not host_is_placement_eligible(candidate, strategy=placement_strategy):
             continue
         if region and h.get("region", "") != region:
             continue
@@ -653,7 +649,7 @@ def _filter_placement_candidates(
             host_tags = _host_json(h, "tags_json")
             if not all(host_tags.get(k) == v for k, v in required_tags.items()):
                 continue
-        result.append({**h, "headroom": headroom, "asu_available": asu_available})
+        result.append(candidate)
     return result
 
 
@@ -674,6 +670,11 @@ def _placement_rejection_summary(
         health_state = str(h.get("last_health_state") or "").strip().lower()
         if health_state not in HEALTHY_HOST_STATES:
             reasons.add("unhealthy")
+            continue
+        metadata = fleet_host_metadata(h)
+        image_sync_state = str(metadata.get("image_sync_state") or "").strip().lower()
+        if image_sync_state in BLOCKING_IMAGE_SYNC_STATES:
+            reasons.add("image_sync_failed")
             continue
         if int(h.get("drain", 0)):
             reasons.add("draining")

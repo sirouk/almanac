@@ -313,6 +313,7 @@ def control_node_provisioning_readiness(
     live worker probes stay under PG-FLEET/PG-PROVISION.
     """
     from arclink_fleet import (
+        fleet_host_metadata,
         fleet_capacity_summary,
         fleet_host_ssh_endpoint,
         host_available_placement_units,
@@ -334,6 +335,7 @@ def control_node_provisioning_readiness(
             "effective_capacity_slots": max(0, int(host.get("effective_capacity_slots") or host.get("capacity_slots") or 0)),
             "control_plane_reserve": bool(host.get("control_plane_reserve")),
             "last_health_state": str(host.get("last_health_state") or ""),
+            "image_sync_state": str(fleet_host_metadata(host).get("image_sync_state") or ""),
             "executor_adapter": executor_adapter,
             "ssh_endpoint": fleet_host_ssh_endpoint(host),
         }

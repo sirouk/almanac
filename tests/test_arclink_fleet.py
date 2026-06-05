@@ -137,6 +137,31 @@ def test_fleet_capacity_summary_counts_only_eligible_available_slots() -> None:
     print("PASS test_fleet_capacity_summary_counts_only_eligible_available_slots")
 
 
+def test_image_sync_failed_blocks_capacity_and_placement() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_image_sync")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_image_sync")
+    conn = memory_db(control)
+    healthy = fleet.register_fleet_host(conn, hostname="healthy-image.test", capacity_slots=3)
+    stale = fleet.register_fleet_host(
+        conn,
+        hostname="stale-image.test",
+        capacity_slots=5,
+        metadata={"image_sync_state": "image_sync_failed"},
+    )
+    conn.execute(
+        "UPDATE arclink_fleet_hosts SET last_health_state = 'active' WHERE host_id IN (?, ?)",
+        (healthy["host_id"], stale["host_id"]),
+    )
+    conn.commit()
+    summary = fleet.fleet_capacity_summary(conn)
+    expect(summary["raw_available_slots"] == 8, str(summary))
+    expect(summary["available_slots"] == 3, str(summary))
+    expect(summary["eligible_worker_count"] == 1, str(summary))
+    placement = fleet.place_deployment(conn, deployment_id="dep_image_sync")
+    expect(placement["host_id"] == healthy["host_id"], str(placement))
+    print("PASS test_image_sync_failed_blocks_capacity_and_placement")
+
+
 def test_control_plane_reserve_is_capped_and_used_after_remote_capacity() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_control_reserve")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_control_reserve")
@@ -525,6 +550,7 @@ if __name__ == "__main__":
     test_update_fleet_host_drain()
     test_fleet_capacity_summary()
     test_fleet_capacity_summary_counts_only_eligible_available_slots()
+    test_image_sync_failed_blocks_capacity_and_placement()
     test_control_plane_reserve_is_capped_and_used_after_remote_capacity()
     test_reconcile_fleet_observed_loads_repairs_stale_load()
     test_place_deployment_chooses_healthy_host()
@@ -542,4 +568,4 @@ if __name__ == "__main__":
     test_standard_unit_strategy_uses_inventory_asu_available()
     test_standard_unit_capacity_summary_uses_asu_available()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
-    print(f"\nAll 23 fleet tests passed.")
+    print(f"\nAll 24 fleet tests passed.")

@@ -782,6 +782,15 @@ docker_tailnet_forward_socket() {
   printf '%s/%s-%s.ctl\n' "$dir" "$deployment_id" "$port"
 }
 
+docker_tailnet_forward_unit_name() {
+  local deployment_id="$1"
+  local port="$2"
+  local safe_id=""
+
+  safe_id="$(printf '%s' "$deployment_id" | tr -c '[:alnum:]_.@-' '-')"
+  printf 'arclink-tailnet-forward-%s-%s.service\n' "$safe_id" "$port"
+}
+
 docker_stop_tailnet_forward_socket() {
   local control_path="$1"
   local pid=""
@@ -798,11 +807,44 @@ docker_stop_tailnet_forward_socket() {
   rm -f "$control_path"
 }
 
+docker_stop_tailnet_forward_unit() {
+  local unit="$1"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop "$unit" >/dev/null 2>&1 || true
+    systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  fi
+}
+
+docker_tailnet_local_http_probe() {
+  local port="$1"
+  local status=""
+
+  status="$(curl -sS --max-time 4 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null || true)"
+  case "$status" in
+    2??|3??|401|403)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_wait_tailnet_local_http() {
+  local port="$1"
+  local deadline=$((SECONDS + ${2:-12}))
+
+  while (( SECONDS <= deadline )); do
+    if docker_tailnet_local_http_probe "$port"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 docker_prune_tailnet_forwards() {
   local routes_file="$1"
   local dir="$REPO_DIR/arclink-priv/state/tailnet-forwards"
-  local socket="" name="" desired=""
-  [[ -d "$dir" ]] || return 0
+  local socket="" name="" desired="" unit_name="" deployment_id="" port=""
   desired="$(awk -F '\t' 'NF >= 3 {print $1 "-" $3 ".ctl"}' "$routes_file" 2>/dev/null || true)"
   shopt -s nullglob
   for socket in "$dir"/*.ctl; do
@@ -812,6 +854,20 @@ docker_prune_tailnet_forwards() {
     fi
   done
   shopt -u nullglob
+  if command -v systemctl >/dev/null 2>&1; then
+    desired=""
+    while IFS=$'\t' read -r deployment_id _prefix port _ssh_host _ssh_user _ssh_port; do
+      [[ -n "$deployment_id" && -n "$port" ]] || continue
+      desired+=$(docker_tailnet_forward_unit_name "$deployment_id" "$port")
+      desired+=$'\n'
+    done <"$routes_file"
+    while IFS= read -r unit_name; do
+      [[ -n "$unit_name" ]] || continue
+      if ! grep -Fxq "$unit_name" <<<"$desired"; then
+        docker_stop_tailnet_forward_unit "$unit_name"
+      fi
+    done < <(systemctl list-units --all --plain --no-legend 'arclink-tailnet-forward-*.service' 2>/dev/null | awk '{print $1}')
+  fi
 }
 
 docker_ensure_tailnet_forward() {
@@ -820,10 +876,11 @@ docker_ensure_tailnet_forward() {
   local ssh_host="$3"
   local ssh_user="${4:-arclink}"
   local ssh_port="${5:-22}"
-  local key_path="" known_hosts="" control_path="" target=""
+  local key_path="" known_hosts="" control_path="" target="" unit="" ssh_bin="" log_file="" forward_pid=""
 
   if docker_is_local_ssh_host "$ssh_host"; then
-    return 0
+    docker_wait_tailnet_local_http "$port" 4
+    return $?
   fi
   if [[ -z "$ssh_host" ]]; then
     return 1
@@ -846,7 +903,45 @@ docker_ensure_tailnet_forward() {
   if [[ -S "$control_path" ]]; then
     docker_stop_tailnet_forward_socket "$control_path"
   fi
-  ssh \
+  if docker_tailnet_local_http_probe "$port"; then
+    return 0
+  fi
+
+  unit="$(docker_tailnet_forward_unit_name "$deployment_id" "$port")"
+  ssh_bin="$(command -v ssh || true)"
+  [[ -n "$ssh_bin" ]] || return 1
+  if command -v systemd-run >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+    docker_stop_tailnet_forward_unit "$unit"
+    systemd-run \
+      --unit="$unit" \
+      --description="ArcLink tailnet forward $deployment_id:$port" \
+      --property=Restart=always \
+      --property=RestartSec=5s \
+      --property=StartLimitIntervalSec=0 \
+      --collect \
+      "$ssh_bin" \
+      -i "$key_path" \
+      -p "${ssh_port:-22}" \
+      -o BatchMode=yes \
+      -o IdentitiesOnly=yes \
+      -o ExitOnForwardFailure=yes \
+      -o ServerAliveInterval=30 \
+      -o ServerAliveCountMax=3 \
+      -o StrictHostKeyChecking=accept-new \
+      -o UserKnownHostsFile="$known_hosts" \
+      -o ControlMaster=no \
+      -N \
+      -L "127.0.0.1:$port:127.0.0.1:$port" \
+      "$target" >/dev/null 2>&1 || return 1
+    if docker_wait_tailnet_local_http "$port" 12; then
+      return 0
+    fi
+    docker_stop_tailnet_forward_unit "$unit"
+    return 1
+  fi
+
+  log_file="$REPO_DIR/arclink-priv/state/tailnet-forwards/$deployment_id-$port.log"
+  nohup "$ssh_bin" \
     -i "$key_path" \
     -p "${ssh_port:-22}" \
     -o BatchMode=yes \
@@ -856,12 +951,16 @@ docker_ensure_tailnet_forward() {
     -o ServerAliveCountMax=3 \
     -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile="$known_hosts" \
-    -o ControlMaster=yes \
-    -o ControlPath="$control_path" \
-    -o ControlPersist=yes \
-    -N -f \
+    -o ControlMaster=no \
+    -N \
     -L "127.0.0.1:$port:127.0.0.1:$port" \
-    "$target" >/dev/null 2>&1
+    "$target" >"$log_file" 2>&1 &
+  forward_pid="$!"
+  if docker_wait_tailnet_local_http "$port" 12; then
+    return 0
+  fi
+  kill "$forward_pid" >/dev/null 2>&1 || true
+  return 1
 }
 
 docker_publish_tailnet_deployment_apps() {

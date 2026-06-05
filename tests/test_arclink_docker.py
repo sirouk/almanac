@@ -6093,6 +6093,10 @@ def test_docker_operator_commands_are_present() -> None:
     expect(
         "docker_ensure_tailnet_forward" in body
         and "docker_prune_tailnet_forwards" in body
+        and "docker_tailnet_local_http_probe" in body
+        and "systemd-run" in body
+        and "arclink-tailnet-forward-" in body
+        and "-o ControlMaster=no" in body
         and '-L "127.0.0.1:$port:127.0.0.1:$port"' in body,
         body,
     )
@@ -6499,7 +6503,7 @@ def test_deployment_hermes_home_installer_seeds_runtime_knowledge() -> None:
     print("PASS test_deployment_hermes_home_installer_seeds_runtime_knowledge")
 
 
-def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
+def test_docker_tailnet_publish_uses_dashboard_native_plugin_urls() -> None:
     body = read("bin/arclink-docker.sh")
     snippet = extract(body, "docker_host_priv_path() {", "docker_configure_deployment_nextcloud_overwrite() {")
     with tempfile.TemporaryDirectory() as tmp:
@@ -6577,6 +6581,9 @@ configured_or_default() {{
 docker_configure_deployment_nextcloud_overwrite() {{
   printf 'called\\n' >> {shlex.quote(str(root / "nextcloud-called"))}
 }}
+docker_wait_tailnet_local_http() {{
+  return 0
+}}
 docker_publish_tailnet_deployment_apps
 """
         result = subprocess.run(
@@ -6601,6 +6608,113 @@ docker_publish_tailnet_deployment_apps
         expect("http://127.0.0.1:8443" in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8"))
         expect(not (root / "nextcloud-called").exists(), "Nextcloud overwrite must not be configured for dashboard-native Drive")
         print("PASS test_docker_tailnet_publish_uses_dashboard_native_plugin_urls")
+
+
+def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
+    body = read("bin/arclink-docker.sh")
+    snippet = extract(body, "docker_host_priv_path() {", "docker_configure_deployment_nextcloud_overwrite() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        state = repo / "arclink-priv" / "state"
+        state.mkdir(parents=True)
+        (repo / "python").symlink_to(REPO / "python")
+        db_path = state / "arclink-control.sqlite3"
+        existing_metadata = json.dumps(
+            {
+                "tailnet_service_ports": {"hermes": 8443},
+                "access_urls": {"dashboard": "https://old.example.test"},
+            }
+        )
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE arclink_deployments (
+                  deployment_id TEXT PRIMARY KEY,
+                  prefix TEXT,
+                  base_domain TEXT,
+                  status TEXT,
+                  metadata_json TEXT,
+                  created_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE arclink_deployment_placements (
+                  placement_id TEXT PRIMARY KEY,
+                  deployment_id TEXT,
+                  host_id TEXT,
+                  status TEXT,
+                  placed_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE arclink_fleet_hosts (
+                  host_id TEXT PRIMARY KEY,
+                  hostname TEXT,
+                  metadata_json TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO arclink_deployments (
+                  deployment_id, prefix, base_domain, status, metadata_json, created_at
+                ) VALUES (?, 'amber-vault-1a2b', 'worker.example.ts.net', 'active', ?, '2026-01-01T00:00:00+00:00')
+                """,
+                ("dep_1", existing_metadata),
+            )
+            conn.commit()
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        log_path = root / "tailscale.log"
+        (bin_dir / "tailscale").write_text(
+            "#!/usr/bin/env bash\n"
+            f"printf '%s\\n' \"$*\" >> {shlex.quote(str(log_path))}\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (bin_dir / "tailscale").chmod(0o755)
+        script = f"""
+set -euo pipefail
+{snippet}
+REPO_DIR={shlex.quote(str(repo))}
+configured_or_default() {{
+  case "$1" in
+    ARCLINK_INGRESS_MODE) printf '%s\\n' tailscale ;;
+    ARCLINK_TAILSCALE_DEPLOYMENT_HOST_STRATEGY) printf '%s\\n' path ;;
+    ARCLINK_TAILSCALE_DNS_NAME) printf '%s\\n' worker.example.ts.net ;;
+    ARCLINK_WEB_PORT) printf '%s\\n' 3000 ;;
+    ARCLINK_TAILNET_SERVICE_PORT_BASE) printf '%s\\n' 8443 ;;
+    *) printf '%s\\n' "${{2:-}}" ;;
+  esac
+}}
+docker_wait_tailnet_local_http() {{
+  return 1
+}}
+docker_publish_tailnet_deployment_apps
+"""
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            cwd=REPO,
+            env={**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"},
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        expect(result.returncode == 0, f"tailnet publish failure probe failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+        with sqlite3.connect(db_path) as conn:
+            metadata = json.loads(conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()[0])
+        expect(metadata["tailnet_app_publication"]["status"] == "unavailable", str(metadata))
+        expect(metadata["tailnet_app_publication"]["failed_roles"] == ["hermes"], str(metadata))
+        expect("access_urls" not in metadata, str(metadata))
+        expect("message" in metadata["tailnet_app_publication"], str(metadata))
+        log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        expect("http://127.0.0.1:8443" not in log_text, log_text)
+        print("PASS test_docker_tailnet_publish_failure_withholds_app_urls")
 
 
 def test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config() -> None:
@@ -7534,6 +7648,7 @@ def main() -> int:
     test_docker_repair_backfills_dashboard_sso_and_crew_links()
     test_docker_repair_strips_control_network_for_remote_deployments()
     test_deployment_hermes_home_installer_seeds_runtime_knowledge()
+    test_docker_tailnet_publish_uses_dashboard_native_plugin_urls()
     test_docker_tailnet_publish_failure_withholds_app_urls()
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
     test_docker_agent_supervisor_replaces_user_systemd_units()
@@ -7552,7 +7667,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 57 ArcLink Docker regression tests")
+    print("PASS all 58 ArcLink Docker regression tests")
     return 0
 
 

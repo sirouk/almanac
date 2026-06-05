@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
+from arclink_fleet import fleet_host_ssh_endpoint, fleet_host_ssh_user
 from arclink_secrets_regex import redact_then_truncate
 
 
@@ -112,7 +113,7 @@ def executor_for_fleet_host(
         else:
             runner = SubprocessDockerComposeRunner(docker_binary=str(env.get("ARCLINK_DOCKER_BINARY") or "docker"))
     else:
-        host_name = str(host_meta.get("ssh_host") or host.get("hostname") or "").strip()
+        host_name = fleet_host_ssh_endpoint(host)
         if not _truthy(env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED") or env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED") or ""):
             raise ArcLinkExecutorError("ArcLink SSH executor mode requires ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED=1")
         allowed_hosts = _csv_values(str(env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST") or env.get("ARCLINK_ACTION_WORKER_SSH_HOST_ALLOWLIST") or ""))
@@ -128,7 +129,10 @@ def executor_for_fleet_host(
             ssh_options.extend(("-o", f"UserKnownHostsFile={known_hosts}"))
         runner = SshDockerComposeRunner(
             host=host_name,
-            user=str(host_meta.get("ssh_user") or env.get("ARCLINK_ACTION_WORKER_SSH_USER") or env.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink"),
+            user=fleet_host_ssh_user(
+                host,
+                default=str(env.get("ARCLINK_ACTION_WORKER_SSH_USER") or env.get("ARCLINK_LOCAL_FLEET_SSH_USER") or "arclink"),
+            ),
             ssh_binary=str(env.get("ARCLINK_SSH_BINARY") or "ssh"),
             rsync_binary=str(env.get("ARCLINK_RSYNC_BINARY") or "rsync"),
             docker_binary=str(env.get("ARCLINK_DOCKER_BINARY") or "docker"),
@@ -693,7 +697,48 @@ class SshDockerComposeRunner:
             if fallback.returncode == 0:
                 return fallback.stdout
             raise ArcLinkExecutorError(_safe_command_error("ssh read file", fallback.stderr or fallback.stdout))
-        raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
+            raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
+
+    def write_text_file(self, path: str, content: str, *, allowed_root: str = "", mode: str = "0600") -> Mapping[str, Any]:
+        clean_path = _normalized_remote_prepare_path(path)
+        if not clean_path:
+            raise ArcLinkExecutorError("ArcLink SSH file write path is invalid")
+        clean_allowed_root = _normalized_remote_prepare_path(allowed_root) if allowed_root else ""
+        if clean_allowed_root and not _remote_path_within(clean_path, clean_allowed_root):
+            raise ArcLinkExecutorError("ArcLink SSH file write path is outside the allowed root")
+        clean_mode = str(mode or "0600").strip()
+        if not re.fullmatch(r"0?[0-7]{3}", clean_mode):
+            raise ArcLinkExecutorError("ArcLink SSH file write mode is invalid")
+        script = (
+            "import os,sys,tempfile;"
+            "path=sys.argv[1];mode=int(sys.argv[2],8);"
+            "root=os.path.dirname(path) or '.';os.makedirs(root,exist_ok=True);"
+            "fd,tmp=tempfile.mkstemp(dir=root,prefix='.arclink-',suffix='.tmp');"
+            "data=sys.stdin.read();"
+            "f=os.fdopen(fd,'w',encoding='utf-8');"
+            "f.write(data);f.flush();os.fsync(f.fileno());f.close();"
+            "os.chmod(tmp,mode);os.replace(tmp,path);os.chmod(path,mode)"
+        )
+        target = self._target()
+        write = subprocess.run(
+            (
+                self.ssh_binary,
+                *self.ssh_options,
+                target,
+                "python3",
+                "-c",
+                script,
+                clean_path,
+                clean_mode,
+            ),
+            input=str(content or ""),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if write.returncode != 0:
+            raise ArcLinkExecutorError(_safe_command_error("ssh write file", write.stderr or write.stdout))
+        return {"status": "ok", "path": clean_path}
 
 
 def _runner_stdout(args: tuple[str, ...], stdout: str) -> str:

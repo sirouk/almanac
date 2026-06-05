@@ -1088,7 +1088,7 @@ export default function DashboardPage() {
               <div>
                 <p className="text-xs uppercase tracking-[0.22em] text-signal-orange">Raven console</p>
                 <h1 className="mt-2 font-display text-3xl font-bold tracking-tight md:text-4xl">
-                  {data?.user?.display_name || "ArcLink Operator"}
+                  {data?.user?.display_name || "ArcLink Captain"}
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-soft-white/60">
                   Your private agent workspace, service links, model lane, memory rail, billing state, and launch health in one place.
@@ -1957,7 +1957,7 @@ function recoveryActionsForDashboard({
   if (!isGoodStatus(deployment.status)) {
     actions.push({
       title: "Provisioning is not complete",
-      detail: "Open provisioning for job state, service output, and operator handoff status.",
+      detail: "Open provisioning for job state, service output, and ArcLink support handoff status.",
       status: deployment.status || "unknown",
       tab: "provisioning",
     });
@@ -1966,7 +1966,7 @@ function recoveryActionsForDashboard({
   if (serviceAttention.length > 0) {
     actions.push({
       title: "Service attention",
-      detail: `${serviceAttention.length} reported service signal(s) need operator review.`,
+      detail: `${serviceAttention.length} reported service signal(s) need ArcLink support review.`,
       status: "attention",
       tab: "services",
     });
@@ -2225,7 +2225,7 @@ function NotionSetupPanel({ setup }: { setup?: NotionSetup }) {
         <div>
           <p className="text-xs text-soft-white/60">Notion SSOT</p>
           <p className="mt-1 text-soft-white/55">
-            Brokered shared-root setup with dashboard/operator verification.
+            Brokered shared-root setup with dashboard verification.
           </p>
         </div>
         <StatusBadge status={status} />

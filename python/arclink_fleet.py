@@ -49,6 +49,39 @@ def _host_json(host: Mapping[str, Any], key: str) -> dict[str, Any]:
     return json_loads_safe(str(value or "{}"))
 
 
+def fleet_host_metadata(host: Mapping[str, Any]) -> dict[str, Any]:
+    return _host_json(host, "metadata_json")
+
+
+def _clean_endpoint(value: Any) -> str:
+    return str(value or "").strip().lower().rstrip(".")
+
+
+def fleet_host_ssh_endpoint(host: Mapping[str, Any]) -> str:
+    """Return the production SSH endpoint for a fleet host.
+
+    First-contact SSH can be a public address, while steady-state ArcPod work
+    should prefer the private mesh. Keep the preference centralized so
+    execution, probes, readiness, and deploy allowlists agree.
+    """
+
+    metadata = fleet_host_metadata(host)
+    for key in ("private_dns_name", "wireguard_dns_name", "private_mesh_dns_name", "ssh_host"):
+        endpoint = _clean_endpoint(metadata.get(key))
+        if endpoint:
+            return endpoint
+    for key in ("private_dns_name", "wireguard_dns_name", "private_mesh_dns_name", "ssh_host", "hostname"):
+        endpoint = _clean_endpoint(host.get(key))
+        if endpoint:
+            return endpoint
+    return ""
+
+
+def fleet_host_ssh_user(host: Mapping[str, Any], *, default: str = "arclink") -> str:
+    metadata = fleet_host_metadata(host)
+    return str(metadata.get("ssh_user") or host.get("ssh_user") or default).strip() or default
+
+
 def control_host_max_arcpod_slots(env: Mapping[str, str] | None = None) -> int:
     source = env if env is not None else os.environ
     return _positive_int(
@@ -104,6 +137,13 @@ def host_is_placement_eligible(host: Mapping[str, Any], *, strategy: str = "") -
     if placement_strategy == "standard_unit":
         return float(host.get("asu_available") or 0) >= 1
     return int(host.get("headroom") if host.get("headroom") is not None else _host_headroom(host)) > 0
+
+
+def host_available_placement_units(host: Mapping[str, Any], *, strategy: str = "") -> int:
+    placement_strategy = strategy or _placement_strategy()
+    if placement_strategy == "standard_unit":
+        return max(0, int(float(host.get("asu_available") or 0)))
+    return max(0, int(host.get("headroom") if host.get("headroom") is not None else _host_headroom(host)))
 
 
 # ---------------------------------------------------------------------------
@@ -284,12 +324,13 @@ def list_fleet_hosts(conn: sqlite3.Connection, *, status: str = "") -> list[dict
 
 def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
     hosts = list_fleet_hosts(conn)
+    strategy = _placement_strategy()
     total_slots = sum(int(h["capacity_slots"]) for h in hosts)
     effective_total_slots = sum(int(h.get("effective_capacity_slots") or h["capacity_slots"]) for h in hosts)
     total_load = sum(int(h["observed_load"]) for h in hosts)
     active_hosts = [h for h in hosts if h["status"] == "active" and not int(h["drain"])]
-    eligible_hosts = [h for h in hosts if host_is_placement_eligible(h)]
-    eligible_slots = sum(int(h.get("headroom") or 0) for h in eligible_hosts)
+    eligible_hosts = [h for h in hosts if host_is_placement_eligible(h, strategy=strategy)]
+    eligible_slots = sum(host_available_placement_units(h, strategy=strategy) for h in eligible_hosts)
     return {
         "total_hosts": len(hosts),
         "active_hosts": len(active_hosts),
@@ -312,6 +353,7 @@ def fleet_capacity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
                 "observed_load": int(h["observed_load"]),
                 "last_health_state": str(h.get("last_health_state") or ""),
                 "headroom": int(h.get("headroom") or 0),
+                "available_placement_units": host_available_placement_units(h, strategy=strategy),
                 "control_plane_reserve": bool(h.get("control_plane_reserve")),
                 "asu_capacity": float(h.get("asu_capacity") or 0),
                 "asu_consumed": float(h.get("asu_consumed") or 0),

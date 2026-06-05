@@ -854,6 +854,30 @@ def read_academy_proposals(
     return [_proposal_public(row) for row in rows]
 
 
+def _trainee_has_real_training_sources(conn: sqlite3.Connection, trainee: Mapping[str, Any]) -> bool:
+    proposals = read_academy_proposals(conn, trainee_id=str(trainee["trainee_id"]), statuses=USABLE_PROPOSAL_STATUSES)
+    if any(_proposal_kind(proposal) == "add_resource" for proposal in proposals):
+        return True
+    if read_central_specialist_sources(conn, trainee_id=str(trainee["trainee_id"])):
+        return True
+    program = get_academy_program(conn, str(trainee.get("program_id") or ""))
+    if program is None:
+        return False
+    specialist_uid, _topic_fp = specialist_uid_for_program(program)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM academy_sources src
+        JOIN academy_specialist_sources link ON link.source_uid = src.source_uid
+        WHERE link.specialist_uid = ?
+          AND src.status = 'active'
+          AND src.share_scope = 'redacted_public'
+        """,
+        (specialist_uid,),
+    ).fetchone()
+    return int(row["n"] if row is not None else 0) > 0
+
+
 def end_academy_mode(
     conn: sqlite3.Connection,
     *,
@@ -902,6 +926,39 @@ def end_academy_mode(
     # proposals into the CENTRAL deduplicated shared corpus (opt-out sharing) and
     # subscribes the trainee to its specialist. No Agent write happens here.
     if graduate:
+        if not _trainee_has_real_training_sources(conn, trainee):
+            summary.setdefault("graduated", False)
+            summary.setdefault("resource_proposal_count", 0)
+            summary.setdefault("trainer_deep_dive_status", "needs_training_sources")
+            summary.setdefault("canon_status", "blocked_until_real_training_sources")
+            summary.setdefault("agent_write_status", "blocked_until_real_training_sources")
+            summary.setdefault("apply_status", "blocked_until_real_training_sources")
+            summary.setdefault("forward_maintenance", "not armed")
+            summary.setdefault(
+                "apply_note",
+                "Academy Mode remains open: gather at least one governed real source or adopt a shared Academy specialist before graduation.",
+            )
+            summary.setdefault("actor", str(actor or "").strip() or "captain")
+            conn.execute(
+                "UPDATE academy_mode_sessions SET commit_summary_json = ? WHERE session_id = ?",
+                (_dumps(summary), session["session_id"]),
+            )
+            conn.execute(
+                "UPDATE academy_trainees SET status = 'in_academy', mode_open = 1, forward_maintained = 0, updated_at = ? WHERE trainee_id = ?",
+                (now, trainee["trainee_id"]),
+            )
+            conn.commit()
+            open_row = conn.execute(
+                "SELECT * FROM academy_mode_sessions WHERE session_id = ?", (session["session_id"],)
+            ).fetchone()
+            return {
+                "session": _session_public(open_row) if open_row is not None else session,
+                "trainee": get_academy_trainee(conn, trainee["trainee_id"]),
+                "graduated": False,
+                "status": "needs_training_sources",
+                "mutation_performed": False,
+                "workspace_mutation_performed": False,
+            }
         try:
             promotion = promote_proposals_to_central(conn, trainee_id=trainee["trainee_id"], actor=str(actor or ""), commit=False)
             specialist_uid = str(promotion.get("specialist_uid") or "")
@@ -2953,6 +3010,16 @@ def academy_continuing_education(
     program = get_academy_program(conn, str(trainee.get("program_id") or ""))
     if program is None:
         raise ArcLinkAcademyProgramError("academy trainee has no Major program")
+    if not bool(trainee.get("forward_maintained")) or not _trainee_has_real_training_sources(conn, trainee):
+        return {
+            "artifact_kind": "academy-weekly-continuing-education-review",
+            "trainee_id": trainee["trainee_id"],
+            "status": "needs_training_sources",
+            "continuing_education_status": "blocked_until_real_training_sources",
+            "source_refreshes": [],
+            "mutation_performed": False,
+            "no_write": True,
+        }
     now = str(created_at or _now())
     # Sources use the stable per-trainee timestamp so the manifest is deterministic
     # and the weekly freshness window is measured against the original acquisition

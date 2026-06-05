@@ -759,6 +759,15 @@ def _seed_academy_graduate(control, conn, programs) -> dict[str, str]:
         conn, program_id="systems_practice_engineer", user_id=user_id, deployment_id=deployment_id, name="Apply Grace"
     )
     session = programs.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by=user_id)
+    programs.record_academy_resource_proposal(
+        conn,
+        deployment_id=deployment_id,
+        lane_id="web_article",
+        title="Apply gate source",
+        origin_url="https://example.test/academy-apply-source",
+        summary="Compressed source notes that allow the Academy trainee to graduate before apply.",
+        proposed_by="agent-apply",
+    )
     programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor=user_id, graduate=True)
     return {"user_id": user_id, "deployment_id": deployment_id, "trainee_id": trainee["trainee_id"]}
 
@@ -879,7 +888,7 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(refresh_request["status"] == "requested", str(refresh_request))
         expect(refresh_request["deployment_id"] == deployment_id, str(refresh_request))
         refresh_result = applied["post_apply_refresh_result"]
-        expect(refresh_result["status"] == "validated", str(refresh_result))
+        expect(refresh_result["status"] == "queued", str(refresh_result))
         expect("SOUL.md" in refresh_result["verified_paths"], str(refresh_result))
         expect(refresh_result["missing_paths"] == [], str(refresh_result))
         refresh_kinds = {item["kind"]: item for item in refresh_request["refreshes"]}
@@ -896,15 +905,17 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         expect(state["post_apply_refresh_request"]["request_id"] == refresh_request["request_id"], str(state))
         refresh_file = json.loads((hermes_home / "state" / "arclink-academy-post-apply-refresh.json").read_text(encoding="utf-8"))
         expect(refresh_file["request_id"] == refresh_request["request_id"], str(refresh_file))
-        expect(refresh_file["status"] == "validated", str(refresh_file))
-        expect({item["status"] for item in refresh_file["refreshes"]} <= {"validated_pending_runner", "not_requested"}, str(refresh_file))
+        expect(refresh_file["status"] == "queued", str(refresh_file))
+        expect({item["status"] for item in refresh_file["refreshes"]} <= {"queued", "staged", "not_requested"}, str(refresh_file))
         expect("Docker" in refresh_file["queue_policy"] and "inline" in refresh_file["queue_policy"], str(refresh_file))
+        expect((hermes_home / "state" / "arclink-academy-qmd-refresh-request.json").is_file(), str(refresh_file))
+        expect((hermes_home / "state" / "arclink-academy-memory-synthesis-request.json").is_file(), str(refresh_file))
         refresh_job = conn.execute(
             "SELECT * FROM refresh_jobs WHERE job_name = ?",
             (f"academy-post-apply-refresh:{deployment_id}",),
         ).fetchone()
         expect(refresh_job is not None, "Academy apply should record a control-plane post-apply refresh job")
-        expect(refresh_job["target_id"] == deployment_id and refresh_job["last_status"] == "validated" and refresh_request["request_id"] in refresh_job["last_note"], str(dict(refresh_job)))
+        expect(refresh_job["target_id"] == deployment_id and refresh_job["last_status"] == "queued" and refresh_request["request_id"] in refresh_job["last_note"], str(dict(refresh_job)))
         runner_calls: list[dict[str, str]] = []
 
         def _proof_runner(payload: dict[str, object]) -> dict[str, object]:

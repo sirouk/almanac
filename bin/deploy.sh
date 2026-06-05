@@ -10333,6 +10333,15 @@ EOF
   ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED="1"
   ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" "$ssh_host")"
   ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$hostname")"
+  if [[ -n "$private_dns_name" ]]; then
+    ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$private_dns_name")"
+  fi
+  if [[ -n "$wireguard_private_ip" ]]; then
+    ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "${wireguard_private_ip%%/*}")"
+  fi
+  if [[ -n "$tailscale_dns_name" ]]; then
+    ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$tailscale_dns_name")"
+  fi
   if [[ "$smoke_status" == "passed" ]]; then
     ARCLINK_CONTROL_PROVISIONER_ENABLED="1"
   elif [[ "${ARCLINK_CONTROL_PROVISIONER_ENABLED:-0}" != "1" ]]; then
@@ -10586,6 +10595,12 @@ ensure_control_local_fleet_worker_registered() {
     ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "${ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST:-}" "$hostname")"
     if [[ -n "$ssh_host" ]]; then
       ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$ssh_host")"
+    fi
+    if [[ -n "$private_dns_name" ]]; then
+      ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$private_dns_name")"
+    fi
+    if [[ -n "$tailscale_dns_name" ]]; then
+      ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST="$(append_control_csv_value "$ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST" "$tailscale_dns_name")"
     fi
     write_docker_runtime_config "$docker_env"
     CONFIG_TARGET="$docker_env"

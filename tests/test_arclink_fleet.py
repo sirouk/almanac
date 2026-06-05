@@ -461,6 +461,46 @@ def test_standard_unit_strategy_uses_inventory_asu_available() -> None:
     print("PASS test_standard_unit_strategy_uses_inventory_asu_available")
 
 
+def test_standard_unit_capacity_summary_uses_asu_available() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_asu_summary")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_asu_summary")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_asu_summary")
+    conn = memory_db(control)
+    h1 = fleet.register_fleet_host(conn, hostname="h1.test", capacity_slots=20)
+    h2 = fleet.register_fleet_host(conn, hostname="h2.test", capacity_slots=20)
+    inventory.register_inventory_machine(
+        conn,
+        provider="manual",
+        hostname="h1.test",
+        status="ready",
+        asu_capacity=0.5,
+        asu_consumed=0,
+        machine_host_link=h1["host_id"],
+    )
+    inventory.register_inventory_machine(
+        conn,
+        provider="manual",
+        hostname="h2.test",
+        status="ready",
+        asu_capacity=3,
+        asu_consumed=0,
+        machine_host_link=h2["host_id"],
+    )
+    old = os.environ.get("ARCLINK_FLEET_PLACEMENT_STRATEGY")
+    os.environ["ARCLINK_FLEET_PLACEMENT_STRATEGY"] = "standard_unit"
+    try:
+        summary = fleet.fleet_capacity_summary(conn)
+    finally:
+        if old is None:
+            os.environ.pop("ARCLINK_FLEET_PLACEMENT_STRATEGY", None)
+        else:
+            os.environ["ARCLINK_FLEET_PLACEMENT_STRATEGY"] = old
+    expect(summary["eligible_worker_count"] == 1, str(summary))
+    expect(summary["available_slots"] == 3, str(summary))
+    expect(summary["eligible_slots"] == 3, str(summary))
+    print("PASS test_standard_unit_capacity_summary_uses_asu_available")
+
+
 def test_fleet_inventory_orphan_reconciler_reports_without_repairing() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_orphan")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_orphan")
@@ -500,5 +540,6 @@ if __name__ == "__main__":
     test_region_filter()
     test_placement_rejects_secret_required_tags()
     test_standard_unit_strategy_uses_inventory_asu_available()
+    test_standard_unit_capacity_summary_uses_asu_available()
     test_fleet_inventory_orphan_reconciler_reports_without_repairing()
-    print(f"\nAll 22 fleet tests passed.")
+    print(f"\nAll 23 fleet tests passed.")

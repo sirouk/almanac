@@ -1920,6 +1920,28 @@ def test_fleet_host_executor_helper_accepts_compose_escaped_allowlist() -> None:
     print("PASS test_fleet_host_executor_helper_accepts_compose_escaped_allowlist")
 
 
+def test_fleet_host_executor_helper_prefers_private_mesh_endpoint() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_fleet_host_private_endpoint")
+    executor = mod.executor_for_fleet_host(
+        adapter="ssh",
+        env={
+            "ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED": "1",
+            "ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST": "203.0.113.20,10.44.0.20",
+        },
+        host={
+            "host_id": "host_private",
+            "hostname": "worker-public.example.test",
+            "metadata_json": json.dumps(
+                {"ssh_host": "203.0.113.20", "private_dns_name": "10.44.0.20", "ssh_user": "arclink"}
+            ),
+        },
+        secret_resolver=mod.FakeSecretResolver({}),
+    )
+    runner = executor.docker_runner
+    expect(runner.host == "10.44.0.20", str(runner))
+    print("PASS test_fleet_host_executor_helper_prefers_private_mesh_endpoint")
+
+
 def test_live_executor_requires_docker_runner() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_runner_required_test")
     intent = sample_intent()
@@ -2075,11 +2097,12 @@ def main() -> int:
     test_ssh_docker_runner_requires_explicit_host_allowlist()
     test_fleet_host_executor_helper_builds_ssh_runner_from_host_metadata()
     test_fleet_host_executor_helper_accepts_compose_escaped_allowlist()
+    test_fleet_host_executor_helper_prefers_private_mesh_endpoint()
     test_live_executor_requires_docker_runner()
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 40 ArcLink executor tests")
+    print("PASS all 41 ArcLink executor tests")
     return 0
 
 

@@ -253,7 +253,7 @@ managed upgrade guidance (`docs/arclink/raven-public-bot.md:72-112`,
 
 In active Telegram chats, Raven moves behind a selected Raven namespace, normally
 `/raven`, while the active Agent owns the bare slash namespace. Discord keeps
-global Raven commands and exposes `/agent <message-or-command>` as the active
+global Raven commands and uses `/agent <name>` to switch the active
 Agent bridge (`docs/arclink/raven-public-bot.md:28-44`,
 `docs/arclink/raven-public-bot.md:132-136`).
 
@@ -381,7 +381,7 @@ to `removed`, hiding it from future user API reads
 requires operator rotation or recovery (`docs/arclink/first-day-user-guide.md:17-28`).
 
 Raven blocks Notion setup prep until credential handoffs are confirmed. That
-keeps Notion secrets out of chat and forces dashboard/operator verification
+keeps Notion secrets out of chat and forces dashboard verification
 (`python/arclink_public_bots.py:3291-3358`).
 
 Status: local credential handoff and acknowledgement are `real`; live

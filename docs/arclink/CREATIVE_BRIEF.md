@@ -706,7 +706,7 @@ per-chat Hermes command scope:
 | `/help` | Open the ArcLink action palette |
 | `/status` | Check onboarding or pod status |
 | `/name <display_name>` | Name your ArcLink workspace |
-| `/plan <sovereign\|operator\|scale>` | Choose sovereign, operator, or scale |
+| `/plan <founders\|sovereign\|scale>` | Choose Founders, Sovereign, or Scale |
 | `/checkout` | Hire your first Hermes Agent |
 | `/agents` | Open your ArcLink crew manifest |
 | `/raven_name` | Set Raven's ArcLink-message display name for this channel or account |
@@ -720,7 +720,7 @@ control command, normally `/raven`, plus the active Hermes Agent's current Herme
 commands. Use `/raven agents`, `/raven status`, `/raven connect_notion`,
 `/raven config_backup`, `/raven link_channel`, or `/raven cancel` for ArcLink
 controls there. Bare slash commands belong to the active Hermes Agent. Discord keeps
-global slash commands and uses `/agent <message-or-command>` for active Hermes Agent
+global slash commands and uses `/agent <name>` to switch the active Hermes Agent
 commands.
 
 Hidden/account-state actions:

@@ -11,6 +11,16 @@ const PROOF_STORAGE_KEY = "arclink_onboarding_proof";
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLLS = 160; // ~8 minutes
 
+const statusLabels: Record<string, string> = {
+  active: "online",
+  running: "online",
+  provisioning_ready: "queued",
+  provisioning: "provisioning",
+  provisioning_failed: "needs repair",
+  entitlement_required: "awaiting payment",
+  reserved: "reserved",
+};
+
 type EntitlementStatus = "unknown" | "pending" | "paid" | "failed";
 type ResourceUrls = {
   dashboard?: string;
@@ -180,8 +190,10 @@ function CheckoutSuccessContent() {
   const waitingForResources = confirmed && !deploymentReady && !timedOut;
   const channelLabel = channel === "telegram" ? "Telegram" : channel === "discord" ? "Discord" : "";
   const agentWord = agentCount === 1 ? "Hermes Agent" : "Hermes Agents";
+  const launchTitle = agentCount === 1 ? "Launching your Hermes Agent" : `Launching ${agentCount} Hermes Agents`;
+  const readyTitle = agentCount === 1 ? "Your Hermes Agent is online" : `${agentCount} Hermes Agents online`;
   const statusSummary = deployments
-    .map((deployment) => deployment.status)
+    .map((deployment) => statusLabels[(deployment.status || "").toLowerCase()] || deployment.status)
     .filter(Boolean)
     .filter((value, index, list) => list.indexOf(value) === index)
     .join(", ");
@@ -193,7 +205,7 @@ function CheckoutSuccessContent() {
           {confirmed ? "Payment confirmed" : "Verifying payment"}
         </p>
         <h1 className="font-display text-3xl font-bold">
-          {confirmed ? (deploymentReady ? `${agentCount} ${agentWord} online` : `Launching ${agentCount} ${agentWord}`) : "Waiting for confirmation"}
+          {confirmed ? (deploymentReady ? readyTitle : launchTitle) : "Waiting for confirmation"}
         </h1>
 
         {!confirmed && !timedOut && (
@@ -208,7 +220,7 @@ function CheckoutSuccessContent() {
         {confirmed && (
           <div className="mt-4">
             <p className="text-sm text-soft-white/65">
-              {displayName ? `Captain ${displayName}, ` : ""}{deploymentReady ? `your ${agentWord} ${agentCount === 1 ? "is" : "are"} online.` : `Raven has confirmed payment and your ${agentCount} ${agentWord} ${agentCount === 1 ? "is" : "are"} entering the launch queue.`}
+              {displayName ? `Captain ${displayName}, ` : ""}{deploymentReady ? `your ${agentWord} ${agentCount === 1 ? "is" : "are"} online.` : `payment cleared; Raven is moving your ${agentCount} ${agentWord} into the launch queue.`}
             </p>
             {channelLabel && (
               <p className="mt-2 text-sm text-soft-white/65">
@@ -225,7 +237,7 @@ function CheckoutSuccessContent() {
             )}
             {deploymentReady && (
               <p className="mt-2 text-sm text-neon-green">
-                {channelLabel ? "Use the dashboard username and password Raven gives you in chat. The same sign-in opens each Hermes Agent Dashboard in this Crew." : sessionClaimed ? "Use Account Dashboard for ready links and the Hermes Agent Dashboard credential handoff. The same sign-in opens each Hermes Agent Dashboard in this Crew." : "Sign in from Account Dashboard for ready links and the Hermes Agent Dashboard credential handoff."}
+                {channelLabel ? "Use the dashboard username and password Raven gives you in chat. The same sign-in opens each Hermes Agent Dashboard in this Crew." : sessionClaimed ? "Use Account Dashboard for ready links and the Hermes Agent Dashboard credential handoff. The same sign-in opens each Hermes Agent Dashboard in this Crew." : "Sign in to Account Dashboard for ready links and the Hermes Agent Dashboard credential handoff."}
               </p>
             )}
             {sessionClaimed && (
@@ -288,7 +300,7 @@ function CheckoutSuccessContent() {
               Hermes Agent dashboards preparing
             </button>
           )}
-          {sessionClaimed && (
+          {(sessionClaimed || (confirmed && !channelLabel)) && (
             <Link
               href="/dashboard"
               className="rounded border border-border px-4 py-2 text-center font-semibold text-soft-white transition hover:bg-carbon"

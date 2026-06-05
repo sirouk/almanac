@@ -640,6 +640,15 @@ def test_operator_raven_academy_roster_is_read_only() -> None:
             conn, program_id="research_analyst", user_id="user-alex", deployment_id="dep-alex", name="Ada"
         )
         session = programs.open_academy_mode(conn, trainee_id=trainee["trainee_id"], opened_by="user-alex")
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-alex",
+            lane_id="web_article",
+            title="Operator roster Academy source",
+            origin_url="https://example.test/operator-roster-academy-source",
+            summary="Compressed governed public source notes for the Operator Raven Academy roster fixture.",
+            proposed_by="agent-operator-roster",
+        )
         programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor="user-alex", graduate=True)
 
         before_actions = conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"]

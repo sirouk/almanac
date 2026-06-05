@@ -3401,7 +3401,7 @@ def _credentials_reply(
             action="credentials_already_stored",
             reply=(
                 "That credential handoff is already closed and removed from future responses.\n\n"
-                "If you lost it, ask Raven or the operator to rotate/reissue dashboard access."
+                "If you lost it, ask Raven or ArcLink support to rotate/reissue dashboard access."
             ),
             session=session,
             deployment=deployment,
@@ -3423,7 +3423,7 @@ def _credentials_reply(
             action="credentials_reveal_unavailable",
             reply=(
                 "That credential handoff is no longer revealable. "
-                "Use the saved password, or ask Raven or the operator to rotate/reissue dashboard access."
+                "Use the saved password, or ask Raven or ArcLink support to rotate/reissue dashboard access."
             ),
             session=session,
             deployment=deployment,
@@ -3645,7 +3645,7 @@ def _credential_handoff_required_turn(
         "",
         "Use `/credentials`, copy the dashboard password into your password manager, and confirm storage. After ArcLink removes that handoff from future responses, I can record the brokered SSOT setup intent.",
         "",
-        "This keeps Notion setup on the dashboard/operator verification rail. No Notion tokens or API keys belong in chat.",
+        "This keeps Notion setup on the dashboard verification rail. No Notion tokens or API keys belong in chat.",
     ]
     if helm:
         lines.insert(3, f"Hermes Dashboard: {helm}")
@@ -4152,7 +4152,7 @@ def _connect_notion_reply(
     lines = [
         "Opening the Notion SSOT preparation lane for your ArcLink account.",
         "",
-        "Current model: ArcLink uses a brokered shared-root Notion SSOT rail with dashboard/operator verification. This command records setup intent and callback only; it does not verify the Notion integration, install secrets, support user-owned OAuth, or bypass the verification rail.",
+        "Current model: ArcLink uses a brokered shared-root Notion SSOT rail with dashboard verification. This command records setup intent and callback only; it does not verify the Notion integration, install secrets, support user-owned OAuth, or bypass the verification rail.",
         "",
         "Drop this shared control-node callback into the Notion webhook/subscription panel:",
         callback_url or "(callback URL is not available yet)",
@@ -4218,7 +4218,7 @@ def _config_backup_reply(
         action="prompt_backup_repo",
         reply=(
             "Opening the private backup preparation lane.\n\n"
-            "This public command records the intended private GitHub repository. It does not mint, install, or verify the deploy key; the dashboard/operator backup rail completes that step.\n\n"
+            "This public command records the intended private GitHub repository. It does not mint, install, or verify the deploy key; the dashboard verification rail completes that step.\n\n"
             "Choose a private GitHub repository - this is where Hermes' home and the pod's configuration snapshots will rest after key setup is verified. "
             "Send me `owner/repo` and I will attach it to this deployment as pending setup.\n\n"
             f"Example: `{example}`\n\n"
@@ -5849,7 +5849,42 @@ def _handle_academy_training_workflow(
                 trainee = result.get("trainee") if isinstance(result.get("trainee"), Mapping) else {}
                 program = get_academy_program(conn, str(trainee.get("program_id") or data.get("program_id") or ""))
                 summary = result.get("session", {}).get("commit_summary") if isinstance(result.get("session"), Mapping) else {}
-                source_count = int((summary or {}).get("source_count") or 0)
+                source_count = int((summary or {}).get("source_count") or (summary or {}).get("resource_proposal_count") or 0)
+                if not bool(result.get("graduated")):
+                    status_value = str(result.get("status") or (summary or {}).get("canon_status") or "needs_training_sources")
+                    status = _academy_status_for_mode(
+                        deployment=target or {},
+                        program=program,
+                        trainee=trainee,
+                        mode_status=status_value,
+                        summary=(
+                            "Academy Mode remains open. The selected Hermes Agent must submit at least one governed real "
+                            "source through the arclink-academy skill, or the Captain must adopt a shared Academy specialist, "
+                            "before the Trainer can seal canon."
+                        ),
+                        graduation_status=str((summary or {}).get("canon_status") or "blocked_until_real_training_sources"),
+                        source_count=source_count,
+                    )
+                    refreshed = _persist_academy_deployment_status(
+                        conn,
+                        deployment=target or {},
+                        academy_status=status,
+                        actor_id=user_id,
+                        reason="Academy Mode graduation blocked pending governed sources",
+                    )
+                    return _turn(
+                        channel=channel,
+                        channel_identity=channel_identity,
+                        action="academy_mode_needs_training_sources",
+                        reply=(
+                            f"Academy Mode remains open for {label}.\n\n"
+                            "The Trainer cannot seal canon yet. Have the Hermes Agent use `arclink-academy` to propose at least one governed real source, or adopt a matching shared Academy specialist, then send `graduate` again.\n\n"
+                            "Private strategy stays with this Crew; public-safe source notes go through Trainer review."
+                        ),
+                        session=session,
+                        deployment=refreshed,
+                        buttons=(_button("Keep Training", command="/academy", style="secondary"), _button("Exit", command="/cancel", style="secondary")),
+                    )
                 status = _academy_status_for_mode(
                     deployment=target or {},
                     program=program,
@@ -6464,7 +6499,7 @@ def _handle_active_workflow(
             reply=(
                 f"Logged as pending key setup. `{owner_repo}` is attached to this pod's private backup lane, but backup is not active yet.\n\n"
                 "Keep the repository private. ArcLink will mint a dedicated pod deploy key with write access; "
-                "when the dashboard/operator rail produces the key, set it here:\n"
+                "when the dashboard verification rail produces the key, set it here:\n"
                 f"{settings_url}\n\n"
                 "Recorded to the deployment event stream - operators on the admin bridge can see this move and finish verification."
             ),

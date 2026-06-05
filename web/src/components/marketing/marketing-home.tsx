@@ -103,12 +103,12 @@ const SystemGrid = () => {
 };
 
 const systemLogs = [
-  'Raven completed: Invoice dispatch — 8 sent',
-  'Raven completed: Lead follow-up — 12 contacts',
-  'Raven completed: Competitor price scan — 3 changes flagged',
-  'Raven completed: Notion sync — 47 records updated',
-  'Raven completed: Weekly status report — delivered to Slack',
-  'Raven completed: GitHub issue triage — 9 items labeled',
+  'Hermes Agent completed: Invoice dispatch — 8 sent',
+  'Hermes Agent completed: Lead follow-up — 12 contacts',
+  'Hermes Agent completed: Competitor price scan — 3 changes flagged',
+  'Hermes Agent completed: Notion sync — 47 records updated',
+  'Hermes Agent completed: Weekly status report — delivered to Slack',
+  'Hermes Agent completed: GitHub issue triage — 9 items labeled',
 ];
 
 // --- Hero System Log Ticker ---
@@ -189,7 +189,7 @@ const Hero = () => (
 
             <h1 className="font-heading font-normal text-[#E7E6E6] leading-[1.08] mb-6"
               style={{fontSize: 'clamp(2.8rem, 6vw, 5.5rem)'}}>
-              Raven runs your<br />operations.
+              Hermes Agents run your<br />operations.
             </h1>
 
             <p className="text-[#E7E6E6]/55 font-body text-base lg:text-lg max-w-lg mb-4 leading-relaxed">
@@ -546,7 +546,7 @@ const Solution = () => {
           <div>
             <span className="text-[#FB5005] text-xs font-mono tracking-widest uppercase">The solution</span>
             <h2 className="font-heading font-normal text-[#E7E6E6] text-4xl lg:text-5xl mt-4 mb-8 leading-tight">
-              Hire Raven, an agent<br />that never sleeps.
+              Hire a Hermes Agent<br />Raven can launch.
             </h2>
           </div>
           <div className="space-y-5 lg:pt-16">
@@ -1001,9 +1001,9 @@ const HowItWorks = () => {
 // --- Comparison ---
 const Comparison = () => {
   const rows = [
-    { traditional: 'You manage tools', arclink: 'Raven runs systems' },
+    { traditional: 'You manage tools', arclink: 'Hermes Agents run systems' },
     { traditional: 'You follow up manually', arclink: 'Raven executes automatically' },
-    { traditional: 'Work stops when you stop', arclink: 'Raven runs 24/7' },
+    { traditional: 'Work stops when you stop', arclink: 'Hermes Agents run 24/7' },
     { traditional: 'You adapt to software', arclink: 'Raven adapts to you' },
     { traditional: 'Manual overhead', arclink: 'Zero overhead' },
     { traditional: 'Inconsistent output', arclink: 'System-driven consistency' },
@@ -1455,7 +1455,7 @@ const PlatformChoice = () => (
           Built where you already work.
         </h2>
         <p className="text-[#E7E6E6]/40 font-body text-sm">
-          You don&apos;t learn a new platform. Raven runs where your conversations already happen.
+          You don&apos;t learn a new platform. Raven meets you where your conversations already happen.
         </p>
       </div>
 

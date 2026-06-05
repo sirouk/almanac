@@ -119,9 +119,8 @@ over:
 - `/plan`
 - `/checkout`
 - `/agents`
-- `/agent <message-or-command>` sends a message or slash command to the active
-  agent. Use this when a platform command menu does not expose the specific
-  Hermes command you want.
+- `/agent <name>` switches the active Hermes Agent. Normal chat then routes to
+  the selected Hermes Agent, and Discord also supports `/arclink <message>`.
 - `/raven_name` sets Raven's ArcLink-message display name for the current
   channel or, after account linking, the whole account. The preference changes
   Raven's name in ArcLink-rendered bot messages; Telegram and Discord platform

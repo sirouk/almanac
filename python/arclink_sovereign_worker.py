@@ -669,6 +669,12 @@ def process_sovereign_deployment(
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_running"}
     if str(job["status"]) == "failed":
         if int(job["attempt_count"] or 0) >= worker.max_attempts:
+            _release_failed_deployment_placement_if_exhausted(
+                conn,
+                deployment_id=deployment_id,
+                job_id=str(job["job_id"]),
+                reason="max_attempts_exhausted",
+            )
             return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "max_attempts_exhausted"}
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="queued")
 
@@ -713,8 +719,20 @@ def process_sovereign_deployment(
     except Exception as exc:
         error = _safe_error(exc)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="failed", error=error)
+        refreshed_job = conn.execute(
+            "SELECT attempt_count FROM arclink_provisioning_jobs WHERE job_id = ?",
+            (str(job["job_id"]),),
+        ).fetchone()
         _mark_deployment_failed_if_still_provisioning(conn, deployment_id=deployment_id)
         _record_service_status(conn, deployment_id=deployment_id, status="failed", detail={"error": error})
+        if int(refreshed_job["attempt_count"] if refreshed_job is not None else 0) >= worker.max_attempts:
+            _release_failed_deployment_placement_if_exhausted(
+                conn,
+                deployment_id=deployment_id,
+                job_id=str(job["job_id"]),
+                reason="max_attempts_exhausted_after_failure",
+                error=error,
+            )
         append_arclink_event(
             conn,
             subject_kind="deployment",
@@ -723,6 +741,53 @@ def process_sovereign_deployment(
             metadata={"job_id": str(job["job_id"]), "error": error},
         )
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "failed", "error": error}
+
+
+def _deployment_has_durable_runtime(conn: sqlite3.Connection, *, deployment_id: str) -> bool:
+    rows = conn.execute(
+        "SELECT status FROM arclink_service_health WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchall()
+    return any(str(row["status"] or "").strip().lower() in {"healthy", "running", "ready", "active"} for row in rows)
+
+
+def _release_failed_deployment_placement_if_exhausted(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    job_id: str,
+    reason: str,
+    error: str = "",
+) -> dict[str, Any] | None:
+    if _deployment_has_durable_runtime(conn, deployment_id=deployment_id):
+        append_arclink_event(
+            conn,
+            subject_kind="deployment",
+            subject_id=deployment_id,
+            event_type="placement_retained_after_provisioning_failure",
+            metadata={"job_id": job_id, "reason": reason, "durable_runtime": True},
+        )
+        return None
+    removed = remove_placement(conn, deployment_id=deployment_id)
+    if removed is None:
+        return None
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="placement_released_after_provisioning_failure",
+        metadata={"job_id": job_id, "reason": reason, "placement_id": str(removed.get("placement_id") or "")},
+    )
+    append_arclink_audit(
+        conn,
+        action="sovereign_failed_placement_released",
+        actor_id="system:sovereign_worker",
+        target_kind="deployment",
+        target_id=deployment_id,
+        reason="released failed provisioning placement after exhausted attempts without durable runtime",
+        metadata={"job_id": job_id, "reason": reason, "error": error, "placement": removed},
+    )
+    return removed
 
 
 def _ensure_deployment_fleet_share_hub(conn: sqlite3.Connection, *, deployment: Mapping[str, Any]) -> dict[str, Any]:
@@ -1561,8 +1626,6 @@ def _refresh_crew_dashboard_access_states(
         if not hermes_home:
             continue
         access_path = Path(hermes_home) / "state" / "arclink-web-access.json"
-        if not access_path.is_file():
-            continue
         try:
             intent = render_arclink_provisioning_intent(
                 conn,
@@ -1580,28 +1643,59 @@ def _refresh_crew_dashboard_access_states(
             crew = json.loads(crew_raw)
             if not isinstance(crew, list):
                 continue
-            existing = json_loads_safe(access_path.read_text(encoding="utf-8"))
+            active = _active_placement_with_host(conn, deployment_id=deployment_id)
+            runner = None
+            allowed_root = str((roots or {}).get("root") or "").strip()
+            if active is not None:
+                try:
+                    runner = getattr(_executor_for_host(worker=worker, host=active["host"], intent=intent), "docker_runner", None)
+                except Exception:
+                    runner = None
+            if access_path.is_file():
+                existing = json_loads_safe(access_path.read_text(encoding="utf-8"))
+                remote_write = False
+            elif runner is not None and callable(getattr(runner, "read_text_file", None)):
+                existing = json_loads_safe(
+                    runner.read_text_file(str(access_path), allowed_root=allowed_root or hermes_home)
+                )
+                remote_write = True
+            else:
+                continue
             if not isinstance(existing, dict):
                 continue
             existing["crew_dashboards"] = crew
             existing["crew_dashboards_refreshed_at"] = utc_now_iso()
-            access_path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(dir=str(access_path.parent), prefix=".arclink-web-access-", suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(existing, handle, indent=2, sort_keys=True)
-                    handle.write("\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(tmp_name, access_path)
-            finally:
+            content = json.dumps(existing, indent=2, sort_keys=True) + "\n"
+            if remote_write:
+                if runner is None or not callable(getattr(runner, "write_text_file", None)):
+                    continue
+                runner.write_text_file(str(access_path), content, allowed_root=allowed_root or hermes_home, mode="0600")
+            else:
+                access_path.parent.mkdir(parents=True, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(dir=str(access_path.parent), prefix=".arclink-web-access-", suffix=".tmp")
                 try:
-                    os.unlink(tmp_name)
-                except FileNotFoundError:
-                    pass
-            access_path.chmod(0o600)
+                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                        handle.write(content)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(tmp_name, access_path)
+                finally:
+                    try:
+                        os.unlink(tmp_name)
+                    except FileNotFoundError:
+                        pass
+                access_path.chmod(0o600)
             refreshed.append(deployment_id)
-        except Exception:
+        except Exception as exc:
+            append_arclink_audit(
+                conn,
+                action="crew_dashboard_access_refresh_failed",
+                actor_id="system:sovereign_worker",
+                target_kind="deployment",
+                target_id=deployment_id,
+                reason="failed to refresh sibling Hermes Dashboard switcher access state",
+                metadata={"access_path": str(access_path), "error": _safe_error(exc)},
+            )
             continue
     return refreshed
 

@@ -545,28 +545,9 @@ def arclink_public_bot_telegram_active_command_plan(
         {"command": raven_command, "description": ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION[:256]}
     ]
     used = {raven_command}
-    raw_captain = (
-        list(captain_commands)
-        if captain_commands is not None
-        else arclink_public_bot_captain_telegram_commands()
-    )
-    captain_command_names: list[str] = []
+    del captain_commands
+    hidden_captain_command_names: list[str] = []
     captain_conflicts: list[str] = []
-    for item in raw_captain:
-        name = _telegram_command_name(str(item.get("command") or ""))
-        description = str(item.get("description") or "").strip()
-        if not name or not description:
-            continue
-        if name in used:
-            continue
-        if name in raw_agent_names:
-            captain_conflicts.append(name)
-            continue
-        if len(commands) >= ARCLINK_TELEGRAM_COMMAND_LIMIT:
-            break
-        commands.append({"command": name, "description": description[:256]})
-        captain_command_names.append(name)
-        used.add(name)
     agent_added_count = 0
     for item in normalized_agent:
         if item["command"] in used:
@@ -583,7 +564,7 @@ def arclink_public_bot_telegram_active_command_plan(
     return {
         "commands": commands,
         "agent_command_names": sorted(seen_agent),
-        "captain_command_names": sorted(captain_command_names),
+        "captain_command_names": sorted(hidden_captain_command_names),
         "captain_conflicts": sorted(set(captain_conflicts)),
         "legacy_raven_conflicts": legacy_conflicts,
         "hard_raven_conflicts": hard_conflicts,

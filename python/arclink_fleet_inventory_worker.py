@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 from arclink_asu import compute_asu, current_load
 from arclink_boundary import json_loads_safe
 from arclink_control import Config, append_arclink_audit, connect_db, ensure_schema, parse_utc_iso, queue_notification, utc_now, utc_now_iso
+from arclink_fleet import fleet_host_ssh_endpoint, fleet_host_ssh_user
 from arclink_secrets_regex import redact_secret_material, redact_then_truncate
 
 
@@ -205,13 +206,8 @@ def _host_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         host = dict(row)
         metadata = json_loads_safe(str(host.get("metadata_json") or "{}"))
         if isinstance(metadata, Mapping):
-            private_dns_name = str(metadata.get("private_dns_name") or "").strip()
-            if private_dns_name:
-                host["ssh_host"] = private_dns_name
-            elif not str(host.get("ssh_host") or "").strip():
-                host["ssh_host"] = str(metadata.get("ssh_host") or "").strip()
-            if not str(host.get("ssh_user") or "").strip():
-                host["ssh_user"] = str(metadata.get("ssh_user") or "").strip()
+            host["ssh_host"] = fleet_host_ssh_endpoint(host)
+            host["ssh_user"] = fleet_host_ssh_user(host, default=str(host.get("ssh_user") or "arclink"))
             executor = str(metadata.get("executor") or "").strip().lower()
         else:
             executor = ""

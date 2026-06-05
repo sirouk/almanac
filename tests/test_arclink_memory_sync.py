@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -963,6 +964,51 @@ def test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift() -> 
         print("PASS test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift")
 
 
+def test_recent_vault_change_rows_ignore_delivered_notifications() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_memory_sync_delivered_vault_changes")
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    mod.ensure_schema(conn)
+    now = mod.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO notification_outbox (
+          target_kind, target_id, channel_kind, message, extra_json, created_at, delivered_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "user-agent",
+            "agent-test",
+            "vault-change",
+            "old delivered",
+            json.dumps({"vault_name": "Fleet", "paths": ["old.md"], "path_count": 1}),
+            now,
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO notification_outbox (
+          target_kind, target_id, channel_kind, message, extra_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "user-agent",
+            "agent-test",
+            "vault-change",
+            "new undelivered",
+            json.dumps({"vault_name": "Fleet", "paths": ["new.md"], "path_count": 1}),
+            now,
+        ),
+    )
+    conn.commit()
+    rows = mod._recent_vault_change_rows_for_agent(conn, "agent-test", limit=8)
+    expect(len(rows) == 1, str(rows))
+    expect(rows[0]["message"] == "new undelivered", str(rows))
+    expect(rows[0]["paths"] == ["new.md"], str(rows))
+    print("PASS test_recent_vault_change_rows_ignore_delivered_notifications")
+
+
 def test_managed_notion_stub_stays_scoped_to_verified_user() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_memory_sync_notion_scope_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1573,12 +1619,13 @@ def main() -> int:
     test_curator_fanout_reuses_shared_notions_snapshot_cache_per_batch()
     test_write_managed_memory_stubs_skips_local_rewrites_on_cache_hit()
     test_write_managed_memory_stubs_repairs_matching_cache_key_state_drift()
+    test_recent_vault_change_rows_ignore_delivered_notifications()
     test_managed_notion_stub_stays_scoped_to_verified_user()
     test_managed_notion_stub_reports_pending_claim_status()
     test_managed_notion_stub_reports_pending_write_approvals()
     test_managed_notion_stub_reports_verified_page_scoped_write_access()
     test_managed_notion_stub_reports_verification_not_started()
-    print("PASS all 12 memory sync regression tests")
+    print("PASS all 13 memory sync regression tests")
     return 0
 
 

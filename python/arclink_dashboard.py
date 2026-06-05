@@ -312,7 +312,12 @@ def control_node_provisioning_readiness(
     This helper is intentionally read-only. SSH, Docker, provider, ingress, and
     live worker probes stay under PG-FLEET/PG-PROVISION.
     """
-    from arclink_fleet import fleet_capacity_summary, host_is_placement_eligible
+    from arclink_fleet import (
+        fleet_capacity_summary,
+        fleet_host_ssh_endpoint,
+        host_available_placement_units,
+        host_is_placement_eligible,
+    )
 
     source_env = env if env is not None else os.environ
     provisioner_enabled = _truthy(source_env.get("ARCLINK_CONTROL_PROVISIONER_ENABLED"))
@@ -325,15 +330,17 @@ def control_node_provisioning_readiness(
             "hostname": str(host.get("hostname") or ""),
             "region": str(host.get("region") or ""),
             "headroom": max(0, int(host.get("headroom") or 0)),
+            "available_placement_units": host_available_placement_units(host),
             "effective_capacity_slots": max(0, int(host.get("effective_capacity_slots") or host.get("capacity_slots") or 0)),
             "control_plane_reserve": bool(host.get("control_plane_reserve")),
             "last_health_state": str(host.get("last_health_state") or ""),
             "executor_adapter": executor_adapter,
+            "ssh_endpoint": fleet_host_ssh_endpoint(host),
         }
         for host in hosts
         if host_is_placement_eligible(host)
     ]
-    eligible_slots = sum(int(host["headroom"]) for host in eligible_workers)
+    eligible_slots = sum(int(host["available_placement_units"]) for host in eligible_workers)
     blockers: list[dict[str, str]] = []
 
     if executor_adapter not in {"fake", "local", "ssh"}:
@@ -357,11 +364,6 @@ def control_node_provisioning_readiness(
             source_env.get("ARCLINK_EXECUTOR_MACHINE_MODE_ENABLED")
             or source_env.get("ARCLINK_ACTION_WORKER_SSH_ENABLED")
         )
-        host = str(
-            source_env.get("ARCLINK_ACTION_WORKER_SSH_HOST")
-            or source_env.get("ARCLINK_LOCAL_FLEET_SSH_HOST")
-            or ""
-        ).strip().lower()
         allowed_hosts = _csv_set(
             str(
                 source_env.get("ARCLINK_EXECUTOR_MACHINE_HOST_ALLOWLIST")
@@ -370,10 +372,17 @@ def control_node_provisioning_readiness(
             )
         )
         key_path = str(source_env.get("ARCLINK_FLEET_SSH_KEY_PATH") or "").strip()
+        allowed_worker_endpoints = [
+            worker
+            for worker in eligible_workers
+            if str(worker.get("ssh_endpoint") or "").strip().lower() in allowed_hosts
+        ]
         if not machine_enabled:
             ssh_blockers.append({"name": "ssh_machine_mode", "detail": "SSH machine mode is disabled."})
-        if not host or host not in allowed_hosts:
-            ssh_blockers.append({"name": "ssh_host", "detail": "SSH host is missing or not allowlisted."})
+        if not any(str(worker.get("ssh_endpoint") or "").strip() for worker in eligible_workers):
+            ssh_blockers.append({"name": "ssh_host", "detail": "No eligible fleet worker has a private SSH endpoint."})
+        elif not allowed_worker_endpoints:
+            ssh_blockers.append({"name": "ssh_host_allowlist", "detail": "No eligible fleet worker endpoint is allowlisted."})
         if not key_path:
             ssh_blockers.append({"name": "ssh_key", "detail": "Fleet SSH key path is missing."})
         blockers.extend(ssh_blockers)
@@ -1161,7 +1170,7 @@ def _deployment_backup_setup(
         },
         "guidance": (
             "Raven can record the intended private GitHub repository. Backup remains inactive until a dedicated "
-            "pod deploy key is minted, installed with write access, and verified by the dashboard/operator rail."
+            "pod deploy key is minted, installed with write access, and verified by the dashboard verification rail."
         ),
         "verification": {
             "state": status,

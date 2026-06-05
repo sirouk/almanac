@@ -142,6 +142,20 @@ def test_academy_enroll_open_sticky_and_graduate() -> None:
         expect(status["mode_open"] is True and status["session"] is not None, str(status))
         expect(status["program"]["label"] == "Research Analyst", str(status["program"]))
 
+        blocked = ap.end_academy_mode(conn, session_id=opened["session"]["session_id"], actor="tg:42", graduate=True)
+        expect(blocked["graduated"] is False and blocked["status"] == "needs_training_sources", str(blocked))
+        expect(blocked["trainee"]["status"] == "in_academy" and blocked["trainee"]["mode_open"] is True, str(blocked["trainee"]))
+        expect(blocked["trainee"]["forward_maintained"] is False, "fixture-only trainee must not arm continuing education")
+
+        ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-1",
+            lane_id="web_article",
+            title="Research analyst field guide",
+            origin_url="https://example.test/research-analyst-guide",
+            summary="A real governed source gathered during Academy Mode.",
+            proposed_by="agent-1",
+        )
         # The mode does not end on its own; the Captain ends it -> graduate + commit + forward-maintain.
         ended = ap.end_academy_mode(conn, session_id=opened["session"]["session_id"], actor="tg:42", graduate=True)
         expect(ended["graduated"] is True, str(ended))
@@ -275,6 +289,15 @@ def test_academy_browse_graduates_and_adopt() -> None:
         ap.seed_default_academy_programs(conn)
         t = ap.enroll_academy_trainee(conn, program_id="systems_practice_engineer", user_id="u1", deployment_id="dep-a", name="Grace")
         s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u1")
+        ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-a",
+            lane_id="web_article",
+            title="Systems practice source",
+            origin_url="https://example.test/grace/systems-practice",
+            summary="Governed Academy source for the graduate gallery.",
+            proposed_by="agent-1",
+        )
         ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="u1", graduate=True, staged_manifest_id="mani-xyz")
 
         gallery = ap.browse_academy_graduates(conn)
@@ -421,13 +444,22 @@ def test_academy_commit_curates_on_graduation() -> None:
         ap.seed_default_academy_programs(conn)
         t = ap.enroll_academy_trainee(conn, program_id="research_analyst", user_id="u", deployment_id="dep-d")
         s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="u")
+        ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-d",
+            lane_id="web_article",
+            title="Research analyst source",
+            origin_url="https://example.test/research/commit-curation",
+            summary="Governed source notes for graduation curation.",
+            proposed_by="test-agent",
+        )
         ended = ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="u", graduate=True)
         grad = ended["trainee"]
         expect(grad["status"] == "graduated", str(grad))
         expect(grad["staged_manifest_id"], "graduation curated + staged a manifest")
         cs = ended["session"]["commit_summary"]
         expect(cs.get("manifest_id") == grad["staged_manifest_id"], str(cs))
-        expect(cs.get("review_status") in {"ready_for_review", "live_proof_pending"}, str(cs))
+        expect(cs.get("review_status") in {"ready_for_review", "live_proof_pending", "blocked_by_quality"}, str(cs))
         expect("PG-HERMES" in cs.get("apply_proof_gates", []), str(cs))
         expect(ended["mutation_performed"] is False, "no live Agent writes at commit")
         print("PASS test_academy_commit_curates_on_graduation")
@@ -441,7 +473,8 @@ def test_academy_continuing_education_is_no_write() -> None:
         ap.seed_default_academy_programs(conn)
         t = ap.enroll_academy_trainee(conn, program_id="domain_tutor", user_id="u", deployment_id="dep-e")
         ce = ap.academy_continuing_education(conn, trainee_id=t["trainee_id"], observed_sources=[])
-        expect("agent_update_status" in ce, str(ce.keys()))
+        expect(ce["status"] == "needs_training_sources", str(ce))
+        expect(ce["continuing_education_status"] == "blocked_until_real_training_sources", str(ce))
         expect(ce["mutation_performed"] is False, "continuing education is no-write")
         expect(ce["trainee_id"] == t["trainee_id"], str(ce))
         print("PASS test_academy_continuing_education_is_no_write")
@@ -627,6 +660,15 @@ def test_academy_graduate_card_redacts_tenant_identity() -> None:
             agent_id="secret-agent", captain_steer={"focus": "confidential-MnA-target"},
         )
         s = ap.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="secret-user")
+        ap.record_academy_resource_proposal(
+            conn,
+            deployment_id="secret-dep",
+            lane_id="web_article",
+            title="Redacted public source",
+            origin_url="https://example.test/redacted/public-source",
+            summary="Governed public source without tenant identity.",
+            proposed_by="secret-agent",
+        )
         ap.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="secret-user", graduate=True)
         gallery = ap.browse_academy_graduates(conn, user_id="secret-user")
         grad = gallery["graduates"][0]

@@ -331,8 +331,7 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     expect(calls[0]["scope"] == {"type": "chat", "chat_id": 42}, str(calls[0]))
     names = {item["command"] for item in calls[0]["commands"]}
     expect("raven" in names, str(names))
-    expect("raven_agents" in names and "raven_status" in names, str(names))
-    expect("raven_academy" in names and "raven_switch_agent" in names, str(names))
+    expect(not any(name.startswith("raven_") for name in names), str(names))
     expect("agents" not in names and "status" not in names and "help" not in names, str(names))
     expect("model" in names, str(names))
     expect("provider" in names, str(names))
@@ -501,8 +500,8 @@ def test_telegram_active_scope_exposes_dynamic_agent_switch_command() -> None:
 
     expect(result is not None and result["action"] == "show_agents", str(result))
     names = {item["command"] for item in calls[-1]["commands"]}
-    expect("agent_atlas" in names, str(names))
-    expect("raven_agent" in names and "raven_switch_agent" in names, str(names))
+    expect("agent_atlas" not in names, str(names))
+    expect(not any(name.startswith("raven_") for name in names), str(names))
     switched = tg.handle_telegram_update(
         conn,
         {"update_id": 62, "message": {"message_id": 2, "chat": {"id": 42}, "from": {"id": 99}, "text": "/agent_atlas"}},

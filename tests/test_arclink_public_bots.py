@@ -2074,6 +2074,7 @@ def test_public_bot_train_crew_flow_and_whats_changed() -> None:
 def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     control = load_module("arclink_control.py", "arclink_control_public_bot_academy_test")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_academy_test")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_public_bot_academy_test")
     conn = memory_db(control)
     seeded = seed_active_public_bot_deployment(
         control,
@@ -2170,6 +2171,22 @@ def test_public_bot_academy_training_walks_crew_with_skip() -> None:
     trainee_after_note = conn.execute("SELECT captain_steer_json FROM academy_trainees WHERE trainee_id = ?", (trainee_row["trainee_id"],)).fetchone()
     steer = json.loads(trainee_after_note["captain_steer_json"])
     expect(steer["captain_notes"], str(steer))
+
+    blocked = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="graduate")
+    expect(blocked.action == "academy_mode_needs_training_sources", blocked.reply)
+    expect("remains open" in blocked.reply and "governed real source" in blocked.reply, blocked.reply)
+    still_open = conn.execute("SELECT * FROM academy_mode_sessions WHERE trainee_id = ? AND status = 'open'", (trainee_row["trainee_id"],)).fetchone()
+    expect(still_open is not None, "zero-source graduation should keep sticky mode open")
+
+    programs.record_academy_resource_proposal(
+        conn,
+        deployment_id="arcdep_academy_second",
+        lane_id="web_article",
+        title="Public bot Academy source",
+        origin_url="https://example.test/public-bot-academy-source",
+        summary="Compressed governed public source notes for the public bot Academy training flow.",
+        proposed_by="agent-public-bot",
+    )
 
     graduated = bots.handle_arclink_public_bot_turn(conn, channel="telegram", channel_identity="tg:academy", text="graduate")
     expect(graduated.action == "academy_mode_graduated", graduated.reply)

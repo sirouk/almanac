@@ -89,6 +89,15 @@ def cleanup(tmp, old_env) -> None:
 def _graduate(programs, conn, program_id, user_id, deployment_id):
     t = programs.enroll_academy_trainee(conn, program_id=program_id, user_id=user_id, deployment_id=deployment_id)
     s = programs.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by=user_id)
+    programs.record_academy_resource_proposal(
+        conn,
+        deployment_id=deployment_id,
+        lane_id="web_article",
+        title=f"Weekly source for {program_id}",
+        origin_url=f"https://example.test/academy-weekly/{program_id}/{deployment_id}",
+        summary="Compressed derived notes for the weekly source.",
+        proposed_by="agent-x",
+    )
     programs.end_academy_mode(conn, session_id=s["session"]["session_id"], actor=user_id, graduate=True)
     return t
 
@@ -128,8 +137,8 @@ def test_forward_maintenance_caps_and_reports_overflow() -> None:
     tmp, old_env, conn, _control, programs, scheduler = with_db()
     try:
         programs.seed_default_academy_programs(conn)
-        for i in range(3):
-            _graduate(programs, conn, "research_analyst", f"u{i}", f"dep-{i}")
+        for i, program_id in enumerate(("research_analyst", "systems_practice_engineer", "domain_tutor")):
+            _graduate(programs, conn, program_id, f"u{i}", f"dep-{i}")
         result = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"}, limit=2)
         expect(result["eligible"] == 3, str(result))
         expect(result["processed"] == 2, str(result))
@@ -143,8 +152,8 @@ def test_forward_maintenance_limit_zero_processes_all() -> None:
     tmp, old_env, conn, _control, programs, scheduler = with_db()
     try:
         programs.seed_default_academy_programs(conn)
-        for i in range(3):
-            _graduate(programs, conn, "research_analyst", f"u{i}", f"dep-{i}")
+        for i, program_id in enumerate(("research_analyst", "systems_practice_engineer", "domain_tutor")):
+            _graduate(programs, conn, program_id, f"u{i}", f"dep-{i}")
         # limit <= 0 means "process all eligible" (explicit, documented).
         result = scheduler.run_academy_forward_maintenance(conn, env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "0"}, limit=0)
         expect(result["eligible"] == 3 and result["processed"] == 3, str(result))

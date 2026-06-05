@@ -77,7 +77,7 @@ though the underlying queue rows are keyed on technical identifiers.
 
 ## Examples
 
-- Web onboarding hero: "Name your Hermes Agent. Raven runs the rest."
+- Web onboarding hero: "Name your Hermes Agent. Raven launches the path."
 - Paid ping: "Captain Atlas, payment cleared. I'm provisioning your ArcPod now."
 - Vessel-online ping: "Captain Atlas, your Pod is live. Open the Hermes Dashboard."
 - Low-fuel ping: "ArcPod fuel is running low. Raven can open ArcPod Refueling."

@@ -61,9 +61,8 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         exact = [call["exact"] for call in calls if "exact" in call][0]
         names = {item["command"] for item in exact["commands"]}
         expect("arclink" in names, str(names))
-        expect("raven_agents" in names and "raven_status" in names, str(names))
-        expect("raven_academy" in names and "raven_switch_agent" in names, str(names))
         expect("model" in names, str(names))
+        expect(not any(name.startswith("raven_") for name in names), str(names))
         expect("raven" not in names and "agents" not in names and "status" not in names, str(names))
         expect("update" not in names, str(names))
 
@@ -72,7 +71,7 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         row = conn.execute("SELECT metadata_json FROM arclink_onboarding_sessions").fetchone()
         metadata = json.loads(str(row["metadata_json"] or "{}"))
         expect(metadata["telegram_raven_control_command"] == "arclink", str(metadata))
-        expect("raven_agents" in metadata["telegram_captain_command_names"], str(metadata))
+        expect(metadata["telegram_captain_command_names"] == [], str(metadata))
         expect("agents" in metadata["telegram_command_scope_legacy_conflicts"], str(metadata))
         expect("raven" in metadata["telegram_command_scope_hard_conflicts"], str(metadata))
         expect("update" in metadata["telegram_command_scope_policy_suppressed"], str(metadata))

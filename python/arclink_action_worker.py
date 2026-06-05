@@ -1574,11 +1574,21 @@ def _academy_run_refresh_kind(
         item["status"] = "blocked"
         item["last_error"] = "Applied path validation failed; refresh runner was not invoked."
         return item
+    if runner is None and current_status == "queued":
+        item["last_error"] = ""
+        return item
     if kind == "skill_activation" and int(item.get("skill_count") or 0) > 0:
         state_path = Path(str(payload.get("state") or "")) / "arclink-academy-approved-skills.json"
         if not state_path.is_file():
             item["status"] = "blocked"
             item["last_error"] = "Approved skill state file is missing; activation runner was not invoked."
+            return item
+        if current_status == "staged" and runner is None:
+            item["last_error"] = ""
+            item["runner_result"] = {
+                "status": "staged",
+                "summary": "Approved skills remain staged until an explicit PG-HERMES activation runner is supplied.",
+            }
             return item
     if runner is None:
         item["status"] = "validated_pending_runner"
@@ -1615,9 +1625,11 @@ def run_academy_post_apply_refresh(
     """Consume and validate a deployment's Academy post-apply refresh handoff.
 
     Runners are injectable proof hooks. Without runners this validates the
-    handoff and records ``validated_pending_runner`` refresh items; it does not
-    run qmd, memory synthesis, Hermes skill activation, Docker, SSH, or provider
-    calls inline.
+    handoff and records ``validated_pending_runner`` refresh items for active
+    refreshes. Callers that materialize Academy canon should pass queue runners
+    so qmd and memory work have durable out-of-band handoff markers; the action
+    worker still does not run qmd, memory synthesis, Hermes skill activation,
+    Docker, SSH, or provider calls inline.
     """
     clean_deployment = str(deployment_id or "").strip()
     if not clean_deployment:
@@ -1674,6 +1686,8 @@ def run_academy_post_apply_refresh(
         status = "blocked"
     elif statuses and statuses <= {"succeeded", "not_requested"}:
         status = "succeeded"
+    elif statuses & {"queued", "staged"}:
+        status = "queued"
     else:
         status = "validated"
     consumed_at = utc_now_iso()
@@ -1737,6 +1751,42 @@ def run_academy_post_apply_refresh(
         "refreshes": refreshes,
         "handoff_path": str(refresh_path),
         "live_execution_performed": bool(qmd_runner or memory_runner or skill_runner),
+    }
+
+
+def _academy_durable_refresh_queue_runner(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Record a durable post-apply queue marker for timer/worker refresh lanes."""
+    kind = str(payload.get("kind") or "").strip()
+    marker_by_kind = {
+        "qmd_index": "arclink-academy-qmd-refresh-request.json",
+        "memory_synthesis": "arclink-academy-memory-synthesis-request.json",
+    }
+    marker_name = marker_by_kind.get(kind)
+    if not marker_name:
+        raise ArcLinkActionWorkerError(f"Academy post-apply queue marker does not support refresh kind: {kind or 'unknown'}")
+    state_dir = Path(str(payload.get("state") or ""))
+    if not str(state_dir).strip():
+        raise ArcLinkActionWorkerError("Academy post-apply queue marker requires a state directory")
+    marker = state_dir / marker_name
+    queued_at = utc_now_iso()
+    marker_payload = {
+        "status": "queued",
+        "queued_at": queued_at,
+        "request_id": str(payload.get("request_id") or ""),
+        "deployment_id": str(payload.get("deployment_id") or ""),
+        "kind": kind,
+        "trainee_id": str(payload.get("trainee_id") or ""),
+        "program_id": str(payload.get("program_id") or ""),
+        "manifest_id": str(payload.get("manifest_id") or ""),
+        "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
+        "applied_paths": list(payload.get("applied_paths") or []),
+    }
+    changed = _write_private_text_atomic(marker, json.dumps(marker_payload, indent=2, sort_keys=True) + "\n")
+    return {
+        "status": "queued",
+        "summary": f"Academy {kind} refresh marker queued for the deployment refresh/timer lane.",
+        "changed": changed,
+        "proof": marker.name,
     }
 
 
@@ -1882,6 +1932,8 @@ def _materialize_academy_apply(
     post_apply_refresh_result = run_academy_post_apply_refresh(
         conn,
         deployment_id=deployment_id,
+        qmd_runner=_academy_durable_refresh_queue_runner,
+        memory_runner=_academy_durable_refresh_queue_runner,
         requested_by="system:academy_apply",
     )
     conn.execute(

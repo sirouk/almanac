@@ -697,6 +697,7 @@ def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
     api = load_module("arclink_api_auth.py", "arclink_api_auth_hosted_academy_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_academy_test")
     hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_academy_test")
+    programs = load_module("arclink_academy_programs.py", "arclink_academy_programs_hosted_academy_test")
     conn = memory_db(control)
     config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
     prepared = seed_paid_deployment(
@@ -749,6 +750,25 @@ def test_user_academy_routes_browse_enroll_sticky_mode_and_graduate() -> None:
         headers=auth_headers(session), query={"trainee_id": trainee_id}, config=config,
     )
     expect(status == 200 and payload["mode_open"] is True, f"status got {status}: {payload}")
+
+    # Captain cannot graduate until the Agent skill has proposed at least one real governed source.
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="POST", path="/api/v1/user/academy/mode-end",
+        headers=browser_auth_headers(session, csrf=True),
+        body=json.dumps({"trainee_id": trainee_id, "graduate": True}), config=config,
+    )
+    expect(status == 200 and payload["status"] == "needs_training_sources", f"zero-source graduation should block got {status}: {payload}")
+    expect(payload["trainee"]["status"] == "in_academy" and payload["graduated"] is False, str(payload))
+
+    programs.record_academy_resource_proposal(
+        conn,
+        deployment_id=prepared["deployment_id"],
+        lane_id="web_article",
+        title="Hosted Academy source",
+        origin_url="https://example.test/hosted-academy-source",
+        summary="Compressed derived notes from a governed public source for the hosted Academy route.",
+        proposed_by="agent-hosted-api",
+    )
 
     # Captain ends the mode -> graduate + commit (curates a staged plan).
     status, payload, _ = hosted.route_arclink_hosted_api(

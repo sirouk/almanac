@@ -17812,6 +17812,7 @@ def _recent_vault_change_rows_for_agent(conn: sqlite3.Connection, agent_id: str,
         WHERE target_kind = 'user-agent'
           AND target_id = ?
           AND channel_kind = 'vault-change'
+          AND delivered_at IS NULL
         ORDER BY id DESC
         LIMIT ?
         """,

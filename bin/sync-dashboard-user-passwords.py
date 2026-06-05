@@ -12,7 +12,11 @@ _PYTHON = _REPO / "python"
 if str(_PYTHON) not in sys.path:
     sys.path.insert(0, str(_PYTHON))
 
-from arclink_api_auth import set_arclink_user_password, verify_arclink_password  # noqa: E402
+from arclink_api_auth import (  # noqa: E402
+    _dashboard_password_secret_path,
+    set_arclink_user_password,
+    verify_arclink_password,
+)
 from arclink_control import Config, connect_db  # noqa: E402
 from arclink_provisioning import render_arclink_state_roots  # noqa: E402
 
@@ -27,6 +31,16 @@ def _load_access_password(path: Path) -> str:
     return str(payload.get("password") or "").strip()
 
 
+def _load_secret_password(path: Path | None) -> str:
+    if path is None or not path.is_file():
+        return ""
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return value if value.startswith("arc_") else ""
+
+
 def sync_dashboard_user_passwords(conn: sqlite3.Connection, *, state_root_base: str) -> dict[str, int]:
     rows = conn.execute(
         """
@@ -37,16 +51,31 @@ def sync_dashboard_user_passwords(conn: sqlite3.Connection, *, state_root_base: 
         ORDER BY d.updated_at DESC, d.deployment_id ASC
         """
     ).fetchall()
-    scanned = updated = skipped = missing = 0
+    scanned = updated = skipped = missing = users = 0
+    seen_users: set[str] = set()
     for row in rows:
         scanned += 1
+        user_id = str(row["user_id"] or "").strip()
+        if not user_id or user_id in seen_users:
+            continue
+        seen_users.add(user_id)
+        users += 1
+        canonical_ref = f"secret://arclink/dashboard/users/{user_id}/password"
+        password = _load_secret_password(
+            _dashboard_password_secret_path(
+                deployment_id="",
+                user_id=user_id,
+                secret_ref=canonical_ref,
+            )
+        )
         roots = render_arclink_state_roots(
             deployment_id=str(row["deployment_id"]),
             prefix=str(row["prefix"]),
             state_root_base=state_root_base,
         )
-        access_path = Path(roots["hermes_home"]) / "state" / "arclink-web-access.json"
-        password = _load_access_password(access_path)
+        if not password:
+            access_path = Path(roots["hermes_home"]) / "state" / "arclink-web-access.json"
+            password = _load_access_password(access_path)
         if not password:
             missing += 1
             continue
@@ -54,9 +83,9 @@ def sync_dashboard_user_passwords(conn: sqlite3.Connection, *, state_root_base: 
         if current_hash and verify_arclink_password(password, current_hash):
             skipped += 1
             continue
-        set_arclink_user_password(conn, user_id=str(row["user_id"]), password=password)
+        set_arclink_user_password(conn, user_id=user_id, password=password)
         updated += 1
-    return {"scanned": scanned, "updated": updated, "skipped": skipped, "missing": missing}
+    return {"scanned": scanned, "users": users, "updated": updated, "skipped": skipped, "missing": missing}
 
 
 def main() -> None:

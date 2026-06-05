@@ -4340,6 +4340,9 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
     gateway_block = compose_text.split("  control-operator-hermes-gateway:", 1)[1].split("\n\n", 1)[0]
     dashboard_block = compose_text.split("  control-operator-hermes-dashboard:", 1)[1].split("\n\n", 1)[0]
     setup_block = compose_text.split("  control-operator-hermes-setup:", 1)[1].split("\n\n", 1)[0]
+    vault_watch_block = compose_text.split("  control-operator-vault-watch:", 1)[1].split("\n\n", 1)[0]
+    memory_synth_block = compose_text.split("  control-operator-memory-synth:", 1)[1].split("\n\n", 1)[0]
+    wrapped_block = compose_text.split("  control-operator-arclink-wrapped:", 1)[1].split("\n\n", 1)[0]
     for runtime_block in (gateway_block, dashboard_block):
         expect("*arclink-control-secret-env" not in runtime_block,
                f"interactive operator runtime must not inherit control secret env\n{runtime_block}")
@@ -4353,6 +4356,9 @@ def test_control_install_wires_single_operator_hermes_agent() -> None:
            "one-shot setup must mount the control state DIRECTORY so its router-key write shares the WAL/-shm the router reads (a single-file mount silently loses the write)")
     expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in setup_block,
            "one-shot setup must scope the control DB env to setup only")
+    for maintenance_block in (vault_watch_block, memory_synth_block, wrapped_block):
+        expect("ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3" in maintenance_block,
+               f"operator background maintenance job must read the control DB explicitly despite operator memory STATE_DIR\n{maintenance_block}")
     expect("ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER: ${ARCLINK_LLM_ROUTER_KEY_HASH_PEPPER:-}" in setup_block,
            "one-shot setup must hash the operator router key with the same optional router pepper as the router")
     expect("ARCLINK_SESSION_HASH_PEPPER: ${ARCLINK_SESSION_HASH_PEPPER:-}" in setup_block,

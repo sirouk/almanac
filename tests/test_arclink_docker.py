@@ -2632,6 +2632,58 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
     print("PASS test_operator_upgrade_broker_runs_allowlisted_operator_upgrade")
 
 
+def test_operator_upgrade_broker_signature_replay_cache_is_bounded() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    broker = load_python_module(PYTHON_DIR / "arclink_operator_upgrade_broker.py", "arclink_operator_upgrade_broker_replay_test")
+    import hashlib
+    import hmac
+
+    body = b'{"operation":"run_operator_upgrade","log_path":"/priv/state/operator-actions/upgrade.log"}'
+
+    def signed_headers(nonce: str, *, signature: str = "", timestamp: int = 0) -> dict[str, str]:
+        clean_timestamp = timestamp or int(broker.time.time())
+        if not signature:
+            body_hash = hashlib.sha256(body).hexdigest()
+            signature = hmac.new(
+                b"test-operator-upgrade-token",
+                f"{clean_timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+        return {
+            broker.OPERATOR_UPGRADE_BROKER_TOKEN_HEADER: "test-operator-upgrade-token",
+            broker.OPERATOR_UPGRADE_BROKER_TIMESTAMP_HEADER: str(clean_timestamp),
+            broker.OPERATOR_UPGRADE_BROKER_NONCE_HEADER: nonce,
+            broker.OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER: signature,
+        }
+
+    old_env = os.environ.copy()
+    old_max = broker.MAX_SEEN_SIGNATURE_NONCES
+    try:
+        os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "test-operator-upgrade-token"
+        broker.MAX_SEEN_SIGNATURE_NONCES = 3
+        broker._SEEN_SIGNATURE_NONCES.clear()
+
+        reused_nonce = "nonce-reused-0001"
+        expect(broker._is_authorized(signed_headers(reused_nonce, signature="0" * 64), body) is False, "bad signature accepted")
+        expect(reused_nonce not in broker._SEEN_SIGNATURE_NONCES, "bad signature must not consume a replay-cache nonce")
+        expect(broker._is_authorized(signed_headers(reused_nonce), body) is True, "valid signed request rejected")
+        expect(broker._is_authorized(signed_headers(reused_nonce), body) is False, "valid nonce replay accepted")
+
+        broker._SEEN_SIGNATURE_NONCES.clear()
+        for index in range(4):
+            nonce = f"nonce-bounded-{index:04d}"
+            expect(broker._is_authorized(signed_headers(nonce), body) is True, f"valid nonce {nonce} rejected")
+        expect(len(broker._SEEN_SIGNATURE_NONCES) <= 3, str(broker._SEEN_SIGNATURE_NONCES))
+        expect("nonce-bounded-0000" not in broker._SEEN_SIGNATURE_NONCES, str(broker._SEEN_SIGNATURE_NONCES))
+    finally:
+        broker.MAX_SEEN_SIGNATURE_NONCES = old_max
+        broker._SEEN_SIGNATURE_NONCES.clear()
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_operator_upgrade_broker_signature_replay_cache_is_bounded")
+
+
 def test_operator_upgrade_broker_rejects_raw_or_unsafe_requests() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -6084,6 +6136,7 @@ def test_docker_operator_commands_are_present() -> None:
     expect('-path "$REPO_DIR/arclink-priv/state/operator/nextcloud" -prune' in body, body)
     expect('chown -R 33:33 "$REPO_DIR/arclink-priv/state/operator/nextcloud/html"' in body, body)
     expect('chown -R 70:70 "$REPO_DIR/arclink-priv/state/operator/nextcloud/db"' in body, body)
+    expect('chown -R 999:1000 "$REPO_DIR/arclink-priv/state/operator/nextcloud/redis"' in body, body)
     expect("qmd-mcp" in body and "qmd --version" in body, body)
     expect('pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' in body, body)
     expect("health-watch" in body and "compose exec -T health-watch ./bin/docker-health.sh" in body, body)
@@ -7625,6 +7678,7 @@ def main() -> int:
     test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_mounts()
     test_docker_authority_inventory_matches_compose_boundary()
     test_operator_upgrade_broker_runs_allowlisted_operator_upgrade()
+    test_operator_upgrade_broker_signature_replay_cache_is_bounded()
     test_operator_upgrade_broker_rejects_raw_or_unsafe_requests()
     test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_before_log_or_subprocess()
     test_operator_upgrade_broker_rejects_unsafe_docker_binary_before_subprocess()
@@ -7673,7 +7727,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 58 ArcLink Docker regression tests")
+    print("PASS all 59 ArcLink Docker regression tests")
     return 0
 
 

@@ -43,6 +43,7 @@ from arclink_product import chutes_default_model
 
 DEFAULT_PRICE_ID = "price_arclink_founders"
 GENERIC_REQUEST_ERROR = "Request blocked. Check input and try again."
+MAX_PRODUCT_SURFACE_BODY_BYTES = 64 * 1024
 FAVICON_SVG = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
     '<rect width="64" height="64" rx="12" fill="#080808"/>'
@@ -774,23 +775,34 @@ def make_arclink_product_surface_app(
         method = str(environ.get("REQUEST_METHOD", "GET"))
         path = str(environ.get("PATH_INFO", "/"))
         query = str(environ.get("QUERY_STRING", ""))
-        length = int(str(environ.get("CONTENT_LENGTH") or "0") or 0)
-        body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
-        params = {key: values for key, values in parse_qs(body).items()}
-        response = handle_arclink_product_surface_request(
-            conn,
-            method=method,
-            path=f"{path}?{query}" if query else path,
-            params=params,
-            stripe_client=stripe_client,
-            env=env,
-        )
+        try:
+            length = int(str(environ.get("CONTENT_LENGTH") or "0") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        if length > MAX_PRODUCT_SURFACE_BODY_BYTES:
+            response = ArcLinkSurfaceResponse(
+                status=413,
+                body=json.dumps({"error": "request body too large"}),
+                content_type="application/json; charset=utf-8",
+            )
+        else:
+            body = environ["wsgi.input"].read(length).decode("utf-8") if length else ""
+            params = {key: values for key, values in parse_qs(body).items()}
+            response = handle_arclink_product_surface_request(
+                conn,
+                method=method,
+                path=f"{path}?{query}" if query else path,
+                params=params,
+                stripe_client=stripe_client,
+                env=env,
+            )
         status_text = {
             200: "200 OK",
             202: "202 Accepted",
             303: "303 See Other",
             400: "400 Bad Request",
             401: "401 Unauthorized",
+            413: "413 Payload Too Large",
             404: "404 Not Found",
         }.get(response.status, f"{response.status} OK")
         headers = [("Content-Type", response.content_type), *response.headers]

@@ -103,15 +103,25 @@ nextcloud_reset_admin_password() {
 nextcloud_rotate_postgres_password() {
   local old_password="$1"
   local new_password="$2"
+  local role="${POSTGRES_USER:-nextcloud}"
 
   validate_rotation_secret "Existing Postgres password" "$old_password"
   validate_rotation_secret "New Postgres password" "$new_password"
 
-  nextcloud_runtime_exec_db sh -eu -c '
-role="$1"
-new_password="$2"
-psql -v ON_ERROR_STOP=1 -U "$role" -d postgres -c "ALTER ROLE \"$role\" WITH PASSWORD '\''$new_password'\''"
-' sh "$POSTGRES_USER" "$new_password"
+  printf '%s' "$new_password" | python3 -c '
+import sys
+
+role = sys.argv[1]
+password = sys.stdin.read()
+
+def ident(value):
+    return "\"" + value.replace("\"", "\"\"") + "\""
+
+def literal(value):
+    return "'"'"'" + value.replace("'"'"'", "'"'"''"'"'") + "'"'"'"
+
+print(f"ALTER ROLE {ident(role)} WITH PASSWORD {literal(password)};")
+' "$role" | nextcloud_runtime_exec_db psql -v ON_ERROR_STOP=1 -U "$role" -d postgres >/dev/null
 }
 
 nextcloud_set_dbpassword_config() {

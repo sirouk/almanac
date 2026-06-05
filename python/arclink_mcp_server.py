@@ -67,6 +67,7 @@ from arclink_control import (
 )
 
 LOGGER = logging.getLogger("arclink-mcp")
+DEFAULT_MCP_MAX_REQUEST_BYTES = 1024 * 1024
 
 TOOLS = {
     "status": "Return control-plane status and vault warnings.",
@@ -1627,6 +1628,20 @@ class ArcLinkServer(ThreadingHTTPServer):
         self.sessions: set[str] = set()
 
 
+class MCPBodyError(ValueError):
+    def __init__(self, message: str, *, status: int = 400):
+        super().__init__(message)
+        self.status = status
+
+
+def _mcp_max_request_bytes() -> int:
+    try:
+        value = int(str(os.environ.get("ARCLINK_MCP_MAX_REQUEST_BYTES") or DEFAULT_MCP_MAX_REQUEST_BYTES).strip())
+    except (TypeError, ValueError):
+        value = DEFAULT_MCP_MAX_REQUEST_BYTES
+    return max(1, min(value, 16 * 1024 * 1024))
+
+
 class Handler(BaseHTTPRequestHandler):
     server: ArcLinkServer
 
@@ -1653,8 +1668,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _json_body(self) -> dict:
-        content_length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            content_length = int(self.headers.get("Content-Length", "0") or "0")
+        except (TypeError, ValueError):
+            raise MCPBodyError("invalid Content-Length", status=400) from None
+        if content_length < 0:
+            raise MCPBodyError("invalid Content-Length", status=400)
+        max_bytes = _mcp_max_request_bytes()
+        if content_length > max_bytes:
+            raise MCPBodyError("MCP request body too large", status=413)
         raw = self.rfile.read(content_length)
+        if len(raw) > max_bytes:
+            raise MCPBodyError("MCP request body too large", status=413)
         return json.loads(raw.decode("utf-8") or "{}")
 
     def _rpc_success(self, result: dict, request_id: int | str | None, session_id: str | None) -> None:
@@ -1712,6 +1737,9 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             body = self._json_body()
+        except MCPBodyError as exc:
+            self._rpc_error(str(exc), None, status=exc.status)
+            return
         except json.JSONDecodeError:
             self._rpc_error("invalid JSON body", None, status=400)
             return

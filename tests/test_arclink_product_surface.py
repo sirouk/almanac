@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import io
 import importlib.util
 import json
 import sqlite3
@@ -264,13 +265,42 @@ def test_product_surface_generic_errors_do_not_expose_internal_exception_text() 
     print("PASS test_product_surface_generic_errors_do_not_expose_internal_exception_text")
 
 
+def test_product_surface_wsgi_rejects_oversized_bodies() -> None:
+    control = load_module("arclink_control.py", "arclink_control_product_surface_body_cap_test")
+    surface = load_module("arclink_product_surface.py", "arclink_product_surface_body_cap_test")
+    conn = memory_db(control)
+    app = surface.make_arclink_product_surface_app(conn)
+    captured: dict[str, object] = {}
+    body = b"x" * (surface.MAX_PRODUCT_SURFACE_BODY_BYTES + 1)
+
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = headers
+
+    response = app(
+        {
+            "REQUEST_METHOD": "POST",
+            "PATH_INFO": "/api/admin/actions",
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(body)),
+            "wsgi.input": io.BytesIO(body),
+        },
+        start_response,
+    )
+    joined = b"".join(response).decode("utf-8")
+    expect(str(captured.get("status") or "").startswith("413"), str(captured))
+    expect("too large" in joined, joined)
+    print("PASS test_product_surface_wsgi_rejects_oversized_bodies")
+
+
 def main() -> int:
     test_product_surface_renders_usable_first_screen_and_checkout_flow()
     test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_only()
     test_product_surface_css_contains_mobile_overflow_guards()
     test_product_surface_favicon_does_not_fall_through_to_404()
     test_product_surface_generic_errors_do_not_expose_internal_exception_text()
-    print("PASS all 5 ArcLink product surface tests")
+    test_product_surface_wsgi_rejects_oversized_bodies()
+    print("PASS all 6 ArcLink product surface tests")
     return 0
 
 

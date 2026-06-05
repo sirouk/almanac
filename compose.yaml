@@ -427,6 +427,7 @@ services:
       - ALL
     environment:
       <<: *arclink-operator-env
+      ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
     command: ["./bin/vault-watch.sh"]
     volumes:
       - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
@@ -440,6 +441,7 @@ services:
       - ALL
     environment:
       <<: *arclink-operator-env
+      ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
     command: ["./bin/docker-job-loop.sh", "operator-memory-synth", "1800", "./bin/memory-synth.sh"]
     volumes:
       - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
@@ -505,6 +507,7 @@ services:
       - ALL
     environment:
       <<: *arclink-operator-env
+      ARCLINK_DB_PATH: /home/arclink/arclink/arclink-priv/state/arclink-control.sqlite3
     command: ["./bin/docker-job-loop.sh", "operator-arclink-wrapped", "300", "./bin/arclink-wrapped.sh", "--json"]
     volumes:
       - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator

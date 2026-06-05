@@ -140,11 +140,43 @@ cat "$LOG_PATH"
     print("PASS test_rotate_nextcloud_runtime_secrets_reads_new_passwords_from_files")
 
 
+def test_rotate_nextcloud_postgres_password_streams_sql_without_secret_argv() -> None:
+    text = ROTATE_SH.read_text()
+    snippet = extract(text, "validate_rotation_secret() {", "\nrotate_nextcloud_runtime_secrets\n")
+    rotate_fn = snippet[
+        snippet.index("nextcloud_rotate_postgres_password() {") : snippet.index("nextcloud_set_dbpassword_config() {")
+    ]
+    expect(
+        'sh "$POSTGRES_USER" "$new_password"' not in rotate_fn,
+        "Postgres rotation must not pass the new password as a shell argument",
+    )
+    expect(
+        '-c "ALTER ROLE' not in rotate_fn,
+        "Postgres rotation must not expose the new password through psql -c argv",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        sql_path = tmp_path / "rotation.sql"
+        script = f"""
+{snippet}
+SQL_PATH={sql_path}
+POSTGRES_USER=nextcloud
+nextcloud_runtime_exec_db() {{ cat > "$SQL_PATH"; return 0; }}
+nextcloud_rotate_postgres_password oldpg newpg
+cat "$SQL_PATH"
+"""
+        result = bash(script)
+        expect(result.returncode == 0, f"nextcloud postgres SQL streaming case failed: {result.stderr}")
+        expect(result.stdout.strip() == 'ALTER ROLE "nextcloud" WITH PASSWORD \'newpg\';', result.stdout)
+    print("PASS test_rotate_nextcloud_postgres_password_streams_sql_without_secret_argv")
+
+
 def main() -> int:
     test_rotate_nextcloud_runtime_secrets_orders_mutations_safely()
     test_rotate_nextcloud_runtime_secrets_rolls_back_on_dbpassword_write_failure()
     test_rotate_nextcloud_runtime_secrets_reads_new_passwords_from_files()
-    print("PASS all 3 nextcloud secret rotation regression tests")
+    test_rotate_nextcloud_postgres_password_streams_sql_without_secret_argv()
+    print("PASS all 4 nextcloud secret rotation regression tests")
     return 0
 
 

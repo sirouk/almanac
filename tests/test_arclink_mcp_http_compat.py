@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -91,12 +92,41 @@ def test_mcp_session_recovery_still_requires_initialize_for_unknown_methods() ->
     print("PASS test_mcp_session_recovery_still_requires_initialize_for_unknown_methods")
 
 
+def test_mcp_json_body_rejects_invalid_and_oversized_lengths() -> None:
+    mod = load_module(MCP_SERVER, "arclink_mcp_server_body_cap_test")
+    old_env = os.environ.copy()
+    try:
+        bad_length = DummyHandler()
+        bad_length.headers = {"Content-Length": "not-a-number"}
+        bad_length.rfile = io.BytesIO(b"{}")
+        try:
+            mod.Handler._json_body(bad_length)
+            raise AssertionError("invalid Content-Length should fail")
+        except mod.MCPBodyError as exc:
+            expect(exc.status == 400 and "Content-Length" in str(exc), str(exc))
+
+        os.environ["ARCLINK_MCP_MAX_REQUEST_BYTES"] = "4"
+        oversized = DummyHandler()
+        oversized.headers = {"Content-Length": "5"}
+        oversized.rfile = io.BytesIO(b"{}")
+        try:
+            mod.Handler._json_body(oversized)
+            raise AssertionError("oversized MCP body should fail")
+        except mod.MCPBodyError as exc:
+            expect(exc.status == 413 and "too large" in str(exc), str(exc))
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_mcp_json_body_rejects_invalid_and_oversized_lengths")
+
+
 def main() -> int:
     test_rpc_error_uses_http_200_for_jsonrpc_failures()
     test_mcp_session_recovery_accepts_stale_tool_sessions()
     test_mcp_session_recovery_mints_missing_safe_session()
     test_mcp_session_recovery_still_requires_initialize_for_unknown_methods()
-    print("PASS all 4 ArcLink MCP HTTP compatibility tests")
+    test_mcp_json_body_rejects_invalid_and_oversized_lengths()
+    print("PASS all 5 ArcLink MCP HTTP compatibility tests")
     return 0
 
 

@@ -34,6 +34,7 @@ from arclink_rejection_incidents import private_state_rejection_path, record_rej
 
 MAX_REQUEST_BYTES = 16384
 REQUEST_SIGNATURE_TTL_SECONDS = 300
+MAX_SEEN_SIGNATURE_NONCES = 4096
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8917
 OPERATOR_UPGRADE_BROKER_TOKEN_HEADER = "X-ArcLink-Operator-Upgrade-Broker-Token"
@@ -503,16 +504,25 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _nonce_seen_or_record(nonce: str, now: float) -> bool:
+def _nonce_seen(nonce: str, now: float) -> bool:
     cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
     with _SEEN_SIGNATURE_NONCES_LOCK:
         for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
             if observed < cutoff:
                 _SEEN_SIGNATURE_NONCES.pop(key, None)
-        if nonce in _SEEN_SIGNATURE_NONCES:
-            return True
+        return nonce in _SEEN_SIGNATURE_NONCES
+
+
+def _record_nonce(nonce: str, now: float) -> None:
+    cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
+    with _SEEN_SIGNATURE_NONCES_LOCK:
+        for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
+            if observed < cutoff:
+                _SEEN_SIGNATURE_NONCES.pop(key, None)
+        while len(_SEEN_SIGNATURE_NONCES) >= MAX_SEEN_SIGNATURE_NONCES:
+            oldest = min(_SEEN_SIGNATURE_NONCES, key=_SEEN_SIGNATURE_NONCES.get)
+            _SEEN_SIGNATURE_NONCES.pop(oldest, None)
         _SEEN_SIGNATURE_NONCES[nonce] = now
-        return False
 
 
 def _is_authorized(headers: Any, raw_body: bytes) -> bool:
@@ -534,7 +544,7 @@ def _is_authorized(headers: Any, raw_body: bytes) -> bool:
         return False
     if not re.fullmatch(r"[A-Za-z0-9_.~+/=-]{16,160}", nonce):
         return False
-    if _nonce_seen_or_record(nonce, now):
+    if _nonce_seen(nonce, now):
         return False
     body_hash = hashlib.sha256(raw_body).hexdigest()
     expected_signature = hmac.new(
@@ -542,7 +552,10 @@ def _is_authorized(headers: Any, raw_body: bytes) -> bool:
         f"{timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    return hmac.compare_digest(expected_signature, supplied_signature)
+    if not hmac.compare_digest(expected_signature, supplied_signature):
+        return False
+    _record_nonce(nonce, now)
+    return True
 
 
 class OperatorUpgradeBrokerHandler(BaseHTTPRequestHandler):

@@ -357,11 +357,14 @@ ensure_docker_app_bind_permissions() {
   fi
 
   # The operator Nextcloud stack uses official images, not the ArcLink app UID:
-  # nextcloud:apache runs as www-data (33) and postgres:alpine as postgres (70).
+  # nextcloud:apache runs as www-data (33), postgres:alpine as postgres (70),
+  # and redis:alpine persists as redis (999:1000).
   [[ -d "$REPO_DIR/arclink-priv/state/operator/nextcloud/html" ]] \
     && chown -R 33:33 "$REPO_DIR/arclink-priv/state/operator/nextcloud/html" 2>/dev/null || true
   [[ -d "$REPO_DIR/arclink-priv/state/operator/nextcloud/db" ]] \
     && chown -R 70:70 "$REPO_DIR/arclink-priv/state/operator/nextcloud/db" 2>/dev/null || true
+  [[ -d "$REPO_DIR/arclink-priv/state/operator/nextcloud/redis" ]] \
+    && chown -R 999:1000 "$REPO_DIR/arclink-priv/state/operator/nextcloud/redis" 2>/dev/null || true
 }
 
 docker_repair_deployment_compose_secret_dirs() {

@@ -36,7 +36,7 @@ Captain's private strategy, notes, or protected resources into a public lane.
 5. Search and fetch through governed tools first:
 
 ```json
-{"tool":"knowledge.search-and-fetch","arguments":{"query":"<topic>", "search_limit":3, "fetch_limit":2}}
+{"tool":"knowledge.search-and-fetch","arguments":{"query":"<topic>", "search_limit":3, "vault_fetch_limit":1, "notion_fetch_limit":2}}
 {"tool":"vault.search-and-fetch","arguments":{"query":"<topic>", "search_limit":3, "fetch_limit":2}}
 {"tool":"notion.search-and-fetch","arguments":{"query":"<topic>", "search_limit":3, "fetch_limit":2}}
 ```

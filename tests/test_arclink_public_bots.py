@@ -2721,5 +2721,22 @@ def test_public_bot_new_onboarding_workflow_wins_over_retired_history() -> None:
     print("PASS test_public_bot_new_onboarding_workflow_wins_over_retired_history")
 
 
+def test_telegram_markdown_to_entities_strips_backticks_into_code_entities() -> None:
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_md_entities_test")
+    text, entities = bots.telegram_markdown_to_entities("Use `/raven agents`, then `/raven status` to act.")
+    # No literal backticks reach the Captain; both code spans become code entities.
+    expect("`" not in text, text)
+    expect(text == "Use /raven agents, then /raven status to act.", text)
+    expect(len(entities) == 2, str(entities))
+    expect(all(e["type"] == "code" for e in entities), str(entities))
+    first = entities[0]
+    rendered = text.encode("utf-16-le")[first["offset"] * 2 : (first["offset"] + first["length"]) * 2].decode("utf-16-le")
+    expect(rendered == "/raven agents", rendered)
+    # Plain text with no backticks is returned unchanged with no entities.
+    plain, none_entities = bots.telegram_markdown_to_entities("no code here")
+    expect(plain == "no code here" and none_entities == (), str((plain, none_entities)))
+    print("PASS test_telegram_markdown_to_entities_strips_backticks_into_code_entities")
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

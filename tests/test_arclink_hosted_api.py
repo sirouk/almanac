@@ -4191,7 +4191,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
             self.message_reactions = []
             self.chat_actions = []
 
-        def send_message(self, chat_id: str, text: str, reply_markup=None):
+        def send_message(self, chat_id: str, text: str, reply_markup=None, entities=None):
             self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
             return {"message_id": len(self.sent_messages)}
 
@@ -4229,7 +4229,7 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     expect("Comms are open" in transport.sent_messages[0]["text"], transport.sent_messages[0]["text"])
 
     class FailingTransport:
-        def send_message(self, chat_id: str, text: str, reply_markup=None):
+        def send_message(self, chat_id: str, text: str, reply_markup=None, entities=None):
             raise RuntimeError("telegram api unavailable")
 
     status, payload, _ = hosted._handle_telegram_webhook(
@@ -4452,7 +4452,7 @@ def test_telegram_webhook_acknowledges_button_callbacks() -> None:
             self.sent_messages = []
             self.answered_callbacks = []
 
-        def send_message(self, chat_id: str, text: str, reply_markup=None):
+        def send_message(self, chat_id: str, text: str, reply_markup=None, entities=None):
             self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
             return {"message_id": len(self.sent_messages)}
 
@@ -4586,7 +4586,7 @@ def test_telegram_credential_ack_edits_original_secret_message() -> None:
             self.edited_messages = []
             self.answered_callbacks = []
 
-        def send_message(self, chat_id: str, text: str, reply_markup=None):
+        def send_message(self, chat_id: str, text: str, reply_markup=None, entities=None):
             self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
             return {"message_id": len(self.sent_messages)}
 

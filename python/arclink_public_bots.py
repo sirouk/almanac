@@ -1136,6 +1136,48 @@ def _telegram_utf16_offset(text: str, index: int) -> int:
     return len(text[:index].encode("utf-16-le")) // 2
 
 
+def telegram_markdown_to_entities(text: str) -> tuple[str, tuple[dict[str, Any], ...]]:
+    """Convert single-backtick code spans in a Raven reply into Telegram ``code``
+    entities, returning the backtick-stripped text plus the entities.
+
+    Telegram does not render literal Markdown without ``parse_mode``/entities, so a
+    reply like ``use `/raven status` `` would show the raw backticks to the Captain.
+    Discord renders the same Markdown natively, so converting only on the Telegram
+    boundary keeps both surfaces elegant from one source string.
+    """
+    if "`" not in text:
+        return text, ()
+    out_chars: list[str] = []
+    spans: list[tuple[int, int]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "`":
+            close = text.find("`", i + 1)
+            if close == -1:
+                out_chars.append(ch)
+                i += 1
+                continue
+            inner = text[i + 1 : close]
+            start = len(out_chars)
+            out_chars.extend(inner)
+            spans.append((start, len(inner)))
+            i = close + 1
+        else:
+            out_chars.append(ch)
+            i += 1
+    stripped = "".join(out_chars)
+    entities: list[dict[str, Any]] = []
+    for start, length in spans:
+        if length <= 0:
+            continue
+        off = _telegram_utf16_offset(stripped, start)
+        end = _telegram_utf16_offset(stripped, start + length)
+        entities.append({"type": "code", "offset": off, "length": end - off})
+    return stripped, tuple(entities)
+
+
 def _telegram_code_entities(text: str, values: tuple[str, ...]) -> tuple[dict[str, Any], ...]:
     entities: list[dict[str, Any]] = []
     search_from = 0
@@ -6177,6 +6219,24 @@ def _handle_active_workflow(
                 except Exception:
                     pass
             updated = _clear_academy_training_workflow(conn, session)
+        elif workflow == "pair_channel":
+            # Supersede the still-claimable pairing code and clear the pairing keys so a
+            # cancelled link cannot be completed by a fresh channel during the TTL.
+            try:
+                conn.execute(
+                    "UPDATE arclink_channel_pairing_codes SET status = 'superseded' "
+                    "WHERE source_session_id = ? AND status = 'open'",
+                    (str(session.get("session_id") or ""),),
+                )
+                conn.commit()
+            except Exception:
+                pass
+            updated = _update_session_metadata(
+                conn,
+                session_id=str(session.get("session_id") or ""),
+                updates={},
+                clear=("public_bot_workflow", "pair_channel_code", "pair_channel_expires_at"),
+            )
         else:
             updated = _clear_crew_training_workflow(conn, session)
         return _turn(

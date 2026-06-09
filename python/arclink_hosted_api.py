@@ -2961,7 +2961,7 @@ def _handle_telegram_webhook(
         reply_text = str(result.get("text") or "").strip()
         if reply_text and not edited:
             try:
-                telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+                telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"), entities=result.get("entities") or None)
                 sent = True
             except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
                 logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
@@ -2978,7 +2978,7 @@ def _handle_telegram_webhook(
             reply_text = str(result.get("text") or "").strip()
             if reply_text and not edited:
                 try:
-                    live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"))
+                    live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"), entities=result.get("entities") or None)
                     sent = True
                 except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))

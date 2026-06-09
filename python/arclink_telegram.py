@@ -28,6 +28,7 @@ from arclink_public_bots import (
     arclink_public_bot_telegram_commands,
     arclink_public_bot_turn_telegram_reply_markup,
     handle_arclink_public_bot_turn,
+    telegram_markdown_to_entities,
 )
 from arclink_operator_raven import (
     dispatch_operator_raven_command,
@@ -545,6 +546,11 @@ def arclink_public_bot_telegram_active_command_plan(
         {"command": raven_command, "description": ARCLINK_TELEGRAM_RAVEN_ACTIVE_DESCRIPTION[:256]}
     ]
     used = {raven_command}
+    # In an active Agent chat the Agent owns the bare slash namespace, so the picker
+    # intentionally exposes ONE /raven control gateway plus the Agent's own commands
+    # rather than ~30 raven_* entries. Every Captain raven_* sub-command stays reachable
+    # by typing /raven <x> (rewritten by _raven_prefixed_command_rewrite) and is shown in
+    # full in non-active chats; this keeps the menu clean without losing capability.
     del captain_commands
     hidden_captain_command_names: list[str] = []
     captain_conflicts: list[str] = []
@@ -1360,10 +1366,17 @@ def handle_telegram_update(
             )
         except Exception as exc:  # noqa: BLE001 - never fail the webhook on menu refresh
             logger.warning("telegram_command_scope_refresh_failed action=%s error=%s", turn.action, str(exc)[:160])
+    reply_text = turn.telegram_reply or turn.reply
+    reply_entities = [dict(entity) for entity in (turn.telegram_entities or ())]
+    if not reply_entities:
+        # No explicit entities: convert backtick code spans so Telegram renders the
+        # Raven reply elegantly instead of showing literal backtick characters.
+        reply_text, derived = telegram_markdown_to_entities(reply_text)
+        reply_entities = [dict(entity) for entity in derived]
     return {
         "chat_id": parsed["chat_id"],
-        "text": turn.telegram_reply or turn.reply,
-        "entities": [dict(entity) for entity in (turn.telegram_entities or ())],
+        "text": reply_text,
+        "entities": reply_entities,
         "reply_markup": arclink_public_bot_turn_telegram_reply_markup(turn),
         "session_id": turn.session_id,
         "action": turn.action,

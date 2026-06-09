@@ -1175,6 +1175,10 @@ def _render_services(
                 vault_volume,
                 qmd_volume,
                 memory_volume,
+                # Shared Fleet/Linked roots so their content is qmd-indexed and
+                # retrievable like local vault knowledge for every authorized Agent.
+                linked_resources_volume,
+                fleet_shared_volume,
             ],
             deploy=_limits("qmd-mcp"),
         ),
@@ -1182,7 +1186,10 @@ def _render_services(
             image=app_image,
             command=["./bin/vault-watch.sh"],
             environment=env,
-            volumes=[vault_volume, memory_volume],
+            # Watch the shared Fleet/Linked roots too so a peer's Fleet pull or a new
+            # Linked grant triggers a fast qmd re-index + memory synthesis (event-driven,
+            # not only the periodic timer).
+            volumes=[vault_volume, memory_volume, linked_resources_volume, fleet_shared_volume],
             depends_on=["qmd-mcp"],
             deploy=_limits("vault-watch"),
         ),

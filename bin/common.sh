@@ -1046,6 +1046,16 @@ configure_qmd_collections() {
   ensure_qmd_collection "$QMD_COLLECTION_NAME" "$VAULT_DIR" "$VAULT_QMD_COLLECTION_MASK"
   ensure_qmd_collection "$ARCLINK_NOTION_INDEX_COLLECTION_NAME" "$ARCLINK_NOTION_INDEX_MARKDOWN_DIR" "**/*.md"
 
+  # Shared Fleet/Linked roots become searchable collections so shared docs feel like
+  # local knowledge to every authorized Agent. Gated on the mount existing so a Pod
+  # without shares (or a non-fleet install) skips them cleanly.
+  if [[ -n "${ARCLINK_FLEET_SHARED_ROOT:-}" && -d "${ARCLINK_FLEET_SHARED_ROOT:-}" ]]; then
+    ensure_qmd_collection "${ARCLINK_FLEET_SHARED_COLLECTION_NAME:-fleet-shared}" "$ARCLINK_FLEET_SHARED_ROOT" "$VAULT_QMD_COLLECTION_MASK"
+  fi
+  if [[ -n "${ARCLINK_LINKED_RESOURCES_ROOT:-}" && -d "${ARCLINK_LINKED_RESOURCES_ROOT:-}" ]]; then
+    ensure_qmd_collection "${ARCLINK_LINKED_COLLECTION_NAME:-linked-shared}" "$ARCLINK_LINKED_RESOURCES_ROOT" "$VAULT_QMD_COLLECTION_MASK"
+  fi
+
   if [[ "$PDF_INGEST_ENABLED" == "1" ]]; then
     ensure_qmd_collection "$PDF_INGEST_COLLECTION_NAME" "$PDF_INGEST_MARKDOWN_DIR" "**/*.md"
   elif qmd --index "$QMD_INDEX_NAME" collection show "$PDF_INGEST_COLLECTION_NAME" >/dev/null 2>&1; then

@@ -653,7 +653,15 @@ def _string_list_arg(arguments: dict, name: str, *, default: list[str], allowed:
 
 
 def _qmd_default_collections() -> list[str]:
-    return ["vault", "vault-pdf-ingest"]
+    collections = ["vault", "vault-pdf-ingest"]
+    # Include the shared Fleet/Linked collections when those roots are configured so
+    # vault/knowledge search reaches shared docs like local knowledge. Env-gated so a
+    # Pod without shares never targets a collection qmd has not been told to build.
+    if str(os.environ.get("ARCLINK_FLEET_SHARED_ROOT") or "").strip():
+        collections.append(str(os.environ.get("ARCLINK_FLEET_SHARED_COLLECTION_NAME") or "fleet-shared"))
+    if str(os.environ.get("ARCLINK_LINKED_RESOURCES_ROOT") or "").strip():
+        collections.append(str(os.environ.get("ARCLINK_LINKED_COLLECTION_NAME") or "linked-shared"))
+    return collections
 
 
 def _qmd_vault_collection_set() -> set[str]:

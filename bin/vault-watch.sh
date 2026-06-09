@@ -325,6 +325,18 @@ start_event_stream() {
     exec {vault_watch_fd}<&- || true
   fi
 
+  local -a watch_targets=("$VAULT_DIR")
+  # Also watch the shared Fleet/Linked roots so a peer's Fleet pull or a new Linked
+  # grant triggers a fast qmd re-index + memory synthesis on this Pod (event-driven,
+  # not only the periodic timer). The existing path classifiers route these like local
+  # text/git content, so no special-casing is needed downstream.
+  if [[ -n "${ARCLINK_FLEET_SHARED_ROOT:-}" && -d "${ARCLINK_FLEET_SHARED_ROOT:-}" && "${ARCLINK_FLEET_SHARED_ROOT}" != "$VAULT_DIR" ]]; then
+    watch_targets+=("$ARCLINK_FLEET_SHARED_ROOT")
+  fi
+  if [[ -n "${ARCLINK_LINKED_RESOURCES_ROOT:-}" && -d "${ARCLINK_LINKED_RESOURCES_ROOT:-}" && "${ARCLINK_LINKED_RESOURCES_ROOT}" != "$VAULT_DIR" ]]; then
+    watch_targets+=("$ARCLINK_LINKED_RESOURCES_ROOT")
+  fi
+
   exec {vault_watch_fd}< <(
     inotifywait \
       --monitor \
@@ -332,7 +344,7 @@ start_event_stream() {
       --recursive \
       --format '%w%f|%e' \
       --event close_write,create,delete,moved_to,moved_from,attrib \
-      "$VAULT_DIR" 2>/dev/null
+      "${watch_targets[@]}" 2>/dev/null
   )
 }
 

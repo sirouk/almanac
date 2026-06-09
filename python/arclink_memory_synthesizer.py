@@ -1723,7 +1723,16 @@ def run_once(
                 ):
                     skipped += 1
                     continue
-                if row is not None and str(row["status"] or "") == "failed" and not _should_retry_failed(row, settings):
+                if (
+                    row is not None
+                    and str(row["status"] or "") == "failed"
+                    and str(row["source_signature"] or "") == candidate.source_signature
+                    and not _should_retry_failed(row, settings)
+                ):
+                    # Only honor the failure backoff when the SOURCE is unchanged. A
+                    # changed source (new content hash -> new signature) must be
+                    # re-synthesized immediately so an edit is not suppressed for up to
+                    # the failure-retry window (critical for fleet/linked shared docs).
                     skipped += 1
                     continue
                 to_process.append(candidate)

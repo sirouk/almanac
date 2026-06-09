@@ -2211,7 +2211,13 @@ def test_deploy_sh_retires_public_docker_control_center() -> None:
     expect("docker image save \"$image\" | timeout \"$load_timeout\" ssh" in text, "expected fleet image sync to use a bounded private SSH lane")
     expect("timeout \"$inspect_timeout\" ssh" in text and "ServerAliveInterval=5" in text and "arclink-ssh-ok" in text, "expected fleet image inspect SSH to be time-bounded and prove readiness")
     expect("docker image inspect --format '{{.Id}}' $q_image 2>/dev/null || true\" </dev/null" in text, "expected fleet image inspect SSH not to consume the worker row stream")
-    expect("metadata.get(\"private_dns_name\") or metadata.get(\"ssh_host\")" in text, "expected fleet image sync to prefer WireGuard/private mesh hosts")
+    expect(
+        "metadata.get(\"private_dns_name\")" in text
+        and "metadata.get(\"wireguard_dns_name\")" in text
+        and "metadata.get(\"private_mesh_dns_name\")" in text
+        and "metadata.get(\"ssh_host\")" in text,
+        "expected fleet image sync to prefer WireGuard/private mesh hosts",
+    )
     expect("image_sync_failed" in text and "metadata_json" in text and "image_sync_state" in text, "expected image sync failures to be tracked separately from liveness")
     expect("next successful image sync" in text, "expected image sync failure copy to require successful image sync before placement resumes")
     expect("One or more fleet image syncs failed; affected workers were marked image_sync_failed" in text and "return 1" not in extract(text, "sync_control_docker_image_to_fleet_workers() {", "derive_control_worker_join_url() {"), "fleet image sync should degrade bad workers without aborting control upgrade")

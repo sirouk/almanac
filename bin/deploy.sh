@@ -2310,6 +2310,7 @@ emit_runtime_config() {
     write_kv ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES "${ARCLINK_LLM_ROUTER_FALLBACK_STATUS_CODES:-429,500,502,503,504}"
     write_kv ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS "${ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS:-}"
     write_kv ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE "${ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE:-1}"
+    write_kv ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS "${ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS:-2500}"
     write_kv ARCLINK_NOTION_WEBHOOK_HOST "$ARCLINK_NOTION_WEBHOOK_HOST"
     write_kv ARCLINK_NOTION_WEBHOOK_PORT "$ARCLINK_NOTION_WEBHOOK_PORT"
     write_kv ARCLINK_NOTION_WEBHOOK_PUBLIC_URL "${ARCLINK_NOTION_WEBHOOK_PUBLIC_URL:-}"
@@ -9633,7 +9634,13 @@ for row in rows:
         metadata = json.loads(row["metadata_json"] or "{}")
     except json.JSONDecodeError:
         metadata = {}
-    ssh_host = str(metadata.get("private_dns_name") or metadata.get("ssh_host") or "").strip()
+    ssh_host = str(
+        metadata.get("private_dns_name")
+        or metadata.get("wireguard_dns_name")
+        or metadata.get("private_mesh_dns_name")
+        or metadata.get("ssh_host")
+        or ""
+    ).strip()
     ssh_user = str(metadata.get("ssh_user") or "arclink").strip() or "arclink"
     health_state = str(row["last_health_state"] or "").strip().lower()
     if not ssh_host or health_state not in healthy:
@@ -11329,6 +11336,10 @@ collect_control_install_answers() {
   fi
   ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS="$(normalize_optional_answer "$(ask "LLM router emergency model replacements old=new,comma-separated (type none to clear)" "${ARCLINK_LLM_ROUTER_MODEL_REPLACEMENTS:-}")")"
   ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE="$(ask_yes_no "Allow LLM router catalog auto-promotion to newer active same-family models" "${ARCLINK_LLM_ROUTER_MODEL_AUTO_PROMOTE:-1}")"
+  ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS="$(normalize_optional_answer "$(ask "Default per-ArcPod monthly model budget in cents (0 fails closed until a per-Pod budget is set; the Operator's own Pod stays unlimited)" "${ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS:-2500}")")"
+  if [[ -z "$ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS" || ! "$ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS" =~ ^[0-9]+$ ]]; then
+    ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS="2500"
+  fi
   TELEGRAM_BOT_TOKEN="$(ask_secret_with_default "Public Telegram bot token (ENTER keeps current, type none to clear)" "${TELEGRAM_BOT_TOKEN:-}")"
   TELEGRAM_BOT_USERNAME="$(normalize_optional_answer "$(ask "Public Telegram bot username (type none to clear)" "${TELEGRAM_BOT_USERNAME:-}")")"
   TELEGRAM_WEBHOOK_SECRET="$(ask_secret_with_default "Public Telegram webhook secret token (ENTER keeps current, type none to clear)" "${TELEGRAM_WEBHOOK_SECRET:-}")"

@@ -524,6 +524,29 @@ def test_chutes_boundary_warns_and_blocks_at_budget_limit() -> None:
     print("PASS test_chutes_boundary_warns_and_blocks_at_budget_limit")
 
 
+def test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_blocked() -> None:
+    mod = load_module("arclink_chutes.py", "arclink_chutes_boundary_unlimited_test")
+    metadata = {
+        "chutes": {
+            "secret_ref": "secret://arclink/chutes/operator",
+            "key_id": "key_operator",
+            "monthly_budget_cents": 0,
+            # Spend far above any Captain cap; the Operator Pod must still serve.
+            "used_cents": 5_000_000,
+            "budget_policy": "observe_only_unlimited",
+        }
+    }
+    boundary = mod.evaluate_chutes_deployment_boundary("operator", "operator", metadata)
+    # Effectively unlimited: never fails closed, never "unconfigured"/"exhausted".
+    expect(boundary.budget_status == "unlimited", str(boundary))
+    expect(boundary.allow_inference is True, str(boundary))
+    expect(boundary.credential_state == "active", str(boundary))
+    # Still metered/observable: usage is preserved, remaining reported as effectively limitless.
+    expect(boundary.used_cents == 5_000_000, str(boundary))
+    expect(boundary.remaining_cents >= 10**11, str(boundary))
+    print("PASS test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_blocked")
+
+
 def test_chutes_boundary_suspends_provider_for_noncurrent_billing() -> None:
     mod = load_module("arclink_chutes.py", "arclink_chutes_boundary_billing_test")
     metadata = {

@@ -13,6 +13,9 @@ from urllib import request as urlrequest
 from arclink_product import chutes_base_url, chutes_default_model
 
 
+# Observed-unlimited Pods (the Operator's own Pod) report this as their remaining
+# budget so the router treats them as effectively limitless while still metering usage.
+OBSERVE_UNLIMITED_REMAINING_CENTS = 10**12
 REQUIRED_CHUTES_CAPABILITIES = ("tools", "reasoning", "structured_outputs")
 CURRENT_BILLING_STATES = frozenset({"paid", "comp"})
 NONCURRENT_BILLING_STATES = frozenset({"past_due", "unpaid", "cancelled", "none"})
@@ -701,6 +704,15 @@ def evaluate_chutes_deployment_boundary(
             meta.get("provider_used_cents"),
         )
     )
+    # The Operator's own Pod is observed like a Captain Pod (usage is still metered and
+    # recorded) but is effectively unlimited: it never fails closed on budget so Raven
+    # can always remedy the stack. Stamped as chutes.budget_policy=observe_only_unlimited
+    # on the operator deployment.
+    budget_policy = _first_text(
+        chutes_meta.get("budget_policy"),
+        meta.get("chutes_budget_policy"),
+    ).strip().lower()
+    unlimited_budget = budget_policy in {"observe_only_unlimited", "unlimited"}
     warning_threshold_percent = _clean_percent(
         _first_text(
             chutes_meta.get("warning_threshold_percent"),
@@ -752,7 +764,13 @@ def evaluate_chutes_deployment_boundary(
     remaining_cents = max(0, budget_limit_cents - used_cents) if budget_limit_cents else 0
     usage_percent = round((used_cents / monthly_budget_cents) * 100.0, 2) if monthly_budget_cents else 0.0
 
-    if monthly_budget_cents <= 0:
+    if unlimited_budget:
+        # Observed-unlimited: never unconfigured/exhausted/warning. Report a large
+        # remaining so the router reservation check and fuel notices treat it as
+        # effectively limitless while used_cents is still recorded for observability.
+        budget_status = "unlimited"
+        remaining_cents = OBSERVE_UNLIMITED_REMAINING_CENTS
+    elif monthly_budget_cents <= 0:
         budget_status = "unconfigured"
     elif used_cents >= budget_limit_cents:
         budget_status = "exhausted"

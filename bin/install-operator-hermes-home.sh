@@ -76,13 +76,20 @@ with connect_db(cfg) as conn:
         or os.environ.get("ARCLINK_CHUTES_DEFAULT_MODEL")
         or ""
     ).strip()
+    # Carry the full install-collected model allowlist (CSV) so the Operator can
+    # deliberately select any allowed model, not only the single default, and
+    # provider-side fallback CSV strings remain valid. Falls back to [model].
+    allowed_csv = (os.environ.get("ARCLINK_LLM_ROUTER_ALLOWED_MODELS") or "").strip()
+    allowed_models = [m.strip() for m in allowed_csv.split(",") if m.strip()]
+    if model and model not in allowed_models:
+        allowed_models.insert(0, model)
     ensure_llm_router_key(
         conn,
         deployment_id=os.environ.get("ARCLINK_DEPLOYMENT_ID", "operator") or "operator",
         user_id=os.environ.get("ARCLINK_USER_ID", "operator") or "operator",
         secret_ref=secret_ref,
         raw_key=raw_key,
-        allowed_models=[model] if model else None,
+        allowed_models=allowed_models or None,
         metadata={"source": "operator_hermes_home", "runtime": "control-stack"},
     )
 PY

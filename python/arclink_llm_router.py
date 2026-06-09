@@ -1144,7 +1144,9 @@ def _preflight_chat_request(
     )
     selected_pricing = dict(pricing_choice["selected"])
     reserved_cents = int(selected_pricing.get("reserved_cents") or config.min_reservation_cents)
-    if boundary.remaining_cents < reserved_cents:
+    # Observed-unlimited Pods (the Operator's own Pod) are metered but never reservation-
+    # blocked, so Raven inference cannot be silenced by a budget cap.
+    if str(getattr(boundary, "budget_status", "") or "") != "unlimited" and boundary.remaining_cents < reserved_cents:
         _queue_arc_pod_fuel_notice(
             conn,
             deployment_id=str(auth_record.get("deployment_id") or ""),

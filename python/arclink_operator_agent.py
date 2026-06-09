@@ -129,6 +129,26 @@ def ensure_operator_agent_deployment(
         merged_metadata.update(dict(metadata))
 
     existing = _deployment_row(conn, clean_deployment)
+
+    # The Operator owns the universe: their own Pod is metered/observable like a Captain
+    # Pod but is effectively unlimited and never fails closed on budget, so Operator Raven
+    # inference can always remedy the stack. Stamp budget_policy=observe_only_unlimited
+    # while PRESERVING any accumulated chutes usage so the running total survives a control
+    # re-deploy. See evaluate_chutes_deployment_boundary.
+    from arclink_boundary import json_loads_safe
+
+    operator_chutes: dict[str, Any] = {}
+    if isinstance(merged_metadata.get("chutes"), Mapping):
+        operator_chutes.update(dict(merged_metadata["chutes"]))
+    if existing is not None:
+        raw_existing_meta = existing.get("metadata_json")
+        existing_meta = json_loads_safe(raw_existing_meta) if isinstance(raw_existing_meta, str) else raw_existing_meta
+        if isinstance(existing_meta, Mapping) and isinstance(existing_meta.get("chutes"), Mapping):
+            for key, value in dict(existing_meta["chutes"]).items():
+                operator_chutes.setdefault(key, value)
+    operator_chutes["monthly_budget_cents"] = 0
+    operator_chutes["budget_policy"] = "observe_only_unlimited"
+    merged_metadata["chutes"] = operator_chutes
     if existing is None:
         deployment = reserve_arclink_deployment_prefix(
             conn,

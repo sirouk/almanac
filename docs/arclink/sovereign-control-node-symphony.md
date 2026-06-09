@@ -38,23 +38,64 @@ The remaining dream work must not be described as complete until its gap rows
 close. The highest-signal open product gaps are:
 
 - `GAP-029`: Operator Raven already queues real, audited, identity- and
-  approval-code-gated mutations, but is not yet a single full-service chat-native
-  control plane (breadth, unified policy, and live proof remain).
+  approval-code-gated mutations across **both Telegram and Discord** (Discord can
+  now be a secondary operator control surface, not only the primary), but is not
+  yet a single full-service chat-native control plane (breadth, unified policy,
+  and live proof remain).
 - `GAP-030`: Control Node product readiness can still be reached without a
   verified worker-capacity proof.
-- `GAP-031`: the router has local fallback semantics, but not live provider
-  overload proof.
+- `GAP-031`: the router has live-by-default fallback cascade and a metered-but-
+  unlimited Operator lane, but not live provider overload proof.
 - `GAP-032`: Hermes and component upgrades exist, source-owned dependency
   policy plus `/upgrade_sweep` now guide component pins, and local ArcPod
   rollout planning/materialization exists, but real refresh/apply execution and
   live multi-Pod proof remain.
-- `GAP-033`: a local cross-surface polish gate now exists, but live
-  browser/chat/workspace proof is still required before the experience is
-  product-real.
-- `GAP-034`: Academy scaffolding is substantial, including sticky mode,
-  governed source review, weekly crawl observations, and authorized SOUL/vault
-  apply handoff, but live acquisition/provider synthesis and downstream
-  qmd/memory/skill refresh proof remain.
+- `GAP-033`: a local cross-surface polish gate now exists and Telegram Captain
+  replies now render their Markdown as real `code` entities (no more literal
+  backticks), but live browser/chat/workspace proof is still required before the
+  experience is product-real.
+- `GAP-034`: Academy scaffolding is substantial, including sticky mode, the
+  **live LLM Trainer enabled by default** (fail-closed to deterministic), governed
+  source review, weekly crawl observations, real `academy_apply` SOUL/vault/
+  memory-seed/approved-skill writes, and authorized apply handoff, but live
+  per-lane acquisition/provider synthesis and downstream qmd/memory/skill refresh
+  execution proof remain.
+
+**Recent ground truth (2026-06-05 hardening pass).** Several motions that this
+document previously listed as "remaining" are now real in source and regression-
+tested, and a focused defect sweep closed concrete quirks:
+
+- *Inference is operator-unlimited-but-observed.* The Operator's own Pod carries
+  `chutes.budget_policy=observe_only_unlimited`: every inference is still metered
+  and recorded (`used_cents`), but the budget boundary returns `budget_status=
+  unlimited` and never fails closed, so Operator Raven reasoning can always remedy
+  the stack. Install now asks for and persists the default per-Pod monthly budget,
+  and the Operator's router key carries the full model allowlist (CSV), not a single
+  model.
+- *Shared knowledge fans out.* Fleet/Linked shared roots are now qmd-indexed
+  collections (searchable through `knowledge.search-and-fetch`), mounted into the
+  `qmd-mcp` and `vault-watch` containers, and the vault watcher watches those roots
+  so a peer's Fleet pull or a new Linked grant triggers a fast, event-driven qmd
+  re-index + memory synthesis instead of waiting for the periodic timer. A changed
+  source now overrides the memory-synth failure backoff so an edit is never
+  suppressed.
+- *Remote dashboards reach the Captain.* Remote ArcPod dashboards are bridged
+  through the control tailnet (publish-before-handoff, stale-forward pruning,
+  keepalive, port-collision avoidance, remote dashboard secret ownership).
+- *Placement reporting is honest.* The provisioning-readiness read model now
+  counts eligibility from full host rows, so `image_sync_failed` workers are no
+  longer over-counted; image-sync state survives a hostname re-registration; the
+  image-sync worker resolver matches the canonical WireGuard/private-mesh
+  precedence.
+- *Academy review metadata is preserved.* The weekly live-trainer review now
+  reports refreshed capsules accurately and no longer clobbers the Trainer's
+  engine/live/summary enrichment when a capsule changes.
+
+The remaining open items from that sweep — Telegram operator-gate unification, a
+Captain `/share-create` origination command, ArcPod-upgrade command-menu refresh,
+tracked nohup tailnet-forward pruning, deferring the Tailscale handoff link until
+the control bridge publishes, and TUI/API/docs surface-contract coverage — are
+recorded with concrete fix approaches in **Post-Audit Hardening Register** below.
 
 ## North Star
 
@@ -237,10 +278,22 @@ with a free-form chat bridge that routes operator messages to that Hermes
 through the `public-agent-turn` worker. Live mutation is still gated by
 `ARCLINK_EXECUTOR_ADAPTER` (`fake` records only) and the per-action proof gates
 (`PG-PROVISION`, `PG-INGRESS`, `PG-UPGRADE`/`PG-HERMES`, `PG-PROVIDER`,
-`PG-STRIPE`, `PG-BACKUP`). What remains under `GAP-029` is breadth (fleet
+`PG-STRIPE`, `PG-BACKUP`).
+
+The dual-channel intent is now real on both adapters. The Telegram operator
+surface activates when `telegram` is in the operator channel set
+(`ARCLINK_CURATOR_CHANNELS`), and the Discord operator surface now activates when
+`discord` is in that set too — not only when Discord is the *primary* response
+channel — so an Operator can run, e.g., Telegram primary + Discord secondary at
+once. Discord-as-secondary keys its operator channel off
+`ARCLINK_OPERATOR_DISCORD_CHANNEL_ID` and stays fenced by the existing Discord
+user/role allowlist (`ARCLINK_OPERATOR_DISCORD_USER_IDS`/`_ROLE_IDS`), which fails
+closed for guild channels with no allowlist. Each adapter replies on the channel a
+command arrived on, while `OPERATOR_NOTIFY_CHANNEL_PLATFORM` (the primary) governs
+proactive/notification responses. What remains under `GAP-029` is breadth (fleet
 admission/rotation, user suspend/restore, billing refuel from chat), one
-unified Raven/action policy, and authorized live proof — not a "read-only"
-limitation.
+unified Raven/action policy that fully reconciles the long-poll and webhook
+Telegram operator gates, and authorized live proof — not a "read-only" limitation.
 
 ## Admin Dashboard, API, And CLI Control
 
@@ -370,7 +423,12 @@ pushes, so every machine converges; unresolvable rebases are surfaced as conflic
 per-Agent `fleet-share-sync` job is rendered into the ArcPod for the in-pod git
 sync, while the control-node `fleet-share-reconcile` compose job runs DB-only
 membership convergence (`reconcile --all`, every 120s) — enrolling newly-active
-agents and deregistering torn-down ones without touching the hub. Live
+agents and deregistering torn-down ones without touching the hub. Today Raven is the share **approval/accept** surface
+(`/share-approve`, `/share-deny`, `/share-accept`, `/share-claim`); share
+**origination** (minting a grant for a Drive/Code folder) is reachable from the
+Drive/Code plugins, the web dashboard, and the MCP `_create_agent_share_request`
+tool, but not yet from a Raven command — the planned `/share-create` origination
+command is in the Post-Audit Hardening Register. Live
 browser/bot proof, no-channel behavior, and remote
 (`ssh`/`https`) hub transport remain tracked under `GAP-014`, `GAP-015`, and
 `GAP-016`.
@@ -398,8 +456,15 @@ Current source now has a local enforced finish gate:
 Operator Raven, dashboard readiness, product surface, Drive/Code/Terminal
 plugin status, and CLI readiness copy for audience vocabulary, blocked-state
 next actions, proof-gate honesty, chat markdown balance, secret redaction, and
-raw-traceback refusal. `GAP-033` remains open for live browser, bot, and
-workspace proof.
+raw-traceback refusal. The Telegram render boundary now converts a Raven reply's
+single-backtick code spans into real Telegram `code` entities
+(`telegram_markdown_to_entities`, applied in `handle_telegram_update` when no
+explicit entities are present, and forwarded through both the long-poll and
+webhook send paths) — so a Captain on Telegram sees styled code instead of literal
+backtick characters, matching how Discord renders the same source string natively.
+`GAP-033` remains open for live browser, bot, and workspace proof, and the
+surface contract's declared `tui`/`api`/`docs` channels still need real samples
+(see Post-Audit Hardening Register).
 
 ## Inference And Router Policy
 
@@ -428,8 +493,20 @@ The desired router behavior is:
 
 The current router supports model policy, usage accounting, limits, provider
 relay, model replacements, and auto-promotion. Control Node install now asks
-for a default model or provider-side fallback CSV, allowed models, and
-ArcLink-owned fallback models/status codes. Non-streaming chat completions now
+for a default model or provider-side fallback CSV, allowed models,
+ArcLink-owned fallback models/status codes, **and the default per-ArcPod monthly
+budget in cents** (persisted to config, not only a compose default; 0 means
+fail-closed-until-a-per-Pod-budget-is-set). The Operator lane is now explicitly
+**metered but unlimited**: `ensure_operator_agent_deployment` stamps the operator
+deployment with `chutes.budget_policy=observe_only_unlimited` (preserving any
+accumulated `used_cents` across control re-deploys), `evaluate_chutes_deployment_
+boundary` recognizes that policy and returns `budget_status=unlimited` with
+`allow_inference=True` while still recording usage, and `_preflight_chat_request`
+skips the reservation short-circuit for the unlimited lane — so Operator Raven
+inference is observable like a Captain Pod yet never silenced by a cap. The
+Operator's own router key now carries the full install-collected model allowlist
+(CSV), so the Operator can deliberately select any allowed model and provider-side
+fallback strings remain valid. Non-streaming chat completions now
 retry bounded fallback candidates on configured retryable provider failures.
 Streaming requests can retry fallback candidates before any upstream chunk is
 emitted; once a stream has started, the router labels fallback as unavailable
@@ -607,11 +684,24 @@ refresh rails over a turn-by-turn Raven bootstrap, and open a real sticky
 Academy Mode. The Agent uses the `arclink-academy` skill to search approved
 rails and submit compressed resources or reviewed discontinuation requests
 through `academy.propose-resource`; the
-Captain closes the mode to queue the Academy Trainer deep dive. Canonical
-application to the Agent is split: the marker-bounded SOUL overlay apply is
-implemented behind the PG-HERMES action gate, while live source acquisition,
-provider-assisted generation, vault/qmd/skill deltas, and source-governance
-decisions remain under `GAP-034`.
+Captain closes the mode to queue the Academy Trainer deep dive. The live LLM
+Trainer is now **enabled by default in the control stack**
+(`ARCLINK_ACADEMY_TRAINER_LIVE=1`): with a scoped router key present,
+`run_academy_trainer_review` and the weekly scheduler route the deep dive through
+the central `control-llm-router` (same inference model) with secret-redacted
+derived notes, and fail closed to the deterministic engine on any missing key,
+router error, or authorization gap. The weekly review also preserves the
+Trainer's engine/live/summary enrichment when a capsule body changes (it
+recomposes the capsule first, then writes the Trainer enrichment). Canonical
+application to the Agent is split: the marker-bounded SOUL overlay apply, the
+apply receipt, governed `Vault/Academy/<role>/` markdown, memory seeds, and
+approved-skill records are all implemented behind the PG-HERMES action gate, while
+live **per-lane source acquisition**, provider-assisted generation, and the
+downstream **execution** of qmd re-indexing, memory-synthesis ingestion, and
+active Hermes skill enablement remain runner/proof-gated under `GAP-034`. (The
+staged Vault/Academy markdown, memory seeds, and approved-skill records are
+already written, so they are no longer part of the GAP-034 remnant — only their
+live execution is.)
 
 This is larger than the current Crew Recipe system. The current source locally
 supports deterministic recipe/SOUL projection and proof-gated live recipe
@@ -633,8 +723,13 @@ Raven commands should be role-aware and self-refreshing:
 - Every menu refresh should be part of install/upgrade and should not require a
   manual restart or unexplained force reload.
 
-Captain command handling is relatively mature. Operator command coverage is
-the gap and belongs to `GAP-029`.
+Captain command handling is relatively mature. In an active Agent chat the
+picker deliberately exposes a single `/raven` control gateway plus the Agent's
+own commands (so the Agent keeps the bare slash namespace and the menu stays
+uncluttered); every Captain `raven_*` sub-command remains reachable by typing
+`/raven <x>` (rewritten by `_raven_prefixed_command_rewrite`) and is listed in
+full in non-active chats. Operator command coverage is the remaining gap and
+belongs to `GAP-029`.
 
 ## Captain "Yes, And" Behavior
 
@@ -721,8 +816,21 @@ The knowledge/memory contract is:
 - Deletions, moves, renames, and permission changes self-heal indexes and do
   not leave stale private facts available to the wrong Pod.
 
-Current source and tests cover much of this locally. Live workspace proof still
-belongs to `PG-HERMES`, and shared external Notion proof belongs to `PG-NOTION`.
+Shared-directory parity is now real, not aspirational. The Fleet and Linked
+shared roots are registered as their own qmd collections
+(`fleet-shared`/`linked-shared`, gated on the mount existing), mounted into the
+`qmd-mcp` and `vault-watch` containers, and added to the default
+`knowledge.search-and-fetch` collection set when those roots are configured — so a
+shared document is retrievable through MCP and searchable in plugins like local
+vault knowledge, for every authorized Agent. Propagation is now event-driven: the
+vault watcher watches the Fleet/Linked roots in addition to the vault, so a peer's
+Fleet pull (`fleet-share-sync`) or a new Linked grant triggers a fast qmd re-index
+plus a bounded memory-synthesis refresh on the receiving Pod, instead of waiting
+for the next periodic timer. Memory synthesis also no longer suppresses a changed
+source while its prior card is in failure backoff — a new content signature
+overrides the backoff so an edit is reflected immediately. Current source and
+tests cover much of this locally. Live workspace proof still belongs to
+`PG-HERMES`, and shared external Notion proof belongs to `PG-NOTION`.
 
 ## Hermes And ArcPod Updates
 
@@ -1279,6 +1387,88 @@ The complete adoption layer should include:
 
 Adoption is part of the product. A system this broad is only excellent if new
 people can enter it without being handed a maze.
+
+## Post-Audit Hardening Register
+
+This register records the 2026-06-05 ground-truth defect sweep so the symphony,
+`GAPS.md`, and the code agree on the same traversal. Each landed fix is source-
+real and regression-tested; each forward-plan item names the exact owner and
+approach so it can be picked up without re-discovery.
+
+**Landed this pass (source-real + tested).**
+
+- *Executor boundary* — `SshDockerComposeRunner.read_text_file` now fails closed
+  (raises) instead of silently returning `None` when a remote read fails with no
+  `allowed_root`; `write_text_file` sends a single shell-quoted remote command
+  (matching `read_text_file`) so a remote login shell cannot re-split the path on
+  metacharacters.
+- *Placement reporting* — `control_node_provisioning_readiness` builds eligibility
+  from full `list_fleet_hosts` rows (which carry `metadata_json`) rather than the
+  metadata-stripped capacity-summary projection, so `image_sync_failed` workers are
+  no longer over-counted as eligible; `register_fleet_host` preserves `image_sync_*`
+  keys across a hostname re-registration; the `deploy.sh` image-sync resolver matches
+  the canonical `private_dns_name → wireguard_dns_name → private_mesh_dns_name →
+  ssh_host` precedence.
+- *Academy* — the weekly live-trainer review returns the capsule `changed` flag so
+  `central_capsules_refreshed` is accurate, and it recomposes the capsule *before*
+  writing the Trainer enrichment so the engine/live/summary metadata is no longer
+  clobbered when a capsule body changes.
+- *Inference* — Operator Pod is `observe_only_unlimited` (metered but never
+  fails closed); install asks for and persists the default per-Pod monthly budget;
+  the Operator router key carries the full model allowlist (CSV).
+- *Shared knowledge* — Fleet/Linked roots are qmd-indexed collections, mounted into
+  `qmd-mcp`/`vault-watch`, and added to the default search collection set; the vault
+  watcher watches those roots for event-driven re-index + memory synthesis; a changed
+  source overrides the memory-synth failure backoff.
+- *Experience* — Telegram Captain replies render Markdown code spans as real `code`
+  entities instead of literal backticks, forwarded through long-poll and webhook send.
+- *Operator control* — Discord can now be a *secondary* operator surface (not only the
+  primary), gated by the Discord user/role allowlist and an explicit operator channel.
+- *Hygiene* — pairing-code cancel now supersedes the still-claimable DB code and clears
+  the pairing session keys; the `arclink-academy` skill teaches the correct
+  `knowledge.search-and-fetch` params (`vault_fetch_limit`/`notion_fetch_limit`);
+  `curate-notion.sh` is executable; the installed-skill-count ground-truth doc is
+  corrected (10 user / 11 Curator; `notion-page-pdf-export` is an optional
+  chromium-gated operator skill, not in the default set).
+
+**Forward plan (named owner + approach; not yet landed).**
+
+- *`GAP-033` Telegram handoff link in Tailscale mode* (high) — on a successful
+  tailscale/path-mode apply, `arclink_sovereign_worker.process_sovereign_deployment`
+  fires `user_handoff_ready` with the *worker* tailnet DNS URL before the control-node
+  bridge is published, so the first link can be unreachable. Plan: defer the handoff
+  event + `_queue_vessel_online_notifications` until metadata
+  `tailnet_app_publication.status == 'published'`, and let the existing
+  `recover_succeeded_sovereign_handoffs` sweep re-fire it once the control publisher
+  has rewritten `access_urls` to the control DNS. Requires live tailscale-mode proof
+  before landing (deferring the handoff must not strand it).
+- *Raven `/share-create` origination* (`GAP-014` adjacent) — Raven today is an
+  approve/accept surface only; the plugin/web/MCP paths can mint a share but Raven
+  cannot. Plan: add an `ARCLINK_PUBLIC_BOT_SHARE_CREATE_RE` command dispatched to a
+  new `_share_create_reply` that resolves `session.user_id` as owner and calls the
+  same `create_user_share_grant_for_owner` broker (inheriting no-reshare + root
+  validation), with owner-approval/claim copy. Security-review the recipient
+  resolution before enabling.
+- *ArcPod-upgrade command-menu refresh* (`GAP-032`) — a Captain-initiated ArcPod
+  Hermes upgrade does not re-push that Pod's active-chat command scope, and the
+  per-turn lazy refresh reads control-node-local Hermes rather than the Pod's
+  container. Plan: call `refresh_active_telegram_command_scopes` (or a per-deployment
+  variant) on rollout completion in `arclink_action_worker`, and include a description
+  hash in the per-turn cache signature so description-only changes are not skipped.
+- *Tracked nohup tailnet forwards* — when `systemd-run` is unavailable,
+  `docker_ensure_tailnet_forward` falls back to a `nohup ssh -L` that
+  `docker_prune_tailnet_forwards` cannot stop (no `.ctl` socket, no unit), so it leaks.
+  Plan: write a pidfile next to the existing `.log`, prune by killing tracked pids not
+  in the desired route set, and scope the local-http short-circuit to a known-good
+  tracked forward for this deployment+port.
+- *Operator gate unification* (`GAP-029`) — the curator-onboarding long-poll Telegram
+  operator gate and the hosted-API webhook gate use slightly different rules. Plan:
+  unify both behind one `operator_telegram_sender_allowed` helper so the same update
+  yields the same allow/deny regardless of transport.
+- *Surface-contract TUI/API/docs coverage* (`GAP-033`) — the contract declares those
+  channels but the test samples none. Plan: run a read-only `arclink_ctl` command and
+  representative TUI/docs strings through `assert_surface_contract`, or trim the
+  `SurfaceChannel` Literal to what is actually exercised.
 
 ## Governance And Proof
 

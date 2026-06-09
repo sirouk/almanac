@@ -124,10 +124,39 @@ async def main() -> None:
     validator = _discord_validator(curator_bot_id)
     sync_done = False
 
+    def _operator_discord_enabled() -> bool:
+        # Discord is an operator control surface when it is the primary response channel
+        # OR when it is in the enabled operator channel set (so the operator can run, e.g.,
+        # Telegram primary + Discord secondary at the same time).
+        if (cfg.operator_notify_platform or "").strip().lower() == "discord":
+            return True
+        channels = {
+            value.strip().lower()
+            for value in str(
+                os.environ.get("ARCLINK_CURATOR_CHANNELS")
+                or config_env_value("ARCLINK_CURATOR_CHANNELS", "")
+                or ""
+            ).split(",")
+            if value.strip()
+        }
+        return "discord" in channels
+
     def _operator_channel_id() -> str:
-        if (cfg.operator_notify_platform or "").strip().lower() != "discord":
+        if not _operator_discord_enabled():
             return ""
-        return str(cfg.operator_notify_channel_id or "").strip()
+        # Prefer an explicit Discord operator channel so Discord can be a SECONDARY
+        # operator surface; the shared operator channel id holds the PRIMARY platform's
+        # channel, so it is only reused when Discord itself is the primary.
+        explicit = str(
+            os.environ.get("ARCLINK_OPERATOR_DISCORD_CHANNEL_ID")
+            or config_env_value("ARCLINK_OPERATOR_DISCORD_CHANNEL_ID", "")
+            or ""
+        ).strip()
+        if explicit:
+            return explicit
+        if (cfg.operator_notify_platform or "").strip().lower() == "discord":
+            return str(cfg.operator_notify_channel_id or "").strip()
+        return ""
 
     def _operator_discord_user_ids() -> set[str]:
         return _csv_env_values("ARCLINK_OPERATOR_DISCORD_USER_IDS", "OPERATOR_DISCORD_USER_IDS")
@@ -253,7 +282,9 @@ async def main() -> None:
         operator_channel_id = _operator_channel_id()
         if not operator_channel_id:
             await interaction.response.send_message(
-                "Discord is not configured as the primary operator control channel.",
+                "Discord is not an enabled operator control channel. Enable it in the operator "
+                "channel set and set ARCLINK_OPERATOR_DISCORD_CHANNEL_ID (or make Discord the "
+                "primary operator channel).",
                 ephemeral=True,
             )
             return False

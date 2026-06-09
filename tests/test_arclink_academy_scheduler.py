@@ -276,6 +276,10 @@ def test_forward_maintenance_can_run_live_trainer_review_without_agent_writes() 
             proposed_by="agent-live",
         )
         programs.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-live", graduate=True)
+        # Mutate a promoted central source so the weekly recompose genuinely changes
+        # the capsule, exercising the central_capsules_refreshed counter on the live branch.
+        conn.execute("UPDATE academy_sources SET derived_notes = derived_notes || ' (weekly change)'")
+        conn.commit()
         scheduler.academy_trainer_client_from_env = lambda env=None: _FakeWeeklyLiveTrainer()
         result = scheduler.run_academy_forward_maintenance(
             conn,
@@ -284,6 +288,8 @@ def test_forward_maintenance_can_run_live_trainer_review_without_agent_writes() 
         )
         expect(result["trainer_reviews"] >= 1, str(result))
         expect(result["live_trainer_reviews"] >= 1, str(result))
+        # The live-trainer branch must count the genuinely-refreshed capsule (was always 0 before).
+        expect(result["central_capsules_refreshed"] >= 1, str(result))
         expect(result["no_write"] is True and result["writes_enabled"] is False, str(result))
         row = conn.execute("SELECT enrichment_json FROM academy_corpus_specialists").fetchone()
         enrichment = json.loads(row["enrichment_json"])

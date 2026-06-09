@@ -2311,13 +2311,17 @@ def run_academy_trainer_review(
         "live_enrichment_status": "live_reviewed" if use_live else "pending_pg_provider",
         "actor": str(actor or "").strip() or "system:trainer",
     }
+    # Recompose the capsule FIRST. refresh_specialist_capsule writes its own
+    # deterministic enrichment_json whenever the capsule body changes, so the Trainer
+    # enrichment (engine/live/summary/verdicts) must be written AFTER it or it would be
+    # clobbered and the live review metadata lost on any week the capsule changes.
+    capsule_result = refresh_specialist_capsule(
+        conn, specialist_uid=clean, actor=actor, only_if_changed=True, commit=False
+    )
     conn.execute(
         "UPDATE academy_corpus_specialists SET enrichment_json = ?, last_enriched_at = ?, updated_at = ? WHERE specialist_uid = ?",
         (_dumps(enrichment), now, now, clean),
     )
-    # Recompose the capsule from the reviewed corpus (idempotent; live enrichment of
-    # the capsule body layers on here when a live client returns enriched text).
-    refresh_specialist_capsule(conn, specialist_uid=clean, actor=actor, only_if_changed=True, commit=False)
     # Stamp the contributing trainees' promoted proposals so the Captain sees the
     # Trainer deep dive ran on what they gathered.
     contributors = {
@@ -2348,6 +2352,10 @@ def run_academy_trainer_review(
         "source_count": len(sources),
         "verdict_count": len(review.get("verdicts") or []),
         "reviewed_proposals": reviewed_proposals,
+        # Surface the capsule refresh outcome so the weekly scheduler's live-trainer
+        # branch can count genuinely-refreshed capsules (it keys on result["changed"]).
+        "changed": bool(capsule_result.get("changed")),
+        "capsule_version": int(capsule_result.get("capsule_version") or 0),
         "live_enrichment_status": enrichment["live_enrichment_status"],
         "proof_gate": "PG-PROVIDER",
     }

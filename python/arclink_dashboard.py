@@ -318,13 +318,17 @@ def control_node_provisioning_readiness(
         fleet_host_ssh_endpoint,
         host_available_placement_units,
         host_is_placement_eligible,
+        list_fleet_hosts,
     )
 
     source_env = env if env is not None else os.environ
     provisioner_enabled = _truthy(source_env.get("ARCLINK_CONTROL_PROVISIONER_ENABLED"))
     executor_adapter = str(source_env.get("ARCLINK_EXECUTOR_ADAPTER") or "disabled").strip().lower() or "disabled"
     capacity = fleet_capacity_summary(conn)
-    hosts = list(capacity.get("hosts") or [])
+    # Build eligibility from FULL host rows (which carry metadata_json) rather than
+    # the capacity-summary projection, which strips metadata_json and therefore
+    # makes host_is_placement_eligible miss image_sync_failed / blocking sync state.
+    hosts = list_fleet_hosts(conn)
     eligible_workers = [
         {
             "host_id": str(host.get("host_id") or ""),

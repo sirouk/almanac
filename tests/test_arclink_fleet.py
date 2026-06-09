@@ -162,6 +162,58 @@ def test_image_sync_failed_blocks_capacity_and_placement() -> None:
     print("PASS test_image_sync_failed_blocks_capacity_and_placement")
 
 
+def test_register_existing_host_preserves_image_sync_state() -> None:
+    control = load_module("arclink_control.py", "arclink_control_resync_preserve")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_resync_preserve")
+    conn = memory_db(control)
+    fleet.register_fleet_host(
+        conn, hostname="resync.test", capacity_slots=4, metadata={"ssh_host": "10.44.0.7"}
+    )
+    # The control image-sync sweep marks the worker failed via fresh metadata.
+    fleet.register_fleet_host(
+        conn,
+        hostname="resync.test",
+        capacity_slots=4,
+        metadata={"ssh_host": "10.44.0.7", "image_sync_state": "image_sync_failed"},
+    )
+    # An inventory hostname re-register supplies fresh metadata WITHOUT the sync key.
+    reregistered = fleet.register_fleet_host(
+        conn,
+        hostname="resync.test",
+        capacity_slots=4,
+        metadata={"ssh_host": "10.44.0.7", "region_note": "moved"},
+    )
+    meta = fleet.fleet_host_metadata(reregistered)
+    expect(meta.get("image_sync_state") == "image_sync_failed", str(meta))
+    expect(meta.get("region_note") == "moved", str(meta))
+    print("PASS test_register_existing_host_preserves_image_sync_state")
+
+
+def test_provisioning_readiness_excludes_image_sync_failed_worker() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dash_readiness")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_dash_readiness")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_readiness")
+    conn = memory_db(control)
+    healthy = fleet.register_fleet_host(conn, hostname="ok.test", capacity_slots=4)
+    stale = fleet.register_fleet_host(
+        conn,
+        hostname="stale.test",
+        capacity_slots=4,
+        metadata={"image_sync_state": "image_sync_failed"},
+    )
+    conn.execute(
+        "UPDATE arclink_fleet_hosts SET last_health_state='active' WHERE host_id IN (?, ?)",
+        (healthy["host_id"], stale["host_id"]),
+    )
+    conn.commit()
+    env = {"ARCLINK_CONTROL_PROVISIONER_ENABLED": "1", "ARCLINK_EXECUTOR_ADAPTER": "fake"}
+    readiness = dashboard.control_node_provisioning_readiness(conn, env=env)
+    expect(readiness["eligible_worker_count"] == 1, str(readiness))
+    eligible_ids = {str(w.get("host_id")) for w in readiness["eligible_workers"]}
+    expect(stale["host_id"] not in eligible_ids, str(readiness["eligible_workers"]))
+    print("PASS test_provisioning_readiness_excludes_image_sync_failed_worker")
+
+
 def test_control_plane_reserve_is_capped_and_used_after_remote_capacity() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_control_reserve")
     fleet = load_module("arclink_fleet.py", "arclink_fleet_control_reserve")

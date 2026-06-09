@@ -191,6 +191,22 @@ def register_fleet_host(
         (clean_hostname,),
     ).fetchone()
     if existing is not None:
+        # Preserve image-sync state across a hostname re-registration: a caller
+        # supplying fresh metadata (e.g. inventory re-register) must not silently
+        # erase the image_sync_* keys that gate placement eligibility. Carry over
+        # any image_sync_* key the incoming metadata does not itself set.
+        if metadata is not None:
+            preserved = json_loads_safe(str(existing["metadata_json"] or "{}"))
+            sync_carryover = {
+                key: value
+                for key, value in preserved.items()
+                if str(key).startswith("image_sync_") and key not in metadata
+            }
+            if sync_carryover:
+                merged_metadata = {**dict(metadata), **sync_carryover}
+                metadata_json = json_dumps_safe(
+                    merged_metadata, label="ArcLink fleet", error_cls=ArcLinkFleetError
+                )
         sets: list[str] = []
         params: list[Any] = []
         if str(existing["region"] or "") != clean_region:

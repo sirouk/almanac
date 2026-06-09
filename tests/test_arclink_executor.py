@@ -1547,6 +1547,86 @@ def test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback() -> None:
     print("PASS test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback")
 
 
+def test_ssh_docker_runner_read_without_allowed_root_raises_on_failure() -> None:
+    # Regression for the misindented final raise (ac98f8d): a failed cat with no
+    # allowed_root must raise, not silently fall through and return None.
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_read_no_root_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del cmd, kwargs
+        return Proc(1, stderr="cat: Permission denied\n")
+
+    raised = False
+    try:
+        mod.subprocess.run = fake_run
+        runner = mod.SshDockerComposeRunner(
+            host="worker.example.test",
+            user="arclink",
+            allowed_hosts=("worker.example.test",),
+        )
+        try:
+            runner.read_text_file("/etc/hostname")
+        except mod.ArcLinkExecutorError:
+            raised = True
+    finally:
+        mod.subprocess.run = original_run
+
+    expect(raised, "read_text_file without allowed_root must raise on cat failure, not return None")
+    print("PASS test_ssh_docker_runner_read_without_allowed_root_raises_on_failure")
+
+
+def test_ssh_docker_runner_write_text_file_shell_quotes_remote_command() -> None:
+    # Regression: write_text_file must pass a single shell-quoted command so the
+    # remote login shell cannot re-split the path on metacharacters.
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_write_quote_test")
+
+    class Proc:
+        def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    calls: list[tuple[str, ...]] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        calls.append(tuple(str(part) for part in cmd))
+        return Proc(0)
+
+    try:
+        mod.subprocess.run = fake_run
+        runner = mod.SshDockerComposeRunner(
+            host="worker.example.test",
+            user="arclink",
+            allowed_hosts=("worker.example.test",),
+        )
+        result = runner.write_text_file(
+            "/arcdata/deployments/dep_1/state/hermes-home/state/arclink-web-access.json",
+            '{"ok": true}',
+            allowed_root="/arcdata/deployments/dep_1",
+        )
+    finally:
+        mod.subprocess.run = original_run
+
+    expect(result.get("status") == "ok", str(result))
+    expect(len(calls) == 1, str(calls))
+    remote_command = calls[0][-1]
+    # The path/mode must be embedded in one quoted command string, not bare argv tail.
+    expect(remote_command.startswith("python3 -c "), remote_command)
+    expect("arclink-web-access.json" in remote_command, remote_command)
+    expect(calls[0][-2] == runner._target(), str(calls[0]))
+    print("PASS test_ssh_docker_runner_write_text_file_shell_quotes_remote_command")
+
+
 def test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_secret_restart_test")
     intent = sample_intent()

@@ -697,7 +697,7 @@ class SshDockerComposeRunner:
             if fallback.returncode == 0:
                 return fallback.stdout
             raise ArcLinkExecutorError(_safe_command_error("ssh read file", fallback.stderr or fallback.stdout))
-            raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
+        raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
 
     def write_text_file(self, path: str, content: str, *, allowed_root: str = "", mode: str = "0600") -> Mapping[str, Any]:
         clean_path = _normalized_remote_prepare_path(path)
@@ -720,17 +720,14 @@ class SshDockerComposeRunner:
             "os.chmod(tmp,mode);os.replace(tmp,path);os.chmod(path,mode)"
         )
         target = self._target()
+        # Build a single shell-quoted remote command (matching read_text_file) so
+        # the remote login shell cannot re-split path/mode on metacharacters.
+        command = (
+            f"python3 -c {_shell_quote(script)} "
+            f"{_shell_quote(clean_path)} {_shell_quote(clean_mode)}"
+        )
         write = subprocess.run(
-            (
-                self.ssh_binary,
-                *self.ssh_options,
-                target,
-                "python3",
-                "-c",
-                script,
-                clean_path,
-                clean_mode,
-            ),
+            (self.ssh_binary, *self.ssh_options, target, command),
             input=str(content or ""),
             check=False,
             text=True,

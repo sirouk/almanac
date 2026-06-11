@@ -22,7 +22,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from arclink_control import (
     Config,
@@ -684,7 +684,12 @@ def _public_agent_gateway_payload(
         "streaming_enabled": _public_agent_bridge_streaming_enabled(),
     }
     if clean_channel == "telegram":
-        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
+        for key in (
+            "telegram_update_kind",
+            "telegram_update_json",
+            "telegram_update_json_list",
+            "telegram_native_callback",
+        ):
             value = extra.get(key)
             if value not in (None, ""):
                 payload[key] = value
@@ -1433,6 +1438,117 @@ def _resolve_captain_wrapped_public_channel(cfg: Config, *, user_id: str) -> tup
     return (channel_kind, target_id) if target_id else ("", "")
 
 
+TELEGRAM_ALBUM_QUIESCE_SECONDS = 1.5
+TELEGRAM_ALBUM_MAX_WAIT_SECONDS = 4.0
+TELEGRAM_ALBUM_MAX_UPDATE_BYTES = 45000
+
+
+def _telegram_media_group_id(extra: Mapping[str, Any]) -> str:
+    raw = str(extra.get("telegram_update_json") or "").strip()
+    if not raw or "media_group_id" not in raw:
+        return ""
+    try:
+        update = json.loads(raw)
+    except ValueError:
+        return ""
+    message = update.get("message") or update.get("edited_message") or {}
+    return str((message or {}).get("media_group_id") or "").strip()
+
+
+def _absorb_telegram_album_siblings(
+    cfg: Config,
+    *,
+    row: Mapping[str, Any],
+    extra: dict[str, Any],
+    media_group_id: str,
+) -> str | None:
+    """Merge a Telegram album's sibling outbox rows into this turn.
+
+    Telegram delivers an album as one webhook update per item; each becomes its
+    own outbox row, and Hermes' native media-group debounce can only merge
+    items inside one process. The lowest-id undelivered row becomes the
+    leader: it waits briefly for stragglers, absorbs sibling updates into
+    ``telegram_update_json_list`` (so one bridge process replays them all and
+    Hermes merges them natively), and marks the siblings delivered. Non-leader
+    rows defer; if the leader dies, their lease expiry retries them solo.
+    """
+    import time as _time
+
+    target_id = str(row.get("target_id") or "")
+    channel_kind = str(row.get("channel_kind") or "").lower()
+    own_id = int(row["id"]) if str(row.get("id") or "").isdigit() else None
+    if own_id is None:
+        return None
+    deadline = _time.monotonic() + TELEGRAM_ALBUM_MAX_WAIT_SECONDS
+
+    def _group_rows(conn: Any) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            SELECT id, message, extra_json, created_at, delivered_at
+            FROM notification_outbox
+            WHERE target_kind = 'public-agent-turn'
+              AND channel_kind = ?
+              AND target_id = ?
+              AND created_at >= datetime('now', '-120 seconds')
+            ORDER BY id ASC
+            """,
+            (channel_kind, target_id),
+        ).fetchall()
+        group: list[dict[str, Any]] = []
+        for candidate in rows:
+            item = dict(candidate)
+            try:
+                item_extra = json.loads(str(item.get("extra_json") or "{}"))
+            except ValueError:
+                continue
+            if not isinstance(item_extra, dict):
+                continue
+            if _telegram_media_group_id(item_extra) != media_group_id:
+                continue
+            item["_extra"] = item_extra
+            group.append(item)
+        return group
+
+    while True:
+        with connect_db(cfg) as conn:
+            group = _group_rows(conn)
+            if not group:
+                return None
+            newest = max(str(item.get("created_at") or "") for item in group)
+            newest_dt = parse_utc_iso(newest)
+            quiesced = (
+                newest_dt is None
+                or (utc_now().timestamp() - newest_dt.timestamp()) >= TELEGRAM_ALBUM_QUIESCE_SECONDS
+            )
+            if quiesced or _time.monotonic() >= deadline:
+                undelivered = [item for item in group if not str(item.get("delivered_at") or "").strip()]
+                if not undelivered:
+                    return None
+                leader_id = min(int(item["id"]) for item in undelivered)
+                if leader_id != own_id:
+                    return PUBLIC_AGENT_BRIDGE_DEFERRED
+                updates: list[str] = []
+                absorbed: list[int] = []
+                total = 0
+                for item in undelivered:
+                    update_json = str(item["_extra"].get("telegram_update_json") or "").strip()
+                    if not update_json:
+                        continue
+                    if int(item["id"]) != own_id and total + len(update_json) > TELEGRAM_ALBUM_MAX_UPDATE_BYTES:
+                        break
+                    total += len(update_json)
+                    updates.append(update_json)
+                    if int(item["id"]) != own_id:
+                        absorbed.append(int(item["id"]))
+                if len(updates) > 1:
+                    extra["telegram_update_json_list"] = updates
+                    for absorbed_id in absorbed:
+                        mark_notification_delivered(conn, absorbed_id)
+                        mark_notification_error(conn, absorbed_id, f"absorbed_into_album_leader:{own_id}")
+                return None
+        _time.sleep(0.4)
+
+
 def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str, Any]) -> str | None:
     channel_kind = str(row.get("channel_kind") or "").lower()
     target_id = str(row.get("target_id") or "")
@@ -1444,6 +1560,19 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
     if not prompt:
         return None
     notification_id = int(row["id"]) if str(row.get("id") or "").isdigit() else None
+    if channel_kind == "telegram":
+        media_group_id = _telegram_media_group_id(extra)
+        if media_group_id:
+            album_state = _absorb_telegram_album_siblings(
+                cfg,
+                row=row,
+                extra=extra,
+                media_group_id=media_group_id,
+            )
+            if album_state == PUBLIC_AGENT_BRIDGE_DEFERRED:
+                return PUBLIC_AGENT_BRIDGE_DEFERRED
+            if extra.get("telegram_update_json_list"):
+                extra["telegram_album_size"] = len(extra["telegram_update_json_list"])
     if bool(extra.get("operator_turn")) or str(extra.get("source_kind") or "").strip() == "operator_chat":
         bridged, _bridge_error = _run_operator_agent_gateway_turn(
             channel_kind=channel_kind,

@@ -115,6 +115,13 @@ class SynthesisSettings:
     state_dir: Path
     status_file: Path
     lock_file: Path
+    # Where the LLM credentials came from: "memory-synth" (dedicated
+    # ARCLINK_MEMORY_SYNTH_* vars), "pdf-vision-fallback" (legacy PDF_VISION_*
+    # back-compat), or "" when no LLM config is present. The fallback is kept
+    # for compatibility, but it couples the synthesis model to the PDF vision
+    # endpoint: rotating PDF_VISION_* silently changes the model in the dedupe
+    # key and re-synthesizes every card, so the fallback is surfaced loudly.
+    llm_config_source: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -176,12 +183,21 @@ def _resolve_chat_endpoint(endpoint: str) -> str:
 
 def load_settings(cfg: Config | None = None) -> SynthesisSettings:
     cfg = cfg or Config.from_env()
-    endpoint = _resolve_chat_endpoint(_env("ARCLINK_MEMORY_SYNTH_ENDPOINT", "").strip() or _env("PDF_VISION_ENDPOINT", ""))
-    model = (_env("ARCLINK_MEMORY_SYNTH_MODEL", "").strip() or _env("PDF_VISION_MODEL", "").strip())
-    api_key = (_env("ARCLINK_MEMORY_SYNTH_API_KEY", "").strip() or _env("PDF_VISION_API_KEY", "").strip())
+    dedicated_endpoint = _env("ARCLINK_MEMORY_SYNTH_ENDPOINT", "").strip()
+    dedicated_model = _env("ARCLINK_MEMORY_SYNTH_MODEL", "").strip()
+    dedicated_api_key = _env("ARCLINK_MEMORY_SYNTH_API_KEY", "").strip()
+    endpoint = _resolve_chat_endpoint(dedicated_endpoint or _env("PDF_VISION_ENDPOINT", ""))
+    model = dedicated_model or _env("PDF_VISION_MODEL", "").strip()
+    api_key = dedicated_api_key or _env("PDF_VISION_API_KEY", "").strip()
     enabled_raw = _env("ARCLINK_MEMORY_SYNTH_ENABLED", "auto").strip().lower()
     explicit_enabled = enabled_raw not in {"", "auto"}
     has_llm_config = bool(endpoint and model and api_key)
+    if not has_llm_config:
+        llm_config_source = ""
+    elif dedicated_endpoint and dedicated_model and dedicated_api_key:
+        llm_config_source = "memory-synth"
+    else:
+        llm_config_source = "pdf-vision-fallback"
     enabled = _boolish(enabled_raw) if explicit_enabled else has_llm_config
     if enabled and not has_llm_config:
         model = LOCAL_FALLBACK_MODEL
@@ -192,6 +208,7 @@ def load_settings(cfg: Config | None = None) -> SynthesisSettings:
         endpoint=endpoint,
         model=model,
         api_key=api_key,
+        llm_config_source=llm_config_source,
         max_sources_per_run=_int_env("ARCLINK_MEMORY_SYNTH_MAX_SOURCES_PER_RUN", DEFAULT_MAX_SOURCES_PER_RUN, minimum=1, maximum=100),
         max_source_chars=_int_env("ARCLINK_MEMORY_SYNTH_MAX_SOURCE_CHARS", DEFAULT_MAX_SOURCE_CHARS, minimum=500, maximum=50_000),
         max_output_tokens=_int_env("ARCLINK_MEMORY_SYNTH_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS, minimum=100, maximum=4000),
@@ -1804,6 +1821,7 @@ def run_once(
                     ):
                         changed += 1
 
+            fanout_consumed: dict[str, Any] = {}
             if changed:
                 queue_notification(
                     conn,
@@ -1820,6 +1838,16 @@ def run_once(
                         "stale": stale_count,
                     },
                 )
+                # Consume the fan-out immediately so refreshed cards reach the
+                # per-agent plugin context now instead of waiting for the next
+                # hourly curator-refresh pass (recall-stub staleness shortener).
+                if _boolish(_env("ARCLINK_MEMORY_SYNTH_CONSUME_FANOUT", "1")):
+                    try:
+                        from arclink_control import consume_curator_brief_fanout
+
+                        fanout_consumed = consume_curator_brief_fanout(conn, cfg)
+                    except Exception as exc:  # noqa: BLE001 - fanout stays queued for curator-refresh retry.
+                        fanout_consumed = {"ok": False, "error": redact_then_truncate(exc, limit=240)}
 
             status = "ok" if failed == 0 else "warn"
             note_refresh_job(
@@ -1834,6 +1862,22 @@ def run_once(
                     f"fallback={fallback_synthesized}; changed={changed}; stale={stale_count}; failed={failed}"
                 ),
             )
+            finished_at = utc_now_iso()
+            # Academy post-apply markers request exactly this lane; a completed
+            # run is their consumption evidence, so transition queued markers
+            # instead of leaving them write-only forever.
+            academy_markers: dict[str, Any] = {}
+            try:
+                from arclink_action_worker import consume_academy_refresh_queue_markers_for_all
+
+                academy_markers = consume_academy_refresh_queue_markers_for_all(
+                    conn,
+                    kind="memory_synthesis",
+                    lane_completed_at=finished_at,
+                    consumed_by="memory-synth:run_once",
+                )
+            except Exception as exc:  # noqa: BLE001 - marker consumption must never fail the synth run.
+                academy_markers = {"ok": False, "error": redact_then_truncate(exc, limit=240)}
             result = {
                 "status": status,
                 "changed": changed,
@@ -1845,10 +1889,30 @@ def run_once(
                 "candidate_count": len(candidates),
                 "model": settings.model,
                 "prompt_version": PROMPT_VERSION,
+                "llm_config_source": settings.llm_config_source,
                 "errors": errors[:8],
                 "fallback_reasons": fallback_reasons[:8],
-                "finished_at": utc_now_iso(),
+                "finished_at": finished_at,
             }
+            if settings.llm_config_source == "pdf-vision-fallback":
+                result["config_warning"] = (
+                    "memory synthesis is running on PDF_VISION_* fallback credentials; set "
+                    "ARCLINK_MEMORY_SYNTH_ENDPOINT/MODEL/API_KEY so rotating the PDF vision "
+                    "endpoint cannot silently change the synthesis model and re-synthesize every card"
+                )
+            if fanout_consumed:
+                published_agents = fanout_consumed.get("published_agents") or []
+                result["fanout_consumed"] = {
+                    "published_agents": [
+                        str(entry.get("agent_id") or "")
+                        for entry in published_agents
+                        if isinstance(entry, dict)
+                    ],
+                    "refresh_signals": int(fanout_consumed.get("refresh_signals") or 0),
+                    "error": str(fanout_consumed.get("error") or ""),
+                }
+            if academy_markers:
+                result["academy_markers"] = academy_markers
             _write_status(settings, result)
             return result
 

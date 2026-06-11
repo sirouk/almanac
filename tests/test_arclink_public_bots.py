@@ -1074,6 +1074,30 @@ def test_public_bot_agents_roster_add_agent_and_switch_are_account_aware() -> No
     )
     expect("Agent #prime - Mission Operator" in roster_with_bob.reply, roster_with_bob.reply)
     expect("Bob - Signal Strategist" in roster_with_bob.reply, roster_with_bob.reply)
+    expect("- at helm" in roster_with_bob.reply, roster_with_bob.reply)
+    helm_buttons = [button for button in roster_with_bob.buttons if button.label.startswith("Take Helm:")]
+    expect(any(button.label == "Take Helm: Bob" for button in helm_buttons), str(roster_with_bob.buttons))
+    expect(not any("prime" in button.label.lower() for button in helm_buttons), str(helm_buttons))
+    bob_helm = next(button for button in helm_buttons if button.label == "Take Helm: Bob")
+    expect(bob_helm.command == "/agent Bob", str(bob_helm))
+    now_iso = control.utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO academy_trainees (
+          trainee_id, program_id, user_id, deployment_id, name, status, mode_open,
+          enrolled_at, graduated_at, created_at, updated_at
+        ) VALUES ('trn_bob_grad', 'research_analyst', ?, 'arcdep_bob', 'Research Analyst', 'graduated', 0, ?, ?, ?, ?)
+        """,
+        (seeded["user_id"], now_iso, now_iso, now_iso, now_iso),
+    )
+    conn.commit()
+    roster_with_academy = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:42",
+        text="/agents",
+    )
+    expect("Academy: Academy graduate - Research Analyst" in roster_with_academy.reply, roster_with_academy.reply)
     soft_switched = bots.handle_arclink_public_bot_turn(
         conn,
         channel="telegram",
@@ -1633,6 +1657,125 @@ def test_public_bot_share_approval_buttons_are_owner_scoped() -> None:
     }
     expect({"share_grant_requested", "share_grant_approved", "share_grant_accepted", "share_grant_denied"} <= audit_actions, str(audit_actions))
     print("PASS test_public_bot_share_approval_buttons_are_owner_scoped")
+
+
+def test_public_bot_share_create_originates_owner_staged_grant() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_bot_share_create_test")
+    bots = load_module("arclink_public_bots.py", "arclink_public_bots_share_create_test")
+    conn = memory_db(control)
+    owner = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        prefix="arc-share-creator",
+    )
+    recipient = seed_active_public_bot_deployment(
+        control,
+        conn,
+        channel="discord",
+        channel_identity="discord:share-receiver",
+        prefix="arc-share-receiver",
+    )
+
+    usage = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/share-create",
+    )
+    expect(usage.action == "share_create_usage", str(usage))
+    expect("vault/" in usage.reply and "workspace/" in usage.reply, usage.reply)
+
+    root_only = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/share-create vault someone@example.test",
+    )
+    expect(root_only.action == "share_create_usage", str(root_only))
+
+    unknown = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/share-create vault/Projects/Briefs nobody@example.test",
+    )
+    expect(unknown.action == "share_create_recipient_unknown", str(unknown))
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_share_grants").fetchone()["n"] == 0, "no grant for unknown recipient")
+
+    self_share = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/share-create vault/Projects/Briefs arc-share-creator@example.test",
+    )
+    expect(self_share.action == "share_create_same_account", str(self_share))
+    expect("Fleet" in self_share.reply, self_share.reply)
+
+    protected = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/share-create vault/.ssh arc-share-receiver@example.test",
+    )
+    expect(protected.action == "share_create_rejected", str(protected))
+    expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_share_grants").fetchone()["n"] == 0, "no grant for protected path")
+
+    staged = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/share-create vault/Projects/Briefs ARC-SHARE-RECEIVER@example.test",
+    )
+    expect(staged.action == "share_create_staged", str(staged))
+    grant_row = conn.execute("SELECT * FROM arclink_share_grants").fetchone()
+    expect(grant_row is not None, "grant should exist")
+    grant = dict(grant_row)
+    expect(grant["owner_user_id"] == owner["user_id"], str(grant))
+    expect(grant["recipient_user_id"] == recipient["user_id"], str(grant))
+    expect(grant["resource_kind"] == "drive" and grant["resource_root"] == "vault", str(grant))
+    expect(grant["resource_path"] == "/Projects/Briefs", str(grant))
+    expect(grant["status"] == "pending_owner_approval", str(grant))
+    expect(grant["access_mode"] == "read_write", str(grant))
+    grant_id = str(grant["grant_id"])
+    button_commands = {button.command for button in staged.buttons}
+    expect(f"/share-approve {grant_id}" in button_commands, str(button_commands))
+    expect(f"/share-deny {grant_id}" in button_commands, str(button_commands))
+    metadata = json.loads(grant["metadata_json"])
+    expect(metadata.get("origin") == "raven_share_create", str(metadata))
+    expect("reshare" not in json.dumps(metadata).lower() or not metadata.get("reshare_allowed"), str(metadata))
+
+    approved = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text=f"/share-approve {grant_id}",
+    )
+    expect(approved.action == "share_grant_approved", str(approved))
+    accepted = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="discord",
+        channel_identity="discord:share-receiver",
+        text=f"/share-accept {grant_id}",
+    )
+    expect(accepted.action == "share_grant_accepted", str(accepted))
+    final_status = conn.execute("SELECT status FROM arclink_share_grants WHERE grant_id = ?", (grant_id,)).fetchone()["status"]
+    expect(final_status == "accepted", str(final_status))
+
+    rewritten = bots.handle_arclink_public_bot_turn(
+        conn,
+        channel="telegram",
+        channel_identity="tg:share-creator",
+        text="/raven share workspace/Tools arc-share-receiver@example.test",
+    )
+    expect(rewritten.action == "share_create_staged", str(rewritten))
+    code_grant = conn.execute(
+        "SELECT * FROM arclink_share_grants WHERE resource_kind = 'code'"
+    ).fetchone()
+    expect(code_grant is not None and code_grant["resource_root"] == "workspace", str(dict(code_grant or {})))
+    expect(code_grant["resource_path"] == "/Tools", str(dict(code_grant)))
+    print("PASS test_public_bot_share_create_originates_owner_staged_grant")
 
 
 def test_public_bot_ignores_cross_user_active_deployment_metadata() -> None:
@@ -2232,6 +2375,8 @@ def main() -> int:
     test_public_bot_pair_channel_links_account_across_telegram_and_discord()
     test_public_bot_pair_channel_refuses_existing_other_account()
     test_public_bot_share_approval_buttons_are_owner_scoped()
+    test_public_bot_share_create_originates_owner_staged_grant()
+    test_telegram_markdown_to_entities_strips_backticks_into_code_entities()
     test_public_bot_ignores_cross_user_active_deployment_metadata()
     test_public_bot_withholds_unpublished_tailnet_app_urls()
     test_public_bot_withholds_tailnet_urls_until_publication_record_exists()
@@ -2247,7 +2392,7 @@ def main() -> int:
     test_public_bot_train_crew_flow_and_whats_changed()
     test_public_bot_academy_training_walks_crew_with_skip()
     test_public_bot_new_onboarding_workflow_wins_over_retired_history()
-    print("PASS all 36 ArcLink public bot tests")
+    print("PASS all 40 ArcLink public bot tests")
     return 0
 
 

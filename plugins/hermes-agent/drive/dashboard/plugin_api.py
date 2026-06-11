@@ -169,6 +169,17 @@ _ROOT_METADATA = {
 }
 
 
+def _root_label(root_id: str) -> str:
+    """Captain-facing label for a Drive root id, for error copy and badges."""
+    normalized = str(root_id or "").strip().lower()
+    metadata = _ROOT_METADATA.get(normalized)
+    if metadata:
+        return str(metadata.get("label") or normalized.title() or "Drive")
+    if normalized == "vault":
+        return "Workspace"
+    return normalized.title() or "Drive"
+
+
 def _hermes_home() -> Path:
     return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes")).expanduser()
 
@@ -217,6 +228,24 @@ def _manifest_bool(value: Any, *, default: bool = True) -> bool:
 def _linked_entry_writable(entry: dict[str, Any]) -> bool:
     access_mode = str(entry.get("access_mode") or "").strip().lower().replace("-", "_")
     return access_mode == "read_write" and not _manifest_bool(entry.get("read_only"), default=True)
+
+
+def _linked_root_has_writable_share(root: Path | None) -> bool:
+    """True when at least one accepted read/write shared folder exists under Linked."""
+    if root is None:
+        return False
+    try:
+        entries = _linked_manifest(root.resolve(strict=False))
+    except OSError:
+        return False
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("resource_kind") or "").strip().lower() != "directory":
+            continue
+        if _linked_entry_writable(entry):
+            return True
+    return False
 
 
 def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
@@ -680,8 +709,36 @@ def _root_capabilities(
     webdav_available: bool = False,
     read_only: bool = False,
     share_request_enabled: bool = False,
+    linked: bool = False,
 ) -> dict[str, bool]:
     local = bool(available and backend == "local")
+    if linked:
+        # Linked is system-managed: writes are only possible inside accepted
+        # read/write shared folders, so write-style capabilities follow the
+        # manifest truth instead of advertising full local capabilities.
+        writable = bool(local and not read_only)
+        return {
+            "batch": local,
+            "copy": local,
+            "delete": writable,
+            "download": local,
+            "drag_drop_upload": writable,
+            "duplicate": local,
+            "favorites": False,
+            "folder_upload": writable,
+            "folders": writable,
+            "move": writable,
+            "new_file": writable,
+            "preview": local,
+            "rename": writable,
+            "restore": writable,
+            "search": local,
+            "share_request": False,
+            "sharing": False,
+            "trash": writable,
+            "upload": writable,
+            "nextcloud_webdav": False,
+        }
     if read_only:
         return {
             "batch": False,
@@ -738,6 +795,7 @@ def _root_descriptor(
     read_only: bool = False,
     share_request_enabled: bool = False,
     resource_root: str = "",
+    linked: bool = False,
 ) -> dict[str, Any]:
     available = root is not None
     child_count, child_count_truncated = _visible_child_count(root_id, root, root) if root is not None else (0, False)
@@ -763,6 +821,7 @@ def _root_descriptor(
             webdav_available=webdav_available,
             read_only=read_only,
             share_request_enabled=share_request_enabled,
+            linked=linked,
         ),
     }
 
@@ -771,6 +830,7 @@ def _local_root_descriptors(webdav_available: bool = False, share_request_enable
     vault = _first_existing_dir(_candidate_vault_roots())
     workspace = _first_existing_dir(_candidate_workspace_roots()) or vault
     workspace_resource_root = "vault" if _same_root(workspace, vault) else "workspace"
+    linked_root = _first_existing_dir(_candidate_linked_roots())
     return [
         _root_descriptor(
             "workspace",
@@ -789,7 +849,9 @@ def _local_root_descriptors(webdav_available: bool = False, share_request_enable
         _root_descriptor(
             "linked",
             "Linked",
-            _first_existing_dir(_candidate_linked_roots()),
+            linked_root,
+            read_only=not _linked_root_has_writable_share(linked_root),
+            linked=True,
         ),
     ]
 
@@ -828,9 +890,22 @@ def _root_context(raw_root: Any = None) -> dict[str, Any]:
     raise HTTPException(status_code=404, detail="Drive root is not available")
 
 
+_WRITABLE_ROOT_IDS = {"vault", "workspace", "fleet"}
+
+
 def _assert_writable_root(root_id: str) -> None:
-    if str(root_id or "").strip().lower() == "linked":
+    """Fail closed before any Drive write: only owned writable roots may proceed.
+
+    Linked passes through because every Linked write path must route through
+    _linked_writable_source, which authorizes writes per accepted read/write
+    shared folder and rejects everything else. Any other root id is rejected
+    so future read-only roots cannot silently reach write handlers.
+    """
+    normalized = str(root_id or "").strip().lower()
+    if normalized == "linked":
         return
+    if normalized not in _WRITABLE_ROOT_IDS:
+        raise HTTPException(status_code=403, detail=f"{_root_label(normalized)} root is read-only")
 
 
 def _share_item_kind(path: Path) -> str:
@@ -919,13 +994,10 @@ def _meta_path() -> Path:
 
 def _load_meta() -> dict[str, Any]:
     meta = _load_json(_meta_path())
-    favorites = meta.get("favorites")
-    if not isinstance(favorites, dict):
-        favorites = {}
     trash = meta.get("trash")
     if not isinstance(trash, dict):
         trash = {}
-    return {"favorites": favorites, "trash": trash}
+    return {"trash": trash}
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -1180,7 +1252,7 @@ def _iso_from_timestamp(value: float) -> str:
     return email.utils.formatdate(value, usegmt=True)
 
 
-def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, meta: dict[str, Any]) -> dict[str, Any]:
+def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str) -> dict[str, Any]:
     _assert_within_root(root, path, root_id=root_id)
     try:
         stat = path.stat()
@@ -1209,7 +1281,6 @@ def _item_from_local(root_id: str, root: Path, path: Path, relative_path: str, m
         "size": 0 if is_dir else stat.st_size,
         "modified": _iso_from_timestamp(stat.st_mtime),
         "mime": mime,
-        "favorite": bool(_root_meta(meta, "favorites", root_id).get(display)),
         "text": bool((not is_dir) and _is_text_item(path) and stat.st_size <= _MAX_TEXT_BYTES),
         "child_count": child_count,
         "child_count_truncated": child_count_truncated,
@@ -1224,9 +1295,9 @@ def _should_skip(path: Path) -> bool:
     return path.name in _SKIP_DIR_NAMES
 
 
-def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", favorites_only: bool = False) -> dict[str, Any]:
-    meta = _load_meta()
+def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "") -> dict[str, Any]:
     items: list[dict[str, Any]] = []
+    folder: dict[str, Any] | None = None
     if query.strip():
         needle = query.strip().lower()
         for current_root, dirnames, filenames in os.walk(root, followlinks=root_id == "linked"):
@@ -1242,10 +1313,7 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
                 relative = _safe_child_relative(root, candidate, root_id=root_id)
                 if relative is None:
                     continue
-                item = _item_from_local(root_id, root, candidate, relative, meta)
-                if favorites_only and not item["favorite"]:
-                    continue
-                items.append(item)
+                items.append(_item_from_local(root_id, root, candidate, relative))
                 if len(items) >= _SEARCH_LIMIT:
                     break
             if len(items) >= _SEARCH_LIMIT:
@@ -1254,9 +1322,10 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
     else:
         target, relative = _resolve_local(root, raw_path, root_id=root_id)
         if not target.exists():
-            raise HTTPException(status_code=404, detail="Vault path does not exist")
+            raise HTTPException(status_code=404, detail=f"{_root_label(root_id)} path does not exist")
         if not target.is_dir():
-            raise HTTPException(status_code=400, detail="Vault path is not a folder")
+            raise HTTPException(status_code=400, detail=f"{_root_label(root_id)} path is not a folder")
+        folder = _item_from_local(root_id, root, target, relative)
         safe_children = [child for child in target.iterdir() if _safe_child_relative(root, child, root_id=root_id) is not None]
         for child in sorted(safe_children, key=lambda value: (not value.is_dir(), value.name.lower())):
             if _should_skip(child):
@@ -1264,18 +1333,15 @@ def _list_local(root_id: str, root: Path, raw_path: Any, *, query: str = "", fav
             child_relative = _safe_child_relative(root, child, root_id=root_id)
             if child_relative is None:
                 continue
-            item = _item_from_local(root_id, root, child, child_relative, meta)
-            if favorites_only and not item["favorite"]:
-                continue
-            items.append(item)
+            items.append(_item_from_local(root_id, root, child, child_relative))
         current_path = _display_path(relative)
     return {
         "backend": "local-vault",
         "root": root_id,
         "path": current_path,
+        "folder": folder,
         "items": items,
         "query": query.strip(),
-        "favorites_only": bool(favorites_only),
     }
 
 
@@ -1300,16 +1366,8 @@ def _move_local(root_id: str, root: Path, source_path: Any, destination_path: An
         raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(destination))
-    meta = _load_meta()
-    favorites = _root_meta(meta, "favorites", root_id)
     source_display = _linked_display_path(source_slug, source_relative) if source_slug else _display_path(source_relative)
     destination_display = _linked_display_path(destination_slug, destination_relative) if destination_slug else _display_path(destination_relative)
-    for favorite_path in list(favorites):
-        if favorite_path == source_display or favorite_path.startswith(source_display + "/"):
-            favorites[destination_display + favorite_path[len(source_display) :]] = favorites.pop(favorite_path)
-    if source_display == destination_display:
-        favorites[destination_display] = True
-    _save_meta(meta)
     return {"ok": True, "root": root_id, "path": source_display, "destination": destination_display}
 
 
@@ -1472,19 +1530,13 @@ def _move_webdav(profile: dict[str, Any], source_path: Any, destination_path: An
     source_display = _display_path(_clean_relative_path(source_path))
     destination_display = _display_path(_clean_relative_path(destination_path))
     if source_display == "/":
-        raise HTTPException(status_code=400, detail="Cannot move the vault root")
+        raise HTTPException(status_code=400, detail="Cannot move the Drive root")
     _dav_request(
         profile,
         "MOVE",
         source_display,
         headers={"Destination": _webdav_url(profile, destination_display), "Overwrite": "F"},
     )
-    meta = _load_meta()
-    favorites = meta.setdefault("favorites", {})
-    for favorite_path in list(favorites):
-        if favorite_path == source_display or favorite_path.startswith(source_display + "/"):
-            favorites[destination_display + favorite_path[len(source_display) :]] = favorites.pop(favorite_path)
-    _save_meta(meta)
     return {"ok": True, "path": source_display, "destination": destination_display}
 
 
@@ -1519,7 +1571,6 @@ def _propfind_body() -> str:
     <d:getcontenttype />
     <d:getlastmodified />
     <d:resourcetype />
-    <oc:favorite />
   </d:prop>
 </d:propfind>
 """
@@ -1542,7 +1593,7 @@ def _dav_relative_from_href(profile: dict[str, Any], href: str) -> str:
     return posixpath.basename(href_path)
 
 
-def _item_from_dav(profile: dict[str, Any], response: ET.Element, meta: dict[str, Any]) -> dict[str, Any]:
+def _item_from_dav(profile: dict[str, Any], response: ET.Element) -> dict[str, Any]:
     href = _text_from(response, "d:href")
     relative = _dav_relative_from_href(profile, href)
     prop = response.find("d:propstat/d:prop", _DAV_NS)
@@ -1555,7 +1606,6 @@ def _item_from_dav(profile: dict[str, Any], response: ET.Element, meta: dict[str
     except ValueError:
         size = 0
     mime = "inode/directory" if is_dir else (_text_from(prop, "d:getcontenttype") or "application/octet-stream")
-    favorite = _text_from(prop, "oc:favorite") == "1" or bool((meta.get("favorites") or {}).get(display))
     suffix = Path(relative).suffix.lower()
     return {
         "name": posixpath.basename(relative.rstrip("/")) or "Drive",
@@ -1564,14 +1614,13 @@ def _item_from_dav(profile: dict[str, Any], response: ET.Element, meta: dict[str
         "size": 0 if is_dir else size,
         "modified": _text_from(prop, "d:getlastmodified"),
         "mime": mime,
-        "favorite": favorite,
         "text": bool((not is_dir) and (mime.startswith("text/") or suffix in _TEXT_EXTENSIONS) and size <= _MAX_TEXT_BYTES),
     }
 
 
-def _list_dav(profile: dict[str, Any], raw_path: Any, *, query: str = "", favorites_only: bool = False) -> dict[str, Any]:
+def _list_dav(profile: dict[str, Any], raw_path: Any, *, query: str = "") -> dict[str, Any]:
     if query.strip():
-        raise HTTPException(status_code=400, detail="Search is available through the local vault backend")
+        raise HTTPException(status_code=400, detail="Search is available through the local Drive backend")
     _status, body, _headers = _dav_request(
         profile,
         "PROPFIND",
@@ -1579,15 +1628,12 @@ def _list_dav(profile: dict[str, Any], raw_path: Any, *, query: str = "", favori
         body=_propfind_body(),
         headers={"Depth": "1", "Content-Type": "application/xml"},
     )
-    meta = _load_meta()
     root = ET.fromstring(body)
     items: list[dict[str, Any]] = []
     current_path = _display_path(_clean_relative_path(raw_path))
     for response in root.findall("d:response", _DAV_NS):
-        item = _item_from_dav(profile, response, meta)
+        item = _item_from_dav(profile, response)
         if item["path"] == current_path:
-            continue
-        if favorites_only and not item["favorite"]:
             continue
         items.append(item)
     items.sort(key=lambda item: (item["kind"] != "folder", str(item["name"]).lower()))
@@ -1596,7 +1642,6 @@ def _list_dav(profile: dict[str, Any], raw_path: Any, *, query: str = "", favori
         "path": current_path,
         "items": items,
         "query": "",
-        "favorites_only": bool(favorites_only),
     }
 
 
@@ -1677,17 +1722,17 @@ async def share_request(request: Request) -> dict[str, Any]:
 
 
 @router.get("/items")
-async def items(path: str = "/", query: str = "", favorites_only: bool = False, root: str = "") -> dict[str, Any]:
+async def items(path: str = "/", query: str = "", root: str = "") -> dict[str, Any]:
     if root:
         ctx = _root_context(root)
-        return _list_local(ctx["id"], Path(ctx["path"]), path, query=query, favorites_only=favorites_only)
+        return _list_local(ctx["id"], Path(ctx["path"]), path, query=query)
     backend = _backend()
     if backend["name"] == "local-vault":
-        return _list_local("vault", backend["root"], path, query=query, favorites_only=favorites_only)
+        return _list_local("vault", backend["root"], path, query=query)
     if backend["name"] == "nextcloud-webdav":
-        return _list_dav(backend["profile"], path, query=query, favorites_only=favorites_only)
+        return _list_dav(backend["profile"], path, query=query)
     ctx = _root_context(root)
-    return _list_local(ctx["id"], Path(ctx["path"]), path, query=query, favorites_only=favorites_only)
+    return _list_local(ctx["id"], Path(ctx["path"]), path, query=query)
 
 
 @router.get("/content")
@@ -1852,33 +1897,6 @@ async def rename(request: Request) -> dict[str, Any]:
     raise HTTPException(status_code=404, detail="Drive is not available")
 
 
-@router.post("/favorite")
-async def favorite(request: Request) -> dict[str, Any]:
-    payload = await _request_json(request)
-    root_id = str(payload.get("root") or "").strip().lower()
-    if root_id:
-        _root_context(root_id)
-    display = _display_path(_clean_relative_path(payload.get("path")))
-    is_favorite = bool(payload.get("favorite"))
-    meta = _load_meta()
-    favorites = _root_meta(meta, "favorites", root_id or "vault")
-    if is_favorite:
-        favorites[display] = True
-    else:
-        favorites.pop(display, None)
-    _save_meta(meta)
-    backend = _backend()
-    if backend["name"] == "nextcloud-webdav":
-        value = "1" if is_favorite else "0"
-        body = f"""<?xml version="1.0"?>
-<d:propertyupdate xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
-  <d:set><d:prop><oc:favorite>{value}</oc:favorite></d:prop></d:set>
-</d:propertyupdate>
-"""
-        _dav_request(backend["profile"], "PROPPATCH", display, body=body, headers={"Content-Type": "application/xml"})
-    return {"ok": True, "root": root_id or "vault", "path": display, "favorite": is_favorite}
-
-
 @router.post("/delete")
 async def delete(request: Request) -> dict[str, Any]:
     payload = await _request_json(request)
@@ -1903,20 +1921,18 @@ def _delete_local(root_id: str, root: Path, raw_path: Any) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Drive path does not exist")
     if target == effective_root:
         raise HTTPException(status_code=400, detail="Cannot delete the Drive root")
+    item_kind = "folder" if target.is_dir() else "file"
     trash_target = _next_trash_path(effective_root, relative)
     shutil.move(str(target), str(trash_target))
     display = _linked_display_path(slug, relative) if slug else _display_path(relative)
     trash_relative = trash_target.relative_to(effective_root).as_posix()
     trash_display = _linked_display_path(slug, trash_relative) if slug else _display_path(trash_relative)
     meta = _load_meta()
-    favorites = _root_meta(meta, "favorites", root_id)
-    for favorite_path in list(favorites):
-        if favorite_path == display or favorite_path.startswith(display + "/"):
-            favorites.pop(favorite_path, None)
     _root_meta(meta, "trash", root_id)[trash_display] = {
         "root": root_id,
         "original_path": display,
         "trash_path": trash_display,
+        "kind": item_kind,
         "deleted_at": _iso_from_timestamp(time.time()),
     }
     _save_meta(meta)
@@ -2238,17 +2254,6 @@ async def batch(request: Request) -> dict[str, Any]:
         try:
             if action == "trash":
                 result = _delete_local(ctx["id"], Path(ctx["path"]), raw_path)
-            elif action == "favorite":
-                is_favorite = bool(payload.get("favorite", True))
-                meta = _load_meta()
-                favorites = _root_meta(meta, "favorites", ctx["id"])
-                display = _display_path(_clean_relative_path(raw_path))
-                if is_favorite:
-                    favorites[display] = True
-                else:
-                    favorites.pop(display, None)
-                _save_meta(meta)
-                result = {"ok": True, "root": ctx["id"], "path": display, "favorite": is_favorite}
             elif action == "copy":
                 destination_root = payload.get("destination_root") or (_default_writable_root_id() if ctx["id"] == "linked" else ctx["id"])
                 destination_folder = payload.get("destination_folder") or payload.get("destination_path")

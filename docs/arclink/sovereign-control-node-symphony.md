@@ -91,11 +91,14 @@ tested, and a focused defect sweep closed concrete quirks:
   reports refreshed capsules accurately and no longer clobbers the Trainer's
   engine/live/summary enrichment when a capsule changes.
 
-The remaining open items from that sweep — Telegram operator-gate unification, a
+All six follow-up items from that sweep — Telegram operator-gate unification, a
 Captain `/share-create` origination command, ArcPod-upgrade command-menu refresh,
 tracked nohup tailnet-forward pruning, deferring the Tailscale handoff link until
-the control bridge publishes, and TUI/API/docs surface-contract coverage — are
-recorded with concrete fix approaches in **Post-Audit Hardening Register** below.
+the control bridge publishes, and TUI/API/docs surface-contract coverage — landed
+source-real and regression-tested in the 2026-06-11 hardening pass recorded in
+**Post-Audit Hardening Register** below. That pass also gave the Captain crew
+roster take-the-helm switch buttons and per-Agent Academy status markers, so
+switching Agents is one tap from `/agents` on both chat platforms.
 
 ## North Star
 
@@ -290,10 +293,13 @@ once. Discord-as-secondary keys its operator channel off
 user/role allowlist (`ARCLINK_OPERATOR_DISCORD_USER_IDS`/`_ROLE_IDS`), which fails
 closed for guild channels with no allowlist. Each adapter replies on the channel a
 command arrived on, while `OPERATOR_NOTIFY_CHANNEL_PLATFORM` (the primary) governs
-proactive/notification responses. What remains under `GAP-029` is breadth (fleet
-admission/rotation, user suspend/restore, billing refuel from chat), one
-unified Raven/action policy that fully reconciles the long-poll and webhook
-Telegram operator gates, and authorized live proof — not a "read-only" limitation.
+proactive/notification responses. The long-poll and webhook Telegram operator
+gates are now one rule: both transports call the shared
+`operator_telegram_sender_allowed` helper in `arclink_telegram.py`, so the same
+update yields the same allow/deny decision regardless of transport (covered by
+`test_operator_telegram_gate_unified_across_transports`). What remains under
+`GAP-029` is breadth (fleet admission/rotation, user suspend/restore, billing
+refuel from chat) and authorized live proof — not a "read-only" limitation.
 
 ## Admin Dashboard, API, And CLI Control
 
@@ -423,12 +429,17 @@ pushes, so every machine converges; unresolvable rebases are surfaced as conflic
 per-Agent `fleet-share-sync` job is rendered into the ArcPod for the in-pod git
 sync, while the control-node `fleet-share-reconcile` compose job runs DB-only
 membership convergence (`reconcile --all`, every 120s) — enrolling newly-active
-agents and deregistering torn-down ones without touching the hub. Today Raven is the share **approval/accept** surface
-(`/share-approve`, `/share-deny`, `/share-accept`, `/share-claim`); share
-**origination** (minting a grant for a Drive/Code folder) is reachable from the
-Drive/Code plugins, the web dashboard, and the MCP `_create_agent_share_request`
-tool, but not yet from a Raven command — the planned `/share-create` origination
-command is in the Post-Audit Hardening Register. Live
+agents and deregistering torn-down ones without touching the hub. Raven is now
+both the share **approval/accept** surface (`/share-approve`, `/share-deny`,
+`/share-accept`, `/share-claim`) and an **origination** surface:
+`/share-create <vault|workspace>/<path> <recipient-email-or-id>` resolves the
+linked session as owner, resolves the recipient through the shared
+`_resolve_share_recipient_user_id` lookup (recipient must exist), and calls the
+same `create_user_share_grant_for_owner` broker as the Drive/Code plugins, web
+dashboard, and MCP `_create_agent_share_request` tool — inheriting the
+no-reshare, protected-path, and root validation. The staged grant still requires
+the owner's explicit `/share-approve` before the recipient is notified, and a
+same-account recipient is redirected to the Fleet folder instead. Live
 browser/bot proof, no-channel behavior, and remote
 (`ssh`/`https`) hub transport remain tracked under `GAP-014`, `GAP-015`, and
 `GAP-016`.
@@ -462,9 +473,11 @@ single-backtick code spans into real Telegram `code` entities
 explicit entities are present, and forwarded through both the long-poll and
 webhook send paths) — so a Captain on Telegram sees styled code instead of literal
 backtick characters, matching how Discord renders the same source string natively.
-`GAP-033` remains open for live browser, bot, and workspace proof, and the
-surface contract's declared `tui`/`api`/`docs` channels still need real samples
-(see Post-Audit Hardening Register).
+All eight declared `SurfaceChannel` values now carry real samples: the
+`tui`/`api`/`docs` channels are exercised with curator-TUI recovery copy, hosted
+API health/error payloads, and OpenAPI route summaries plus Captain command
+descriptions (`test_surface_contract_covers_tui_api_and_docs_channels`).
+`GAP-033` remains open for live browser, bot, and workspace proof.
 
 ## Inference And Router Policy
 
@@ -1390,12 +1403,13 @@ people can enter it without being handed a maze.
 
 ## Post-Audit Hardening Register
 
-This register records the 2026-06-05 ground-truth defect sweep so the symphony,
+This register records the 2026-06-05 ground-truth defect sweep and the
+2026-06-11 hardening pass that closed its forward plan, so the symphony,
 `GAPS.md`, and the code agree on the same traversal. Each landed fix is source-
-real and regression-tested; each forward-plan item names the exact owner and
-approach so it can be picked up without re-discovery.
+real and regression-tested; any future forward-plan item must name the exact
+owner and approach so it can be picked up without re-discovery.
 
-**Landed this pass (source-real + tested).**
+**Landed 2026-06-05 (source-real + tested).**
 
 - *Executor boundary* — `SshDockerComposeRunner.read_text_file` now fails closed
   (raises) instead of silently returning `None` when a remote read fails with no
@@ -1431,44 +1445,208 @@ approach so it can be picked up without re-discovery.
   corrected (10 user / 11 Curator; `notion-page-pdf-export` is an optional
   chromium-gated operator skill, not in the default set).
 
+**Landed 2026-06-11 (the prior forward plan; source-real + regression-tested).**
+
+- *`GAP-033` Telegram handoff link in Tailscale mode* (high) —
+  `process_sovereign_deployment` no longer fires `user_handoff_ready` with the
+  worker tailnet DNS URL in tailscale ingress. The handoff and
+  `_queue_vessel_online_notifications` defer until metadata
+  `tailnet_app_publication.status == 'published'`, then the
+  `recover_succeeded_sovereign_handoffs` sweep fires with the control-DNS
+  `access_urls` the publisher wrote. Deferral cannot strand the Captain: a
+  recorded publish failure (`unavailable`) fires immediately with the best-known
+  URLs, and an un-published bridge fires anyway after a bounded window
+  (`ARCLINK_TAILNET_HANDOFF_DEFER_MAX_SECONDS`, default 900s), with
+  `user_handoff_deferred` events for observability. Live tailscale-mode proof of
+  the rendered link remains under `PG-INGRESS`/`GAP-033`.
+- *Raven `/share-create` origination* (`GAP-014` adjacent) —
+  `ARCLINK_PUBLIC_BOT_SHARE_CREATE_RE` dispatches `_share_create_reply`, which
+  resolves the linked session as owner, resolves the recipient through
+  `_resolve_share_recipient_user_id` (must be an existing account; email or
+  account ID), and calls the same `create_user_share_grant_for_owner` broker —
+  inheriting no-reshare, protected-path, and root validation. The staged grant
+  stays `pending_owner_approval` with explicit approve/deny buttons, and a
+  same-account recipient is redirected to the Fleet folder. Registered in the
+  Telegram/Discord command menus as `share_create`/`share-create`.
+- *ArcPod-upgrade command-menu refresh* (`GAP-032`) — rollout completion in
+  `arclink_action_worker` now calls `refresh_active_telegram_command_scopes`
+  filtered to the rolled `deployment_ids` (best-effort; never fails the
+  rollout, result recorded as `telegram_command_scope_refresh`), and the
+  per-turn cache signature includes a description digest so description-only
+  Hermes command changes re-register the chat menu.
+- *Tracked nohup tailnet forwards* — the nohup fallback writes
+  `<deployment>-<port>.pid` next to the `.log`; `docker_prune_tailnet_forwards`
+  kills tracked pids that left the desired route set and drops dead pidfiles;
+  the healthy-port short-circuit now requires a tracked owner
+  (`docker_tailnet_forward_tracked_alive`) for this deployment+port, and an
+  untracked legacy listener is replaced with a tracked forward instead of
+  silently adopted.
+- *Operator gate unification* (`GAP-029`) — both the curator long-poll and the
+  hosted-API webhook now call one `operator_telegram_sender_allowed` helper in
+  `arclink_telegram.py`; the same Telegram update yields the same allow/deny on
+  both transports (secondary-surface enablement via `ARCLINK_CURATOR_CHANNELS`
+  included, no-allowlist trust limited to the configured private operator
+  channel).
+- *Surface-contract TUI/API/docs coverage* (`GAP-033`) — all eight declared
+  `SurfaceChannel` values now run real samples through
+  `assert_surface_contract`: curator-TUI recovery copy, hosted API health and
+  unauthorized-error payloads, and OpenAPI route summaries plus Captain command
+  descriptions.
+
+**Also landed in that pass (Captain power polish).**
+
+- The `/agents` crew roster now builds **Take Helm** switch buttons for every
+  ready non-active Agent (the copy always promised them), shows the `at helm`
+  marker on the active Agent, and surfaces a per-Agent Academy status line
+  (`Academy graduate - <role>` / `In Academy - <role>` / `Academy enrolled`)
+  from the `academy_trainees` ledger.
+- Captain-facing command descriptions were aligned to the product vocabulary
+  (capitalized Pod/Crew), now enforced by the docs-channel surface sample.
+- Pin hygiene from the `3c231eb` hermes-agent bump was completed: the
+  `config/arclink.env.example` bootstrap fallbacks
+  (`ARCLINK_HERMES_AGENT_REF`/`ARCLINK_HERMES_DOCS_REF`) and the pin
+  regression test now match `config/pins.json`, and the public-repo hygiene
+  provider-context allowlist gained `arclink_operator_agent.py` and this
+  symphony document, which legitimately describe the provider budget lane.
+- A dead test was wired in: the Telegram markdown-entities regression
+  (`test_telegram_markdown_to_entities_strips_backticks_into_code_entities`)
+  existed but was never invoked by the public-bots suite runner.
+
+**Landed 2026-06-11 (second pass: chat-native power + bridge parity; source-real
++ regression-tested).** This pass compared the upgraded local Hermes source
+(checkout moved from the stale `a618789` to the pinned `3c231eb` / v0.16.0,
+with upstream `main` measured 629 commits further ahead) against the ArcLink
+bridge, then closed the highest-impact gaps:
+
+- *One-tap Operator upgrades* — bare `/upgrade` (and bare `/pin_upgrade`) now
+  renders a read-only **upgrade menu** with single-use, 15-minute nonce buttons
+  (`mint_operator_button_nonce`/`consume_operator_button_nonce`, settings-table
+  backed). Tapping a button dispatches the server-minted
+  `/upgrade_apply <nonce>` through the same `dispatch_operator_raven_command`
+  gate as typed commands — actor required, nonce is the structured
+  confirmation, replay fails closed, queue rows still carry
+  `request_source=operator-raven`. Works on the Telegram webhook, the Telegram
+  long-poll, and Discord (components + `arclink:/` custom-id dispatch). The
+  legacy detector-notification Install buttons now queue for real when no
+  approval code is configured, and answer with a fresh nonce menu when one is
+  (two taps, zero typing); `ARCLINK_OPERATOR_BUTTON_APPROVALS=0` restores
+  typed-only confirmation everywhere.
+- *Discord stops discarding what the Captain typed* — `parse_discord_interaction`
+  now reconstructs every slash command's registered option values generically
+  (agent-name, agent-title, rename/retitle, wrapped-frequency, share-create, …)
+  instead of re-prompting; previously only seven commands mapped options.
+- *Discord slash picker carries the Hermes blend* —
+  `arclink_public_bot_discord_agent_commands` mirrors the pinned Hermes command
+  inventory (deduped against ArcLink names, policy-suppressed names dropped,
+  100-command budget) into the application-command registration, each with an
+  optional free-text option dispatched through the agent passthrough.
+- *Menus derive from Hermes itself* — the control-local loader now prefers
+  Hermes's public `telegram_menu_commands()` helper (core + plugin + skill
+  tiers, true hidden count) before the registry loop and static fallback, so an
+  upgraded Hermes changes ArcLink menus without an ArcLink patch.
+- *Telegram albums become one Agent turn* — the delivery consumer elects a
+  leader per `media_group_id`, waits for stragglers, absorbs sibling outbox
+  rows into `telegram_update_json_list`, and the bridge replays them in one
+  process so Hermes's native media-group debounce merges them (previously one
+  album = N self-interrupting turns).
+- *Bridge correctness* — edited messages replay natively instead of degrading
+  to a placeholder; oversized update JSON is slimmed instead of truncated into
+  invalid JSON; `video_note` gets a real parse kind and placeholder; Discord
+  sends (bridge and outbox) now pin `allowed_mentions` to default-deny so agent
+  output can never ping `@everyone`/roles.
+- *Captain friction buttons* — pairing replies carry a Copy Pairing Command
+  button; Notion setup gained Ready/Cancel buttons; wrapped-frequency offers
+  Daily/Weekly/Monthly one-taps; backup repo prompts gained Cancel; the
+  retire-agent typed safety gate gained a Copy Agent Name button; bare
+  `/rename-agent` and `/retitle-agent` open listening lanes instead of
+  demanding retyped commands.
+
+**Also landed 2026-06-11 (second pass: workstation + knowledge spine).**
+
+- *Crew switcher, both phases* — the dashboard crew links are now plain
+  Captain-scoped (multi-session purchases get one unified switcher), torn-down
+  Agents drop out (exclusion set aligned with the refresher's terminal set via
+  `CREW_LINK_EXCLUDED_STATUSES`, refresher now invoked from teardown), and a
+  new native **`arclink-crew`** slot plugin mounts a top-right header dropdown
+  in every Agent's Hermes dashboard (header-right slot, hidden tab, one
+  read-only `/crew` route over the existing `arclink-web-access.json` rail;
+  shipped by `install-arclink-plugins.sh`). The Agent at the helm is marked;
+  every other Agent is one click away.
+- *Terminal sessions persist like tmux* — the tmux server moved out of the
+  dashboard container into a dedicated long-lived `terminal-tmux` service
+  (control compose + per-Pod template, own cgroup so heavy shells cannot OOM
+  the dashboard), `exit-empty off` keeps the server alive at zero sessions,
+  history-limit honors the advertised scrollback, `clear_closed_sessions` can
+  no longer kill live detached tmux sessions, implicit reattach starts the
+  background reader, managed-pty fallback stops advertising
+  `persistent_sessions`, the false `ssh_sessions` capability is gone, SSE
+  reconnects with backoff instead of permanently downgrading, and detached or
+  exited sessions visibly refuse keystrokes.
+- *Code plugin hardened* — the two P0s (Explorer render crash from
+  module-scope state reads; tree dead beyond depth 3) are fixed, dirty tabs
+  can no longer be silently evicted by the tab cap, "Discard all" states its
+  real blast radius, trash restore has UI, errors render `payload.detail`
+  instead of raw JSON, list/search responses are sequenced against stale
+  races, commit messages survive until the commit resolves, and the
+  source-control glyphs became labeled buttons.
+- *Drive and Code tell the Linked truth* — both plugins' Linked root
+  descriptors now derive `read_only`/write capabilities from the share
+  manifest instead of advertising writes that 403; Drive shows read-only
+  badges and gates actions on per-item flags; cross-root drags open the
+  supported copy dialog; subfolder upload conflicts route through keep-both;
+  error copy names the actual root.
+- *Knowledge plumbing aligned with the Hermes audit* — the audit confirmed
+  qmd is the right complement (Hermes v0.16.0 ships no native vector search,
+  only FTS5 session search, so the qmd lane is load-bearing, not legacy). The
+  `QMD_EMBED_PROVIDER=endpoint` setting no longer silently disables all
+  vector search (logged local-embedding fallback; the installer labels it
+  unsupported at the pinned qmd); the bootstrap qmd fallback no longer floats
+  to a stale 2.1.0 (pins.json or fail-hard); the MCP `protocolVersion` is a
+  named constant tied to the qmd pin; pending-embeddings age is a diagnostics
+  check; Notion-only and memory-synth changes now fan out the same per-agent
+  refresh signal vault changes use; recall-recipe cards state true fetch
+  limits; the memory-synth/PDF-vision credential overlap is surfaced as an
+  explicit config source.
+- *Central skills with per-agent enablement* — new
+  `arclink_agent_skill_enablement` registry (deployment, skill, source,
+  status, provenance), `academy_apply` records enablement intents alongside
+  the receipt, a real `skill_activation` refresh runner replaces the
+  would-raise marker, and the per-agent refresh loop applies enablement
+  through Hermes's own config surface (`skills.disabled` removal, collision
+  detection, local-wins precedence, `effective_at=next_session` honesty).
+- *Bridge pin coupling is tested* — `tests/test_arclink_public_agent_bridge.py`
+  pins the private Hermes handler names the replay calls and the
+  `hermes_cli.commands` helpers the menu derivation imports, so a hermes-agent
+  pin bump that renames them fails loudly instead of silently degrading turns.
+
 **Forward plan (named owner + approach; not yet landed).**
 
-- *`GAP-033` Telegram handoff link in Tailscale mode* (high) — on a successful
-  tailscale/path-mode apply, `arclink_sovereign_worker.process_sovereign_deployment`
-  fires `user_handoff_ready` with the *worker* tailnet DNS URL before the control-node
-  bridge is published, so the first link can be unreachable. Plan: defer the handoff
-  event + `_queue_vessel_online_notifications` until metadata
-  `tailnet_app_publication.status == 'published'`, and let the existing
-  `recover_succeeded_sovereign_handoffs` sweep re-fire it once the control publisher
-  has rewritten `access_urls` to the control DNS. Requires live tailscale-mode proof
-  before landing (deferring the handoff must not strand it).
-- *Raven `/share-create` origination* (`GAP-014` adjacent) — Raven today is an
-  approve/accept surface only; the plugin/web/MCP paths can mint a share but Raven
-  cannot. Plan: add an `ARCLINK_PUBLIC_BOT_SHARE_CREATE_RE` command dispatched to a
-  new `_share_create_reply` that resolves `session.user_id` as owner and calls the
-  same `create_user_share_grant_for_owner` broker (inheriting no-reshare + root
-  validation), with owner-approval/claim copy. Security-review the recipient
-  resolution before enabling.
-- *ArcPod-upgrade command-menu refresh* (`GAP-032`) — a Captain-initiated ArcPod
-  Hermes upgrade does not re-push that Pod's active-chat command scope, and the
-  per-turn lazy refresh reads control-node-local Hermes rather than the Pod's
-  container. Plan: call `refresh_active_telegram_command_scopes` (or a per-deployment
-  variant) on rollout completion in `arclink_action_worker`, and include a description
-  hash in the per-turn cache signature so description-only changes are not skipped.
-- *Tracked nohup tailnet forwards* — when `systemd-run` is unavailable,
-  `docker_ensure_tailnet_forward` falls back to a `nohup ssh -L` that
-  `docker_prune_tailnet_forwards` cannot stop (no `.ctl` socket, no unit), so it leaks.
-  Plan: write a pidfile next to the existing `.log`, prune by killing tracked pids not
-  in the desired route set, and scope the local-http short-circuit to a known-good
-  tracked forward for this deployment+port.
-- *Operator gate unification* (`GAP-029`) — the curator-onboarding long-poll Telegram
-  operator gate and the hosted-API webhook gate use slightly different rules. Plan:
-  unify both behind one `operator_telegram_sender_allowed` helper so the same update
-  yields the same allow/deny regardless of transport.
-- *Surface-contract TUI/API/docs coverage* (`GAP-033`) — the contract declares those
-  channels but the test samples none. Plan: run a read-only `arclink_ctl` command and
-  representative TUI/docs strings through `assert_surface_contract`, or trim the
-  `SurfaceChannel` Literal to what is actually exercised.
+- *Terminal tmux service live proof* — the dedicated `terminal-tmux` service
+  is rendered and health-tracked locally; surviving a real dashboard-container
+  restart with an attached session needs live workspace proof (`PG-HERMES`).
+- *Gateway `/reload_skills` after enablement + fleet-shared skill scanning* —
+  deferred pending an auth-posture review (the enablement receipt records
+  `effective_at=next_session` honestly); fleet-sourced skills should pass a
+  skills_guard-style scan before enablement.
+- *Discord outbound media/components from the Agent* (`GAP-033` adjacent) — the
+  bridge's Discord REST rebind sends text only; native Hermes can send files,
+  embeds, views (exec-approval buttons), and voice messages. Plan: extend
+  `_DiscordRest`/`_send` in `arclink_public_agent_bridge.py` with multipart
+  uploads mirroring Hermes's `_standalone_send` precedent, and map
+  `discord.ui.View` components to raw component payloads with `arclink:`-safe
+  custom ids; exec approvals need the durable-state pattern below first.
+- *Durable state for `sc:`/`cl:`/model-picker callbacks* — only `ea:` exec
+  approvals survive across bridge processes today. Plan: generalize the
+  `_write_approval_mapping` on-disk pattern in `arclink_public_agent_bridge.py`
+  to slash-confirm and clarify prompts.
+- *Discord free-text ingress for Captains* — public Discord is
+  interaction-webhook only; channel messages never reach the Agent without
+  `/agent message:`. Plan requires a design decision (per-Pod gateway client vs
+  control-node listener) recorded before code.
+- *Telegram text-split batching* — >4096-char messages still arrive as separate
+  turns (albums are fixed; text splits lack a correlation id). Plan: reuse the
+  album leader-election pattern keyed on (chat, ~4096-char boundary, arrival
+  window) once a correlation heuristic is validated against real traffic.
 
 ## Governance And Proof
 

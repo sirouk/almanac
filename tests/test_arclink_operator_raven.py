@@ -730,21 +730,43 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         expect("Host upgrade dry-run" in preview["message"], preview["message"])
         expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "dry-run host upgrade must not queue")
 
-        # Actorless must fail closed.
+        # Bare /upgrade is now the one-tap menu: read-only, queues nothing.
+        # Actorless renders the summary but mints no one-tap buttons.
         actorless = raven.dispatch_operator_raven_command(conn, "/upgrade")
-        expect("requires a verified operator identity" in actorless["message"], actorless["message"])
-        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "actorless host upgrade must not queue")
+        expect("upgrade menu" in actorless["message"], actorless["message"])
+        expect(not actorless.get("buttons"), str(actorless.get("buttons")))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "actorless upgrade menu must not queue")
 
-        needs_confirm = raven.dispatch_operator_raven_command(conn, "/upgrade", actor_id="telegram:42")
-        expect("append `confirm`" in needs_confirm["message"], needs_confirm["message"])
-        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "unconfirmed host upgrade must not queue")
+        menu = raven.dispatch_operator_raven_command(conn, "/upgrade", actor_id="telegram:42")
+        expect("upgrade menu" in menu["message"], menu["message"])
+        menu_buttons = list(menu.get("buttons") or [])
+        expect(menu_buttons and menu_buttons[0]["label"] == "Apply Control Upgrade", str(menu_buttons))
+        expect(menu_buttons[0]["callback_data"].startswith("arclink:/upgrade_apply "), str(menu_buttons))
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == before, "menu render must not queue")
 
-        result = raven.dispatch_operator_raven_command(conn, "/upgrade confirm", actor_id="telegram:42")
-        expect("queued an ArcLink upgrade" in result["message"], result["message"])
-        expect(result["mutation_performed"] is True, str(result))
+        # One-tap apply: the nonce in the button is the confirmation.
+        one_tap_command = menu_buttons[0]["callback_data"][len("arclink:"):]
+        actorless_tap = raven.dispatch_operator_raven_command(conn, one_tap_command)
+        expect("requires a verified operator identity" in actorless_tap["message"], actorless_tap["message"])
+        applied = raven.dispatch_operator_raven_command(conn, one_tap_command, actor_id="telegram:42")
+        expect("queued an ArcLink upgrade" in applied["message"], applied["message"])
+        expect(applied["mutation_performed"] is True, str(applied))
         row = conn.execute("SELECT action_kind, requested_by, status FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
         expect(row["action_kind"] == "upgrade", dict(row))
         expect(row["requested_by"] == "telegram:42", dict(row))
+
+        # Replaying the same button nonce fails closed and queues nothing new.
+        after_apply = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+        replay = raven.dispatch_operator_raven_command(conn, one_tap_command, actor_id="telegram:42")
+        expect("expired or was already used" in replay["message"], replay["message"])
+        expect(conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"] == after_apply, "nonce replay must not queue")
+        bogus = raven.dispatch_operator_raven_command(conn, "/upgrade_apply not-a-real-nonce", actor_id="telegram:42")
+        expect("expired or was already used" in bogus["message"], bogus["message"])
+
+        # Typed lane keeps working: an active upgrade dedupes.
+        result = raven.dispatch_operator_raven_command(conn, "/upgrade confirm", actor_id="telegram:42")
+        expect("already queued" in result["message"] or "already running" in result["message"], result["message"])
+        expect(result["mutation_performed"] is False, str(result))
 
         no_payload = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
         expect("no active detector payload" in no_payload["message"], no_payload["message"])
@@ -753,12 +775,21 @@ def test_operator_raven_host_and_pin_upgrade_queue_operator_actions() -> None:
         pin_preview = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes --dry-run", actor_id="telegram:42")
         expect(token in pin_preview["message"] and "No action was queued" in pin_preview["message"], pin_preview["message"])
 
-        pin = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
+        # The menu lists the pending payload with a one-tap pin button.
+        pin_menu = raven.dispatch_operator_raven_command(conn, "/upgrade", actor_id="telegram:42")
+        pin_buttons = [button for button in pin_menu.get("buttons") or [] if button["label"].startswith("Pin ")]
+        expect(pin_buttons, str(pin_menu.get("buttons")))
+        pin_tap_command = pin_buttons[0]["callback_data"][len("arclink:"):]
+        pin = raven.dispatch_operator_raven_command(conn, pin_tap_command, actor_id="telegram:42")
         expect("pinned-component upgrade for hermes" in pin["message"], pin["message"])
         expect(token in pin["message"], pin["message"])
         expect(pin["mutation_performed"] is True, str(pin))
         pin_row = conn.execute("SELECT action_kind, requested_target FROM operator_actions ORDER BY id DESC LIMIT 1").fetchone()
         expect(pin_row["action_kind"] == "pin-upgrade" and pin_row["requested_target"] == token, dict(pin_row))
+
+        # Typed component confirm still works and dedupes against the one-tap queue row.
+        typed_pin = raven.dispatch_operator_raven_command(conn, "/pin_upgrade hermes confirm", actor_id="telegram:42")
+        expect("already queued" in typed_pin["message"] or "already running" in typed_pin["message"], typed_pin["message"])
 
         bad = raven.dispatch_operator_raven_command(conn, "/pin_upgrade not-a-component", actor_id="telegram:42")
         expect("unknown component" in bad["message"], bad["message"])
@@ -887,8 +918,11 @@ def test_operator_raven_mutation_helpers_and_approval_code() -> None:
     expect(raven.operator_raven_command_is_mutating("/backup_status") is False, "backup_status is read-only")
     expect(raven.operator_raven_command_is_mutating("/workspace_status") is False, "workspace_status is read-only")
     expect(raven.operator_raven_command_is_mutating("/rollout v2.0.0") is True, "rollout is mutating")
-    expect(raven.operator_raven_command_is_mutating("/upgrade") is True, "upgrade is mutating")
+    expect(raven.operator_raven_command_is_mutating("/upgrade") is False, "bare /upgrade renders the read-only one-tap menu")
+    expect(raven.operator_raven_command_is_mutating("/pin_upgrade") is False, "bare /pin_upgrade renders the read-only one-tap menu")
     expect(raven.operator_raven_command_is_mutating("/upgrade confirm") is True, "confirmed upgrade is mutating")
+    expect(raven.operator_raven_command_is_mutating("/pin_upgrade hermes") is True, "component pin upgrade stays mutating")
+    expect(raven.operator_raven_command_is_mutating("/upgrade_apply abc123") is False, "one-tap apply self-gates on its single-use nonce")
     expect(raven.operator_raven_command_is_mutating("/upgrade_sweep") is True, "upgrade_sweep is mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade_sweep --dry-run") is False, "dry-run upgrade_sweep is not mutating")
     expect(raven.operator_raven_command_is_mutating("/upgrade_check") is False, "upgrade_check is read-only")
@@ -948,7 +982,10 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
     expect("@tree.command(name=\"billing-status\"" in discord_text, "Discord should expose operator billing status")
     expect("@tree.command(name=\"backup-status\"" in discord_text, "Discord should expose operator backup status")
     expect("@tree.command(name=\"workspace-status\"" in discord_text, "Discord should expose operator workspace status")
-    expect("@tree.command(name=\"upgrade\"" in discord_text and "/upgrade --dry-run" in discord_text, "Discord /upgrade should preview before queueing")
+    expect(
+        "@tree.command(name=\"upgrade\"" in discord_text and "Bare /upgrade renders the one-tap menu" in discord_text,
+        "Discord bare /upgrade must render the read-only one-tap menu, never queue directly",
+    )
     expect("@tree.command(name=\"pin-upgrade\"" in discord_text, "Discord should expose a confirmed pinned-component upgrade command")
     expect("_queue_upgrade_operator_action" not in discord_text, "Discord /upgrade must not bypass Operator Raven confirmation")
     expect('request_source="discord-button"' not in discord_text, "Discord upgrade buttons must not queue operator actions directly")
@@ -961,6 +998,85 @@ def test_operator_raven_chat_adapters_preserve_authorization_boundaries() -> Non
     expect('request_source="telegram-button"' not in curator_telegram_text, "Telegram upgrade buttons must not queue operator actions directly")
     expect('dispatch_text = f"{dispatch_text} --confirm"' in (PYTHON_DIR / "arclink_telegram.py").read_text(encoding="utf-8"), "Public Telegram approval code should satisfy confirmation")
     print("PASS test_operator_raven_chat_adapters_preserve_authorization_boundaries")
+
+
+def test_operator_telegram_gate_unified_across_transports() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_operator_gate_unify_test")
+    curator = load_module(CURATOR_TELEGRAM_PY, "arclink_curator_onboarding_operator_gate_unify_test")
+    tg = load_module(PYTHON_DIR / "arclink_telegram.py", "arclink_telegram_operator_gate_unify_test")
+
+    scenarios = [
+        # (label, env overrides, chat_id, sender_id, chat_type, expected)
+        ("configured channel + allowlisted sender", {"ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99"}, "42", "99", "private", True),
+        ("allowlisted sender own private DM", {"ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99"}, "99", "99", "private", True),
+        ("allowlisted sender in a group", {"ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99"}, "-555", "99", "group", False),
+        ("non-allowlisted sender", {"ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99"}, "98", "98", "private", False),
+        ("no allowlist, configured private channel", {}, "42", "42", "private", True),
+        ("no allowlist, other private chat", {}, "99", "99", "private", False),
+        (
+            "telegram secondary surface, allowlisted DM",
+            {
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+                "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+                "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+            },
+            "99",
+            "99",
+            "private",
+            True,
+        ),
+        (
+            "telegram secondary surface, no allowlist",
+            {
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+                "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+                "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+            },
+            "99",
+            "99",
+            "private",
+            False,
+        ),
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        old_env = os.environ.copy()
+        try:
+            for label, overrides, chat_id, sender_id, chat_type, expected in scenarios:
+                values = config_values(root)
+                values.update(overrides)
+                config_path = root / "config" / "arclink.env"
+                write_config(config_path, values)
+                os.environ.clear()
+                os.environ.update(old_env)
+                os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+                cfg = control.Config.from_env()
+                message = {
+                    "chat": {"id": chat_id, "type": chat_type},
+                    "from": {"id": sender_id},
+                }
+                longpoll = curator.operator_message_allowed(cfg, message)
+                env = {
+                    "OPERATOR_NOTIFY_CHANNEL_PLATFORM": values.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM", ""),
+                    "OPERATOR_NOTIFY_CHANNEL_ID": values.get("OPERATOR_NOTIFY_CHANNEL_ID", ""),
+                    "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": values.get("ARCLINK_OPERATOR_TELEGRAM_USER_IDS", ""),
+                    "ARCLINK_CURATOR_CHANNELS": values.get("ARCLINK_CURATOR_CHANNELS", ""),
+                }
+                webhook = tg._operator_telegram_sender_allowed(
+                    {"chat_id": chat_id, "user_id": sender_id, "chat_type": chat_type},
+                    env,
+                )
+                expect(
+                    longpoll == webhook == expected,
+                    f"{label}: long-poll={longpoll} webhook={webhook} expected={expected}",
+                )
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_operator_telegram_gate_unified_across_transports")
 
 
 if __name__ == "__main__":
@@ -982,4 +1098,5 @@ if __name__ == "__main__":
     test_operator_raven_action_status_reads_both_queues()
     test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
-    print("PASS all 17 Operator Raven tests")
+    test_operator_telegram_gate_unified_across_transports()
+    print("PASS all 18 Operator Raven tests")

@@ -334,6 +334,33 @@ async def main() -> None:
         except Exception as exc:  # noqa: BLE001
             return f"Operator Raven command failed closed: {exc}"
 
+    def _operator_raven_result(content: str, *, actor_id: str = "", message_id: str = "") -> dict:
+        """Dispatch and return the full Operator Raven result (message + one-tap buttons)."""
+        try:
+            with connect_db(cfg) as conn:
+                return dispatch_operator_raven_command(
+                    conn,
+                    content,
+                    env=os.environ,
+                    actor_id=actor_id,
+                    idempotency_key=message_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            return {"message": f"Operator Raven command failed closed: {exc}", "buttons": []}
+
+    def _operator_buttons_view(result: dict | None):
+        """Render Operator Raven one-tap buttons as a Discord component view."""
+        buttons = list((result or {}).get("buttons") or [])
+        if not buttons:
+            return None
+        view = discord.ui.View(timeout=None)
+        for button in buttons[:8]:
+            label = str(button.get("label") or "").strip()[:80]
+            data = str(button.get("callback_data") or "").strip()
+            if label and data and len(data) <= 100:
+                view.add_item(discord.ui.Button(label=label, custom_id=data, style=discord.ButtonStyle.primary))
+        return view if view.children else None
+
     async def _process_discord_input(
         *,
         chat_id: str,
@@ -601,9 +628,22 @@ async def main() -> None:
         if not await _ensure_operator_channel(interaction):
             return
         actor = _format_actor_label(interaction.user)
-        dispatch = "/upgrade --dry-run"
-        if confirm:
-            dispatch = f"/upgrade {(operator_code.strip() or 'confirm')}"
+        if not confirm:
+            # Bare /upgrade renders the one-tap menu: single-use nonce buttons
+            # queue the real action through the same Operator Raven gate.
+            menu = _operator_raven_result(
+                "/upgrade",
+                actor_id=actor,
+                message_id=str(getattr(interaction, "id", "") or ""),
+            )
+            view = _operator_buttons_view(menu)
+            message_text = str(menu.get("message") or "Operator Raven upgrade menu")
+            if view is not None:
+                await interaction.response.send_message(message_text, view=view)
+            else:
+                await interaction.response.send_message(message_text)
+            return
+        dispatch = f"/upgrade {(operator_code.strip() or 'confirm')}"
         await interaction.response.send_message(
             _operator_raven_response(dispatch, actor_id=actor, message_id=str(getattr(interaction, "id", "") or ""))
         )
@@ -771,6 +811,24 @@ async def main() -> None:
             return
         data = getattr(interaction, "data", {}) or {}
         custom_id = str(data.get("custom_id") or "").strip()
+        if custom_id.startswith("arclink:/") and operator_raven_command_requested(custom_id[len("arclink:"):]):
+            # One-tap operator buttons (for example /upgrade_apply <nonce>):
+            # the nonce inside the server-minted command is the single-use
+            # confirmation, and the command runs through the same Operator
+            # Raven dispatch gate as typed commands.
+            if not await _ensure_operator_channel(interaction):
+                return
+            actor = _format_actor_label(interaction.user)
+            result = _operator_raven_result(
+                custom_id[len("arclink:"):].strip(),
+                actor_id=actor,
+                message_id=str(getattr(interaction, "id", "") or ""),
+            )
+            result_text = str(result.get("message") or "Operator Raven command returned no output.")
+            message_text = str(getattr(getattr(interaction, "message", None), "content", "") or "").strip()
+            replacement = (message_text + f"\n\n{result_text} ({actor})").strip() if message_text else result_text
+            await interaction.response.edit_message(content=replacement, view=None)
+            return
         if (
             custom_id.startswith("arclink:upgrade:")
             or custom_id.startswith("arclink:pin-upgrade:")

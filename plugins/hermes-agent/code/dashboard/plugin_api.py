@@ -178,6 +178,29 @@ def _linked_entry_writable(entry: dict[str, Any]) -> bool:
     return access_mode == "read_write" and not _manifest_bool(entry.get("read_only"), default=True)
 
 
+def _linked_root_has_writable_share(root: Path | None) -> bool:
+    """True when at least one accepted read/write shared folder exists under Linked.
+
+    Mirrors the Drive plugin: the Linked root descriptor must tell the truth
+    about writability instead of advertising write capabilities that per-path
+    enforcement then rejects with 403s.
+    """
+    if root is None:
+        return False
+    try:
+        entries = _linked_manifest(root.resolve(strict=False))
+    except OSError:
+        return False
+    for entry in entries.values():
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("resource_kind") or "").strip().lower() != "directory":
+            continue
+        if _linked_entry_writable(entry):
+            return True
+    return False
+
+
 def _linked_target_allowed(root: Path, path: Path, resolved: Path) -> bool:
     entry = _linked_manifest_entry(root, path)
     if not entry:
@@ -544,6 +567,7 @@ def _root_descriptors() -> list[dict[str, Any]]:
         "share_request": False,
         "sharing": False,
     }
+    linked_writable = _linked_root_has_writable_share(linked)
     def descriptor(
         root_id: str,
         root: Path | None,
@@ -579,7 +603,19 @@ def _root_descriptors() -> list[dict[str, Any]]:
             },
         ),
         descriptor("fleet", fleet, capabilities=dict(writable_capabilities)),
-        descriptor("linked", linked, capabilities=linked_capabilities),
+        descriptor(
+            "linked",
+            linked,
+            # Write truth derives from the manifest: only an accepted
+            # read/write shared folder makes Linked writable, and per-path
+            # enforcement still applies inside it.
+            capabilities={
+                **linked_capabilities,
+                "write": linked_writable,
+                "duplicate": linked_writable,
+            },
+            read_only=not linked_writable,
+        ),
     ]
 
 

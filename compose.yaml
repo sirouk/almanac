@@ -390,6 +390,23 @@ services:
       - operator-upgrade-broker-net
       - gateway-exec-broker-net
 
+  control-operator-terminal-tmux:
+    <<: *arclink-app
+    cap_drop:
+      - ALL
+    environment:
+      <<: *arclink-operator-env
+    # Long-lived tmux server for the Terminal dashboard plugin. The dashboard
+    # container's tmux clients reach it over the socket on the shared operator
+    # state mount, so dashboard restarts/upgrades never kill terminal sessions
+    # and terminal shells live in their own cgroup instead of the dashboard's.
+    command: ["bash", "-lc", "exec ./bin/run-terminal-tmux.sh"]
+    volumes:
+      - ./arclink-priv/state/operator:/home/arclink/arclink/arclink-priv/state/operator
+    depends_on:
+      control-operator-hermes-setup:
+        condition: service_completed_successfully
+
   control-operator-hermes-dashboard:
     <<: *arclink-app
     cap_drop:
@@ -405,6 +422,8 @@ services:
       control-operator-hermes-setup:
         condition: service_completed_successfully
       control-operator-qmd-mcp:
+        condition: service_started
+      control-operator-terminal-tmux:
         condition: service_started
     networks:
       - default

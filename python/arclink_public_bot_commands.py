@@ -8,7 +8,7 @@ import shlex
 import sqlite3
 import subprocess
 import sys
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 _PYTHON_DIR = pathlib.Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
@@ -214,11 +214,20 @@ def _captain_commands_for_session(conn: sqlite3.Connection, row: sqlite3.Row) ->
     return arclink_public_bot_captain_telegram_commands(deployments=deployments)
 
 
-def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, Any]:
+def refresh_active_telegram_command_scopes(
+    env: Mapping[str, str],
+    *,
+    deployment_ids: Iterable[str] | None = None,
+) -> dict[str, Any]:
     token = str(env.get("TELEGRAM_BOT_TOKEN") or "").strip()
     db_path = _control_db_path(env)
     if not token or not db_path or not pathlib.Path(db_path).is_file():
         return {"skipped": True, "reason": "missing_token_or_db"}
+    wanted_deployments = {
+        str(value or "").strip()
+        for value in (deployment_ids or ())
+        if str(value or "").strip()
+    }
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -235,6 +244,8 @@ def refresh_active_telegram_command_scopes(env: Mapping[str, str]) -> dict[str, 
     issues: list[dict[str, Any]] = []
     try:
         for row in rows:
+            if wanted_deployments and str(row["deployment_id"] or "").strip() not in wanted_deployments:
+                continue
             identity = str(row["channel_identity"] or "")
             chat_id = identity.removeprefix("tg:")
             if not chat_id:

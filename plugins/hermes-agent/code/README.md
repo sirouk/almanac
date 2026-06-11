@@ -13,10 +13,10 @@ Hermes `v2026.4.30` or newer.
 ## Roots
 
 - Workspace uses the first existing directory from `ARCLINK_WORKSPACE_ROOT`,
-  `ARCLINK_DRIVE_ROOT`, `DRIVE_ROOT`, `KNOWLEDGE_VAULT_ROOT`, `VAULT_DIR`,
   `ARCLINK_CODE_WORKSPACE_ROOT`, `CODE_WORKSPACE_ROOT`, `DRIVE_WORKSPACE_ROOT`,
-  `~/Vault`, `$HERMES_HOME/Vault`, or `$HERMES_HOME/workspace`. `vault`
-  remains a hidden compatibility alias for older callers.
+  `ARCLINK_DRIVE_ROOT`, `DRIVE_ROOT`, `KNOWLEDGE_VAULT_ROOT`, `VAULT_DIR`,
+  `~/Vault`, `$HERMES_HOME/Vault`, or `$HERMES_HOME/workspace` (checked in that
+  order). `vault` remains a hidden compatibility alias for older callers.
 - Fleet (the git-synced fleet shared folder) uses the first existing directory
   from `CODE_FLEET_SHARED_ROOT`, `ARCLINK_FLEET_SHARED_ROOT`, or
   `$HERMES_HOME/fleet-shared`.
@@ -53,6 +53,9 @@ Hermes `v2026.4.30` or newer.
   new owned copy into Workspace or Fleet without granting reshare.
 - Text, Markdown, PDF, image, audio, and video previews can open in tabs and
   full-screen preview mode when browser-supported.
+- Trash is recoverable: the Explorer toolbar Trash dialog lists trashed items
+  (`GET /trash`) and restores them to their original folder (`POST
+  /ops/restore`).
 
 ## Check
 

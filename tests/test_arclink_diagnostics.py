@@ -181,6 +181,41 @@ def test_diagnostics_noop_without_live_flag() -> None:
     print("PASS test_diagnostics_noop_without_live_flag")
 
 
+def test_qmd_pending_embeddings_age_alert() -> None:
+    import tempfile
+
+    mod = load_module("arclink_diagnostics.py", "arclink_diag_qmd_pending")
+    # No marker => no check (the qmd lane is not provisioned here).
+    expect(mod.diagnose_qmd_pending_embeddings(env={}) == [], "missing marker must yield no checks")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        marker = Path(tmpdir) / "pending-embeddings.json"
+        env = {"QMD_PENDING_EMBED_STATE_FILE": str(marker)}
+        # Fresh pending work within the threshold: ok.
+        marker.write_text(
+            json.dumps({"pending": 4, "pending_since_epoch": 1_000_000, "checked_at_epoch": 1_000_500}),
+            encoding="utf-8",
+        )
+        checks = mod.diagnose_qmd_pending_embeddings(env=env, now=1_000_000 + 3600)
+        expect(len(checks) == 1 and checks[0].ok, str(checks))
+        # Pending work older than the threshold: alert (not ok), no secrets.
+        checks = mod.diagnose_qmd_pending_embeddings(env=env, now=1_000_000 + 30 * 3600)
+        expect(len(checks) == 1 and not checks[0].ok, str(checks))
+        expect("stale" in checks[0].detail, checks[0].detail)
+        # Zero pending: ok regardless of age fields.
+        marker.write_text(json.dumps({"pending": 0, "pending_since_epoch": 0}), encoding="utf-8")
+        checks = mod.diagnose_qmd_pending_embeddings(env=env, now=2_000_000)
+        expect(len(checks) == 1 and checks[0].ok, str(checks))
+        # Unreadable marker fails closed (not ok) instead of hiding the lane.
+        marker.write_text("{not json", encoding="utf-8")
+        checks = mod.diagnose_qmd_pending_embeddings(env=env)
+        expect(len(checks) == 1 and not checks[0].ok, str(checks))
+        # The aggregate runner includes the qmd check when the marker exists.
+        marker.write_text(json.dumps({"pending": 1, "pending_since_epoch": 1}), encoding="utf-8")
+        result = mod.run_diagnostics(env=env, docker_binary="python3")
+        expect(any(c.provider == "qmd" for c in result.checks), str(result.to_dict()))
+    print("PASS test_qmd_pending_embeddings_age_alert")
+
+
 def main() -> int:
     test_stripe_credentials_missing()
     test_stripe_credentials_present()
@@ -195,7 +230,8 @@ def main() -> int:
     test_full_diagnostics_machine_readable()
     test_full_diagnostics_all_present()
     test_diagnostics_noop_without_live_flag()
-    print("PASS all 13 ArcLink diagnostics tests")
+    test_qmd_pending_embeddings_age_alert()
+    print("PASS all 14 ArcLink diagnostics tests")
     return 0
 
 

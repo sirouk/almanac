@@ -7,6 +7,7 @@ Uses fake mode (no network) when the token is absent.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import json
 import os
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 _PYTHON_DIR = pathlib.Path(__file__).resolve().parent
 if str(_PYTHON_DIR) not in sys.path:
@@ -431,6 +432,25 @@ def _load_hermes_telegram_menu_commands(
             sys.path.insert(0, root)
             added = True
         try:
+            # Prefer Hermes's own public menu helper: it layers core commands,
+            # plugin slash commands, and skill commands with the real hidden
+            # count, so an upgraded Hermes changes the menu without an ArcLink
+            # patch. The registry loop below stays as the compatibility path
+            # for older runtimes that predate the helper.
+            try:
+                from hermes_cli.commands import telegram_menu_commands  # type: ignore
+
+                menu, hidden = telegram_menu_commands(max_commands=max_commands)
+                helper_commands = [
+                    (str(name or "").strip(), str(description or "").strip())
+                    for name, description in menu
+                    if str(name or "").strip() and str(description or "").strip()
+                ]
+                if helper_commands:
+                    return helper_commands, max(0, int(hidden or 0)), root
+            except Exception as exc:  # noqa: BLE001 - fall back to the registry loop
+                logger.debug("hermes_telegram_menu_helper_failed source=%s error=%s", root, str(exc)[:160])
+
             from hermes_cli.commands import (  # type: ignore
                 COMMAND_REGISTRY,
                 _is_gateway_available,
@@ -689,7 +709,12 @@ def refresh_arclink_public_telegram_chat_commands(
             captain_commands=captain_commands,
             env=env,
         )
-    signature = ",".join(item["command"] for item in commands)
+    # The signature covers descriptions too, so a description-only change in a
+    # Pod's Hermes command registry still re-registers the chat menu.
+    description_digest = hashlib.sha256(
+        "\n".join(f"{item['command']}\t{item.get('description', '')}" for item in commands).encode("utf-8")
+    ).hexdigest()[:16]
+    signature = ",".join(item["command"] for item in commands) + f"#{description_digest}"
     cache_key = (clean_chat_id, signature)
     if not force and cache_key in _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE:
         return {
@@ -928,14 +953,32 @@ def _telegram_display_name(user: Mapping[str, Any]) -> str:
 
 def _telegram_update_json(update: Mapping[str, Any]) -> str:
     try:
-        return json.dumps(update, sort_keys=True, separators=(",", ":"))[:60000]
+        serialized = json.dumps(update, sort_keys=True, separators=(",", ":"))
     except TypeError:
         return ""
+    if len(serialized) <= 60000:
+        return serialized
+    # Never ship a mid-string truncation: invalid JSON would break the Pod's
+    # native replay and silently degrade the turn to a placeholder. Shrink the
+    # biggest payload carriers first, then give up to the placeholder path.
+    slimmed = json.loads(serialized)
+    message = slimmed.get("message") or slimmed.get("edited_message") or {}
+    if isinstance(message, dict):
+        for bulky_key in ("photo", "entities", "caption_entities", "reply_to_message", "quote"):
+            message.pop(bulky_key, None)
+        for text_key in ("text", "caption"):
+            value = message.get(text_key)
+            if isinstance(value, str) and len(value) > 20000:
+                message[text_key] = value[:20000]
+    retry = json.dumps(slimmed, sort_keys=True, separators=(",", ":"))
+    return retry if len(retry) <= 60000 else ""
 
 
 def _telegram_message_kind(msg: Mapping[str, Any]) -> str:
     if msg.get("photo"):
         return "photo"
+    if msg.get("video_note"):
+        return "video_note"
     if msg.get("video"):
         return "video"
     if msg.get("audio"):
@@ -960,6 +1003,7 @@ def _telegram_message_kind(msg: Mapping[str, Any]) -> str:
 def _telegram_fallback_text_for_kind(kind: str) -> str:
     labels = {
         "photo": "[Telegram photo]",
+        "video_note": "[Telegram video note]",
         "video": "[Telegram video]",
         "audio": "[Telegram audio]",
         "voice": "[Telegram voice message]",
@@ -1056,22 +1100,80 @@ def _operator_telegram_user_ids(env: Mapping[str, str]) -> set[str]:
     }
 
 
+def operator_telegram_sender_allowed(
+    *,
+    chat_id: str,
+    sender_id: str,
+    chat_type: str,
+    notify_platform: str,
+    notify_channel_id: str,
+    operator_user_ids: Iterable[str],
+    operator_channels: Iterable[str] = (),
+) -> bool:
+    """Single operator gate for every Telegram transport.
+
+    Both the hosted-API webhook path and the curator long-poll loop must call
+    this helper so the same Telegram update yields the same allow/deny
+    decision regardless of transport (GAP-029 gate unification).
+    """
+    platform = str(notify_platform or "").strip().lower()
+    channels = {
+        str(value or "").strip().lower()
+        for value in operator_channels
+        if str(value or "").strip()
+    }
+    if platform != "telegram" and "telegram" not in channels:
+        return False
+    chat = str(chat_id or "").strip()
+    sender = str(sender_id or "").strip()
+    kind = str(chat_type or "").strip().lower()
+    configured_chat = str(notify_channel_id or "").strip()
+    allowed_ids = {
+        str(value or "").strip()
+        for value in operator_user_ids
+        if str(value or "").strip()
+    }
+    if not chat or not sender:
+        return False
+    if allowed_ids:
+        if sender not in allowed_ids:
+            return False
+        if platform == "telegram" and configured_chat and chat == configured_chat:
+            return True
+        return kind == "private" and chat == sender
+    # Without an explicit allowlist, only the configured primary operator
+    # channel is trusted, and only when it is the operator's own private chat.
+    return (
+        platform == "telegram"
+        and bool(configured_chat)
+        and chat == configured_chat
+        and kind == "private"
+        and chat == sender
+    )
+
+
 def _operator_telegram_sender_allowed(parsed: Mapping[str, Any], env: Mapping[str, str]) -> bool:
-    if not _operator_telegram_enabled(env):
-        return False
-    primary_platform = str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or "").strip().lower()
-    configured_chat = str(env.get("OPERATOR_NOTIFY_CHANNEL_ID") or "").strip()
-    chat_id = str(parsed.get("chat_id") or "").strip()
-    sender_id = str(parsed.get("user_id") or "").strip()
-    chat_type = str(parsed.get("chat_type") or "").strip().lower()
-    operator_ids = _operator_telegram_user_ids(env)
-    if not operator_ids or not sender_id or sender_id not in operator_ids:
-        return False
-    if primary_platform == "telegram" and configured_chat and chat_id == configured_chat:
-        return True
-    if chat_type == "private" and chat_id == sender_id:
-        return True
-    return False
+    return operator_telegram_sender_allowed(
+        chat_id=str(parsed.get("chat_id") or ""),
+        sender_id=str(parsed.get("user_id") or ""),
+        chat_type=str(parsed.get("chat_type") or ""),
+        notify_platform=str(env.get("OPERATOR_NOTIFY_CHANNEL_PLATFORM") or ""),
+        notify_channel_id=str(env.get("OPERATOR_NOTIFY_CHANNEL_ID") or ""),
+        operator_user_ids=_operator_telegram_user_ids(env),
+        operator_channels=_operator_telegram_channels(env),
+    )
+
+
+def telegram_operator_buttons_markup(result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Render an Operator Raven result's one-tap buttons as an inline keyboard."""
+    buttons = list((result or {}).get("buttons") or [])
+    rows: list[list[dict[str, str]]] = []
+    for button in buttons[:8]:
+        label = str(button.get("label") or "").strip()
+        data = str(button.get("callback_data") or "").strip()
+        if label and data and len(data.encode("utf-8")) <= 64:
+            rows.append([{"text": label[:64], "callback_data": data}])
+    return {"inline_keyboard": rows} if rows else None
 
 
 def _operator_raven_intro_reply() -> str:
@@ -1149,6 +1251,7 @@ def _handle_operator_telegram_update(
     first = text.split(maxsplit=1)[0] if text else ""
     command = _telegram_command_token(first)
     dispatch_text = text
+    operator_reply_markup: dict[str, Any] | None = None
     if command in {"/upgrade_hermes", "/hermes_upgrade"}:
         dispatch_text = "/upgrade_check"
     if operator_raven_command_requested(dispatch_text):
@@ -1189,6 +1292,7 @@ def _handle_operator_telegram_update(
             )
             reply = str(result.get("message") or "Operator Raven command returned no output.")
             action = f"operator_raven_{result.get('command') or 'command'}"
+            operator_reply_markup = telegram_operator_buttons_markup(result)
         except Exception as exc:  # noqa: BLE001 - never let public webhook mutate/fail open
             reply = f"Operator Raven command failed closed: {exc}"
             action = "operator_raven_failed_closed"
@@ -1208,7 +1312,7 @@ def _handle_operator_telegram_update(
     return {
         "chat_id": str(parsed.get("chat_id") or ""),
         "text": reply,
-        "reply_markup": None,
+        "reply_markup": operator_reply_markup,
         "session_id": "",
         "action": action,
         "channel_identity": f"operator:telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}",

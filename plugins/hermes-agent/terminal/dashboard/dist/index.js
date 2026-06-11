@@ -279,6 +279,7 @@
     const freshSessionRef = useRef({});
     const focusSessionRef = useRef("");
     const requestFailureRef = useRef({ count: 0, message: "" });
+    const stickyErrorRef = useRef(false);
 
     useEffect(function () {
       stateRef.current = state;
@@ -299,6 +300,29 @@
       requestFailureRef.current = { count: 0, message: "" };
     }
 
+    // Errors raised by explicit Captain actions are sticky: background polls
+    // and SSE updates must not wipe them within a second. They clear on the
+    // next successful user action or via the banner's Dismiss control.
+    function mergeWithErrorReset(next) {
+      stickyErrorRef.current = false;
+      merge(next);
+    }
+
+    function mergeKeepingActionError(next) {
+      if (!stickyErrorRef.current) next.errorMessage = "";
+      merge(next);
+    }
+
+    function surfaceActionError(error, extra) {
+      stickyErrorRef.current = true;
+      merge(Object.assign({ errorMessage: String((error && error.message) || error || "") }, extra || {}));
+    }
+
+    function dismissError() {
+      stickyErrorRef.current = false;
+      merge({ errorMessage: "" });
+    }
+
     function surfaceRequestError(error, options) {
       const opts = options || {};
       const message = String((error && error.message) || error || "");
@@ -307,10 +331,12 @@
         const nextCount = current.message === message ? current.count + 1 : 1;
         requestFailureRef.current = { count: nextCount, message: message };
         if (nextCount < 4) return;
+        stickyErrorRef.current = false;
         merge({ errorMessage: "Connection interrupted; retrying" });
         return;
       }
       requestFailureRef.current = { count: 1, message: message };
+      stickyErrorRef.current = !opts.background;
       merge({ errorMessage: message });
     }
 
@@ -327,7 +353,7 @@
           const nextId = hasRequested ? requestedId : (sessions[0] && sessions[0].id) || "";
           rememberSelectedSessionId(nextId);
           clearRequestFailure();
-          merge({ sessions: sessions, selectedId: nextId, errorMessage: "" });
+          mergeKeepingActionError({ sessions: sessions, selectedId: nextId });
           if (nextId) {
             return loadSession(nextId, { force: !!opts.force, background: !!opts.background });
           }
@@ -347,12 +373,12 @@
           if (!opts.force && stateRef.current.selectedId !== sessionId) return payload.session || null;
           rememberSelectedSessionId(sessionId);
           clearRequestFailure();
-          merge({ selected: payload.session || null, selectedId: sessionId, errorMessage: "" });
+          mergeKeepingActionError({ selected: payload.session || null, selectedId: sessionId });
           return payload.session || null;
         })
         .catch(function (error) {
           if (isMissingSessionError(error)) {
-            merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
+            mergeWithErrorReset({ selected: null, selectedId: "", errorMessage: "", streaming: false });
             return loadSessions("", { force: true });
           }
           surfaceRequestError(error, opts);
@@ -424,16 +450,16 @@
         .then(function (payload) {
           const latest = stateRef.current;
           if (latest.selectedId === sessionId) {
-            merge({ selected: payload.session || selected, errorMessage: "" });
+            mergeWithErrorReset({ selected: payload.session || selected, errorMessage: "" });
           }
         })
         .catch(function (error) {
           if (isMissingSessionError(error)) {
-            merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
+            mergeWithErrorReset({ selected: null, selectedId: "", errorMessage: "", streaming: false });
             loadSessions("", { force: true });
             return;
           }
-          merge({ errorMessage: String(error.message || error) });
+          surfaceActionError(error);
         });
     }
 
@@ -447,15 +473,17 @@
         .then(function (payload) {
           const latest = stateRef.current;
           if (latest.selectedId === sessionId) {
-            merge({ selected: payload.session || latest.selected, errorMessage: "" });
+            mergeKeepingActionError({ selected: payload.session || latest.selected });
           }
         })
         .catch(function (error) {
           if (isMissingSessionError(error)) {
-            merge({ selected: null, selectedId: "", errorMessage: "", streaming: false });
+            mergeWithErrorReset({ selected: null, selectedId: "", errorMessage: "", streaming: false });
             loadSessions("", { force: true });
             return;
           }
+          // Resize retries automatically; do not pin a sticky banner for it.
+          stickyErrorRef.current = false;
           merge({ errorMessage: String(error.message || error) });
         });
     }
@@ -716,7 +744,7 @@
           merge({ terminalReady: true });
         })
         .catch(function (error) {
-          if (!cancelled) merge({ errorMessage: String(error.message || error) });
+          if (!cancelled) surfaceActionError(error);
         });
       return function () {
         cancelled = true;
@@ -730,12 +758,21 @@
         let stream = null;
         let closed = false;
         let timerReadsSelected = false;
+        let reconnectTimer = null;
+        let reconnectDelayMs = 1000;
         const streamSessionId = state.selectedId || "";
+        const canStream = !!(
+          streamSessionId &&
+          state.status &&
+          state.status.capabilities &&
+          state.status.capabilities.streaming_output &&
+          window.EventSource
+        );
 
         function startPolling(readSelected) {
           const includeSelected = !!readSelected;
           if (timer) {
-            if (!includeSelected || timerReadsSelected) return;
+            if (timerReadsSelected === includeSelected) return;
             clearInterval(timer);
             timer = null;
           }
@@ -751,16 +788,38 @@
           timerReadsSelected = includeSelected;
         }
 
-        if (
-          state.selectedId &&
-          state.status &&
-          state.status.capabilities &&
-          state.status.capabilities.streaming_output &&
-          window.EventSource
-        ) {
+        function closeStream() {
+          if (!stream) return;
+          try {
+            stream.close();
+          } catch (_error) {}
+          stream = null;
+        }
+
+        function scheduleStreamReconnect() {
+          if (closed || reconnectTimer) return;
+          const selected = stateRef.current.selected;
+          if (selected && selected.id === streamSessionId && ["closed", "exited"].indexOf(String(selected.state || "")) !== -1) {
+            // Terminal-state sessions have nothing left to stream.
+            return;
+          }
+          const delay = reconnectDelayMs;
+          reconnectDelayMs = Math.min(reconnectDelayMs * 2, 30000);
+          reconnectTimer = window.setTimeout(function () {
+            reconnectTimer = null;
+            connectStream();
+          }, delay);
+        }
+
+        function connectStream() {
+          if (closed || !canStream) return;
+          closeStream();
           stream = new EventSource(api("/sessions/" + encodeURIComponent(streamSessionId) + "/stream"), { withCredentials: true });
           stream.addEventListener("open", function () {
-            if (!closed && stateRef.current.selectedId === streamSessionId) merge({ streaming: true });
+            if (closed) return;
+            if (stateRef.current.selectedId === streamSessionId) merge({ streaming: true });
+            // SSE is live again; drop back to the light session-list poll.
+            startPolling(false);
           });
           stream.addEventListener("session", function (event) {
             if (closed || stateRef.current.selectedId !== streamSessionId) return;
@@ -768,18 +827,27 @@
               const payload = JSON.parse(event.data || "{}");
               const session = payload.session || null;
               if (!session || session.id !== streamSessionId) return;
+              if (["running", "starting"].indexOf(String(session.state || "")) !== -1) reconnectDelayMs = 1000;
               clearRequestFailure();
-              merge({ selected: session, selectedId: streamSessionId, streaming: true, errorMessage: "" });
+              mergeKeepingActionError({ selected: session, selectedId: streamSessionId, streaming: true });
               loadSessions(streamSessionId, { background: true });
             } catch (_error) {
               startPolling(true);
             }
           });
           stream.addEventListener("error", function () {
-            if (stream) stream.close();
-            if (!closed && stateRef.current.selectedId === streamSessionId) merge({ streaming: false });
+            closeStream();
+            if (closed) return;
+            if (stateRef.current.selectedId === streamSessionId) merge({ streaming: false });
+            // Keep the UI live on 1s polling while SSE reconnects with backoff
+            // instead of permanently downgrading after one error.
             startPolling(true);
+            scheduleStreamReconnect();
           });
+        }
+
+        if (canStream) {
+          connectStream();
           startPolling(false);
         } else {
           merge({ streaming: false });
@@ -788,8 +856,9 @@
 
         return function () {
           closed = true;
-          if (stream) stream.close();
+          closeStream();
           if (timer) clearInterval(timer);
+          if (reconnectTimer) window.clearTimeout(reconnectTimer);
         };
       },
       [state.selectedId, state.status && state.status.capabilities && state.status.capabilities.streaming_output]
@@ -851,10 +920,11 @@
           const session = payload.session || {};
           if (session.id) freshSessionRef.current[session.id] = true;
           if (session.id) focusSessionRef.current = session.id;
+          stickyErrorRef.current = false;
           return loadSessions(session.id || "", { force: true });
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
+          surfaceActionError(error);
         });
     }
 
@@ -884,11 +954,11 @@
       }
       postJSON("/sessions/" + encodeURIComponent(selectedId) + "/rename", { name: name })
         .then(function () {
-          merge({ editingSessionId: "", editingSessionName: "" });
+          mergeWithErrorReset({ editingSessionId: "", editingSessionName: "" });
           return loadSessions(selectedId, { force: true });
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error), editingSessionId: "", editingSessionName: "" });
+          surfaceActionError(error, { editingSessionId: "", editingSessionName: "" });
         });
     }
 
@@ -899,10 +969,11 @@
       if (folder === null) return;
       postJSON("/sessions/" + encodeURIComponent(selected.id) + "/rename", { folder: folder })
         .then(function () {
+          stickyErrorRef.current = false;
           return loadSessions(selected.id, { force: true });
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
+          surfaceActionError(error);
         });
     }
 
@@ -911,10 +982,11 @@
       if (!selected) return;
       postJSON("/sessions/" + encodeURIComponent(selected.id) + "/rename", { order: Number(selected.order || 0) + delta })
         .then(function () {
+          stickyErrorRef.current = false;
           return loadSessions(selected.id, { force: true });
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error) });
+          surfaceActionError(error);
         });
     }
 
@@ -928,12 +1000,12 @@
           Object.keys(terminalCache).forEach(function (sessionId) {
             if (!live[sessionId]) delete terminalCache[sessionId];
           });
-          merge({ contextMenu: null, selected: null, selectedId: "", errorMessage: "" });
+          mergeWithErrorReset({ contextMenu: null, selected: null, selectedId: "", errorMessage: "" });
           rememberSelectedSessionId("");
           return loadSessions("", { force: true });
         })
         .catch(function (error) {
-          merge({ errorMessage: String(error.message || error), contextMenu: null });
+          surfaceActionError(error, { contextMenu: null });
         });
     }
 
@@ -944,12 +1016,12 @@
         .then(function () {
           delete terminalCache[selected.id];
           if ((terminalRef.current || {}).sessionId === selected.id) disposeTerminal();
-          merge({ confirmClose: null, selected: null, selectedId: "" });
+          mergeWithErrorReset({ confirmClose: null, selected: null, selectedId: "" });
           rememberSelectedSessionId("");
           return loadSessions("", { force: true });
         })
         .catch(function (error) {
-          merge({ confirmClose: null, errorMessage: String(error.message || error) });
+          surfaceActionError(error, { confirmClose: null });
         });
     }
 
@@ -962,7 +1034,7 @@
           delete terminalCache[selected.id];
           if ((terminalRef.current || {}).sessionId === selected.id) disposeTerminal();
           focusSessionRef.current = selected.id;
-          merge({ selected: nextSession, selectedId: selected.id, contextMenu: null, errorMessage: "" });
+          mergeWithErrorReset({ selected: nextSession, selectedId: selected.id, contextMenu: null, errorMessage: "" });
           return loadSessions(selected.id, { force: true });
         })
         .catch(function (error) {
@@ -1030,7 +1102,18 @@
           ? h("div", { className: "hermes-terminal-actions" }, h("button", { type: "button", onClick: function () { reattachSelected(selected); } }, "Reattach"))
           : null
       ),
-      state.errorMessage ? h("div", { className: "hermes-terminal-error" }, state.errorMessage) : null,
+      state.errorMessage
+        ? h(
+            "div",
+            { className: "hermes-terminal-error", role: "alert" },
+            h("span", { className: "hermes-terminal-error-text" }, state.errorMessage),
+            h(
+              "button",
+              { type: "button", className: "hermes-terminal-error-dismiss", "aria-label": "Dismiss error", onClick: dismissError },
+              "Dismiss"
+            )
+          )
+        : null,
       state.loading
         ? h("div", { className: "hermes-terminal-empty full" }, "Loading")
         : h(
@@ -1046,7 +1129,8 @@
                 h(
                   "div",
                   { className: "hermes-terminal-session-tools" },
-                  h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !(capabilities.machine_terminal_sessions || capabilities.ssh_sessions) }, "+SSH"),
+                  h("button", { type: "button", title: "New workspace shell", onClick: function () { createSession("shell"); }, disabled: !status.available }, "+Shell"),
+                  h("button", { type: "button", title: "New machine terminal", onClick: function () { createSession("ssh"); }, disabled: !capabilities.machine_terminal_sessions }, "+Machine"),
                   h("button", { type: "button", title: "Open Hermes TUI", onClick: function () { createSession("tui"); }, disabled: !capabilities.hermes_tui_sessions }, "+TUI")
                 )
               ),

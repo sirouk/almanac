@@ -106,7 +106,39 @@ def test_bootstrap_userland_enforces_qmd_pin() -> None:
     expect("__pins_get_or_default qmd version" in text, "bootstrap must read qmd version from pins.json")
     expect("qmd --version" in text, "bootstrap must inspect installed qmd version")
     expect('installed_version" != "$qmd_version' in text, "bootstrap must reinstall qmd when installed version drifts")
+    # No hard-coded version fallback: a stale literal (e.g. 2.1.0) silently
+    # changes index/recall semantics on degraded installs. When the pin cannot
+    # be read and no explicit ARCLINK_QMD_VERSION is set, bootstrap fails hard.
+    expect(re.search(r"ARCLINK_QMD_VERSION:-\d", text) is None, "bootstrap must not carry a hard-coded qmd version fallback")
+    expect("Refusing to install an unpinned qmd" in text, "bootstrap must fail hard when the qmd pin is unresolvable")
     print("PASS test_bootstrap_userland_enforces_qmd_pin")
+
+
+def test_bootstrap_userland_install_qmd_fails_hard_without_pin() -> None:
+    """Extract install_qmd and run it with pins unreadable and no env override:
+    it must refuse rather than install a floating/stale qmd."""
+    text = BOOTSTRAP_USERLAND.read_text(encoding="utf-8")
+    start = text.index("install_qmd() {")
+    end = text.index("\n}", start) + 2
+    snippet = text[start:end]
+    script = f"""
+set -uo pipefail
+__pins_get_or_default() {{ printf '%s' "$3"; }}
+ensure_nvm() {{ :; }}
+npm() {{ echo "npm must not run without a resolved qmd pin" >&2; exit 99; }}
+ARCLINK_QMD_PACKAGE=@tobilu/qmd
+{snippet}
+if install_qmd; then
+  echo "install_qmd unexpectedly succeeded" >&2
+  exit 98
+fi
+echo "refused-as-expected"
+"""
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    expect(result.returncode == 0, f"install_qmd fail-hard check failed: {result.stderr}\n{result.stdout}")
+    expect("refused-as-expected" in result.stdout, result.stdout)
+    expect("Refusing to install an unpinned qmd" in result.stderr, result.stderr)
+    print("PASS test_bootstrap_userland_install_qmd_fails_hard_without_pin")
 
 
 def test_pins_sh_round_trip_does_not_corrupt_other_components() -> None:
@@ -617,6 +649,7 @@ def main() -> int:
     test_pins_json_kind_required_fields_present()
     test_qmd_pin_is_explicit_semver()
     test_bootstrap_userland_enforces_qmd_pin()
+    test_bootstrap_userland_install_qmd_fails_hard_without_pin()
     test_pins_sh_round_trip_does_not_corrupt_other_components()
     test_pins_sh_resolve_inherited_ref_for_hermes_docs()
     test_common_sh_reads_hermes_pin_from_pins_json()
@@ -627,7 +660,7 @@ def main() -> int:
     test_component_upgrade_rebases_pin_commit_when_remote_arclink_advances()
     test_component_upgrade_requires_deploy_key_before_writing_pin()
     test_component_upgrade_reexec_discovers_operator_config_artifact()
-    print("PASS all 14 pins regression tests")
+    print("PASS all 15 pins regression tests")
     return 0
 
 

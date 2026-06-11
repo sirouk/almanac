@@ -818,6 +818,58 @@ docker_stop_tailnet_forward_unit() {
   fi
 }
 
+docker_tailnet_forward_pidfile() {
+  local deployment_id="$1"
+  local port="$2"
+  local dir="$REPO_DIR/arclink-priv/state/tailnet-forwards"
+  mkdir -p "$dir"
+  printf '%s/%s-%s.pid\n' "$dir" "$deployment_id" "$port"
+}
+
+docker_tailnet_forward_tracked_alive() {
+  local deployment_id="$1"
+  local port="$2"
+  local unit="" pid_file="" pid=""
+
+  if command -v systemctl >/dev/null 2>&1; then
+    unit="$(docker_tailnet_forward_unit_name "$deployment_id" "$port")"
+    if systemctl is-active --quiet "$unit" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  pid_file="$(docker_tailnet_forward_pidfile "$deployment_id" "$port")"
+  if [[ -f "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    rm -f "$pid_file"
+  fi
+  return 1
+}
+
+docker_kill_tracked_tailnet_forward_pid() {
+  local deployment_id="$1"
+  local port="$2"
+  local pid_file="" pid=""
+
+  pid_file="$(docker_tailnet_forward_pidfile "$deployment_id" "$port")"
+  [[ -f "$pid_file" ]] || return 0
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    kill "$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$pid_file"
+}
+
+docker_kill_untracked_tailnet_forward() {
+  # Legacy nohup forwards predate pidfile tracking; free the port by matching
+  # the exact -L spec so a fresh tracked forward can bind it.
+  local port="$1"
+  command -v pkill >/dev/null 2>&1 || return 0
+  pkill -f -- "-L 127.0.0.1:$port:127.0.0.1:$port" >/dev/null 2>&1 || true
+}
+
 docker_tailnet_local_http_probe() {
   local port="$1"
   local status=""
@@ -847,13 +899,30 @@ docker_wait_tailnet_local_http() {
 docker_prune_tailnet_forwards() {
   local routes_file="$1"
   local dir="$REPO_DIR/arclink-priv/state/tailnet-forwards"
-  local socket="" name="" desired="" unit_name="" deployment_id="" port=""
+  local socket="" name="" desired="" unit_name="" deployment_id="" port="" pid_file="" pid=""
   desired="$(awk -F '\t' 'NF >= 3 {print $1 "-" $3 ".ctl"}' "$routes_file" 2>/dev/null || true)"
   shopt -s nullglob
   for socket in "$dir"/*.ctl; do
     name="$(basename "$socket")"
     if ! grep -Fxq "$name" <<<"$desired"; then
       docker_stop_tailnet_forward_socket "$socket"
+    fi
+  done
+  # Tracked nohup forwards: kill pids whose deployment+port left the desired
+  # route set, and drop pidfiles whose process already exited.
+  desired="$(awk -F '\t' 'NF >= 3 {print $1 "-" $3 ".pid"}' "$routes_file" 2>/dev/null || true)"
+  for pid_file in "$dir"/*.pid; do
+    name="$(basename "$pid_file")"
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if ! grep -Fxq "$name" <<<"$desired"; then
+      if [[ -n "$pid" ]]; then
+        kill "$pid" >/dev/null 2>&1 || true
+      fi
+      rm -f "$pid_file"
+      continue
+    fi
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" >/dev/null 2>&1; then
+      rm -f "$pid_file"
     fi
   done
   shopt -u nullglob
@@ -879,7 +948,7 @@ docker_ensure_tailnet_forward() {
   local ssh_host="$3"
   local ssh_user="${4:-arclink}"
   local ssh_port="${5:-22}"
-  local key_path="" known_hosts="" control_path="" target="" unit="" ssh_bin="" log_file="" forward_pid=""
+  local key_path="" known_hosts="" control_path="" target="" unit="" ssh_bin="" log_file="" forward_pid="" pid_file=""
 
   if docker_is_local_ssh_host "$ssh_host"; then
     docker_wait_tailnet_local_http "$port" 4
@@ -906,15 +975,20 @@ docker_ensure_tailnet_forward() {
   if [[ -S "$control_path" ]]; then
     docker_stop_tailnet_forward_socket "$control_path"
   fi
-  if docker_tailnet_local_http_probe "$port"; then
+  # Only short-circuit on a healthy port when a forward we track (systemd unit
+  # or pidfile) owns it for this deployment+port; an untracked listener gets
+  # replaced with a tracked forward instead of silently adopted.
+  if docker_tailnet_forward_tracked_alive "$deployment_id" "$port" && docker_tailnet_local_http_probe "$port"; then
     return 0
   fi
 
   unit="$(docker_tailnet_forward_unit_name "$deployment_id" "$port")"
   ssh_bin="$(command -v ssh || true)"
   [[ -n "$ssh_bin" ]] || return 1
+  docker_stop_tailnet_forward_unit "$unit"
+  docker_kill_tracked_tailnet_forward_pid "$deployment_id" "$port"
+  docker_kill_untracked_tailnet_forward "$port"
   if command -v systemd-run >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
-    docker_stop_tailnet_forward_unit "$unit"
     systemd-run \
       --unit="$unit" \
       --description="ArcLink tailnet forward $deployment_id:$port" \
@@ -944,6 +1018,7 @@ docker_ensure_tailnet_forward() {
   fi
 
   log_file="$REPO_DIR/arclink-priv/state/tailnet-forwards/$deployment_id-$port.log"
+  pid_file="$(docker_tailnet_forward_pidfile "$deployment_id" "$port")"
   nohup "$ssh_bin" \
     -i "$key_path" \
     -p "${ssh_port:-22}" \
@@ -959,10 +1034,12 @@ docker_ensure_tailnet_forward() {
     -L "127.0.0.1:$port:127.0.0.1:$port" \
     "$target" >"$log_file" 2>&1 &
   forward_pid="$!"
+  printf '%s\n' "$forward_pid" >"$pid_file"
   if docker_wait_tailnet_local_http "$port" 12; then
     return 0
   fi
   kill "$forward_pid" >/dev/null 2>&1 || true
+  rm -f "$pid_file"
   return 1
 }
 

@@ -53,6 +53,12 @@ Linked. `vault` remains a hidden compatibility alias for older callers.
   creation, rename, move, delete, and restore are confined to the accepted
   folder source. Sharing from Linked stays disabled, and copy/duplicate can
   still create owned copies in Workspace or Fleet without granting reshare.
+- The Linked root descriptor reports `read_only` and write capabilities from
+  the linked-resources manifest: write-style capabilities are advertised only
+  when at least one accepted read/write shared folder exists. Listings include
+  a `folder` descriptor plus per-item `can_write`/`can_upload`/`can_delete`/
+  `can_rename` flags; the UI shows Read-only badges and disables New, Upload,
+  Rename, Move, and Trash wherever those flags are false.
 - Delete moves local files into `.drive-trash`.
 - Text, Markdown, JSON, CSV/TSV, PDF, image, audio, video, and browser-native
   file previews render in place when browser-supported.

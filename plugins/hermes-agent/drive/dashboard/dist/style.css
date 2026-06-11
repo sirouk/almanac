@@ -567,6 +567,20 @@
   white-space: nowrap;
 }
 
+.hermes-drive-readonly-badge {
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--midground-base) 34%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--midground-base) 70%, transparent);
+  display: inline-flex;
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  padding: 0.14rem 0.4rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .hermes-drive-root-chip .hermes-drive-rooticon {
   flex-basis: 1rem;
   transform: scale(0.86);

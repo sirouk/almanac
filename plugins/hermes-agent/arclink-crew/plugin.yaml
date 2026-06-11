@@ -1,6 +1,6 @@
-name: terminal
-version: 0.4.0
-description: Adds Terminal to the Hermes Dashboard as an ArcLink managed-pty plugin.
+name: arclink-crew
+version: 1.0.0
+description: Crew switcher dropdown in the Hermes dashboard header for jumping between a Captain's Agents.
 author: ArcLink
 kind: standalone
 provides_tools: []

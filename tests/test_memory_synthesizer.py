@@ -298,10 +298,29 @@ def test_memory_synthesizer_caches_cards_and_injects_recall_stubs() -> None:
                     and all(card.get("disagreement_signals") for card in parsed_cards),
                     parsed_cards,
                 )
+                # Exactly one GLOBAL curator fanout is queued per changed run;
+                # run_once now consumes it immediately (recall-stub staleness
+                # shortener), which marks it delivered and expands it into
+                # per-agent rows handled in the same pass.
                 fanout = conn.execute(
-                    "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'"
+                    """
+                    SELECT COUNT(*) AS c FROM notification_outbox
+                    WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'
+                      AND target_id IN ('', 'curator')
+                    """
                 ).fetchone()
                 expect(int(fanout["c"]) == 1, f"expected one curator fanout notification, got {fanout['c']}")
+                undelivered_global = conn.execute(
+                    """
+                    SELECT COUNT(*) AS c FROM notification_outbox
+                    WHERE target_kind = 'curator' AND channel_kind = 'brief-fanout'
+                      AND target_id IN ('', 'curator') AND delivered_at IS NULL
+                    """
+                ).fetchone()
+                expect(
+                    int(undelivered_global["c"]) == 0,
+                    "run_once should consume its own fanout immediately instead of waiting for curator-refresh",
+                )
                 conn.execute(
                     "UPDATE memory_synthesis_cards SET updated_at = ? WHERE source_kind = 'vault' AND source_key = ?",
                     ("2026-01-01T00:00:00+00:00", "Research"),
@@ -731,17 +750,66 @@ def test_memory_synthesizer_rejects_unsafe_model_output() -> None:
     print("PASS test_memory_synthesizer_rejects_unsafe_model_output")
 
 
+def test_memory_synth_credentials_split_from_pdf_vision() -> None:
+    """Dedicated ARCLINK_MEMORY_SYNTH_* creds win; PDF_VISION_* stays a
+    back-compat fallback that is surfaced loudly (rotating the vision endpoint
+    changes the model in the dedupe key and re-synthesizes every card)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        old_env = os.environ.copy()
+        try:
+            # Dedicated vars present -> source is memory-synth.
+            values = base_config(root)
+            write_config(config_path, values)
+            os.environ.update(values)
+            os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+            cfg = control.Config.from_env()
+            settings = synth.load_settings(cfg)
+            expect(settings.llm_config_source == "memory-synth", str(settings))
+
+            # Only PDF_VISION_* present -> fallback source, model inherited.
+            values = base_config(root)
+            values.update(
+                {
+                    "ARCLINK_MEMORY_SYNTH_ENDPOINT": "",
+                    "ARCLINK_MEMORY_SYNTH_MODEL": "",
+                    "ARCLINK_MEMORY_SYNTH_API_KEY": "",
+                    "PDF_VISION_ENDPOINT": "https://vision.example.test/v1",
+                    "PDF_VISION_MODEL": "vision-fallback-model",
+                    "PDF_VISION_API_KEY": "vision-secret",
+                }
+            )
+            write_config(config_path, values)
+            os.environ.update(values)
+            settings = synth.load_settings(cfg)
+            expect(settings.llm_config_source == "pdf-vision-fallback", str(settings))
+            expect(settings.model == "vision-fallback-model", str(settings))
+
+            # Neither set -> no LLM config source.
+            values = local_fallback_config(root)
+            write_config(config_path, values)
+            os.environ.update(values)
+            settings = synth.load_settings(cfg)
+            expect(settings.llm_config_source == "", str(settings))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_memory_synth_credentials_split_from_pdf_vision")
+
+
 def main() -> int:
     test_memory_synthesizer_caches_cards_and_injects_recall_stubs()
     test_memory_synthesizer_source_signature_uses_file_content_hash()
     test_memory_synthesizer_local_fallback_runs_without_llm_config()
+    test_memory_synth_credentials_split_from_pdf_vision()
     test_memory_synthesizer_ingests_academy_memory_seeds()
     test_memory_synthesizer_picks_up_linked_and_fleet_shared_documents()
     test_memory_synthesizer_falls_back_when_llm_returns_malformed_json()
     test_memory_synthesizer_notion_paths_stay_inside_index_root()
     test_memory_synthesizer_redacts_secret_material_before_truncation()
     test_memory_synthesizer_rejects_unsafe_model_output()
-    print("PASS all 9 memory synthesizer tests")
+    print("PASS all 10 memory synthesizer tests")
     return 0
 
 

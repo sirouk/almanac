@@ -38,6 +38,7 @@ ARCLINK_PROVISIONING_SERVICE_NAMES = (
     "dashboard",
     "hermes-gateway",
     "hermes-dashboard",
+    "terminal-tmux",
     "qmd-mcp",
     "vault-watch",
     "memory-synth",
@@ -769,6 +770,16 @@ def _int_or_zero(value: Any) -> int:
         return 0
 
 
+# Crew switcher links are Captain-scoped: every Agent the Captain owns appears in
+# every sibling switcher, regardless of which onboarding session or bundle
+# purchased it. Keep this exclusion set aligned with the terminal-status set in
+# _refresh_crew_dashboard_access_states (python/arclink_sovereign_worker.py) so a
+# torn-down Agent drops out of the switcher everywhere at once.
+CREW_LINK_EXCLUDED_STATUSES = frozenset(
+    {"cancelled", "teardown_complete", "torn_down", "archived", "deleted", "retired"}
+)
+
+
 def _crew_dashboard_links(
     conn: sqlite3.Connection,
     *,
@@ -781,8 +792,9 @@ def _crew_dashboard_links(
     current_metadata: Mapping[str, Any],
     limit: int = 24,
 ) -> list[dict[str, Any]]:
-    current_session_id = str(current_metadata.get("onboarding_session_id") or "").strip()
-    current_primary = str(current_metadata.get("bundle_primary_deployment_id") or current_deployment_id).strip()
+    # current_metadata is retained for caller compatibility (bin/arclink-docker.sh);
+    # links are Captain-scoped, so session/bundle metadata no longer filters rows.
+    del current_metadata
     rows = [
         dict(row)
         for row in conn.execute(
@@ -803,16 +815,8 @@ def _crew_dashboard_links(
             metadata = _json_loads(str(row.get("metadata_json") or "{}"))
         except Exception:
             metadata = {}
-        row_session_id = str(metadata.get("onboarding_session_id") or "").strip()
-        row_primary = str(metadata.get("bundle_primary_deployment_id") or deployment_id).strip()
-        if current_session_id:
-            if deployment_id != current_deployment_id and row_session_id != current_session_id:
-                continue
-        elif current_primary:
-            if deployment_id != current_deployment_id and row_primary != current_primary:
-                continue
         status = str(row.get("status") or "").strip()
-        if status in {"archived", "deleted", "retired"}:
+        if status in CREW_LINK_EXCLUDED_STATUSES:
             continue
         prefix = str(row.get("prefix") or "").strip()
         if not prefix:
@@ -1001,6 +1005,9 @@ ARCLINK_DEFAULT_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "dashboard":               _resource_limit("256M", "0.5"),
     "hermes-gateway":          _resource_limit("512M", "1.0"),
     "hermes-dashboard":        _resource_limit("256M", "0.5"),
+    # Terminal tmux server + the shells it hosts get their own cgroup so heavy
+    # terminal use can never OOM the dashboard (which would kill every session).
+    "terminal-tmux":           _resource_limit("512M", "1.0"),
     "qmd-mcp":                 _resource_limit("512M", "1.0"),
     "vault-watch":             _resource_limit("128M", "0.25"),
     "memory-synth":            _resource_limit("256M", "0.5"),
@@ -1159,13 +1166,41 @@ def _render_services(
             ],
             ports=hermes_host_ports,
             labels=labels["hermes"],
-            depends_on=installer_complete_depends_on,
+            depends_on={
+                "managed-context-install": {"condition": "service_completed_successfully"},
+                # The terminal tmux server must be up before the dashboard so the
+                # first Terminal session lands in the long-lived service instead
+                # of a throwaway server inside the dashboard container.
+                "terminal-tmux": {"condition": "service_started"},
+            },
             secrets=[
                 {"source": provider_secret_name, "target": secret_target[provider_secret_name]},
                 {"source": "share_request_broker_token", "target": secret_target["share_request_broker_token"]},
             ],
             deploy=_limits("hermes-dashboard"),
             networks=_service_networks(prefix, "hermes", use_control_network=use_control_network),
+        ),
+        # Dedicated long-lived tmux server for the Terminal dashboard plugin.
+        # It shares the HERMES_HOME bind mount (and the workspace/vault mounts
+        # the shells need) with hermes-dashboard, so the plugin's tmux clients
+        # reach it over $HERMES_HOME/state/terminal/tmux.sock and sessions
+        # survive hermes-dashboard restarts, upgrades, crashes, and OOM kills.
+        # Deliberately NOT in the refresh force-recreate set: routine refreshes
+        # must never kill terminal sessions.
+        "terminal-tmux": _service(
+            image=app_image,
+            command=["./bin/run-terminal-tmux.sh"],
+            environment=env,
+            volumes=[
+                hermes_home_volume,
+                vault_volume,
+                memory_volume,
+                workspace_volume,
+                linked_resources_volume,
+                fleet_shared_volume,
+            ],
+            depends_on=installer_complete_depends_on,
+            deploy=_limits("terminal-tmux"),
         ),
         "qmd-mcp": _service(
             image=app_image,

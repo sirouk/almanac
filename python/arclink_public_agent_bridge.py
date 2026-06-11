@@ -431,9 +431,21 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
             message_id=message_id,
         )
         _install_telegram_bridge_state(adapter, runner, source, chat_id=chat_id)
-        if await _try_replay_native_telegram_update(adapter, bot, payload):
-            pass
+        replayed = False
+        # A Telegram album arrives as one update per item; the delivery layer
+        # absorbs sibling outbox rows into telegram_update_json_list so this
+        # single bridge process can replay them together and Hermes' native
+        # media-group debounce merges them into one Agent turn.
+        update_list = payload.get("telegram_update_json_list")
+        if isinstance(update_list, list) and update_list:
+            for raw_update in update_list:
+                item_payload = {**payload, "telegram_update_json": raw_update}
+                item_payload.pop("telegram_update_json_list", None)
+                if await _try_replay_native_telegram_update(adapter, bot, item_payload):
+                    replayed = True
         else:
+            replayed = await _try_replay_native_telegram_update(adapter, bot, payload)
+        if not replayed:
             event = MessageEvent(
                 text=text,
                 message_type=MessageType.COMMAND if _is_slash_command(text) else MessageType.TEXT,
@@ -551,7 +563,11 @@ async def _try_replay_native_telegram_update(adapter: Any, bot: Any, payload: Ma
             return True
         return False
 
-    message = getattr(update, "message", None)
+    # PTB exposes edited messages as update.edited_message; Hermes treats an
+    # edit as a fresh message, so replaying it through the same handlers keeps
+    # native parity (text, captions, and media all re-enter) instead of
+    # degrading the edit to a placeholder turn.
+    message = getattr(update, "message", None) or getattr(update, "edited_message", None)
     if message is None:
         return False
 
@@ -695,7 +711,12 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
             chunks = adapter.truncate_message(adapter.format_message(content), getattr(adapter, "MAX_MESSAGE_LENGTH", 2000))
             sent_ids: list[str] = []
             for idx, chunk in enumerate(chunks or [""]):
-                body: dict[str, Any] = {"content": chunk}
+                body: dict[str, Any] = {
+                    "content": chunk,
+                    # Default-deny mass mentions: agent output must never ping
+                    # @everyone/@here or roles, matching native Hermes policy.
+                    "allowed_mentions": {"parse": ["users"], "replied_user": True},
+                }
                 if reply_to and idx == 0 and getattr(adapter, "_reply_to_mode", "first") != "off":
                     body["message_reference"] = {
                         "message_id": str(reply_to),

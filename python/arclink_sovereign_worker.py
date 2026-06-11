@@ -607,6 +607,95 @@ def recover_stale_sovereign_jobs(conn: sqlite3.Connection, *, stale_seconds: int
     return recovered
 
 
+TAILNET_HANDOFF_DEFER_DEFAULT_MAX_SECONDS = 900
+
+
+def _tailnet_handoff_defer_max_seconds(worker: SovereignWorkerConfig) -> int:
+    raw = str((worker.env or {}).get("ARCLINK_TAILNET_HANDOFF_DEFER_MAX_SECONDS") or "").strip()
+    try:
+        value = int(raw) if raw else TAILNET_HANDOFF_DEFER_DEFAULT_MAX_SECONDS
+    except ValueError:
+        value = TAILNET_HANDOFF_DEFER_DEFAULT_MAX_SECONDS
+    return max(60, value)
+
+
+def _tailnet_handoff_ready(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    worker: SovereignWorkerConfig,
+) -> tuple[bool, dict[str, Any]]:
+    """Decide whether the Captain handoff may fire for this deployment.
+
+    In tailscale/path ingress the first reachable URL is the control-node
+    bridge, which only exists after the publisher records
+    ``tailnet_app_publication.status == 'published'`` and rewrites
+    ``access_urls`` to the control DNS. Defer the handoff until then, but
+    never strand it: a recorded publish failure or an elapsed deferral window
+    fires the handoff with the best-known URLs anyway.
+    """
+    if str(worker.ingress_mode or "").strip().lower() != "tailscale":
+        return True, {"reason": "not_tailscale_ingress"}
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchone()
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}")) if row is not None else {}
+    publication = (
+        metadata.get("tailnet_app_publication")
+        if isinstance(metadata.get("tailnet_app_publication"), Mapping)
+        else {}
+    )
+    status = str(publication.get("status") or "").strip().lower()
+    if status == "published":
+        return True, {"reason": "tailnet_publication_published", "publication_status": status}
+    if status:
+        # The publisher ran and recorded a non-published outcome (for example
+        # 'unavailable'). Firing with worker URLs beats stranding the Captain.
+        return True, {"reason": f"tailnet_publication_{status}", "publication_status": status}
+    deferred_at = parse_utc_iso(str(metadata.get("tailnet_handoff_deferred_at") or ""))
+    max_seconds = _tailnet_handoff_defer_max_seconds(worker)
+    if deferred_at is not None and utc_now().timestamp() - deferred_at.timestamp() >= max_seconds:
+        return True, {
+            "reason": "tailnet_handoff_defer_window_elapsed",
+            "publication_status": "pending",
+            "deferred_at": str(metadata.get("tailnet_handoff_deferred_at") or ""),
+        }
+    return False, {"reason": "awaiting_tailnet_publication", "publication_status": "pending"}
+
+
+def _record_tailnet_handoff_deferral(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    job_id: str,
+    state: Mapping[str, Any],
+) -> None:
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (deployment_id,),
+    ).fetchone()
+    if row is None:
+        return
+    metadata = json_loads_safe(str(row["metadata_json"] or "{}"))
+    if str(metadata.get("tailnet_handoff_deferred_at") or "").strip():
+        return
+    now = utc_now_iso()
+    metadata["tailnet_handoff_deferred_at"] = now
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ?, updated_at = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), now, deployment_id),
+    )
+    conn.commit()
+    append_arclink_event(
+        conn,
+        subject_kind="deployment",
+        subject_id=deployment_id,
+        event_type="user_handoff_deferred",
+        metadata={"job_id": job_id, **{str(k): v for k, v in dict(state).items()}},
+    )
+
+
 def recover_succeeded_sovereign_handoffs(
     conn: sqlite3.Connection,
     *,
@@ -639,7 +728,20 @@ def recover_succeeded_sovereign_handoffs(
         job_id = str(deployment["job_id"])
         if str(deployment.get("status") or "") != "active":
             _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
+        ready, handoff_state = _tailnet_handoff_ready(conn, deployment_id=deployment_id, worker=worker)
+        if not ready:
+            # The Pod is applied and active; only the Captain notification
+            # waits for the control bridge to publish.
+            _record_tailnet_handoff_deferral(conn, deployment_id=deployment_id, job_id=job_id, state=handoff_state)
+            recovered.append({"deployment_id": deployment_id, "job_id": job_id, "status": "handoff_deferred"})
+            continue
         _refresh_crew_dashboard_access_states(conn, user_id=str(deployment.get("user_id") or ""), worker=worker)
+        refreshed_row = conn.execute(
+            "SELECT * FROM arclink_deployments WHERE deployment_id = ?",
+            (deployment_id,),
+        ).fetchone()
+        if refreshed_row is not None:
+            deployment = {**dict(refreshed_row), "job_id": job_id}
         urls = _handoff_urls_for_recovery(conn, deployment=deployment, worker=worker)
         _queue_vessel_online_notifications(conn, deployment_id=deployment_id, urls=urls)
         append_arclink_event(
@@ -647,7 +749,7 @@ def recover_succeeded_sovereign_handoffs(
             subject_kind="deployment",
             subject_id=deployment_id,
             event_type="user_handoff_ready",
-            metadata={"job_id": job_id, "urls": urls, "recovered": True},
+            metadata={"job_id": job_id, "urls": urls, "recovered": True, **handoff_state},
         )
         recovered.append({"deployment_id": deployment_id, "job_id": job_id, "status": "handoff_recovered"})
     return recovered
@@ -694,18 +796,32 @@ def process_sovereign_deployment(
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
         _mark_deployment_status(conn, deployment_id=deployment_id, status="active")
         _refresh_crew_dashboard_access_states(conn, user_id=str(deployment.get("user_id") or ""), worker=worker)
-        _queue_vessel_online_notifications(
-            conn,
-            deployment_id=deployment_id,
-            urls=result.get("urls", {}),
-        )
-        append_arclink_event(
-            conn,
-            subject_kind="deployment",
-            subject_id=deployment_id,
-            event_type="user_handoff_ready",
-            metadata={"job_id": str(job["job_id"]), "urls": result.get("urls", {})},
-        )
+        handoff_ready, handoff_state = _tailnet_handoff_ready(conn, deployment_id=deployment_id, worker=worker)
+        if handoff_ready:
+            _queue_vessel_online_notifications(
+                conn,
+                deployment_id=deployment_id,
+                urls=result.get("urls", {}),
+            )
+            append_arclink_event(
+                conn,
+                subject_kind="deployment",
+                subject_id=deployment_id,
+                event_type="user_handoff_ready",
+                metadata={"job_id": str(job["job_id"]), "urls": result.get("urls", {})},
+            )
+        else:
+            # Tailscale ingress: the control bridge has not published yet, so
+            # the worker-DNS link could be unreachable. The
+            # recover_succeeded_sovereign_handoffs sweep re-fires the handoff
+            # once the publisher records 'published' (or the bounded deferral
+            # window elapses), using the rewritten control-DNS access_urls.
+            _record_tailnet_handoff_deferral(
+                conn,
+                deployment_id=deployment_id,
+                job_id=str(job["job_id"]),
+                state=handoff_state,
+            )
         append_arclink_audit(
             conn,
             action="sovereign_pod_apply",
@@ -815,6 +931,7 @@ def process_sovereign_teardown(
     job = _ensure_teardown_job(conn, deployment_id=deployment_id)
     if str(job["status"]) in TERMINAL_JOB_STATUSES:
         _mark_deployment_status(conn, deployment_id=deployment_id, status="torn_down")
+        _refresh_crew_dashboard_access_states(conn, user_id=str(deployment.get("user_id") or ""), worker=worker)
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_torn_down"}
     if str(job["status"]) == "running":
         return {"deployment_id": deployment_id, "job_id": str(job["job_id"]), "status": "already_running"}
@@ -836,6 +953,10 @@ def process_sovereign_teardown(
         result = _teardown_deployment(conn, deployment=dict(deployment), job=job, worker=worker, executor=executor)
         transition_arclink_provisioning_job(conn, job_id=str(job["job_id"]), status="succeeded")
         _mark_deployment_status(conn, deployment_id=deployment_id, status="torn_down")
+        # A retired Agent must drop out of every sibling Crew switcher; refresh
+        # the surviving Agents' dashboard access states (apply-success and
+        # handoff recovery already do the same).
+        _refresh_crew_dashboard_access_states(conn, user_id=str(deployment.get("user_id") or ""), worker=worker)
         append_arclink_event(
             conn,
             subject_kind="deployment",

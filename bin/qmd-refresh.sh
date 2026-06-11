@@ -70,8 +70,12 @@ run_qmd_embed() {
 
   case "${QMD_EMBED_PROVIDER:-local}" in
     endpoint|openai-compatible|remote|api)
-      echo "QMD embedding endpoint provider selected; local qmd embedding is skipped. Text index is updated, and endpoint-backed qmd vector search can use QMD_EMBED_ENDPOINT/QMD_EMBED_ENDPOINT_MODEL when available." >&2
-      return 0
+      # The pinned qmd release has no endpoint-backed embedding support, so
+      # honoring this provider literally would silently disable ALL vector
+      # search. Fall back to local embedding and keep the endpoint env vars
+      # (QMD_EMBED_ENDPOINT/QMD_EMBED_ENDPOINT_MODEL/...) untouched so a future
+      # qmd upgrade can adopt them without reconfiguration.
+      echo "WARNING: QMD embedding endpoint provider selected, but the pinned qmd release does not support endpoint-backed embeddings; falling back to local qmd embeddings so vector search stays available. QMD_EMBED_ENDPOINT settings are preserved for a future qmd upgrade." >&2
       ;;
     none|off|disabled)
       echo "QMD embeddings are disabled; text index is updated." >&2
@@ -124,3 +128,8 @@ qmd --index "$QMD_INDEX_NAME" update
 if [[ "$run_embed" == "1" ]]; then
   run_qmd_embed
 fi
+
+# Track how long documents have been waiting for embeddings so a quietly
+# starved embed lane surfaces as a health/diagnostics warning instead of
+# leaving vector search stale indefinitely.
+qmd_note_pending_embeddings_state || true

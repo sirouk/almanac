@@ -119,7 +119,12 @@ def discord_send_message(
     text: str,
     components: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {"content": text if len(text) <= 1900 else text[:1897] + "..."}
+    payload: dict[str, Any] = {
+        "content": text if len(text) <= 1900 else text[:1897] + "...",
+        # Default-deny mass mentions on every outbox send: notification copy
+        # must never ping @everyone/@here or roles.
+        "allowed_mentions": {"parse": ["users"], "replied_user": True},
+    }
     if components is not None:
         payload["components"] = components
     return _request_json(
@@ -353,7 +358,18 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
                 display_name = option_values.get("display_name", "").strip()
                 text = " ".join(item for item in ("/raven-name", scope, display_name) if item).strip()
             else:
-                text = f"/{name}" if name else "/start"
+                # Generic mapping: the Captain already filled the registered
+                # options in Discord's native UI, so reconstruct the typed
+                # command instead of throwing those values away and
+                # re-prompting (the #1 Discord friction bug). Option order
+                # follows the command's registered discord_options.
+                ordered_values = [
+                    str(opt.get("value") or "").strip()
+                    for opt in options
+                    if isinstance(opt, Mapping) and str(opt.get("value") or "").strip()
+                ]
+                base = f"/{name}" if name else "/start"
+                text = " ".join([base, *ordered_values]).strip() if ordered_values else base
         user = (interaction.get("member") or {}).get("user") or interaction.get("user") or {}
         return {
             "channel_id": str(interaction.get("channel_id") or ""),

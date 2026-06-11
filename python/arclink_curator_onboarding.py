@@ -48,16 +48,19 @@ from arclink_onboarding_flow import (
 )
 from arclink_operator_raven import (
     dispatch_operator_raven_command,
+    operator_button_approvals_enabled,
     operator_raven_command_is_mutating,
     operator_raven_command_requested,
     strip_operator_approval_code,
 )
 from arclink_telegram import (
+    operator_telegram_sender_allowed,
     telegram_answer_callback_query,
     telegram_edit_message_text,
     telegram_edit_message_reply_markup,
     telegram_get_me,
     telegram_get_updates,
+    telegram_operator_buttons_markup,
     telegram_set_my_commands,
     telegram_send_message,
 )
@@ -207,6 +210,14 @@ def notify_operator_worker_failure(
         return
 
 
+def _operator_channel_set() -> set[str]:
+    return {
+        value.strip().lower()
+        for value in config_env_value("ARCLINK_CURATOR_CHANNELS", "").split(",")
+        if value.strip()
+    }
+
+
 def _operator_sender_allowed(
     cfg: Config,
     *,
@@ -214,13 +225,17 @@ def _operator_sender_allowed(
     sender_id: str,
     chat_type: str,
 ) -> bool:
-    if cfg.operator_notify_platform != "telegram" or not cfg.operator_notify_channel_id:
-        return False
-    if chat_id != str(cfg.operator_notify_channel_id):
-        return False
-    if cfg.operator_telegram_user_ids:
-        return sender_id in cfg.operator_telegram_user_ids
-    return chat_type == "private" and chat_id == sender_id
+    # Shared GAP-029 gate: the long-poll loop and the hosted-API webhook must
+    # reach the same allow/deny decision for the same Telegram update.
+    return operator_telegram_sender_allowed(
+        chat_id=chat_id,
+        sender_id=sender_id,
+        chat_type=chat_type,
+        notify_platform=cfg.operator_notify_platform,
+        notify_channel_id=str(cfg.operator_notify_channel_id or ""),
+        operator_user_ids=cfg.operator_telegram_user_ids,
+        operator_channels=_operator_channel_set(),
+    )
 
 
 def operator_message_allowed(cfg: Config, message: dict[str, Any]) -> bool:
@@ -338,7 +353,12 @@ def _handle_operator_command(
                     actor_id=actor,
                     idempotency_key=message_id,
                 )
-            send_text(bot_token, operator_chat_id, str(result.get("message") or "Operator Raven command returned no output."))
+            send_text(
+                bot_token,
+                operator_chat_id,
+                str(result.get("message") or "Operator Raven command returned no output."),
+                reply_markup=telegram_operator_buttons_markup(result),
+            )
         except Exception as exc:  # noqa: BLE001
             send_text(bot_token, operator_chat_id, f"Operator Raven command failed closed: {exc}")
         return
@@ -789,6 +809,40 @@ def _handle_operator_callback(
             show_alert=True,
         )
         return
+    raw_command = data[len("arclink:"):].strip()
+    if raw_command.startswith("/") and operator_raven_command_requested(raw_command):
+        # One-tap operator buttons carry a server-minted command (for example
+        # /upgrade_apply <single-use nonce>). They route through the same
+        # Operator Raven dispatch gate as typed commands; the nonce is the
+        # structured confirmation, so no extra typing is required.
+        actor = _format_actor_label({"from": sender})
+        result: dict[str, Any] | None = None
+        try:
+            with connect_db(cfg) as conn:
+                result = dispatch_operator_raven_command(
+                    conn,
+                    raw_command,
+                    env=os.environ,
+                    actor_id=actor,
+                    idempotency_key=callback_query_id,
+                )
+            summary = str(result.get("message") or "Operator Raven command returned no output.")
+        except Exception as exc:  # noqa: BLE001 - callbacks must fail closed, not crash the loop
+            summary = f"Operator Raven command failed closed: {exc}"
+        telegram_answer_callback_query(
+            bot_token=bot_token,
+            callback_query_id=callback_query_id,
+            text=summary[:190],
+            show_alert=False,
+        )
+        if chat_id:
+            send_text(
+                bot_token,
+                chat_id,
+                summary,
+                reply_markup=telegram_operator_buttons_markup(result),
+            )
+        return
     try:
         _, scope, action, target_id = data.split(":", 3)
     except ValueError:
@@ -799,7 +853,38 @@ def _handle_operator_callback(
             show_alert=True,
         )
         return
+    # Upgrade/pin-upgrade install buttons become one-tap when no approval code
+    # is configured (typing /upgrade confirm needs no code either, so buttons
+    # must not be stricter than typing). With a code configured, the install
+    # press answers with the fresh /upgrade menu whose single-use nonce buttons
+    # are the code-equivalent second factor: two taps, zero typing.
+    # Onboarding/enrollment/SSOT approvals keep the strict typed-code stance,
+    # and ARCLINK_OPERATOR_BUTTON_APPROVALS=0 restores typed-only everywhere.
+    one_tap_install = action == "install" and scope in {"upgrade", "pin-upgrade"} and operator_button_approvals_enabled(os.environ)
     if _operator_approval_code() and action in {"approve", "deny", "install"}:
+        if one_tap_install:
+            with connect_db(cfg) as conn:
+                menu = dispatch_operator_raven_command(
+                    conn,
+                    "/upgrade",
+                    env=os.environ,
+                    actor_id=_format_actor_label({"from": sender}),
+                    idempotency_key=callback_query_id,
+                )
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="Fresh upgrade menu sent. Tap a button there to queue it.",
+                show_alert=False,
+            )
+            if chat_id:
+                send_text(
+                    bot_token,
+                    chat_id,
+                    str(menu.get("message") or "Operator Raven upgrade menu"),
+                    reply_markup=telegram_operator_buttons_markup(menu),
+                )
+            return
         telegram_answer_callback_query(
             bot_token=bot_token,
             callback_query_id=callback_query_id,
@@ -880,6 +965,18 @@ def _handle_operator_callback(
                     upsert_setting(conn, "arclink_upgrade_last_dismissed_sha", target_id)
                     result_text = f"Dismissed ArcLink update notice for {target_id[:12]}."
                     replacement_text = (message_text + f"\n\nDismissed by {actor}.").strip()
+                elif action == "install" and one_tap_install:
+                    # One-tap: route through the same Operator Raven gate as a
+                    # typed /upgrade confirm. The queue dedupes replays.
+                    dispatched = dispatch_operator_raven_command(
+                        conn,
+                        "/upgrade confirm",
+                        env=os.environ,
+                        actor_id=actor,
+                        idempotency_key=callback_query_id,
+                    )
+                    result_text = str(dispatched.get("message") or "Operator Raven queued the ArcLink upgrade.")
+                    replacement_text = (message_text + f"\n\n{result_text} ({actor})").strip()
                 elif action in {"preview", "install"}:
                     result_text = (
                         "ArcLink upgrade preview only: no action was queued from this button. "
@@ -896,6 +993,28 @@ def _handle_operator_callback(
                     dismissed = dismiss_pin_upgrade_action(conn, target_id)
                     silenced = ", ".join(dismissed.get("silenced") or dismissed.get("components") or [])
                     result_text = f"Dismissed pinned-component upgrade notice for {silenced or components}."
+                elif action == "install" and one_tap_install:
+                    # One-tap: queue each detector component through the same
+                    # Operator Raven dispatch as typed /pin_upgrade confirm.
+                    # Detector items use pin names (hermes-agent/hermes-docs);
+                    # the operator command surface uses "hermes" for both.
+                    operator_components: list[str] = []
+                    for item in payload["items"]:
+                        raw_component = str(item.get("component") or "").strip().lower()
+                        operator_name = "hermes" if raw_component in {"hermes-agent", "hermes-docs"} else raw_component
+                        if operator_name and operator_name not in operator_components:
+                            operator_components.append(operator_name)
+                    summaries: list[str] = []
+                    for component_name in operator_components:
+                        dispatched = dispatch_operator_raven_command(
+                            conn,
+                            f"/pin_upgrade {component_name} confirm",
+                            env=os.environ,
+                            actor_id=actor,
+                            idempotency_key=f"{callback_query_id}:{component_name}",
+                        )
+                        summaries.append(str(dispatched.get("message") or f"Queued {component_name}."))
+                    result_text = "\n".join(summaries) or f"No pending pinned-component upgrade remained for {components}."
                 elif action in {"preview", "install"}:
                     result_text = (
                         "Pinned-component upgrade preview only: no action was queued from this button. "

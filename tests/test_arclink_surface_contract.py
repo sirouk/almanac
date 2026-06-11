@@ -288,10 +288,102 @@ def test_cross_surface_contract_uses_real_local_surfaces() -> None:
     print("PASS test_cross_surface_contract_uses_real_local_surfaces")
 
 
+def curator_tui_recovery_text() -> str:
+    text = (REPO / "bin/curator-tui.sh").read_text(encoding="utf-8")
+    lines = re.findall(r'echo "([^"]+)"', text)
+    lines.extend(
+        stripped.lstrip("# ").strip()
+        for stripped in (line.strip() for line in text.splitlines())
+        if stripped.startswith("# ") and "operator" in stripped.lower()
+    )
+    return "\n".join(lines)
+
+
+def test_surface_contract_covers_tui_api_and_docs_channels() -> None:
+    contract = load_python_module("arclink_surface_contract.py", "arclink_surface_contract_channel_cover_test")
+    control = load_python_module("arclink_control.py", "arclink_control_surface_channel_cover_test")
+    hosted = load_python_module("arclink_hosted_api.py", "arclink_hosted_api_surface_channel_cover_test")
+    bots = load_python_module("arclink_public_bots.py", "arclink_public_bots_surface_channel_cover_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test"})
+
+    # api: real hosted API response bodies are the user-visible API copy.
+    health_status, health_payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/health", headers={}, config=config,
+    )
+    expect(health_status == 200, str(health_payload))
+    unauth_status, unauth_payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/user/dashboard", headers={}, config=config,
+    )
+    expect(unauth_status in {400, 401, 403}, f"{unauth_status}: {unauth_payload}")
+    api_text = json.dumps({"health": health_payload, "unauthorized": unauth_payload}, indent=2, sort_keys=True)
+
+    # docs: OpenAPI route summaries plus the Captain command-menu descriptions
+    # are the shipped doc copy for API consumers and Captains.
+    spec_status, spec_payload, _ = hosted.route_arclink_hosted_api(
+        conn, method="GET", path="/api/v1/openapi.json", headers={}, config=config,
+    )
+    expect(spec_status == 200, str(spec_status))
+    summaries: list[str] = []
+    for path_key, methods in sorted(spec_payload.get("paths", {}).items()):
+        for method_spec in methods.values():
+            summary = str(method_spec.get("summary") or "").strip()
+            if summary:
+                summaries.append(f"{path_key}: {summary}")
+    expect(len(summaries) >= 10, f"expected OpenAPI summaries, got {len(summaries)}")
+    # Command tokens like /agents are syntax, not prose; the Captain-facing
+    # doc copy under contract is each command's description string.
+    command_docs = "\n".join(action.description for action in bots.ARCLINK_PUBLIC_BOT_ACTIONS)
+
+    samples = [
+        contract.SurfaceSample(
+            name="hosted-api-health-and-error",
+            text=api_text,
+            audience="mixed",
+            channel="api",
+            required_terms=("health",),
+            max_chars=2400,
+        ),
+        contract.SurfaceSample(
+            name="openapi-route-docs",
+            text="\n".join(summaries),
+            audience="mixed",
+            channel="docs",
+            max_chars=12000,
+            max_line_chars=240,
+        ),
+        contract.SurfaceSample(
+            name="raven-command-docs",
+            text=command_docs,
+            audience="captain",
+            channel="docs",
+            required_terms=("Crew", "Academy", "Agent"),
+            max_chars=4000,
+            max_line_chars=160,
+        ),
+        contract.SurfaceSample(
+            name="curator-tui-recovery",
+            text=curator_tui_recovery_text(),
+            audience="operator",
+            channel="tui",
+            state="blocked",
+            required_terms=("Curator Hermes", "Run"),
+            max_chars=1200,
+            max_line_chars=200,
+        ),
+    ]
+    contract.assert_surface_contract(samples)
+    declared = set(contract.SurfaceChannel.__args__)
+    exercised = {"chat", "dashboard", "plugin", "cli", "web"} | {sample.channel for sample in samples}
+    expect(declared <= exercised, f"declared channels without samples: {sorted(declared - exercised)}")
+    print("PASS test_surface_contract_covers_tui_api_and_docs_channels")
+
+
 def main() -> int:
     test_surface_contract_lints_common_regressions()
     test_cross_surface_contract_uses_real_local_surfaces()
-    print("PASS all 2 surface contract tests")
+    test_surface_contract_covers_tui_api_and_docs_channels()
+    print("PASS all 3 surface contract tests")
     return 0
 
 

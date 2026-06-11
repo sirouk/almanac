@@ -1265,6 +1265,36 @@ def _dispatch_action(
                     },
                 }
             )
+            # An upgraded Pod can carry a changed Hermes command registry, so
+            # re-push the active-chat Telegram command scope for the rolled
+            # Pods. Best-effort: menu refresh must never fail the rollout.
+            try:
+                from arclink_public_bot_commands import refresh_active_telegram_command_scopes
+
+                result["telegram_command_scope_refresh"] = refresh_active_telegram_command_scopes(
+                    rollout_env,
+                    deployment_ids=deployment_ids or None,
+                )
+            except Exception as exc:  # noqa: BLE001 - rollout truth already recorded
+                result["telegram_command_scope_refresh"] = {
+                    "skipped": True,
+                    "reason": f"refresh_failed: {str(exc)[:160]}",
+                }
+            # Discord's application-command list mirrors the Hermes inventory,
+            # so re-register it after a rollout when credentials are present.
+            try:
+                from arclink_discord import DiscordConfig, register_arclink_public_discord_commands
+
+                discord_config = DiscordConfig.from_env(rollout_env)
+                if discord_config.bot_token and discord_config.app_id:
+                    result["discord_command_refresh"] = register_arclink_public_discord_commands(discord_config)
+                else:
+                    result["discord_command_refresh"] = {"skipped": True, "reason": "discord_not_configured"}
+            except Exception as exc:  # noqa: BLE001 - rollout truth already recorded
+                result["discord_command_refresh"] = {
+                    "skipped": True,
+                    "reason": f"refresh_failed: {str(exc)[:160]}",
+                }
         return result
 
     raise ArcLinkActionWorkerError(f"unsupported action type: {action_type}")
@@ -1609,6 +1639,12 @@ def _academy_run_refresh_kind(
             continue
         value = result_map[key]
         runner_result[key] = redact_then_truncate(value, limit=240) if isinstance(value, str) else value
+    for key in ("verified_skills", "missing_skills"):
+        if key not in result_map:
+            continue
+        values = result_map[key]
+        if isinstance(values, (list, tuple)):
+            runner_result[key] = [redact_then_truncate(str(value), limit=120) for value in values][:50]
     item["runner_result"] = runner_result
     return item
 
@@ -1769,6 +1805,16 @@ def _academy_durable_refresh_queue_runner(payload: Mapping[str, Any]) -> dict[st
         raise ArcLinkActionWorkerError("Academy post-apply queue marker requires a state directory")
     marker = state_dir / marker_name
     queued_at = utc_now_iso()
+    consumer_by_kind = {
+        # memory_synthesis markers are consumed automatically: every completed
+        # memory-synth run calls consume_academy_refresh_queue_markers_for_all.
+        "memory_synthesis": "memory-synth run completion (consume_academy_refresh_queue_markers)",
+        # qmd_index markers stay runner-gated: the standing qmd refresh lane
+        # (5-15 min) reindexes the applied vault markdown regardless, but it
+        # runs in bash without control-DB access, so consumption requires a
+        # caller to supply lane evidence to consume_academy_refresh_queue_markers.
+        "qmd_index": "runner-gated: consume_academy_refresh_queue_markers with explicit lane evidence",
+    }
     marker_payload = {
         "status": "queued",
         "queued_at": queued_at,
@@ -1780,14 +1826,243 @@ def _academy_durable_refresh_queue_runner(payload: Mapping[str, Any]) -> dict[st
         "manifest_id": str(payload.get("manifest_id") or ""),
         "academy_specialist_uid": str(payload.get("academy_specialist_uid") or ""),
         "applied_paths": list(payload.get("applied_paths") or []),
+        "consumer": consumer_by_kind.get(kind, ""),
+        "runner_gated": kind == "qmd_index",
     }
     changed = _write_private_text_atomic(marker, json.dumps(marker_payload, indent=2, sort_keys=True) + "\n")
     return {
         "status": "queued",
-        "summary": f"Academy {kind} refresh marker queued for the deployment refresh/timer lane.",
+        "summary": (
+            f"Academy {kind} refresh marker queued for the deployment refresh/timer lane; "
+            f"consumer: {consumer_by_kind.get(kind, 'unspecified')}."
+        ),
         "changed": changed,
         "proof": marker.name,
     }
+
+
+_ACADEMY_REFRESH_MARKER_BY_KIND = {
+    "qmd_index": "arclink-academy-qmd-refresh-request.json",
+    "memory_synthesis": "arclink-academy-memory-synthesis-request.json",
+}
+
+
+def consume_academy_refresh_queue_markers(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    lane_evidence: Mapping[str, str] | None = None,
+    consumed_by: str = "system:academy_refresh_marker_consumer",
+) -> dict[str, Any]:
+    """Transition queued Academy refresh markers once their lane has run.
+
+    ``lane_evidence`` maps refresh kind -> ISO timestamp of a completed lane
+    run. For ``memory_synthesis`` the evidence defaults to the control-plane
+    ``refresh_jobs`` record written by every memory-synth run. ``qmd_index``
+    has no default evidence (the qmd refresh lane is bash-only with no DB
+    writes), so those markers stay queued/runner-gated unless the caller
+    supplies evidence. Markers whose lane completed after queued_at move to
+    ``consumed``; everything else is reported untouched.
+    """
+    from arclink_control import parse_utc_iso
+
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        raise ArcLinkActionWorkerError("Academy refresh marker consumption requires a deployment id")
+    roots = _deployment_academy_roots(conn, deployment_id=clean_deployment)
+    state_dir = Path(roots["hermes_home"]) / "state"
+    evidence = {str(key): str(value or "") for key, value in dict(lane_evidence or {}).items()}
+    if "memory_synthesis" not in evidence:
+        job_row = conn.execute(
+            "SELECT last_run_at, last_status FROM refresh_jobs WHERE job_name = 'memory-synth'"
+        ).fetchone()
+        if job_row is not None and str(job_row["last_status"] or "") in {"ok", "warn"}:
+            evidence["memory_synthesis"] = str(job_row["last_run_at"] or "")
+    markers: list[dict[str, Any]] = []
+    consumed = 0
+    for kind, marker_name in _ACADEMY_REFRESH_MARKER_BY_KIND.items():
+        marker_path = state_dir / marker_name
+        try:
+            payload = json.loads(marker_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except json.JSONDecodeError:
+            markers.append({"kind": kind, "status": "invalid", "marker": marker_name})
+            continue
+        if not isinstance(payload, dict):
+            markers.append({"kind": kind, "status": "invalid", "marker": marker_name})
+            continue
+        current_status = str(payload.get("status") or "")
+        if current_status != "queued":
+            markers.append({"kind": kind, "status": current_status, "marker": marker_name})
+            continue
+        completed_at = str(evidence.get(kind) or "").strip()
+        queued_at = parse_utc_iso(str(payload.get("queued_at") or ""))
+        completed = parse_utc_iso(completed_at)
+        if not completed_at or completed is None or (queued_at is not None and completed < queued_at):
+            markers.append(
+                {
+                    "kind": kind,
+                    "status": "queued",
+                    "marker": marker_name,
+                    "note": "no lane completion evidence after queued_at yet",
+                }
+            )
+            continue
+        payload.update(
+            {
+                "status": "consumed",
+                "consumed_at": utc_now_iso(),
+                "consumed_by": str(consumed_by or "").strip(),
+                "lane_completed_at": completed_at,
+            }
+        )
+        _write_private_text_atomic(marker_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        consumed += 1
+        markers.append({"kind": kind, "status": "consumed", "marker": marker_name})
+    if consumed:
+        note_refresh_job(
+            conn,
+            job_name=f"academy-refresh-markers:{clean_deployment}",
+            job_kind="academy-post-apply",
+            target_id=clean_deployment,
+            schedule="on lane completion",
+            status="ok",
+            note=f"consumed {consumed} Academy refresh marker(s) via {consumed_by}",
+        )
+    return {
+        "deployment_id": clean_deployment,
+        "consumed": consumed,
+        "markers": markers,
+    }
+
+
+def consume_academy_refresh_queue_markers_for_all(
+    conn: sqlite3.Connection,
+    *,
+    kind: str,
+    lane_completed_at: str,
+    consumed_by: str = "system:academy_refresh_marker_consumer",
+) -> dict[str, Any]:
+    """Consume queued markers of one kind across all deployments.
+
+    Called by lane owners on completion (memory-synth run_once). Deployments
+    without the marker file are skipped cheaply; per-deployment errors are
+    recorded instead of raised so one bad deployment row cannot wedge a lane.
+    """
+    clean_kind = str(kind or "").strip()
+    if clean_kind not in _ACADEMY_REFRESH_MARKER_BY_KIND:
+        raise ArcLinkActionWorkerError(f"Academy refresh marker consumption does not support kind: {clean_kind or 'unknown'}")
+    rows = conn.execute(
+        "SELECT deployment_id FROM arclink_deployments ORDER BY deployment_id ASC"
+    ).fetchall()
+    results: list[dict[str, Any]] = []
+    errors: list[str] = []
+    consumed = 0
+    for row in rows:
+        deployment_id = str(row["deployment_id"] or "").strip()
+        if not deployment_id:
+            continue
+        try:
+            roots = _deployment_academy_roots(conn, deployment_id=deployment_id)
+        except Exception:  # noqa: BLE001 - skip deployments without resolvable roots.
+            continue
+        marker_path = Path(roots["hermes_home"]) / "state" / _ACADEMY_REFRESH_MARKER_BY_KIND[clean_kind]
+        if not marker_path.is_file():
+            continue
+        try:
+            result = consume_academy_refresh_queue_markers(
+                conn,
+                deployment_id=deployment_id,
+                lane_evidence={clean_kind: str(lane_completed_at or "")},
+                consumed_by=consumed_by,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep the lane moving.
+            errors.append(f"{deployment_id}: {_safe_error_message(exc)}")
+            continue
+        consumed += int(result.get("consumed") or 0)
+        results.append(result)
+    return {
+        "ok": not errors,
+        "kind": clean_kind,
+        "consumed": consumed,
+        "deployments": [str(item.get("deployment_id") or "") for item in results],
+        "errors": errors[:8],
+    }
+
+
+def _academy_skill_enablement_runner(
+    conn: sqlite3.Connection,
+    *,
+    approved_skill_intents: list[dict[str, Any]],
+) -> AcademyPostApplyRunner:
+    """Real skill_activation refresh runner for academy_apply.
+
+    Records each Trainer-approved skill intent as an enablement row in the
+    central arclink_agent_skill_enablement registry (source academy:<slug>,
+    status approved) and reports verified/missing skill ids instead of
+    raising. The per-agent refresh lane applies approved rows; actual Hermes
+    skill activation stays out-of-band and PG-HERMES gated.
+    """
+
+    def _runner(payload: Mapping[str, Any]) -> dict[str, Any]:
+        from arclink_control import record_agent_skill_enablement_intent
+
+        deployment_id = str(payload.get("deployment_id") or "").strip()
+        if not deployment_id:
+            return {
+                "status": "blocked",
+                "summary": "Skill enablement intents require a deployment id.",
+                "last_error": "missing deployment id in skill activation payload",
+            }
+        program_slug = _academy_slug(
+            payload.get("program_id") or payload.get("academy_specialist_uid") or payload.get("trainee_id")
+        )
+        source = f"academy:{program_slug}"
+        verified: list[str] = []
+        missing: list[str] = []
+        for intent in approved_skill_intents:
+            skill_id = str(intent.get("skill_id") or intent.get("source_id") or "").strip()
+            if not skill_id:
+                missing.append(str(intent.get("source_id") or "unknown"))
+                continue
+            provenance_hash = hashlib.sha256(
+                json.dumps(intent, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            record_agent_skill_enablement_intent(
+                conn,
+                deployment_id=deployment_id,
+                skill_id=skill_id,
+                source=source,
+                status="approved",
+                provenance_hash=provenance_hash,
+                requested_by=str(payload.get("request_id") or "system:academy_apply"),
+                metadata={
+                    "source_id": str(intent.get("source_id") or ""),
+                    "review_status": str(intent.get("review_status") or ""),
+                    "tool_recipes": [str(item or "") for item in (intent.get("tool_recipes") or [])],
+                    "trainee_id": str(payload.get("trainee_id") or ""),
+                    "program_id": str(payload.get("program_id") or ""),
+                    "manifest_id": str(payload.get("manifest_id") or ""),
+                    "effective_at": "next_session",
+                },
+            )
+            verified.append(skill_id)
+        return {
+            "status": "recorded",
+            "summary": (
+                f"{len(verified)} approved skill enablement intent(s) recorded in "
+                f"arclink_agent_skill_enablement (source {source}); "
+                f"{len(missing)} intent(s) missing a skill id. The per-agent refresh lane "
+                "applies enablement; skills enter the Hermes prompt index at next session start."
+            ),
+            "changed": bool(verified),
+            "proof": "arclink_agent_skill_enablement",
+            "verified_skills": verified,
+            "missing_skills": missing,
+        }
+
+    return _runner
 
 
 def _materialize_academy_apply(
@@ -1934,6 +2209,7 @@ def _materialize_academy_apply(
         deployment_id=deployment_id,
         qmd_runner=_academy_durable_refresh_queue_runner,
         memory_runner=_academy_durable_refresh_queue_runner,
+        skill_runner=_academy_skill_enablement_runner(conn, approved_skill_intents=approved_skill_intents),
         requested_by="system:academy_apply",
     )
     conn.execute(

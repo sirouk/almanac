@@ -62,9 +62,17 @@ install_node_if_missing() {
 install_qmd() {
   # qmd version is pinned in config/pins.json. An explicit semver is enforced
   # on every bootstrap so retrieval semantics cannot drift under agents.
+  # There is intentionally NO hard-coded version fallback here: a stale
+  # fallback silently changes index/recall semantics on degraded installs.
+  # When the pin cannot be read (missing pins.json or jq), an explicit
+  # ARCLINK_QMD_VERSION may stand in; otherwise bootstrap fails hard.
   local qmd_pkg qmd_version qmd_spec installed_version
   qmd_pkg="$(__pins_get_or_default qmd package "${ARCLINK_QMD_PACKAGE:-@tobilu/qmd}")"
-  qmd_version="$(__pins_get_or_default qmd version "${ARCLINK_QMD_VERSION:-2.1.0}")"
+  qmd_version="$(__pins_get_or_default qmd version "${ARCLINK_QMD_VERSION:-}")"
+  if [[ -z "$qmd_version" ]]; then
+    echo "bootstrap-userland: cannot resolve the qmd version pin from config/pins.json (pins file unreadable or jq missing) and ARCLINK_QMD_VERSION is unset. Refusing to install an unpinned qmd because retrieval semantics must not drift." >&2
+    return 1
+  fi
   qmd_spec="${qmd_pkg}@${qmd_version}"
   ensure_nvm
   installed_version=""

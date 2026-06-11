@@ -1850,7 +1850,9 @@ collect_qmd_embedding_answers() {
   cat <<'EOF'
 QMD semantic embeddings
   local    - qmd local GGUF embeddings; private and offline, but can be slow on CPU
-  endpoint - OpenAI-compatible /v1/embeddings credentials; skips slow local embedding until endpoint-backed qmd search is available
+  endpoint - UNSUPPORTED with the pinned qmd release: OpenAI-compatible /v1/embeddings
+             credentials are stored for a future qmd upgrade, but local embedding
+             still runs as the fallback so vector search stays available today
 EOF
 
   while true; do
@@ -1878,7 +1880,12 @@ EOF
       QMD_EMBED_ENDPOINT_MODEL="$(normalize_optional_answer "$(ask "Embedding endpoint model name (type none to leave unset)" "${default_model:-text-embedding-3-small}")")"
       QMD_EMBED_DIMENSIONS="$(normalize_optional_answer "$(ask "Embedding dimensions (optional; type none to omit)" "$default_dimensions")")"
       QMD_EMBED_API_KEY="$(ask_secret_with_default "Embedding API key (ENTER keeps current, type none to clear)" "$default_api_key")"
-      QMD_RUN_EMBED="0"
+      # The pinned qmd release cannot consume these endpoint credentials yet, so
+      # local embedding stays on as the fallback; otherwise selecting endpoint
+      # would silently disable ALL vector search. The credentials are persisted
+      # for a future qmd upgrade.
+      echo "Note: endpoint-backed qmd embeddings are not supported by the pinned qmd release; keeping local qmd embeddings enabled as the fallback."
+      QMD_RUN_EMBED="1"
       remember_qmd_embed_provider_transition "$default_provider" "$QMD_EMBED_PROVIDER"
       ;;
     none)

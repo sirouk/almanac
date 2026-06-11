@@ -671,6 +671,101 @@ def test_public_agent_turn_delivery_prefers_gateway_bridge_when_available() -> N
             os.environ.update(old_env)
 
 
+def test_public_agent_turn_album_rows_merge_into_one_bridge_call() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_album_merge_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_album_merge_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                for index in range(3):
+                    update = {
+                        "update_id": 9000 + index,
+                        "message": {
+                            "message_id": 100 + index,
+                            "media_group_id": "album-777",
+                            "chat": {"id": 777, "type": "private"},
+                            "from": {"id": 777},
+                            "photo": [{"file_id": f"photo-{index}", "width": 1, "height": 1}],
+                            "caption": "first caption" if index == 0 else "",
+                        },
+                    }
+                    control.queue_notification(
+                        conn,
+                        target_kind="public-agent-turn",
+                        target_id="tg:777",
+                        channel_kind="telegram",
+                        message="[Telegram photo]",
+                        extra={
+                            "deployment_id": "arcdep_album",
+                            "prefix": "arc-albumpod",
+                            "agent_label": "Album Agent",
+                            "telegram_update_kind": "photo",
+                            "telegram_update_json": json.dumps(update, sort_keys=True, separators=(",", ":")),
+                        },
+                    )
+                backdated = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+                conn.execute("UPDATE notification_outbox SET created_at = ?", (backdated,))
+                conn.commit()
+
+            bridge_calls: list[dict[str, object]] = []
+
+            def fake_gateway_turn(**kwargs):
+                bridge_calls.append(kwargs)
+                return True, ""
+
+            delivery._run_public_agent_gateway_turn = fake_gateway_turn
+            summary = delivery.run_public_agent_turns_once(cfg, channel_kind="telegram", target_id="tg:777", limit=5)
+            expect(summary["delivered"] == 1, str(summary))
+            expect(len(bridge_calls) == 1, f"album must reach the bridge as one merged turn: {len(bridge_calls)}")
+            merged_extra = bridge_calls[0]["extra"]
+            update_list = merged_extra.get("telegram_update_json_list")
+            expect(isinstance(update_list, list) and len(update_list) == 3, str(merged_extra.get("telegram_album_size")))
+            expect("album-777" in update_list[0] and "album-777" in update_list[2], "all album items must carry the group id")
+
+            with control.connect_db(cfg) as conn:
+                rows = conn.execute(
+                    "SELECT id, delivered_at, delivery_error FROM notification_outbox ORDER BY id ASC"
+                ).fetchall()
+            expect(all(str(row["delivered_at"] or "").strip() for row in rows), str([dict(row) for row in rows]))
+            absorbed_notes = [str(row["delivery_error"] or "") for row in rows[1:]]
+            expect(
+                all(note.startswith("absorbed_into_album_leader:") for note in absorbed_notes),
+                str(absorbed_notes),
+            )
+            print("PASS test_public_agent_turn_album_rows_merge_into_one_bridge_call")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_operator_agent_turn_delivery_uses_control_stack_gateway() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -2245,6 +2340,7 @@ def main() -> int:
     test_public_agent_turn_delivery_allows_explicit_quiet_fallback()
     test_public_agent_turn_delivery_fails_closed_without_quiet_fallback()
     test_public_agent_turn_delivery_prefers_gateway_bridge_when_available()
+    test_public_agent_turn_album_rows_merge_into_one_bridge_call()
     test_operator_agent_turn_delivery_uses_control_stack_gateway()
     test_public_agent_turn_delivery_bridges_discord_channel_metadata()
     test_public_agent_live_trigger_claims_and_defers_until_detached_bridge_finishes()

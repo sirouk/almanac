@@ -12,10 +12,8 @@ Copy this directory to `~/.hermes/plugins/terminal` and enable `terminal` under
 `plugins.enabled` in `config.yaml`. The dashboard plugin surface requires
 Hermes `v2026.4.30` or newer (`minimum_hermes_version` in `plugin.yaml`).
 
-Version note: `plugin.yaml` carries `version: 0.2.0`, while the `/status`
-payload reports `version: "0.3.0"` (the running surface). Treat `0.3.0` as the
-current behavior level described below; the `plugin.yaml` pin is stale and not
-yet reconciled.
+Version: `0.4.0` everywhere — `plugin.yaml`, `dashboard/manifest.json`, and the
+`/status` payload all carry the same number and must be bumped together.
 
 ## Runtime
 
@@ -29,9 +27,18 @@ yet reconciled.
 - Root execution is blocked unless `TERMINAL_ALLOW_ROOT=1`.
 - Session state lives under `$HERMES_HOME/state/terminal/sessions.json`.
 - When `tmux` is installed, Terminal runs sessions inside an ArcLink-owned tmux
-  socket under `$HERMES_HOME/state/terminal/` and reattaches a browser pty
-  client after dashboard refreshes or worker restarts. Without `tmux`, it falls
-  back to the in-process managed pty backend.
+  socket under `$HERMES_HOME/state/terminal/` (override with
+  `TERMINAL_TMUX_SOCKET`) and reattaches a browser pty client after dashboard
+  refreshes or worker restarts. Without `tmux`, it falls back to the in-process
+  managed pty backend, which does NOT survive dashboard restarts — `/status`
+  only advertises `persistent_sessions` on the tmux backend.
+- On ArcLink Pods the tmux server runs in a dedicated long-lived `terminal-tmux`
+  compose service (`bin/run-terminal-tmux.sh`) that shares the `HERMES_HOME`
+  bind mount, so sessions survive dashboard container restarts, upgrades,
+  crashes, and OOM kills, and terminal shells live in their own cgroup.
+- New tmux sessions set `history-limit` to at least 4000 lines (or the
+  configured `TERMINAL_REATTACH_SCROLLBACK_LINES`) so reattach recovery can
+  actually capture the advertised scrollback.
 - Backend scrollback defaults to `TERMINAL_SCROLLBACK_BYTES=8000000` and is
   bounded between 4 KB and 50 MB.
 - Browser scrollback defaults to `TERMINAL_SCROLLBACK_LINES=50000` and is
@@ -43,16 +50,24 @@ yet reconciled.
 ## Behavior
 
 - Session list, inline rename, close confirmation, closed-session cleanup, and
-  bounded scrollback are built in.
+  bounded scrollback are built in. "Clear Closed" never removes or kills a
+  detached tmux session that is still alive — those stay listed and
+  reattachable; the confirm-gated Close action is the only user kill path.
 - Direct key input, backspace/delete, Ctrl shortcuts, bracketed paste, TUI
   cursor reports, SSE streaming, and polling fallback are supported through
-  xterm.js and the terminal pty API.
+  xterm.js and the terminal pty API. If the SSE stream drops, the UI keeps
+  polling at 1s and re-establishes the stream with exponential backoff instead
+  of permanently downgrading.
 - Cached browser terminals are caught up before they are revealed again, so
   switching back to a TUI session does not visibly replay already-buffered text.
-- The `+SSH` button opens a shell on the local machine (the ArcPod's own host)
-  without asking for a remote target; despite the `ssh` mode name the session is
-  created with an empty `target`, so it is never a remote dial-out. `+TUI` opens
-  the configured Hermes TUI command.
+- Detached, exited, and closed sessions are visibly dimmed with an overlay
+  notice (`[data-session-state]` styling) so it is obvious why keystrokes are
+  not accepted.
+- `+Shell` opens a shell confined to the configured workspace root. `+Machine`
+  opens a shell on the local machine (the ArcPod's own host) without asking for
+  a remote target; the session keeps the internal `ssh` mode name for stored
+  state compatibility but it is never a remote dial-out and no `ssh_sessions`
+  capability is advertised. `+TUI` opens the configured Hermes TUI command.
 
 ## Check
 

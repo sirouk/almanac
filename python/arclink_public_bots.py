@@ -13,13 +13,16 @@ from urllib.parse import urlencode
 
 from arclink_api_auth import (
     ARCLINK_CREDENTIAL_HANDOFF_TTL_SECONDS,
+    ArcLinkApiAuthError,
     accept_share_grant_for_recipient,
     claim_share_nonce_for_recipient,
     check_arclink_rate_limit,
+    create_user_share_grant_for_owner,
     _dashboard_password_ref_for_handoff,
     expire_revealable_user_material,
     queue_share_grant_recipient_notification,
     _resolve_revealable_credential_secret,
+    _resolve_share_recipient_user_id,
     _stable_handoff_id,
 )
 from arclink_adapters import arclink_access_urls
@@ -287,6 +290,17 @@ ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny|accept)\s+(share_[0-9a-f]{32})$")
 ARCLINK_PUBLIC_BOT_SHARE_CLAIM_RE = re.compile(r"^/(?:arclink_share_accept|share-claim|share_claim)\s+(asn_[0-9a-f]{48})$")
+# Matched against the original-case message so resource paths keep their case.
+ARCLINK_PUBLIC_BOT_SHARE_CREATE_RE = re.compile(
+    r"^/share[-_]create(?:\s+(?P<target>\S+))?(?:\s+(?P<recipient>\S+))?\s*$",
+    re.IGNORECASE,
+)
+ARCLINK_PUBLIC_BOT_SHARE_CREATE_ROOTS: Mapping[str, tuple[str, str]] = {
+    "vault": ("drive", "vault"),
+    "drive": ("drive", "vault"),
+    "workspace": ("code", "workspace"),
+    "code": ("code", "workspace"),
+}
 ARCLINK_PUBLIC_BOT_CREDENTIAL_TARGET_PREFIXES = (
     "/credentials ",
     "/credential ",
@@ -342,7 +356,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="status",
         telegram_command="status",
         discord_command="status",
-        description="Check onboarding or pod status",
+        description="Check onboarding or Pod status",
     ),
     ArcLinkPublicBotAction(
         key="credentials",
@@ -482,7 +496,7 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="agents",
         telegram_command="agents",
         discord_command="agents",
-        description="Open your ArcLink crew manifest",
+        description="Open your ArcLink Crew manifest",
     ),
     ArcLinkPublicBotAction(
         key="learn",
@@ -566,13 +580,13 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         key="connect_notion",
         telegram_command="connect_notion",
         discord_command="connect-notion",
-        description="Connect Notion to your live pod",
+        description="Connect Notion to your live Pod",
     ),
     ArcLinkPublicBotAction(
         key="config_backup",
         telegram_command="config_backup",
         discord_command="config-backup",
-        description="Configure private pod backup",
+        description="Configure private Pod backup",
     ),
     ArcLinkPublicBotAction(
         key="pair_channel",
@@ -599,6 +613,26 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
                 "name": "code",
                 "description": "Six-character code from Raven on the other channel",
                 "required": False,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="share_create",
+        telegram_command="share_create",
+        discord_command="share-create",
+        description="Share a Drive or Code folder with another Captain",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "resource",
+                "description": "vault/<path> or workspace/<path> to share",
+                "required": True,
+            },
+            {
+                "type": 3,
+                "name": "recipient",
+                "description": "Recipient Captain's email or account ID",
+                "required": True,
             },
         ),
     ),
@@ -757,6 +791,8 @@ def _raven_control_rewrite(message: str, command: str) -> str | None:
         return "/confirm-retire-agent"
     if verb in {"cancel_retire", "cancel_retire_agent", "cancel-retire", "cancel-retire-agent", "keep", "keep_agent", "keep-agent"}:
         return "/cancel-retire-agent"
+    if verb in {"share", "share_create", "share-create", "create_share", "create-share"}:
+        return f"/share-create {tail}".strip()
     if verb in {"approve", "share_approve", "share-approve"}:
         return f"/share-approve {tail}".strip()
     if verb in {"deny", "share_deny", "share-deny"}:
@@ -1519,7 +1555,61 @@ def arclink_public_bot_discord_application_commands() -> list[dict[str, Any]]:
         if action.discord_options:
             payload["options"] = [dict(item) for item in action.discord_options]
         commands.append(payload)
+    commands.extend(arclink_public_bot_discord_agent_commands(reserved={item["name"] for item in commands}))
     return commands
+
+
+_DISCORD_COMMAND_NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+ARCLINK_DISCORD_APPLICATION_COMMAND_LIMIT = 100
+
+
+def arclink_public_bot_discord_agent_commands(
+    *,
+    reserved: set[str] | None = None,
+    env: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Mirror the Hermes agent command inventory into Discord's slash picker.
+
+    Telegram active chats already blend ArcLink + live Hermes commands; this
+    gives Discord Captains the same blend. The inventory is derived from the
+    pinned Hermes runtime (telegram_menu_commands covers core + plugin + skill
+    tiers and is platform-neutral name/description data), so an upgraded
+    Hermes changes this list without an ArcLink patch. Each command carries
+    one optional free-text option and dispatches through the agent
+    passthrough, so argument grammar always belongs to the Pod's Hermes.
+    """
+    from arclink_telegram import arclink_public_bot_telegram_agent_commands
+
+    taken = {str(name or "").strip().lower() for name in (reserved or set())}
+    results: list[dict[str, Any]] = []
+    budget = ARCLINK_DISCORD_APPLICATION_COMMAND_LIMIT - len(taken)
+    for item in arclink_public_bot_telegram_agent_commands(env=env):
+        if budget <= 0:
+            break
+        name = str(item.get("command") or "").strip().lower().replace(".", "_")
+        if not name or name in taken or not _DISCORD_COMMAND_NAME_RE.fullmatch(name):
+            continue
+        if name in ARCLINK_PUBLIC_BOT_AGENT_POLICY_SUPPRESSED_COMMANDS:
+            continue
+        description = str(item.get("description") or f"Agent: run /{name}").strip()[:100]
+        results.append(
+            {
+                "name": name,
+                "type": 1,
+                "description": description or f"Agent: run /{name}",
+                "options": [
+                    {
+                        "type": 3,
+                        "name": "args",
+                        "description": "Arguments for this Hermes Agent command (optional)",
+                        "required": False,
+                    }
+                ],
+            }
+        )
+        taken.add(name)
+        budget -= 1
+    return results
 
 
 def _active_raven_callback_command(command: str) -> str:
@@ -2482,6 +2572,37 @@ def _agent_theme_label(deployment: Mapping[str, Any], *, index: int = 0) -> str:
     return str(default_arclink_agent_profile(index + 1).get("theme_label") or "ArcLink Signal Orange")
 
 
+def _academy_roster_marker(conn: sqlite3.Connection | None, deployment_id: str) -> str:
+    if conn is None or not str(deployment_id or "").strip():
+        return ""
+    try:
+        row = conn.execute(
+            """
+            SELECT t.status, t.mode_open, t.name, t.program_id, p.label AS program_label
+            FROM academy_trainees t
+            LEFT JOIN academy_programs p ON p.program_id = t.program_id
+            WHERE t.deployment_id = ? AND t.status != 'archived'
+            ORDER BY t.updated_at DESC, t.trainee_id DESC
+            LIMIT 1
+            """,
+            (str(deployment_id).strip(),),
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    if row is None:
+        return ""
+    status = str(row["status"] or "")
+    role = str(row["program_label"] or row["name"] or row["program_id"] or "").strip()
+    role_suffix = f" - {role}"[:72] if role else ""
+    if status == "graduated":
+        return f"Academy graduate{role_suffix}"
+    if bool(row["mode_open"]) or status == "in_academy":
+        return f"In Academy{role_suffix}"
+    if status == "enrolled":
+        return f"Academy enrolled{role_suffix}"
+    return ""
+
+
 def _crew_roster_lines_and_buttons(
     deployments: list[dict[str, Any]],
     *,
@@ -2490,20 +2611,29 @@ def _crew_roster_lines_and_buttons(
     include_links: bool = True,
 ) -> tuple[list[str], list[ArcLinkPublicBotButton]]:
     lines: list[str] = []
-    buttons: list[ArcLinkPublicBotButton] = []
+    helm_buttons: list[ArcLinkPublicBotButton] = []
+    open_buttons: list[ArcLinkPublicBotButton] = []
     for index, item in enumerate(deployments):
         label = _agent_label(item, index=index, conn=conn)
         title = _agent_title(item, index=index)
         theme = _agent_theme_label(item, index=index)
         marker = _deployment_status_marker(item, active_id=active_id)
-        suffix = f" - {marker}" if marker not in {"ready", "at helm"} else ""
+        suffix = f" - {marker}" if marker != "ready" else ""
         lines.append(f"- {label} - {title} ({theme}){suffix}")
-        if include_links and str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
-            dashboard = _hermes_dashboard_url(_deployment_access(item))
-            if dashboard:
-                lines.append(f"  Hermes Dashboard: {dashboard}")
-                buttons.append(_button(f"Open {label}"[:80], url=dashboard, style="secondary"))
-    return lines, buttons
+        academy_marker = _academy_roster_marker(conn, str(item.get("deployment_id") or ""))
+        if academy_marker:
+            lines.append(f"  Academy: {academy_marker}")
+        if str(item.get("status") or "") in ARCLINK_PUBLIC_BOT_DEPLOYMENT_READY_STATUSES:
+            if str(item.get("deployment_id") or "") != active_id:
+                helm_buttons.append(_button(f"Take Helm: {label}"[:80], command=f"/agent {label}"))
+            if include_links:
+                dashboard = _hermes_dashboard_url(_deployment_access(item))
+                if dashboard:
+                    lines.append(f"  Hermes Dashboard: {dashboard}")
+                    open_buttons.append(_button(f"Open {label}"[:80], url=dashboard, style="secondary"))
+    # Switching the helm is the Captain's power move; it outranks dashboard
+    # links when downstream button budgets truncate.
+    return lines, helm_buttons + open_buttons
 
 
 def _deployment_can_anchor_add_agent(deployment: Mapping[str, Any] | None) -> bool:
@@ -2889,7 +3019,10 @@ def _retire_agent_start_reply(
         ),
         session=updated,
         deployment=item,
-        buttons=(_button("Cancel", command="/cancel-retire-agent", style="secondary"),),
+        buttons=(
+            _button("Copy Agent Name", copy_text=label),
+            _button("Cancel", command="/cancel-retire-agent", style="secondary"),
+        ),
     )
 
 
@@ -3976,6 +4109,7 @@ def _pair_channel_reply(
             deployment=deployment,
             bot_display_name=raven,
             buttons=(
+                _button("Copy Pairing Command", copy_text=f"/link-channel {code}"),
                 _button("Show My Crew", command="/agents", style="secondary"),
                 _button("Check Status", command="/status", style="secondary"),
             ),
@@ -4211,6 +4345,10 @@ def _connect_notion_reply(
         reply="\n".join(lines),
         session=session,
         deployment=deployment,
+        buttons=(
+            _button("Ready For Verification", command="ready"),
+            _button("Cancel", command="/cancel", style="secondary"),
+        ),
     )
 
 
@@ -4729,6 +4867,150 @@ def _share_claim_reply(
         session=session,
         deployment=deployment,
         buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+    )
+
+
+def _share_create_usage_turn(
+    *,
+    channel: str,
+    channel_identity: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+    note: str = "",
+) -> ArcLinkPublicBotTurn:
+    lead = f"{note}\n\n" if note else ""
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="share_create_usage",
+        reply=(
+            f"{lead}To open a folder to another Captain, tell me the resource and who receives it:\n"
+            "`/share-create vault/Projects/Briefs captain@example.com`\n"
+            "`/share-create workspace/tools other-captain-id`\n\n"
+            "Resources start with `vault/` (Drive) or `workspace/` (Code). "
+            "I will stage the grant for your approval before anything leaves your Pod, "
+            "and the recipient can never reshare it."
+        ),
+        session=session,
+        deployment=deployment,
+        buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+    )
+
+
+def _share_create_reply(
+    conn: sqlite3.Connection,
+    *,
+    channel: str,
+    channel_identity: str,
+    target: str,
+    recipient: str,
+    session: Mapping[str, Any] | None,
+    deployment: Mapping[str, Any] | None,
+) -> ArcLinkPublicBotTurn:
+    if not session or not str(session.get("user_id") or "").strip():
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_create_unavailable",
+            reply="I cannot create a share from this channel until it is linked to your ArcLink account.",
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Link Channel", command="/link-channel", style="secondary"),),
+        )
+    owner_user = str(session.get("user_id") or "").strip()
+    clean_target = str(target or "").strip().strip("`")
+    clean_recipient = str(recipient or "").strip().strip("`")
+    if not clean_target or not clean_recipient:
+        return _share_create_usage_turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+        )
+    root_token, _, share_path = clean_target.replace("\\", "/").lstrip("/").partition("/")
+    kind_root = ARCLINK_PUBLIC_BOT_SHARE_CREATE_ROOTS.get(root_token.strip().lower())
+    if kind_root is None or not share_path.strip("/"):
+        return _share_create_usage_turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            session=session,
+            deployment=deployment,
+            note="I need a folder inside `vault/` (Drive) or `workspace/` (Code), not the root itself.",
+        )
+    resource_kind, resource_root = kind_root
+    try:
+        recipient_user = _resolve_share_recipient_user_id(conn, recipient_identity=clean_recipient)
+    except (KeyError, ArcLinkApiAuthError):
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_create_recipient_unknown",
+            reply=(
+                "I could not find an ArcLink Captain for that address. "
+                "Check the email or account ID and run `/share-create` again."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    if recipient_user == owner_user:
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_create_same_account",
+            reply=(
+                "That address is your own account. Your whole Crew already shares the "
+                "**Fleet** folder in Drive and Code — drop the material there and every "
+                "Agent in your fleet converges on it automatically."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    owner_deployment_id = str((deployment or {}).get("deployment_id") or "").strip()
+    try:
+        result = create_user_share_grant_for_owner(
+            conn,
+            owner_user_id=owner_user,
+            recipient_user_id=recipient_user,
+            resource_kind=resource_kind,
+            resource_root=resource_root,
+            resource_path=share_path,
+            owner_deployment_id=owner_deployment_id,
+            metadata={"origin": "raven_share_create", "channel": channel},
+        )
+    except (KeyError, ArcLinkApiAuthError):
+        return _turn(
+            channel=channel,
+            channel_identity=channel_identity,
+            action="share_create_rejected",
+            reply=(
+                "I could not stage that share. Protected locations and root folders stay closed; "
+                "pick a folder inside `vault/` or `workspace/` and run `/share-create` again."
+            ),
+            session=session,
+            deployment=deployment,
+            buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
+        )
+    grant = dict((result.payload or {}).get("grant") or {})
+    grant_id = str(grant.get("grant_id") or "")
+    label = str(grant.get("display_name") or grant.get("resource_path") or share_path)
+    access_label = "read/write" if str(grant.get("access_mode") or "") == "read_write" else "read-only"
+    return _turn(
+        channel=channel,
+        channel_identity=channel_identity,
+        action="share_create_staged",
+        reply=(
+            f"Staged. `{label}` is ready to open to that Captain as a {access_label} Linked resource. "
+            "Nothing leaves your Pod until you approve it, and they can never reshare it.\n\n"
+            f"Release it with `/share-approve {grant_id}` or close it with `/share-deny {grant_id}`."
+        ),
+        session=session,
+        deployment=deployment,
+        buttons=(
+            _button("Approve Share", command=f"/share-approve {grant_id}"),
+            _button("Deny Share", command=f"/share-deny {grant_id}", style="secondary"),
+        ),
     )
 
 
@@ -6416,6 +6698,43 @@ def _handle_active_workflow(
                     _button("Cancel", command="/cancel", style="secondary"),
                 ),
             )
+    if workflow in {"rename_agent_value", "retitle_agent_value"}:
+        if command.startswith("/"):
+            return None
+        value = message.strip()
+        if not value:
+            return _turn(
+                channel=channel,
+                channel_identity=channel_identity,
+                action="rename_agent_missing" if workflow == "rename_agent_value" else "retitle_agent_missing",
+                reply="I am listening. Send the new value, or send `cancel` to close this lane.",
+                session=session,
+                deployment=deployment,
+                buttons=(_button("Cancel", command="/cancel", style="secondary"),),
+            )
+        updated = _update_session_metadata(
+            conn,
+            session_id=str(session["session_id"]),
+            updates={},
+            clear=("public_bot_workflow", "rename_agent_requested_at", "retitle_agent_requested_at"),
+        )
+        if workflow == "rename_agent_value":
+            return _agent_identity_update_reply(
+                conn,
+                channel=channel,
+                channel_identity=channel_identity,
+                session=updated,
+                deployment=deployment,
+                agent_name=value,
+            )
+        return _agent_identity_update_reply(
+            conn,
+            channel=channel,
+            channel_identity=channel_identity,
+            session=updated,
+            deployment=deployment,
+            agent_title=value,
+        )
     if workflow == "name_update":
         explicit_name = _command_value(message, command, ("name", "/name"))
         if explicit_name is not None:
@@ -6520,6 +6839,10 @@ def _handle_active_workflow(
             reply="Send `ready` once Notion completes the verification handshake. Send `cancel` and I will seal the Notion lane.",
             session=session,
             deployment=deployment,
+            buttons=(
+                _button("Ready For Verification", command="ready"),
+                _button("Cancel", command="/cancel", style="secondary"),
+            ),
         )
     if workflow == "config_backup_repo":
         owner_repo = message.strip().removeprefix("repo ").strip()
@@ -6531,6 +6854,7 @@ def _handle_active_workflow(
                 reply="Send the private GitHub repository in `owner/repo` form. Send `cancel` and I will seal the backup lane.",
                 session=session,
                 deployment=deployment,
+                buttons=(_button("Cancel", command="/cancel", style="secondary"),),
             )
         updated = _update_session_metadata(
             conn,
@@ -6915,13 +7239,20 @@ def handle_arclink_public_bot_turn(
     if rename_value is not None:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         if not rename_value.strip():
+            if session:
+                session = _update_session_metadata(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    updates={"public_bot_workflow": "rename_agent_value", "rename_agent_requested_at": utc_now_iso()},
+                )
             return _turn(
                 channel=clean_channel,
                 channel_identity=clean_identity,
                 action="rename_agent_missing",
-                reply="Send the new Agent name after the command, for example `/rename-agent Atlas`.",
+                reply="I am listening. Send the new Agent name (for example `Atlas`), or cancel below.",
                 session=session,
                 deployment=deployment,
+                buttons=(_button("Cancel", command="/cancel", style="secondary"),),
             )
         return _agent_identity_update_reply(
             conn,
@@ -6936,13 +7267,20 @@ def handle_arclink_public_bot_turn(
     if retitle_value is not None:
         session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
         if not retitle_value.strip():
+            if session:
+                session = _update_session_metadata(
+                    conn,
+                    session_id=str(session["session_id"]),
+                    updates={"public_bot_workflow": "retitle_agent_value", "retitle_agent_requested_at": utc_now_iso()},
+                )
             return _turn(
                 channel=clean_channel,
                 channel_identity=clean_identity,
                 action="retitle_agent_missing",
-                reply="Send the new Agent title after the command, for example `/retitle-agent the right hand`.",
+                reply="I am listening. Send the new Agent title (for example `the right hand`), or cancel below.",
                 session=session,
                 deployment=deployment,
+                buttons=(_button("Cancel", command="/cancel", style="secondary"),),
             )
         return _agent_identity_update_reply(
             conn,
@@ -6973,9 +7311,14 @@ def handle_arclink_public_bot_turn(
                 channel=clean_channel,
                 channel_identity=clean_identity,
                 action="wrapped_frequency_missing",
-                reply="Send the Wrapped cadence after the command: `/wrapped-frequency daily`, `/wrapped-frequency weekly`, or `/wrapped-frequency monthly`.",
+                reply="Pick the Wrapped cadence below, or send it after the command: `/wrapped-frequency daily`, `/wrapped-frequency weekly`, or `/wrapped-frequency monthly`.",
                 session=session,
                 deployment=deployment,
+                buttons=(
+                    _button("Daily", command="/wrapped-frequency daily"),
+                    _button("Weekly", command="/wrapped-frequency weekly"),
+                    _button("Monthly", command="/wrapped-frequency monthly"),
+                ),
             )
         try:
             updated = set_wrapped_frequency(
@@ -7101,6 +7444,19 @@ def handle_arclink_public_bot_turn(
         return _upgrade_hermes_reply(
             channel=clean_channel,
             channel_identity=clean_identity,
+            session=session,
+            deployment=deployment,
+        )
+
+    share_create_match = ARCLINK_PUBLIC_BOT_SHARE_CREATE_RE.match(message)
+    if share_create_match:
+        session, deployment = _deployment_context(conn, channel=clean_channel, channel_identity=clean_identity)
+        return _share_create_reply(
+            conn,
+            channel=clean_channel,
+            channel_identity=clean_identity,
+            target=str(share_create_match.group("target") or ""),
+            recipient=str(share_create_match.group("recipient") or ""),
             session=session,
             deployment=deployment,
         )

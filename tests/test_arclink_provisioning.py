@@ -102,6 +102,7 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
         "dashboard",
         "hermes-gateway",
         "hermes-dashboard",
+        "terminal-tmux",
         "qmd-mcp",
         "vault-watch",
         "memory-synth",
@@ -272,6 +273,23 @@ def test_dry_run_renders_full_service_dns_access_intent_without_secrets() -> Non
     expect(
         services["hermes-dashboard"]["depends_on"]["managed-context-install"]["condition"] == "service_completed_successfully",
         str(services["hermes-dashboard"]),
+    )
+    expect(
+        services["hermes-dashboard"]["depends_on"]["terminal-tmux"]["condition"] == "service_started",
+        str(services["hermes-dashboard"]),
+    )
+    terminal_tmux = services["terminal-tmux"]
+    expect(terminal_tmux["command"] == ["./bin/run-terminal-tmux.sh"], str(terminal_tmux))
+    terminal_tmux_volumes = {item["target"]: item["source"] for item in terminal_tmux["volumes"]}
+    # The tmux server must share the dashboard's mounts at the same targets so
+    # the tmux socket and every session cwd resolve identically across both
+    # containers — that is the contract that makes forever-sessions real.
+    for target in ("/home/arclink/.hermes", "/srv/vault", "/workspace", "/linked-resources", "/fleet-shared"):
+        expect(terminal_tmux_volumes.get(target) == hermes_dashboard_volumes.get(target), str(terminal_tmux))
+    expect(terminal_tmux["secrets"] == [], "terminal shells must not see provider secret files: " + str(terminal_tmux))
+    expect(
+        terminal_tmux["depends_on"]["managed-context-install"]["condition"] == "service_completed_successfully",
+        str(terminal_tmux),
     )
     fleet_sync = services["fleet-share-sync"]
     expect(
@@ -987,6 +1005,76 @@ def test_remote_arcpod_marks_app_writable_binds_for_ssh_prepare() -> None:
     print("PASS test_remote_arcpod_marks_app_writable_binds_for_ssh_prepare")
 
 
+def test_crew_dashboard_links_are_captain_scoped_and_drop_torn_down_agents() -> None:
+    control = load_module("arclink_control.py", "arclink_control_crew_links_scope_test")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_crew_links_scope_test")
+    conn = memory_db(control)
+    seed_deployment(
+        control,
+        conn,
+        status="active",
+        metadata={
+            "onboarding_session_id": "onb_session_one",
+            "bundle_primary_deployment_id": "dep_1",
+        },
+    )
+    # A second Agent bought in a DIFFERENT onboarding session/bundle must still
+    # show up in the Captain's crew switcher (Captain-scoped, not bundle-scoped).
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_2",
+        user_id="user_1",
+        prefix="ember-code-2222",
+        base_domain="example.test",
+        agent_name="Ember",
+        agent_title="the code specialist",
+        status="active",
+        metadata={
+            "onboarding_session_id": "onb_session_two",
+            "bundle_primary_deployment_id": "dep_2",
+        },
+    )
+    # Canonical terminal statuses flow through the schema CHECK constraint;
+    # archived/deleted/retired are legacy values that only exist in pre-CHECK
+    # databases, so they are pinned via CREW_LINK_EXCLUDED_STATUSES below.
+    seeded_terminal_statuses = ("cancelled", "teardown_complete", "torn_down")
+    for index, status in enumerate(seeded_terminal_statuses, start=3):
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id=f"dep_{index}",
+            user_id="user_1",
+            prefix=f"gone-agent-{index:04d}",
+            base_domain="example.test",
+            agent_name=f"Gone{index}",
+            status=status,
+            metadata={"onboarding_session_id": "onb_session_one"},
+        )
+    conn.commit()
+    links = provisioning._crew_dashboard_links(
+        conn,
+        current_deployment_id="dep_1",
+        user_id="user_1",
+        base_domain="example.test",
+        ingress_mode="domain",
+        tailscale_dns_name="",
+        tailscale_host_strategy="path",
+        current_metadata={
+            "onboarding_session_id": "onb_session_one",
+            "bundle_primary_deployment_id": "dep_1",
+        },
+    )
+    link_ids = sorted(item["deployment_id"] for item in links)
+    expect(link_ids == ["dep_1", "dep_2"], str(links))
+    current = [item for item in links if item["current"]]
+    expect(len(current) == 1 and current[0]["deployment_id"] == "dep_1", str(links))
+    expect(
+        provisioning.CREW_LINK_EXCLUDED_STATUSES
+        == frozenset({"cancelled", "teardown_complete", "torn_down", "archived", "deleted", "retired"}),
+        str(provisioning.CREW_LINK_EXCLUDED_STATUSES),
+    )
+    print("PASS test_crew_dashboard_links_are_captain_scoped_and_drop_torn_down_agents")
+
+
 def main() -> int:
     test_dry_run_renders_full_service_dns_access_intent_without_secrets()
     test_dashboard_password_defaults_to_user_scoped_secret_for_agent_sso()
@@ -1007,7 +1095,8 @@ def main() -> int:
     test_remote_worker_derives_wireguard_fleet_share_hub_when_unset()
     test_remote_fleet_share_sync_mounts_worker_local_git_key()
     test_remote_arcpod_marks_app_writable_binds_for_ssh_prepare()
-    print("PASS all 19 ArcLink provisioning tests")
+    test_crew_dashboard_links_are_captain_scoped_and_drop_torn_down_agents()
+    print("PASS all 20 ArcLink provisioning tests")
     return 0
 
 

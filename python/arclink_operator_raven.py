@@ -179,6 +179,13 @@ _COMMAND_ALIASES = {
     "componentupgrade": "pin_upgrade",
     "upgrade_component": "pin_upgrade",
     "upgradecomponent": "pin_upgrade",
+    "upgrade_menu": "upgrade_menu",
+    "upgrademenu": "upgrade_menu",
+    "upgrades": "upgrade_menu",
+    "upgrade_apply": "upgrade_apply",
+    "upgradeapply": "upgrade_apply",
+    "upgrade_go": "upgrade_apply",
+    "upgradego": "upgrade_apply",
     "rollout_plan": "rollout",
     "rolloutplan": "rollout",
     "rollout": "rollout",
@@ -253,6 +260,16 @@ def parse_operator_raven_command(text: str) -> OperatorRavenCommand | None:
         if _operator_token(arg) not in _DRY_RUN_TOKENS and _operator_token(arg) not in _CONFIRM_TOKENS
     )
     component = _infer_pin_component(normalized, clean_args) if name == "pin_upgrade" else ""
+    # A bare /upgrade or /pin_upgrade (no arguments, no confirm, no dry-run) is
+    # a menu request: it renders the one-tap upgrade menu and mutates nothing,
+    # so it must not trip the transports' mutating-command approval-code wall.
+    if (
+        name in {"host_upgrade", "pin_upgrade"}
+        and not clean_args
+        and not confirmed
+        and not dry_run
+    ):
+        name = "upgrade_menu"
     return OperatorRavenCommand(
         name=name,
         args=clean_args,
@@ -356,6 +373,8 @@ def dispatch_operator_raven_command(
         "upgrade_check": _handle_upgrade_check,
         "upgrade_policy": _handle_upgrade_policy,
         "upgrade_sweep": _handle_upgrade_sweep,
+        "upgrade_menu": _handle_upgrade_menu,
+        "upgrade_apply": _handle_upgrade_apply,
         "host_upgrade": _handle_host_upgrade,
         "pin_upgrade": _handle_pin_upgrade,
         "rollout": _handle_rollout,
@@ -1299,6 +1318,214 @@ def _queue_pin_upgrade_payloads(
     return queued, created_count
 
 
+OPERATOR_BUTTON_NONCE_TTL_SECONDS = 900
+_OPERATOR_BUTTON_NONCE_PREFIX = "operator_button_nonce:"
+
+
+def operator_button_approvals_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """One-tap upgrade buttons are on unless the operator opts out.
+
+    A button press carries a fresh single-use server-minted nonce on the
+    gated operator channel, which is the structured confirmation for the
+    mapped action. Set ARCLINK_OPERATOR_BUTTON_APPROVALS=0 to require typed
+    confirm/approval-code flows instead.
+    """
+    raw = str((env or {}).get("ARCLINK_OPERATOR_BUTTON_APPROVALS") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _prune_operator_button_nonces(conn: sqlite3.Connection) -> None:
+    from arclink_control import parse_utc_iso, utc_now
+
+    rows = conn.execute(
+        "SELECT key, value FROM settings WHERE key LIKE ?",
+        (_OPERATOR_BUTTON_NONCE_PREFIX + "%",),
+    ).fetchall()
+    now_ts = utc_now().timestamp()
+    for row in rows:
+        try:
+            payload = json.loads(str(row["value"] or "{}"))
+        except ValueError:
+            payload = {}
+        expires = parse_utc_iso(str(payload.get("expires_at") or ""))
+        if payload.get("used_at") or expires is None or expires.timestamp() <= now_ts:
+            conn.execute("DELETE FROM settings WHERE key = ?", (str(row["key"]),))
+    conn.commit()
+
+
+def mint_operator_button_nonce(conn: sqlite3.Connection, *, command: str) -> str:
+    """Mint a single-use, short-lived nonce mapping to one confirmed command."""
+    from arclink_control import upsert_setting, utc_after_seconds_iso
+
+    _prune_operator_button_nonces(conn)
+    raw = secrets.token_urlsafe(18)
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    payload = {
+        "command": str(command or "").strip(),
+        "expires_at": utc_after_seconds_iso(OPERATOR_BUTTON_NONCE_TTL_SECONDS),
+        "used_at": "",
+    }
+    upsert_setting(conn, _OPERATOR_BUTTON_NONCE_PREFIX + digest, json.dumps(payload, sort_keys=True))
+    return raw
+
+
+def consume_operator_button_nonce(conn: sqlite3.Connection, raw_nonce: str) -> str:
+    """Validate and burn a button nonce; returns the mapped command or ''."""
+    from arclink_control import parse_utc_iso, upsert_setting, utc_now, utc_now_iso
+
+    clean = str(raw_nonce or "").strip()
+    if not clean:
+        return ""
+    digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()
+    key = _OPERATOR_BUTTON_NONCE_PREFIX + digest
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return ""
+    try:
+        payload = json.loads(str(row["value"] or "{}"))
+    except ValueError:
+        return ""
+    if str(payload.get("used_at") or "").strip():
+        return ""
+    expires = parse_utc_iso(str(payload.get("expires_at") or ""))
+    if expires is None or expires.timestamp() <= utc_now().timestamp():
+        return ""
+    payload["used_at"] = utc_now_iso()
+    upsert_setting(conn, key, json.dumps(payload, sort_keys=True))
+    return str(payload.get("command") or "").strip()
+
+
+def _upgrade_one_tap_button(
+    conn: sqlite3.Connection,
+    *,
+    label: str,
+    command: str,
+) -> dict[str, str]:
+    nonce = mint_operator_button_nonce(conn, command=command)
+    return {"label": label[:60], "callback_data": f"arclink:/upgrade_apply {nonce}"}
+
+
+def _pin_payload_button_label(payload: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+    for item in payload.get("install_items") or payload.get("items") or []:
+        component = str(item.get("component") or "").strip()
+        target = str(item.get("target") or "").strip()
+        if str(item.get("kind") or "") == "git-commit" and len(target) >= 12:
+            target = target[:12]
+        if component:
+            parts.append(f"{component} -> {target or '?'}")
+    return ("Pin " + ", ".join(parts))[:60] if parts else "Pin upgrade"
+
+
+def _handle_upgrade_menu(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Render the one-tap upgrade menu. Read-only: nothing is queued here."""
+    from arclink_control import get_active_operator_action
+
+    lines = ["Operator Raven upgrade menu"]
+    buttons: list[dict[str, str]] = []
+    # Nonce buttons are minted only for a proven operator identity; an
+    # actorless render stays a plain read-only summary.
+    one_tap = operator_button_approvals_enabled(env) and bool(actor_id)
+    active_upgrade = None
+    try:
+        active_upgrade = get_active_operator_action(conn, action_kind="upgrade")
+    except Exception:  # noqa: BLE001 - menu must render even if the queue read fails
+        active_upgrade = None
+    if active_upgrade is not None:
+        status = str(active_upgrade.get("status") or "pending")
+        lines.append(f"- Control upgrade already {status}. Track it with /action_status.")
+    else:
+        lines.append("- Control Node upgrade/repair: ready to queue (git pull + control/docker upgrade + reconcile + health).")
+        if one_tap:
+            buttons.append(_upgrade_one_tap_button(conn, label="Apply Control Upgrade", command="/upgrade confirm"))
+    try:
+        payloads = _pending_pin_payloads(conn)
+    except Exception as exc:  # noqa: BLE001
+        payloads = []
+        lines.append(f"- Pinned components: could not read detector payloads ({_redact_text(str(exc))[:120]}).")
+    if payloads:
+        lines.append("Pending pinned-component upgrades:")
+        for payload in payloads[:6]:
+            stateful = " (stateful: needs maintenance window)" if _pin_payload_is_stateful(payload) else ""
+            lines.append(f"- {_pin_payload_line(payload)}{stateful}")
+            if one_tap and not _pin_payload_is_stateful(payload):
+                components = sorted(_pin_payload_operator_names(payload))
+                component = components[0] if components else ""
+                if component:
+                    buttons.append(
+                        _upgrade_one_tap_button(
+                            conn,
+                            label=_pin_payload_button_label(payload),
+                            command=f"/pin_upgrade {component} confirm",
+                        )
+                    )
+        if any(_pin_payload_is_stateful(payload) for payload in payloads):
+            lines.append("Stateful components (postgres/redis/nextcloud) stay typed-only: /upgrade_sweep --include-stateful confirm after a backup.")
+    else:
+        lines.append("No pinned-component upgrades are pending. The hourly detector refreshes this list.")
+    if one_tap and buttons:
+        lines.append("")
+        lines.append("Tap a button to queue it. Buttons are single-use and expire in 15 minutes; send /upgrade again for a fresh menu.")
+    elif not one_tap:
+        lines.append("")
+        lines.append("One-tap buttons are disabled (ARCLINK_OPERATOR_BUTTON_APPROVALS=0). Use /upgrade confirm or /pin_upgrade <component> confirm with your approval code.")
+    return {
+        "message": "\n".join(lines),
+        "buttons": buttons,
+        "mutation_performed": False,
+    }
+
+
+def _handle_upgrade_apply(
+    conn: sqlite3.Connection,
+    command: OperatorRavenCommand,
+    *,
+    env: Mapping[str, str],
+    upgrade_check_runner: UpgradeCheckRunner | None,
+    actor_id: str,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    """Apply a one-tap upgrade button: nonce is the structured confirmation."""
+    blocked = _require_operator_actor(actor_id, "One-tap upgrade")
+    if blocked is not None:
+        return blocked
+    if not operator_button_approvals_enabled(env):
+        return {
+            "message": (
+                "One-tap upgrade buttons are disabled (ARCLINK_OPERATOR_BUTTON_APPROVALS=0). "
+                "Use /upgrade confirm or /pin_upgrade <component> confirm instead. No action was queued."
+            ),
+        }
+    nonce = _first_non_option_arg(command.args)
+    mapped = consume_operator_button_nonce(conn, nonce)
+    if not mapped:
+        return {
+            "message": (
+                "That upgrade button expired or was already used. Send /upgrade for a fresh menu. "
+                "No action was queued."
+            ),
+        }
+    result = dispatch_operator_raven_command(
+        conn,
+        mapped,
+        env=env,
+        upgrade_check_runner=upgrade_check_runner,
+        actor_id=actor_id,
+        idempotency_key=idempotency_key or hashlib.sha256(nonce.encode("utf-8")).hexdigest()[:24],
+    )
+    result["command"] = "upgrade_apply"
+    result.setdefault("applied_command", mapped.split(" confirm")[0].strip())
+    return result
+
+
 def _handle_host_upgrade(
     conn: sqlite3.Connection,
     command: OperatorRavenCommand,
@@ -1399,6 +1626,14 @@ def _handle_pin_upgrade(
         return blocked
     needs_confirm = _require_operator_confirmation(command)
     if needs_confirm is not None:
+        if operator_button_approvals_enabled(env) and not _pin_payload_is_stateful(payload):
+            needs_confirm["buttons"] = [
+                _upgrade_one_tap_button(
+                    conn,
+                    label=_pin_payload_button_label(payload),
+                    command=f"/pin_upgrade {component} confirm",
+                )
+            ]
         return needs_confirm
     try:
         queued, created_count = _queue_pin_upgrade_payloads(conn, payloads=[payload], actor_id=actor_id)

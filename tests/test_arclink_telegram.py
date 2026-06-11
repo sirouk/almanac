@@ -149,6 +149,48 @@ def test_telegram_operator_identity_uses_operator_raven_before_public_onboarding
     )
     expect(operator_upgrade is not None, "operator upgrade check should reply")
     expect(operator_upgrade["action"] == "operator_raven_upgrade_check", str(operator_upgrade))
+
+    operator_menu = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 45,
+            "message": {
+                "message_id": 6,
+                "chat": {"id": 42, "type": "private"},
+                "from": {"id": 99},
+                "text": "/upgrade",
+            },
+        },
+        env=env,
+    )
+    expect(operator_menu is not None and operator_menu["action"] == "operator_raven_upgrade_menu", str(operator_menu))
+    menu_markup = operator_menu.get("reply_markup") or {}
+    menu_rows = menu_markup.get("inline_keyboard") or []
+    expect(menu_rows and menu_rows[0][0]["text"] == "Apply Control Upgrade", str(menu_markup))
+    one_tap_data = str(menu_rows[0][0]["callback_data"])
+    expect(one_tap_data.startswith("arclink:/upgrade_apply ") and len(one_tap_data.encode()) <= 64, one_tap_data)
+
+    # Pressing the button re-enters as a webhook callback and queues the
+    # upgrade through the same operator gate, one tap, no typing.
+    one_tap = tg.handle_telegram_update(
+        conn,
+        {
+            "update_id": 46,
+            "callback_query": {
+                "id": "cbq-upgrade-1",
+                "data": one_tap_data,
+                "from": {"id": 99},
+                "message": {"message_id": 6, "chat": {"id": 42, "type": "private"}},
+            },
+        },
+        env=env,
+    )
+    expect(one_tap is not None and one_tap["action"] == "operator_raven_upgrade_apply", str(one_tap))
+    expect("queued an ArcLink upgrade" in one_tap["text"], one_tap["text"])
+    queued_action = conn.execute(
+        "SELECT action_kind, requested_by FROM operator_actions ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    expect(queued_action is not None and queued_action["action_kind"] == "upgrade", str(queued_action))
     expect("Operator Raven upgrade check" in operator_upgrade["text"], operator_upgrade["text"])
     expect("No upgrade was queued or run." in operator_upgrade["text"], operator_upgrade["text"])
     expect("unmanaged `hermes update`" not in operator_upgrade["text"], operator_upgrade["text"])
@@ -382,6 +424,33 @@ def test_telegram_active_chat_scope_adds_agent_commands() -> None:
     print("PASS test_telegram_active_chat_scope_adds_agent_commands")
 
 
+def test_telegram_chat_scope_signature_includes_description_changes() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_desc_signature_test")
+    calls: list[dict[str, object]] = []
+    tg.telegram_set_my_commands = lambda **kwargs: calls.append(kwargs) or {"result": True}
+    plans = [
+        {"commands": [{"command": "brief", "description": "Agent: original wording"}]},
+        {"commands": [{"command": "brief", "description": "Agent: original wording"}]},
+        {"commands": [{"command": "brief", "description": "Agent: refreshed wording"}]},
+    ]
+    tg.arclink_public_bot_telegram_active_command_plan = lambda **kwargs: plans.pop(0)
+
+    first = tg.refresh_arclink_public_telegram_chat_commands(
+        bot_token="123:abc", chat_id="77", include_agent_commands=True
+    )
+    expect(first.get("registered") == ["brief"], str(first))
+    second = tg.refresh_arclink_public_telegram_chat_commands(
+        bot_token="123:abc", chat_id="77", include_agent_commands=True
+    )
+    expect(second.get("skipped") is True and second.get("reason") == "unchanged", str(second))
+    third = tg.refresh_arclink_public_telegram_chat_commands(
+        bot_token="123:abc", chat_id="77", include_agent_commands=True
+    )
+    expect(third.get("registered") == ["brief"], "description-only change must re-register the chat menu: " + str(third))
+    expect(len(calls) == 2, str(calls))
+    print("PASS test_telegram_chat_scope_signature_includes_description_changes")
+
+
 def test_telegram_active_media_carries_native_update_to_agent_bridge() -> None:
     import json
 
@@ -593,6 +662,7 @@ def main() -> int:
     test_telegram_registers_public_bot_actions()
     test_telegram_registers_operator_command_scope()
     test_telegram_active_chat_scope_adds_agent_commands()
+    test_telegram_chat_scope_signature_includes_description_changes()
     test_telegram_active_media_carries_native_update_to_agent_bridge()
     test_telegram_status_reports_selected_agent_label()
     test_telegram_active_scope_exposes_dynamic_agent_switch_command()
@@ -600,7 +670,7 @@ def main() -> int:
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 15 ArcLink Telegram adapter tests")
+    print("PASS all 16 ArcLink Telegram adapter tests")
     return 0
 
 

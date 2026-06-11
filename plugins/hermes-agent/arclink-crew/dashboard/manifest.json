@@ -1,0 +1,13 @@
+{
+  "name": "arclink-crew",
+  "label": "Crew",
+  "description": "Top-bar Crew switcher: jump between your Agents' Hermes dashboards.",
+  "icon": "Users",
+  "version": "1.0.0",
+  "tab": {
+    "hidden": true
+  },
+  "slots": ["header-right"],
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

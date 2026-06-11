@@ -253,6 +253,26 @@ _SESSION_TOOL_BUDGETS: dict[str, dict[str, object]] = {}
 _TOKEN_CACHE: dict[str, object] = {}
 _TOOL_BUDGET_WINDOW_SECONDS = 10 * 60
 _NOTION_QUERY_MAX_PER_TASK = 3
+# Long-lived gateways accumulate one entry per session/task in the maps above;
+# without eviction they grow without bound. Insertion order approximates
+# recency well enough here: when a map exceeds the cap, the oldest entries are
+# dropped (a dropped session merely re-injects context once on its next turn).
+_SESSION_MAP_MAX_ENTRIES = 256
+
+
+def _evict_oldest_entries(mapping: dict, max_entries: int = _SESSION_MAP_MAX_ENTRIES) -> None:
+    while len(mapping) > max_entries:
+        try:
+            mapping.pop(next(iter(mapping)))
+        except (StopIteration, KeyError):  # pragma: no cover - concurrent mutation guard
+            return
+
+
+def _session_map_put(mapping: dict, key, value, max_entries: int = _SESSION_MAP_MAX_ENTRIES) -> None:
+    """Insert with move-to-end semantics so active sessions are evicted last."""
+    mapping.pop(key, None)
+    mapping[key] = value
+    _evict_oldest_entries(mapping, max_entries)
 _TOKEN_TOOL_SUFFIXES = {
     "catalog_vaults": "catalog.vaults",
     "vaults_refresh": "vaults.refresh",
@@ -351,7 +371,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         (
             "knowledge.search-and-fetch - source-agnostic ArcLink retrieval. The plugin injects token automatically; omit token. Required: query. "
             "Searches both vault/PDF and shared Notion by default; use sources:[\"vault\"] or [\"notion\"] to narrow. "
-            "Bounded defaults: search_limit ≤ 5 per source, vault_fetch_limit ≤ 2, notion_fetch_limit ≤ 3, body_char_limit ≤ 12000. "
+            "Bounded defaults: search_limit ≤ 5 per source, vault_fetch_limit ≤ 2, notion_fetch_limit ≤ 3, body_char_limit default 6000 (max 12000; pass it explicitly for longer bodies). "
             "Best first call when the user did not clearly say whether the answer lives in files/PDFs or Notion."
         ),
     ),
@@ -478,7 +498,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         ),
         (
             "vault.search-and-fetch - one-shot vault/PDF retrieval. The plugin injects token automatically; omit token. Required: query. "
-            "Bounded: search_limit ≤ 5, fetch_limit ≤ 2, maxLines ≤ 500, body_char_limit ≤ 12000. "
+            "Bounded: search_limit ≤ 5, fetch_limit ≤ 2, maxLines ≤ 500, body_char_limit default 6000 (max 12000; pass it explicitly for longer bodies). "
             "Includes vault-pdf-ingest by default and is the preferred first call for shared vault knowledge. "
             "Leading YAML metadata stays inline in text when fetched from the top and is duplicated into metadata."
         ),
@@ -513,7 +533,7 @@ _TOOL_RECIPES: tuple[tuple[str, tuple[str, ...], str], ...] = (
         ),
         (
             "notion.search-and-fetch - one-shot \"find and read\". The plugin injects token automatically; omit token. Required: query. "
-            "Bounded: search_limit ≤ 10, fetch_limit ≤ 3, body_char_limit ≤ 12000. "
+            "Bounded: search_limit ≤ 10, fetch_limit ≤ 3, body_char_limit default 4000 (max 12000; pass it explicitly for longer bodies). "
             "Prefer over separate notion.search + fetch loops."
         ),
     ),
@@ -665,7 +685,7 @@ def _maybe_block_tool_budget(*, tool_name: str, session_id: str, task_id: str) -
         started_at = now
         count = 0
     count += 1
-    _SESSION_TOOL_BUDGETS[key] = {"started_at": started_at, "count": count}
+    _session_map_put(_SESSION_TOOL_BUDGETS, key, {"started_at": started_at, "count": count})
     if count <= _NOTION_QUERY_MAX_PER_TASK:
         return None
     return {
@@ -1713,7 +1733,7 @@ def _pre_llm_call(
     session_key = str(session_id or "__global__")
     previous_revision = _SESSION_REVISIONS.get(session_key)
     revision_changed = previous_revision is not None and previous_revision != revision
-    _SESSION_REVISIONS[session_key] = revision
+    _session_map_put(_SESSION_REVISIONS, session_key, revision)
     runtime_section = str(sections.get("model-runtime") or "").strip()
     runtime_revision = _context_revision({"model-runtime": runtime_section}) if runtime_section else ""
     previous_runtime_revision = _SESSION_RUNTIME_REVISIONS.get(session_key)
@@ -1724,7 +1744,7 @@ def _pre_llm_call(
         and not is_first_turn
         and bool(conversation_history)
     )
-    _SESSION_RUNTIME_REVISIONS[session_key] = runtime_revision
+    _session_map_put(_SESSION_RUNTIME_REVISIONS, session_key, runtime_revision)
 
     context_relevant = _is_relevant(user_message) or _matches_payload_landmark(user_message, payload)
     context_followup = _is_followup(user_message) and _history_was_relevant(conversation_history)

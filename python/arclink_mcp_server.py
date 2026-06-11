@@ -68,6 +68,11 @@ from arclink_control import (
 
 LOGGER = logging.getLogger("arclink-mcp")
 DEFAULT_MCP_MAX_REQUEST_BYTES = 1024 * 1024
+# MCP protocol revision spoken by both the ArcLink MCP server and the qmd
+# vault-bridge client handshake. This is tied to the qmd pin in
+# config/pins.json (qmd 2.5.2 speaks 2025-03-26); bump it together with any
+# qmd upgrade after verifying the pinned qmd's MCP handshake.
+MCP_PROTOCOL_VERSION = "2025-03-26"
 
 TOOLS = {
     "status": "Return control-plane status and vault warnings.",
@@ -701,7 +706,7 @@ def _mcp_tool_call(url: str, tool_name: str, arguments: dict[str, Any], *, timeo
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {"name": "arclink-mcp-vault-bridge", "version": "1.0"},
             },
@@ -1761,7 +1766,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.sessions.add(session_id)
             self._rpc_success(
                 {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": False}},
                     "serverInfo": {"name": "arclink-mcp", "version": "1.0"},
                 },

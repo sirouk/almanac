@@ -250,6 +250,53 @@
   white-space: pre;
 }
 
+.hermes-terminal-screen[data-session-state] {
+  position: relative;
+}
+
+.hermes-terminal-screen[data-session-state="detached"],
+.hermes-terminal-screen[data-session-state="exited"],
+.hermes-terminal-screen[data-session-state="closed"] {
+  cursor: not-allowed;
+}
+
+.hermes-terminal-screen[data-session-state="detached"] .xterm,
+.hermes-terminal-screen[data-session-state="exited"] .xterm,
+.hermes-terminal-screen[data-session-state="closed"] .xterm {
+  filter: grayscale(0.4);
+  opacity: 0.55;
+}
+
+.hermes-terminal-screen[data-session-state="detached"]::after,
+.hermes-terminal-screen[data-session-state="exited"]::after,
+.hermes-terminal-screen[data-session-state="closed"]::after {
+  background: rgba(7, 10, 15, 0.92);
+  border: 1px solid #303846;
+  border-radius: 6px;
+  color: #fbbf24;
+  content: "Session detached — keystrokes are paused. Use Reattach to resume.";
+  font-size: 12px;
+  left: 50%;
+  max-width: calc(100% - 48px);
+  padding: 8px 12px;
+  pointer-events: none;
+  position: absolute;
+  text-align: center;
+  top: 12px;
+  transform: translateX(-50%);
+  z-index: 5;
+}
+
+.hermes-terminal-screen[data-session-state="exited"]::after {
+  color: #fca5a5;
+  content: "Session exited — keystrokes are disabled.";
+}
+
+.hermes-terminal-screen[data-session-state="closed"]::after {
+  color: #9aa4b2;
+  content: "Session closed.";
+}
+
 .hermes-terminal-screen:focus {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, #4f9cf9 58%, transparent);
 }
@@ -309,13 +356,31 @@
 }
 
 .hermes-terminal-error {
+  align-items: center;
   border: 1px solid #7f1d1d;
   border-radius: 8px;
   background: #2b1114;
   color: #fecaca;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
   margin-bottom: 12px;
   padding: 10px 12px;
   font-size: 13px;
+}
+
+.hermes-terminal-error-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hermes-terminal .hermes-terminal-error-dismiss {
+  background: transparent;
+  border-color: #7f1d1d;
+  color: #fecaca;
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 4px 8px;
 }
 
 .hermes-terminal-empty.full {

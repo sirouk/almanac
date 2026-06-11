@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 COMMON_SH = REPO / "bin" / "common.sh"
 ENV_EXAMPLE = REPO / "config" / "arclink.env.example"
 PINS_JSON = REPO / "config" / "pins.json"
-PINNED_REF = "a618789dbabf396a00fb061a491f54e12f536a45"
+PINNED_REF = "3c231eb3979ab9c57d5cd6d02f1d577a3b718b43"
 
 
 def run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

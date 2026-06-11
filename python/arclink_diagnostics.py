@@ -120,6 +120,74 @@ def diagnose_docker(*, docker_binary: str = "docker") -> list[DiagnosticCheck]:
     return checks
 
 
+def diagnose_qmd_pending_embeddings(
+    env: Mapping[str, str] | None = None,
+    *,
+    state_file: str = "",
+    now: float | None = None,
+) -> list[DiagnosticCheck]:
+    """Alert when qmd documents have been waiting for embeddings too long.
+
+    Reads the marker maintained by bin/common.sh qmd_note_pending_embeddings_state
+    (refreshed by every qmd-refresh.sh run). Embed failures are
+    swallowed-and-retried by design, so a starved embed lane otherwise leaves
+    vector search stale with only `qmd status "Pending: N"` as a signal.
+    A missing marker means the qmd lane is not provisioned here: no check.
+    """
+    import time
+
+    source = env if env is not None else os.environ
+    path = str(state_file or source.get("QMD_PENDING_EMBED_STATE_FILE", "") or "").strip()
+    if not path or not os.path.isfile(path):
+        return []
+    try:
+        max_age = int(str(source.get("QMD_PENDING_EMBED_MAX_AGE_SECONDS", "") or 21600))
+    except ValueError:
+        max_age = 21600
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return [
+            DiagnosticCheck(
+                provider="qmd",
+                name="pending_embeddings_age",
+                ok=False,
+                detail=f"unreadable pending-embeddings marker at {path}",
+            )
+        ]
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        pending = int(payload.get("pending") or 0)
+        pending_since = int(payload.get("pending_since_epoch") or 0)
+    except (TypeError, ValueError):
+        pending, pending_since = 0, 0
+    if pending <= 0 or pending_since <= 0:
+        return [
+            DiagnosticCheck(
+                provider="qmd",
+                name="pending_embeddings_age",
+                ok=True,
+                detail="no documents waiting for embeddings",
+            )
+        ]
+    current = float(now if now is not None else time.time())
+    age = max(0, int(current) - pending_since)
+    stale = age > max_age
+    detail = f"{pending} document(s) pending embeddings for ~{age // 3600}h" + (
+        f" (exceeds {max_age // 3600}h threshold; vector search is stale)" if stale else ""
+    )
+    return [
+        DiagnosticCheck(
+            provider="qmd",
+            name="pending_embeddings_age",
+            ok=not stale,
+            detail=detail,
+        )
+    ]
+
+
 def run_diagnostics(
     *,
     env: Mapping[str, str] | None = None,
@@ -141,6 +209,7 @@ def run_diagnostics(
     checks.extend(diagnose_telegram(env))
     checks.extend(diagnose_discord(env))
     checks.extend(diagnose_docker(docker_binary=docker_binary))
+    checks.extend(diagnose_qmd_pending_embeddings(env))
     return DiagnosticsResult(checks=checks)
 
 

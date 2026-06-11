@@ -16,7 +16,8 @@ if [[ $# -eq 0 ]]; then
     code \
     terminal \
     arclink-theme \
-    arclink-managed-context
+    arclink-managed-context \
+    arclink-crew
 fi
 
 PLUGINS_ROOT="$REPO_DIR/plugins/hermes-agent"

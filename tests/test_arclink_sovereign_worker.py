@@ -241,6 +241,87 @@ def test_crew_dashboard_access_state_refreshes_sibling_switchers() -> None:
     print("PASS test_crew_dashboard_access_state_refreshes_sibling_switchers")
 
 
+def test_teardown_refreshes_sibling_crew_dashboard_switchers() -> None:
+    import inspect
+
+    control = load_module("arclink_control.py", "arclink_control_sovereign_teardown_crew_refresh")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_teardown_crew_refresh")
+    provisioning = load_module("arclink_provisioning.py", "arclink_provisioning_teardown_crew_refresh")
+    import arclink_executor as executor_mod
+
+    # The provisioning crew-link exclusion set must stay aligned with the
+    # refresher's terminal-status SQL so torn-down Agents drop out everywhere.
+    refresher_src = inspect.getsource(worker_mod._refresh_crew_dashboard_access_states)
+    for status in sorted(provisioning.CREW_LINK_EXCLUDED_STATUSES):
+        expect(f"'{status}'" in refresher_src, f"refresher terminal set is missing {status!r}")
+
+    conn = memory_db(control)
+    seed_ready_deployment(control, conn)
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_2",
+        user_id="user_1",
+        prefix="ember-code-2222",
+        base_domain="example.test",
+        agent_name="Ember",
+        agent_title="the code specialist",
+        status="provisioning_ready",
+        metadata={},
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir)
+        executor = executor_mod.ArcLinkExecutor(
+            config=executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake"),
+            secret_resolver=executor_mod.FakeSecretResolver({}),
+        )
+        executor.chutes_key_apply(executor_mod.ChutesKeyApplyRequest(
+            deployment_id="dep_2",
+            action="create",
+            secret_ref="secret://arclink/chutes/dep_2",
+            idempotency_key="seed-chutes-key-dep-2",
+        ))
+        applied = worker_mod.process_sovereign_batch(conn, worker=cfg)
+        expect({item["status"] for item in applied} == {"applied"} and len(applied) == 2, str(applied))
+        roots_by_dep: dict[str, dict[str, str]] = {}
+        for dep_id, prefix in (("dep_1", "amber-vault-1234"), ("dep_2", "ember-code-2222")):
+            roots = worker_mod.render_arclink_state_roots(
+                deployment_id=dep_id,
+                prefix=prefix,
+                state_root_base=cfg.state_root_base,
+            )
+            roots_by_dep[dep_id] = roots
+            row = conn.execute(
+                "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?", (dep_id,)
+            ).fetchone()
+            metadata = json.loads(row["metadata_json"] or "{}")
+            metadata.setdefault("state_roots", roots)
+            metadata.setdefault("state_root_base", cfg.state_root_base)
+            conn.execute(
+                "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+                (json.dumps(metadata, sort_keys=True), dep_id),
+            )
+            access_file = Path(roots["hermes_home"]) / "state" / "arclink-web-access.json"
+            access_file.parent.mkdir(parents=True, exist_ok=True)
+            access_file.write_text(
+                json.dumps({"username": "user@example.test", "password": "keep-me", "crew_dashboards": []}),
+                encoding="utf-8",
+            )
+        conn.execute("UPDATE arclink_deployments SET status = 'teardown_requested' WHERE deployment_id = 'dep_2'")
+        conn.commit()
+        torn_down = worker_mod.process_sovereign_batch(conn, worker=cfg, executor=executor)
+        expect(any(item.get("status") == "torn_down" for item in torn_down), str(torn_down))
+        access = json.loads(
+            (Path(roots_by_dep["dep_1"]["hermes_home"]) / "state" / "arclink-web-access.json").read_text(encoding="utf-8")
+        )
+        expect(access["password"] == "keep-me", str(access))
+        crew_ids = [item["deployment_id"] for item in access["crew_dashboards"]]
+        expect(crew_ids == ["dep_1"], f"retired Agent must drop out of the sibling switcher: {access}")
+        expect(access.get("crew_dashboards_refreshed_at"), str(access))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_2'").fetchone()
+    expect(dep["status"] == "torn_down", str(dict(dep)))
+    print("PASS test_teardown_refreshes_sibling_crew_dashboard_switchers")
+
+
 def test_fake_sovereign_worker_applies_ready_deployment() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_apply")
     bots = load_module("arclink_public_bots.py", "arclink_public_bots_sovereign_apply")
@@ -1235,6 +1316,129 @@ def test_sovereign_worker_recovers_succeeded_job_without_handoff() -> None:
     print("PASS test_sovereign_worker_recovers_succeeded_job_without_handoff")
 
 
+def _seed_succeeded_unhandedoff_deployment(control, fleet, worker_mod, conn, *, metadata: dict) -> None:
+    seed_ready_deployment(control, conn)
+    fleet.register_fleet_host(
+        conn,
+        hostname="worker-1.example.test",
+        region="us-east",
+        capacity_slots=2,
+        metadata={"edge_target": "edge.example.test"},
+    )
+    fleet.place_deployment(conn, deployment_id="dep_1")
+    job = worker_mod._ensure_apply_job(conn, deployment_id="dep_1")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="running")
+    control.transition_arclink_provisioning_job(conn, job_id=job["job_id"], status="succeeded")
+    conn.execute(
+        "UPDATE arclink_deployments SET status = 'provisioning', metadata_json = ? WHERE deployment_id = 'dep_1'",
+        (json.dumps(metadata, sort_keys=True),),
+    )
+    conn.commit()
+
+
+def test_sovereign_worker_defers_tailscale_handoff_until_bridge_published() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailnet_defer")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_sovereign_tailnet_defer")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailnet_defer")
+    conn = memory_db(control)
+    worker_urls = {"dashboard": "https://worker-node.tail.example", "hermes": "https://worker-node.tail.example"}
+    _seed_succeeded_unhandedoff_deployment(
+        control, fleet, worker_mod, conn, metadata={"access_urls": worker_urls}
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir, ingress_mode="tailscale")
+        worker_mod.process_sovereign_batch(conn, worker=cfg)
+        event_types = [row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()]
+        expect("user_handoff_ready" not in event_types, str(event_types))
+        expect(event_types.count("user_handoff_deferred") == 1, str(event_types))
+        queued = conn.execute(
+            "SELECT COUNT(*) AS c FROM notification_outbox WHERE target_kind = 'public-bot-user'"
+        ).fetchone()["c"]
+        expect(int(queued) == 0, f"deferred handoff must not notify yet, got {queued}")
+        row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+        metadata = json.loads(row["metadata_json"])
+        expect(metadata.get("tailnet_handoff_deferred_at"), str(metadata))
+
+        # A second sweep while the bridge is still unpublished stays deferred
+        # and does not duplicate the deferral event.
+        worker_mod.process_sovereign_batch(conn, worker=cfg)
+        event_types = [row["event_type"] for row in conn.execute("SELECT event_type FROM arclink_events").fetchall()]
+        expect("user_handoff_ready" not in event_types, str(event_types))
+        expect(event_types.count("user_handoff_deferred") == 1, str(event_types))
+
+        # The control publisher records the bridge and rewrites access_urls to
+        # the control DNS; the next sweep fires the handoff with those URLs.
+        control_urls = {
+            "dashboard": "https://control.example.ts.net:8443",
+            "hermes": "https://control.example.ts.net:8443",
+        }
+        metadata["access_urls"] = control_urls
+        metadata["tailnet_app_publication"] = {"status": "published", "successful_roles": ["hermes"]}
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = 'dep_1'",
+            (json.dumps(metadata, sort_keys=True),),
+        )
+        conn.commit()
+        worker_mod.process_sovereign_batch(conn, worker=cfg)
+    event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'user_handoff_ready'").fetchone()
+    expect(event is not None, "published bridge must release the deferred handoff")
+    payload = json.loads(event["metadata_json"])
+    expect(payload["urls"]["dashboard"] == "https://control.example.ts.net:8443", str(payload))
+    expect(payload.get("reason") == "tailnet_publication_published", str(payload))
+    note = conn.execute("SELECT message FROM notification_outbox WHERE target_kind = 'public-bot-user'").fetchone()
+    expect(note is not None and "https://control.example.ts.net:8443" in note["message"], str(dict(note) if note else None))
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_1'").fetchone()
+    expect(dep["status"] == "active", str(dict(dep)))
+    print("PASS test_sovereign_worker_defers_tailscale_handoff_until_bridge_published")
+
+
+def test_sovereign_worker_tailscale_handoff_is_never_stranded() -> None:
+    control = load_module("arclink_control.py", "arclink_control_sovereign_tailnet_nostrand")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_sovereign_tailnet_nostrand")
+    worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_tailnet_nostrand")
+
+    # A recorded publish failure fires immediately with the best-known URLs.
+    conn = memory_db(control)
+    _seed_succeeded_unhandedoff_deployment(
+        control,
+        fleet,
+        worker_mod,
+        conn,
+        metadata={
+            "access_urls": {"dashboard": "https://worker-node.tail.example"},
+            "tailnet_app_publication": {"status": "unavailable"},
+        },
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir, ingress_mode="tailscale")
+        worker_mod.process_sovereign_batch(conn, worker=cfg)
+    event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'user_handoff_ready'").fetchone()
+    expect(event is not None, "publication failure must not strand the handoff")
+    payload = json.loads(event["metadata_json"])
+    expect(payload.get("reason") == "tailnet_publication_unavailable", str(payload))
+
+    # An elapsed deferral window fires even when the publisher never ran.
+    conn = memory_db(control)
+    _seed_succeeded_unhandedoff_deployment(
+        control,
+        fleet,
+        worker_mod,
+        conn,
+        metadata={
+            "access_urls": {"dashboard": "https://worker-node.tail.example"},
+            "tailnet_handoff_deferred_at": "2020-01-01T00:00:00+00:00",
+        },
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cfg = worker_config(worker_mod, tmpdir, ingress_mode="tailscale")
+        worker_mod.process_sovereign_batch(conn, worker=cfg)
+    event = conn.execute("SELECT metadata_json FROM arclink_events WHERE event_type = 'user_handoff_ready'").fetchone()
+    expect(event is not None, "elapsed defer window must not strand the handoff")
+    payload = json.loads(event["metadata_json"])
+    expect(payload.get("reason") == "tailnet_handoff_defer_window_elapsed", str(payload))
+    print("PASS test_sovereign_worker_tailscale_handoff_is_never_stranded")
+
+
 def test_compose_ps_transport_failure_records_failed_health() -> None:
     control = load_module("arclink_control.py", "arclink_control_sovereign_ps_failure")
     worker_mod = load_module("arclink_sovereign_worker.py", "arclink_sovereign_worker_ps_failure")
@@ -1406,6 +1610,7 @@ if __name__ == "__main__":
     test_hermes_home_ready_manifest_requires_dashboard_plugins()
     test_remote_hermes_home_ready_manifest_reads_through_executor()
     test_crew_dashboard_access_state_refreshes_sibling_switchers()
+    test_teardown_refreshes_sibling_crew_dashboard_switchers()
     test_fake_sovereign_worker_applies_ready_deployment()
     test_live_sovereign_worker_reconciles_compose_ps_health()
     test_sovereign_worker_blocks_handoff_when_dashboard_is_created()
@@ -1426,6 +1631,8 @@ if __name__ == "__main__":
     test_sovereign_worker_repairs_stale_local_host_load()
     test_sovereign_worker_recovers_stale_running_job()
     test_sovereign_worker_recovers_succeeded_job_without_handoff()
+    test_sovereign_worker_defers_tailscale_handoff_until_bridge_published()
+    test_sovereign_worker_tailscale_handoff_is_never_stranded()
     test_compose_ps_transport_failure_records_failed_health()
     test_notion_webhook_secret_is_generated_without_notion_token()
     test_dashboard_password_secret_is_generated_for_canonical_handoff_store()

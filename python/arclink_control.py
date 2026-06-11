@@ -1708,6 +1708,33 @@ def ensure_schema(conn: sqlite3.Connection, cfg: Config | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_academy_source_crawl_observations_specialist
         ON academy_source_crawl_observations (specialist_uid, observed_at);
 
+        -- Central per-agent skill enablement registry. The passive shared skill
+        -- STORE (repo skills, Fleet/Vault Agents_Skills libraries, Hermes
+        -- bundled skills) stays as-is; this table records which skills are
+        -- approved/enabled for which deployment and from which source, so
+        -- Academy graduations and fleet sharing stop dead-ending in audit
+        -- artifacts. The per-agent refresh lane applies rows; new skills enter
+        -- the Hermes system-prompt index at next session start.
+        CREATE TABLE IF NOT EXISTS arclink_agent_skill_enablement (
+          enablement_id TEXT PRIMARY KEY,
+          deployment_id TEXT NOT NULL DEFAULT '',
+          skill_id TEXT NOT NULL DEFAULT '',
+          source TEXT NOT NULL DEFAULT 'repo',
+          status TEXT NOT NULL DEFAULT 'approved' CHECK (status IN ('approved', 'installed', 'enabled', 'disabled', 'blocked')),
+          provenance_hash TEXT NOT NULL DEFAULT '',
+          requested_by TEXT NOT NULL DEFAULT '',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL DEFAULT '',
+          applied_at TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_arclink_agent_skill_enablement_unique
+        ON arclink_agent_skill_enablement (deployment_id, skill_id, source);
+
+        CREATE INDEX IF NOT EXISTS idx_arclink_agent_skill_enablement_deployment_status
+        ON arclink_agent_skill_enablement (deployment_id, status);
+
         CREATE TABLE IF NOT EXISTS arclink_wrapped_reports (
           report_id TEXT PRIMARY KEY,
           user_id TEXT NOT NULL,
@@ -14617,12 +14644,33 @@ def sync_shared_notion_index(
         indexed_pages.update(page_rows.keys())
 
     conn.commit()
+    is_full_run = bool(full or (not normalized_page_ids and not normalized_database_ids))
     if changed_docs or removed_docs:
         _refresh_qmd_after_notion_sync(cfg, embed=_notion_index_run_embed())
+        # Notion-only card/index updates do not fan out vault-change
+        # notifications, so without this hook the plugin recall stubs lag up to
+        # the 4h refresh timer. Queue a curator brief-fanout; curator-refresh
+        # consumes it in the same pass (consume_curator_brief_fanout runs right
+        # after the Notion reindex) and fires per-agent refresh signals.
+        queue_notification(
+            conn,
+            target_kind="curator",
+            target_id="curator",
+            channel_kind="brief-fanout",
+            message=(
+                "notion-index-refresh: shared Notion knowledge changed; refresh "
+                "plugin-managed context so recall stubs do not stay stale."
+            ),
+            extra={
+                "source": "notion-index-sync",
+                "changed_docs": changed_docs,
+                "removed_docs": removed_docs,
+                "full": is_full_run,
+            },
+        )
     status = "ok"
     if unresolved_pages or unresolved_databases:
         status = "warn"
-    is_full_run = bool(full or (not normalized_page_ids and not normalized_database_ids))
     note_refresh_job(
         conn,
         job_name="notion-index-sync" if is_full_run else "notion-index-sync-incremental",
@@ -17535,7 +17583,7 @@ def build_managed_memory_payload(
         "- Use arclink-academy when Academy Mode is active: gather Captain steering, call academy.search-graduates before inventing a new specialist, search approved rails, propose compressed resources through academy.propose-resource, and wait for Trainer deep dive before treating material as canon.\n"
         "- Use arclink-resources for /arclink-resources, dashboard/code workspace links, remote helper setup, backup setup, and the user-visible ~/ArcLink vault path.\n"
         "- Use arclink-first-contact for ArcLink setup or diagnostic checks.\n"
-        "- Org-published Hermes skills live under Workspace/Agents_Skills/*/skills; fleet-shared optional skills live under Fleet/Agents_Skills/*/skills. Both are discoverable through skills.external_dirs during install/refresh, but each agent still enables/applies skills explicitly through the supported Hermes/ArcLink flow.\n"
+        "- Org-published Hermes skills live under Workspace/Agents_Skills/*/skills; fleet-shared optional skills live under Fleet/Agents_Skills/*/skills. Both are discoverable through skills.external_dirs during install/refresh. Central enablement intents (for example Academy-approved skills) are recorded in the control-plane arclink_agent_skill_enablement registry and applied by the per-agent refresh lane; manual enable/disable through the supported Hermes flow still works and local skills always win name collisions.\n"
         "- The Workspace/vault root does not require a fixed Projects/Repos taxonomy; qmd indexes text-like files anywhere under the root, and .vault files only define subscription/notification lanes.\n"
         "- All vaults remain retrievable through ArcLink/qmd even when a vault is unsubscribed; subscriptions only shape plugin-managed awareness and Curator push behavior.\n"
         "- Curator publishes a shared Notion digest into plugin-managed context so the agent has ambient SSOT orientation without live cross-user reads.\n"
@@ -17574,7 +17622,8 @@ def build_managed_memory_payload(
         "Repos/, Projects/, Research/, and org-specific folders are layout\n"
         "conventions, not retrieval boundaries. Moves and renames change qmd\n"
         "source paths, so old exact qmd file refs may go stale; search again\n"
-        "by content after the watcher or 15-minute qmd refresh has run.\n"
+        "by content after the vault watcher or the periodic qmd refresh\n"
+        "(every 5-15 minutes depending on the install lane) has run.\n"
         "If the user did not specify whether the answer is in the vault or\n"
         "shared Notion, prefer ArcLink MCP knowledge.search-and-fetch first;\n"
         "it searches vault/PDF and shared Notion together and returns tagged\n"
@@ -18647,6 +18696,140 @@ def publish_central_managed_memory(
         "managed_memory_revision": str(payload["managed_memory_revision"]),
         "managed_payload_cache_key": str(payload["managed_payload_cache_key"]),
     }
+
+
+_AGENT_SKILL_ENABLEMENT_STATUSES = {"approved", "installed", "enabled", "disabled", "blocked"}
+
+
+def record_agent_skill_enablement_intent(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    skill_id: str,
+    source: str = "repo",
+    status: str = "approved",
+    provenance_hash: str = "",
+    requested_by: str = "",
+    metadata: dict[str, Any] | None = None,
+    applied_at: str = "",
+) -> dict[str, Any]:
+    """Upsert one (deployment, skill, source) enablement row.
+
+    Source values: 'repo' | 'fleet-shared' | 'vault' | 'academy:<slug>'.
+    Status lifecycle: approved -> installed -> enabled (or disabled/blocked).
+    Re-recording the same intent updates status/metadata without duplicating
+    rows, so Academy re-applies stay idempotent.
+    """
+    clean_deployment = str(deployment_id or "").strip()
+    clean_skill = str(skill_id or "").strip()
+    clean_source = str(source or "").strip() or "repo"
+    clean_status = str(status or "").strip() or "approved"
+    if not clean_deployment:
+        raise ValueError("skill enablement requires a deployment_id")
+    if not clean_skill:
+        raise ValueError("skill enablement requires a skill_id")
+    if clean_status not in _AGENT_SKILL_ENABLEMENT_STATUSES:
+        raise ValueError(f"unsupported skill enablement status: {clean_status}")
+    now_iso = utc_now_iso()
+    metadata_json = json_dumps(dict(metadata or {}))
+    enablement_id = "ske_" + hashlib.sha256(
+        f"{clean_deployment}:{clean_skill}:{clean_source}".encode("utf-8")
+    ).hexdigest()[:24]
+    conn.execute(
+        """
+        INSERT INTO arclink_agent_skill_enablement (
+          enablement_id, deployment_id, skill_id, source, status,
+          provenance_hash, requested_by, metadata_json, created_at, updated_at, applied_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (enablement_id) DO UPDATE SET
+          status = excluded.status,
+          provenance_hash = excluded.provenance_hash,
+          requested_by = excluded.requested_by,
+          metadata_json = excluded.metadata_json,
+          updated_at = excluded.updated_at,
+          applied_at = CASE
+            WHEN excluded.applied_at != '' THEN excluded.applied_at
+            ELSE arclink_agent_skill_enablement.applied_at
+          END
+        """,
+        (
+            enablement_id,
+            clean_deployment,
+            clean_skill,
+            clean_source,
+            clean_status,
+            str(provenance_hash or "").strip(),
+            str(requested_by or "").strip(),
+            metadata_json,
+            now_iso,
+            now_iso,
+            str(applied_at or "").strip(),
+        ),
+    )
+    conn.commit()
+    return {
+        "enablement_id": enablement_id,
+        "deployment_id": clean_deployment,
+        "skill_id": clean_skill,
+        "source": clean_source,
+        "status": clean_status,
+        "provenance_hash": str(provenance_hash or "").strip(),
+    }
+
+
+def list_agent_skill_enablement(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str,
+    statuses: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    clean_deployment = str(deployment_id or "").strip()
+    if not clean_deployment:
+        return []
+    wanted = [str(item or "").strip() for item in (statuses or []) if str(item or "").strip()]
+    query = (
+        "SELECT * FROM arclink_agent_skill_enablement WHERE deployment_id = ?"
+    )
+    params: list[Any] = [clean_deployment]
+    if wanted:
+        placeholders = ",".join("?" for _ in wanted)
+        query += f" AND status IN ({placeholders})"
+        params.extend(wanted)
+    query += " ORDER BY skill_id ASC, source ASC"
+    rows = conn.execute(query, tuple(params)).fetchall()
+    result = []
+    for row in rows:
+        payload = {key: row[key] for key in row.keys()}
+        payload["metadata"] = json_loads(str(row["metadata_json"] or "{}"), {})
+        result.append(payload)
+    return result
+
+
+def mark_agent_skill_enablement_applied(
+    conn: sqlite3.Connection,
+    *,
+    enablement_id: str,
+    status: str = "enabled",
+    applied_at: str = "",
+) -> bool:
+    clean_status = str(status or "").strip() or "enabled"
+    if clean_status not in _AGENT_SKILL_ENABLEMENT_STATUSES:
+        raise ValueError(f"unsupported skill enablement status: {clean_status}")
+    cursor = conn.execute(
+        """
+        UPDATE arclink_agent_skill_enablement
+        SET status = ?, applied_at = ?, updated_at = ?
+        WHERE enablement_id = ?
+        """,
+        (
+            clean_status,
+            str(applied_at or "").strip() or utc_now_iso(),
+            utc_now_iso(),
+            str(enablement_id or "").strip(),
+        ),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def signal_agent_refresh_from_curator(

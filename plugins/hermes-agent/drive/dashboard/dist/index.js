@@ -233,11 +233,25 @@
     ).then(flattenUploadGroups);
   }
 
+  function errorDetailFromBody(text, status) {
+    try {
+      const payload = JSON.parse(text || "{}");
+      if (payload && typeof payload.detail === "string" && payload.detail) return payload.detail;
+      if (payload && payload.detail) return JSON.stringify(payload.detail);
+    } catch (error) {
+      const plain = String(text || "").trim();
+      if (plain && plain.charAt(0) !== "{" && plain.charAt(0) !== "<") return plain.slice(0, 400);
+    }
+    return "Request failed" + (status ? " (" + status + ")" : "");
+  }
+
   function fetchJSON(url, options) {
     return fetch(url, Object.assign({ credentials: "same-origin" }, options || {})).then(function (response) {
       if (!response.ok) {
         return response.text().then(function (text) {
-          throw new Error(text || "request failed");
+          const failure = new Error(errorDetailFromBody(text, response.status));
+          failure.status = response.status;
+          throw failure;
         });
       }
       return response.json();
@@ -248,6 +262,7 @@
     const fileInput = useRef(null);
     const folderInput = useRef(null);
     const confirmResolver = useRef(null);
+    const listRequestToken = useRef(0);
     const statePair = useState({
       loading: true,
       status: null,
@@ -256,7 +271,7 @@
       path: "/",
       location: "roots",
       query: "",
-      favoritesOnly: false,
+      folder: null,
       view: "list",
       sortKey: "name",
       items: [],
@@ -404,6 +419,7 @@
           size: 0,
           modified: "",
           root_overview: true,
+          read_only: !!root.read_only,
           description: root.description || root.tooltip || "",
           child_count: root.child_count,
           child_count_truncated: root.child_count_truncated,
@@ -413,11 +429,12 @@
 
     function showRootOverview(roots) {
       const nextRoots = orderedRoots(roots || state.roots);
+      listRequestToken.current += 1;
       patch({
         root: "",
         path: "/",
         query: "",
-        favoritesOnly: false,
+        folder: null,
         location: "roots",
         items: rootOverviewItems(nextRoots),
         searchResults: [],
@@ -461,6 +478,29 @@
       const root = rootById(itemRoot(item));
       const capabilities = (root && root.capabilities) || {};
       return !!(root && root.available && !root.read_only && capabilities.share_request);
+    }
+
+    function itemIsReadOnly(item) {
+      if (!item || item.trashed) return false;
+      if (item.root_overview) return !!item.read_only;
+      return item.can_write === false;
+    }
+
+    function itemCanRename(item) {
+      return !!item && !item.trashed && !item.root_overview && item.can_rename !== false;
+    }
+
+    function itemCanDelete(item) {
+      return !!item && !item.trashed && !item.root_overview && item.can_delete !== false;
+    }
+
+    function itemCanReceiveUpload(item) {
+      return !!item && !item.trashed && item.kind === "folder" && item.can_upload !== false;
+    }
+
+    function renderReadOnlyBadge(item) {
+      if (!itemIsReadOnly(item)) return null;
+      return h("span", { className: "hermes-drive-readonly-badge", title: "Read-only" }, "Read-only");
     }
 
     function copyShareText(text) {
@@ -593,7 +633,6 @@
         root: rootId,
         path: folder,
         query: "",
-        favoritesOnly: false,
         location: "files",
         selected: null,
         selectedPaths: {},
@@ -601,7 +640,7 @@
         preview: null,
       });
       loadTreeNode(rootId, folder);
-      loadItems(folder, "", false, rootId);
+      loadItems(folder, "", rootId);
     }
 
     function setDestinationFolder(rootId, path) {
@@ -623,44 +662,47 @@
       const activeRoot = rootId || state.root;
       loadTreeNode(activeRoot, folder);
       loadTreeNode(activeRoot, parentPath(folder));
-      loadItems(folder, state.query, state.favoritesOnly, activeRoot);
+      loadItems(folder, state.query, activeRoot);
     }
 
-    function loadItems(nextPath, nextQuery, nextFavorites, nextRoot) {
+    function loadItems(nextPath, nextQuery, nextRoot) {
       const targetPath = nextPath || state.path;
       const targetRoot = nextRoot || state.root;
       const query = typeof nextQuery === "string" ? nextQuery : state.query;
-      const favoritesOnly = typeof nextFavorites === "boolean" ? nextFavorites : state.favoritesOnly;
-      patch({ loading: true, root: targetRoot, path: targetPath, location: "files", query: query, favoritesOnly: favoritesOnly, errorMessage: "" });
+      const token = listRequestToken.current + 1;
+      listRequestToken.current = token;
+      patch({ loading: true, root: targetRoot, path: targetPath, location: "files", query: query, errorMessage: "" });
       const params = new URLSearchParams({ path: targetPath, query: query });
       if (targetRoot) params.set("root", targetRoot);
-      if (favoritesOnly) params.set("favorites_only", "true");
       fetchJSON(api("/items?" + params.toString()))
         .then(function (data) {
-          patch({ loading: false, items: decorateItems(targetRoot, data.items || []), path: data.path || targetPath, location: "files", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null, searchResults: query ? state.searchResults : [] });
+          if (token !== listRequestToken.current) return;
+          patch({ loading: false, items: decorateItems(targetRoot, data.items || []), folder: data.folder || null, path: data.path || targetPath, location: "files", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null, searchResults: query ? state.searchResults : [] });
         })
         .catch(function (error) {
-          patch({ loading: false, items: [], selected: null, preview: null, errorMessage: error.message || "Unable to load Drive" });
+          if (token !== listRequestToken.current) return;
+          patch({ loading: false, items: [], folder: null, selected: null, preview: null, errorMessage: error.message || "Unable to load Drive" });
         });
     }
 
-    function searchAllRoots(query, favoritesOnly) {
+    function searchAllRoots(query) {
       const clean = String(query || "").trim();
-      patch({ query: clean, favoritesOnly: !!favoritesOnly, location: "files", errorMessage: "" });
+      patch({ query: clean, location: "files", errorMessage: "" });
       if (!clean) {
         patch({ searchResults: [], searching: false });
         if (state.location === "roots" || !state.root) {
           showRootOverview();
         } else {
-          loadItems(state.path, "", !!favoritesOnly, state.root);
+          loadItems(state.path, "", state.root);
         }
         return;
       }
+      const token = listRequestToken.current + 1;
+      listRequestToken.current = token;
       patch({ searching: true, loading: false, selected: null, selectedPaths: {}, selectionAnchor: null });
       Promise.all(
         orderedRoots(state.roots).map(function (root) {
           const params = new URLSearchParams({ root: root.id, path: "/", query: clean });
-          if (favoritesOnly) params.set("favorites_only", "true");
           return fetchJSON(api("/items?" + params.toString()))
             .then(function (data) {
               return decorateItems(root.id, data.items || []);
@@ -670,6 +712,7 @@
             });
         })
       ).then(function (groups) {
+        if (token !== listRequestToken.current) return;
         const results = [];
         groups.forEach(function (items) {
           items.forEach(function (item) {
@@ -681,15 +724,18 @@
     }
 
     function loadTrash() {
-      patch({ loading: true, location: "trash", favoritesOnly: false, query: "", selected: null, selectedPaths: {}, selectionAnchor: null, preview: null, errorMessage: "" });
+      const token = listRequestToken.current + 1;
+      listRequestToken.current = token;
+      patch({ loading: true, location: "trash", query: "", folder: null, selected: null, selectedPaths: {}, selectionAnchor: null, preview: null, errorMessage: "" });
       const params = new URLSearchParams();
       if (state.root) params.set("root", state.root);
       fetchJSON(api("/trash?" + params.toString()))
         .then(function (data) {
+          if (token !== listRequestToken.current) return;
           const items = (data.items || []).map(function (record) {
             return {
               trashed: true,
-              kind: "file",
+              kind: record.kind === "folder" ? "folder" : "file",
               name: nameFromPath(record.original_path),
               path: record.original_path,
               original_path: record.original_path,
@@ -700,6 +746,7 @@
           patch({ loading: false, location: "trash", trashItems: decorateItems(state.root, items), selected: null, selectedPaths: {}, selectionAnchor: null, preview: null });
         })
         .catch(function (error) {
+          if (token !== listRequestToken.current) return;
           patch({ loading: false, location: "trash", trashItems: [], selected: null, preview: null, errorMessage: error.message || "Unable to load trash" });
         });
     }
@@ -782,6 +829,29 @@
       folderInput.current && folderInput.current.click();
     }
 
+    function existingNamesFor(targetFolder, rootId) {
+      if (rootId === state.root && targetFolder === normalizeFolder(state.path) && state.location === "files" && !state.query) {
+        const names = {};
+        (state.items || []).forEach(function (item) {
+          names[item.name] = true;
+        });
+        return Promise.resolve(names);
+      }
+      const params = new URLSearchParams({ path: targetFolder, query: "" });
+      if (rootId) params.set("root", rootId);
+      return fetchJSON(api("/items?" + params.toString()))
+        .then(function (data) {
+          const names = {};
+          ((data && data.items) || []).forEach(function (item) {
+            names[item.name] = true;
+          });
+          return names;
+        })
+        .catch(function () {
+          return {};
+        });
+    }
+
     function uploadFiles(files, targetPath, targetRoot, options) {
       const uploadEntries = normalizeUploadEntries(files);
       const directories = ((options && options.directories) || []).map(function (directory) {
@@ -790,12 +860,7 @@
       if (!uploadEntries.length && !directories.length) return;
       const targetFolder = normalizeFolder(targetPath || state.path);
       const rootId = targetRoot || state.root;
-      let conflict = "reject";
-      if (targetFolder === normalizeFolder(state.path)) {
-        const existingNames = {};
-        (state.items || []).forEach(function (item) {
-          existingNames[item.name] = true;
-        });
+      existingNamesFor(targetFolder, rootId).then(function (existingNames) {
         const conflictEntries = uploadEntries.concat(
           directories.map(function (directory) {
             return { relativePath: directory };
@@ -818,8 +883,8 @@
           });
           return;
         }
-      }
-      startUpload(uploadEntries, targetFolder, conflict, rootId, directories);
+        startUpload(uploadEntries, targetFolder, "reject", rootId, directories);
+      });
     }
 
     function uploadDroppedItems(dataTransfer, targetPath, targetRoot) {
@@ -870,6 +935,10 @@
     }
 
     function renameItem(item) {
+      if (!itemCanRename(item)) {
+        patch({ errorMessage: (item.name || "This item") + " is read-only in " + (rootById(itemRoot(item)).label || itemRoot(item) || "Drive") + ".", contextMenu: null });
+        return;
+      }
       const name = (window.prompt("Rename", item.name) || "").trim();
       if (!name || name === item.name) {
         patch({ contextMenu: null });
@@ -881,6 +950,10 @@
     }
 
     function moveItemToFolder(item, destinationFolder) {
+      if (!itemCanRename(item)) {
+        patch({ errorMessage: (item.name || "This item") + " is read-only in " + (rootById(itemRoot(item)).label || itemRoot(item) || "Drive") + ".", contextMenu: null });
+        return;
+      }
       const folder = normalizeFolder(destinationFolder);
       if (item.kind === "folder" && (folder === item.path || folder.indexOf(item.path + "/") === 0)) {
         window.alert("A folder cannot be moved into itself.");
@@ -918,7 +991,10 @@
         return;
       }
       const initialRoot = roots[0].id;
-      const initialPath = normalizeFolder(initialRoot === sourceRoot && item ? parentPath(item.path) : state.path || "/");
+      const initialPath =
+        initialRoot === sourceRoot
+          ? normalizeFolder(item ? parentPath(item.path) : state.path || "/")
+          : "/";
       patch({
         contextMenu: null,
         destinationDialog: {
@@ -960,7 +1036,44 @@
       moveItemToFolder(item, destinationFolder);
     }
 
+    function handleCrossRootDrag(sourcePath, sourceRoot, targetRoot, targetFolder) {
+      const sourceLabel = rootById(sourceRoot).label || sourceRoot || "Drive";
+      const targetLabel = rootById(targetRoot).label || targetRoot || "Drive";
+      if (sourceRoot === "linked" && rootCanReceiveCopy(rootById(targetRoot))) {
+        // Copy from Linked into an owned root is the one supported cross-root
+        // path; open the copy dialog already pointed at the drop target.
+        const item = (state.items || []).concat(state.searchResults || []).filter(function (candidate) {
+          return candidate.path === sourcePath && itemRoot(candidate) === sourceRoot;
+        })[0] || { root: sourceRoot, path: sourcePath, name: nameFromPath(sourcePath), kind: "file" };
+        const folder = normalizeFolder(targetFolder || "/");
+        patch({
+          contextMenu: null,
+          destinationDialog: {
+            action: "copy",
+            mode: "item",
+            item: item,
+            paths: [item.path],
+            sourceRoot: sourceRoot,
+            root: targetRoot,
+            path: folder,
+          },
+        });
+        loadTreeNode(targetRoot, "/");
+        loadTreeNode(targetRoot, folder);
+        return;
+      }
+      if (sourceRoot === "linked") {
+        patch({ errorMessage: "Linked items can only be copied into a writable root; " + targetLabel + " cannot receive this copy." });
+        return;
+      }
+      patch({ errorMessage: "Items cannot be moved or copied between " + sourceLabel + " and " + targetLabel + "." });
+    }
+
     function deleteItem(item) {
+      if (!itemCanDelete(item)) {
+        patch({ errorMessage: (item.name || "This item") + " is read-only in " + (rootById(itemRoot(item)).label || itemRoot(item) || "Drive") + ".", contextMenu: null });
+        return;
+      }
       askConfirm({
         title: "Move to trash?",
         message: "Type the item name to move " + item.name + " to trash.",
@@ -1169,7 +1282,7 @@
       const parts = String(state.path || "/").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
       const rootLabel = currentRoot.label || state.root || "Drive";
       const nodes = [
-        h("button", { key: "root", type: "button", onClick: function () { loadItems("/", "", false, state.root); } }, rootLabel),
+        h("button", { key: "root", type: "button", onClick: function () { loadItems("/", "", state.root); } }, rootLabel),
       ];
       if (state.location === "trash") {
         nodes.push(h("button", { key: "trash", type: "button", onClick: loadTrash }, "Trash"));
@@ -1178,7 +1291,7 @@
       let current = "";
       parts.forEach(function (part) {
         current += "/" + part;
-        nodes.push(h("button", { key: current, type: "button", onClick: function () { loadItems(current, "", false, state.root); } }, part));
+        nodes.push(h("button", { key: current, type: "button", onClick: function () { loadItems(current, "", state.root); } }, part));
       });
       return nodes;
     }
@@ -1743,7 +1856,7 @@
       return h(
         "div",
         { className: "hermes-drive-details" },
-        h("div", { className: "hermes-drive-details-title" }, renderFileIcon(selected), h("strong", null, selected.name)),
+        h("div", { className: "hermes-drive-details-title" }, renderFileIcon(selected), h("strong", null, selected.name), renderReadOnlyBadge(selected)),
         h(
           "div",
           { className: "hermes-drive-file-facts" },
@@ -1768,8 +1881,8 @@
             : null,
           isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { duplicateItem(selected); } }, "Duplicate"),
           isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { copyItemWithPrompt(selected); } }, "Copy"),
-          isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { renameItem(selected); } }, "Rename"),
-          isRootOverview || selected.trashed ? null : h("button", { type: "button", onClick: function () { moveItemWithPrompt(selected); } }, "Move")
+          isRootOverview || selected.trashed ? null : h("button", { type: "button", disabled: !itemCanRename(selected), title: itemCanRename(selected) ? "" : "Read-only", onClick: function () { renameItem(selected); } }, "Rename"),
+          isRootOverview || selected.trashed ? null : h("button", { type: "button", disabled: !itemCanRename(selected), title: itemCanRename(selected) ? "" : "Read-only", onClick: function () { moveItemWithPrompt(selected); } }, "Move")
         ),
         renderPreviewPanel()
       );
@@ -1867,7 +1980,10 @@
     const contextItem = state.contextMenu && state.contextMenu.item;
     const selectedCount = selectedPathList().length;
     const currentRoot = (state.roots || []).filter(function (root) { return root.id === state.root; })[0] || {};
-    const canWrite = !!state.root && !state.busy && state.location !== "trash" && state.location !== "roots" && status.available && (!currentRoot.capabilities || currentRoot.capabilities.upload !== false);
+    // Linked folders are only writable when the server-listed folder flags say so;
+    // owned roots stay writable when no folder flags are present (search/legacy).
+    const folderWritable = state.folder ? state.folder.can_write === true : state.root !== "linked";
+    const canWrite = !!state.root && !state.busy && state.location !== "trash" && state.location !== "roots" && status.available && folderWritable && (!currentRoot.capabilities || currentRoot.capabilities.upload !== false);
     const visibleItems = sortedItems();
     const confirmDialog = state.confirmDialog;
     const confirmBlocked = !!(confirmDialog && confirmDialog.expectedText && confirmDialog.typedText !== confirmDialog.expectedText);
@@ -1913,7 +2029,7 @@
                 )
               : null
           ),
-          h("button", { type: "button", onClick: function () { state.location === "roots" ? showRootOverview() : loadItems(state.path, "", false, state.root); }, disabled: !status.available }, "Refresh"),
+          h("button", { type: "button", onClick: function () { state.location === "roots" ? showRootOverview() : loadItems(state.path, "", state.root); }, disabled: !status.available }, "Refresh"),
           h("input", {
             ref: fileInput,
             type: "file",
@@ -1958,7 +2074,7 @@
                       patch({ query: value });
                       window.clearTimeout(DrivePage._timer);
                       DrivePage._timer = window.setTimeout(function () {
-                        searchAllRoots(value, state.favoritesOnly);
+                        searchAllRoots(value);
                       }, 180);
                     },
                   }),
@@ -2015,10 +2131,14 @@
                   patch({ dropActive: false });
                   if (sourcePath) {
                     if (sourceRoot !== state.root) {
-                      patch({ errorMessage: "Move between Drive roots is not enabled yet. Copy between roots instead." });
+                      handleCrossRootDrag(sourcePath, sourceRoot, state.root, state.path);
                       return;
                     }
                     moveDraggedPath(sourcePath, state.path, sourceRoot);
+                    return;
+                  }
+                  if (!folderWritable) {
+                    patch({ errorMessage: (currentRoot.label || state.root || "This folder") + " is read-only here; uploads are not allowed." });
                     return;
                   }
                   uploadDroppedItems(event.dataTransfer, state.path, state.root);
@@ -2112,18 +2232,23 @@
                               const sourceRoot = event.dataTransfer.getData("application/x-hermes-drive-root") || itemRoot(item);
                               if (sourcePath) {
                                 if (sourceRoot !== itemRoot(item)) {
-                                  patch({ errorMessage: "Move between Drive roots is not enabled yet. Copy between roots instead." });
+                                  handleCrossRootDrag(sourcePath, sourceRoot, itemRoot(item), item.path);
                                   return;
                                 }
                                 moveDraggedPath(sourcePath, item.path, sourceRoot);
                                 return;
                               }
                               patch({ dropActive: false });
+                              if (!itemCanReceiveUpload(item)) {
+                                patch({ errorMessage: (item.name || "This folder") + " is read-only; uploads are not allowed." });
+                                return;
+                              }
                               uploadDroppedItems(event.dataTransfer, item.path, itemRoot(item));
                             },
                           },
                           renderFileIcon(item),
                           h("span", { className: "hermes-drive-name" }, item.name),
+                          renderReadOnlyBadge(item),
                           state.query
                             ? h(
                                 "span",
@@ -2231,15 +2356,15 @@
                     !contextItem.trashed && contextItem.kind === "file"
                       ? h("a", { role: "menuitem", href: codeEditUrl(contextItem) }, "Edit in Code")
                       : null,
-                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { renameItem(contextItem); } }, "Rename"),
+                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", disabled: !itemCanRename(contextItem), title: itemCanRename(contextItem) ? "" : "Read-only", onClick: function () { renameItem(contextItem); } }, "Rename"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { duplicateItem(contextItem); } }, "Duplicate"),
                     contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { copyItemWithPrompt(contextItem); } }, "Copy"),
-                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { moveItemWithPrompt(contextItem); } }, "Move"),
+                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", disabled: !itemCanRename(contextItem), title: itemCanRename(contextItem) ? "" : "Read-only", onClick: function () { moveItemWithPrompt(contextItem); } }, "Move"),
                     itemCanRequestShare(contextItem) ? h("button", { type: "button", role: "menuitem", onClick: function () { requestShare(contextItem); } }, "Share") : null,
                     !contextItem.trashed && contextItem.kind === "file"
                       ? h("a", { role: "menuitem", href: api("/download?path=" + encodeURIComponent(contextItem.path) + "&root=" + encodeURIComponent(itemRoot(contextItem) || "")), target: "_blank", rel: "noreferrer" }, "Download")
                       : null,
-                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", onClick: function () { deleteItem(contextItem); } }, "Move to Trash")
+                    contextItem.trashed ? null : h("button", { type: "button", role: "menuitem", disabled: !itemCanDelete(contextItem), title: itemCanDelete(contextItem) ? "" : "Read-only", onClick: function () { deleteItem(contextItem); } }, "Move to Trash")
                   )
           )
         : null

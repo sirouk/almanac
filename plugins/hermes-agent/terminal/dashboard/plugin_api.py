@@ -82,6 +82,7 @@ _CPR_QUERY = b"\x1b[6n"
 _MANAGED_BACKEND = "managed-pty"
 _TMUX_BACKEND = "tmux-pty"
 _RUNTIMES: dict[str, dict[str, Any]] = {}
+_READER_THREADS: dict[str, threading.Thread] = {}
 _STATE_LOCK = threading.RLock()
 _TERMINAL_ENV_ALLOWLIST = {
     "COLORTERM",
@@ -328,7 +329,12 @@ def _entry_backend(entry: Mapping[str, Any] | None = None) -> str:
 
 
 def _tmux_socket_path() -> Path:
-    path = _state_dir() / "tmux.sock"
+    # The default socket lives on the shared HERMES_HOME bind mount, which the
+    # dedicated long-lived terminal-tmux compose service mounts at the same
+    # path. Sessions therefore live in that service's tmux server and survive
+    # dashboard container restarts, upgrades, crashes, and OOM kills.
+    override = _env_first("TERMINAL_TMUX_SOCKET", "ARCLINK_TERMINAL_TMUX_SOCKET")
+    path = Path(override).expanduser() if override else (_state_dir() / "tmux.sock")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.parent.chmod(0o700)
@@ -700,11 +706,25 @@ def _close_runtime(session_id: str, runtime: dict[str, Any], *, terminate: bool 
     _RUNTIMES.pop(session_id, None)
 
 
+def _tmux_history_limit() -> int:
+    # Honor the advertised reattach_scrollback_lines: tmux's default
+    # history-limit (~2000 lines) would silently truncate capture-pane
+    # recovery below what /status promises.
+    return max(4000, _reattach_scrollback_lines())
+
+
 def _tmux_new_session_args(entry: dict[str, Any], argv: list[str], cwd: Path, env: Mapping[str, str]) -> list[str]:
     session_id = str(entry.get("id") or "")
     rows = _clean_int(entry.get("rows"), _DEFAULT_ROWS, 8, 200)
     cols = _clean_int(entry.get("cols"), _DEFAULT_COLS, 20, 400)
     args = [
+        # Apply the history limit globally before the session is created so
+        # the new pane is born with at least the advertised scrollback.
+        "set-option",
+        "-g",
+        "history-limit",
+        str(_tmux_history_limit()),
+        ";",
         "new-session",
         "-d",
         "-s",
@@ -827,6 +847,9 @@ def _read_runtime(entry: dict[str, Any]) -> bool:
     runtime = _runtime(session_id)
     if not runtime:
         if str(entry.get("state") or "") in {"starting", "running", "detached"} and _reattach_tmux_runtime(entry):
+            # Implicit auto-reattach must also restart the background PTY
+            # reader so output keeps draining without an open browser tab.
+            _start_reader(session_id)
             return True
         if str(entry.get("state") or "") in {"starting", "running"}:
             entry["state"] = "exited" if _entry_backend(entry) == _TMUX_BACKEND else "detached"
@@ -867,7 +890,8 @@ def _read_runtime(entry: dict[str, Any]) -> bool:
     if exit_code is not None:
         _close_runtime(session_id, runtime, terminate=False)
         if _entry_backend(entry) == _TMUX_BACKEND and _tmux_session_exists(entry):
-            _reattach_tmux_runtime(entry)
+            if _reattach_tmux_runtime(entry):
+                _start_reader(session_id)
         else:
             entry["state"] = "exited"
             entry["exit_code"] = exit_code
@@ -892,28 +916,42 @@ def _poll_sessions(payload: dict[str, Any]) -> bool:
 
 def _reader_loop(session_id: str) -> None:
     idle_delay = 0.08
-    while True:
-        with _STATE_LOCK:
-            payload = _load_sessions()
-            try:
-                entry = _find_session(payload, session_id)
-            except HTTPException:
-                return
-            changed = _read_runtime(entry)
-            if changed:
-                _save_sessions(payload)
-            state = str(entry.get("state") or "")
-            if state in {"closed", "exited", "detached"} or not _runtime(session_id):
-                return
-        time.sleep(idle_delay)
+    try:
+        while True:
+            with _STATE_LOCK:
+                payload = _load_sessions()
+                try:
+                    entry = _find_session(payload, session_id)
+                except HTTPException:
+                    return
+                changed = _read_runtime(entry)
+                if changed:
+                    _save_sessions(payload)
+                state = str(entry.get("state") or "")
+                if state in {"closed", "exited", "detached"} or not _runtime(session_id):
+                    return
+            time.sleep(idle_delay)
+    finally:
+        if _READER_THREADS.get(session_id) is threading.current_thread():
+            _READER_THREADS.pop(session_id, None)
 
 
 def _start_reader(session_id: str) -> None:
     runtime = _runtime(session_id)
-    if not runtime or runtime.get("reader"):
+    if not runtime:
+        return
+    # Reattach swaps in a fresh runtime dict, so dedupe reader threads through
+    # the shared per-session registry instead of the runtime alone.
+    existing = runtime.get("reader")
+    if isinstance(existing, threading.Thread) and existing.is_alive():
+        return
+    shared = _READER_THREADS.get(session_id)
+    if shared is not None and shared.is_alive():
+        runtime["reader"] = shared
         return
     reader = threading.Thread(target=_reader_loop, args=(session_id,), daemon=True, name="terminal-reader-" + session_id[:16])
     runtime["reader"] = reader
+    _READER_THREADS[session_id] = reader
     reader.start()
 
 
@@ -1046,7 +1084,7 @@ def _status_payload() -> dict[str, Any]:
     return {
         "plugin": "terminal",
         "label": "Terminal",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "status_contract": 1,
         "available": available,
         "backend": backend,
@@ -1074,7 +1112,10 @@ def _status_payload() -> dict[str, Any]:
             "fallback_poll_interval_ms": 1000,
         },
         "capabilities": {
-            "persistent_sessions": available,
+            # Managed-pty shells die with the dashboard worker (atexit kills
+            # their process groups), so only the tmux backend may advertise
+            # persistence — fail closed instead of overpromising.
+            "persistent_sessions": bool(available and backend == _TMUX_BACKEND),
             "process_survives_dashboard_restart": bool(available and backend == _TMUX_BACKEND),
             "reattach_sessions": bool(available and backend == _TMUX_BACKEND),
             "streaming_output": available,
@@ -1091,7 +1132,6 @@ def _status_payload() -> dict[str, Any]:
             "resize": available,
             "browser_cpr_response": available,
             "machine_terminal_sessions": available,
-            "ssh_sessions": available,
             "hermes_tui_sessions": available and tui_available,
             "clear_closed_sessions": True,
             "full_pod_shell_authority": available,
@@ -1195,17 +1235,23 @@ async def clear_closed_sessions() -> dict[str, Any]:
         payload = _load_sessions()
         _poll_sessions(payload)
         before = len(payload["sessions"])
-        removed_entries = [
-            entry for entry in payload["sessions"]
-            if str(entry.get("state") or "") in {"closed", "exited", "detached"}
-        ]
+        kept: list[dict[str, Any]] = []
+        removed_entries: list[dict[str, Any]] = []
+        for entry in payload["sessions"]:
+            state = str(entry.get("state") or "")
+            if state not in {"closed", "exited", "detached"}:
+                kept.append(entry)
+                continue
+            if state != "closed" and _entry_backend(entry) == _TMUX_BACKEND and _tmux_session_exists(entry):
+                # A live tmux session is still reattachable: cleanup must never
+                # remove or kill it. close_session is the only user kill path.
+                kept.append(entry)
+                continue
+            removed_entries.append(entry)
         for entry in removed_entries:
             _tmux_kill_session(entry)
-        payload["sessions"] = [
-            entry for entry in payload["sessions"]
-            if str(entry.get("state") or "") not in {"closed", "exited", "detached"}
-        ]
-        removed = before - len(payload["sessions"])
+        payload["sessions"] = kept
+        removed = before - len(kept)
         _save_sessions(payload)
         return {"ok": True, "removed": removed, "sessions": [_session_payload(entry, include_scrollback=False) for entry in payload["sessions"]]}
 

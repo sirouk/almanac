@@ -906,10 +906,24 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
         refresh_file = json.loads((hermes_home / "state" / "arclink-academy-post-apply-refresh.json").read_text(encoding="utf-8"))
         expect(refresh_file["request_id"] == refresh_request["request_id"], str(refresh_file))
         expect(refresh_file["status"] == "queued", str(refresh_file))
-        expect({item["status"] for item in refresh_file["refreshes"]} <= {"queued", "staged", "not_requested"}, str(refresh_file))
+        expect({item["status"] for item in refresh_file["refreshes"]} <= {"queued", "staged", "not_requested", "recorded"}, str(refresh_file))
         expect("Docker" in refresh_file["queue_policy"] and "inline" in refresh_file["queue_policy"], str(refresh_file))
         expect((hermes_home / "state" / "arclink-academy-qmd-refresh-request.json").is_file(), str(refresh_file))
         expect((hermes_home / "state" / "arclink-academy-memory-synthesis-request.json").is_file(), str(refresh_file))
+        # The queue markers are no longer write-only: each names its consumer
+        # and whether it stays runner-gated.
+        memory_marker = json.loads((hermes_home / "state" / "arclink-academy-memory-synthesis-request.json").read_text(encoding="utf-8"))
+        expect(memory_marker["status"] == "queued" and "memory-synth" in memory_marker["consumer"], str(memory_marker))
+        qmd_marker = json.loads((hermes_home / "state" / "arclink-academy-qmd-refresh-request.json").read_text(encoding="utf-8"))
+        expect(qmd_marker["runner_gated"] is True and "runner-gated" in qmd_marker["consumer"], str(qmd_marker))
+        # academy_apply records central skill enablement intents alongside the
+        # Approved_Skills.md audit artifact.
+        enablement_rows = control.list_agent_skill_enablement(conn, deployment_id=deployment_id)
+        expect(len(enablement_rows) == len(applied["approved_skill_intents"]), str(enablement_rows))
+        if enablement_rows:
+            expect(enablement_rows[0]["status"] == "approved", str(enablement_rows))
+            expect(enablement_rows[0]["source"].startswith("academy:"), str(enablement_rows))
+            expect(bool(enablement_rows[0]["provenance_hash"]), str(enablement_rows))
         refresh_job = conn.execute(
             "SELECT * FROM refresh_jobs WHERE job_name = ?",
             (f"academy-post-apply-refresh:{deployment_id}",),
@@ -1497,6 +1511,11 @@ def test_rollout_action_executes_one_local_batch_when_explicitly_requested() -> 
     expect(metadata["execution"]["record_only"] is True, str(metadata))
     expect(metadata["health_smoke"]["status"] == "pending_live_proof", str(metadata))
     expect("secret://" not in json.dumps(payload, sort_keys=True), str(payload))
+    # GAP-032: an executed rollout batch must attempt a Telegram command-scope
+    # refresh for the rolled Pods (best-effort; here it records a safe skip
+    # because no bot token or control DB path is configured in the action env).
+    refresh = payload.get("telegram_command_scope_refresh")
+    expect(isinstance(refresh, dict) and refresh.get("skipped") is True, str(payload.get("telegram_command_scope_refresh")))
     print("PASS test_rollout_action_executes_one_local_batch_when_explicitly_requested")
 
 
@@ -1807,6 +1826,200 @@ def test_action_worker_main_reuses_single_db_connection_for_once_batch() -> None
     print("PASS test_action_worker_main_reuses_single_db_connection_for_once_batch")
 
 
+def test_agent_skill_enablement_registry_records_and_transitions() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_skill_registry")
+    conn = memory_db(control)
+    table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'arclink_agent_skill_enablement'"
+    ).fetchone()
+    expect(table is not None, "ensure_schema must create arclink_agent_skill_enablement")
+    recorded = control.record_agent_skill_enablement_intent(
+        conn,
+        deployment_id="dep_skill_reg",
+        skill_id="retrieval-and-cite",
+        source="academy:systems-practice-engineer",
+        status="approved",
+        provenance_hash="abc123",
+        requested_by="test:registry",
+        metadata={"review_status": "approved"},
+    )
+    expect(recorded["status"] == "approved", str(recorded))
+    # Idempotent upsert: same (deployment, skill, source) does not duplicate.
+    control.record_agent_skill_enablement_intent(
+        conn,
+        deployment_id="dep_skill_reg",
+        skill_id="retrieval-and-cite",
+        source="academy:systems-practice-engineer",
+        status="approved",
+        provenance_hash="abc456",
+        requested_by="test:registry",
+    )
+    rows = control.list_agent_skill_enablement(conn, deployment_id="dep_skill_reg")
+    expect(len(rows) == 1, str(rows))
+    expect(rows[0]["provenance_hash"] == "abc456", str(rows))
+    expect(rows[0]["applied_at"] == "", str(rows))
+    expect(rows[0]["metadata"] == {}, str(rows))
+    changed = control.mark_agent_skill_enablement_applied(
+        conn, enablement_id=rows[0]["enablement_id"], status="enabled"
+    )
+    expect(changed is True, "mark applied must update the row")
+    enabled_rows = control.list_agent_skill_enablement(
+        conn, deployment_id="dep_skill_reg", statuses=["enabled"]
+    )
+    expect(len(enabled_rows) == 1 and bool(enabled_rows[0]["applied_at"]), str(enabled_rows))
+    # Fail closed on bad input.
+    for kwargs in (
+        {"deployment_id": "", "skill_id": "x"},
+        {"deployment_id": "dep_skill_reg", "skill_id": ""},
+        {"deployment_id": "dep_skill_reg", "skill_id": "x", "status": "bogus"},
+    ):
+        try:
+            control.record_agent_skill_enablement_intent(conn, **kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {kwargs}")
+    print("PASS test_agent_skill_enablement_registry_records_and_transitions")
+
+
+def test_academy_skill_enablement_runner_records_verified_and_missing() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_skill_runner")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_skill_runner")
+    conn = memory_db(control)
+    intents = [
+        {
+            "kind": "approved_skill_intent",
+            "source_id": "src-skill-1",
+            "skill_id": "retrieval-and-cite",
+            "review_status": "approved",
+            "tool_recipes": ["knowledge.search-and-fetch"],
+        },
+        # No skill_id AND no source_id fallback (the trainer derives skill_id
+        # from source_id when metadata omits it): recorded as missing.
+        {"kind": "approved_skill_intent", "source_id": "", "skill_id": "", "review_status": "approved"},
+    ]
+    runner = worker._academy_skill_enablement_runner(conn, approved_skill_intents=intents)
+    result = runner(
+        {
+            "deployment_id": "dep_skill_runner",
+            "program_id": "systems_practice_engineer",
+            "trainee_id": "trainee-1",
+            "request_id": "req-runner-1",
+            "kind": "skill_activation",
+        }
+    )
+    expect(result["status"] == "recorded", str(result))
+    expect(result["verified_skills"] == ["retrieval-and-cite"], str(result))
+    expect(result["missing_skills"] == ["unknown"], str(result))
+    expect(result["proof"] == "arclink_agent_skill_enablement", str(result))
+    rows = control.list_agent_skill_enablement(conn, deployment_id="dep_skill_runner")
+    expect(len(rows) == 1, str(rows))
+    expect(rows[0]["skill_id"] == "retrieval-and-cite", str(rows))
+    expect(rows[0]["source"].startswith("academy:"), str(rows))
+    expect(rows[0]["metadata"].get("effective_at") == "next_session", str(rows))
+    # Missing deployment id fails closed without raising.
+    blocked = runner({"deployment_id": "", "kind": "skill_activation"})
+    expect(blocked["status"] == "blocked", str(blocked))
+    print("PASS test_academy_skill_enablement_runner_records_verified_and_missing")
+
+
+def test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_marker_consumer")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_marker_consumer")
+    conn = memory_db(control)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "dep-markers"
+        roots = {
+            "root": str(root),
+            "config": str(root / "config"),
+            "state": str(root / "state"),
+            "vault": str(root / "vault"),
+            "hermes_home": str(root / "state" / "hermes-home"),
+        }
+        state_dir = Path(roots["hermes_home"]) / "state"
+        state_dir.mkdir(parents=True)
+        control.upsert_arclink_user(conn, user_id="user_markers", email="markers@example.test", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id="dep_markers",
+            user_id="user_markers",
+            prefix="markers-one",
+            base_domain="example.test",
+            status="active",
+            metadata={"state_roots": roots},
+        )
+        for kind in ("qmd_index", "memory_synthesis"):
+            queued = worker._academy_durable_refresh_queue_runner(
+                {
+                    "kind": kind,
+                    "state": str(state_dir),
+                    "deployment_id": "dep_markers",
+                    "request_id": "req-markers-1",
+                }
+            )
+            expect(queued["status"] == "queued", str(queued))
+        # Without lane evidence both markers stay queued (qmd_index has no
+        # default evidence; memory-synth has no refresh_jobs record yet).
+        untouched = worker.consume_academy_refresh_queue_markers(
+            conn, deployment_id="dep_markers", consumed_by="test:no-evidence"
+        )
+        expect(untouched["consumed"] == 0, str(untouched))
+        expect({item["status"] for item in untouched["markers"]} == {"queued"}, str(untouched))
+        # A completed memory-synth lane is the default consumption evidence.
+        control.note_refresh_job(
+            conn,
+            job_name="memory-synth",
+            job_kind="memory-synth",
+            target_id="global",
+            schedule="timer",
+            status="ok",
+            note="test lane completion",
+        )
+        consumed = worker.consume_academy_refresh_queue_markers(
+            conn, deployment_id="dep_markers", consumed_by="test:memory-synth"
+        )
+        expect(consumed["consumed"] == 1, str(consumed))
+        statuses = {item["kind"]: item["status"] for item in consumed["markers"]}
+        expect(statuses["memory_synthesis"] == "consumed", str(consumed))
+        expect(statuses["qmd_index"] == "queued", str(consumed))
+        memory_marker = json.loads(
+            (state_dir / "arclink-academy-memory-synthesis-request.json").read_text(encoding="utf-8")
+        )
+        expect(memory_marker["status"] == "consumed" and memory_marker["consumed_by"] == "test:memory-synth", str(memory_marker))
+        expect(bool(memory_marker["consumed_at"]) and bool(memory_marker["lane_completed_at"]), str(memory_marker))
+        # qmd_index consumes only with explicit lane evidence (runner-gated).
+        with_evidence = worker.consume_academy_refresh_queue_markers(
+            conn,
+            deployment_id="dep_markers",
+            lane_evidence={"qmd_index": control.utc_now_iso()},
+            consumed_by="test:qmd-lane",
+        )
+        expect(with_evidence["consumed"] == 1, str(with_evidence))
+        qmd_marker = json.loads(
+            (state_dir / "arclink-academy-qmd-refresh-request.json").read_text(encoding="utf-8")
+        )
+        expect(qmd_marker["status"] == "consumed", str(qmd_marker))
+        # The all-deployments wrapper used by memory-synth run_once: re-queue a
+        # memory marker and consume across deployments with explicit evidence.
+        worker._academy_durable_refresh_queue_runner(
+            {
+                "kind": "memory_synthesis",
+                "state": str(state_dir),
+                "deployment_id": "dep_markers",
+                "request_id": "req-markers-2",
+            }
+        )
+        swept = worker.consume_academy_refresh_queue_markers_for_all(
+            conn,
+            kind="memory_synthesis",
+            lane_completed_at=control.utc_now_iso(),
+            consumed_by="memory-synth:run_once",
+        )
+        expect(swept["ok"] is True and swept["consumed"] == 1, str(swept))
+        expect(swept["deployments"] == ["dep_markers"], str(swept))
+    print("PASS test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence")
+
+
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
@@ -1829,6 +2042,9 @@ if __name__ == "__main__":
     test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
     test_academy_apply_action_stages_fail_closed_without_authorization()
     test_academy_apply_action_materializes_local_hermes_home_when_authorized()
+    test_agent_skill_enablement_registry_records_and_transitions()
+    test_academy_skill_enablement_runner_records_verified_and_missing()
+    test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence()
     test_reprovision_dispatches_pod_migration()
     test_reprovision_non_dry_run_requires_root_capture_opt_in()
     test_reprovision_non_dry_run_requires_migration_capture_helper_in_docker_mode()
@@ -1853,4 +2069,4 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 42 action worker tests passed.")
+    print(f"\nAll 45 action worker tests passed.")

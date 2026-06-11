@@ -1042,6 +1042,96 @@ match = re.search(r"Pending:\s+(\d+)\s+need embedding", text)
 print(match.group(1) if match else "0")' <<<"$status_output"
 }
 
+# Record how long the qmd index has been carrying pending (un-embedded)
+# documents. Embed failures are swallowed-and-retried by design, so without
+# this marker a starved embed lane (slow pod, repeated timeouts) can leave
+# vector search stale indefinitely with only `qmd status` as a signal. The
+# marker is read by qmd_pending_embeddings_age_alert and by
+# arclink_diagnostics.diagnose_qmd_pending_embeddings.
+qmd_note_pending_embeddings_state() {
+  local state_file="${QMD_PENDING_EMBED_STATE_FILE:-$STATE_DIR/qmd/pending-embeddings.json}"
+  local pending=0
+
+  pending="$(qmd_pending_embeddings_count || printf '0\n')"
+  [[ "$pending" =~ ^[0-9]+$ ]] || pending=0
+  mkdir -p "$(dirname "$state_file")" 2>/dev/null || return 0
+  QMD_PENDING_EMBED_COUNT="$pending" python3 - "$state_file" <<'PY' || true
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+state_path = Path(sys.argv[1])
+pending = int(os.environ.get("QMD_PENDING_EMBED_COUNT", "0") or 0)
+now = int(time.time())
+previous = {}
+if state_path.is_file():
+    try:
+        previous = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        previous = {}
+if not isinstance(previous, dict):
+    previous = {}
+pending_since = int(previous.get("pending_since_epoch") or 0)
+if pending <= 0:
+    pending_since = 0
+elif pending_since <= 0:
+    pending_since = now
+payload = {
+    "pending": pending,
+    "pending_since_epoch": pending_since,
+    "checked_at_epoch": now,
+}
+tmp_path = state_path.with_name(state_path.name + ".tmp")
+tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.replace(tmp_path, state_path)
+PY
+}
+
+# Print a warning (and return 1) when pending embeddings have been waiting
+# longer than QMD_PENDING_EMBED_MAX_AGE_SECONDS (default 6h). Health lanes can
+# call this without touching qmd directly; the marker is refreshed by every
+# qmd-refresh.sh run.
+qmd_pending_embeddings_age_alert() {
+  local state_file="${QMD_PENDING_EMBED_STATE_FILE:-$STATE_DIR/qmd/pending-embeddings.json}"
+  local max_age="${QMD_PENDING_EMBED_MAX_AGE_SECONDS:-21600}"
+
+  [[ -f "$state_file" ]] || return 0
+  QMD_PENDING_EMBED_MAX_AGE_SECONDS="$max_age" python3 - "$state_file" <<'PY'
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+if not isinstance(payload, dict):
+    raise SystemExit(0)
+pending = int(payload.get("pending") or 0)
+pending_since = int(payload.get("pending_since_epoch") or 0)
+try:
+    max_age = int(os.environ.get("QMD_PENDING_EMBED_MAX_AGE_SECONDS", "21600") or 21600)
+except ValueError:
+    max_age = 21600
+if pending <= 0 or pending_since <= 0:
+    raise SystemExit(0)
+age = max(0, int(time.time()) - pending_since)
+if age <= max_age:
+    raise SystemExit(0)
+print(
+    f"WARNING: {pending} qmd document(s) have needed embeddings for ~{age // 3600}h "
+    f"(threshold {max_age // 3600}h); vector search is stale. Check the qmd embed lane "
+    "(QMD_RUN_EMBED, QMD_EMBED_TIMEOUT_SECONDS, pod memory/CPU limits).",
+    file=sys.stderr,
+)
+raise SystemExit(1)
+PY
+}
+
 configure_qmd_collections() {
   ensure_qmd_collection "$QMD_COLLECTION_NAME" "$VAULT_DIR" "$VAULT_QMD_COLLECTION_MASK"
   ensure_qmd_collection "$ARCLINK_NOTION_INDEX_COLLECTION_NAME" "$ARCLINK_NOTION_INDEX_MARKDOWN_DIR" "**/*.md"

@@ -85,6 +85,57 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         print("PASS test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_operator")
 
 
+def test_refresh_active_telegram_command_scopes_can_target_specific_deployments() -> None:
+    control = load_module("arclink_control.py", "arclink_control_public_command_scope_filter_test")
+    commands = load_module("arclink_public_bot_commands.py", "arclink_public_bot_commands_scope_filter_test")
+    telegram = sys.modules["arclink_telegram"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "arclink-control.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        control.ensure_schema(conn)
+        first = seed_active_public_bot_deployment(
+            control,
+            conn,
+            channel="telegram",
+            channel_identity="tg:111",
+            prefix="arc-scope-one",
+        )
+        seed_active_public_bot_deployment(
+            control,
+            conn,
+            channel="telegram",
+            channel_identity="tg:222",
+            prefix="arc-scope-two",
+        )
+        conn.close()
+
+        refreshed_chats: list[str] = []
+        commands.refresh_arclink_public_telegram_chat_commands = lambda **kwargs: refreshed_chats.append(
+            str(kwargs.get("chat_id"))
+        ) or {"registered": [], "scope": {}}
+        telegram.telegram_set_my_commands = lambda **kwargs: {"result": True}
+        commands._agent_commands_from_gateway_container = lambda deployment_id: (
+            [{"command": "model", "description": "Switch model"}],
+            "fallback",
+            0,
+        )
+
+        result = commands.refresh_active_telegram_command_scopes(
+            {
+                "TELEGRAM_BOT_TOKEN": "123:abc",
+                "ARCLINK_DB_PATH": str(db_path),
+                "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "tui-only",
+            },
+            deployment_ids=[first["deployment_id"]],
+        )
+
+        expect(result["refreshed"] == 1, str(result))
+        expect(refreshed_chats == ["111"], str(refreshed_chats))
+        print("PASS test_refresh_active_telegram_command_scopes_can_target_specific_deployments")
+
+
 def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
     commands = load_module("arclink_public_bot_commands.py", "arclink_public_bot_commands_operator_scope_test")
     telegram = sys.modules["arclink_telegram"]
@@ -131,8 +182,9 @@ def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
 
 def main() -> int:
     test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_operator()
+    test_refresh_active_telegram_command_scopes_can_target_specific_deployments()
     test_register_public_bot_commands_gives_operator_hermes_scope()
-    print("PASS all 2 ArcLink public bot command registration tests")
+    print("PASS all 3 ArcLink public bot command registration tests")
     return 0
 
 

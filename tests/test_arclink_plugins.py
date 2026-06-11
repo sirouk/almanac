@@ -572,11 +572,17 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(root_map["linked"]["label"] == "Linked", str(root_map["linked"]))
             expect(root_map["linked"]["icon"] == "linked", str(root_map["linked"]))
             expect(root_map["linked"]["available"] is True, str(root_map["linked"]))
-            expect(root_map["linked"]["read_only"] is False, str(root_map["linked"]))
+            # No accepted read/write shares exist in this fixture, so the Linked
+            # descriptor must report the same read-only truth the per-item flags
+            # and the 403 write guards enforce.
+            expect(root_map["linked"]["read_only"] is True, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["sharing"] is False, str(root_map["workspace"]))
-            expect(root_map["linked"]["capabilities"]["upload"] is True, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["upload"] is False, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["folder_upload"] is True, str(root_map["workspace"]))
-            expect(root_map["linked"]["capabilities"]["folder_upload"] is True, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["folder_upload"] is False, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["new_file"] is False, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["copy"] is True, str(root_map["linked"]))
+            expect(root_map["linked"]["capabilities"]["preview"] is True, str(root_map["linked"]))
             expect(root_map["workspace"]["capabilities"]["trash"] is True, str(root_map["workspace"]))
             expect(root_map["workspace"]["child_count"] == 2, str(root_map["workspace"]))
             expect(root_map["workspace"]["child_count_truncated"] is False, str(root_map["workspace"]))
@@ -614,12 +620,14 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(code_root_map["fleet"]["icon"] == "fleet", str(code_root_map["fleet"]))
             expect(code_root_map["linked"]["label"] == "Linked", str(code_root_map["linked"]))
             expect(code_root_map["linked"]["available"] is True, str(code_root_map["linked"]))
-            expect(code_root_map["linked"]["read_only"] is False, str(code_root_map["linked"]))
+            # The fixture share is read-only, so the Linked root descriptor
+            # must say so instead of advertising writes that 403 later.
+            expect(code_root_map["linked"]["read_only"] is True, str(code_root_map["linked"]))
             expect(code_root_map["workspace"]["capabilities"]["sharing"] is False, str(code_root_map["workspace"]))
             expect(code_root_map["workspace"]["icon"] == "workspace", str(code_root_map["workspace"]))
             expect(code_root_map["workspace"]["resource_root"] == "vault", str(code_root_map["workspace"]))
             expect(code_root_map["linked"]["capabilities"]["sharing"] is False, str(code_root_map["linked"]))
-            expect(code_root_map["linked"]["capabilities"]["write"] is True, str(code_root_map["linked"]))
+            expect(code_root_map["linked"]["capabilities"]["write"] is False, str(code_root_map["linked"]))
             expect(code["workspace_root"].endswith("/home/alex/Vault"), str(code))
             code_items = asyncio.run(code_api.items(path="/", root="workspace"))
             expect(any(item["name"] == "agent-notes.md" for item in code_items["items"]), str(code_items))
@@ -649,7 +657,12 @@ def test_arclink_dashboard_plugins_expose_sanitized_access_state() -> None:
             expect(terminal["workspace_root"] == "[workspace]", str(terminal))
             expect(terminal["hermes_state"] == "[hermes-state]", str(terminal))
             expect(terminal["capabilities"]["confirm_close_or_kill"] is True, str(terminal))
-            expect(terminal["capabilities"]["persistent_sessions"] is True, str(terminal))
+            # persistent_sessions must only be advertised when the tmux backend
+            # is real; managed-pty shells die with the dashboard worker.
+            expect(
+                terminal["capabilities"]["persistent_sessions"] is (terminal["backend"] == "tmux-pty"),
+                str(terminal),
+            )
             expect(terminal["capabilities"]["streaming_output"] is True, str(terminal))
             expect(terminal["capabilities"]["bounded_scrollback"] is True, str(terminal))
             expect(terminal["capabilities"]["full_pod_shell_authority"] is True, str(terminal))
@@ -746,7 +759,12 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
             expect(drive_roots["linked"]["read_only"] is False, str(drive_roots["linked"]))
             expect(drive_roots["linked"]["capabilities"]["preview"] is True, str(drive_roots["linked"]))
             expect(drive_roots["linked"]["capabilities"]["delete"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["capabilities"]["upload"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["capabilities"]["new_file"] is True, str(drive_roots["linked"]))
+            expect(drive_roots["linked"]["capabilities"]["share_request"] is False, str(drive_roots["linked"]))
             linked_items = asyncio.run(drive_api.items(root="linked", path="/"))
+            expect(linked_items["folder"]["can_write"] is False, str(linked_items["folder"]))
+            expect(linked_items["folder"]["can_upload"] is False, str(linked_items["folder"]))
             linked_items_by_name = {item["name"]: item for item in linked_items["items"]}
             expect(any(item["name"] == "shared-note.md" for item in linked_items["items"]), str(linked_items))
             expect(any(item["name"] == "live-brief" for item in linked_items["items"]), str(linked_items))
@@ -767,6 +785,11 @@ def test_arclink_drive_and_code_expose_writable_linked_shared_folders() -> None:
             expect("Second version" in live_content_updated["content"], str(live_content_updated))
             live_listing = asyncio.run(drive_api.items(root="linked", path="/live-brief"))
             expect(not any(item["name"] == ".env" for item in live_listing["items"]), str(live_listing))
+            expect(live_listing["folder"]["can_write"] is True, str(live_listing["folder"]))
+            expect(live_listing["folder"]["can_upload"] is True, str(live_listing["folder"]))
+            legacy_listing = asyncio.run(drive_api.items(root="linked", path="/legacy-brief"))
+            expect(legacy_listing["folder"]["can_write"] is False, str(legacy_listing["folder"]))
+            expect(legacy_listing["folder"]["can_upload"] is False, str(legacy_listing["folder"]))
             linked_mkdir = asyncio.run(drive_api.mkdir(JsonRequest({"root": "linked", "path": "/live-brief", "name": "Notes"})))
             expect(linked_mkdir["path"] == "/live-brief/Notes", str(linked_mkdir))
             expect((source_live / "Notes").is_dir(), "linked Drive mkdir should write into the shared source folder")
@@ -1337,8 +1360,15 @@ def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
             else:
                 raise AssertionError("expected cross-root move to be rejected")
 
-            favorite = asyncio.run(drive_api.favorite(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md", "favorite": True})))
-            expect(favorite["favorite"] is True, str(favorite))
+            expect(not hasattr(drive_api, "favorite"), "Drive favorites are stripped; the /favorite route must not exist")
+            listing_after_ops = asyncio.run(drive_api.items(root="vault", path="/Docs"))
+            expect("favorites_only" not in listing_after_ops, str(sorted(listing_after_ops)))
+            expect(all("favorite" not in item for item in listing_after_ops["items"]), str(listing_after_ops))
+            expect(listing_after_ops["folder"]["can_write"] is True, str(listing_after_ops["folder"]))
+            expect(listing_after_ops["folder"]["can_upload"] is True, str(listing_after_ops["folder"]))
+            unsupported_batch = asyncio.run(drive_api.batch(JsonRequest({"root": "vault", "action": "favorite", "paths": ["/Docs/Ideas"]})))
+            expect(unsupported_batch["ok"] is False, str(unsupported_batch))
+            expect(unsupported_batch["results"][0]["status"] == 400, str(unsupported_batch))
 
             batch_deleted = asyncio.run(drive_api.batch(JsonRequest({"root": "vault", "action": "trash", "paths": ["/Docs/Ideas/starter copy.md"]})))
             expect(batch_deleted["ok"] is True, str(batch_deleted))
@@ -1363,8 +1393,14 @@ def test_arclink_drive_local_backend_file_operations_are_recoverable() -> None:
             deleted = asyncio.run(drive_api.delete(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md"})))
             expect(deleted["path"] == "/Docs/Ideas/renamed.md", str(deleted))
             expect(not (docs / "Ideas" / "renamed.md").exists(), "delete should move local files to trash")
+            folder_deleted = asyncio.run(drive_api.delete(JsonRequest({"root": "vault", "path": "/Docs/Moved"})))
+            expect(folder_deleted["path"] == "/Docs/Moved", str(folder_deleted))
             trash = asyncio.run(drive_api.trash(root="vault"))
             expect(any(item["original_path"] == "/Docs/Ideas/renamed.md" for item in trash["items"]), str(trash))
+            file_record = next((item for item in trash["items"] if item["original_path"] == "/Docs/Ideas/renamed.md"), None)
+            expect(file_record is not None and file_record["kind"] == "file", str(file_record))
+            folder_record = next((item for item in trash["items"] if item["original_path"] == "/Docs/Moved"), None)
+            expect(folder_record is not None and folder_record["kind"] == "folder", "trash records must keep folder kind: " + str(folder_record))
 
             restored = asyncio.run(drive_api.restore(JsonRequest({"root": "vault", "path": "/Docs/Ideas/renamed.md"})))
             expect(restored["path"] == "/Docs/Ideas/renamed.md", str(restored))
@@ -1665,6 +1701,98 @@ def test_arclink_drive_api_hardens_roots_uploads_and_batch_failures() -> None:
             os.environ.update(old_env)
 
 
+def test_arclink_drive_read_only_truth_error_vocabulary_and_write_guard() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        home = root / "home" / "alex"
+        workspace = root / "workspace"
+        fleet = root / "fleet-shared"
+        linked = root / "linked"
+        source_read_only = root / "owner-source" / "read-only-brief"
+        for directory in (hermes_home, home, workspace, fleet, linked, source_read_only):
+            directory.mkdir(parents=True, exist_ok=True)
+        (source_read_only / "overview.md").write_text("# Read-only brief\n", encoding="utf-8")
+        os.symlink(source_read_only, linked / "read-only-brief", target_is_directory=True)
+        (linked / ".arclink-linked-resources.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": {
+                        "read-only-brief": {
+                            "grant_id": "share_ro",
+                            "source_path": str(source_read_only.resolve(strict=False)),
+                            "linked_path": "/read-only-brief",
+                            "resource_kind": "directory",
+                            "read_only": True,
+                            "projection_mode": "living_symlink",
+                        }
+                    },
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+        old_env = os.environ.copy()
+        for key in ("DRIVE_ROOT", "KNOWLEDGE_VAULT_ROOT", "AGENT_VAULT_DIR", "VAULT_DIR"):
+            os.environ.pop(key, None)
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(home)
+        os.environ["DRIVE_WORKSPACE_ROOT"] = str(workspace)
+        os.environ["DRIVE_FLEET_SHARED_ROOT"] = str(fleet)
+        os.environ["ARCLINK_LINKED_RESOURCES_ROOT"] = str(linked)
+        try:
+            drive_api = load_module(
+                PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py",
+                "arclink_drive_dashboard_read_only_truth_test",
+            )
+            status = asyncio.run(drive_api.status())
+            roots = {item["id"]: item for item in status["roots"]}
+            # Linked carries only a read-only share here, so the descriptor must
+            # report the same read-only truth the per-item flags enforce.
+            expect(roots["linked"]["available"] is True, str(roots["linked"]))
+            expect(roots["linked"]["read_only"] is True, str(roots["linked"]))
+            for capability in ("upload", "new_file", "folder_upload", "drag_drop_upload", "rename", "delete", "move", "trash", "restore"):
+                expect(roots["linked"]["capabilities"][capability] is False, capability + ": " + str(roots["linked"]))
+            expect(roots["linked"]["capabilities"]["copy"] is True, str(roots["linked"]))
+            expect(roots["linked"]["capabilities"]["download"] is True, str(roots["linked"]))
+            expect(roots["linked"]["capabilities"]["share_request"] is False, str(roots["linked"]))
+            linked_listing = asyncio.run(drive_api.items(root="linked", path="/read-only-brief"))
+            expect(linked_listing["folder"]["can_write"] is False, str(linked_listing["folder"]))
+            expect(linked_listing["folder"]["can_upload"] is False, str(linked_listing["folder"]))
+            listed = {item["name"]: item for item in linked_listing["items"]}
+            expect(listed["overview.md"]["can_write"] is False, str(listed))
+
+            # Error vocabulary must name the actual root, never a hardcoded Vault.
+            for root_id, label in (("fleet", "Fleet"), ("workspace", "Workspace"), ("linked", "Linked")):
+                try:
+                    asyncio.run(drive_api.items(root=root_id, path="/missing-folder"))
+                except Exception as exc:
+                    expect(getattr(exc, "status_code", None) == 404, f"expected 404 for {root_id}, got {exc!r}")
+                    detail = str(getattr(exc, "detail", ""))
+                    expect(detail.startswith(label + " "), f"{root_id} error should name {label}: {detail!r}")
+                else:
+                    raise AssertionError(f"expected missing path rejection for {root_id}")
+            api_source = (PLUGINS_ROOT / "drive" / "dashboard" / "plugin_api.py").read_text(encoding="utf-8")
+            expect('"Vault path' not in api_source, "Drive errors must name the actual root, not a hardcoded Vault")
+
+            # _assert_writable_root is a real fail-closed guard, not a no-op.
+            for blocked in ("", "bogus", "snapshots"):
+                try:
+                    drive_api._assert_writable_root(blocked)
+                except Exception as exc:
+                    expect(getattr(exc, "status_code", None) == 403, f"expected write-guard 403 for {blocked!r}, got {exc!r}")
+                else:
+                    raise AssertionError(f"expected write guard to reject root {blocked!r}")
+            for allowed in ("vault", "workspace", "fleet", "linked"):
+                drive_api._assert_writable_root(allowed)
+            print("PASS test_arclink_drive_read_only_truth_error_vocabulary_and_write_guard")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> None:
     body = (PLUGINS_ROOT / "drive" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
     expect('h("button", { key: "drive"' not in body, "Drive breadcrumb should start at the active root, not a redundant Drive tile")
@@ -1729,6 +1857,19 @@ def test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore() -> 
     expect(".hermes-drive-item.root-overview" in style and ".hermes-drive-items.grid .hermes-drive-item.root-overview" in style, "Drive CSS should make root parent folders readable in list and grid views")
     expect(".hermes-drive-destination" in style and ".hermes-drive-destination-body" in style, "Drive CSS should style the destination picker modal")
     expect("@media (max-width: 900px)" in style and ".hermes-drive-destination-body" in style and "grid-template-columns: 1fr;" in style, "Drive destination picker should collapse on mobile")
+    expect("function errorDetailFromBody" in body and "payload.detail" in body, "Drive UI should surface parsed server error details, never raw JSON bodies")
+    expect('throw new Error(text || "request failed")' not in body, "Drive UI must not throw raw response bodies at Captains")
+    expect("listRequestToken.current" in body and "token !== listRequestToken.current" in body, "Drive list/search/trash responses must be sequenced against stale-response races")
+    expect("Move between Drive roots is not enabled yet" not in body, "Drive cross-root drag advice must not point at an unsupported copy path")
+    expect("function handleCrossRootDrag" in body and 'sourceRoot === "linked" && rootCanReceiveCopy' in body, "Drive cross-root drags should route Linked items into the supported copy flow")
+    expect("initialRoot === sourceRoot" in body and ': "/";' in body, "Drive destination dialog should open at the root for cross-root copies instead of a nonexistent source path")
+    expect("function existingNamesFor" in body and "existingNamesFor(targetFolder, rootId).then" in body, "Drive subfolder drops should reuse the keep-both conflict flow instead of raw 409s")
+    expect("renderReadOnlyBadge(item)" in body and "hermes-drive-readonly-badge" in body, "Drive should render read-only badges on items that cannot be written")
+    expect("itemCanRename(" in body and "itemCanDelete(" in body and "itemCanReceiveUpload(" in body, "Drive should gate rename/move/trash/upload actions on per-item can_* flags")
+    expect('state.folder ? state.folder.can_write === true : state.root !== "linked"' in body, "Drive toolbar New/Upload should follow the listed folder write flags and fail closed for Linked")
+    expect('record.kind === "folder" ? "folder" : "file"' in body, "Drive trash should render trashed folders as folders")
+    expect("favorites_only" not in body and '"/favorite"' not in body and "favoritesOnly" not in body, "Drive favorites dead feature should be stripped from the UI")
+    expect(".hermes-drive-readonly-badge" in style, "Drive CSS should style the read-only badge")
     print("PASS test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore")
 
 
@@ -2204,6 +2345,52 @@ def test_arclink_code_browser_opens_source_control_changes_as_diffs() -> None:
     print("PASS test_arclink_code_browser_opens_source_control_changes_as_diffs")
 
 
+def test_arclink_code_ui_hardening_protects_edits_and_deep_navigation() -> None:
+    body = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "index.js").read_text(encoding="utf-8")
+    # P0-1: rootById/rootLabel read component state, so they must live inside CodePage.
+    module_scope = body.split("function CodePage()", 1)[0]
+    component_scope = body.split("function CodePage()", 1)[1]
+    expect("function rootById(" not in module_scope, "rootById must not sit at module scope where state is undefined")
+    expect("function rootLabel(" not in module_scope, "rootLabel must not sit at module scope where state is undefined")
+    expect("function rootById(rootId)" in component_scope and "function rootLabel(rootId)" in component_scope, "rootById/rootLabel should be defined inside CodePage")
+    # P0-2: expanding past the fetched tree depth must fetch children; Up must navigate.
+    expect("function loadSubtree(path, root)" in body and "function ensureTreeChildren(path, root)" in body, "Explorer expansion should fetch missing subtree children")
+    expect("function mergeTreeNodes(" in body and "function replaceTreeNode(" in body, "Tree refreshes should merge instead of wiping deeper loaded children")
+    expect("function goUpOneFolder()" in body and "onClick: goUpOneFolder" in body, "Explorer Up should really navigate to the parent folder")
+    # P1-3: the tab cap must never silently evict a dirty tab.
+    expect("function capTabs(tabs)" in body, "Tab cap should go through capTabs")
+    expect("tabs.slice(-8)" not in body, "Tab cap must not silently discard dirty tabs via slice(-8)")
+    # P1-4: Discard all confirm copy states the full blast radius.
+    expect(
+        "Staged edits are wiped, modified files are reverted, and untracked files and folders are permanently deleted" in body,
+        "Discard all confirm should state that staged edits and untracked dirs are wiped",
+    )
+    # P1-5: trash restore UI for the existing /trash + /ops/restore endpoints.
+    expect('api("/trash")' in body and '"/ops/restore"' in body, "Code UI should expose trash listing and restore")
+    expect("function renderTrashDialog()" in body and "Trash is empty" in body and "Restore" in body, "Code UI should render a trash dialog with restore actions")
+    # P1-7: error bodies are parsed for payload.detail, never raw JSON.
+    expect("payload.detail" in body, "Code fetchJSON should surface payload.detail instead of raw JSON error bodies")
+    # P2-11: list/search responses are request-tokened against stale-response races.
+    expect("CodePage._itemsToken" in body and "CodePage._searchToken" in body, "List and search responses should be guarded by request tokens")
+    # P2-19: the commit message survives a failed commit.
+    expect("if (committed) patch({ gitMessage: \"\" })" in body, "Commit message should only clear after the commit resolves")
+    # P2-20: per-change source-control actions are labeled buttons, not bare glyph spans.
+    expect("function changeActionButton(" in body, "Per-change source-control actions should be labeled buttons")
+    expect('h("span", { title: "Unstage"' not in body and '}, "U")' not in body, "Bare glyph spans for stage/discard actions should be gone")
+    # P2-21: cross-root drags message instead of silently ignoring.
+    expect("Drag-and-drop cannot move items from" in body, "Cross-root drags should surface a message instead of silently ignoring")
+    style = (PLUGINS_ROOT / "code" / "dashboard" / "dist" / "style.css").read_text(encoding="utf-8")
+    expect(".hermes-code-trash-list" in style and ".hermes-code-trash-row" in style, "Code CSS should style the trash dialog")
+    expect("button.hermes-code-change-action" in style, "Code CSS should style labeled per-change action buttons")
+    readme = (PLUGINS_ROOT / "code" / "README.md").read_text(encoding="utf-8")
+    workspace_doc = readme.split("- Workspace uses", 1)[1].split("- Fleet", 1)[0]
+    expect(
+        workspace_doc.index("`ARCLINK_CODE_WORKSPACE_ROOT`") < workspace_doc.index("`ARCLINK_DRIVE_ROOT`"),
+        "README workspace-root env precedence should match plugin_api._candidate_workspace_roots order",
+    )
+    print("PASS test_arclink_code_ui_hardening_protects_edits_and_deep_navigation")
+
+
 def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -2233,12 +2420,20 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             expect(status["backend"] in {"managed-pty", "tmux-pty"}, str(status))
             expect(status["workspace_root"] == "[workspace]", str(status))
             expect(status["hermes_state"] == "[hermes-state]", str(status))
-            expect(status["capabilities"]["persistent_sessions"] is True, str(status))
+            # persistent_sessions is only true on the tmux backend: managed-pty
+            # shells are killed by the dashboard worker's atexit cleanup, so
+            # advertising persistence there would overpromise.
+            expect(
+                status["capabilities"]["persistent_sessions"] is (status["backend"] == "tmux-pty"),
+                str(status),
+            )
             expect(status["capabilities"]["streaming_output"] is True, str(status))
             expect(status["capabilities"]["reload_reconnect"] is True, str(status))
             expect(status["capabilities"]["group_sessions"] is True, str(status))
             expect(status["capabilities"]["machine_terminal_sessions"] is True, str(status))
-            expect(status["capabilities"]["ssh_sessions"] is True, str(status))
+            # The +Machine surface is a local shell, never a remote dial-out, so
+            # the misleading ssh_sessions alias must stay retired.
+            expect("ssh_sessions" not in status["capabilities"], str(status))
             expect("reattach_sessions" in status["capabilities"], str(status))
             expect(status["capabilities"]["resize"] is True, str(status))
             expect(status["capabilities"]["browser_cpr_response"] is True, str(status))
@@ -2340,8 +2535,37 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
                 reattached = asyncio.run(terminal_api.get_session(session_id=session_id))
                 expect(reattached["session"]["state"] == "running", str(reattached))
                 expect(terminal_api._runtime(session_id) is not None, str(reattached))
+                # Implicit auto-reattach must restart the background PTY reader
+                # so output drains without an open browser tab.
+                expect(terminal_api._runtime(session_id).get("reader") is not None, str(reattached))
                 manual_reattach = asyncio.run(terminal_api.reattach_session(session_id=session_id))
                 expect(manual_reattach["session"]["state"] == "running", str(manual_reattach))
+
+                # A live tmux session that races into 'detached' (for example the
+                # send_input detach race) must survive Clear Closed: drop nothing,
+                # never kill-session. Block reattach so the entry stays detached
+                # (the patch goes first so the background reader cannot revive it).
+                original_attach = terminal_api._attach_tmux_runtime
+                terminal_api._attach_tmux_runtime = lambda entry, suppress_initial=False: False
+                try:
+                    with terminal_api._STATE_LOCK:
+                        live_runtime = terminal_api._runtime(session_id)
+                        if live_runtime is not None:
+                            terminal_api._close_runtime(session_id, live_runtime)
+                        detached_live_payload = terminal_api._load_sessions()
+                        detached_live_entry = next(item for item in detached_live_payload["sessions"] if item["id"] == session_id)
+                        detached_live_entry["state"] = "detached"
+                        terminal_api._save_sessions(detached_live_payload)
+                    preserved = asyncio.run(terminal_api.clear_closed_sessions())
+                finally:
+                    terminal_api._attach_tmux_runtime = original_attach
+                expect(any(item["id"] == session_id for item in preserved["sessions"]), str(preserved))
+                expect(
+                    terminal_api._tmux_session_exists({"id": session_id, "backend": "tmux-pty"}),
+                    "Clear Closed must never kill a live, reattachable tmux session",
+                )
+                revived = asyncio.run(terminal_api.reattach_session(session_id=session_id))
+                expect(revived["session"]["state"] == "running", str(revived))
 
             resized = asyncio.run(terminal_api.resize_session(session_id, JsonRequest({"rows": 20, "cols": 100})))
             expect(resized["session"]["rows"] == 20 and resized["session"]["cols"] == 100, str(resized))
@@ -2382,6 +2606,9 @@ def test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded() -> N
             asyncio.run(terminal_api.close_session(machine_session["id"], JsonRequest({"confirm": True})))
             asyncio.run(terminal_api.clear_closed_sessions())
 
+            # A DEAD detached entry (its tmux session no longer exists, or the
+            # backend is managed-pty) is unrecoverable, so Clear Closed may
+            # remove it — only live tmux sessions are protected above.
             detached_payload = terminal_api._load_sessions()
             detached_payload["sessions"].append(
                 {
@@ -2429,7 +2656,9 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("ensureTerminalVendor" in body and "xterm.js" in body and "addon-fit.js" in body, "Terminal UI should load vendored xterm.js assets")
     expect("term.onData" in body and "writeInputTo" in body, "Terminal UI should send xterm pty input directly")
     expect('addEventListener("keydown", onNativeKeyDown)' not in body, "Terminal UI should not double-send keystrokes")
-    expect('"New machine terminal"' in body and "+SSH" in body, "Terminal UI should use +SSH for a local machine shell")
+    expect('"New machine terminal"' in body and "+Machine" in body, "Terminal UI should use +Machine for a local machine shell")
+    expect("+SSH" not in body, "Terminal UI must not imply remote SSH for the local machine shell")
+    expect('"New workspace shell"' in body and "+Shell" in body, "Terminal UI should expose the workspace-confined shell mode")
     expect("startRenameSession" in body and "editingSessionId" in body, "Terminal UI should support inline session renaming")
     expect("hermes-terminal-session-name-row" in body and '"aria-label": "Close "' in body, "Terminal close control should be separated from the session name")
     expect("window.prompt(\"SSH target\"" not in body and "target: \"\"" in body, "Terminal UI should not prompt for an SSH target")
@@ -2441,6 +2670,9 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("terminalCache" in body and "detachTerminal" in body, "Terminal UI should keep xterm buffers warm when the page is revisited")
     expect("onSynced" in body and "revealCachedTerminal" in body, "Terminal UI should catch cached terminals up before revealing them")
     expect("surfaceRequestError" in body and "Connection interrupted; retrying" in body, "Terminal UI should suppress transient background fetch flicker")
+    expect("scheduleStreamReconnect" in body and "reconnectDelayMs" in body, "Terminal UI should re-establish SSE with backoff instead of permanently downgrading to polling")
+    expect("stickyErrorRef" in body and "mergeKeepingActionError" in body, "Terminal UI must not let background polls erase action error banners")
+    expect("dismissError" in body and '"Dismiss"' in body, "Terminal UI error banners should be dismissible")
     expect('"/reattach"' in body and "reattachSelected" in body, "Terminal UI should expose a reattach action for recoverable detached sessions")
     expect("onScroll" in body and "SESSION_VIEWPORT_STORAGE_PREFIX" in body, "Terminal UI should remember scroll viewport per session")
     expect("attachCustomKeyEventHandler" in body and '\\x03' in body and "controlInputForKey" in body, "Terminal UI should forward Ctrl+C and related control keys to the PTY")
@@ -2467,6 +2699,15 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("process_survives_dashboard_restart" in api_body, "Terminal API should report restart-persistent terminal capability")
     expect("resize_session" in api_body, "Terminal API should expose PTY resize")
     expect("threading.Thread" in api_body and "_reader_loop" in api_body and "_start_reader" in api_body and "background_pty_reader" in api_body, "Terminal API should drain PTYs even when the browser is refreshed or logged out")
+    expect("history-limit" in api_body and "_tmux_history_limit" in api_body, "Terminal API should set tmux history-limit to honor the advertised reattach scrollback")
+    expect('"persistent_sessions": bool(available and backend == _TMUX_BACKEND)' in api_body, "Terminal API must not advertise persistent sessions on the managed-pty fallback")
+    expect('"ssh_sessions"' not in api_body, "Terminal API must not advertise an ssh_sessions alias for the local machine shell")
+    expect("TERMINAL_TMUX_SOCKET" in api_body, "Terminal API should honor the shared terminal-tmux service socket override")
+    terminal_manifest = json.loads((PLUGINS_ROOT / "terminal" / "dashboard" / "manifest.json").read_text(encoding="utf-8"))
+    terminal_plugin_yaml = (PLUGINS_ROOT / "terminal" / "plugin.yaml").read_text(encoding="utf-8")
+    expect(terminal_manifest["version"] == "0.4.0", str(terminal_manifest))
+    expect("version: 0.4.0" in terminal_plugin_yaml, terminal_plugin_yaml)
+    expect('"version": "0.4.0"' in api_body, "Terminal manifest, plugin.yaml, and /status must agree on one version")
     expect('{"", "dumb", "unknown"}' in api_body and 'env["TERM"] = "xterm-256color"' in api_body, "Terminal API should not pass a dumb TERM to TUIs")
     expect('env["HERMES_HOME"] = str(_hermes_home())' in api_body, "Terminal TUI sessions should reuse the dashboard agent Hermes home")
     expect("window.__HERMES_PLUGINS__.register(PLUGIN, TerminalPage)" in body, "Terminal UI should register through the Hermes plugin registry")
@@ -2484,6 +2725,12 @@ def test_arclink_terminal_browser_exposes_persistent_session_controls() -> None:
     expect("text-transform: none" in style and "font-variant-caps: normal" in style, "Terminal CSS should preserve shell output casing")
     expect(".xterm-viewport" in style and "overflow: hidden;" in style, "Terminal CSS should leave terminal layout and scrolling to xterm")
     expect("@media (max-width: 820px)" in style and "grid-template-columns: 1fr;" in style, "Terminal layout should collapse on mobile")
+    expect(
+        '[data-session-state="detached"]' in style and '[data-session-state="exited"]' in style and '[data-session-state="closed"]' in style,
+        "Terminal CSS must make detached/exited/closed sessions visibly refuse keystrokes",
+    )
+    expect("cursor: not-allowed" in style and "keystrokes are paused" in style, "Terminal CSS should explain why a session ignores input")
+    expect(".hermes-terminal-error-dismiss" in style, "Terminal CSS should style the error banner dismiss control")
     print("PASS test_arclink_terminal_browser_exposes_persistent_session_controls")
 
 
@@ -4169,11 +4416,13 @@ def main() -> int:
     test_arclink_drive_code_share_request_broker_contract()
     test_arclink_drive_local_backend_file_operations_are_recoverable()
     test_arclink_drive_api_hardens_roots_uploads_and_batch_failures()
+    test_arclink_drive_read_only_truth_error_vocabulary_and_write_guard()
     test_arclink_drive_browser_exposes_roots_breadcrumbs_and_trash_restore()
     test_arclink_code_native_editor_guards_conflicting_saves()
     test_arclink_code_source_control_reports_and_updates_git_state()
     test_arclink_dashboard_file_plugins_reject_sensitive_workspace_paths()
     test_arclink_code_browser_opens_source_control_changes_as_diffs()
+    test_arclink_code_ui_hardening_protects_edits_and_deep_navigation()
     test_arclink_terminal_managed_pty_sessions_are_persistent_and_bounded()
     test_arclink_terminal_browser_exposes_persistent_session_controls()
     test_arclink_terminal_blocks_unrestricted_root_runtime_when_not_overridden()

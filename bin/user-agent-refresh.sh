@@ -166,7 +166,18 @@ paths = arclink_control.write_managed_memory_stubs(hermes_home=hermes_home, payl
 print(json.dumps({"agent_id": payload["agent_id"], "source": os.environ.get("ARCLINK_MANAGED_PAYLOAD_SOURCE", "live"), **paths}, sort_keys=True))
 PY
 
-# 3. drain agent-targeted notifications (SSOT nudges, subscription signals)
+# 3. apply central skill enablement intents (for example Academy-approved
+# skills staged in state/arclink-academy-approved-skills.json): remove approved
+# AND locally discoverable skills from config.yaml skills.disabled, and write a
+# receipt to state/arclink-skill-enablement-applied.json. Skill files are never
+# copied or overwritten (local skills win), skills.platform_disabled is never
+# touched, and undiscoverable skills stay untouched (fail closed). Failures
+# never break the refresh lane.
+if [[ -f "$REPO_DIR/python/arclink_skill_enablement.py" ]]; then
+  python3 "$REPO_DIR/python/arclink_skill_enablement.py" --hermes-home "$HERMES_HOME" || true
+fi
+
+# 4. drain agent-targeted notifications (SSOT nudges, subscription signals)
 # and append them to a local recent-events log so the agent can see them on
 # its next session start.
 

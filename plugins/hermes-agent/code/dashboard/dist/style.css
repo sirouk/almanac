@@ -207,6 +207,10 @@
 
 .hermes-code-icon-button.danger {
   color: color-mix(in srgb, #ff927d 82%, var(--midground));
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0 0.5rem;
 }
 
 .hermes-code-source-head {
@@ -605,7 +609,8 @@
 
 .hermes-code-change {
   align-items: center;
-  border-color: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
   display: grid;
   gap: 0.45rem;
   grid-template-columns: 1.9rem minmax(0, 1fr) auto;
@@ -613,6 +618,11 @@
   padding: 0.26rem 0.36rem;
   text-align: left;
   width: 100%;
+}
+
+.hermes-code-change:hover,
+.hermes-code-change:focus-visible {
+  background: color-mix(in srgb, var(--midground-base) 8%, transparent);
 }
 
 .hermes-code-change-status {
@@ -645,16 +655,19 @@
   gap: 0.28rem;
 }
 
-.hermes-code-change-actions span {
+.hermes-code .hermes-code-change-actions button.hermes-code-change-action {
   border: 1px solid color-mix(in srgb, var(--midground-base) 20%, transparent);
   color: var(--midground);
   cursor: pointer;
+  font-size: 0.68rem;
+  min-height: 0;
   min-width: 1.45rem;
-  padding: 0.24rem 0.35rem;
+  padding: 0.2rem 0.4rem;
   text-align: center;
+  width: auto;
 }
 
-.hermes-code-change-actions span:hover {
+.hermes-code .hermes-code-change-actions button.hermes-code-change-action:hover {
   background: color-mix(in srgb, var(--midground-base) 10%, transparent);
 }
 
@@ -1189,6 +1202,43 @@
   gap: 0.5rem;
   justify-content: flex-end;
   margin-top: 0.85rem;
+}
+
+.hermes-code-trash-list {
+  border: 1px solid color-mix(in srgb, var(--midground-base) 16%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  max-height: min(22rem, 50dvh);
+  overflow: auto;
+  padding: 0.35rem;
+}
+
+.hermes-code-trash-row {
+  align-items: center;
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+  min-height: 2.1rem;
+  padding: 0.2rem 0.3rem;
+}
+
+.hermes-code-trash-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hermes-code-trash-name span,
+.hermes-code-trash-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-code-trash-name small {
+  color: color-mix(in srgb, var(--midground-base) 58%, transparent);
+  font-size: 0.68rem;
 }
 
 @media (max-width: 760px) {

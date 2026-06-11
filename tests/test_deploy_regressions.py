@@ -3315,29 +3315,46 @@ def test_qmd_refresh_bounds_embedding_work() -> None:
     expect("QMD_EMBED_PROVIDER=local" in example, example)
     expect("QMD_EMBED_FORCE_ON_NEXT_REFRESH=0" in example, example)
     expect("QMD embedding endpoint provider selected" in refresh, refresh)
+    expect("falling back to local qmd embeddings" in refresh, refresh)
     expect("qmd remote embedding endpoint config captured" in health, health)
     expect('"$SCRIPT_DIR/qmd-refresh.sh" --embed' in vault_watch, vault_watch)
     expect('qmd --index "$QMD_INDEX_NAME" embed' not in vault_watch, vault_watch)
+    expect("qmd_note_pending_embeddings_state" in refresh, refresh)
+    expect("qmd_note_pending_embeddings_state()" in common, common)
+    expect("qmd_pending_embeddings_age_alert()" in common, common)
     print("PASS test_qmd_refresh_bounds_embedding_work")
 
 
-def test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected() -> None:
+def test_qmd_refresh_falls_back_to_local_embedding_when_endpoint_provider_selected() -> None:
+    # The pinned qmd release has no endpoint-backed embedding support, so the
+    # endpoint provider must NOT silently disable vector search: the refresh
+    # logs a warning and still runs local embedding.
     text = QMD_REFRESH_SH.read_text(encoding="utf-8")
-    snippet = extract(text, "run_qmd_embed() {", "exec 9>")
-    script = f"""
+    snippet = extract(text, "clear_qmd_embed_force_flag() {", "exec 9>")
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = Path(tmp) / "qmd.log"
+        script = f"""
 set -euo pipefail
 QMD_INDEX_NAME=arclink
 QMD_EMBED_PROVIDER=endpoint
 QMD_EMBED_ENDPOINT=https://embed.example.test/v1
 QMD_EMBED_ENDPOINT_MODEL=text-embedding-3-small
 QMD_EMBED_API_KEY=secret
+QMD_EMBED_TIMEOUT_SECONDS=0
+LOG_FILE={shlex.quote(str(log_path))}
+qmd() {{
+  printf '%s\\n' "$*" >>"$LOG_FILE"
+}}
 {snippet}
 run_qmd_embed
+printf 'qmd:%s\\n' "$(cat "$LOG_FILE")"
 """
-    result = bash(script)
-    expect(result.returncode == 0, f"qmd endpoint skip failed: {result.stderr}\n{result.stdout}")
-    expect("local qmd embedding is skipped" in result.stderr, result.stderr)
-    print("PASS test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected")
+        result = bash(script)
+    expect(result.returncode == 0, f"qmd endpoint fallback failed: {result.stderr}\n{result.stdout}")
+    expect("QMD embedding endpoint provider selected" in result.stderr, result.stderr)
+    expect("falling back to local qmd embeddings" in result.stderr, result.stderr)
+    expect("qmd:--index arclink embed" in result.stdout, result.stdout)
+    print("PASS test_qmd_refresh_falls_back_to_local_embedding_when_endpoint_provider_selected")
 
 
 def test_qmd_refresh_forces_and_consumes_local_rebuild_flag() -> None:
@@ -3423,7 +3440,12 @@ printf 'local:%s:%s:%s:%s:%s:%s:%s\\n' "$QMD_RUN_EMBED" "$QMD_EMBED_PROVIDER" "$
 """
     result = bash(script)
     expect(result.returncode == 0, f"qmd embedding answer reconfigure failed: {result.stderr}\n{result.stdout}")
-    expect("endpoint:0:endpoint:https://embed.example.test/v1:text-embedding-3-small:768:0" in result.stdout, result.stdout)
+    # Endpoint credentials are persisted for a future qmd upgrade, but local
+    # embedding stays ON (QMD_RUN_EMBED=1): the pinned qmd has no
+    # endpoint-backed embeddings, so disabling local embedding would silently
+    # disable all vector search.
+    expect("endpoint:1:endpoint:https://embed.example.test/v1:text-embedding-3-small:768:0" in result.stdout, result.stdout)
+    expect("endpoint-backed qmd embeddings are not supported by the pinned qmd release" in result.stdout, result.stdout)
     expect("Switching to local qmd embeddings; the next qmd refresh will rebuild local vectors." in result.stdout, result.stdout)
     expect("local:1:local:::::1" in result.stdout, result.stdout)
     print("PASS test_collect_qmd_embedding_answers_reconfigures_between_local_and_endpoint")
@@ -4409,7 +4431,7 @@ def main() -> int:
         test_deploy_uses_stable_copy_for_privileged_reexec,
         test_nextcloud_rotation_uses_secret_files_instead_of_password_argv,
         test_qmd_refresh_bounds_embedding_work,
-        test_qmd_refresh_skips_local_embedding_when_endpoint_provider_selected,
+        test_qmd_refresh_falls_back_to_local_embedding_when_endpoint_provider_selected,
         test_qmd_refresh_forces_and_consumes_local_rebuild_flag,
         test_placeholder_upstream_default_uses_checkout_origin,
         test_json_field_reads_json_payload,

@@ -488,6 +488,7 @@ def test_compose_defines_full_stack_services() -> None:
         "control-operator-hermes-setup:",
         "control-operator-qmd-mcp:",
         "control-operator-hermes-gateway:",
+        "control-operator-terminal-tmux:",
         "control-operator-hermes-dashboard:",
         "control-operator-vault-watch:",
         "control-operator-memory-synth:",
@@ -6153,6 +6154,25 @@ def test_docker_operator_commands_are_present() -> None:
         and '-L "127.0.0.1:$port:127.0.0.1:$port"' in body,
         body,
     )
+    # Nohup fallback forwards must be tracked by pidfile so pruning can stop
+    # them, and the healthy-port short-circuit must require a tracked owner.
+    expect(
+        "docker_tailnet_forward_pidfile()" in body
+        and "docker_tailnet_forward_tracked_alive()" in body
+        and "docker_kill_tracked_tailnet_forward_pid()" in body
+        and 'printf \'%s\\n\' "$forward_pid" >"$pid_file"' in body,
+        "tailnet nohup forwards must write a pidfile next to the .log",
+    )
+    expect(
+        'docker_tailnet_forward_tracked_alive "$deployment_id" "$port" && docker_tailnet_local_http_probe "$port"' in body,
+        "tailnet local-http short-circuit must be scoped to a tracked forward for this deployment+port",
+    )
+    ensure_prune_block = extract(body, "docker_prune_tailnet_forwards()", "\ndocker_ensure_tailnet_forward()")
+    expect(
+        '.pid"}\' "$routes_file"' in ensure_prune_block
+        and 'rm -f "$pid_file"' in ensure_prune_block,
+        "tailnet forward pruning must kill tracked pids that left the desired route set\n" + ensure_prune_block,
+    )
     expect("docker_refresh_deployment_service_health()" in body and "docker compose" in body and "upsert_arclink_service_health" in body, body)
     expect("docker_refresh_deployment_managed_plugins()" in body, body)
     expect("sync-dashboard-user-passwords.py" in body and "control-provisioner" in body, body)
@@ -6667,6 +6687,53 @@ docker_publish_tailnet_deployment_apps
         expect("http://127.0.0.1:8443" in log_path.read_text(encoding="utf-8"), log_path.read_text(encoding="utf-8"))
         expect(not (root / "nextcloud-called").exists(), "Nextcloud overwrite must not be configured for dashboard-native Drive")
         print("PASS test_docker_tailnet_publish_uses_dashboard_native_plugin_urls")
+
+
+def test_docker_tailnet_forward_pidfile_tracking_prunes_nohup_forwards() -> None:
+    body = read("bin/arclink-docker.sh")
+    snippet = extract(body, "docker_tailnet_forward_socket() {", "docker_ensure_tailnet_forward() {")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        forwards = repo / "arclink-priv" / "state" / "tailnet-forwards"
+        forwards.mkdir(parents=True)
+        driver = root / "driver.sh"
+        driver.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -uo pipefail\n"
+            f"REPO_DIR={shlex.quote(str(repo))}\n"
+            + snippet
+            + "\n"
+            'dir="$REPO_DIR/arclink-priv/state/tailnet-forwards"\n'
+            "sleep 300 & stale_pid=$!\n"
+            'printf \'%s\\n\' "$stale_pid" > "$dir/dep-stale-9001.pid"\n'
+            "sleep 300 & live_pid=$!\n"
+            'printf \'%s\\n\' "$live_pid" > "$dir/dep-live-9002.pid"\n'
+            'printf \'dep-live\\tprefix\\t9002\\thost\\tuser\\t22\\n\' > "$REPO_DIR/routes.tsv"\n'
+            'docker_prune_tailnet_forwards "$REPO_DIR/routes.tsv"\n'
+            "for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 \"$stale_pid\" 2>/dev/null || break; sleep 0.2; done\n"
+            'if kill -0 "$stale_pid" 2>/dev/null; then echo "FAIL stale forward pid survived prune"; exit 1; fi\n'
+            'if [[ -f "$dir/dep-stale-9001.pid" ]]; then echo "FAIL stale pidfile survived prune"; exit 1; fi\n'
+            'kill -0 "$live_pid" 2>/dev/null || { echo "FAIL desired forward pid was killed"; exit 1; }\n'
+            '[[ -f "$dir/dep-live-9002.pid" ]] || { echo "FAIL desired pidfile was removed"; exit 1; }\n'
+            'docker_tailnet_forward_tracked_alive "dep-live" "9002" || { echo "FAIL tracked_alive false for live forward"; exit 1; }\n'
+            'kill "$live_pid" 2>/dev/null; wait "$live_pid" 2>/dev/null\n'
+            'if docker_tailnet_forward_tracked_alive "dep-live" "9002"; then echo "FAIL tracked_alive true for dead forward"; exit 1; fi\n'
+            'if [[ -f "$dir/dep-live-9002.pid" ]]; then echo "FAIL dead pidfile retained"; exit 1; fi\n'
+            'echo "TAILNET_FORWARD_TRACKING_OK"\n',
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["bash", str(driver)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        expect(
+            result.returncode == 0 and "TAILNET_FORWARD_TRACKING_OK" in result.stdout,
+            f"stdout={result.stdout!r} stderr={result.stderr!r}",
+        )
+    print("PASS test_docker_tailnet_forward_pidfile_tracking_prunes_nohup_forwards")
 
 
 def test_docker_tailnet_publish_failure_withholds_app_urls() -> None:
@@ -7709,6 +7776,7 @@ def main() -> int:
     test_docker_repair_strips_control_network_for_remote_deployments()
     test_deployment_hermes_home_installer_seeds_runtime_knowledge()
     test_docker_tailnet_publish_uses_dashboard_native_plugin_urls()
+    test_docker_tailnet_forward_pidfile_tracking_prunes_nohup_forwards()
     test_docker_tailnet_publish_failure_withholds_app_urls()
     test_docker_component_upgrade_apply_loads_upstream_env_from_docker_config()
     test_docker_agent_supervisor_replaces_user_systemd_units()
@@ -7727,7 +7795,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 59 ArcLink Docker regression tests")
+    print("PASS all 60 ArcLink Docker regression tests")
     return 0
 
 

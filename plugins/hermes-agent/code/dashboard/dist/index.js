@@ -93,16 +93,6 @@
     return String((item && (item.root || item.root_id)) || "workspace");
   }
 
-  function rootById(rootId) {
-    const roots = (state.status && state.status.roots) || [];
-    return roots.filter(function (root) { return root.id === rootId; })[0] || {};
-  }
-
-  function rootLabel(rootId) {
-    const root = rootById(rootId);
-    return root.label || rootId || "Workspace";
-  }
-
   function rootTooltip(root) {
     return String((root && (root.tooltip || root.description)) || "");
   }
@@ -130,7 +120,17 @@
     return fetch(url, Object.assign({ credentials: "same-origin" }, options || {})).then(function (response) {
       if (!response.ok) {
         return response.text().then(function (text) {
-          throw new Error(text || "request failed");
+          let message = text || "request failed";
+          try {
+            const payload = JSON.parse(text || "{}");
+            if (payload && payload.detail) message = String(payload.detail);
+          } catch (_error) {
+            // Non-JSON error bodies fall back to the raw text.
+          }
+          const error = new Error(message);
+          error.status = response.status;
+          error.responseText = text;
+          throw error;
         });
       }
       return response.json();
@@ -266,6 +266,59 @@
     return String(a.path).localeCompare(String(b.path));
   }
 
+  function capTabs(tabs) {
+    // Keep at most 8 tabs, but never silently evict a tab with unsaved edits
+    // (eviction would bypass the close confirm) and never evict the tab that
+    // was just opened (the newest entry). When everything is dirty the cap is
+    // allowed to overflow rather than discard work.
+    const limit = 8;
+    if (tabs.length <= limit) return tabs;
+    const result = tabs.slice();
+    let index = 0;
+    while (result.length > limit && index < result.length - 1) {
+      if (result[index].dirty) index += 1;
+      else result.splice(index, 1);
+    }
+    return result;
+  }
+
+  function mergeTreeNodes(previous, next, depthLeft) {
+    // The /tree endpoint only loads a bounded depth. Refreshed nodes at the
+    // depth boundary come back with empty children even though deeper children
+    // may already be loaded client-side; keep those grafts so the Explorer
+    // stays browsable beyond the fetched depth.
+    if (!next) return previous || null;
+    if (!previous) return next;
+    const prevChildren = previous.children || [];
+    if (depthLeft <= 0) {
+      return prevChildren.length ? Object.assign({}, next, { children: prevChildren }) : next;
+    }
+    const prevByKey = {};
+    prevChildren.forEach(function (child) {
+      prevByKey[itemKey(child)] = child;
+    });
+    return Object.assign({}, next, {
+      children: (next.children || []).map(function (child) {
+        return mergeTreeNodes(prevByKey[itemKey(child)] || null, child, depthLeft - 1);
+      }),
+    });
+  }
+
+  function replaceTreeNode(tree, root, path, fresh, depth) {
+    if (!tree) return tree;
+    if (tree.path === path && itemRoot(tree) === root) {
+      return mergeTreeNodes(tree, fresh, depth);
+    }
+    const children = tree.children || [];
+    let changed = false;
+    const nextChildren = children.map(function (child) {
+      const next = replaceTreeNode(child, root, path, fresh, depth);
+      if (next !== child) changed = true;
+      return next;
+    });
+    return changed ? Object.assign({}, tree, { children: nextChildren }) : tree;
+  }
+
   function CodePage() {
     const statePair = useState({
       loading: true,
@@ -302,6 +355,9 @@
       sourcePickerMessage: "",
       previewFullscreen: false,
       shareDialog: null,
+      trashOpen: false,
+      trashItems: [],
+      trashBusy: false,
     });
     const state = statePair[0];
     const setState = statePair[1];
@@ -311,6 +367,18 @@
       setState(function (current) {
         return Object.assign({}, current, typeof next === "function" ? next(current) : next);
       });
+    }
+
+    // These read the component-scoped state, so they must live inside CodePage;
+    // hoisting them to module scope makes the first Explorer render throw a ReferenceError.
+    function rootById(rootId) {
+      const roots = (state.status && state.status.roots) || [];
+      return roots.filter(function (root) { return root.id === rootId; })[0] || {};
+    }
+
+    function rootLabel(rootId) {
+      const root = rootById(rootId);
+      return root.label || rootId || "Workspace";
     }
 
     function clearExplorerFolderClickTimer() {
@@ -327,6 +395,7 @@
         expanded[pathKey(root || itemRoot(item), item.path)] = true;
         return { expanded: expanded };
       });
+      ensureTreeChildren(item.path, root || itemRoot(item));
       explorerFolderClickTimer = setTimeout(function () {
         explorerFolderClickTimer = null;
         loadItems(item.path, root);
@@ -341,13 +410,18 @@
     function loadItems(nextPath, nextRoot) {
       const targetPath = nextPath || state.path;
       const targetRoot = nextRoot || state.root || "workspace";
+      // Request token guards against stale list responses landing after a
+      // newer navigation already resolved.
+      const token = (CodePage._itemsToken = (CodePage._itemsToken || 0) + 1);
       patch({ loading: true, root: targetRoot, path: targetPath, errorMessage: "" });
       fetchJSON(api("/items?path=" + encodeURIComponent(targetPath) + "&root=" + encodeURIComponent(targetRoot)))
         .then(function (data) {
+          if (token !== CodePage._itemsToken) return;
           patch({ loading: false, root: data.root || targetRoot, path: data.path || targetPath, items: data.items || [] });
-          loadTree(data.root || targetRoot);
+          loadSubtree(data.path || targetPath, data.root || targetRoot);
         })
         .catch(function (error) {
+          if (token !== CodePage._itemsToken) return;
           patch({ loading: false, items: [], errorMessage: error.message || "Unable to load files" });
         });
     }
@@ -358,7 +432,8 @@
         .then(function (data) {
           patch(function (current) {
             const trees = Object.assign({}, current.trees || {});
-            trees[data.root || targetRoot] = data.tree || null;
+            const key = data.root || targetRoot;
+            trees[key] = data.tree ? mergeTreeNodes(trees[key] || null, data.tree, data.depth || 3) : null;
             return { trees: trees };
           });
         })
@@ -369,6 +444,37 @@
             return { trees: trees };
           });
         });
+    }
+
+    function loadSubtree(path, root) {
+      const targetRoot = root || state.root || "workspace";
+      const targetPath = path || "/";
+      if (targetPath === "/") {
+        loadTree(targetRoot);
+        return;
+      }
+      fetchJSON(api("/tree?path=" + encodeURIComponent(targetPath) + "&root=" + encodeURIComponent(targetRoot) + "&depth=2"))
+        .then(function (data) {
+          if (!data || !data.tree) return;
+          patch(function (current) {
+            const trees = Object.assign({}, current.trees || {});
+            trees[targetRoot] = replaceTreeNode(trees[targetRoot], targetRoot, data.path || targetPath, data.tree, data.depth || 2);
+            return { trees: trees };
+          });
+        })
+        .catch(function () {
+          // Expansion fetches stay best-effort; Refresh reloads the whole tree.
+        });
+    }
+
+    function ensureTreeChildren(path, root) {
+      // Expanding a folder past the initially fetched tree depth must fetch
+      // its children, otherwise the Explorer is dead beyond that depth.
+      const targetRoot = root || state.root || "workspace";
+      const node = findTreeNode(path, targetRoot, (state.trees || {})[targetRoot]);
+      if (node && node.kind === "file") return;
+      if (node && node.children && node.children.length) return;
+      loadSubtree(path, targetRoot);
     }
 
     function loadSource(repo) {
@@ -538,7 +644,7 @@
           previewContent: file.previewContent !== undefined ? file.previewContent : existing.previewContent,
           previewMode: !!(file.previewMode || existing.previewMode),
         });
-        return { fileTabs: tabs.slice(-8) };
+        return { fileTabs: capTabs(tabs) };
       });
     }
 
@@ -647,7 +753,7 @@
           previewMessage: previewFile.previewMessage,
         });
         return {
-          fileTabs: tabs.slice(-8),
+          fileTabs: capTabs(tabs),
           openFile: previewFile,
           content: "",
           savedContent: "",
@@ -741,7 +847,7 @@
               previewMode: false,
             });
             return {
-              fileTabs: tabs.slice(-8),
+              fileTabs: capTabs(tabs),
               openFile: Object.assign({}, data, { kind: "file", editable: true, previewKind: kind, previewUrl: previewUrl(data), previewMode: false }),
               content: content,
               savedContent: content,
@@ -798,7 +904,7 @@
         });
         tabs.push({ root: root, path: path, name: name, dirty: true, pinned: true, content: "", savedContent: "", hash: "", language: "plaintext", editable: true });
         return {
-          fileTabs: tabs.slice(-8),
+          fileTabs: capTabs(tabs),
           openFile: { root: root, path: path, name: name, language: "plaintext", editable: true },
           content: "",
           savedContent: "",
@@ -968,6 +1074,90 @@
       );
     }
 
+    function openTrashDialog() {
+      patch({ trashOpen: true, trashBusy: true, errorMessage: "", contextMenu: null });
+      fetchJSON(api("/trash"))
+        .then(function (data) {
+          patch({ trashBusy: false, trashItems: (data && data.trash) || [] });
+        })
+        .catch(function (error) {
+          patch({ trashBusy: false, trashItems: [], errorMessage: error.message || "Unable to load Trash" });
+        });
+    }
+
+    function restoreFromTrash(entry) {
+      if (!entry || !entry.id) return;
+      patch({ trashBusy: true, errorMessage: "" });
+      fetchJSON(api("/ops/restore"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entry.id }),
+      })
+        .then(function (data) {
+          patch({ trashBusy: false, trashItems: (data && data.trash) || [] });
+          loadItems(state.path, state.root);
+          loadTree(entry.root || state.root);
+        })
+        .catch(function (error) {
+          patch({ trashBusy: false, errorMessage: error.message || "Restore failed" });
+        });
+    }
+
+    function renderTrashDialog() {
+      if (!state.trashOpen) return null;
+      return h(
+        "div",
+        {
+          className: "hermes-code-modal-backdrop",
+          role: "presentation",
+          onClick: function () { patch({ trashOpen: false }); },
+        },
+        h(
+          "section",
+          {
+            className: "hermes-code-modal hermes-code-trash",
+            role: "dialog",
+            "aria-modal": "true",
+            "aria-label": "Trash",
+            onClick: function (event) { event.stopPropagation(); },
+          },
+          h("h2", null, "Trash"),
+          h("p", null, "Restore returns an item to the folder it was trashed from."),
+          state.trashBusy
+            ? h("div", { className: "hermes-code-empty" }, "Loading")
+            : state.trashItems.length
+              ? h(
+                  "div",
+                  { className: "hermes-code-trash-list" },
+                  state.trashItems.map(function (entry) {
+                    return h(
+                      "div",
+                      { className: "hermes-code-trash-row", key: entry.id },
+                      renderFileIcon({ kind: entry.kind === "folder" ? "folder" : "file", name: entry.name }),
+                      h(
+                        "span",
+                        { className: "hermes-code-trash-name", title: rootLabel(entry.root) + " " + entry.path },
+                        h("span", null, rootLabel(entry.root) + " " + entry.path),
+                        h("small", null, entry.trashed_at || "")
+                      ),
+                      h(
+                        "button",
+                        { type: "button", onClick: function () { restoreFromTrash(entry); }, disabled: state.trashBusy },
+                        "Restore"
+                      )
+                    );
+                  })
+                )
+              : h("div", { className: "hermes-code-empty" }, "Trash is empty"),
+          h(
+            "div",
+            { className: "hermes-code-modal-actions" },
+            h("button", { type: "button", onClick: function () { patch({ trashOpen: false }); } }, "Close")
+          )
+        )
+      );
+    }
+
     function openContextMenu(event, item) {
       event.preventDefault();
       patch({
@@ -1006,15 +1196,21 @@
     function runSearch(query) {
       const nextQuery = typeof query === "string" ? query : state.searchQuery;
       if (!nextQuery.trim()) {
+        // Bump the token so an in-flight search cannot repopulate a cleared box.
+        CodePage._searchToken = (CodePage._searchToken || 0) + 1;
         patch({ searchQuery: nextQuery, searchResults: [], searchBusy: false });
         return;
       }
+      // Request token guards against stale search responses overwriting newer ones.
+      const token = (CodePage._searchToken = (CodePage._searchToken || 0) + 1);
       patch({ searchQuery: nextQuery, searchBusy: true, errorMessage: "" });
       fetchJSON(api("/search?q=" + encodeURIComponent(nextQuery) + "&path=" + encodeURIComponent("/")))
         .then(function (data) {
+          if (token !== CodePage._searchToken) return;
           patch({ searchBusy: false, searchResults: data.results || [] });
         })
         .catch(function (error) {
+          if (token !== CodePage._searchToken) return;
           patch({ searchBusy: false, searchResults: [], errorMessage: error.message || "Search failed" });
         });
     }
@@ -1057,10 +1253,10 @@
     }
 
     function gitAction(endpoint, payload, confirmText) {
-      if (!state.repo) return;
-      if (confirmText && !window.confirm(confirmText)) return;
+      if (!state.repo) return Promise.resolve(false);
+      if (confirmText && !window.confirm(confirmText)) return Promise.resolve(false);
       patch({ sourceBusy: true, errorMessage: "" });
-      fetchJSON(api(endpoint), {
+      return fetchJSON(api(endpoint), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.assign({ repo: state.repo.path, root: state.repo.root_id || state.repo.root || "workspace" }, payload || {})),
@@ -1068,17 +1264,22 @@
         .then(function (data) {
           patch({ sourceBusy: false, source: data.status || state.source, lastGitResult: data.last_git_result || null });
           loadItems(state.path, state.root);
+          return true;
         })
         .catch(function (error) {
           patch({ sourceBusy: false, errorMessage: error.message || "Git action failed" });
+          return false;
         });
     }
 
     function commitStaged() {
       const message = state.gitMessage.trim();
       if (!message) return;
-      gitAction("/git/commit", { message: message });
-      patch({ gitMessage: "" });
+      // Keep the commit message until the commit actually succeeds so a failed
+      // commit never throws away what the Captain typed.
+      gitAction("/git/commit", { message: message }).then(function (committed) {
+        if (committed) patch({ gitMessage: "" });
+      });
     }
 
     function openChange(change) {
@@ -1260,11 +1461,29 @@
 
     function toggleExplorerNode(path) {
       const root = arguments.length > 1 && arguments[1] ? arguments[1] : state.root || "workspace";
+      const willExpand = !state.expanded[pathKey(root, path)];
       patch(function (current) {
         const expanded = Object.assign({}, current.expanded || {});
         expanded[pathKey(root, path)] = !expanded[pathKey(root, path)];
         return { expanded: expanded };
       });
+      if (willExpand) ensureTreeChildren(path, root);
+    }
+
+    function goUpOneFolder() {
+      if (state.path === "/") return;
+      const root = state.root || "workspace";
+      const target = parentPath(state.path);
+      patch(function (current) {
+        const expanded = Object.assign({}, current.expanded || {});
+        let cursor = target;
+        while (cursor && cursor !== "/") {
+          expanded[pathKey(root, cursor)] = true;
+          cursor = parentPath(cursor);
+        }
+        return { expanded: expanded };
+      });
+      loadItems(target, root);
     }
 
     function renderExplorer() {
@@ -1272,7 +1491,7 @@
       function renderTreeNode(item, depth) {
         const root = itemRoot(item);
         const selectedKey = pathKey(state.root, state.path);
-        const isSelected = (openFile && itemKey(openFile) === itemKey(item)) || (!openFile && selectedKey === itemKey(item));
+        const isSelected = (openFile && itemKey(openFile) === itemKey(item)) || selectedKey === itemKey(item);
         const children = item.children || [];
         const isFolder = item.kind === "folder";
         const isExpanded = !!state.expanded[itemKey(item)];
@@ -1300,8 +1519,16 @@
               onDrop: function (event) {
                 const sourcePath = event.dataTransfer.getData("text/hermes-code-path");
                 const sourceRoot = event.dataTransfer.getData("text/hermes-code-root") || root;
-                if (!sourcePath || item.kind !== "folder" || sourcePath === item.path || sourceRoot !== root) return;
+                if (!sourcePath || item.kind !== "folder" || sourcePath === item.path) return;
                 event.preventDefault();
+                if (sourceRoot !== root) {
+                  patch({
+                    errorMessage:
+                      "Drag-and-drop cannot move items from " + rootLabel(sourceRoot) + " to " + rootLabel(root) + "." +
+                      (sourceRoot === "linked" ? " Use Duplicate on the Linked item to copy it into an owned root." : ""),
+                  });
+                  return;
+                }
                 fileOperation(
                   "/ops/move",
                   { path: sourcePath, root: root, destination: joinPath(item.path, basename(sourcePath)) },
@@ -1358,8 +1585,9 @@
         h(
           "div",
           { className: "hermes-code-treebar" },
-          h("button", { type: "button", onClick: function () { loadItems(parentPath(state.path), state.root); }, disabled: state.path === "/" }, "Up"),
-          h("button", { type: "button", onClick: function () { loadItems(state.path, state.root); } }, "Refresh")
+          h("button", { type: "button", onClick: goUpOneFolder, disabled: state.path === "/" }, "Up"),
+          h("button", { type: "button", onClick: function () { loadItems(state.path, state.root); loadTree(state.root); } }, "Refresh"),
+          h("button", { type: "button", onClick: openTrashDialog }, "Trash")
         ),
         h("div", { className: "hermes-code-path" }, rootLabel(state.root) + " " + state.path),
         h(
@@ -1456,32 +1684,47 @@
       return root;
     }
 
+    function changeActionButton(label, title, onClick) {
+      return h(
+        "button",
+        {
+          type: "button",
+          className: "hermes-code-change-action",
+          title: title,
+          "aria-label": title,
+          onClick: function (event) {
+            event.stopPropagation();
+            onClick();
+          },
+        },
+        label
+      );
+    }
+
     function renderChangeActions(change, mode) {
       return h(
         "span",
         { className: "hermes-code-change-actions" },
         mode === "staged"
-          ? h("span", { title: "Unstage", onClick: function (event) { event.stopPropagation(); gitAction("/git/unstage", { path: change.path }); } }, "-")
-          : h("span", { title: "Stage", onClick: function (event) { event.stopPropagation(); gitAction("/git/stage", { path: change.path }); } }, "+"),
+          ? changeActionButton("Unstage", "Unstage " + change.path, function () { gitAction("/git/unstage", { path: change.path }); })
+          : changeActionButton("Stage", "Stage " + change.path, function () { gitAction("/git/stage", { path: change.path }); }),
         mode === "staged"
           ? null
           : h(
               React.Fragment,
               null,
               change.untracked
-                ? h("span", { title: "Ignore", onClick: function (event) { event.stopPropagation(); gitAction("/git/ignore", { path: change.path }); } }, "I")
+                ? changeActionButton("Ignore", "Add " + change.path + " to .gitignore", function () { gitAction("/git/ignore", { path: change.path }); })
                 : null,
-              h("span", {
-                title: "Discard",
-                onClick: function (event) {
-                  event.stopPropagation();
-                  gitAction(
-                    "/git/discard",
-                    { path: change.path, untracked: change.untracked, confirm: true },
-                    "Discard changes in " + change.path + "?"
-                  );
-                },
-              }, "U")
+              changeActionButton("Discard", "Discard changes in " + change.path, function () {
+                gitAction(
+                  "/git/discard",
+                  { path: change.path, untracked: change.untracked, confirm: true },
+                  change.untracked
+                    ? "Permanently delete untracked " + change.path + "? This cannot be undone."
+                    : "Discard changes in " + change.path + "?"
+                );
+              })
             )
       );
     }
@@ -1503,15 +1746,24 @@
           return renderChangeTreeNode(node.folders[name], mode, depth + (node.name ? 1 : 0));
         }),
         (node.files || []).map(function (change) {
+          // The row is a div[role=button] (not a button) so the labeled
+          // per-change action buttons inside stay valid, focusable HTML.
           return h(
-            "button",
+            "div",
             {
               key: mode + ":file:" + change.path + ":" + change.status,
-              type: "button",
+              role: "button",
+              tabIndex: 0,
               className: "hermes-code-change",
               style: { paddingLeft: 0.45 + (depth + (node.name ? 1 : 0)) * 0.85 + "rem" },
               onClick: function () {
                 openChange(change);
+              },
+              onKeyDown: function (event) {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  openChange(change);
+                }
               },
             },
             h("span", { className: "hermes-code-change-status" }, change.status.trim() || change.status),
@@ -1631,8 +1883,12 @@
                 sourceIconButton("Push", "↑", function () {
                     gitAction("/git/push", { confirm: true }, "Push committed changes to the configured remote?");
                   }, state.sourceBusy),
-                sourceIconButton("Discard all", "!", function () {
-                    gitAction("/git/discard", { all: true, confirm: true }, "Discard all unstaged and untracked changes?");
+                sourceIconButton("Discard all", "Discard all", function () {
+                    gitAction(
+                      "/git/discard",
+                      { all: true, confirm: true },
+                      "Discard ALL pending changes in this source? Staged edits are wiped, modified files are reverted, and untracked files and folders are permanently deleted. This cannot be undone."
+                    );
                   }, state.sourceBusy || !hasChanges, "danger")
               ),
               h(
@@ -1800,7 +2056,7 @@
     useEffect(function () {
       function closeDismissables(event) {
         if (event.key === "Escape") {
-          patch({ shareDialog: null, contextMenu: null, sourcePickerOpen: false });
+          patch({ shareDialog: null, contextMenu: null, sourcePickerOpen: false, trashOpen: false });
         }
       }
       window.addEventListener("keydown", closeDismissables);
@@ -1962,6 +2218,7 @@
         : h("div", { className: "hermes-code-empty full" }, "Code is not available"),
       renderSourcePicker(),
       renderShareDialog(),
+      renderTrashDialog(),
       renderFullscreenPreview()
     );
   }

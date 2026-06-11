@@ -458,7 +458,15 @@ def test_telegram_operator_upgrade_command_queues_upgrade_action() -> None:
             cfg = control.Config.from_env()
             conn = control.connect_db(cfg)
             outbound: list[str] = []
-            curator.send_text = lambda bot_token, chat_id, text, **kwargs: outbound.append(text)
+            markups: list[dict | None] = []
+
+            def _capture_send(bot_token, chat_id, text, **kwargs):
+                outbound.append(text)
+                markups.append(kwargs.get("reply_markup"))
+
+            curator.send_text = _capture_send
+            answered: list[str] = []
+            curator.telegram_answer_callback_query = lambda **kwargs: answered.append(str(kwargs.get("text") or ""))
 
             curator._handle_operator_command(
                 cfg=cfg,
@@ -468,8 +476,48 @@ def test_telegram_operator_upgrade_command_queues_upgrade_action() -> None:
             )
 
             row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'upgrade'").fetchone()
-            expect(row is None, "bare /upgrade should fail closed until explicit confirmation")
-            expect(outbound and "append `confirm`" in outbound[-1], str(outbound))
+            expect(row is None, "bare /upgrade renders the one-tap menu and must not queue")
+            expect(outbound and "upgrade menu" in outbound[-1], str(outbound))
+            menu_markup = markups[-1] or {}
+            menu_rows = menu_markup.get("inline_keyboard") or []
+            expect(menu_rows and menu_rows[0][0]["text"] == "Apply Control Upgrade", str(menu_markup))
+            one_tap_data = str(menu_rows[0][0]["callback_data"])
+            expect(one_tap_data.startswith("arclink:/upgrade_apply "), one_tap_data)
+
+            # Pressing the menu button on the long-poll transport queues the
+            # upgrade through the same Operator Raven gate: one tap, no typing.
+            curator._handle_operator_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cbq-menu-1",
+                    "data": one_tap_data,
+                    "from": {"id": "42", "username": "operator"},
+                    "message": {"message_id": 7, "chat": {"id": "42", "type": "private"}},
+                },
+            )
+            row = conn.execute("SELECT * FROM operator_actions WHERE action_kind = 'upgrade'").fetchone()
+            expect(row is not None, "one-tap menu button must queue the upgrade")
+            expect(row["request_source"] == "operator-raven", str(dict(row)))
+            expect(answered and "queued an ArcLink upgrade" in answered[-1], str(answered))
+
+            # Replaying the same callback fails closed (single-use nonce).
+            before = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+            curator._handle_operator_callback(
+                cfg=cfg,
+                bot_token="test-token",
+                callback_query={
+                    "id": "cbq-menu-2",
+                    "data": one_tap_data,
+                    "from": {"id": "42", "username": "operator"},
+                    "message": {"message_id": 7, "chat": {"id": "42", "type": "private"}},
+                },
+            )
+            expect(answered and "expired or was already used" in answered[-1], str(answered[-1]))
+            after = conn.execute("SELECT COUNT(*) AS n FROM operator_actions").fetchone()["n"]
+            expect(after == before, "nonce replay must not queue a second action")
+            conn.execute("DELETE FROM operator_actions")
+            conn.commit()
 
             curator._handle_operator_command(
                 cfg=cfg,

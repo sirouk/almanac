@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -15,6 +16,29 @@ class HttpResponse:
     status_code: int
     text: str
     headers: dict[str, str]
+
+
+_SENSITIVE_QUERY_KEY_RE = re.compile(r"(?:^|[_-])(token|secret|key|password|auth)(?:$|[_-])", re.I)
+
+
+def _redact_url_for_error(url: str) -> str:
+    text = str(url or "")
+    try:
+        parsed = urllib.parse.urlparse(text)
+    except ValueError:
+        return re.sub(r"/bot[^/\s]+", "/botREDACTED", text)
+    netloc = parsed.netloc
+    if "@" in netloc:
+        netloc = f"REDACTED@{netloc.rsplit('@', 1)[1]}"
+    path = re.sub(r"/bot[^/\s]+", "/botREDACTED", parsed.path)
+    query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    query = urllib.parse.urlencode(
+        [
+            (key, "REDACTED" if _SENSITIVE_QUERY_KEY_RE.search(key) else value)
+            for key, value in query_pairs
+        ]
+    )
+    return urllib.parse.urlunparse(parsed._replace(netloc=netloc, path=path, query=query))
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -36,7 +60,7 @@ def enforce_secure_transport(url: str, *, allow_loopback_http: bool = True) -> N
         return
     if allow_loopback_http and _is_loopback_host(parsed.hostname or ""):
         return
-    raise RuntimeError(f"insecure transport refused for non-loopback URL: {url}")
+    raise RuntimeError(f"insecure transport refused for non-loopback URL: {_redact_url_for_error(url)}")
 
 
 def http_request(
@@ -75,7 +99,7 @@ def http_request(
             with httpx.Client(timeout=float(timeout)) as client:
                 response = client.request(method.upper(), url, headers=request_headers, **request_kwargs)
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"{url} request failed: {exc}") from exc
+            raise RuntimeError(f"{_redact_url_for_error(url)} request failed: {exc}") from exc
         return HttpResponse(
             status_code=response.status_code,
             text=response.text,
@@ -104,7 +128,7 @@ def http_request(
         return HttpResponse(status_code=exc.code, text=body, headers=response_headers)
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", exc)
-        raise RuntimeError(f"{url} request failed: {reason}") from exc
+        raise RuntimeError(f"{_redact_url_for_error(url)} request failed: {reason}") from exc
 
 
 def parse_json_response(response: HttpResponse, *, label: str) -> Any:

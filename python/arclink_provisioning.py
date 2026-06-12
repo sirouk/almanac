@@ -1084,6 +1084,8 @@ def _render_services(
             "-o",
             "IdentitiesOnly=yes",
             "-o",
+            "IdentityAgent=none",
+            "-o",
             "StrictHostKeyChecking=accept-new",
         ]
         if fleet_share_known_hosts_host_path:

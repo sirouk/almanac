@@ -2203,6 +2203,7 @@ def test_deploy_sh_retires_public_docker_control_center() -> None:
     expect("ARCLINK_FLEET_SHARE_HUB_ROOT" in text and "/arcdata/captains" in text, "expected Captain fleet-share hub root to be a first-class control config default")
     expect("test_local_fleet_ssh_access()" in text, "expected local fleet SSH smoke test helper")
     expect("ARCLINK_LOCAL_FLEET_SSH_SMOKE_TIMEOUT_SECONDS" in text and "timeout --kill-after=5s" in text, "expected local starter SSH smoke to be time-bounded")
+    expect("IdentityAgent=none" in text, "expected key-file SSH lanes to ignore inherited SSH agent sockets")
     expect("continuing control upgrade and leaving fleet health to inventory probes" in text, "expected local starter SSH smoke failure to degrade without aborting control upgrade")
     expect("install_local_fleet_probe_wrapper()" in text, "expected local starter bootstrap to install the fleet probe wrapper")
     expect("/usr/local/bin/arclink-fleet-probe-wrapper" in text, "expected local starter probe wrapper to be installed into PATH")

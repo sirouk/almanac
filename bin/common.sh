@@ -1479,7 +1479,7 @@ prepare_backup_git_transport() {
     chmod 644 "${BACKUP_GIT_DEPLOY_KEY_PATH}.pub" >/dev/null 2>&1 || true
   fi
 
-  export GIT_SSH_COMMAND="ssh -i \"$BACKUP_GIT_DEPLOY_KEY_PATH\" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"$BACKUP_GIT_KNOWN_HOSTS_FILE\""
+  export GIT_SSH_COMMAND="ssh -i \"$BACKUP_GIT_DEPLOY_KEY_PATH\" -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=\"$BACKUP_GIT_KNOWN_HOSTS_FILE\""
 }
 
 ensure_backup_git_origin_remote() {

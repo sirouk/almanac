@@ -56,7 +56,7 @@ printf 'KNOWN_HOSTS=%s\\n' "$(cat "$BACKUP_GIT_KNOWN_HOSTS_FILE")"
         result = bash(script)
         expect(result.returncode == 0, f"prepare_backup_git_transport case failed: {result.stderr}")
         expect(
-            f'GIT_SSH_COMMAND=ssh -i "{key_path}" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="{known_hosts_path}"'
+            f'GIT_SSH_COMMAND=ssh -i "{key_path}" -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="{known_hosts_path}"'
             in result.stdout,
             f"expected deploy-key GIT_SSH_COMMAND, got: {result.stdout!r}",
         )

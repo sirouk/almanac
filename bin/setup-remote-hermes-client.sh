@@ -161,6 +161,7 @@ fi
 exec ssh \\
   -i "$KEY_PATH" \\
   -o IdentitiesOnly=yes \\
+  -o IdentityAgent=none \\
   -o BatchMode=yes \\
   -o StrictHostKeyChecking=yes \\
   "\${ssh_tty_args[@]}" \\

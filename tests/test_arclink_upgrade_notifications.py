@@ -502,6 +502,8 @@ def test_upgrade_check_uses_configured_upstream_deploy_key_for_ssh_remotes() -> 
             expect("-o BatchMode=yes" in ssh_command, ssh_command)
             expect("-o IPQoS=none" in ssh_command, ssh_command)
             expect("-o IdentitiesOnly=yes" in ssh_command, ssh_command)
+            expect("-o IdentityAgent=none" in ssh_command, ssh_command)
+            expect("SSH_AUTH_SOCK" not in git_env, str(git_env))
             expect(
                 ctl._upstream_git_env(cfg, "https://github.com/example/arclink.git") is None,
                 "HTTPS remotes should not get SSH deploy-key env",

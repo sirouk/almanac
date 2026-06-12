@@ -3828,7 +3828,7 @@ upstream_git_ssh_command() {
   known_hosts="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-$(default_upstream_git_known_hosts_file)}"
   printf -v quoted_key '%q' "$key_path"
   printf -v quoted_known_hosts '%q' "$known_hosts"
-  printf 'ssh -i %s -o BatchMode=yes -o IPQoS=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
+  printf 'ssh -i %s -o BatchMode=yes -o IPQoS=none -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%s' \
     "$quoted_key" "$quoted_known_hosts"
 }
 
@@ -9422,6 +9422,7 @@ test_local_fleet_ssh_access() {
     -o BatchMode=yes
     -o ConnectTimeout=5
     -o IdentitiesOnly=yes
+    -o IdentityAgent=none
     -o StrictHostKeyChecking=accept-new
   )
   if [[ -n "$known_hosts" ]]; then
@@ -9476,6 +9477,7 @@ test_remote_fleet_ssh_access() {
     -o BatchMode=yes
     -o ConnectTimeout=8
     -o IdentitiesOnly=yes
+    -o IdentityAgent=none
     -o StrictHostKeyChecking=accept-new
   )
   if [[ -n "$known_hosts" ]]; then
@@ -9578,6 +9580,7 @@ sync_control_docker_image_to_fleet_workers() {
     -o BatchMode=yes
     -o ConnectTimeout=15
     -o IdentitiesOnly=yes
+    -o IdentityAgent=none
     -o ServerAliveInterval=5
     -o ServerAliveCountMax=2
     -o StrictHostKeyChecking=accept-new
@@ -9981,6 +9984,7 @@ run_remote_fleet_worker_bootstrap() {
     -o BatchMode=yes
     -o ConnectTimeout=10
     -o IdentitiesOnly=yes
+    -o IdentityAgent=none
     -o StrictHostKeyChecking=accept-new
   )
   if [[ -n "$known_hosts" ]]; then

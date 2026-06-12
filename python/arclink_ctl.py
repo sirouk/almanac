@@ -1553,11 +1553,13 @@ def _upstream_git_env(cfg: Config, repo_url: str) -> dict[str, str] | None:
     if not key_path or not known_hosts:
         return None
     env = os.environ.copy()
+    env.pop("SSH_AUTH_SOCK", None)
     env["GIT_SSH_COMMAND"] = (
         f"ssh -i {shlex.quote(key_path)} "
         "-o BatchMode=yes "
         "-o IPQoS=none "
         "-o IdentitiesOnly=yes "
+        "-o IdentityAgent=none "
         "-o StrictHostKeyChecking=yes "
         f"-o UserKnownHostsFile={shlex.quote(known_hosts)}"
     )

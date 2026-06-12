@@ -377,7 +377,7 @@ require_upstream_push_ready() {
 
 upstream_ssh_command() {
   local known_hosts="${ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE:-${HOME:-}/.ssh/known_hosts}"
-  printf 'ssh -i %q -o BatchMode=yes -o IPQoS=none -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%q' \
+  printf 'ssh -i %q -o BatchMode=yes -o IPQoS=none -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=%q' \
     "$ARCLINK_UPSTREAM_DEPLOY_KEY_PATH" \
     "$known_hosts"
 }

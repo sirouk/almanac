@@ -1001,6 +1001,7 @@ docker_ensure_tailnet_forward() {
       -p "${ssh_port:-22}" \
       -o BatchMode=yes \
       -o IdentitiesOnly=yes \
+      -o IdentityAgent=none \
       -o ExitOnForwardFailure=yes \
       -o ServerAliveInterval=30 \
       -o ServerAliveCountMax=3 \
@@ -1024,6 +1025,7 @@ docker_ensure_tailnet_forward() {
     -p "${ssh_port:-22}" \
     -o BatchMode=yes \
     -o IdentitiesOnly=yes \
+    -o IdentityAgent=none \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \

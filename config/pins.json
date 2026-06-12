@@ -33,7 +33,7 @@
     "nvm": {
       "kind": "git-tag",
       "repo": "https://github.com/nvm-sh/nvm",
-      "tag": "v0.40.4",
+      "tag": "v0.40.5",
       "installer_url_template": "https://raw.githubusercontent.com/nvm-sh/nvm/{tag}/install.sh",
       "description": "Node Version Manager installer. Pinned tag is fetched from raw.githubusercontent.com and piped to bash during userland bootstrap."
     },

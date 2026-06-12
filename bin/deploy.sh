@@ -9396,7 +9396,9 @@ test_local_fleet_ssh_access() {
   local host="${ARCLINK_LOCAL_FLEET_SSH_HOST:-localhost}"
   local key_path="${ARCLINK_FLEET_SSH_KEY_HOST_PATH:-${ARCLINK_FLEET_SSH_KEY_PATH:-}}"
   local known_hosts="${ARCLINK_FLEET_SSH_KNOWN_HOSTS_HOST_FILE:-${ARCLINK_FLEET_SSH_KNOWN_HOSTS_FILE:-}}"
+  local smoke_timeout="${ARCLINK_LOCAL_FLEET_SSH_SMOKE_TIMEOUT_SECONDS:-20}"
   local -a ssh_opts=()
+  local -a ssh_cmd=()
 
   if [[ -z "$key_path" || ! -r "$key_path" ]]; then
     echo "Skipping local fleet SSH smoke test: missing private key." >&2
@@ -9425,8 +9427,15 @@ test_local_fleet_ssh_access() {
   if [[ -n "$known_hosts" ]]; then
     ssh_opts+=(-o "UserKnownHostsFile=$known_hosts")
   fi
-  if ssh "${ssh_opts[@]}" "$user@$host" true >/dev/null 2>&1 && \
-      ssh "${ssh_opts[@]}" "$user@$host" arclink-fleet-probe-wrapper liveness >/dev/null 2>&1; then
+  if [[ ! "$smoke_timeout" =~ ^[0-9]+$ || "$smoke_timeout" -lt 1 ]]; then
+    smoke_timeout="20"
+  fi
+  ssh_cmd=(ssh "${ssh_opts[@]}")
+  if command -v timeout >/dev/null 2>&1; then
+    ssh_cmd=(timeout --kill-after=5s "${smoke_timeout}s" ssh "${ssh_opts[@]}")
+  fi
+  if "${ssh_cmd[@]}" "$user@$host" true >/dev/null 2>&1 && \
+      "${ssh_cmd[@]}" "$user@$host" arclink-fleet-probe-wrapper liveness >/dev/null 2>&1; then
     echo "Verified local fleet SSH connectivity and probe wrapper: $user@$host"
     return 0
   fi
@@ -10704,7 +10713,9 @@ ensure_control_local_fleet_worker_registered() {
   if [[ -n "$ssh_host" ]] && is_local_fleet_ssh_host "$ssh_host"; then
     ensure_control_fleet_ssh_key "0"
     ensure_local_fleet_ssh_access
-    test_local_fleet_ssh_access
+    if ! test_local_fleet_ssh_access; then
+      echo "Local starter worker SSH smoke failed; continuing control upgrade and leaving fleet health to inventory probes." >&2
+    fi
   fi
 
   if [[ "$executor_adapter" == "ssh" ]]; then

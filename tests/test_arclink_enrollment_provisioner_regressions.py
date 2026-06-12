@@ -1153,6 +1153,82 @@ def test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade() -> None:
             os.environ.update(old_env)
 
 
+def test_run_pin_upgrade_action_skips_deploy_when_component_upgrade_noops() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_pin_upgrade_noop_test")
+    provisioner = load_module(PROVISIONER_PY, "arclink_enrollment_provisioner_pin_upgrade_noop_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo_dir = root / "repo"
+        (repo_dir / "config").mkdir(parents=True)
+        (repo_dir / "bin").mkdir(parents=True)
+        target = "bbbbbbbbbbbb2222222222222222222222222222"
+        (repo_dir / "config" / "pins.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "components": {
+                        "hermes-agent": {"kind": "git-commit", "ref": target},
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        config_path = root / "config" / "arclink.env"
+        values = config_values(root)
+        values["ARCLINK_REPO_DIR"] = str(repo_dir)
+        write_config(config_path, values)
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            payload = {
+                "items": [
+                    {"component": "hermes-agent", "kind": "git-commit", "field": "ref", "current": target, "target": target},
+                ],
+                "install_items": [
+                    {"component": "hermes-agent", "kind": "git-commit", "field": "ref", "current": target, "target": target},
+                ],
+            }
+            calls = []
+
+            def fake_run(args, **kwargs):
+                argv = list(args)
+                calls.append(argv)
+                if argv[0].endswith("component-upgrade.sh"):
+                    stdout = kwargs.get("stdout")
+                    if stdout is not None:
+                        stdout.write(f"==> hermes-agent pin already at {target} - no-op.\n")
+                        stdout.write("ARCLINK_COMPONENT_UPGRADE_STATUS=noop\n")
+                elif argv[0].endswith("deploy.sh"):
+                    raise AssertionError(f"stale no-op pin upgrade should not run deploy: {argv}")
+                return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+            original_run = provisioner.subprocess.run
+            provisioner.subprocess.run = fake_run
+            try:
+                result = provisioner._run_pin_upgrade_action(cfg, payload, log_path=root / "pin-upgrade.log")
+            finally:
+                provisioner.subprocess.run = original_run
+
+            expect(result.returncode == 0, str(result))
+            expect(
+                calls == [
+                    [str((repo_dir / "bin" / "component-upgrade.sh").resolve()), "hermes-agent", "apply", "--ref", target, "--skip-upgrade"],
+                ],
+                str(calls),
+            )
+            log_text = (root / "pin-upgrade.log").read_text(encoding="utf-8")
+            expect("ARCLINK_COMPONENT_UPGRADE_STATUS=noop" in log_text, log_text)
+            expect("skipping deploy upgrade" in log_text and "deploy.sh" not in log_text, log_text)
+            print("PASS test_run_pin_upgrade_action_skips_deploy_when_component_upgrade_noops")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_operator_upgrade_stale_running_action_fails_closed() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -1597,6 +1673,7 @@ def main() -> int:
     test_operator_upgrade_actions_reject_unconfirmed_sources()
     test_operator_pin_upgrade_actions_run_component_upgrade_and_notify_operator()
     test_run_pin_upgrade_action_pins_targets_then_runs_deploy_upgrade()
+    test_run_pin_upgrade_action_skips_deploy_when_component_upgrade_noops()
     test_operator_upgrade_stale_running_action_fails_closed()
     test_operator_action_finish_retries_transient_sqlite_lock()
     test_run_host_upgrade_seeds_home_when_missing()
@@ -1608,7 +1685,7 @@ def main() -> int:
     test_install_system_services_seeds_home_in_root_units()
     test_install_system_services_does_not_self_deadlock_on_active_oneshots()
     test_auto_provision_dashboard_probe_allows_cold_start_window()
-    print("PASS all 28 enrollment provisioner regression tests")
+    print("PASS all 29 enrollment provisioner regression tests")
     return 0
 
 

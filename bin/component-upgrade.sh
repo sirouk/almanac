@@ -43,6 +43,7 @@ source "$SCRIPT_DIR/pins.sh"
 note()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[33m!! %s\033[0m\n' "$*" >&2; }
 fatal() { printf '\033[31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+status_marker() { printf 'ARCLINK_COMPONENT_UPGRADE_STATUS=%s\n' "$1"; }
 
 usage() {
   cat <<EOF
@@ -610,23 +611,30 @@ do_apply() {
   if [[ "$current" == "$target" ]]; then
     note "$name pin already at $current - no-op."
     if [[ "$dry_run" == "1" ]]; then
+      status_marker "noop"
       return 0
     fi
+    local upgrade_status="noop"
     if [[ "$skip_push" != "1" ]] && ! git -C "$REPO_DIR" diff --quiet HEAD -- config/pins.json; then
       note "pins.json already contains the target but has an uncommitted diff; committing pending bump."
       local commit_msg
       commit_msg="$(printf 'pins: ensure %s.%s at %s\n\nResolved against the upstream source declared in config/pins.json.\n' "$name" "$field" "$target")"
       commit_and_push_pins "$commit_msg"
+      upgrade_status="pushed"
       if [[ "$skip_upgrade" != "1" ]]; then
+        status_marker "$upgrade_status"
         reexec_upgrade
       fi
     elif [[ "$skip_push" != "1" ]] && ! upstream_branch_contains_head; then
       note "Local HEAD is not present on the configured upstream branch; pushing current HEAD."
       push_current_head
+      upgrade_status="pushed"
       if [[ "$skip_upgrade" != "1" ]]; then
+        status_marker "$upgrade_status"
         reexec_upgrade
       fi
     fi
+    status_marker "$upgrade_status"
     return 0
   fi
 
@@ -654,8 +662,10 @@ do_apply() {
   fi
 
   if [[ "$skip_upgrade" != "1" && "$skip_push" != "1" ]]; then
+    status_marker "changed"
     reexec_upgrade
   fi
+  status_marker "changed"
 }
 
 # ---------- main --------------------------------------------------------------

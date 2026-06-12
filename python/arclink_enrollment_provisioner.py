@@ -503,6 +503,10 @@ def _run_pin_upgrade_action(
             handle.flush()
             if last_result.returncode != 0:
                 return last_result
+        if not _pin_upgrade_log_requires_deploy(log_path, expected_statuses=len(install_items)):
+            handle.write("All requested pinned components were already current; skipping deploy upgrade.\n")
+            handle.flush()
+            return last_result or subprocess.CompletedProcess(args=["pin-upgrade"], returncode=0, stdout="", stderr="")
         upgrade_args, upgrade_cwd = _operator_action_deploy_args(cfg)
         handle.write(f"$ {' '.join(shell_quote(arg) for arg in upgrade_args)}\n")
         handle.flush()
@@ -559,6 +563,33 @@ def _append_operator_log(path: Path, text: str) -> None:
                 handle.write("\n")
     except OSError:
         return
+
+
+def _component_upgrade_statuses_from_text(text: str) -> list[str]:
+    prefix = "ARCLINK_COMPONENT_UPGRADE_STATUS="
+    statuses: list[str] = []
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean.startswith(prefix):
+            continue
+        status = clean[len(prefix) :].strip().lower()
+        if status:
+            statuses.append(status)
+    return statuses
+
+
+def _pin_upgrade_log_requires_deploy(log_path: Path, *, expected_statuses: int) -> bool:
+    try:
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    statuses = _component_upgrade_statuses_from_text(log_text)
+    recent = statuses[-expected_statuses:] if expected_statuses > 0 else []
+    if len(recent) < expected_statuses:
+        return True
+    if any(status not in {"noop", "changed", "pushed"} for status in recent):
+        return True
+    return any(status in {"changed", "pushed"} for status in recent)
 
 
 def _clear_canonical_pin_upgrade_notifications(conn, payload: dict[str, Any]) -> None:

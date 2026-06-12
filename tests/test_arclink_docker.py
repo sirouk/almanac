@@ -2633,6 +2633,73 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
     print("PASS test_operator_upgrade_broker_runs_allowlisted_operator_upgrade")
 
 
+def test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    broker = load_python_module(PYTHON_DIR / "arclink_operator_upgrade_broker.py", "arclink_operator_upgrade_broker_pin_noop_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        priv = root / "arclink-priv"
+        container_priv = root / "container" / "arclink-priv"
+        (repo / "bin").mkdir(parents=True)
+        (priv / "state" / "operator-actions").mkdir(parents=True)
+        (priv / "config").mkdir(parents=True)
+        (repo / "deploy.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        (repo / "bin" / "component-upgrade.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        (repo / "deploy.sh").chmod(0o755)
+        (repo / "bin" / "component-upgrade.sh").chmod(0o755)
+        old_env = os.environ.copy()
+        old_run = broker.subprocess.run
+        os.environ["ARCLINK_DOCKER_HOST_REPO_DIR"] = str(repo)
+        os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
+        os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
+        captured: list[list[str]] = []
+
+        def fake_run(args, **kwargs):
+            argv = list(args)
+            captured.append(argv)
+            stdout = kwargs.get("stdout")
+            if argv[0].endswith("component-upgrade.sh"):
+                if stdout is not None:
+                    stdout.write("==> hermes-agent pin already at abc123 - no-op.\n")
+                    stdout.write("ARCLINK_COMPONENT_UPGRADE_STATUS=noop\n")
+            elif argv[0].endswith("deploy.sh"):
+                raise AssertionError(f"stale no-op pin upgrade should not run deploy: {argv}")
+            return subprocess.CompletedProcess(args=argv, returncode=0)
+
+        try:
+            broker.subprocess.run = fake_run
+            requested_log_path = container_priv / "state" / "operator-actions" / "pin-upgrade.log"
+            log_path = priv / "state" / "operator-actions" / "pin-upgrade.log"
+            ok, payload = broker.run_operator_upgrade_request(
+                {
+                    "operation": "run_pin_upgrade",
+                    "log_path": str(requested_log_path),
+                    "install_items": [
+                        {"component": "hermes-agent", "kind": "git-commit", "target": "abc123"},
+                    ],
+                }
+            )
+        finally:
+            broker.subprocess.run = old_run
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        expect(ok is True and isinstance(payload, dict), str(payload))
+        expect(payload.get("returncode") == 0, str(payload))
+        expect(
+            captured
+            == [[str(repo / "bin" / "component-upgrade.sh"), "hermes-agent", "apply", "--ref", "abc123", "--skip-upgrade"]],
+            str(captured),
+        )
+        log_text = log_path.read_text(encoding="utf-8")
+        expect("ARCLINK_COMPONENT_UPGRADE_STATUS=noop" in log_text, log_text)
+        expect("skipping deploy upgrade" in log_text and "deploy.sh upgrade" not in log_text, log_text)
+        expect(not requested_log_path.exists(), "container-style operator log path should be mapped to the host private bind")
+    print("PASS test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops")
+
+
 def test_operator_upgrade_broker_signature_replay_cache_is_bounded() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -7745,6 +7812,7 @@ def main() -> int:
     test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_mounts()
     test_docker_authority_inventory_matches_compose_boundary()
     test_operator_upgrade_broker_runs_allowlisted_operator_upgrade()
+    test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops()
     test_operator_upgrade_broker_signature_replay_cache_is_bounded()
     test_operator_upgrade_broker_rejects_raw_or_unsafe_requests()
     test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_before_log_or_subprocess()
@@ -7795,7 +7863,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 60 ArcLink Docker regression tests")
+    print("PASS all 61 ArcLink Docker regression tests")
     return 0
 
 

@@ -343,6 +343,33 @@ def _run_logged_command(
     return result
 
 
+def _component_upgrade_statuses_from_text(text: str) -> list[str]:
+    prefix = "ARCLINK_COMPONENT_UPGRADE_STATUS="
+    statuses: list[str] = []
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean.startswith(prefix):
+            continue
+        status = clean[len(prefix) :].strip().lower()
+        if status:
+            statuses.append(status)
+    return statuses
+
+
+def _pin_upgrade_log_requires_deploy(log_path: Path, *, expected_statuses: int) -> bool:
+    try:
+        log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    statuses = _component_upgrade_statuses_from_text(log_text)
+    recent = statuses[-expected_statuses:] if expected_statuses > 0 else []
+    if len(recent) < expected_statuses:
+        return True
+    if any(status not in {"noop", "changed", "pushed"} for status in recent):
+        return True
+    return any(status in {"changed", "pushed"} for status in recent)
+
+
 def _run_operator_upgrade(request_body: dict[str, Any]) -> dict[str, Any]:
     _reject_raw_commands(request_body)
     log_path = _require_operator_log_path(str(request_body.get("log_path") or ""))
@@ -401,6 +428,11 @@ def _run_pin_upgrade(request_body: dict[str, Any]) -> dict[str, Any]:
             )
             if last_result.returncode != 0:
                 return {"returncode": int(last_result.returncode)}
+        handle.flush()
+        if not _pin_upgrade_log_requires_deploy(log_path, expected_statuses=len(commands)):
+            handle.write("All requested pinned components were already current; skipping deploy upgrade.\n")
+            handle.flush()
+            return {"returncode": int(last_result.returncode if last_result is not None else 0)}
         last_result = _run_logged_command(
             handle,
             [str(deploy), "upgrade"],

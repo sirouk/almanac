@@ -258,25 +258,27 @@ ArcPod Docker volumes follow the naming convention:
   supervisor, but the broker's writeable socket, the agent-user-helper root
   boundary, and the agent-process-helper root boundary remain open for stronger
   isolation or operator residual-risk decisions. `GAP-019-J`
-  routes queued Docker-mode operator
-  upgrades and pinned-component upgrade apply/final-upgrade execution through
-  `operator-upgrade-broker`: the enrollment provisioner fails closed without
-  broker URL/token, sends no raw command fields, and the broker reconstructs only
-  allowlisted upgrade commands while confining logs to private
-  `state/operator-actions`. Brokered Docker upgrades intentionally skip
-  host-namespace prerequisite, WireGuard/firewall, local Unix-user, and
-  Tailscale publisher mutation; those repair operations remain direct host
-  `./deploy.sh upgrade` work. This narrows the supervisor command path, but
-  the broker's writeable socket and live host checkout mount remain
-  trusted-host authority. `GAP-019-AB` narrows that broker's ambient data
+  routes queued Docker-mode operator upgrades through
+  `operator-upgrade-broker` and the host-side
+  `arclink-operator-upgrade-host-runner.timer`: the enrollment provisioner
+  fails closed without broker URL/token, sends no raw command fields, and the
+  broker queues typed host-runner requests while confining logs to private
+  `state/operator-actions`. The host runner reconstructs only
+  `deploy.sh upgrade` or allowlisted component-upgrade apply commands followed
+  by `deploy.sh upgrade`, so Raven-triggered upgrades use the same host
+  namespace path as direct host upgrades. This narrows the supervisor command
+  path and removes the operator broker's Docker socket; the broker's writable
+  live host checkout/private-state queue mount remains trusted-host authority.
+  `GAP-019-AB` narrows that broker's ambient data
   exposure by
   removing broad `*arclink-env` inheritance, broad canonical private
   config/state mounts, and the `arclink-priv/secrets/container` mount, and by
-  replacing full process env inheritance with a child-process env allowlist for
-  upgrade subprocesses. The writable host checkout can still reach nested
-  private state needed for real upgrades, so the broker remains a trusted-host
-  boundary. `GAP-019-AI` narrows the same broker's executable lookup by
-  preserving `ARCLINK_DOCKER_BINARY` for upgrade subprocesses only after it
+  replacing full process env inheritance with a host-runner queue handoff and a
+  child-process env allowlist for explicit direct-fallback upgrade subprocesses.
+  The writable host checkout can still reach nested private state needed for
+  request queueing, so the broker remains a trusted-host boundary. `GAP-019-AI`
+  narrows the same broker's explicit direct-fallback executable lookup by
+  preserving `ARCLINK_DOCKER_BINARY` for fallback subprocesses only after it
   resolves to a trusted absolute Docker CLI path; unsafe, missing,
   non-executable, non-Docker, relative, or PATH-injected values fail closed.
   `GAP-019-AW` confines the same broker's request-supplied upstream deploy-key

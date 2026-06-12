@@ -8363,6 +8363,60 @@ EOF
   systemctl start arclink-docker-tailnet-publisher.service >/dev/null 2>&1 || true
 }
 
+operator_upgrade_host_runner_interval() {
+  local value="${ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_INTERVAL_SECONDS:-5}"
+  if [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]]; then
+    printf '%ss\n' "$value"
+  else
+    printf '%s\n' "5s"
+  fi
+}
+
+install_control_operator_upgrade_host_runner_timer() {
+  local docker_env="" interval="" service_file="" timer_file=""
+
+  if [[ ! -d /run/systemd/system ]] || ! command_exists systemctl; then
+    return 0
+  fi
+  docker_env="$(docker_env_file_path)"
+  interval="$(operator_upgrade_host_runner_interval)"
+  service_file="/etc/systemd/system/arclink-operator-upgrade-host-runner.service"
+  timer_file="/etc/systemd/system/arclink-operator-upgrade-host-runner.timer"
+
+  cat >"$service_file" <<EOF
+[Unit]
+Description=ArcLink operator upgrade host runner
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=$BOOTSTRAP_DIR
+Environment=ARCLINK_OPERATOR_UPGRADE_HOST_REPO_DIR=$BOOTSTRAP_DIR
+Environment=ARCLINK_OPERATOR_UPGRADE_HOST_PRIV_DIR=$BOOTSTRAP_DIR/arclink-priv
+Environment=ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR=$BOOTSTRAP_DIR/arclink-priv/state/operator-upgrade-host-runner
+Environment=ARCLINK_CONFIG_FILE=$docker_env
+ExecStart=$BOOTSTRAP_DIR/bin/arclink-operator-upgrade-host-runner.sh --once
+EOF
+
+  cat >"$timer_file" <<EOF
+[Unit]
+Description=Run ArcLink operator upgrade host runner
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=$interval
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload >/dev/null
+  systemctl enable --now arclink-operator-upgrade-host-runner.timer >/dev/null
+}
+
 docker_env_file_path() {
   printf '%s\n' "$BOOTSTRAP_DIR/arclink-priv/config/docker.env"
 }
@@ -11537,19 +11591,10 @@ run_control_install_flow() {
   local operation="control-upgrade"
   local docker_env=""
   local arg=""
-  local brokered_control_upgrade="${ARCLINK_BROKERED_CONTROL_UPGRADE:-0}"
   local -a remaining_args=()
 
   if [[ "$run_interactive" == "1" ]]; then
     operation="control-install"
-  fi
-  case "$brokered_control_upgrade" in
-    1|true|TRUE|yes|YES|on|ON) brokered_control_upgrade=1 ;;
-    *) brokered_control_upgrade=0 ;;
-  esac
-  if [[ "$brokered_control_upgrade" == "1" && "$run_interactive" == "1" ]]; then
-    echo "Brokered Docker Control Node upgrades only support noninteractive upgrade mode." >&2
-    return 2
   fi
   for arg in "${CONTROL_DEPLOY_ARGS[@]:-}"; do
     case "$arg" in
@@ -11566,14 +11611,10 @@ run_control_install_flow() {
   trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
 
   echo "Installing or repairing ArcLink Sovereign Control Node from this checkout..."
-  if [[ "$brokered_control_upgrade" == "1" ]]; then
-    echo "Brokered Docker upgrade: skipping host prerequisite installation inside the operator upgrade broker."
-  else
-    ARCLINK_PREREQ_SURFACE="control-node" \
-    ARCLINK_PREREQ_WIREGUARD="${ARCLINK_WIREGUARD_ENABLED:-1}" \
-    ARCLINK_PREREQ_AUDIT_FILE="${ARCLINK_PREREQ_AUDIT_FILE:-$BOOTSTRAP_DIR/arclink-priv/state/arclink-prereq-audit.jsonl}" \
-      "$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"
-  fi
+  ARCLINK_PREREQ_SURFACE="control-node" \
+  ARCLINK_PREREQ_WIREGUARD="${ARCLINK_WIREGUARD_ENABLED:-1}" \
+  ARCLINK_PREREQ_AUDIT_FILE="${ARCLINK_PREREQ_AUDIT_FILE:-$BOOTSTRAP_DIR/arclink-priv/state/arclink-prereq-audit.jsonl}" \
+    "$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"
   run_arclink_docker bootstrap
   docker_env="$(docker_env_file_path)"
   if [[ "$run_interactive" == "1" && "${ARCLINK_CONTROL_SKIP_CONFIG:-0}" != "1" && -t 0 ]]; then
@@ -11584,13 +11625,9 @@ run_control_install_flow() {
     sync_control_upgrade_checkout_from_upstream
   fi
   load_docker_runtime_config
-  if [[ "$brokered_control_upgrade" == "1" ]]; then
-    echo "Brokered Docker upgrade: skipping host WireGuard/firewall mutation inside the operator upgrade broker."
-  else
-    ensure_control_wireguard_ready
-    sync_control_wireguard_peers_from_inventory
-    print_control_wireguard_guidance
-  fi
+  ensure_control_wireguard_ready
+  sync_control_wireguard_peers_from_inventory
+  print_control_wireguard_guidance
   write_docker_runtime_config "$docker_env"
   CONFIG_TARGET="$docker_env"
   load_docker_runtime_config
@@ -11599,13 +11636,10 @@ run_control_install_flow() {
   sync_control_docker_image_to_fleet_workers
   run_arclink_docker up
   load_docker_runtime_config
-  if [[ "$brokered_control_upgrade" == "1" ]]; then
-    echo "Brokered Docker upgrade: skipping host-local fleet repair and Tailscale publisher mutation inside the operator upgrade broker."
-  else
-    ensure_control_local_fleet_worker_registered
-    publish_control_tailscale_ingress
-    install_control_tailnet_publisher_timer
-  fi
+  ensure_control_local_fleet_worker_registered
+  publish_control_tailscale_ingress
+  install_control_tailnet_publisher_timer
+  install_control_operator_upgrade_host_runner_timer
   register_control_public_bot_actions
   run_arclink_docker record-release
   run_arclink_docker ports
@@ -12714,6 +12748,7 @@ run_control_runtime_reset() {
   load_docker_runtime_config
   publish_control_tailscale_ingress
   install_control_tailnet_publisher_timer
+  install_control_operator_upgrade_host_runner_timer
   register_control_public_bot_actions
   run_arclink_docker record-release
   run_arclink_docker ports

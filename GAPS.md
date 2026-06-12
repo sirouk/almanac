@@ -911,13 +911,15 @@ when they were active blockers during this buildout pass. Treat rows marked
   `tests/test_arclink_docker.py`).
   The `GAP-019-J` repair routes queued Docker-mode operator upgrades and
   pinned-component upgrade apply/final-upgrade calls through
-  `operator-upgrade-broker` instead of raw subprocess execution in the root
-  supervisor path. The enrollment provisioner now fails closed without broker
-  URL/token, sends bounded `run_operator_upgrade` or `run_pin_upgrade`
-  requests, and the broker rejects raw commands, validates the host repo/private
-  paths from Docker config, confines logs under private `state/operator-actions`,
-  and reconstructs only `deploy.sh docker upgrade` or allowlisted
-  `component-upgrade.sh ... --skip-upgrade` commands
+  `operator-upgrade-broker` and the host-side operator upgrade runner instead
+  of raw subprocess execution in the root supervisor path. The enrollment
+  provisioner now fails closed without broker URL/token, sends bounded
+  `run_operator_upgrade` or `run_pin_upgrade` requests, and the broker rejects
+  raw commands, validates the host repo/private paths from Docker config,
+  confines logs under private `state/operator-actions`, and queues typed
+  host-runner requests. The host runner reconstructs only `deploy.sh upgrade`
+  or allowlisted `component-upgrade.sh ... --skip-upgrade` commands followed by
+  `deploy.sh upgrade`
   (`python/arclink_enrollment_provisioner.py`,
   `python/arclink_operator_upgrade_broker.py`, `compose.yaml`,
   `tests/test_arclink_enrollment_provisioner_regressions.py`,

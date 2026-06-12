@@ -2,9 +2,9 @@
 """Dedicated Docker-mode operator upgrade broker.
 
 The enrollment provisioner queues typed operator-upgrade requests here in
-Docker mode. This broker owns the Docker socket and writable host checkout for
-allowlisted upgrade commands, reconstructing those commands locally while
-rejecting raw command input.
+Docker mode. This broker authenticates and validates the request, then hands it
+to the host-side operator upgrade runner so queued Raven upgrades use the same
+host namespace path as ./deploy.sh upgrade.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import stat
 import subprocess
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,8 @@ OPTIONAL_CHILD_ENV_KEYS = (
 SERVICE_NAME = "operator-upgrade-broker"
 SCRIPT_READ_BITS = stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
 SCRIPT_EXEC_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+HOST_RUNNER_SCHEMA_VERSION = 1
+HOST_RUNNER_REQUEST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{7,80}$")
 
 
 def _broker_token() -> str:
@@ -215,7 +218,6 @@ def _operator_env(request_body: dict[str, Any]) -> dict[str, str]:
             "ARCLINK_DOCKER_MODE": "1",
             "ARCLINK_CONTAINER_RUNTIME": "docker",
             "ARCLINK_COMPONENT_UPGRADE_MODE": "docker",
-            "ARCLINK_BROKERED_CONTROL_UPGRADE": "1",
             "ARCLINK_REPO_DIR": str(repo_dir),
             "ARCLINK_PRIV_DIR": str(private_dir),
             "ARCLINK_PRIV_CONFIG_DIR": str(private_dir / "config"),
@@ -242,6 +244,133 @@ def _operator_env(request_body: dict[str, Any]) -> dict[str, str]:
             if value:
                 env[key] = value
     return env
+
+
+def _host_runner_enabled() -> bool:
+    value = str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED", "1") or "").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def _normalized_upstream(request_body: dict[str, Any], *, private_dir: Path) -> dict[str, str]:
+    upstream = request_body.get("upstream")
+    normalized: dict[str, str] = {}
+    if isinstance(upstream, dict):
+        for key in UPSTREAM_ENV_KEYS:
+            value = _upstream_env_value(key, upstream.get(key), private_dir=private_dir)
+            if value:
+                normalized[key] = value
+    return normalized
+
+
+def _normalized_pin_upgrade_item(item: dict[str, Any]) -> dict[str, str]:
+    component = _single_line(item.get("component"), label="pin upgrade component", allow_blank=False, max_chars=96)
+    if not SAFE_COMPONENT_RE.fullmatch(component) or component not in ALLOWED_PIN_COMPONENTS:
+        raise ValueError("operator upgrade broker pin upgrade component is not allowlisted")
+    kind = _single_line(item.get("kind"), label=f"{component} pin upgrade kind", allow_blank=False, max_chars=64)
+    target = _single_line(item.get("target"), label=f"{component} pin upgrade target", allow_blank=False, max_chars=240)
+    if kind not in PIN_UPGRADE_FLAGS:
+        raise ValueError(f"operator upgrade broker pin upgrade kind is not allowlisted: {kind}")
+    return {"component": component, "kind": kind, "target": target}
+
+
+def _host_runner_queue_root() -> Path:
+    configured = str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR") or "").strip()
+    host_state_root = Path(_host_priv_dir()).resolve(strict=False) / "state"
+    if configured:
+        root = Path(configured).resolve(strict=False)
+        if not root.is_absolute():
+            raise ValueError("operator upgrade host runner queue path must be absolute")
+        try:
+            root.relative_to(host_state_root)
+        except ValueError:
+            raise ValueError("operator upgrade host runner queue path must stay under private state") from None
+        return root
+    return host_state_root / "operator-upgrade-host-runner"
+
+
+def _host_runner_request_id() -> str:
+    return f"op-{int(time.time())}-{uuid.uuid4().hex}"
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _host_runner_result_error(result_path: Path) -> str:
+    try:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return f"operator upgrade host runner returned an unreadable result: {exc}"
+    if not isinstance(data, dict):
+        return "operator upgrade host runner returned an invalid result"
+    return str(data.get("error") or data.get("message") or "operator upgrade host runner failed")
+
+
+def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> dict[str, Any]:
+    _reject_raw_commands(request_body)
+    repo_dir = _host_repo_dir()
+    private_dir_raw = Path(_host_priv_dir())
+    private_dir = private_dir_raw.resolve(strict=False)
+    log_path = _require_operator_log_path(str(request_body.get("log_path") or ""))
+    timeout_seconds = _operator_timeout(request_body)
+    request_id = _host_runner_request_id()
+    if not HOST_RUNNER_REQUEST_ID_RE.fullmatch(request_id):
+        raise ValueError("operator upgrade host runner request id is invalid")
+    queue_root = _host_runner_queue_root()
+    pending_dir = queue_root / "pending"
+    results_dir = queue_root / "results"
+    result_path = results_dir / f"{request_id}.json"
+    payload: dict[str, Any] = {
+        "schema_version": HOST_RUNNER_SCHEMA_VERSION,
+        "request_id": request_id,
+        "created_at": int(time.time()),
+        "operation": operation,
+        "repo_dir": str(repo_dir),
+        "priv_dir": str(private_dir),
+        "container_priv_dir": _container_priv_dir(),
+        "log_path": str(log_path),
+        "timeout_seconds": timeout_seconds,
+        "upstream": _normalized_upstream(request_body, private_dir=private_dir_raw),
+    }
+    if operation == "run_pin_upgrade":
+        install_items = request_body.get("install_items")
+        if not isinstance(install_items, list) or not install_items:
+            raise ValueError("operator upgrade broker pin upgrade request has no install items")
+        normalized_items: list[dict[str, str]] = []
+        for item in install_items:
+            if not isinstance(item, dict):
+                raise ValueError("operator upgrade broker pin upgrade item must be a JSON object")
+            normalized_items.append(_normalized_pin_upgrade_item(item))
+        payload["install_items"] = normalized_items
+    request_path = pending_dir / f"{request_id}.json"
+    _atomic_write_json(request_path, payload)
+    wait_seconds = max(30, min(21630, timeout_seconds + 30))
+    poll_interval = float(str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_POLL_SECONDS") or "1"))
+    poll_interval = max(0.05, min(5.0, poll_interval))
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if result_path.exists():
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"operator upgrade host runner returned an unreadable result: {exc}") from None
+            if not isinstance(result, dict):
+                raise RuntimeError("operator upgrade host runner returned an invalid result")
+            if result.get("ok") is not True:
+                raise RuntimeError(_host_runner_result_error(result_path))
+            try:
+                returncode = int(result.get("returncode"))
+            except (TypeError, ValueError):
+                raise RuntimeError("operator upgrade host runner result did not include an integer returncode") from None
+            return {"returncode": returncode, "host_runner": True, "request_id": request_id}
+        time.sleep(poll_interval)
+    raise RuntimeError(
+        "operator upgrade host runner did not complete the queued request before timeout; "
+        "check arclink-operator-upgrade-host-runner.timer on the host"
+    )
 
 
 def _operator_timeout(request_body: dict[str, Any]) -> int:
@@ -519,8 +648,12 @@ def run_operator_upgrade_request(request_body: dict[str, Any]) -> tuple[bool, di
             raise ValueError("operator upgrade broker request must be a JSON object")
         operation = str(request_body.get("operation") or "").strip()
         if operation == "run_operator_upgrade":
+            if _host_runner_enabled():
+                return True, _run_host_runner_request(operation, request_body)
             return True, _run_operator_upgrade(request_body)
         if operation == "run_pin_upgrade":
+            if _host_runner_enabled():
+                return True, _run_host_runner_request(operation, request_body)
             return True, _run_pin_upgrade(request_body)
         raise ValueError("operator upgrade broker operation is not allowlisted")
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:

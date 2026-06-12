@@ -841,9 +841,9 @@ services:
 
   operator-upgrade-broker:
     <<: *arclink-app
-    # This broker intentionally owns the trusted-host upgrade boundary. It must
+    # This broker intentionally owns the trusted-host queued request boundary. It must
     # run as root inside the container when the live checkout is under /root so
-    # Docker Compose resolves host bind paths to paths the host daemon can see.
+    # it can write typed host-runner requests into private state.
     user: "0:0"
     cap_drop:
       - ALL
@@ -857,26 +857,19 @@ services:
       ARCLINK_DOCKER_HOST_REPO_DIR: ${ARCLINK_DOCKER_HOST_REPO_DIR:-}
       ARCLINK_DOCKER_HOST_PRIV_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:-}
       ARCLINK_DOCKER_CONTAINER_PRIV_DIR: /home/arclink/arclink/arclink-priv
-      ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}
       ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED: ${ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED:-}
+      ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED: "1"
+      ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:?run ./deploy.sh control bootstrap first}/state/operator-upgrade-host-runner
       ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN: ${ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:?run ./deploy.sh control bootstrap first}
       ARCLINK_OPERATOR_UPGRADE_BROKER_HOST: 0.0.0.0
       ARCLINK_OPERATOR_UPGRADE_BROKER_PORT: 8917
-    group_add:
-      - ${ARCLINK_DOCKER_SOCKET_GID:-0}
     volumes:
-      # Intentional trusted-host boundary: only this broker owns queued
-      # Docker-mode operator upgrade execution from the live host checkout.
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Keep the live checkout available at its host path for allowlisted
-      # operator upgrades without overlaying /home/arclink/arclink. The host
-      # checkout carries arclink-priv for upgrade config/logs, so avoid also
-      # mounting broad canonical private config/state/secret paths here.
+      # Keep the live checkout available at its host path so the broker can
+      # write typed requests into the same private state the host runner drains.
       - ${ARCLINK_DOCKER_HOST_REPO_DIR:-.}:${ARCLINK_DOCKER_HOST_REPO_DIR:-/home/arclink/arclink}
     command: ["python3", "python/arclink_operator_upgrade_broker.py"]
     networks:
       - operator-upgrade-broker-net
-      - operator-upgrade-broker-egress-net
     healthcheck:
       <<: *healthcheck-fast
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8917/health >/dev/null"]
@@ -1182,4 +1175,3 @@ networks:
   gateway-exec-broker-net:
     internal: true
   agent-process-helper-egress-net: {}
-  operator-upgrade-broker-egress-net: {}

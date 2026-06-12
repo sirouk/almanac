@@ -617,11 +617,11 @@ def test_compose_defines_full_stack_services() -> None:
         "curator-refresh must not overlay the image repo with a host checkout that may contain an arclink-priv symlink",
     )
     socket_mounts = re.findall(r"^\s+- /var/run/docker\.sock:/var/run/docker\.sock(?::ro)?\s*$", body, re.MULTILINE)
-    expect(len(socket_mounts) == 4, f"unexpected Docker socket mount count: {socket_mounts}\n{body}")
+    expect(len(socket_mounts) == 3, f"unexpected Docker socket mount count: {socket_mounts}\n{body}")
     expect(body.count("/var/run/docker.sock:/var/run/docker.sock:ro") == 0, body)
-    expect(body.count("/var/run/docker.sock:/var/run/docker.sock\n") == 4, body)
-    expect(body.count("group_add:\n      - ${ARCLINK_DOCKER_SOCKET_GID:-0}") == 4, body)
-    for socket_service in ("deployment-exec-broker", "agent-supervisor-broker", "operator-upgrade-broker", "gateway-exec-broker"):
+    expect(body.count("/var/run/docker.sock:/var/run/docker.sock\n") == 3, body)
+    expect(body.count("group_add:\n      - ${ARCLINK_DOCKER_SOCKET_GID:-0}") == 3, body)
+    for socket_service in ("deployment-exec-broker", "agent-supervisor-broker", "gateway-exec-broker"):
         block = extract(body, f"  {socket_service}:", "\n\n")
         expect("group_add:" in block, f"{socket_service} missing socket gid group_add\n{block}")
     control_ingress_block = extract(body, "  control-ingress:", "\n\n")
@@ -750,12 +750,12 @@ def test_compose_defines_full_stack_services() -> None:
     expect("run_operator_upgrade" not in agent_supervisor_broker_source, agent_supervisor_broker_source)
     expect("run_pin_upgrade" not in agent_supervisor_broker_source, agent_supervisor_broker_source)
     operator_upgrade_broker_block = extract(body, "  operator-upgrade-broker:", "\n\n")
-    expect("/var/run/docker.sock:/var/run/docker.sock" in operator_upgrade_broker_block, operator_upgrade_broker_block)
+    expect("/var/run/docker.sock:/var/run/docker.sock" not in operator_upgrade_broker_block, operator_upgrade_broker_block)
     expect("python/arclink_operator_upgrade_broker.py" in operator_upgrade_broker_block, operator_upgrade_broker_block)
     expect("ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN" in operator_upgrade_broker_block, operator_upgrade_broker_block)
     expect(
         "queued" in operator_upgrade_broker_block
-        and "operator upgrade execution" in operator_upgrade_broker_block
+        and "host-runner requests" in operator_upgrade_broker_block
         and 'user: "0:0"' in operator_upgrade_broker_block
         and compose_list_values(operator_upgrade_broker_block, "cap_add") == ["DAC_OVERRIDE"]
         and re.search(rf"^\s+- {re.escape(HOST_REPO_BIND)}\s*$", operator_upgrade_broker_block, re.MULTILINE)
@@ -777,7 +777,7 @@ def test_compose_defines_full_stack_services() -> None:
     expect("/var/run/docker.sock" not in llm_router_block and "group_add:" not in llm_router_block, llm_router_block)
     expect(
         "/var/run/docker.sock:/var/run/docker.sock" in body,
-        "dashboard and operator-upgrade brokers must intentionally mount the Docker socket for their split authority",
+        "remaining Docker brokers must intentionally mount the Docker socket for their split authority",
     )
     expect("ARCLINK_AGENT_DASHBOARD_PROXY_PORT_RANGE" not in body, body)
     expect("./bin/docker-agent-supervisor.sh" in body, body)
@@ -850,7 +850,6 @@ def test_compose_high_authority_brokers_and_helpers_are_scoped_off_default_netwo
     }
     egress_networks = {
         "agent-process-helper-egress-net": {"agent-process-helper"},
-        "operator-upgrade-broker-egress-net": {"operator-upgrade-broker"},
     }
 
     for network, expected_services in request_networks.items():
@@ -881,7 +880,7 @@ def test_compose_high_authority_brokers_and_helpers_are_scoped_off_default_netwo
         "agent-user-helper": ["agent-user-helper-net"],
         "agent-process-helper": ["agent-process-helper-net", "agent-process-helper-egress-net"],
         "agent-supervisor-broker": ["agent-supervisor-broker-net"],
-        "operator-upgrade-broker": ["operator-upgrade-broker-net", "operator-upgrade-broker-egress-net"],
+        "operator-upgrade-broker": ["operator-upgrade-broker-net"],
         "gateway-exec-broker": ["gateway-exec-broker-net"],
     }
     for service, expected in high_authority_expected.items():
@@ -1614,8 +1613,8 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
     block = blocks.get("operator-upgrade-broker")
     expect(block is not None, "operator-upgrade-broker service block missing")
     assert block is not None
-    expect("/var/run/docker.sock:/var/run/docker.sock" in block, block)
-    expect("group_add:" in block, block)
+    expect("/var/run/docker.sock:/var/run/docker.sock" not in block, block)
+    expect("group_add:" not in block, block)
     expect(
         'user: "0:0"' in block,
         f"operator-upgrade-broker must run as the trusted root broker so /root-hosted live checkouts are traversable\n{block}",
@@ -1660,7 +1659,8 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
         "ARCLINK_DOCKER_HOST_REPO_DIR: ${ARCLINK_DOCKER_HOST_REPO_DIR:-}",
         "ARCLINK_DOCKER_HOST_PRIV_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:-}",
         "ARCLINK_DOCKER_CONTAINER_PRIV_DIR: /home/arclink/arclink/arclink-priv",
-        "ARCLINK_DOCKER_BINARY: ${ARCLINK_DOCKER_BINARY:-docker}",
+        'ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED: "1"',
+        "ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR: ${ARCLINK_DOCKER_HOST_PRIV_DIR:?run ./deploy.sh control bootstrap first}/state/operator-upgrade-host-runner",
         "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN:",
         "ARCLINK_OPERATOR_UPGRADE_BROKER_HOST: 0.0.0.0",
         "ARCLINK_OPERATOR_UPGRADE_BROKER_PORT: 8917",
@@ -1687,6 +1687,7 @@ def test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_moun
     expect(boundary.get("global_container_secrets_mount") is False, f"operator-upgrade-broker must not mount global container secrets: {boundary}")
     expect(boundary.get("inherits_broad_app_env") is False, f"operator-upgrade-broker must not inherit broad app env: {boundary}")
     expect(boundary.get("linux_capabilities") == "drop_all_add_DAC_OVERRIDE", f"operator-upgrade-broker must record its exact cap_add set: {boundary}")
+    expect(boundary.get("docker_socket") == "none", f"operator-upgrade-broker should queue host work without a Docker socket: {boundary}")
     controls = row.get("gap_019_ab_controls")
     expect(isinstance(controls, dict), f"operator-upgrade-broker must record GAP-019-AB controls: {row}")
     assert isinstance(controls, dict)
@@ -2384,7 +2385,8 @@ def test_docker_authority_inventory_matches_compose_boundary() -> None:
             )
             upgrade_enforcement = "\n".join(str(item) for item in upgrade_controls.get("enforcement_paths") or [])
             expect("arclink_enrollment_provisioner.py:_run_brokered_host_upgrade" in upgrade_enforcement, upgrade_controls)
-            expect("arclink_operator_upgrade_broker.py:_run_operator_upgrade" in upgrade_enforcement, upgrade_controls)
+            expect("arclink_operator_upgrade_broker.py:_run_host_runner_request" in upgrade_enforcement, upgrade_controls)
+            expect("arclink_operator_upgrade_host_runner.py:_run_request" in upgrade_enforcement, upgrade_controls)
             expect("operator-actions" in str(upgrade_controls.get("path_confinement") or ""), upgrade_controls)
             u_controls = record.get("gap_019_u_controls")
             expect(isinstance(u_controls, dict), f"{service} must record GAP-019-U split controls: {record}")
@@ -2425,7 +2427,7 @@ def test_docker_authority_inventory_matches_compose_boundary() -> None:
                 f"{service} must record GAP-019-AV repair status: {av_controls}",
             )
             av_enforcement = "\n".join(str(item) for item in av_controls.get("enforcement_paths") or [])
-            expect("_require_operator_repo_script" in av_enforcement and "_run_pin_upgrade" in av_enforcement, av_controls)
+            expect("_require_repo_script" in av_enforcement and "arclink_operator_upgrade_host_runner.py:_run_request" in av_enforcement, av_controls)
             expect("deploy.sh" in str(av_controls.get("removed_authority") or ""), av_controls)
             expect("subprocess.run" in str(av_controls.get("fail_closed_boundary") or ""), av_controls)
             aw_controls = record.get("gap_019_aw_controls")
@@ -2560,6 +2562,7 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
         os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
         os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
         os.environ["ARCLINK_DOCKER_BINARY"] = "docker"
+        os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED"] = "0"
         os.environ["ARCLINK_STATE_ROOT_BASE"] = "/arcdata/test-deployments"
         os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "broker-token-must-not-reach-child"
         os.environ["ARCLINK_GATEWAY_EXEC_BROKER_TOKEN"] = "gateway-token-must-not-reach-child"
@@ -2609,7 +2612,7 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
         env = captured[0]["env"]
         expect(isinstance(env, dict), str(captured))
         expect(env.get("ARCLINK_COMPONENT_UPGRADE_MODE") == "docker", str(env))
-        expect(env.get("ARCLINK_BROKERED_CONTROL_UPGRADE") == "1", str(env))
+        expect("ARCLINK_BROKERED_CONTROL_UPGRADE" not in env, str(env))
         expect(env.get("ARCLINK_REPO_DIR") == str(repo), str(env))
         expect(env.get("ARCLINK_PRIV_DIR") == str(priv), str(env))
         expect(env.get("ARCLINK_UPSTREAM_BRANCH") == "arclink", str(env))
@@ -2634,6 +2637,71 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
     print("PASS test_operator_upgrade_broker_runs_allowlisted_operator_upgrade")
 
 
+def test_operator_upgrade_broker_queues_host_runner_by_default() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    broker = load_python_module(PYTHON_DIR / "arclink_operator_upgrade_broker.py", "arclink_operator_upgrade_broker_host_queue_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        priv = root / "arclink-priv"
+        container_priv = root / "container" / "arclink-priv"
+        queue = priv / "state" / "operator-upgrade-host-runner"
+        (repo / "bin").mkdir(parents=True)
+        (priv / "state" / "operator-actions").mkdir(parents=True)
+        (priv / "config").mkdir(parents=True)
+        old_env = os.environ.copy()
+        captured: list[dict[str, object]] = []
+        original_atomic = broker._atomic_write_json
+        original_request_id = broker._host_runner_request_id
+
+        def fake_atomic(path: Path, payload: dict[str, object]) -> None:
+            original_atomic(path, payload)
+            if path.parent.name == "pending":
+                captured.append(dict(payload))
+                result = queue / "results" / f"{payload['request_id']}.json"
+                original_atomic(result, {"ok": True, "request_id": payload["request_id"], "returncode": 0})
+
+        try:
+            os.environ["ARCLINK_DOCKER_HOST_REPO_DIR"] = str(repo)
+            os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
+            os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR"] = str(queue)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_POLL_SECONDS"] = "0.05"
+            os.environ.pop("ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED", None)
+            broker._atomic_write_json = fake_atomic
+            broker._host_runner_request_id = lambda: "op-testqueue-0001"
+            requested_log_path = container_priv / "state" / "operator-actions" / "upgrade.log"
+            ok, payload = broker.run_operator_upgrade_request(
+                {
+                    "operation": "run_operator_upgrade",
+                    "log_path": str(requested_log_path),
+                    "upstream": {
+                        "ARCLINK_UPSTREAM_REPO_URL": "git@example.com:arclink.git",
+                        "ARCLINK_UPSTREAM_BRANCH": "arclink",
+                    },
+                }
+            )
+        finally:
+            broker._atomic_write_json = original_atomic
+            broker._host_runner_request_id = original_request_id
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        expect(ok is True and isinstance(payload, dict), str(payload))
+        expect(payload.get("host_runner") is True and payload.get("returncode") == 0, str(payload))
+        expect(captured and captured[0]["operation"] == "run_operator_upgrade", str(captured))
+        request = captured[0]
+        expect(request.get("log_path") == str(priv / "state" / "operator-actions" / "upgrade.log"), str(request))
+        expect(request.get("repo_dir") == str(repo), str(request))
+        expect(request.get("priv_dir") == str(priv), str(request))
+        upstream = request.get("upstream")
+        expect(isinstance(upstream, dict) and upstream.get("ARCLINK_UPSTREAM_BRANCH") == "arclink", str(request))
+        expect((queue / "pending" / "op-testqueue-0001.json").is_file(), "host-runner request was not queued")
+        expect(not requested_log_path.exists(), "container-style operator log path should be mapped to the host private bind")
+    print("PASS test_operator_upgrade_broker_queues_host_runner_by_default")
+
+
 def test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -2655,6 +2723,7 @@ def test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops() -> None:
         os.environ["ARCLINK_DOCKER_HOST_REPO_DIR"] = str(repo)
         os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
         os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
+        os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED"] = "0"
         captured: list[list[str]] = []
 
         def fake_run(args, **kwargs):
@@ -2699,6 +2768,81 @@ def test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops() -> None:
         expect("skipping deploy upgrade" in log_text and "deploy.sh upgrade" not in log_text, log_text)
         expect(not requested_log_path.exists(), "container-style operator log path should be mapped to the host private bind")
     print("PASS test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops")
+
+
+def test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip() -> None:
+    runner = load_python_module(
+        PYTHON_DIR / "arclink_operator_upgrade_host_runner.py",
+        "arclink_operator_upgrade_host_runner_exec_test",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        priv = root / "arclink-priv"
+        queue = priv / "state" / "operator-upgrade-host-runner"
+        marker = root / "deploy-marker.txt"
+        (repo / "bin").mkdir(parents=True)
+        (priv / "state" / "operator-actions").mkdir(parents=True)
+        (priv / "config").mkdir(parents=True)
+        (repo / "deploy.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "if [[ -n \"${ARCLINK_BROKERED_CONTROL_UPGRADE:-}\" ]]; then echo brokered-skip-present >&2; exit 42; fi\n"
+            f"printf 'deploy %s %s\\n' \"$1\" \"$ARCLINK_CONFIG_FILE\" >> {shlex.quote(str(marker))}\n",
+            encoding="utf-8",
+        )
+        (repo / "bin" / "component-upgrade.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "echo 'pin already current'\n"
+            "echo 'ARCLINK_COMPONENT_UPGRADE_STATUS=noop'\n",
+            encoding="utf-8",
+        )
+        (repo / "deploy.sh").chmod(0o755)
+        (repo / "bin" / "component-upgrade.sh").chmod(0o755)
+        requests = [
+            {
+                "schema_version": 1,
+                "request_id": "op-hostrunner-0001",
+                "operation": "run_operator_upgrade",
+                "repo_dir": str(repo),
+                "priv_dir": str(priv),
+                "log_path": str(priv / "state" / "operator-actions" / "upgrade.log"),
+                "timeout_seconds": 30,
+            },
+            {
+                "schema_version": 1,
+                "request_id": "op-hostrunner-0002",
+                "operation": "run_pin_upgrade",
+                "repo_dir": str(repo),
+                "priv_dir": str(priv),
+                "log_path": str(priv / "state" / "operator-actions" / "pin-upgrade.log"),
+                "timeout_seconds": 30,
+                "install_items": [{"component": "hermes-agent", "kind": "git-commit", "target": "abc123"}],
+            },
+        ]
+        (queue / "pending").mkdir(parents=True)
+        for request in requests:
+            (queue / "pending" / f"{request['request_id']}.json").write_text(json.dumps(request) + "\n", encoding="utf-8")
+        old_env = os.environ.copy()
+        try:
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_REPO_DIR"] = str(repo)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_PRIV_DIR"] = str(priv)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR"] = str(queue)
+            result = runner.process_once()
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+        expect(result == 0, str(result))
+        marker_lines = marker.read_text(encoding="utf-8").splitlines()
+        expect(marker_lines == [f"deploy upgrade {priv / 'config' / 'docker.env'}"], marker_lines)
+        upgrade_result = json.loads((queue / "results" / "op-hostrunner-0001.json").read_text(encoding="utf-8"))
+        pin_result = json.loads((queue / "results" / "op-hostrunner-0002.json").read_text(encoding="utf-8"))
+        expect(upgrade_result.get("ok") is True and upgrade_result.get("returncode") == 0, str(upgrade_result))
+        expect(pin_result.get("ok") is True and pin_result.get("returncode") == 0, str(pin_result))
+        pin_log = (priv / "state" / "operator-actions" / "pin-upgrade.log").read_text(encoding="utf-8")
+        expect("ARCLINK_COMPONENT_UPGRADE_STATUS=noop" in pin_log and "skipping deploy upgrade" in pin_log, pin_log)
+    print("PASS test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip")
 
 
 def test_operator_upgrade_broker_signature_replay_cache_is_bounded() -> None:
@@ -2930,6 +3074,7 @@ def test_operator_upgrade_broker_rejects_symlinked_or_non_executable_repo_script
             os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
             os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
             os.environ["ARCLINK_DOCKER_BINARY"] = "docker"
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED"] = "0"
             broker.subprocess.run = fake_run
             broker.shutil.which = lambda name: str(docker_path) if name == "docker" else None
             broker.TRUSTED_DOCKER_BINARY_PATHS = (docker_path,)
@@ -3042,6 +3187,7 @@ def test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_befo
             os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
             os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
             os.environ["ARCLINK_DOCKER_BINARY"] = "docker"
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED"] = "0"
             broker.subprocess.run = fake_run
             broker.shutil.which = lambda name: str(docker_path) if name == "docker" else None
             broker.TRUSTED_DOCKER_BINARY_PATHS = (docker_path,)
@@ -3075,7 +3221,7 @@ def test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_befo
             expect(captured and captured[0]["args"] == [str(repo / "deploy.sh"), "upgrade"], str(captured))
             env = captured[0]["env"]
             expect(isinstance(env, dict), str(captured))
-            expect(env.get("ARCLINK_BROKERED_CONTROL_UPGRADE") == "1", str(env))
+            expect("ARCLINK_BROKERED_CONTROL_UPGRADE" not in env, str(env))
             expect(env.get("ARCLINK_UPSTREAM_DEPLOY_KEY_PATH") == str(safe_key), str(env))
             expect(env.get("ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE") == str(safe_known_hosts), str(env))
         finally:
@@ -3163,6 +3309,7 @@ def test_operator_upgrade_broker_rejects_unsafe_docker_binary_before_subprocess(
             os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
             os.environ["ARCLINK_STATE_ROOT_BASE"] = str(root / "deployments")
             os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "redacted-test-token"
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED"] = "0"
             broker.subprocess.run = fake_run
 
             for configured in ("/bin/bash", "docker --host unix:///tmp/docker.sock", "relative/docker"):
@@ -7784,6 +7931,7 @@ def test_docker_compose_config_validates_when_docker_is_available() -> None:
             "ARCLINK_DEPLOYMENT_EXEC_BROKER_TOKEN": "compose-config-test-deployment-broker-token",
             "ARCLINK_AGENT_SUPERVISOR_BROKER_TOKEN": "compose-config-test-agent-supervisor-broker-token",
             "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN": "compose-config-test-operator-upgrade-broker-token",
+            "ARCLINK_DOCKER_HOST_PRIV_DIR": "/tmp/arclink-compose-config/arclink-priv",
             "ARCLINK_AGENT_USER_HELPER_TOKEN": "compose-config-test-agent-user-helper-token",
             "ARCLINK_AGENT_PROCESS_HELPER_TOKEN": "compose-config-test-agent-process-helper-token",
             "ARCLINK_MIGRATION_CAPTURE_HELPER_TOKEN": "compose-config-test-migration-helper-token",
@@ -7814,7 +7962,9 @@ def main() -> int:
     test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_mounts()
     test_docker_authority_inventory_matches_compose_boundary()
     test_operator_upgrade_broker_runs_allowlisted_operator_upgrade()
+    test_operator_upgrade_broker_queues_host_runner_by_default()
     test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops()
+    test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip()
     test_operator_upgrade_broker_signature_replay_cache_is_bounded()
     test_operator_upgrade_broker_rejects_raw_or_unsafe_requests()
     test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_before_log_or_subprocess()

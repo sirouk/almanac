@@ -61,8 +61,8 @@
     "review_status": "local_broker_added",
     "selected_service": "operator-upgrade-broker",
     "control_type": "queued Docker-mode operator upgrade broker controls",
-    "reason": "After agent-supervisor lost direct Docker socket access, queued operator upgrades still needed a source-owned path. The enrollment provisioner now delegates Docker-mode host upgrades and pinned-component upgrade apply/final-upgrade calls to the tokened operator-upgrade-broker, which reconstructs only allowlisted upgrade commands and validates the private operator-action log path.",
-    "remaining_gate": "This keeps the root supervisor from running raw Docker upgrade commands, but operator-upgrade-broker still has host-root-equivalent Docker socket authority and mounts the live host repo path for the allowlisted upgrade commands. GAP-019 remains open for broker residual-risk acceptance or stronger host-side isolation."
+    "reason": "After agent-supervisor lost direct Docker socket access, queued operator upgrades still needed a source-owned path. The enrollment provisioner now delegates Docker-mode host upgrades and pinned-component requests to the tokened operator-upgrade-broker, which validates typed requests and queues them for the host-side operator upgrade runner.",
+    "remaining_gate": "This keeps the root supervisor from running raw Docker upgrade commands and removes the operator-upgrade-broker Docker socket; the broker still has trusted write access to the live host repo/private-state bind so it can queue host-runner requests."
   },
   "gap_019_k_summary": {
     "review_status": "local_control_added",
@@ -147,13 +147,13 @@
     ],
     "control_type": "read-only host repo bind mounts for Docker non-broker services",
     "reason": "agent-process-helper, agent-supervisor, and curator-refresh need the live host checkout for ArcLink script reads, refresh, and detection paths, but they do not need to write to the repository. Their host repo binds are read-only; GAP-019-U moves the explicit writable host repo exception for allowlisted queued Docker-mode operator upgrades to operator-upgrade-broker.",
-    "remaining_gate": "This removes unnecessary write access to the live checkout from Docker non-broker services, but it does not remove agent-process-helper root authority or the operator-upgrade-broker writeable Docker socket and writable host repo exception. GAP-019 remains open for stronger isolation or operator risk acceptance."
+    "remaining_gate": "This removes unnecessary write access to the live checkout from Docker non-broker services, but it does not remove agent-process-helper root authority or the operator-upgrade-broker writable host repo/private-state queue exception. GAP-019 remains open for stronger isolation or operator risk acceptance."
   },
   "gap_019_u_summary": {
     "review_status": "local_broker_split",
     "selected_service": "operator-upgrade-broker",
     "control_type": "split queued operator upgrades out of the dashboard agent-supervisor broker",
-    "reason": "agent-supervisor-broker only needs Docker authority for dashboard network/proxy sidecars. Queued Docker-mode operator upgrades need the writable host checkout and Docker socket, so those requests now use a dedicated operator-upgrade-broker and the dashboard broker no longer mounts the host repo or accepts upgrade operation kinds.",
+    "reason": "agent-supervisor-broker only needs Docker authority for dashboard network/proxy sidecars. Queued Docker-mode operator upgrades need a writable private-state queue into the host checkout, so those requests now use a dedicated operator-upgrade-broker and the dashboard broker no longer mounts the host repo or accepts upgrade operation kinds.",
     "remaining_gate": "This reduces mixed broker authority but does not make operator-upgrade-broker tenant-safe. GAP-019 remains open for the operator-upgrade, deployment, gateway, and dashboard broker socket residual risks, root helper residual risks, and operator risk acceptance."
   },
   "gap_019_v_summary": {
@@ -201,7 +201,7 @@
     "selected_service": "operator-upgrade-broker",
     "control_type": "minimal service env, no broad canonical private mounts, and child-process env allowlist for the operator upgrade broker",
     "removed_authority": "removed broad *arclink-env inheritance, removed broad canonical private config/state/secrets mounts, and replaced child-process os.environ.copy inheritance with an explicit allowlist",
-    "reason": "operator-upgrade-broker reconstructs only allowlisted Docker-mode upgrade commands from tokened requests. It needs broker token/listener env, host repo/private path metadata, optional Docker binary selection, the writable host repo bind, and the Docker socket; upgrade subprocesses now receive only basic runtime env, Docker-mode path env, and request-supplied upstream deploy-key metadata rather than the broker's full process environment.",
+    "reason": "operator-upgrade-broker validates only allowlisted Docker-mode upgrade request kinds from tokened requests. It needs broker token/listener env, host repo/private path metadata, and the writable host repo bind for the host-runner queue; production upgrade execution happens in the host-side operator upgrade runner rather than in the broker container.",
     "remaining_gate": "This narrows the operator broker's ambient secret and private-data exposure. GAP-019 remains open for the broker's writeable Docker socket authority, writable host checkout/private-state reachability through that checkout, live alert integration, stronger isolation, or operator residual-risk acceptance."
   },
   "gap_019_ac_summary": {
@@ -273,8 +273,8 @@
     "selected_service": "operator-upgrade-broker",
     "control_type": "trusted Docker CLI path preflight before operator upgrade child subprocesses",
     "removed_authority": "removed ARCLINK_DOCKER_BINARY steering to non-Docker executables and PATH-injected fake docker binaries in operator-upgrade-broker child env",
-    "reason": "operator-upgrade-broker owns a writeable Docker socket and writable host repo bind for allowlisted queued Docker-mode operator upgrades. It now resolves any preserved ARCLINK_DOCKER_BINARY value to the docker executable only, requires a trusted absolute executable path, and fails closed before subprocess.run when the configured CLI is missing, unsafe, non-executable, or not a Docker CLI path.",
-    "remaining_gate": "This narrows one operator-upgrade broker executable-lookup boundary. GAP-019 remains open for operator-upgrade-broker writeable Docker socket and writable host repo residual risk, other broker socket residual risks, root helper authority, live alert integration, stronger isolation, or operator residual-risk acceptance."
+    "reason": "operator-upgrade-broker no longer owns the Docker socket in production; this control remains for the explicit direct-execution fallback path used outside the host-runner queue. That fallback resolves any preserved ARCLINK_DOCKER_BINARY value to the docker executable only, requires a trusted absolute executable path, and fails closed before subprocess.run when the configured CLI is missing, unsafe, non-executable, or not a Docker CLI path.",
+    "remaining_gate": "This narrows one direct-fallback executable-lookup boundary. GAP-019 remains open for operator-upgrade-broker writable host repo/private-state queue residual risk, other broker socket residual risks, root helper authority, live alert integration, stronger isolation, or operator residual-risk acceptance."
   },
   "gap_019_av_summary": {
     "review_status": "local_fixed_script_target_preflight_added",
@@ -282,7 +282,7 @@
     "control_type": "fixed deploy.sh and component-upgrade.sh target preflight before operator-upgrade logs or subprocesses",
     "removed_authority": "operator-upgrade-broker no longer follows symlinked, directory, unreadable, non-executable, or missing fixed repo script targets for deploy.sh or bin/component-upgrade.sh.",
     "reason": "operator-upgrade-broker is the explicit writable host repo exception for queued Docker-mode upgrades. The broker now treats the configured checkout as untrusted until the exact fixed script targets are proven to be non-symlink regular readable files with executable bits, and it builds pin-upgrade command forms before opening private operator-action logs.",
-    "remaining_gate": "This narrows fixed script target dispatch only. GAP-019 remains open for operator-upgrade-broker writeable Docker socket and writable host repo residual risk, stronger isolation, live alert integration, or operator residual-risk acceptance."
+    "remaining_gate": "This narrows fixed script target dispatch only. GAP-019 remains open for operator-upgrade-broker writable host repo/private-state queue residual risk, stronger isolation, live alert integration, or operator residual-risk acceptance."
   },
   "gap_019_aw_summary": {
     "review_status": "local_upstream_deploy_key_path_confinement_added",
@@ -290,7 +290,7 @@
     "control_type": "upstream deploy-key and known-hosts private-state path confinement before operator-upgrade logs or subprocesses",
     "removed_authority": "request-supplied ARCLINK_UPSTREAM_DEPLOY_KEY_PATH and ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE values can no longer point outside ARCLINK_DOCKER_HOST_PRIV_DIR, use relative paths, or traverse symlinked private-state path components before queued upgrade child env construction.",
     "reason": "operator-upgrade-broker preserves upstream deploy-key metadata for real upgrades, but that metadata is untrusted request data. The broker now validates non-empty upstream key and known-hosts paths as absolute private-state children before private operator-action logs or upgrade subprocesses can be created.",
-    "remaining_gate": "This narrows upstream deploy-key path steering only. GAP-019 remains open for operator-upgrade-broker writeable Docker socket and writable host repo residual risk, stronger isolation, live alert integration, or operator residual-risk acceptance."
+    "remaining_gate": "This narrows upstream deploy-key path steering only. GAP-019 remains open for operator-upgrade-broker writable host repo/private-state queue residual risk, stronger isolation, live alert integration, or operator residual-risk acceptance."
   },
   "gap_019_aj_summary": {
     "review_status": "local_process_reconciliation_hardened",
@@ -2224,9 +2224,9 @@
     {
       "service": "operator-upgrade-broker",
       "authority_class": "root-operator-upgrade-broker",
-      "purpose": "Dedicated broker that executes allowlisted queued Docker-mode operator upgrades.",
+      "purpose": "Dedicated broker that validates queued Docker-mode operator upgrades and queues them for the host runner.",
       "compose_boundary": {
-        "docker_socket": "write",
+        "docker_socket": "none",
         "explicit_root": true,
         "container_user": "root",
         "private_state_mounts": false,
@@ -2236,22 +2236,19 @@
         "child_process_env_allowlist": true,
         "linux_capabilities": "drop_all_add_DAC_OVERRIDE",
         "compose_networks": [
-          "operator-upgrade-broker-net",
-          "operator-upgrade-broker-egress-net"
+          "operator-upgrade-broker-net"
         ],
         "default_network": false,
         "internal_request_networks": [
           "operator-upgrade-broker-net"
         ],
-        "egress_networks": [
-          "operator-upgrade-broker-egress-net"
-        ],
+        "egress_networks": [],
         "trusted_host_risk_acceptance_gate": "required"
       },
-      "why_socket_needed": "Queued Docker-mode operator upgrades and pinned-component apply/final-upgrade requests need to run Docker Compose from the live host checkout.",
-      "proxy_or_broker_candidate_status": "GAP-019-B2 reviewed; GAP-019-U implemented: queued operator upgrade execution moved out of agent-supervisor-broker into this command-specific broker. GAP-019-AI rejects unsafe Docker CLI executable configuration before upgrade child subprocesses. GAP-019-AV rejects unsafe fixed deploy.sh and bin/component-upgrade.sh targets before private logs or upgrade subprocesses. GAP-019-AW rejects unsafe upstream deploy-key and known-hosts paths before child env construction, private logs, or upgrade subprocesses.",
+      "why_socket_needed": "No Docker socket is needed in the broker; queued Docker-mode operator upgrades are executed by the host-side operator upgrade runner.",
+      "proxy_or_broker_candidate_status": "GAP-019-B2 reviewed; GAP-019-U implemented: queued operator upgrade requests moved out of agent-supervisor-broker into this command-specific broker. The broker queues typed host-runner requests, and python/arclink_operator_upgrade_host_runner.py validates fixed deploy.sh and bin/component-upgrade.sh targets before host subprocess execution.",
       "monitoring_runbook_anchor": "docs/docker.md#docker-socket-and-private-state-trust-boundaries",
-      "residual_policy_state": "Writeable Docker socket, root container identity with DAC_OVERRIDE, and writable live host repo access remain host-root-equivalent; GAP-019 remains open until accepted or replaced with stronger isolation.",
+      "residual_policy_state": "The Docker socket was removed from this broker. Root container identity with DAC_OVERRIDE and writable live host repo/private-state queue access remain trusted-host authority; GAP-019 remains open until accepted or replaced with stronger isolation.",
       "gap_019_al_controls": {
         "local_repair_status": "trusted_host_residual_risk_acceptance_gate_added",
         "acceptance_env": "ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED",
@@ -2263,7 +2260,7 @@
           "python/arclink_operator_upgrade_broker.py:main",
           "python/arclink_operator_upgrade_broker.py:run_operator_upgrade_request"
         ],
-        "fail_closed_boundary": "Missing, blank, false, or non-accepted values fail before HTTP listener bind, typed request validation, Docker CLI lookup, deploy.sh docker upgrade, or component-upgrade subprocess execution.",
+        "fail_closed_boundary": "Missing, blank, false, or non-accepted values fail before HTTP listener bind, typed request validation, host-runner queue writes, or any direct fallback subprocess execution.",
         "test_anchors": [
           "tests/test_arclink_docker.py:test_compose_high_authority_services_receive_trusted_host_acceptance_gate",
           "tests/test_arclink_docker.py:test_trusted_host_acceptance_gate_blocks_brokers_and_helpers_before_work",
@@ -2292,14 +2289,15 @@
         "review_status": "reviewed-command-broker-added",
         "broker_or_proxy_decision": "Do not treat a generic socket proxy as sufficient. GAP-019-U uses a command-specific broker that rejects raw commands and accepts only queued operator upgrade operation kinds.",
         "operation_allowlist": [
-          "run deploy.sh docker upgrade from the configured host repo",
-          "run component-upgrade.sh <allowlisted-component> apply <allowlisted-flag> <single-line-target> --skip-upgrade, then deploy.sh docker upgrade"
+          "queue run_operator_upgrade for the host-side deploy.sh upgrade runner",
+          "queue run_pin_upgrade for host-side component-upgrade.sh <allowlisted-component> apply <allowlisted-flag> <single-line-target> --skip-upgrade, then deploy.sh upgrade when pins changed"
         ],
         "runtime_enforcement_paths": [
           "python/arclink_operator_upgrade_broker.py:run_operator_upgrade_request",
-          "python/arclink_operator_upgrade_broker.py:_run_operator_upgrade",
-          "python/arclink_operator_upgrade_broker.py:_run_pin_upgrade",
+          "python/arclink_operator_upgrade_broker.py:_run_host_runner_request",
           "python/arclink_operator_upgrade_broker.py:_require_operator_log_path",
+          "python/arclink_operator_upgrade_host_runner.py:_run_request",
+          "python/arclink_operator_upgrade_host_runner.py:_require_repo_script",
           "python/arclink_enrollment_provisioner.py:_run_brokered_host_upgrade",
           "python/arclink_enrollment_provisioner.py:_run_pin_upgrade_action"
         ],
@@ -2309,6 +2307,7 @@
         },
         "monitoring_controls": [
           "operator-upgrade-broker healthcheck",
+          "arclink-operator-upgrade-host-runner.timer",
           "state/operator-actions/*.log",
           "Docker authority inventory drift guard"
         ],
@@ -2317,14 +2316,16 @@
       },
       "gap_019_j_controls": {
         "local_repair_status": "operator_upgrade_broker_added",
-        "control_type": "queued Docker-mode operator upgrade broker",
+        "control_type": "queued Docker-mode operator upgrade broker and host runner",
         "enforcement_paths": [
           "python/arclink_enrollment_provisioner.py:_run_brokered_host_upgrade",
           "python/arclink_enrollment_provisioner.py:_run_pin_upgrade_action",
           "python/arclink_enrollment_provisioner.py:_operator_upgrade_broker_request",
-          "python/arclink_operator_upgrade_broker.py:_run_operator_upgrade",
-          "python/arclink_operator_upgrade_broker.py:_run_pin_upgrade",
-          "python/arclink_operator_upgrade_broker.py:_require_operator_log_path"
+          "python/arclink_operator_upgrade_broker.py:_run_host_runner_request",
+          "python/arclink_operator_upgrade_broker.py:_require_operator_log_path",
+          "python/arclink_operator_upgrade_host_runner.py:_run_request",
+          "python/arclink_operator_upgrade_host_runner.py:_require_repo_script",
+          "bin/deploy.sh:install_control_operator_upgrade_host_runner_timer"
         ],
         "allowed_operation_kinds": [
           "run_operator_upgrade",
@@ -2340,16 +2341,18 @@
           "single-line pin upgrade target",
           "single-line upstream env values"
         ],
-        "path_confinement": "The broker rejects raw cmd/command/args fields, reconstructs deploy.sh docker upgrade and component-upgrade.sh commands from ARCLINK_DOCKER_HOST_REPO_DIR, and confines operator upgrade logs to ARCLINK_DOCKER_CONTAINER_PRIV_DIR/state/operator-actions.",
+        "path_confinement": "The broker rejects raw cmd/command/args fields, normalizes typed host-runner requests under ARCLINK_DOCKER_HOST_PRIV_DIR/state/operator-upgrade-host-runner, and confines operator upgrade logs to ARCLINK_DOCKER_CONTAINER_PRIV_DIR/state/operator-actions. The host runner then reconstructs deploy.sh upgrade and component-upgrade.sh commands from the configured host repo.",
         "test_anchors": [
           "tests/test_arclink_enrollment_provisioner_regressions.py:test_run_host_upgrade_routes_to_operator_upgrade_broker_in_docker_mode",
           "tests/test_arclink_enrollment_provisioner_regressions.py:test_run_host_upgrade_fails_closed_without_operator_upgrade_broker_token_in_docker_mode",
           "tests/test_arclink_enrollment_provisioner_regressions.py:test_run_pin_upgrade_action_uses_operator_upgrade_broker_in_docker_mode",
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_runs_allowlisted_operator_upgrade",
+          "tests/test_arclink_docker.py:test_operator_upgrade_broker_queues_host_runner_by_default",
+          "tests/test_arclink_docker.py:test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip",
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_rejects_raw_or_unsafe_requests",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "The root supervisor no longer runs raw Docker-mode operator upgrade commands, but operator-upgrade-broker's root container identity with DAC_OVERRIDE, writeable Docker socket, live host repo mount, and private-state reachability through that host repo remain trusted-host authority until the operator accepts residual risk or replaces them with stronger isolation."
+        "remaining_gate": "The root supervisor no longer runs raw Docker-mode operator upgrade commands, and the operator-upgrade-broker no longer mounts the Docker socket. Its root container identity with DAC_OVERRIDE, live host repo mount, and private-state queue reachability remain trusted-host authority until the operator accepts residual risk or replaces them with stronger isolation."
       },
       "gap_019_u_controls": {
         "local_repair_status": "operator_upgrade_broker_split_from_agent_supervisor",
@@ -2360,15 +2363,15 @@
           "tests/test_arclink_docker.py:test_compose_defines_full_stack_services",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "This split narrows mixed authority but leaves operator-upgrade-broker as a trusted-host socket and writable-checkout boundary."
+        "remaining_gate": "This split narrows mixed authority and removes the broker Docker socket, but leaves operator-upgrade-broker as a trusted-host writable-checkout/private-state queue boundary."
       },
       "gap_019_t_controls": {
         "local_repair_status": "writable_host_repo_exception_recorded",
-        "control_type": "explicit writable host repo exception for allowlisted queued Docker-mode operator upgrades",
+        "control_type": "explicit writable host repo exception for allowlisted queued Docker-mode operator upgrade requests",
         "enforcement_paths": [
           "compose.yaml:operator-upgrade-broker host repo bind remains writable",
-          "python/arclink_operator_upgrade_broker.py:_run_operator_upgrade",
-          "python/arclink_operator_upgrade_broker.py:_run_pin_upgrade",
+          "python/arclink_operator_upgrade_broker.py:_run_host_runner_request",
+          "python/arclink_operator_upgrade_host_runner.py:_run_request",
           "tests/test_arclink_docker.py:test_compose_defines_full_stack_services",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
@@ -2376,11 +2379,11 @@
           "agent-process-helper",
           "agent-supervisor"
         ],
-        "remaining_gate": "The broker's writable host repo bind remains trusted-host authority for allowlisted queued upgrades, while Docker agent process services now mount the live checkout read-only. GAP-019 remains open for stronger isolation or operator residual-risk acceptance."
+        "remaining_gate": "The broker's writable host repo bind remains trusted-host authority for allowlisted queued host-runner requests, while Docker agent process services now mount the live checkout read-only. GAP-019 remains open for stronger isolation or operator residual-risk acceptance."
       },
       "gap_019_ab_controls": {
         "local_repair_status": "operator_upgrade_broker_service_env_and_child_env_narrowed",
-        "control_type": "minimal service env, broad private mount removal, and child-process env allowlist",
+        "control_type": "minimal service env, broad private mount removal, host-runner queue handoff, and direct-fallback child-process env allowlist",
         "removed_environment": "Removed broad *arclink-env inheritance from operator-upgrade-broker service startup.",
         "removed_mounts": [
           "./arclink-priv/config:/home/arclink/arclink/arclink-priv/config",
@@ -2395,7 +2398,8 @@
           "ARCLINK_DOCKER_HOST_REPO_DIR",
           "ARCLINK_DOCKER_HOST_PRIV_DIR",
           "ARCLINK_DOCKER_CONTAINER_PRIV_DIR",
-          "ARCLINK_DOCKER_BINARY",
+          "ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_ENABLED",
+          "ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR",
           "ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"
         ],
         "preserved_child_env": [
@@ -2405,8 +2409,7 @@
           "request-supplied ARCLINK_UPSTREAM_* deploy-key metadata"
         ],
         "preserved_mounts": [
-          "writeable Docker socket",
-          "writeable host repo bind, which may include the nested arclink-priv private state for upgrade config/logs"
+          "writeable host repo bind, which may include the nested arclink-priv private state for upgrade request queueing"
         ],
         "test_anchors": [
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_compose_boundary_minimizes_env_and_private_mounts",
@@ -2418,7 +2421,7 @@
       "gap_019_ai_controls": {
         "local_repair_status": "operator_upgrade_broker_docker_cli_preflight_added",
         "control_type": "trusted Docker CLI path preflight for operator upgrade child subprocess env",
-        "removed_authority": "ARCLINK_DOCKER_BINARY can no longer steer deploy.sh docker upgrade or component-upgrade.sh child processes to bash, another non-Docker executable, a relative path, an untrusted absolute path, a PATH-injected fake docker, or a missing/non-executable Docker CLI.",
+        "removed_authority": "In the explicit direct-execution fallback, ARCLINK_DOCKER_BINARY can no longer steer deploy.sh upgrade or component-upgrade.sh child processes to bash, another non-Docker executable, a relative path, an untrusted absolute path, a PATH-injected fake docker, or a missing/non-executable Docker CLI.",
         "enforcement_paths": [
           "python/arclink_operator_upgrade_broker.py:_docker_binary",
           "python/arclink_operator_upgrade_broker.py:_operator_env",
@@ -2439,17 +2442,17 @@
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_rejects_unsafe_docker_binary_before_subprocess",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "This narrows Docker CLI executable selection only. The operator-upgrade-broker still has writeable Docker socket authority and a writable host repo bind until stronger isolation or operator residual-risk acceptance replaces it."
+        "remaining_gate": "This narrows Docker CLI executable selection only for the explicit direct fallback. The production broker now queues a host runner without a Docker socket, but still has a writable host repo/private-state bind until stronger isolation or operator residual-risk acceptance replaces it."
       },
       "gap_019_av_controls": {
         "local_repair_status": "operator_upgrade_broker_fixed_script_preflight_added",
-        "control_type": "exact fixed repo script target preflight before private operator log creation or upgrade subprocess dispatch",
-        "removed_authority": "Symlinked, directory, unreadable, non-executable, or missing deploy.sh and bin/component-upgrade.sh targets no longer reach _run_logged_command or subprocess.run.",
+        "control_type": "exact fixed repo script target preflight before host-runner upgrade subprocess dispatch",
+        "removed_authority": "Symlinked, directory, unreadable, non-executable, or missing deploy.sh and bin/component-upgrade.sh targets no longer reach host-runner _run_logged_command or subprocess.run.",
         "enforcement_paths": [
-          "python/arclink_operator_upgrade_broker.py:_require_operator_repo_script",
-          "python/arclink_operator_upgrade_broker.py:_run_operator_upgrade",
-          "python/arclink_operator_upgrade_broker.py:_run_pin_upgrade",
-          "python/arclink_operator_upgrade_broker.py:_pin_upgrade_command"
+          "python/arclink_operator_upgrade_host_runner.py:_require_repo_script",
+          "python/arclink_operator_upgrade_host_runner.py:_run_request",
+          "python/arclink_operator_upgrade_host_runner.py:_pin_upgrade_command",
+          "python/arclink_operator_upgrade_broker.py:_run_host_runner_request"
         ],
         "rejected_configuration": [
           "missing deploy.sh or bin/component-upgrade.sh",
@@ -2458,13 +2461,13 @@
           "unreadable deploy.sh or bin/component-upgrade.sh",
           "non-executable deploy.sh or bin/component-upgrade.sh"
         ],
-        "fail_closed_boundary": "Script-target validation happens after typed request and log-path validation but before private operator log file creation, _run_logged_command, or subprocess.run.",
+        "fail_closed_boundary": "Script-target validation happens in the host runner after typed request and log-path validation but before host subprocess.run.",
         "test_anchors": [
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_rejects_symlinked_or_non_executable_repo_scripts_before_subprocess",
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_runs_allowlisted_operator_upgrade",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "This narrows fixed script target dispatch only. The operator-upgrade-broker still has writeable Docker socket authority and a writable host repo bind until stronger isolation or operator residual-risk acceptance replaces it."
+        "remaining_gate": "This narrows fixed script target dispatch only. The production broker now queues a host runner without a Docker socket, but still has a writable host repo/private-state bind until stronger isolation or operator residual-risk acceptance replaces it."
       },
       "gap_019_aw_controls": {
         "local_repair_status": "operator_upgrade_broker_upstream_deploy_key_paths_confined",
@@ -2491,7 +2494,7 @@
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_runs_allowlisted_operator_upgrade",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "This narrows upstream deploy-key path steering only. The operator-upgrade-broker still has writeable Docker socket authority and a writable host repo bind until stronger isolation or operator residual-risk acceptance replaces it."
+        "remaining_gate": "This narrows upstream deploy-key path steering only. The production broker now queues a host runner without a Docker socket, but still has a writable host repo/private-state bind until stronger isolation or operator residual-risk acceptance replaces it."
       },
       "gap_019_m_incident_controls": {
         "local_repair_status": "incident_controls_recorded",
@@ -2515,9 +2518,9 @@
         "fail_closed_actions": [
           "Reject broker requests that include raw command fields or unsafe paths",
           "Leave the affected operator upgrade action failed until request metadata is repaired",
-          "Do not run deploy.sh docker upgrade or component-upgrade manually from broker request payloads"
+          "Do not run deploy.sh upgrade or component-upgrade manually from broker request payloads"
         ],
-        "escalation_boundary": "GAP-019 operator security review is required before accepting operator-upgrade-broker residual writeable Docker socket and host checkout mount risk.",
+        "escalation_boundary": "GAP-019 operator security review is required before accepting operator-upgrade-broker residual writable host checkout/private-state queue risk.",
         "status_log_audit_locations": [
           "ARCLINK_DOCKER_HOST_PRIV_DIR/state/docker/operator-upgrade-broker/rejections.jsonl"
         ]

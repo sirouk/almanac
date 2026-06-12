@@ -3098,20 +3098,29 @@ def test_control_install_wires_prereq_auto_installation_with_skip_opt_out() -> N
     print("PASS test_control_install_wires_prereq_auto_installation_with_skip_opt_out")
 
 
-def test_brokered_control_upgrade_skips_host_namespace_mutations() -> None:
+def test_control_upgrade_runs_full_host_namespace_and_installs_operator_runner() -> None:
     text = DEPLOY_SH.read_text(encoding="utf-8")
     flow = extract(text, "run_control_install_flow() {", "run_control_reconfigure_flow() {")
-    expect("ARCLINK_BROKERED_CONTROL_UPGRADE" in flow, flow)
-    expect("skipping host prerequisite installation" in flow, flow)
-    expect("skipping host WireGuard/firewall mutation" in flow, flow)
-    expect("skipping host-local fleet repair and Tailscale publisher mutation" in flow, flow)
+    expect("ARCLINK_BROKERED_CONTROL_UPGRADE" not in flow, flow)
+    expect("skipping host prerequisite installation" not in flow, flow)
+    expect("skipping host WireGuard/firewall mutation" not in flow, flow)
+    expect("skipping host-local fleet repair" not in flow, flow)
+    expect('"$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"' in flow, flow)
+    expect("ensure_control_wireguard_ready" in flow, flow)
+    expect("sync_control_wireguard_peers_from_inventory" in flow, flow)
+    expect("ensure_control_local_fleet_worker_registered" in flow, flow)
+    expect("publish_control_tailscale_ingress" in flow, flow)
+    expect("install_control_tailnet_publisher_timer" in flow, flow)
+    expect("install_control_operator_upgrade_host_runner_timer" in flow, flow)
     expect("run_arclink_docker build" in flow, flow)
     expect("sync_control_docker_image_to_fleet_workers" in flow, flow)
     expect("run_arclink_docker up" in flow, flow)
     expect("register_control_public_bot_actions" in flow, flow)
     expect("run_arclink_docker record-release" in flow, flow)
     expect("run_arclink_docker health" in flow, flow)
-    print("PASS test_brokered_control_upgrade_skips_host_namespace_mutations")
+    expect("arclink-operator-upgrade-host-runner.timer" in text, text)
+    expect("arclink-operator-upgrade-host-runner.sh --once" in text, text)
+    print("PASS test_control_upgrade_runs_full_host_namespace_and_installs_operator_runner")
 
 
 def test_deploy_sh_guides_notion_workspace_migration() -> None:
@@ -4521,7 +4530,7 @@ def main() -> int:
         test_ensure_prereqs_fake_install_uses_packages_and_get_docker_idiom,
         test_ensure_prereqs_wireguard_check_only_plans_tools,
         test_control_install_wires_prereq_auto_installation_with_skip_opt_out,
-        test_brokered_control_upgrade_skips_host_namespace_mutations,
+        test_control_upgrade_runs_full_host_namespace_and_installs_operator_runner,
         test_deploy_sh_guides_notion_workspace_migration,
         test_deploy_sh_guides_notion_page_transfer,
         test_shell_scripts_avoid_bash4_only_features,

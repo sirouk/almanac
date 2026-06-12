@@ -89,7 +89,7 @@ this doc cross-links there rather than duplicating it.
 | `migration-capture-helper` | 8914 | none | yes | Root helper for approved migration capture only; `migration-capture-helper` intentionally runs as root. |
 | `agent-user-helper` | 8915 | none | yes | Tokened root helper for `ensure_user_home` and ownership repair (capabilities `CHOWN`, `DAC_OVERRIDE`, `FOWNER`). |
 | `agent-process-helper` | 8916 | none | yes | Tokened `setpriv` process helper using `ARCLINK_AGENT_PROCESS_HELPER_TOKEN`. |
-| `operator-upgrade-broker` | 8917 | write | yes | Tokened root broker that reconstructs allowlisted `deploy.sh`/component-upgrade actions; holds a writeable Docker socket and a writable host-repo bind. |
+| `operator-upgrade-broker` | 8917 | none | yes | Tokened root broker that validates allowlisted upgrade requests and queues them for the host-side operator upgrade runner through the writable host-repo/private-state bind. |
 
 The honest residual risk is unchanged: each socket broker still holds a writeable
 Docker socket and each root helper still runs as root. The command path is

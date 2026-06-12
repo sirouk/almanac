@@ -849,18 +849,16 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
   exception for allowlisted queued Docker-mode operator upgrades to
   `operator-upgrade-broker`, and that exception stays trusted-host residual
   risk.
-- `GAP-019-J` routes queued Docker-mode operator upgrades and
-  component-upgrade apply/final-upgrade execution through
-  `operator-upgrade-broker`. The enrollment provisioner fails closed without
-  `ARCLINK_OPERATOR_UPGRADE_BROKER_URL` and token. The broker rejects raw
-  command fields, reconstructs only `deploy.sh upgrade` in brokered Docker
-  mode or allowlisted `component-upgrade.sh ... --skip-upgrade` commands from
-  the configured host repo, and confines logs to private
-  `state/operator-actions`. Brokered Docker upgrades keep build/image
-  sync/Compose/release/health work but skip host-namespace package,
-  WireGuard/firewall, local Unix-user, and Tailscale publisher mutation; run
-  direct `./deploy.sh upgrade` on the host for that repair lane. The broker's
-  socket and live host checkout mount remain trusted-host residual risk.
+- `GAP-019-J` routes queued Docker-mode operator upgrades through
+  `operator-upgrade-broker` and the host-side
+  `arclink-operator-upgrade-host-runner.timer`. The enrollment provisioner
+  fails closed without `ARCLINK_OPERATOR_UPGRADE_BROKER_URL` and token. The
+  broker rejects raw command fields, writes only typed host-runner requests
+  under private `state/operator-upgrade-host-runner`, and confines logs to
+  private `state/operator-actions`. The host runner reconstructs only
+  `deploy.sh upgrade` or allowlisted `component-upgrade.sh ... --skip-upgrade`
+  followed by `deploy.sh upgrade`, so Raven-triggered upgrades use the same
+  host namespace path as the operator's direct `./deploy.sh upgrade`.
 - `GAP-019-AB` narrows the same operator broker's service and subprocess env
   boundary. It no longer inherits broad `*arclink-env`, no longer mounts broad
   canonical private config/state or `arclink-priv/secrets/container`, and its

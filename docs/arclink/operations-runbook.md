@@ -853,9 +853,13 @@ drift = reconcile_arclink_dns(conn, deployment_id=..., raw_cloudflare=...)
   component-upgrade apply/final-upgrade execution through
   `operator-upgrade-broker`. The enrollment provisioner fails closed without
   `ARCLINK_OPERATOR_UPGRADE_BROKER_URL` and token. The broker rejects raw
-  command fields, reconstructs only `deploy.sh upgrade` or allowlisted
-  `component-upgrade.sh ... --skip-upgrade` commands from the configured host
-  repo, and confines logs to private `state/operator-actions`. The broker's
+  command fields, reconstructs only `deploy.sh upgrade` in brokered Docker
+  mode or allowlisted `component-upgrade.sh ... --skip-upgrade` commands from
+  the configured host repo, and confines logs to private
+  `state/operator-actions`. Brokered Docker upgrades keep build/image
+  sync/Compose/release/health work but skip host-namespace package,
+  WireGuard/firewall, local Unix-user, and Tailscale publisher mutation; run
+  direct `./deploy.sh upgrade` on the host for that repair lane. The broker's
   socket and live host checkout mount remain trusted-host residual risk.
 - `GAP-019-AB` narrows the same operator broker's service and subprocess env
   boundary. It no longer inherits broad `*arclink-env`, no longer mounts broad

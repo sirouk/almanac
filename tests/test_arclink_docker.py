@@ -2609,6 +2609,7 @@ def test_operator_upgrade_broker_runs_allowlisted_operator_upgrade() -> None:
         env = captured[0]["env"]
         expect(isinstance(env, dict), str(captured))
         expect(env.get("ARCLINK_COMPONENT_UPGRADE_MODE") == "docker", str(env))
+        expect(env.get("ARCLINK_BROKERED_CONTROL_UPGRADE") == "1", str(env))
         expect(env.get("ARCLINK_REPO_DIR") == str(repo), str(env))
         expect(env.get("ARCLINK_PRIV_DIR") == str(priv), str(env))
         expect(env.get("ARCLINK_UPSTREAM_BRANCH") == "arclink", str(env))
@@ -3074,6 +3075,7 @@ def test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_befo
             expect(captured and captured[0]["args"] == [str(repo / "deploy.sh"), "upgrade"], str(captured))
             env = captured[0]["env"]
             expect(isinstance(env, dict), str(captured))
+            expect(env.get("ARCLINK_BROKERED_CONTROL_UPGRADE") == "1", str(env))
             expect(env.get("ARCLINK_UPSTREAM_DEPLOY_KEY_PATH") == str(safe_key), str(env))
             expect(env.get("ARCLINK_UPSTREAM_KNOWN_HOSTS_FILE") == str(safe_known_hosts), str(env))
         finally:

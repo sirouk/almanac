@@ -263,9 +263,13 @@ ArcPod Docker volumes follow the naming convention:
   `operator-upgrade-broker`: the enrollment provisioner fails closed without
   broker URL/token, sends no raw command fields, and the broker reconstructs only
   allowlisted upgrade commands while confining logs to private
-  `state/operator-actions`. This narrows the supervisor command path, but the
-  broker's writeable socket and live host checkout mount remain trusted-host
-  authority. `GAP-019-AB` narrows that broker's ambient data exposure by
+  `state/operator-actions`. Brokered Docker upgrades intentionally skip
+  host-namespace prerequisite, WireGuard/firewall, local Unix-user, and
+  Tailscale publisher mutation; those repair operations remain direct host
+  `./deploy.sh upgrade` work. This narrows the supervisor command path, but
+  the broker's writeable socket and live host checkout mount remain
+  trusted-host authority. `GAP-019-AB` narrows that broker's ambient data
+  exposure by
   removing broad `*arclink-env` inheritance, broad canonical private
   config/state mounts, and the `arclink-priv/secrets/container` mount, and by
   replacing full process env inheritance with a child-process env allowlist for

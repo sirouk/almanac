@@ -11537,10 +11537,19 @@ run_control_install_flow() {
   local operation="control-upgrade"
   local docker_env=""
   local arg=""
+  local brokered_control_upgrade="${ARCLINK_BROKERED_CONTROL_UPGRADE:-0}"
   local -a remaining_args=()
 
   if [[ "$run_interactive" == "1" ]]; then
     operation="control-install"
+  fi
+  case "$brokered_control_upgrade" in
+    1|true|TRUE|yes|YES|on|ON) brokered_control_upgrade=1 ;;
+    *) brokered_control_upgrade=0 ;;
+  esac
+  if [[ "$brokered_control_upgrade" == "1" && "$run_interactive" == "1" ]]; then
+    echo "Brokered Docker Control Node upgrades only support noninteractive upgrade mode." >&2
+    return 2
   fi
   for arg in "${CONTROL_DEPLOY_ARGS[@]:-}"; do
     case "$arg" in
@@ -11557,10 +11566,14 @@ run_control_install_flow() {
   trap 'finish_deploy_operation; arclink_deploy_stable_copy_cleanup' EXIT
 
   echo "Installing or repairing ArcLink Sovereign Control Node from this checkout..."
-  ARCLINK_PREREQ_SURFACE="control-node" \
-  ARCLINK_PREREQ_WIREGUARD="${ARCLINK_WIREGUARD_ENABLED:-1}" \
-  ARCLINK_PREREQ_AUDIT_FILE="${ARCLINK_PREREQ_AUDIT_FILE:-$BOOTSTRAP_DIR/arclink-priv/state/arclink-prereq-audit.jsonl}" \
-    "$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"
+  if [[ "$brokered_control_upgrade" == "1" ]]; then
+    echo "Brokered Docker upgrade: skipping host prerequisite installation inside the operator upgrade broker."
+  else
+    ARCLINK_PREREQ_SURFACE="control-node" \
+    ARCLINK_PREREQ_WIREGUARD="${ARCLINK_WIREGUARD_ENABLED:-1}" \
+    ARCLINK_PREREQ_AUDIT_FILE="${ARCLINK_PREREQ_AUDIT_FILE:-$BOOTSTRAP_DIR/arclink-priv/state/arclink-prereq-audit.jsonl}" \
+      "$BOOTSTRAP_DIR/bin/lib/ensure-prereqs.sh"
+  fi
   run_arclink_docker bootstrap
   docker_env="$(docker_env_file_path)"
   if [[ "$run_interactive" == "1" && "${ARCLINK_CONTROL_SKIP_CONFIG:-0}" != "1" && -t 0 ]]; then
@@ -11571,9 +11584,13 @@ run_control_install_flow() {
     sync_control_upgrade_checkout_from_upstream
   fi
   load_docker_runtime_config
-  ensure_control_wireguard_ready
-  sync_control_wireguard_peers_from_inventory
-  print_control_wireguard_guidance
+  if [[ "$brokered_control_upgrade" == "1" ]]; then
+    echo "Brokered Docker upgrade: skipping host WireGuard/firewall mutation inside the operator upgrade broker."
+  else
+    ensure_control_wireguard_ready
+    sync_control_wireguard_peers_from_inventory
+    print_control_wireguard_guidance
+  fi
   write_docker_runtime_config "$docker_env"
   CONFIG_TARGET="$docker_env"
   load_docker_runtime_config
@@ -11582,9 +11599,13 @@ run_control_install_flow() {
   sync_control_docker_image_to_fleet_workers
   run_arclink_docker up
   load_docker_runtime_config
-  ensure_control_local_fleet_worker_registered
-  publish_control_tailscale_ingress
-  install_control_tailnet_publisher_timer
+  if [[ "$brokered_control_upgrade" == "1" ]]; then
+    echo "Brokered Docker upgrade: skipping host-local fleet repair and Tailscale publisher mutation inside the operator upgrade broker."
+  else
+    ensure_control_local_fleet_worker_registered
+    publish_control_tailscale_ingress
+    install_control_tailnet_publisher_timer
+  fi
   register_control_public_bot_actions
   run_arclink_docker record-release
   run_arclink_docker ports

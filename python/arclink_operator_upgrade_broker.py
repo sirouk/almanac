@@ -215,6 +215,7 @@ def _operator_env(request_body: dict[str, Any]) -> dict[str, str]:
             "ARCLINK_DOCKER_MODE": "1",
             "ARCLINK_CONTAINER_RUNTIME": "docker",
             "ARCLINK_COMPONENT_UPGRADE_MODE": "docker",
+            "ARCLINK_BROKERED_CONTROL_UPGRADE": "1",
             "ARCLINK_REPO_DIR": str(repo_dir),
             "ARCLINK_PRIV_DIR": str(private_dir),
             "ARCLINK_PRIV_CONFIG_DIR": str(private_dir / "config"),

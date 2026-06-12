@@ -39,6 +39,8 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
             [
                 {"command": "agents", "description": "Show Hermes agents"},
                 {"command": "status", "description": "Show Hermes status"},
+                {"command": "academy", "description": "Agent Academy command that must not steal Raven controls"},
+                {"command": "share_create", "description": "Agent share command that must not steal Raven controls"},
                 {"command": "raven", "description": "Unexpected future Hermes command"},
                 {"command": "update", "description": "Unsafe direct update"},
                 {"command": "model", "description": "Switch model"},
@@ -64,6 +66,7 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         expect("model" in names, str(names))
         expect(not any(name.startswith("raven_") for name in names), str(names))
         expect("raven" not in names and "agents" not in names and "status" not in names, str(names))
+        expect("academy" not in names and "share_create" not in names, str(names))
         expect("update" not in names, str(names))
 
         conn = sqlite3.connect(db_path)
@@ -73,6 +76,8 @@ def test_refresh_active_telegram_command_scopes_records_conflicts_and_alerts_ope
         expect(metadata["telegram_raven_control_command"] == "arclink", str(metadata))
         expect(metadata["telegram_captain_command_names"] == [], str(metadata))
         expect("agents" in metadata["telegram_command_scope_legacy_conflicts"], str(metadata))
+        expect("academy" in metadata["telegram_command_scope_legacy_conflicts"], str(metadata))
+        expect("share_create" in metadata["telegram_command_scope_legacy_conflicts"], str(metadata))
         expect("raven" in metadata["telegram_command_scope_hard_conflicts"], str(metadata))
         expect("update" in metadata["telegram_command_scope_policy_suppressed"], str(metadata))
         expect(metadata["telegram_active_agent_command_names"] == ["model"], str(metadata))
@@ -172,6 +177,8 @@ def test_register_public_bot_commands_gives_operator_hermes_scope() -> None:
     registered = set(operator_scopes["registered"])
     expect("operator_status" in registered and "agents" in registered and "upgrade" in registered, str(registered))
     expect("billing_status" in registered and "backup_status" in registered and "workspace_status" in registered, str(registered))
+    expect("operator_fleet" in registered and "upgrade_policy" in registered and "upgrade_sweep" in registered, str(registered))
+    expect("fleet_drain" in registered and "fleet_resume" in registered and "academy_roster" in registered, str(registered))
     expect("model" in registered and "provider" in registered, str(registered))
     expect("update" not in registered, str(registered))
     expect("agents" in operator_scopes["agent_conflicts"], str(operator_scopes))

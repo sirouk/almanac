@@ -12,6 +12,7 @@ REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
 CONTROL_PY = PYTHON_DIR / "arclink_control.py"
 CURATOR_ONBOARDING_PY = PYTHON_DIR / "arclink_curator_onboarding.py"
+CURATOR_DISCORD_ONBOARDING_PY = PYTHON_DIR / "arclink_curator_discord_onboarding.py"
 ONBOARDING_PY = PYTHON_DIR / "arclink_onboarding_flow.py"
 
 
@@ -768,12 +769,49 @@ def test_telegram_command_registration_includes_user_and_operator_commands() -> 
             expect("upgrade" not in command_sets["default"], str(command_sets))
             expect("retry_contact" in command_sets["chat"], str(command_sets))
             expect("upgrade" in command_sets["chat"], str(command_sets))
+            expect("pin_upgrade" in command_sets["chat"], str(command_sets))
+            expect("upgrade_policy" in command_sets["chat"], str(command_sets))
+            expect("upgrade_sweep" in command_sets["chat"], str(command_sets))
+            expect("fleet_drain" in command_sets["chat"], str(command_sets))
+            expect("fleet_resume" in command_sets["chat"], str(command_sets))
+            expect("action_status" in command_sets["chat"], str(command_sets))
+            expect("academy_roster" in command_sets["chat"], str(command_sets))
             expect("approve" in command_sets["chat"], str(command_sets))
             expect(calls[-1]["scope"]["chat_id"] == "42", str(calls[-1]))
             print("PASS test_telegram_command_registration_includes_user_and_operator_commands")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+
+def test_discord_operator_slash_registration_matches_raven_operator_surface() -> None:
+    source = CURATOR_DISCORD_ONBOARDING_PY.read_text(encoding="utf-8")
+    for command in (
+        "operator-status",
+        "operator-agents",
+        "operator-fleet",
+        "worker-probe",
+        "user-lookup",
+        "billing-status",
+        "backup-status",
+        "workspace-status",
+        "pod-repair",
+        "upgrade-check",
+        "upgrade-policy",
+        "upgrade",
+        "pin-upgrade",
+        "upgrade-sweep",
+        "fleet-drain",
+        "fleet-resume",
+        "rollout",
+        "action-status",
+        "academy-status",
+        "academy-roster",
+        "retry-contact",
+    ):
+        needle = f'@tree.command(name="{command}"'
+        expect(needle in source, f"missing Discord Operator slash registration for /{command}")
+    print("PASS test_discord_operator_slash_registration_matches_raven_operator_surface")
 
 
 def main() -> int:
@@ -787,7 +825,8 @@ def main() -> int:
     test_retry_contact_refuses_missing_confirmation_code()
     test_discord_onboarding_user_retry_contact_queues_own_handoff()
     test_telegram_command_registration_includes_user_and_operator_commands()
-    print("PASS all 10 curator onboarding regression tests")
+    test_discord_operator_slash_registration_matches_raven_operator_surface()
+    print("PASS all 11 curator onboarding regression tests")
     return 0
 
 

@@ -759,6 +759,147 @@ async def main() -> None:
             return
         await interaction.response.send_message(_operator_raven_response("/upgrade_check"))
 
+    @tree.command(name="upgrade-policy", description="Show upgrade policy, proof gates, and rollback posture.")
+    @app_commands.describe(component="Optional component, for example hermes, qmd, docker, postgres, redis, nvm, or node")
+    async def upgrade_policy_command(interaction, component: str = "") -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        suffix = f" {component.strip()}" if component.strip() else ""
+        await interaction.response.send_message(_operator_raven_response(f"/upgrade_policy{suffix}"))
+
+    @tree.command(name="upgrade-sweep", description="Preview or queue pending pinned-component upgrades.")
+    @app_commands.describe(
+        include_stateful="Include stateful targets only inside a maintenance window",
+        confirm="Queue only after reviewing the dry-run",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def upgrade_sweep_command(
+        interaction,
+        include_stateful: bool = False,
+        confirm: bool = False,
+        operator_code: str = "",
+    ) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        pieces = ["/upgrade_sweep"]
+        if include_stateful:
+            pieces.append("--include-stateful")
+        pieces.append(operator_code.strip() or "confirm" if confirm else "--dry-run")
+        await interaction.response.send_message(
+            _operator_raven_response(
+                " ".join(pieces),
+                actor_id=actor,
+                message_id=str(getattr(interaction, "id", "") or ""),
+            )
+        )
+
+    @tree.command(name="fleet-drain", description="Preview or apply fleet worker drain.")
+    @app_commands.describe(
+        target="Fleet host id or hostname",
+        force="Allow draining the last currently eligible worker",
+        confirm="Apply only after reviewing the dry-run",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def fleet_drain_command(
+        interaction,
+        target: str,
+        force: bool = False,
+        confirm: bool = False,
+        operator_code: str = "",
+    ) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        pieces = ["/fleet_drain", target.strip()]
+        if force:
+            pieces.append("--force")
+        pieces.append(operator_code.strip() or "confirm" if confirm else "--dry-run")
+        await interaction.response.send_message(
+            _operator_raven_response(
+                " ".join(item for item in pieces if item),
+                actor_id=actor,
+                message_id=str(getattr(interaction, "id", "") or ""),
+            )
+        )
+
+    @tree.command(name="fleet-resume", description="Preview or apply fleet worker resume.")
+    @app_commands.describe(
+        target="Fleet host id or hostname",
+        confirm="Apply only after reviewing the dry-run",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def fleet_resume_command(
+        interaction,
+        target: str,
+        confirm: bool = False,
+        operator_code: str = "",
+    ) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        suffix = operator_code.strip() or "confirm" if confirm else "--dry-run"
+        await interaction.response.send_message(
+            _operator_raven_response(
+                f"/fleet_resume {target.strip()} {suffix}".strip(),
+                actor_id=actor,
+                message_id=str(getattr(interaction, "id", "") or ""),
+            )
+        )
+
+    @tree.command(name="rollout", description="Preview or queue an ArcPod rollout.")
+    @app_commands.describe(
+        target_version="Release/version to roll out",
+        batch_size="Optional batch size",
+        confirm="Queue only after reviewing the dry-run",
+        operator_code="Required when an operator approval code is configured",
+    )
+    async def rollout_command(
+        interaction,
+        target_version: str,
+        batch_size: int = 0,
+        confirm: bool = False,
+        operator_code: str = "",
+    ) -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        actor = _format_actor_label(interaction.user)
+        pieces = ["/rollout", target_version.strip()]
+        if batch_size > 0:
+            pieces.extend(["--batch-size", str(batch_size)])
+        pieces.append(operator_code.strip() or "confirm" if confirm else "--dry-run")
+        await interaction.response.send_message(
+            _operator_raven_response(
+                " ".join(item for item in pieces if item),
+                actor_id=actor,
+                message_id=str(getattr(interaction, "id", "") or ""),
+            )
+        )
+
+    @tree.command(name="action-status", description="Track queued Operator Raven actions.")
+    @app_commands.describe(target_id="Optional action id")
+    async def action_status_command(interaction, target_id: str = "") -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        suffix = f" {target_id.strip()}" if target_id.strip() else ""
+        await interaction.response.send_message(_operator_raven_response(f"/action_status{suffix}"))
+
+    @tree.command(name="academy-status", description="Show Academy status for one Captain or the fleet.")
+    @app_commands.describe(query="Optional user id, email, or display name")
+    async def academy_status_command(interaction, query: str = "") -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        suffix = f" {query.strip()}" if query.strip() else ""
+        await interaction.response.send_message(_operator_raven_response(f"/academy_status{suffix}"))
+
+    @tree.command(name="academy-roster", description="Show Academy trainees and graduates.")
+    @app_commands.describe(query="Optional user id, email, or display name")
+    async def academy_roster_command(interaction, query: str = "") -> None:  # type: ignore[no-untyped-def]
+        if not await _ensure_operator_channel(interaction):
+            return
+        suffix = f" {query.strip()}" if query.strip() else ""
+        await interaction.response.send_message(_operator_raven_response(f"/academy_roster{suffix}"))
+
     @client.event
     async def on_ready() -> None:  # type: ignore[no-untyped-def]
         nonlocal sync_done

@@ -91,29 +91,65 @@ ARCLINK_TELEGRAM_POLICY_SUPPRESSED_AGENT_COMMANDS = frozenset({"update"})
 ARCLINK_TELEGRAM_LEGACY_RAVEN_COMMAND_NAMES = frozenset(
     _telegram_name
     for _telegram_name in (
+        "academy",
+        "arclink_share_accept",
+        "add_agent",
         "agent",
+        "agent_identity",
+        "agent_name",
+        "agent_title",
         "agents",
+        "backup",
         "cancel",
+        "cancel_retire_agent",
         "checkout",
         "commands",
+        "confirm_retire_agent",
         "config_backup",
         "connect_notion",
+        "credential",
+        "credential_stored",
         "credentials",
+        "credentials_stored",
+        "delete_agent",
         "help",
+        "keep_agent",
+        "learn",
         "link_channel",
         "name",
+        "notion",
         "pair_channel",
+        "packages",
         "plan",
+        "quick_training",
         "raven_name",
+        "refuel",
+        "remove_agent",
+        "rename_agent",
+        "retire_agent",
+        "retitle_agent",
+        "share_accept",
+        "share_approve",
+        "share_claim",
+        "share_create",
+        "share_deny",
+        "setup_backup",
+        "show_credentials",
         "start",
         "status",
+        "standard_packages",
+        "top_up",
+        "tour",
+        "train_crew",
         "upgrade_hermes",
+        "whats_changed",
+        "wrapped_frequency",
     )
 )
 ARCLINK_OPERATOR_TELEGRAM_COMMANDS: tuple[dict[str, str], ...] = (
     {"command": "operator_status", "description": "Operator: control-node status"},
     {"command": "agents", "description": "Operator: ArcLink Agents and ArcPods"},
-    {"command": "fleet_list", "description": "Operator: fleet and capacity"},
+    {"command": "operator_fleet", "description": "Operator: fleet and capacity"},
     {"command": "worker_probe", "description": "Operator: worker proof dry run"},
     {"command": "user_lookup", "description": "Operator: find Captain or Pod"},
     {"command": "billing_status", "description": "Operator: billing and credits"},
@@ -121,11 +157,16 @@ ARCLINK_OPERATOR_TELEGRAM_COMMANDS: tuple[dict[str, str], ...] = (
     {"command": "workspace_status", "description": "Operator: qmd and memory"},
     {"command": "pod_repair", "description": "Operator: repair an ArcPod"},
     {"command": "upgrade_check", "description": "Operator: upgrade state"},
+    {"command": "upgrade_policy", "description": "Operator: upgrade policy"},
     {"command": "upgrade", "description": "Operator: apply host/control upgrade"},
     {"command": "pin_upgrade", "description": "Operator: upgrade a pinned component"},
+    {"command": "upgrade_sweep", "description": "Operator: queue pending component upgrades"},
+    {"command": "fleet_drain", "description": "Operator: drain a fleet worker"},
+    {"command": "fleet_resume", "description": "Operator: resume a fleet worker"},
     {"command": "rollout", "description": "Operator: plan/queue an ArcPod rollout"},
     {"command": "action_status", "description": "Operator: track queued actions"},
     {"command": "academy_status", "description": "Operator: Academy status"},
+    {"command": "academy_roster", "description": "Operator: Academy roster"},
 )
 
 
@@ -1191,13 +1232,17 @@ def _operator_raven_intro_reply() -> str:
         "- /backup_status - private backup setup and verification posture\n"
         "- /workspace_status - qmd, memory, Notion index, and share freshness\n"
         "- /upgrade_check - read upgrade availability\n"
+        "- /upgrade_policy [component] - read preflight, proof, downtime, and rollback policy\n"
         "- /action_status [id] - track queued actions and rollouts\n"
-        "- /academy_status <query> - read Academy training state\n\n"
+        "- /academy_status <query> - read Academy training state\n"
+        "- /academy_roster [query] - read Academy trainees and graduates\n\n"
         "Action commands (queue real, audited intents; add --dry-run to preview first, then append confirm or your approval code):\n"
         "- /pod_repair <deployment-id> [restart|reprovision|dns_repair]\n"
         "- /rollout <target-version> [--batch-size N]\n"
         "- /upgrade - apply the ArcLink host/control upgrade and repair\n"
-        "- /pin_upgrade <component> - upgrade hermes, qmd, nextcloud, postgres, redis, nvm, or node\n\n"
+        "- /pin_upgrade <component> - upgrade hermes, qmd, nextcloud, postgres, redis, nvm, or node\n"
+        "- /upgrade_sweep - queue all pending non-stateful pinned-component upgrades\n"
+        "- /fleet_drain <worker> and /fleet_resume <worker> - control placement eligibility\n\n"
         "Live execution honors ARCLINK_EXECUTOR_ADAPTER (fake = record-only) and the "
         "per-action live proof gate. Without a configured approval code, append confirm "
         "to action commands, e.g. /upgrade confirm.\n\n"

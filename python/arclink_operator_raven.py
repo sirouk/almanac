@@ -473,7 +473,7 @@ def _handle_status(
         f"Queued/running operator actions: {_format_counts(action_counts)}",
         "Live actions honor ARCLINK_EXECUTOR_ADAPTER (fake = record-only); set it to local/ssh after the live proof gate.",
         "Act: /pod_repair <deployment> [restart|reprovision|dns_repair], /rollout <target>, /upgrade, /pin_upgrade <component>, /upgrade_sweep, /fleet_drain <worker>, /fleet_resume <worker> (add --dry-run to preview; append confirm or the operator approval code to queue or apply)",
-        "Next: /billing_status, /backup_status, /workspace_status, /upgrade_policy, /operator_fleet, /user_lookup <query>, /academy_status <query>, /action_status, then act with the commands above",
+        "Next: /billing_status, /backup_status, /workspace_status, /upgrade_policy, /operator_fleet, /user_lookup <query>, /academy_status <query>, /academy_roster [query], /action_status, then act with the commands above",
         "Live proof still required for live mutation: PG-PROD, PG-BOTS, PG-PROVIDER, PG-PROVISION, PG-UPGRADE",
     ]
     return {

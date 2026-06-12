@@ -288,7 +288,7 @@ ARCLINK_PUBLIC_BOT_ADD_AGENT_ANCHOR_STATUSES = (
 )
 ARCLINK_PUBLIC_BOT_AGENT_SWITCH_RE = re.compile(r"^/(?:agent[-_])([a-z0-9][a-z0-9_-]{0,31})$")
 ARCLINK_PUBLIC_BOT_PAIR_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
-ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share-(approve|deny|accept)\s+(share_[0-9a-f]{32})$")
+ARCLINK_PUBLIC_BOT_SHARE_ACTION_RE = re.compile(r"^/share[-_](approve|deny|accept)\s+(share_[0-9a-f]{32})$")
 ARCLINK_PUBLIC_BOT_SHARE_CLAIM_RE = re.compile(r"^/(?:arclink_share_accept|share-claim|share_claim)\s+(asn_[0-9a-f]{48})$")
 # Matched against the original-case message so resource paths keep their case.
 ARCLINK_PUBLIC_BOT_SHARE_CREATE_RE = re.compile(
@@ -617,6 +617,26 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
         ),
     ),
     ArcLinkPublicBotAction(
+        key="add_agent",
+        telegram_command="add_agent",
+        discord_command="add-agent",
+        description="Add another Hermes Agent to your Crew",
+    ),
+    ArcLinkPublicBotAction(
+        key="retire_agent",
+        telegram_command="retire_agent",
+        discord_command="retire-agent",
+        description="Retire one Hermes Agent from your Crew",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "agent",
+                "description": "Agent name, number, or deployment id",
+                "required": False,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
         key="share_create",
         telegram_command="share_create",
         discord_command="share-create",
@@ -632,6 +652,48 @@ ARCLINK_PUBLIC_BOT_ACTIONS: tuple[ArcLinkPublicBotAction, ...] = (
                 "type": 3,
                 "name": "recipient",
                 "description": "Recipient Captain's email or account ID",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="share_approve",
+        telegram_command="share_approve",
+        discord_command="share-approve",
+        description="Approve a staged Captain-to-Captain share",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "grant_id",
+                "description": "Share grant id from Raven",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="share_deny",
+        telegram_command="share_deny",
+        discord_command="share-deny",
+        description="Deny a staged Captain-to-Captain share",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "grant_id",
+                "description": "Share grant id from Raven",
+                "required": True,
+            },
+        ),
+    ),
+    ArcLinkPublicBotAction(
+        key="share_accept",
+        telegram_command="share_accept",
+        discord_command="share-accept",
+        description="Accept a shared resource from another Captain",
+        discord_options=(
+            {
+                "type": 3,
+                "name": "grant_id",
+                "description": "Share grant id from Raven",
                 "required": True,
             },
         ),
@@ -2949,7 +3011,7 @@ def _retire_agent_start_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="retire_agent_not_found",
-            reply="That Agent is not on your roster. Open `/agents` and choose the retire button attached to the right Agent.",
+            reply="That Agent is not on your roster. Open `/raven agents` and choose the retire button attached to the right Agent.",
             session=session,
             deployment=deployment,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -2981,7 +3043,7 @@ def _retire_agent_start_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="retire_agent_not_ready",
-            reply=f"`{label}` is `{status.replace('_', ' ')}` right now. Raven will only retire live Agents from chat; use `/status` or operator rails for provisioning failures.",
+            reply=f"`{label}` is `{status.replace('_', ' ')}` right now. Raven will only retire live Agents from chat; use `/raven status` or operator rails for provisioning failures.",
             session=session,
             deployment=item,
             buttons=(_button("Check Status", command="/status", style="secondary"),),
@@ -3205,8 +3267,8 @@ def _raven_name_reply(
                 "Raven display names are local to ArcLink messages; Telegram and Discord profile names stay controlled by the platform bot registration.\n\n"
                 f"Current name in this channel: `{current}`.\n"
                 f"{account_line}\n\n"
-                "Use `/raven_name channel <name>` for this channel, `/raven_name account <name>` for all linked channels, "
-                "`/raven_name reset` for this channel, or `/raven_name reset-account` for the account default."
+                "Use `/raven name channel <name>` for this channel, `/raven name account <name>` for all linked channels, "
+                "`/raven name reset` for this channel, or `/raven name reset-account` for the account default."
             ),
             session=session,
             deployment=deployment,
@@ -3243,7 +3305,7 @@ def _raven_name_reply(
             action="raven_name_account_unavailable",
             reply=(
                 "Account-wide Raven display names open after this channel is linked to an ArcLink account.\n\n"
-                "I can still set a channel-only name here: `/raven_name channel <name>`."
+                "I can still set a channel-only name here: `/raven name channel <name>`."
             ),
             session=session,
             deployment=deployment,
@@ -3255,7 +3317,7 @@ def _raven_name_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="raven_name_missing",
-            reply="Send the display name after the scope, for example `/raven_name channel Raven Prime`.",
+            reply="Send the display name after the scope, for example `/raven name channel Raven Prime`.",
             session=session,
             deployment=deployment,
             bot_display_name=current,
@@ -3818,7 +3880,7 @@ def _credential_handoff_required_turn(
         "",
         f"Still waiting on: {pending_line}.",
         "",
-        "Use `/credentials`, copy the dashboard password into your password manager, and confirm storage. After ArcLink removes that handoff from future responses, I can record the brokered SSOT setup intent.",
+        "Use `/raven credentials`, copy the dashboard password into your password manager, and confirm storage. The Credentials button does the same thing. After ArcLink removes that handoff from future responses, I can record the brokered SSOT setup intent.",
         "",
         "This keeps Notion setup on the dashboard verification rail. No Notion tokens or API keys belong in chat.",
     ]
@@ -4102,7 +4164,7 @@ def _pair_channel_reply(
             action="pair_channel_code",
             reply=(
                 "Pairing lane open.\n\n"
-                f"On the other channel, tell {raven}: `/link-channel {code}`\n\n"
+                f"On the other channel, tell {raven}: `/link-channel {code}`. If that channel already has a Hermes Agent at the helm, use `/raven link_channel {code}` instead.\n\n"
                 f"This code expires in 10 minutes. {live_note}"
             ),
             session=updated,
@@ -4120,7 +4182,7 @@ def _pair_channel_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="pair_channel_invalid_code",
-            reply="That pairing code does not look right. Open `/link-channel` on the other channel and send me the six-character code it gives you.",
+            reply="That pairing code does not look right. Open `/link-channel` on the other channel, or `/raven link_channel` if an Agent is already at the helm there, and send me the six-character code it gives you.",
             session=session,
             deployment=deployment,
             bot_display_name=raven,
@@ -4145,7 +4207,7 @@ def _pair_channel_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="pair_channel_expired",
-            reply="That pairing code has gone cold. Open `/link-channel` on the first channel and I will mint a fresh one.",
+            reply="That pairing code has gone cold. Open `/link-channel` on the first channel, or `/raven link_channel` if an Agent is already at the helm there, and I will mint a fresh one.",
             session=session,
             deployment=deployment,
             bot_display_name=raven,
@@ -4182,7 +4244,7 @@ def _pair_channel_reply(
             action="pair_channel_account_mismatch",
             reply=(
                 "That channel is already linked to a different ArcLink account. "
-                "Open `/link-channel` from the account you want to use, or continue in the original channel."
+                "Open `/link-channel` from the account you want to use, or `/raven link_channel` if an Agent is already at the helm there, or continue in the original channel."
             ),
             session=session,
             deployment=deployment,
@@ -4445,9 +4507,9 @@ def _agents_reply(
         [
             "",
             "Each Hermes Agent has one Hermes Dashboard link. ArcLink skills, Drive, Code, and Terminal live inside that dashboard as plugins; you do not need separate control links.",
-            "Your dashboard username/password works across the Crew's Hermes Dashboards. Use `/credentials` if you need the handoff again.",
+            "Your dashboard username/password works across the Crew's Hermes Dashboards. Use `/raven credentials` if you need the handoff again.",
             "",
-            "Use `/train-crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/academy` to open one-Agent-at-a-time Academy Mode for specialist training, Trainer review, and weekly continuing education. Use `/name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
+            "Use `/raven train_crew` any time to recurate names, roles, personalities, and SOUL.md overlays. Use `/raven academy` to open one-Agent-at-a-time Academy Mode for specialist training, Trainer review, and weekly continuing education. Use `/raven name Your Name` if you want the Crew to call you something other than your Telegram or Discord handle.",
         ]
     )
     buttons: list[ArcLinkPublicBotButton] = open_buttons[:4]
@@ -4493,7 +4555,7 @@ def _switch_agent_reply(
                 channel=channel,
                 channel_identity=channel_identity,
                 action="switch_agent_not_ready",
-                reply=f"`{label}` is {_deployment_status_marker(item)} and cannot take the helm. Choose a ready Agent from `/agents`.",
+                reply=f"`{label}` is {_deployment_status_marker(item)} and cannot take the helm. Choose a ready Agent from `/raven agents`.",
                 session=session,
                 deployment=deployment,
                 buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -4519,7 +4581,7 @@ def _switch_agent_reply(
         channel=channel,
         channel_identity=channel_identity,
         action="switch_agent_not_found",
-        reply="That name is not on your ArcLink roster. Open `/agents` and take the helm from the buttons I build for your account.",
+        reply="That name is not on your ArcLink roster. Open `/raven agents` and take the helm from the buttons I build for your account.",
         session=session,
         deployment=deployment,
         buttons=(_button("Show My Crew", command="/agents"),),
@@ -5003,7 +5065,7 @@ def _share_create_reply(
         reply=(
             f"Staged. `{label}` is ready to open to that Captain as a {access_label} Linked resource. "
             "Nothing leaves your Pod until you approve it, and they can never reshare it.\n\n"
-            f"Release it with `/share-approve {grant_id}` or close it with `/share-deny {grant_id}`."
+            f"Release it with `/share-approve {grant_id}` or close it with `/share-deny {grant_id}`. In an active Agent chat, `/raven share_approve {grant_id}` and `/raven share_deny {grant_id}` route through Raven explicitly."
         ),
         session=session,
         deployment=deployment,
@@ -5279,7 +5341,7 @@ def _crew_training_confirm_reply(
             "Your tuned Crew:\n"
             f"{chr(10).join(roster_lines or ['- Crew roster is still being prepared.'])}\n\n"
             "The additive SOUL.md overlay is projected for your Crew. Memories and sessions were not rewritten.\n\n"
-            "You can rerun Training any time with `/train-crew`. If you want your Crew to call you something else, use `/name Your Name`."
+            "You can rerun Training any time with `/raven train_crew`. If you want your Crew to call you something else, use `/raven name Your Name`."
         ),
         session=updated,
         deployment=deployment,
@@ -5909,7 +5971,7 @@ def _academy_training_start_reply(
             channel=channel,
             channel_identity=channel_identity,
             action="academy_training_agent_not_found",
-            reply="That Agent is not on your Crew roster. Pick one of the buttons or use `/agents` to inspect the names.",
+            reply="That Agent is not on your Crew roster. Pick one of the buttons or use `/raven agents` to inspect the names.",
             session=session,
             deployment=deployment,
             buttons=_academy_training_buttons(deployments),
@@ -6427,7 +6489,7 @@ def _whats_changed_reply(
     diff = whats_changed(conn, user_id=user_id)
     current = diff.get("current") or {}
     if diff["status"] == "none":
-        reply = "No Crew Recipe is active yet. Send `/train-crew` to create one."
+        reply = "No Crew Recipe is active yet. Send `/raven train_crew` to create one."
     elif diff["status"] == "first_recipe":
         reply = f"Current Crew Recipe: {current.get('preset', '')} / {current.get('capacity', '')}. No prior recipe is archived yet."
     else:
@@ -6923,7 +6985,7 @@ def _help_reply(
         action="show_help",
         reply=(
             "Bridge is open.\n\n"
-            "Your first Hermes Agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven retire_agent`, or `/raven cancel`.\n\n"
+            "Your first Hermes Agent is aboard, so I can show you the machinery now. Use the buttons for the common work. If you prefer typed controls, start with `/raven` or use `/raven agents`, `/raven status`, `/raven credentials`, `/raven connect_notion`, `/raven config_backup`, `/raven link_channel`, `/raven add_agent`, `/raven retire_agent`, `/raven share_create`, or `/raven cancel`.\n\n"
             "Pick one lane and I will keep the steps tight and the path clean."
         ),
         session=session,
@@ -7389,7 +7451,7 @@ def handle_arclink_public_bot_turn(
             channel=clean_channel,
             channel_identity=clean_identity,
             action="switch_agent_missing",
-            reply="Open `/agents` or send `/agent Jeff` with an Agent name from your Crew roster. `/agent` is only for switching helm; normal messages go straight to the Agent already at helm.",
+            reply="Open `/raven agents` or send `/raven agent Jeff` with an Agent name from your Crew roster. `/agent` is only for switching helm; normal messages go straight to the Agent already at helm.",
             session=session,
             deployment=deployment,
             buttons=(_button("Show My Crew", command="/agents", style="secondary"),),
@@ -7505,7 +7567,7 @@ def handle_arclink_public_bot_turn(
                 channel_identity=clean_identity,
                 action="cancel_unavailable",
                 reply=(
-                    "No setup workflow is open to cancel. Your agent is already live; use `/agents` or `/status` from here."
+                    "No setup workflow is open to cancel. Your agent is already live; use `/raven agents` or `/raven status` from here."
                 ),
                 session=session,
                 deployment=deployment,

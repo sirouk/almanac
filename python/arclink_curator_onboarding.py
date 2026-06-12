@@ -82,6 +82,7 @@ TELEGRAM_USER_COMMANDS = [
 ]
 TELEGRAM_OPERATOR_COMMANDS = [
     {"command": "operator_status", "description": "Show Control Node status"},
+    {"command": "agents", "description": "Show ArcLink Agents and ArcPods"},
     {"command": "operator_fleet", "description": "List Sovereign fleet workers"},
     {"command": "worker_probe", "description": "Dry-run worker readiness probe"},
     {"command": "user_lookup", "description": "Look up a Captain account"},
@@ -90,9 +91,18 @@ TELEGRAM_OPERATOR_COMMANDS = [
     {"command": "workspace_status", "description": "Show qmd, memory, and workspace posture"},
     {"command": "pod_repair", "description": "Dry-run ArcPod repair plan"},
     {"command": "upgrade_check", "description": "Check upgrade status safely"},
+    {"command": "upgrade_policy", "description": "Show upgrade policy"},
     {"command": "approve", "description": "Approve onboarding/request/write"},
     {"command": "deny", "description": "Deny onboarding/request/write"},
     {"command": "upgrade", "description": "Queue ArcLink host upgrade"},
+    {"command": "pin_upgrade", "description": "Queue pinned-component upgrade"},
+    {"command": "upgrade_sweep", "description": "Queue pending component upgrades"},
+    {"command": "fleet_drain", "description": "Drain a fleet worker"},
+    {"command": "fleet_resume", "description": "Resume a fleet worker"},
+    {"command": "rollout", "description": "Plan or queue ArcPod rollout"},
+    {"command": "action_status", "description": "Track queued actions"},
+    {"command": "academy_status", "description": "Show Academy status"},
+    {"command": "academy_roster", "description": "Show Academy roster"},
     {"command": "retry_contact", "description": "Retry Discord agent-bot handoff"},
 ]
 TELEGRAM_USER_COMMAND_NAMES = {

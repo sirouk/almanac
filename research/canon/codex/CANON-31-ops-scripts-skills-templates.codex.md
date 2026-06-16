@@ -1,0 +1,31 @@
+<<<CODEX-VERDICT-START CANON-31>>>
+## CANON-31 — Codex (GPT-5.5 xhigh) ratification
+SIGN-OFF: OBJECT(6)
+ONE-LINE VERDICT: Core qmd/PDF/ops glue is real, but the consolidated record needs corrections on skill→MCP execution count, Tailscale enable-flag behavior, token argv exposure, and two missed data-loss/staleness edges.
+### Adjudication (each: CONFIRM/REFUTE/REFINE + path:line)
+- REFINE — CANON-31→CANON-18 skill seam: not 14 executed tools, and not verifier’s “5”; I find 8 script-invoked tools (`catalog.vaults`, `vaults.refresh`, `agents.managed-memory`, `status`, `vaults.subscribe`, `notion.search`, `notion.fetch`, `notion.query`) via `run-first-contact.sh`, `curate-vaults.sh`, `curate-notion.sh`; the rest are SKILL.md prose claims, not executed code. `skills/arclink-first-contact/scripts/run-first-contact.sh:41`, `skills/arclink-vaults/scripts/curate-vaults.sh:88`, `skills/arclink-vaults/scripts/curate-vaults.sh:165`, `skills/arclink-notion-knowledge/scripts/curate-notion.sh:101`, `skills/arclink-notion-knowledge/scripts/curate-notion.sh:140`, `skills/arclink-notion-knowledge/scripts/curate-notion.sh:185`; MCP dispatch exists at `python/arclink_mcp_server.py:1908`, `:2005`, `:2011`, `:2121`, `:2223`, `:2531`, `:2541`.
+- REFINE — `run-first-contact.sh` managed-memory validation is branch-conditional: local file payload validates required keys, MCP-fetched fallback does not, then both go to `write_managed_memory_stubs`; consumer defaults mitigate degraded payloads. `skills/arclink-first-contact/scripts/run-first-contact.sh:76-103`, `:299-311`; `python/arclink_control.py:18473-18524`.
+- REFINE — Notion webhook→SSOT batcher seam is real, but Claude’s “functions exist in `arclink_ssot_batcher.py`” cite is an import/call site; bodies live in `arclink_control`. `python/arclink_notion_webhook.py:42-49`, `:359-361`; `bin/arclink-ssot-batcher.sh:13`; `python/arclink_ssot_batcher.py:7-14`; `python/arclink_control.py:14821`, `:19206`.
+- CONFIRM — `vault reload-defs` / `notify-paths` are fully verified, not open: producer argv matches parser and dispatch. `bin/vault-watch.sh:222-242`; `python/arclink_ctl.py:182-188`, `:2240-2252`.
+- CONFIRM — `pdf_ingest_manifest` has one production writer: `pdf-ingest.py` creates/updates/deletes; `vault-watch` and MCP only SELECT. `bin/pdf-ingest.py:474`, `:670`, `:733`, `:777`, `:829`; `bin/vault-watch.sh:68-77`; `python/arclink_mcp_server.py:918-924`.
+- REFINE — `upsert-hermes-mcps.sh` producer is real, but `hermes_cli.config.save_config` is external and absent from this repo/env, so atomicity remains unratified. `bin/upsert-hermes-mcps.sh:43-57`.
+- CONFIRM — Tailscale Serve risk is stronger than naming drift: `ENABLE_TAILSCALE_SERVE=1` still invokes a script that unserves and prints retired-route text. `bin/deploy.sh:5570-5572`, `:5712-5714`; `bin/tailscale-nextcloud-serve.sh:219-240`.
+- CONFIRM — Endpoint qmd embeddings fall back to local with only stderr warning. `bin/qmd-refresh.sh:71-79`.
+- CONFIRM — `vault-watch` fail-open on unreadable PDF manifest is real. `bin/vault-watch.sh:78-81`, `:285-289`.
+- CONFIRM — `qmd-daemon` waits only on `qmd_pid`; proxy death leaves the unit active with the container-facing port gone. `bin/qmd-daemon.sh:24`, `:75-83`.
+- CONFIRM — S6 probe-wrapper seam is producer-subset+fallback: wrapper emits `hardware_summary`, consumer reads absent top-level `capacity_slots`/`observed_load` with fallbacks. `bin/arclink-fleet-probe-wrapper:53-71`; `python/arclink_fleet_inventory_worker.py:348-354`.
+### New findings both Claude passes missed (severity + path:line)
+- LOW — Token argv exposure is longer than Claude stated: helpers pass token-bearing JSON to `arclink_rpc_client.py --json-args`, despite the client offering `--json-args-file` for secret payloads; exposure lasts through the HTTP call timeout window, not just the tiny heredoc builder process. `skills/arclink-first-contact/scripts/run-first-contact.sh:41-46`; `skills/arclink-vaults/scripts/curate-vaults.sh:60-71`; `python/arclink_rpc_client.py:21-26`, `:91-100`.
+- LOW — `vault-watch` post-refresh “late PDF changes” check is effectively neutered when a previous status exists: `preserve_pdf_status_change_summary` forces `qmd_refresh_needed=false` before the line that tests it. Late second-pass sidecar changes can wait for the next event/timer. `bin/vault-watch.sh:150-166`, `:443-458`.
+- LOW — `notion-page-pdf-export.py` can silently overwrite exports when two different pages share the same slug/title: de-dupe is by page id, output path is only `<slug>.pdf`. `bin/notion-page-pdf-export.py:263-288`, `:303-305`.
+### Claude citations re-confirmed or corrected
+- Re-confirmed: 14 systemd ExecStart wrappers exist and point at owned scripts. `systemd/user/arclink-qmd-mcp.service:6`; `systemd/user/arclink-vault-watch.service:6`; `systemd/user/arclink-pdf-ingest.service:6`.
+- Re-confirmed: qmd refresh locking, timeout swallow, and non-atomic config rewrite are as described. `bin/qmd-refresh.sh:57`, `:105-123`.
+- Re-confirmed: PDF ingest required env, traversal guard, minimal extractor env, schema, summary keys, and qmd-refresh trigger. `bin/pdf-ingest.py:21-24`, `:132-160`, `:602-625`, `:834-836`; `bin/pdf-ingest.sh:83-95`.
+- Corrected: verifier G4 overstates a PYTHONPATH dependency; `pdf-ingest.py` inserts repo `python/` before importing `arclink_http`. It still depends on the local module existing. `bin/pdf-ingest.py:16-18`.
+- Corrected: qmd protocol comment is stale on version text only: code says qmd 2.5.2 while pin is 2.5.3; protocol constant remains `2025-03-26`. `python/arclink_mcp_server.py:71-75`; `config/pins.json:54-58`.
+### Residual disagreement with the Claude half (for final reconciliation)
+- The record should replace “14 tools both-ends verified” and the verifier’s “only 5 script-invoked” with “8 script-invoked; remaining named tools are SKILL.md prose and therefore claims under the binding method.”
+- `hermes_cli.config.save_config` atomicity cannot be resolved from this checkout; keep that seam BEV=no unless the pinned Hermes source is opened.
+- Treat Tailscale Serve as an active config-contract bug, not mere dead-code drift, until the `ENABLE_TAILSCALE_SERVE` deploy gate is removed or renamed.
+<<<CODEX-VERDICT-END CANON-31>>>

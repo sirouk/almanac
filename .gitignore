@@ -38,5 +38,6 @@ research/canon/codex/*.raw
 research/canon/fixes/logs/
 research/canon/fixes/prompts/
 research/canon/fixes/*.raw
+research/canon/**/driver.log
 # stray sqlite in-memory artifact (bug: sqlite3.connect(":memory:") wrote a file)
 :memory:

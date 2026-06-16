@@ -259,7 +259,7 @@ def _pin_upgrade_log_requires_deploy(log_path: Path, *, expected_statuses: int) 
     return any(status in {"changed", "pushed"} for status in recent)
 
 
-def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[str]:
+def _validated_pin_upgrade(item: dict[str, Any]) -> tuple[str, str, str]:
     component = _single_line(item.get("component"), label="pin upgrade component", allow_blank=False, max_chars=96)
     if not SAFE_COMPONENT_RE.fullmatch(component) or component not in ALLOWED_PIN_COMPONENTS:
         raise ValueError("operator upgrade host runner pin upgrade component is not allowlisted")
@@ -268,6 +268,11 @@ def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[
     flag = PIN_UPGRADE_FLAGS.get(kind)
     if not flag:
         raise ValueError(f"operator upgrade host runner pin upgrade kind is not allowlisted: {kind}")
+    return component, flag, target
+
+
+def _pin_upgrade_command(component_upgrade: Path, item: dict[str, Any]) -> list[str]:
+    component, flag, target = _validated_pin_upgrade(item)
     return [str(component_upgrade), component, "apply", flag, target, "--skip-upgrade"]
 
 
@@ -307,28 +312,21 @@ def _validate_request(request_body: dict[str, Any], *, repo_dir: Path, priv_dir:
     }
     upstream = request_body.get("upstream")
     if isinstance(upstream, dict):
-        normalized["upstream"] = {
-            key: _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
-            for key in UPSTREAM_ENV_KEYS
-            if _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
-        }
+        normalized_upstream: dict[str, str] = {}
+        for key in UPSTREAM_ENV_KEYS:
+            value = _single_line(upstream.get(key), label=key, allow_blank=True, max_chars=4096)
+            if value:
+                normalized_upstream[key] = value
+        normalized["upstream"] = normalized_upstream
     if operation == "run_pin_upgrade":
         install_items = request_body.get("install_items")
         if not isinstance(install_items, list) or not install_items:
             raise ValueError("operator upgrade host runner pin upgrade request has no install items")
-        normalized_items: list[dict[str, str]] = []
         for item in install_items:
             if not isinstance(item, dict):
                 raise ValueError("operator upgrade host runner pin upgrade item must be a JSON object")
-            command = _pin_upgrade_command(Path("/tmp/component-upgrade-placeholder"), item)
-            normalized_items.append(
-                {
-                    "component": command[1],
-                    "kind": _single_line(item.get("kind"), label="pin upgrade kind", allow_blank=False, max_chars=64),
-                    "target": command[4],
-                }
-            )
-        normalized["install_items"] = normalized_items
+            _validated_pin_upgrade(item)  # reject any disallowed item before running a single command
+        normalized["install_items"] = install_items
     return normalized
 
 

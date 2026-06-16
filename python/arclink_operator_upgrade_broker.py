@@ -299,16 +299,6 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
-def _host_runner_result_error(result_path: Path) -> str:
-    try:
-        data = json.loads(result_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return f"operator upgrade host runner returned an unreadable result: {exc}"
-    if not isinstance(data, dict):
-        return "operator upgrade host runner returned an invalid result"
-    return str(data.get("error") or data.get("message") or "operator upgrade host runner failed")
-
-
 def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> dict[str, Any]:
     _reject_raw_commands(request_body)
     repo_dir = _host_repo_dir()
@@ -360,7 +350,9 @@ def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> di
             if not isinstance(result, dict):
                 raise RuntimeError("operator upgrade host runner returned an invalid result")
             if result.get("ok") is not True:
-                raise RuntimeError(_host_runner_result_error(result_path))
+                raise RuntimeError(
+                    str(result.get("error") or result.get("message") or "operator upgrade host runner failed")
+                )
             try:
                 returncode = int(result.get("returncode"))
             except (TypeError, ValueError):

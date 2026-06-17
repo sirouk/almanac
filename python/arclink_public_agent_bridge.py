@@ -29,6 +29,139 @@ def _json_error(message: str) -> int:
     return 1
 
 
+class _DeliveryEvidence:
+    """Collect platform send/edit acknowledgements from the short-lived bridge."""
+
+    def __init__(self) -> None:
+        self.message_ids: list[str] = []
+        self.events: list[dict[str, Any]] = []
+
+    def _add_message_ids(self, *values: Any) -> list[str]:
+        added: list[str] = []
+        for value in values:
+            if isinstance(value, (list, tuple)):
+                added.extend(self._add_message_ids(*value))
+                continue
+            clean = str(value or "").strip()
+            if not clean or clean in self.message_ids:
+                continue
+            self.message_ids.append(clean)
+            added.append(clean)
+        return added
+
+    @staticmethod
+    def _raw_message_ids(raw_response: Any) -> list[str]:
+        if not isinstance(raw_response, Mapping):
+            return []
+        raw_ids = raw_response.get("message_ids")
+        if isinstance(raw_ids, list):
+            return [str(item).strip() for item in raw_ids if str(item or "").strip()]
+        raw_id = str(raw_response.get("message_id") or raw_response.get("id") or "").strip()
+        return [raw_id] if raw_id else []
+
+    def record_result(
+        self,
+        action: str,
+        result: Any,
+        *,
+        content: Any = "",
+        finalize: bool = False,
+        force_visible: bool = False,
+    ) -> None:
+        success = bool(getattr(result, "success", False))
+        error = str(getattr(result, "error", "") or "").strip()
+        raw_response = getattr(result, "raw_response", None)
+        ids = self._raw_message_ids(raw_response)
+        primary_id = str(getattr(result, "message_id", "") or "").strip()
+        if primary_id:
+            ids.insert(0, primary_id)
+        continuations = getattr(result, "continuation_message_ids", ()) or ()
+        ids.extend(str(item).strip() for item in continuations if str(item or "").strip())
+
+        visible = force_visible or bool(str(content or "").strip())
+        if success and visible:
+            added = self._add_message_ids(ids)
+            status = "confirmed" if added or ids else "unknown"
+        elif not success and (visible or finalize):
+            status = "failed"
+            added = []
+        else:
+            return
+        self.events.append(
+            {
+                "action": action,
+                "status": status,
+                "message_ids": added,
+                "finalize": bool(finalize),
+                "error": error[:220],
+            }
+        )
+
+    def summary(self) -> dict[str, Any]:
+        relevant = [event for event in self.events if str(event.get("status") or "")]
+        if not relevant:
+            status = "unknown"
+            error = "bridge completed without an observed platform send acknowledgement"
+        else:
+            last = relevant[-1]
+            status = str(last.get("status") or "unknown")
+            error = str(last.get("error") or "")
+            if status == "confirmed" and not self.message_ids:
+                status = "unknown"
+                error = "bridge observed a send success without a platform message id"
+        return {
+            "processed": True,
+            "delivered": status == "confirmed" and bool(self.message_ids),
+            "delivery_status": status,
+            "message_ids": list(self.message_ids),
+            "delivery_error": error[:500],
+        }
+
+
+def _content_arg(args: tuple[Any, ...], kwargs: Mapping[str, Any], index: int, *names: str) -> Any:
+    for name in names:
+        if name in kwargs:
+            return kwargs.get(name)
+    if len(args) > index:
+        return args[index]
+    return ""
+
+
+def _install_delivery_evidence(adapter: Any, evidence: _DeliveryEvidence) -> None:
+    def _wrap(method_name: str, *, content_index: int, force_visible: bool = False) -> None:
+        original = getattr(adapter, method_name, None)
+        if not callable(original):
+            return
+
+        async def _wrapped(*args: Any, **kwargs: Any) -> Any:
+            result = await original(*args, **kwargs)
+            content = _content_arg(args, kwargs, content_index, "content", "message", "description", "title")
+            evidence.record_result(
+                method_name,
+                result,
+                content=content,
+                finalize=bool(kwargs.get("finalize")),
+                force_visible=force_visible,
+            )
+            return result
+
+        try:
+            setattr(adapter, method_name, _wrapped)
+        except Exception:
+            pass
+
+    _wrap("send", content_index=1)
+    _wrap("edit_message", content_index=2)
+    _wrap("send_exec_approval", content_index=1, force_visible=True)
+    _wrap("send_slash_confirm", content_index=2, force_visible=True)
+    _wrap("send_clarify", content_index=1, force_visible=True)
+    _wrap("send_image", content_index=2, force_visible=True)
+    _wrap("send_image_file", content_index=2, force_visible=True)
+    _wrap("send_document", content_index=2, force_visible=True)
+    _wrap("send_video", content_index=2, force_visible=True)
+    _wrap("send_voice", content_index=2, force_visible=True)
+
+
 def _payload_from_stdin() -> dict[str, Any]:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -369,7 +502,7 @@ async def _drain_bridge_adapter_tasks(adapter: Any) -> None:
                 raise result
 
 
-async def _run_telegram(payload: Mapping[str, Any]) -> None:
+async def _run_telegram(payload: Mapping[str, Any]) -> dict[str, Any]:
     _add_runtime_paths()
 
     bot_token = _required(payload, "bot_token")
@@ -416,6 +549,8 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
     adapter.set_session_store(runner.session_store)
     adapter.set_busy_session_handler(runner._handle_active_session_busy_message)
     runner.adapters[platform] = adapter
+    evidence = _DeliveryEvidence()
+    _install_delivery_evidence(adapter, evidence)
 
     bot = Bot(token=bot_token)
     await bot.initialize()
@@ -452,9 +587,10 @@ async def _run_telegram(payload: Mapping[str, Any]) -> None:
                 source=source,
                 message_id=message_id,
             )
-            await adapter.handle_message(event)
+        await adapter.handle_message(event)
         await _drain_bridge_adapter_tasks(adapter)
         _persist_telegram_bridge_state(runner, source)
+        return evidence.summary()
     finally:
         try:
             await bot.shutdown()
@@ -659,7 +795,7 @@ class _DiscordRawMessage:
         )
 
 
-async def _run_discord(payload: Mapping[str, Any]) -> None:
+async def _run_discord(payload: Mapping[str, Any]) -> dict[str, Any]:
     _add_runtime_paths()
 
     bot_token = _required(payload, "bot_token")
@@ -696,6 +832,7 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
     cfg.platforms[platform] = platform_cfg
 
     async with _DiscordRest(bot_token) as rest:
+        evidence = _DeliveryEvidence()
         runner = GatewayRunner(cfg)
         adapter = runner._create_adapter(platform, platform_cfg)
         if adapter is None:
@@ -738,10 +875,15 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
                 sent_id = str(sent.get("id") or "")
                 if sent_id:
                     sent_ids.append(sent_id)
-            return SendResult(success=True, message_id=sent_ids[0] if sent_ids else None, raw_response={"message_ids": sent_ids})
+            result = SendResult(
+                success=True,
+                message_id=sent_ids[0] if sent_ids else None,
+                raw_response={"message_ids": sent_ids},
+            )
+            evidence.record_result("send", result, content=content)
+            return result
 
         async def _edit_message(chat_id: str, message_id_arg: str, content: str, *, finalize: bool = False) -> SendResult:
-            del finalize
             target_channel = str(chat_id or channel_id)
             chunks = adapter.truncate_message(adapter.format_message(content), getattr(adapter, "MAX_MESSAGE_LENGTH", 2000))
             await rest.request(
@@ -749,7 +891,9 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
                 f"/channels/{target_channel}/messages/{message_id_arg}",
                 payload={"content": (chunks[0] if chunks else "")},
             )
-            return SendResult(success=True, message_id=message_id_arg)
+            result = SendResult(success=True, message_id=message_id_arg)
+            evidence.record_result("edit_message", result, content=content, finalize=finalize)
+            return result
 
         async def _send_typing(chat_id: str, metadata: Mapping[str, Any] | None = None) -> None:
             del metadata
@@ -787,27 +931,28 @@ async def _run_discord(payload: Mapping[str, Any]) -> None:
         )
         await adapter.handle_message(event)
         await _drain_bridge_adapter_tasks(adapter)
+        return evidence.summary()
 
 
-async def _run(payload: Mapping[str, Any]) -> None:
+async def _run(payload: Mapping[str, Any]) -> dict[str, Any]:
     _apply_public_bridge_options(payload)
     platform = str(payload.get("platform") or "").strip().lower()
     if platform == "telegram":
-        await _run_telegram(payload)
-        return
+        return await _run_telegram(payload)
     if platform == "discord":
-        await _run_discord(payload)
-        return
+        return await _run_discord(payload)
     raise RuntimeError(f"public agent gateway bridge does not support platform {platform or 'blank'} yet")
 
 
 def main() -> int:
     try:
         payload = _payload_from_stdin()
-        asyncio.run(_run(payload))
+        result = asyncio.run(_run(payload))
     except Exception as exc:  # noqa: BLE001 - boundary process returns structured failure
         return _json_error(str(exc))
-    print(json.dumps({"ok": True, "delivered": True}, sort_keys=True))
+    response = {"ok": True}
+    response.update(result)
+    print(json.dumps(response, sort_keys=True))
     return 0
 
 

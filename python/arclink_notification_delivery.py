@@ -329,6 +329,7 @@ def _strip_public_channel_prefix(target_id: str, prefix: str) -> str:
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 PUBLIC_AGENT_BRIDGE_DEFERRED = "DEFERRED_TO_PUBLIC_AGENT_BRIDGE"
+PUBLIC_AGENT_BRIDGE_UNCONFIRMED = "PROCESSED_UNCONFIRMED_BY_PUBLIC_AGENT_BRIDGE"
 PUBLIC_AGENT_BRIDGE_PYTHON = "/opt/arclink/runtime/hermes-venv/bin/python3"
 PUBLIC_AGENT_BRIDGE_SCRIPT = "/home/arclink/arclink/python/arclink_public_agent_bridge.py"
 PUBLIC_AGENT_BRIDGE_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -397,6 +398,71 @@ def _operator_gateway_exec_broker_request(
     }
 
 
+def _bridge_message_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    ids: list[str] = []
+    for item in value:
+        clean = str(item or "").strip()
+        if clean and clean not in ids:
+            ids.append(clean)
+    return ids
+
+
+def public_agent_bridge_delivery_result(payload_out: Any) -> dict[str, Any]:
+    """Normalize a bridge/broker response into ArcLink's delivery contract."""
+    if not isinstance(payload_out, dict):
+        return {
+            "ok": False,
+            "processed": False,
+            "delivered": False,
+            "delivery_status": "failed",
+            "message_ids": [],
+            "error": "Hermes public gateway bridge did not return a JSON object",
+        }
+    if payload_out.get("ok") is not True:
+        return {
+            "ok": False,
+            "processed": False,
+            "delivered": False,
+            "delivery_status": "failed",
+            "message_ids": [],
+            "error": str(payload_out.get("error") or "Hermes public gateway bridge did not return ok")[:500],
+        }
+    message_ids = _bridge_message_ids(payload_out.get("message_ids"))
+    raw_status = str(payload_out.get("delivery_status") or "").strip().lower()
+    error = str(payload_out.get("delivery_error") or payload_out.get("error") or "").strip()
+    if payload_out.get("delivered") is True and message_ids:
+        status = "confirmed"
+    elif raw_status == "failed":
+        status = "failed"
+    elif raw_status == "confirmed" and message_ids:
+        status = "confirmed"
+    else:
+        status = "unknown"
+        if not error:
+            error = "Hermes public gateway bridge completed without confirmed platform message ids"
+    return {
+        "ok": True,
+        "processed": bool(payload_out.get("processed", True)),
+        "delivered": status == "confirmed",
+        "delivery_status": status,
+        "message_ids": message_ids,
+        "error": error[:500],
+    }
+
+
+def _public_agent_bridge_unconfirmed_error(result: Mapping[str, Any]) -> str:
+    status = str(result.get("delivery_status") or "unknown")
+    error = str(result.get("error") or "").strip()
+    suffix = f"{status}: {error}" if error else status
+    return f"{PUBLIC_AGENT_BRIDGE_UNCONFIRMED}: {suffix}"[:500]
+
+
+def _is_public_agent_bridge_unconfirmed(error: Any) -> bool:
+    return str(error or "").startswith(PUBLIC_AGENT_BRIDGE_UNCONFIRMED)
+
+
 def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool, str]:
     broker_url = _gateway_exec_broker_url()
     if not broker_url:
@@ -434,7 +500,10 @@ def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool
     except json.JSONDecodeError:
         parsed = {}
     if 200 <= status < 300 and isinstance(parsed, dict) and parsed.get("ok") is True:
-        return True, ""
+        result = public_agent_bridge_delivery_result(parsed)
+        if result.get("delivered") is True:
+            return True, ""
+        return False, _public_agent_bridge_unconfirmed_error(result)
     if isinstance(parsed, dict):
         error = str(parsed.get("error") or "").strip()
         if error:
@@ -744,6 +813,15 @@ def _public_agent_gateway_payload(
     return payload, ""
 
 
+def _bridge_delivery_tuple(payload_out: Any, *, label: str) -> tuple[bool, str]:
+    result = public_agent_bridge_delivery_result(payload_out)
+    if result.get("delivered") is True:
+        return True, ""
+    if result.get("ok") is True:
+        return False, _public_agent_bridge_unconfirmed_error(result)
+    return False, str(result.get("error") or f"{label} completed without an ok response")[:500]
+
+
 def _run_public_agent_gateway_turn(
     *,
     deployment_id: str,
@@ -860,9 +938,7 @@ def _run_public_agent_gateway_turn(
         payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         payload_out = {}
-    if isinstance(payload_out, dict) and payload_out.get("ok") is True:
-        return True, ""
-    return False, "Hermes public gateway bridge completed without an ok response"
+    return _bridge_delivery_tuple(payload_out, label="Hermes public gateway bridge")
 
 
 def _run_operator_agent_gateway_turn(
@@ -946,9 +1022,7 @@ def _run_operator_agent_gateway_turn(
         payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         payload_out = {}
-    if isinstance(payload_out, dict) and payload_out.get("ok") is True:
-        return True, ""
-    return False, "Hermes operator gateway bridge completed without an ok response"
+    return _bridge_delivery_tuple(payload_out, label="Hermes operator gateway bridge")
 
 
 def _public_agent_bridge_detached_enabled() -> bool:
@@ -1129,6 +1203,171 @@ def _append_public_agent_bridge_log(message: str) -> None:
         return
 
 
+def _public_agent_bridge_unconfirmed_retry_seconds() -> int:
+    return _int_env("ARCLINK_PUBLIC_AGENT_BRIDGE_UNCONFIRMED_RETRY_SECONDS", 86400, minimum=900, maximum=604800)
+
+
+def _mark_public_agent_bridge_unconfirmed(conn: Any, notification_id: int, reason: str) -> None:
+    row = conn.execute(
+        "SELECT attempt_count FROM notification_outbox WHERE id = ?",
+        (int(notification_id),),
+    ).fetchone()
+    attempts = int(row["attempt_count"] or 0) + 1 if row is not None else 1
+    now_iso = utc_now_iso()
+    clean_reason = str(reason or "bridge completed without confirmed platform delivery").strip()
+    error_text = (
+        clean_reason
+        if clean_reason.startswith(PUBLIC_AGENT_BRIDGE_UNCONFIRMED)
+        else f"{PUBLIC_AGENT_BRIDGE_UNCONFIRMED}: {clean_reason}"
+    )
+    conn.execute(
+        """
+        UPDATE notification_outbox
+        SET attempt_count = ?,
+            last_attempt_at = ?,
+            next_attempt_at = ?,
+            delivery_error = ?
+        WHERE id = ?
+          AND delivered_at IS NULL
+        """,
+        (
+            attempts,
+            now_iso,
+            utc_after_seconds_iso(_public_agent_bridge_unconfirmed_retry_seconds()),
+            error_text[:500],
+            int(notification_id),
+        ),
+    )
+    conn.commit()
+
+
+def _public_agent_bridge_worker_stale_seconds() -> int:
+    return _int_env("ARCLINK_PUBLIC_AGENT_BRIDGE_ORPHAN_REAPER_SECONDS", 600, minimum=60, maximum=86400)
+
+
+def _record_public_agent_bridge_worker(notification_id: int, *, pid: int, job_path: Path) -> None:
+    if int(notification_id or 0) <= 0 or int(pid or 0) <= 0:
+        return
+    try:
+        cfg = Config.from_env()
+        with connect_db(cfg) as conn:
+            row = conn.execute(
+                "SELECT extra_json FROM notification_outbox WHERE id = ? AND delivered_at IS NULL",
+                (int(notification_id),),
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                extra = json.loads(str(row["extra_json"] or "{}"))
+            except json.JSONDecodeError:
+                extra = {}
+            if not isinstance(extra, dict):
+                extra = {}
+            extra["_public_agent_bridge_worker"] = {
+                "pid": int(pid),
+                "job_path": str(job_path),
+                "spawned_at": utc_now_iso(),
+            }
+            conn.execute(
+                "UPDATE notification_outbox SET extra_json = ? WHERE id = ? AND delivered_at IS NULL",
+                (json.dumps(extra, sort_keys=True), int(notification_id)),
+            )
+            conn.commit()
+    except Exception as exc:  # noqa: BLE001 - spawn must not fail because metadata could not be recorded.
+        _append_public_agent_bridge_log(
+            json.dumps(
+                {
+                    "event": "public_agent_bridge_worker_metadata_error",
+                    "notification_id": int(notification_id),
+                    "error": str(exc)[:220],
+                },
+                sort_keys=True,
+            )
+        )
+
+
+def _public_agent_bridge_worker_pid_active(pid: int) -> bool:
+    if int(pid or 0) <= 0:
+        return False
+    proc_cmdline = Path("/proc") / str(int(pid)) / "cmdline"
+    try:
+        if proc_cmdline.exists():
+            cmdline = proc_cmdline.read_text(encoding="utf-8", errors="replace").replace("\x00", " ")
+            return "--public-agent-bridge-worker" in cmdline and "arclink_notification_delivery.py" in cmdline
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+
+
+def reap_orphaned_public_agent_bridge_leases(cfg: Config, *, limit: int = 50) -> int:
+    """Re-arm leased public Agent turns whose detached bridge worker died."""
+    now_iso = utc_now_iso()
+    stale_cutoff = utc_now().timestamp() - _public_agent_bridge_worker_stale_seconds()
+    reclaimed = 0
+    with connect_db(cfg) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, extra_json, last_attempt_at, next_attempt_at
+            FROM notification_outbox
+            WHERE delivered_at IS NULL
+              AND target_kind = 'public-agent-turn'
+              AND last_attempt_at IS NOT NULL
+              AND last_attempt_at != ''
+              AND next_attempt_at IS NOT NULL
+              AND next_attempt_at != ''
+              AND next_attempt_at > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (now_iso, max(1, int(limit))),
+        ).fetchall()
+        for raw_row in rows:
+            row = dict(raw_row)
+            last_attempt = parse_utc_iso(str(row.get("last_attempt_at") or ""))
+            if last_attempt is None or last_attempt.timestamp() > stale_cutoff:
+                continue
+            try:
+                extra = json.loads(str(row.get("extra_json") or "{}"))
+            except json.JSONDecodeError:
+                extra = {}
+            if not isinstance(extra, dict):
+                extra = {}
+            worker = extra.get("_public_agent_bridge_worker")
+            if not isinstance(worker, dict):
+                continue
+            pid = int(worker.get("pid") or 0)
+            if _public_agent_bridge_worker_pid_active(pid):
+                continue
+            worker["reclaimed_at"] = now_iso
+            extra["_public_agent_bridge_worker"] = worker
+            cursor = conn.execute(
+                """
+                UPDATE notification_outbox
+                SET next_attempt_at = ?,
+                    delivery_error = ?,
+                    extra_json = ?
+                WHERE id = ?
+                  AND delivered_at IS NULL
+                  AND next_attempt_at > ?
+                """,
+                (
+                    now_iso,
+                    f"public_agent_bridge_orphan_reclaimed: pid={pid}"[:500],
+                    json.dumps(extra, sort_keys=True),
+                    int(row["id"]),
+                    now_iso,
+                ),
+            )
+            if int(getattr(cursor, "rowcount", 0) or 0) == 1:
+                reclaimed += 1
+        if reclaimed:
+            conn.commit()
+    return reclaimed
+
+
 def _run_public_agent_bridge_worker(job_path: Path) -> int:
     try:
         job = _load_public_agent_bridge_job(job_path)
@@ -1168,6 +1407,20 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 _append_public_agent_bridge_log(
                     json.dumps(
                         {"event": "public_agent_bridge_broker_delivered", "notification_id": notification_id},
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            if _is_public_agent_bridge_unconfirmed(error):
+                with connect_db(cfg) as conn:
+                    _mark_public_agent_bridge_unconfirmed(conn, notification_id, error)
+                _append_public_agent_bridge_log(
+                    json.dumps(
+                        {
+                            "event": "public_agent_bridge_broker_unconfirmed",
+                            "notification_id": notification_id,
+                            "error": str(error)[:500],
+                        },
                         sort_keys=True,
                     )
                 )
@@ -1253,18 +1506,41 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
             payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
         except (IndexError, json.JSONDecodeError):
             payload_out = {}
-        if isinstance(payload_out, dict) and payload_out.get("ok") is True:
+        result = public_agent_bridge_delivery_result(payload_out)
+        if result.get("delivered") is True:
             with connect_db(cfg) as conn:
                 mark_notification_delivered(conn, notification_id)
             _append_public_agent_bridge_log(
-                json.dumps({"event": "public_agent_bridge_delivered", "notification_id": notification_id}, sort_keys=True)
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_delivered",
+                        "notification_id": notification_id,
+                        "message_ids": result.get("message_ids") or [],
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if result.get("ok") is True:
+            reason = _public_agent_bridge_unconfirmed_error(result)
+            with connect_db(cfg) as conn:
+                _mark_public_agent_bridge_unconfirmed(conn, notification_id, reason)
+            _append_public_agent_bridge_log(
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_unconfirmed",
+                        "notification_id": notification_id,
+                        "delivery_status": result.get("delivery_status"),
+                    },
+                    sort_keys=True,
+                )
             )
             return 0
         with connect_db(cfg) as conn:
             mark_notification_error(
                 conn,
                 notification_id,
-                "Hermes public gateway bridge completed without an ok response",
+                str(result.get("error") or "Hermes public gateway bridge completed without an ok response"),
             )
         _append_public_agent_bridge_log(
             json.dumps({"event": "public_agent_bridge_no_ok", "notification_id": notification_id}, sort_keys=True)
@@ -1314,6 +1590,11 @@ def _spawn_public_agent_gateway_bridge(
                     text=True,
                     start_new_session=True,
                     close_fds=True,
+                )
+                _record_public_agent_bridge_worker(
+                    int(notification_id),
+                    pid=int(getattr(proc, "pid", 0) or 0),
+                    job_path=job_path,
                 )
                 try:
                     returncode = proc.wait(timeout=0.25)
@@ -1723,6 +2004,8 @@ def _deliver_public_agent_turn(cfg: Config, row: dict[str, Any], extra: dict[str
         if _bridge_error == PUBLIC_AGENT_BRIDGE_DEFERRED:
             return PUBLIC_AGENT_BRIDGE_DEFERRED
         return None
+    if _is_public_agent_bridge_unconfirmed(_bridge_error):
+        return _bridge_error
     if not _public_agent_quiet_fallback_enabled():
         message = f"{label} did not answer through the Hermes gateway bridge yet.\n\n{_bridge_error}"
         if helm:
@@ -1798,6 +2081,8 @@ def run_public_agent_turns_once(
         "not_due": 0,
         "claimed_elsewhere": 0,
         "deferred_public_agent_bridge": 0,
+        "unconfirmed_public_agent_bridge": 0,
+        "reclaimed_public_agent_bridge_orphans": reap_orphaned_public_agent_bridge_leases(cfg, limit=max(1, int(limit))),
     }
     clean_channel = str(channel_kind or "").strip().lower()
     clean_target = str(target_id or "").strip()
@@ -1849,6 +2134,10 @@ def run_public_agent_turns_once(
             if error:
                 if error == PUBLIC_AGENT_BRIDGE_DEFERRED:
                     summary["deferred_public_agent_bridge"] += 1
+                    continue
+                if _is_public_agent_bridge_unconfirmed(error):
+                    _mark_public_agent_bridge_unconfirmed(conn, int(row["id"]), error)
+                    summary["unconfirmed_public_agent_bridge"] += 1
                     continue
                 mark_notification_error(conn, int(row["id"]), error)
                 summary["errors"] += 1
@@ -2007,6 +2296,8 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
         "curator_fanout_agents": 0,
         "deferred_to_agent": 0,
         "deferred_public_agent_bridge": 0,
+        "unconfirmed_public_agent_bridge": 0,
+        "reclaimed_public_agent_bridge_orphans": reap_orphaned_public_agent_bridge_leases(cfg, limit=limit),
         "claimed_elsewhere": 0,
         "deferred_during_deploy": 0,
     }
@@ -2061,6 +2352,10 @@ def run_once(cfg: Config, *, limit: int = 50, verbose: bool = False) -> dict[str
                 continue
             if error == PUBLIC_AGENT_BRIDGE_DEFERRED:
                 summary["deferred_public_agent_bridge"] += 1
+                continue
+            if _is_public_agent_bridge_unconfirmed(error):
+                _mark_public_agent_bridge_unconfirmed(conn, int(row["id"]), error)
+                summary["unconfirmed_public_agent_bridge"] += 1
                 continue
             if error == "HANDLED_BY_CONSUMER":
                 # Safety: any remaining curator rows are already handled above.

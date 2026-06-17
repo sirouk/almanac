@@ -94,9 +94,11 @@ Raven-owned and never relayed to a Hermes Agent. The first non-slash message in
 a linked channel claims a one-time bridge intro before your Agent answers.
 
 Selected-agent replies are delivered asynchronously by the gateway bridge, not
-inline in the webhook response, and live delivery is proof-gated (**PG-BOTS**;
-the Hermes gateway container is **PG-HERMES**). Streaming is opt-in only
-(`ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1`, GAP-023).
+inline in the webhook response, and live delivery is proof-gated
+(**PG-PUBLIC-AGENT-DELIVERY** / **PG-BOTS**; the Hermes gateway container is
+**PG-HERMES**). Streaming is enabled by the bridge runtime unless
+`ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=0`, but the live behavior remains
+proof-gated (GAP-023).
 
 ## Crew Training
 

@@ -7912,7 +7912,12 @@ def test_gateway_exec_broker_rejects_unsafe_docker_binary_before_subprocess() ->
         if list(command)[:2] == [docker_binary, "ps"]:
             return subprocess.CompletedProcess(command, 0, stdout="arclink-dep-one-hermes-gateway-1\n", stderr="")
         if list(command)[:2] == [docker_binary, "exec"]:
-            return subprocess.CompletedProcess(command, 0, stdout='{"ok": true}\n', stderr="")
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"delivered": true, "delivery_status": "confirmed", "message_ids": ["tg-msg-1"], "ok": true}\n',
+                stderr="",
+            )
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected docker command")
 
     request = {

@@ -799,6 +799,25 @@ resolve_hermes_agent_ref_commit() {
   return 1
 }
 
+warm_shared_hermes_runtime_bytecode() {
+  local repo_dir="${1:-$RUNTIME_DIR/hermes-agent-src}"
+  local venv_dir="${2:-$RUNTIME_DIR/hermes-venv}"
+  local python_bin="$venv_dir/bin/python3"
+  local lib_dir="$venv_dir/lib"
+
+  if [[ "${ARCLINK_HERMES_COMPILEALL_ENABLED:-1}" != "1" ]]; then
+    return 0
+  fi
+  if [[ ! -x "$python_bin" ]]; then
+    return 0
+  fi
+  echo "Warming Hermes runtime bytecode for faster cold bridge starts..."
+  "$python_bin" -m compileall -q -j 0 "$repo_dir" "$lib_dir" || {
+    echo "Warning: Hermes runtime bytecode warmup failed; continuing without precompiled bytecode." >&2
+    return 0
+  }
+}
+
 ensure_hermes_agent_checkout() {
   local repo_dir="$1"
   local remote_url="https://github.com/NousResearch/hermes-agent.git"
@@ -891,6 +910,7 @@ ensure_shared_hermes_runtime() {
   uv pip install --python "$venv_dir/bin/python3" --reinstall "$repo_dir[cli,mcp,messaging,cron,web]"
   ensure_hermes_dashboard_assets "$repo_dir"
   sync_hermes_dashboard_assets_into_runtime "$repo_dir" "$venv_dir/bin/python3"
+  warm_shared_hermes_runtime_bytecode "$repo_dir" "$venv_dir"
 }
 
 ensure_hermes_dashboard_assets() {

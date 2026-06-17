@@ -24,7 +24,7 @@ tests as truth, then update the closest canonical doc.
 | `docs/API_REFERENCE.md` | Canonical | Hosted API route and config reference; OpenAPI remains in `docs/openapi/`. |
 | `docs/org-profile.md` | Canonical | Organization profile ingestion and private-state source guidance. |
 | `docs/arclink/architecture.md` | Canonical | Current module map and integration boundaries; its route table cross-links `docs/API_REFERENCE.md` and `docs/openapi/arclink-v1.openapi.json` as the authoritative route catalog. |
-| `docs/arclink/public-agent-gateway.md` | Canonical | Public Agent gateway and trusted-host broker/helper security boundary; cross-links `operations-runbook.md` GAP-019 entries as the authoritative trust-boundary source. |
+| `docs/arclink/public-agent-gateway.md` | Canonical | Public Agent gateway, D5 delivery-evidence contract, cold-spawn posture, and trusted-host broker/helper security boundary; cross-links `operations-runbook.md` GAP-019 entries as the authoritative trust-boundary source. |
 | `docs/arclink/brand-system.md` | Canonical | Brand palette, typography, and voice; matches the product-surface CSS. |
 | `docs/arclink/professional-finish-gate.md` | Canonical | Cross-surface finish-gate guidance naming the executable `arclink_surface_contract.py` linter and its taxonomy. |
 | `docs/arclink/foundation.md` | Canonical | Behavior notes for no-secret foundation and proof-gated execution boundaries. |

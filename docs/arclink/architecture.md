@@ -448,14 +448,19 @@ the turn into the Agent's own Hermes gateway pipeline:
   parity), maintains a durable `ea:` exec-approval mapping on disk, carries
   callback-family metadata for `ea`/`mp`/`sc`/`cl`, supports Discord
   component/embed/attachment metadata on outbound sends, and streams by default.
-  Selected-agent bridge delivery is async; streaming is opt-in via
-  `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1` (GAP-023).
+  Selected-agent bridge delivery is async; delivery marks require confirmed
+  platform message ids, while unconfirmed processed turns are held for
+  reconciliation instead of marked delivered. Streaming is on unless
+  `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=0` (GAP-023).
 - The per-turn `docker exec` into the gateway container is mediated by the
   `gateway-exec-broker` (see Trusted-Host Brokers below) — Raven never holds
   Docker authority directly.
 
 Real bridge delivery requires a live gateway container, a bot token, and a Hermes
-runtime, and is proof-gated behind PG-BOTS / PG-HERMES.
+runtime, and is proof-gated behind PG-PUBLIC-AGENT-DELIVERY / PG-BOTS /
+PG-HERMES. The current performance posture keeps the per-turn cold spawn and
+uses deploy-time bytecode warmup; resident daemon, prefork, and sidecar designs
+are rejected until the control-side durability handoff is redesigned.
 
 The full bridge/broker design (per-turn invocation, native-handler replay, the
 durable `ea:` exec-approval mapping, callback-family replay proof boundary, and
@@ -575,7 +580,9 @@ live-gated behavior.
   transports run in fake mode without tokens; live HTTP transport, webhooks,
   command menus, buttons, Gateway free text, Discord media/components, Telegram
   long-text batching, callback replay, and the selected-agent bridge are
-  proof-gated behind PG-BOTS (and PG-HERMES for per-agent command scope).
+  proof-gated behind PG-BOTS (and PG-HERMES for per-agent command scope). The
+  selected-agent bridge has local delivery-evidence regressions, but the live
+  ack journey is still PG-PUBLIC-AGENT-DELIVERY.
 - Drive and Code are functional first-generation Hermes plugins, but
   not yet broad Google Drive or VS Code replacements. Terminal has a
   managed-pty persistent-session backend with same-origin SSE output streaming

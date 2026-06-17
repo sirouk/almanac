@@ -284,13 +284,13 @@ def _build_gateway_exec_command(request_body: dict[str, Any]) -> tuple[list[str]
     return cmd, payload, timeout_seconds, project_name
 
 
-def run_gateway_exec_request(request_body: dict[str, Any]) -> tuple[bool, str]:
+def run_gateway_exec_request_payload(request_body: dict[str, Any]) -> dict[str, Any]:
     try:
         require_docker_trusted_host_risk_accepted(service=SERVICE_NAME, error_cls=ValueError)
         cmd, payload, timeout_seconds, _project_name = _build_gateway_exec_command(request_body)
     except ValueError as exc:
         _record_rejection_incident(request_body, exc)
-        return False, str(exc)
+        return {"ok": False, "error": str(exc)}
     try:
         proc = subprocess.run(
             cmd,
@@ -301,18 +301,28 @@ def run_gateway_exec_request(request_body: dict[str, Any]) -> tuple[bool, str]:
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
-        return False, "Hermes public gateway bridge timed out"
+        return {"ok": False, "error": "Hermes public gateway bridge timed out"}
     except OSError as exc:
-        return False, f"could not start Hermes public gateway bridge: {str(exc)[:180]}"
+        return {"ok": False, "error": f"could not start Hermes public gateway bridge: {str(exc)[:180]}"}
     if proc.returncode != 0:
-        return False, f"Hermes public gateway bridge failed with exit status {proc.returncode}"
+        return {"ok": False, "error": f"Hermes public gateway bridge failed with exit status {proc.returncode}"}
     try:
         payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         payload_out = {}
-    if isinstance(payload_out, dict) and payload_out.get("ok") is True:
+    result = delivery.public_agent_bridge_delivery_result(payload_out)
+    if result.get("ok") is True:
+        return result
+    return {"ok": False, "error": str(result.get("error") or "Hermes public gateway bridge completed without an ok response")}
+
+
+def run_gateway_exec_request(request_body: dict[str, Any]) -> tuple[bool, str]:
+    result = run_gateway_exec_request_payload(request_body)
+    if result.get("delivered") is True:
         return True, ""
-    return False, "Hermes public gateway bridge completed without an ok response"
+    if result.get("ok") is True:
+        return False, delivery._public_agent_bridge_unconfirmed_error(result)
+    return False, str(result.get("error") or "Hermes public gateway bridge completed without an ok response")
 
 
 class GatewayExecBrokerHandler(BaseHTTPRequestHandler):
@@ -352,11 +362,11 @@ class GatewayExecBrokerHandler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             _json_response(self, 400, {"ok": False, "error": "gateway exec request must be a JSON object"})
             return
-        ok, error = run_gateway_exec_request(body)
-        if ok:
-            _json_response(self, 200, {"ok": True})
+        result = run_gateway_exec_request_payload(body)
+        if result.get("ok") is True:
+            _json_response(self, 200, result)
         else:
-            _json_response(self, 400, {"ok": False, "error": error})
+            _json_response(self, 400, {"ok": False, "error": str(result.get("error") or "")})
 
 
 def serve(*, host: str, port: int) -> None:

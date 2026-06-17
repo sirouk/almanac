@@ -483,6 +483,16 @@ def test_notification_errors_backoff_and_due_fetch_skips_future_rows() -> None:
     print("PASS test_notification_errors_backoff_and_due_fetch_skips_future_rows")
 
 
+def test_notification_retry_backoff_jitters_by_notification_id() -> None:
+    mod = load_module(CONTROL_PY, "arclink_control_db_notification_retry_jitter_test")
+    base = mod.notification_error_retry_delay_seconds(3)
+    values = {mod.notification_error_retry_delay_seconds(3, notification_id=i) for i in range(1, 16)}
+    expect(base == 240, str(base))
+    expect(len(values) > 1, str(values))
+    expect(all(180 <= value <= 300 for value in values), str(values))
+    print("PASS test_notification_retry_backoff_jitters_by_notification_id")
+
+
 def test_operation_idempotency_persists_across_restart() -> None:
     mod = load_module(CONTROL_PY, "arclink_control_db_operation_idem_restart")
     with tempfile.TemporaryDirectory() as tmp:
@@ -720,6 +730,7 @@ if __name__ == "__main__":
     test_operation_idempotency_rejects_same_key_different_intent()
     test_operation_idempotency_failed_attempt_replays_without_completion()
     test_notification_errors_backoff_and_due_fetch_skips_future_rows()
+    test_notification_retry_backoff_jitters_by_notification_id()
     test_operation_idempotency_persists_across_restart()
     test_upsert_user_preserves_protected_status_without_privileged_transition()
     test_email_merge_is_deterministic_and_repoints_owned_rows()

@@ -9851,10 +9851,16 @@ def mark_notification_delivered(conn: sqlite3.Connection, notification_id: int) 
     conn.commit()
 
 
-def notification_error_retry_delay_seconds(attempts: int) -> int:
+def notification_error_retry_delay_seconds(attempts: int, notification_id: int | None = None) -> int:
     step = max(1, int(attempts))
     delay = 60 * (2 ** max(0, step - 1))
-    return max(60, min(3600, delay))
+    base = max(60, min(3600, delay))
+    if notification_id is None:
+        return base
+    spread = max(1, base // 4)
+    digest = hashlib.sha256(f"{int(notification_id)}:{step}".encode("utf-8")).digest()
+    offset = int.from_bytes(digest[:4], "big") % ((spread * 2) + 1)
+    return max(60, min(3600, base + offset - spread))
 
 
 def mark_notification_error(conn: sqlite3.Connection, notification_id: int, error: str) -> None:
@@ -9876,7 +9882,7 @@ def mark_notification_error(conn: sqlite3.Connection, notification_id: int, erro
         (
             attempts,
             now_iso,
-            utc_after_seconds_iso(notification_error_retry_delay_seconds(attempts)),
+            utc_after_seconds_iso(notification_error_retry_delay_seconds(attempts, notification_id)),
             error[:500],
             notification_id,
         ),

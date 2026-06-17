@@ -12,6 +12,36 @@ Updated: 2026-05-16 (Sovereign LLM Router source-level documentation alignment)
 
 Updated: 2026-05-30 (Ground-truth documentation alignment pass)
 
+Updated: 2026-06-17 (Public Agent bridge delivery-evidence and cold-spawn posture)
+
+## 2026-06-17 Public Agent Bridge Delivery Evidence And Cold-Spawn Posture
+
+This pass reconciled the public selected-Agent bridge after the cold-start
+architecture review. It did not claim live Telegram/Discord proof. It records
+that the safe performance direction is optimized cold spawn, not a daemon,
+prefork pool, or warm sidecar.
+
+### What This Pass Reconciled
+
+- **Delivery evidence contract.** `public-agent-gateway.md` and
+  `architecture.md` now state that a bridge subprocess exit is not delivery.
+  Delivery requires confirmed Telegram/Discord platform message ids; `unknown`
+  processed turns are held for reconciliation.
+- **Durability and retries.** The docs now name deterministic retry jitter, the
+  detached bridge worker PID breadcrumb, and the orphan reaper that re-arms dead
+  bridge leases without bypassing the outbox claim path.
+- **Performance posture.** `public-agent-gateway.md`, `architecture.md`, and
+  `sovereign-control-node-symphony.md` now reject resident warm-process designs
+  under the current control-side durability model and record deploy-time
+  bytecode warmup as the first safe cold-import reduction.
+
+### Boundary Notes
+
+- `PG-PUBLIC-AGENT-DELIVERY` remains live-proof gated. Local regression tests
+  cover the D5 contract, broker propagation, unconfirmed handling, and orphan
+  reaper behavior, but real Telegram/Discord ack proof still needs credentials
+  and live containers.
+
 ## 2026-05-30 Ground-Truth Documentation Alignment
 
 This pass reconciled the project-facing documentation against the canonical

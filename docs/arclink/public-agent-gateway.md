@@ -47,9 +47,12 @@ commands, typing, reactions, interim messages, delivery formatting, plugin hooks
 quiet, Raven-mediated CLI call.
 
 `main()` reads the payload (`_payload_from_stdin`), runs `_run`, and prints a single-line JSON
-result `{"ok": true, "delivered": true}` or `{"ok": false, "error": ...}` (error truncated to
-500 chars), exit 0/1. It adds the Hermes runtime source dir to `sys.path` from `HERMES_AGENT_SRC`
-or `RUNTIME_DIR/hermes-agent-src` (default runtime root `/opt/arclink/runtime`).
+result. Success is three-valued: `confirmed` means the bridge observed real platform message ids
+and sets `delivered: true`; `unknown` means Hermes processed the turn but ArcLink did not capture
+a platform ack and must not mark the outbox row delivered; `failed` means the send/edit failed.
+Failure prints `{"ok": false, "error": ...}` (error truncated to 500 chars), exit 1. It adds the
+Hermes runtime source dir to `sys.path` from `HERMES_AGENT_SRC` or
+`RUNTIME_DIR/hermes-agent-src` (default runtime root `/opt/arclink/runtime`).
 
 It dispatches on `payload["platform"]`, which must be `telegram` or `discord`; any other value
 raises "public agent gateway bridge does not support platform ...".
@@ -143,13 +146,43 @@ The `notification-delivery` worker does **not** shell into the deployment contai
   `TRUSTED_DOCKER_BINARY_PATHS`, and re-validates the final command through
   `delivery._validate_public_agent_bridge_cmd`.
 
-### 1.7 Proof-gated and degraded paths
+### 1.7 Delivery evidence, leases, and cold-start posture
 
-- **Live delivery is PG-BOTS / PG-HERMES.** The bridge is unit-tested only against a fake Hermes
-  runtime. Real delivery requires a live `hermes-gateway` (or `control-operator-hermes-gateway`)
-  container, a real bot token, and the Hermes runtime under `/opt/arclink/runtime`. No live
-  Telegram/Discord delivery, durable callback replay, Discord media/components, free-text Gateway
-  ingress, or Hermes browser/workspace behavior has been proven.
+The bridge is intentionally still a **fresh per-turn process**. The daemon, prefork pool, and
+warm sidecar designs were rejected because they break the control-side durability handoff and
+the release lock-step property: the worker that writes `notification_outbox.delivered_at` runs
+on the Control Node, while the Hermes send happens inside the ArcPod container.
+
+Current production contract:
+
+- Telegram wraps the Hermes adapter's send/edit/media/approval methods and records returned
+  `SendResult.message_id` / split-message ids.
+- Discord's REST shims record returned Discord message ids from sends and edits.
+- `gateway-exec-broker` preserves the bridge result in its HTTP response; it no longer reduces a
+  clean subprocess exit to `{ok:true}`.
+- `notification-delivery` only calls `mark_notification_delivered` when the normalized result is
+  `delivered=true` with at least one message id. An `unknown` result is held as
+  `PROCESSED_UNCONFIRMED_BY_PUBLIC_AGENT_BRIDGE` with a long reconciliation retry instead of
+  immediately sending a duplicate turn.
+- Detached bridge workers record their PID in the outbox row. The notification worker re-arms
+  stale leased rows when that recorded worker is gone, closing the old long silent-stall window
+  without bypassing `_claim_notification_for_delivery`.
+- Retry backoff now includes deterministic per-row jitter so correlated delivery failures do not
+  retry in lock-step.
+
+Latency work stays on the cold-spawn path. `ensure_shared_hermes_runtime` runs a deploy-time
+`compileall` warmup (`ARCLINK_HERMES_COMPILEALL_ENABLED=1` by default) so fresh bridge processes
+can reuse bytecode. Future safe layers are single-platform config starvation and a root-owned
+Telegram `getMe` cache, both default-off until live proof.
+
+### 1.8 Proof-gated and degraded paths
+
+- **Live delivery is PG-PUBLIC-AGENT-DELIVERY / PG-BOTS / PG-HERMES.** The D5 delivery-evidence
+  contract is locally regression-tested, but real Telegram/Discord proof still requires a live
+  `hermes-gateway` (or `control-operator-hermes-gateway`) container, a real bot token, and the
+  Hermes runtime under `/opt/arclink/runtime`. Durable callback replay, broader Discord
+  media/components, free-text Gateway ingress, and Hermes browser/workspace behavior remain live
+  proof-gated.
 - **Degraded quiet fallback is fail-closed.** The `hermes chat -Q` text-only path
   (`ARCLINK_PUBLIC_AGENT_QUIET_FALLBACK`, in `arclink_notification_delivery`) is off by default;
   re-enabling it is an explicit operator opt-in because it hides bridge failures.
@@ -338,8 +371,10 @@ Message statuses (table CHECK constraint, `arclink_control.py`): `queued`, `deli
 | Item | Status | Gate |
 | --- | --- | --- |
 | Trusted-host broker/helper family (Docker socket + root) | OPEN, acknowledged-only — **not tenant-safe** | GAP-019; `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted` |
+| Public bridge delivery evidence | Source-real + local regression-tested | PG-PUBLIC-AGENT-DELIVERY for live Telegram/Discord |
 | Public bridge live Telegram/Discord delivery | Proof-gated | PG-BOTS / PG-HERMES |
 | Public bridge streaming default-on | Real (env knob) | GAP-023 (`ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING`) |
+| Bridge cold-start daemon/pool/sidecar | Rejected | cold-spawn only; compileall warmup landed |
 | Discord native parity | Not built (text/slash + REST shims) | PG-BOTS |
 | Operator-stack bridge target (`control-operator-hermes-gateway`) | Real path | part of GAP-029 operator chat bridge |
 | Pod Comms send/store/list | Real (local) | — |

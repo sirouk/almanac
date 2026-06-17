@@ -1663,6 +1663,22 @@ say which proof journeys are missing instead of relying on memory.
   heuristic merging of user-sent 4096-character split messages remains
   intentionally unbuilt; broad correlation without a provider-supplied ID is not
   worth default-enabling until false positives are proven low.
+- *Public Agent bridge delivery evidence + cold-spawn performance posture* —
+  the bridge no longer reports `delivered:true` merely because the subprocess
+  exited cleanly. Telegram wraps the Hermes adapter send/edit/media/approval
+  methods, Discord records REST message ids, `gateway-exec-broker` returns the
+  evidence instead of collapsing it to `{ok:true}`, and `notification-delivery`
+  marks an outbox row delivered only when the normalized result is confirmed
+  with real platform message ids. `unknown` turns are held under
+  `PROCESSED_UNCONFIRMED_BY_PUBLIC_AGENT_BRIDGE` for reconciliation rather than
+  blindly duplicated. Retry backoff gained deterministic jitter, detached bridge
+  workers record their PID, and the orphan reaper re-arms rows whose recorded
+  worker died. The performance track keeps the fresh per-turn spawn because that
+  is what preserves lock-step and the control-side durability handoff; daemon,
+  prefork, and sidecar designs are explicitly rejected under the current
+  architecture. The first safe latency layer landed as deploy-time bytecode
+  warmup (`ARCLINK_HERMES_COMPILEALL_ENABLED=1`); deeper cold-import graph
+  reduction remains desirable, but must preserve the same spawn boundary.
 - *Evidence/governance ambition* — `arclink_evidence.evidence_governance_status`
   summarizes required journeys (`hosted`, `workspace`, `external`, `router`) and
   the operator snapshot exposes missing/incomplete journeys. `CANON.md` and

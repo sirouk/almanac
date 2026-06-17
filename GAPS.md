@@ -374,7 +374,7 @@ when they were active blockers during this buildout pass. Treat rows marked
 - Severity: P1
 - Status: proof-gated
 - Journey joints: `J-03`, `J-04`, `J-18`, `J-24`
-- Proof gates: `PG-BOTS`
+- Proof gates: `PG-BOTS`, `PG-HERMES`
 - Joint: Raven first contact, buttons, selected-agent bridge, handoff pings
 - Expected: real Telegram and Discord public bots register commands/webhooks,
   verify signatures/secrets, deliver buttons, queue selected-agent turns, and
@@ -1535,16 +1535,17 @@ when they were active blockers during this buildout pass. Treat rows marked
 - Joint: public-channel selected-agent replies
 - Expected: if streaming is advertised, Telegram/Discord users see incremental
   Agent responses safely.
-- Actual evidence: Raven docs say public selected-agent turns default to
-  final-message delivery and `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1` is
-  operator opt-in only after runtime validation
-  (`docs/arclink/raven-public-bot.md:24-27`).
+- Actual evidence: the bridge runtime defaults streaming on
+  (`ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING` false values disable it), but live
+  Telegram/Discord streaming behavior is still proof-gated and product copy must
+  not overclaim it before `PG-BOTS`/`PG-HERMES`
+  (`docs/arclink/public-agent-gateway.md`).
 - Missing proof/tests: live streaming bridge runtime proof, backpressure,
   cancellation, and platform edit/rate-limit behavior.
 - Impact: low if final-message delivery is the public contract; high only if
   marketing claims streaming before proof.
 - Owner/surface: public bot bridge, notification delivery.
-- Next repair: keep final-message copy until streaming proof passes.
+- Next repair: keep product copy conservative until streaming proof passes.
 
 ### GAP-024 - Provider changes are visible but not self-service
 
@@ -2239,7 +2240,7 @@ when they were active blockers during this buildout pass. Treat rows marked
 - Severity: P1
 - Status: partial, proof-gated, test-gap, doc-gap
 - Journey joints: `J-03`, `J-04`, `J-13`, `J-19`, `J-24`, `J-27`
-- Proof gates: `PG-BOTS`, `PG-HERMES`, `PG-FLEET`, `PG-PROD`
+- Proof gates: `PG-PUBLIC-AGENT-DELIVERY`, `PG-BOTS`, `PG-HERMES`, `PG-FLEET`, `PG-PROD`
 - Joint: Public bots, public Agent bridge, Hermes workspace, fleet-shared
   skills, evidence governance, canon/doc corpus
 - Expected: after the large CANON repair campaign, every follow-up seam should
@@ -2258,8 +2259,11 @@ when they were active blockers during this buildout pass. Treat rows marked
   matrix has named external proof rows for terminal tmux durability, reload
   skills, fleet skills, callback replay, Discord media/free-text, and Telegram
   split batching; the evidence DB has a governance rollup read by the operator
-  snapshot; and `research/canon/COVERAGE_MATRIX.md` is regenerated at 859/859
-  tracked rows with canon/decision/fix artifacts under CANON-32.
+  snapshot; public Agent bridge delivery now requires confirmed Telegram/Discord
+  message ids, carries `unknown` instead of fake-delivered rows, jitters retries,
+  reaps dead detached-worker leases, and warms Hermes bytecode at deploy; and
+  `research/canon/COVERAGE_MATRIX.md` is regenerated at 859/859 tracked rows
+  with canon/decision/fix artifacts under CANON-32.
 - Reconciliation table:
 
 | Item | Owning surface | Proof gate | Focused tests | Live-proof status | Product severity |
@@ -2271,6 +2275,7 @@ when they were active blockers during this buildout pass. Treat rows marked
 | Durable callback state | Telegram ingress metadata, notification outbox, public Agent bridge | `PG-BOTS` + `PG-HERMES` / `durable_callback_replay_proof` | `tests/test_arclink_telegram.py`, `tests/test_arclink_operator_agent.py`, `tests/test_arclink_notification_delivery.py`, `tests/test_arclink_hosted_api.py` | Raw update plus family metadata persist locally; only `ea:` has full durable resolution mapping today | P0/P1 |
 | Discord free-text ingress | Discord Gateway message path, public bot selected-agent routing | `PG-BOTS` + `PG-HERMES` / `discord_free_text_ingress_proof` | `tests/test_arclink_discord.py`, `tests/test_arclink_public_bots.py` | Local handler exists; production control-node Gateway listener/live intent proof not run | P1 |
 | Telegram text-split batching | Telegram transport, notification delivery, public Agent bridge | `PG-BOTS` + `PG-HERMES` / `telegram_text_split_batch_proof` | `tests/test_arclink_telegram.py`, `tests/test_arclink_notification_delivery.py` | Outbound long-text batching is source-real; inbound split-correlation remains intentionally unclaimed | P2 |
+| Public Agent bridge delivery evidence | `arclink_public_agent_bridge.py`, `arclink_gateway_exec_broker.py`, `arclink_notification_delivery.py` | `PG-PUBLIC-AGENT-DELIVERY` + `PG-BOTS` + `PG-HERMES` | `tests/test_arclink_notification_delivery.py`, `tests/test_arclink_control_db.py` | Local D5 contract, broker propagation, unconfirmed hold, retry jitter, dead-worker reaper, and compileall warmup are source/test-real; live Telegram/Discord ack proof not run | P0 |
 | Evidence/governance ambition | `arclink_evidence.py`, operator snapshot, CANON/GAPS/DOC_STATUS/symphony docs | `PG-PROD` | `tests/test_arclink_evidence.py`, `tests/test_arclink_dashboard.py`, `tests/test_arclink_live_journey.py` | Governance rollup is local-real; production readiness remains false until required journeys pass | P1 |
 
 - Missing proof/tests: `GAP-001` full paid Control Node live proof; terminal

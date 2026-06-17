@@ -22,10 +22,11 @@ The voice should feel like a clear, fast, technically proud launch guide: calm u
   normal messages now route to the active Hermes Agent. After that, normal messages
   are queued as selected-agent turns and Raven brings the Hermes Agent's reply back
   to the same linked Telegram or Discord channel.
-- Public selected-agent turns default to final-message delivery. The bridge is
-  a short-lived synthetic gateway rather than a long-running Hermes platform
-  adapter, so `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1` is an operator opt-in
-  only after that runtime path has been validated.
+- Public selected-agent turns route through a short-lived synthetic gateway
+  rather than a long-running Hermes platform adapter. The bridge runtime streams
+  by default unless `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=0`, but product copy
+  stays proof-gated until PG-BOTS/PG-HERMES validates live Telegram/Discord
+  behavior.
 - In active Telegram chats, Raven refreshes a per-chat command scope with one
   Raven control command, normally `/raven`, plus the active Hermes Agent's current
   Hermes command menu. Bare slash commands such as `/agents`, `/status`,

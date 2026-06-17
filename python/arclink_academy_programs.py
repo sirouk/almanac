@@ -450,8 +450,23 @@ def enroll_academy_trainee(
     # Major, subscribe the new trainee so it inherits the deduped shared corpus.
     try:
         subscribe_trainee_to_specialist(conn, trainee_id=trainee_id, commit=True)
-    except Exception:  # noqa: BLE001 - inheritance is best-effort; enrollment must not fail on it
-        pass
+    except Exception as exc:  # noqa: BLE001 - inheritance is best-effort; enrollment must not fail on it
+        try:
+            from arclink_control import append_arclink_event
+
+            append_arclink_event(
+                conn,
+                subject_kind="academy_trainee",
+                subject_id=trainee_id,
+                event_type="academy_specialist_subscription_failed",
+                metadata={
+                    "program_id": str(program.get("program_id") or ""),
+                    "error": redact_then_truncate(str(exc), limit=200),
+                },
+                commit=True,
+            )
+        except Exception:
+            pass
     return get_academy_trainee(conn, trainee_id) or {}
 
 
@@ -751,14 +766,8 @@ def record_academy_resource_proposal(
     now = _now()
     status = "review_pending"
     existing = None
-    if clean_url:
-        existing = conn.execute(
-            "SELECT * FROM academy_resource_proposals WHERE trainee_id = ? AND proposal_kind = ? AND origin_url = ?",
-            (str(trainee["trainee_id"]), clean_kind, clean_url),
-        ).fetchone()
-    if existing is None:
-        existing = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
-    if existing is not None:
+
+    def _dedupe_existing(row: sqlite3.Row) -> dict[str, Any]:
         conn.execute(
             """
             UPDATE academy_resource_proposals
@@ -781,44 +790,67 @@ def record_academy_resource_proposal(
                 _dumps(clean_citations),
                 str(proposed_by or "").strip()[:160],
                 now,
-                str(existing["proposal_id"]),
+                str(row["proposal_id"]),
             ),
         )
         if commit:
             conn.commit()
-        row = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (str(existing["proposal_id"]),)).fetchone()
-        return _proposal_public(row) if row is not None else {}
-    conn.execute(
-        """
-        INSERT INTO academy_resource_proposals (
-          proposal_id, trainee_id, session_id, user_id, deployment_id, program_id,
-          lane_id, proposal_kind, target_source_uid, target_canonical_url,
-          title, origin_url, summary, relevance_json, citations_json,
-          proposed_by, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            proposal_id,
-            str(trainee["trainee_id"]),
-            str(session.get("session_id") or ""),
-            str(trainee.get("user_id") or ""),
-            str(trainee.get("deployment_id") or ""),
-            str(trainee.get("program_id") or ""),
-            clean_lane,
-            clean_kind,
-            clean_target_source,
-            clean_target_canonical,
-            clean_title,
-            clean_url,
-            clean_summary,
-            _dumps(clean_relevance),
-            _dumps(clean_citations),
-            str(proposed_by or "").strip()[:160],
-            status,
-            now,
-            now,
-        ),
-    )
+        refreshed = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (str(row["proposal_id"]),)).fetchone()
+        return _proposal_public(refreshed) if refreshed is not None else {}
+
+    if clean_url:
+        existing = conn.execute(
+            "SELECT * FROM academy_resource_proposals WHERE trainee_id = ? AND proposal_kind = ? AND origin_url = ?",
+            (str(trainee["trainee_id"]), clean_kind, clean_url),
+        ).fetchone()
+    if existing is None:
+        existing = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
+    if existing is not None:
+        return _dedupe_existing(existing)
+    try:
+        conn.execute(
+            """
+            INSERT INTO academy_resource_proposals (
+              proposal_id, trainee_id, session_id, user_id, deployment_id, program_id,
+              lane_id, proposal_kind, target_source_uid, target_canonical_url,
+              title, origin_url, summary, relevance_json, citations_json,
+              proposed_by, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                proposal_id,
+                str(trainee["trainee_id"]),
+                str(session.get("session_id") or ""),
+                str(trainee.get("user_id") or ""),
+                str(trainee.get("deployment_id") or ""),
+                str(trainee.get("program_id") or ""),
+                clean_lane,
+                clean_kind,
+                clean_target_source,
+                clean_target_canonical,
+                clean_title,
+                clean_url,
+                clean_summary,
+                _dumps(clean_relevance),
+                _dumps(clean_citations),
+                str(proposed_by or "").strip()[:160],
+                status,
+                now,
+                now,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        raced = None
+        if clean_url:
+            raced = conn.execute(
+                "SELECT * FROM academy_resource_proposals WHERE trainee_id = ? AND proposal_kind = ? AND origin_url = ?",
+                (str(trainee["trainee_id"]), clean_kind, clean_url),
+            ).fetchone()
+        if raced is None:
+            raced = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
+        if raced is None:
+            raise
+        return _dedupe_existing(raced)
     if commit:
         conn.commit()
     row = conn.execute("SELECT * FROM academy_resource_proposals WHERE proposal_id = ?", (proposal_id,)).fetchone()
@@ -2291,11 +2323,13 @@ def run_academy_trainer_review(
         client = academy_trainer_client_from_env()
     use_live = bool(live_authorized) and client is not None and bool(getattr(client, "live", False))
     trainer = client if use_live else DeterministicAcademyTrainer()
+    live_error = ""
     try:
         review = trainer.review(role_title=role_title, topic=topic, sources=sources)
     except Exception as exc:  # noqa: BLE001 - a live Trainer failure falls closed to deterministic
         review = DeterministicAcademyTrainer().review(role_title=role_title, topic=topic, sources=sources)
-        review["live_error"] = str(exc)[:200]
+        live_error = redact_then_truncate(str(exc), limit=200)
+        review["live_error"] = live_error
         use_live = False
     now = _now()
     engine = str(review.get("engine") or ("live" if use_live else "deterministic"))
@@ -2334,6 +2368,47 @@ def run_academy_trainer_review(
         ).fetchall()
         if pr["trainee_id"]
     }
+    if live_error and live_authorized:
+        try:
+            from arclink_control import append_arclink_event, queue_notification
+
+            append_arclink_event(
+                conn,
+                subject_kind="academy_specialist",
+                subject_id=clean,
+                event_type="academy_trainer_live_review_failed",
+                metadata={
+                    "engine": engine,
+                    "live_enrichment_status": enrichment["live_enrichment_status"],
+                    "error": live_error,
+                },
+                commit=False,
+            )
+            contributor_users = {
+                str(pr["user_id"])
+                for pr in conn.execute(
+                    "SELECT DISTINCT p.contributor_user_id AS user_id FROM academy_source_provenance p "
+                    "JOIN academy_specialist_sources s ON s.source_uid = p.source_uid "
+                    "WHERE s.specialist_uid = ? AND p.revoked_at = ''",
+                    (clean,),
+                ).fetchall()
+                if pr["user_id"]
+            }
+            for user_id in contributor_users:
+                queue_notification(
+                    conn,
+                    target_kind="user",
+                    target_id=user_id,
+                    channel_kind="academy",
+                    message=(
+                        "Academy Trainer PG-PROVIDER live review failed; deterministic review was recorded "
+                        "and apply remains blocked until a live review succeeds."
+                    ),
+                    extra={"specialist_uid": clean, "error": live_error},
+                    commit=False,
+                )
+        except Exception:
+            pass
     reviewed_proposals = 0
     for tid in contributors:
         rv = {"reviewed_at": now, "engine": engine, "live": bool(use_live), "specialist_uid": clean}
@@ -2873,6 +2948,7 @@ def stage_academy_apply(
     academy_trainer_reviewed_at = ""
     academy_trainer_live_status = ""
     trainer_review_ready = False
+    provider_review_ready = False
     program_row = composed["program"] if isinstance(composed.get("program"), Mapping) else {}
     try:
         spec_uid, _ = specialist_uid_for_program(program_row)
@@ -2888,6 +2964,7 @@ def stage_academy_apply(
             if isinstance(enrichment, Mapping):
                 academy_trainer_reviewed_at = str(enrichment.get("reviewed_at") or "")
                 academy_trainer_live_status = str(enrichment.get("live_enrichment_status") or "")
+                provider_review_ready = academy_trainer_live_status == "live_reviewed"
             academy_capsule_version = int(spec_row["capsule_version"] or 0)
             academy_soul_section = render_academy_overlay(
                 role_title=str(spec_row["role_title"] or program_row.get("label") or ""),
@@ -2935,13 +3012,21 @@ def stage_academy_apply(
             "Staged plan no longer matches the current Major (the Major changed after graduation); "
             "re-graduate to re-review. Fail-closed: no Agent-home write."
         )
-    elif live_adapter and live_authorized and review_ready and trainer_review_ready:
+    elif live_adapter and live_authorized and review_ready and trainer_review_ready and provider_review_ready:
         status = "handoff_to_hermes_home"
         writes_enabled = True
         note = (
             "PG-HERMES authorized: Captain-approved staged contract handed to the Hermes-home installer "
             "(bin/install-deployment-hermes-home.sh) for the additive SOUL/skills/qmd/vault apply."
         )
+    elif live_adapter and live_authorized and not review_ready:
+        status = "failed_closed"
+        writes_enabled = False
+        note = "Academy review status is not ready; no Agent-home write was performed."
+    elif live_adapter and live_authorized and trainer_review_ready and not provider_review_ready:
+        status = "failed_closed"
+        writes_enabled = False
+        note = "Academy Trainer PG-PROVIDER live review is not complete; no Agent-home write was performed."
     elif live_adapter and live_authorized and not trainer_review_ready:
         status = "failed_closed"
         writes_enabled = False
@@ -2986,6 +3071,7 @@ def stage_academy_apply(
         "academy_capsule_version": academy_capsule_version,
         "academy_specialist_uid": academy_specialist_uid,
         "academy_trainer_review_ready": trainer_review_ready,
+        "academy_provider_review_ready": provider_review_ready,
         "academy_trainer_reviewed_at": academy_trainer_reviewed_at,
         "academy_trainer_live_status": academy_trainer_live_status,
         "proof_gates": list(ACADEMY_APPLY_PROOF_GATES),
@@ -3072,8 +3158,8 @@ def _validate_source_lanes(source_lanes: Sequence[str]) -> list[str]:
         from arclink_academy_trainer import default_source_lane_registry
 
         known = set(default_source_lane_registry().keys())
-    except Exception:  # noqa: BLE001 - if the registry can't load, accept the lanes as-is
-        return lanes
+    except Exception as exc:  # noqa: BLE001 - fail closed when the governed registry is unavailable
+        raise ArcLinkAcademyProgramError("academy source lane registry is unavailable") from exc
     unknown = [lane for lane in lanes if lane not in known]
     if unknown:
         raise ArcLinkAcademyProgramError(f"unknown academy source lane(s): {', '.join(unknown)}")

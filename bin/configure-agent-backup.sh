@@ -254,7 +254,7 @@ disable_legacy_backup_timer() {
     runtime_dir="/run/user/$(id -u)"
     bus_addr="unix:path=$runtime_dir/bus"
     env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$bus_addr" \
-      systemctl --user daemon-reload >/dev/null
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
     env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$bus_addr" \
       systemctl --user disable --now arclink-user-agent-backup.timer >/dev/null 2>&1 || true
   fi

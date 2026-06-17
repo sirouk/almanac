@@ -37,6 +37,7 @@ Throttle semantics:
 from __future__ import annotations
 
 import json
+import fcntl
 import re
 import sqlite3
 import subprocess
@@ -65,6 +66,15 @@ MANAGED_COMPONENTS = (
     "postgres",
     "redis",
 )
+EXECUTABLE_PIN_COMPONENTS = {"hermes-agent", "qmd", "nextcloud", "postgres", "redis", "nvm", "node"}
+PIN_FIELD_BY_KIND = {
+    "git-commit": "ref",
+    "git-tag": "tag",
+    "container-image": "tag",
+    "npm": "version",
+    "nvm-version": "version",
+    "release-asset": "version",
+}
 
 DEFAULT_NOTIFY_LIMIT = 1  # max notifications about the same release before silence
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{7,64}$", re.IGNORECASE)
@@ -97,7 +107,13 @@ def _import_arclink_control():
 
 
 def _read_pins() -> dict[str, Any]:
-    return json.loads(PINS_PATH.read_text())
+    try:
+        pins = json.loads(PINS_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"pin upgrade detector could not read config/pins.json: {exc}") from None
+    if not isinstance(pins, dict):
+        raise RuntimeError("pin upgrade detector config/pins.json must contain a JSON object")
+    return pins
 
 
 def _component_kind(pins: dict[str, Any], component: str) -> str:
@@ -233,15 +249,7 @@ def _parse_check_output(component: str, kind: str, output: str) -> CheckResult:
     The script's check mode is line-based; we look for `pinned:` and `latest:`.
     """
     pins = _read_pins()
-    field_map = {
-        "git-commit": "ref",
-        "git-tag": "tag",
-        "container-image": "tag",
-        "npm": "version",
-        "nvm-version": "version",
-        "release-asset": "version",
-    }
-    field = field_map.get(kind, "")
+    field = PIN_FIELD_BY_KIND.get(kind, "")
     current = _component_value(pins, component, field) if field else ""
 
     pinned_match = re.search(r"pinned:\s*([^\s\(]+)", output)
@@ -638,6 +646,7 @@ def _pin_upgrade_install_items(
     component-upgrade.sh bumps inheritors automatically.
     """
     included_names = {r.component for r, _state in included}
+    queued: set[tuple[str, str, str]] = set()
     items: list[dict[str, str]] = []
     for r, _state in included:
         entry = pins.get("components", {}).get(r.component, {})
@@ -646,12 +655,29 @@ def _pin_upgrade_install_items(
             continue
         if not r.target:
             continue
+        component = r.component
+        kind = r.kind
+        field = r.field
+        current = r.current
+        if parent and component not in EXECUTABLE_PIN_COMPONENTS:
+            parent_entry = pins.get("components", {}).get(parent, {})
+            parent_kind = str(parent_entry.get("kind") or "").strip()
+            parent_field = PIN_FIELD_BY_KIND.get(parent_kind, "")
+            if parent in EXECUTABLE_PIN_COMPONENTS and parent_kind == r.kind and parent_field:
+                component = parent
+                kind = parent_kind
+                field = parent_field
+                current = _component_value(pins, parent, parent_field)
+        dedupe_key = (component, kind, r.target)
+        if dedupe_key in queued:
+            continue
+        queued.add(dedupe_key)
         items.append(
             {
-                "component": r.component,
-                "kind": r.kind,
-                "field": r.field,
-                "current": r.current,
+                "component": component,
+                "kind": kind,
+                "field": field,
+                "current": current,
                 "target": r.target,
                 "throttle_target": _throttle_target(r),
             }
@@ -661,10 +687,77 @@ def _pin_upgrade_install_items(
 
 # ---- main entry points -----------------------------------------------------
 
+def _detector_result(
+    *,
+    ok: bool,
+    scanned: list[str] | None = None,
+    included: list[str] | None = None,
+    silenced: list[str] | None = None,
+    cleared: list[str] | None = None,
+    digest: str = "",
+    notified: bool = False,
+    notify_limit: int = DEFAULT_NOTIFY_LIMIT,
+    error: str = "",
+    skipped_locked: bool = False,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": ok,
+        "scanned": scanned or [],
+        "included": included or [],
+        "silenced": silenced or [],
+        "cleared": cleared or [],
+        "digest": digest,
+        "notified": notified,
+        "notify_limit": notify_limit,
+    }
+    if error:
+        result["error"] = error
+    if skipped_locked:
+        result["skipped_locked"] = True
+    return result
+
+
+def _detector_lock_path(cfg: Any) -> Path:
+    configured = str(getattr(cfg, "state_dir", "") or "").strip()
+    state_dir = Path(configured).resolve(strict=False) if configured else (REPO_ROOT / "arclink-priv" / "state")
+    return state_dir / "pin-upgrade-check.lock"
+
+
+def _try_acquire_detector_lock(cfg: Any):
+    lock_path = _detector_lock_path(cfg)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    except OSError:
+        handle.close()
+        raise
+    return handle
+
+
 def run_detector(conn: sqlite3.Connection, cfg: Any) -> dict[str, Any]:
+    try:
+        lock_handle = _try_acquire_detector_lock(cfg)
+    except OSError as exc:
+        return _detector_result(ok=False, error=f"pin upgrade detector could not acquire lock: {exc}")
+    if lock_handle is None:
+        return _detector_result(ok=True, skipped_locked=True)
+    try:
+        return _run_detector_locked(conn, cfg)
+    finally:
+        lock_handle.close()
+
+
+def _run_detector_locked(conn: sqlite3.Connection, cfg: Any) -> dict[str, Any]:
     """Single detection pass. Returns a structured result for callers."""
     _ensure_state_table(conn)
-    pins = _read_pins()
+    try:
+        pins = _read_pins()
+    except RuntimeError as exc:
+        return _detector_result(ok=False, error=str(exc))
     notify_limit = _notify_limit(pins)
 
     included: list[tuple[CheckResult, dict[str, Any]]] = []
@@ -730,16 +823,16 @@ def run_detector(conn: sqlite3.Connection, cfg: Any) -> dict[str, Any]:
         )
         _mark_notified(conn, [r.component for r, _ in included], notify_limit=notify_limit)
 
-    return {
-        "ok": True,
-        "scanned": seen_components,
-        "included": [r.component for r, _ in included],
-        "silenced": [r.component for r in silenced_results],
-        "cleared": cleared,
-        "digest": digest,
-        "notified": bool(included),
-        "notify_limit": notify_limit,
-    }
+    return _detector_result(
+        ok=True,
+        scanned=seen_components,
+        included=[r.component for r, _ in included],
+        silenced=[r.component for r in silenced_results],
+        cleared=cleared,
+        digest=digest,
+        notified=bool(included),
+        notify_limit=notify_limit,
+    )
 
 
 def main(argv: list[str]) -> int:

@@ -17,6 +17,7 @@ CLI mirrors the action worker: `--once --json` for the docker job loop.
 from __future__ import annotations
 
 import argparse
+import http.client
 import ipaddress
 from dataclasses import replace
 from datetime import datetime
@@ -31,7 +32,6 @@ import time
 from typing import Any, Callable, Mapping
 import urllib.error
 import urllib.parse
-import urllib.request
 import urllib.robotparser
 
 from arclink_control import (
@@ -71,6 +71,41 @@ LIVE_CRAWL_SOURCE_LANES = frozenset(
     }
 )
 _CrawlFetcher = Callable[..., Mapping[str, Any]]
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, host: str, *, port: int, timeout: int, pinned_address: str) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._arclink_pinned_address = pinned_address
+
+    def connect(self) -> None:
+        self.sock = self._create_connection(
+            (self._arclink_pinned_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, host: str, *, port: int, timeout: int, pinned_address: str) -> None:
+        super().__init__(host, port=port, timeout=timeout)
+        self._arclink_pinned_address = pinned_address
+
+    def connect(self) -> None:
+        sock = self._create_connection(
+            (self._arclink_pinned_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            server_hostname = self._tunnel_host
+        else:
+            server_hostname = self.host
+        self.sock = self._context.wrap_socket(sock, server_hostname=server_hostname)
 
 
 def _env_bool(env: Mapping[str, str] | None, key: str, *, default: bool = False) -> bool:
@@ -161,52 +196,74 @@ def _is_public_ip_address(value: str) -> bool:
     )
 
 
+def _validated_live_crawl_target(
+    url: str,
+    *,
+    env: Mapping[str, str] | None,
+    fetcher: _CrawlFetcher | None,
+) -> dict[str, Any]:
+    target: dict[str, Any] = {"allowed": False, "reason": "", "address": "", "port": 0}
+    raw = str(url or "").strip()
+    if not raw:
+        target["reason"] = "missing URL"
+        return target
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+    except Exception:
+        target["reason"] = "invalid URL"
+        return target
+    if parsed.scheme not in {"https", "http"}:
+        target["reason"] = "unsupported URL scheme"
+        return target
+    allow_test_urls = bool(fetcher is not None) and _env_bool(env, "ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS", default=False)
+    if parsed.scheme != "https" and not allow_test_urls:
+        target["reason"] = "live crawl requires https"
+        return target
+    if parsed.username or parsed.password:
+        target["reason"] = "URL userinfo is not allowed"
+        return target
+    host = str(parsed.hostname or "").strip().lower()
+    if not host:
+        target["reason"] = "missing host"
+        return target
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
+        target["reason"] = "loopback host is not allowed"
+        return target
+    allowed_ports = {443, 80} if allow_test_urls else {443}
+    if parsed.port is not None and parsed.port not in allowed_ports:
+        target["reason"] = "non-standard port is not allowed"
+        return target
+    target["port"] = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+    if allow_test_urls and host.endswith((".test", ".example", ".invalid")):
+        target["allowed"] = True
+        return target
+    if _is_public_ip_address(host):
+        target.update({"allowed": True, "address": host})
+        return target
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        target["reason"] = f"DNS resolution failed: {exc}"
+        return target
+    addresses = sorted({item[4][0] for item in infos if item and item[4]})
+    if not addresses:
+        target["reason"] = "DNS resolution returned no addresses"
+        return target
+    if not all(_is_public_ip_address(address) for address in addresses):
+        target["reason"] = "host resolves to non-public address"
+        return target
+    target.update({"allowed": True, "address": addresses[0]})
+    return target
+
+
 def _url_allowed_for_live_crawl(
     url: str,
     *,
     env: Mapping[str, str] | None,
     fetcher: _CrawlFetcher | None,
 ) -> tuple[bool, str]:
-    raw = str(url or "").strip()
-    if not raw:
-        return False, "missing URL"
-    try:
-        parsed = urllib.parse.urlsplit(raw)
-    except Exception:
-        return False, "invalid URL"
-    if parsed.scheme not in {"https", "http"}:
-        return False, "unsupported URL scheme"
-    allow_test_urls = bool(fetcher is not None) and _env_bool(env, "ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS", default=False)
-    if parsed.scheme != "https" and not allow_test_urls:
-        return False, "live crawl requires https"
-    if parsed.username or parsed.password:
-        return False, "URL userinfo is not allowed"
-    host = str(parsed.hostname or "").strip().lower()
-    if not host:
-        return False, "missing host"
-    if host in {"localhost", "localhost.localdomain"} or host.endswith(".localhost"):
-        return False, "loopback host is not allowed"
-    if parsed.port is not None and parsed.port not in ({443, 80} if allow_test_urls else {443}):
-        return False, "non-standard port is not allowed"
-    if allow_test_urls and host.endswith((".test", ".example", ".invalid")):
-        return True, ""
-    if _is_public_ip_address(host):
-        return True, ""
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except OSError as exc:
-        return False, f"DNS resolution failed: {exc}"
-    addresses = {item[4][0] for item in infos if item and item[4]}
-    if not addresses:
-        return False, "DNS resolution returned no addresses"
-    if not all(_is_public_ip_address(address) for address in addresses):
-        return False, "host resolves to non-public address"
-    return True, ""
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        return None
+    target = _validated_live_crawl_target(url, env=env, fetcher=fetcher)
+    return bool(target.get("allowed")), str(target.get("reason") or "")
 
 
 def _default_fetch_url(
@@ -215,31 +272,44 @@ def _default_fetch_url(
     headers: Mapping[str, str],
     timeout: int,
     max_bytes: int,
+    pinned_address: str = "",
 ) -> Mapping[str, Any]:
-    request = urllib.request.Request(str(url), headers=dict(headers), method="GET")
-    opener = urllib.request.build_opener(_NoRedirect)
+    parsed = urllib.parse.urlsplit(str(url))
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        raise RuntimeError("missing host")
+    port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+    address = str(pinned_address or "").strip()
+    if not address:
+        target = _validated_live_crawl_target(url, env=None, fetcher=None)
+        if not target.get("allowed"):
+            raise RuntimeError(str(target.get("reason") or "URL is not allowed")[:200])
+        address = str(target.get("address") or "").strip()
+        port = int(target.get("port") or port)
+    if not address:
+        raise RuntimeError("validated crawl target has no pinned address")
+    path = urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+    conn: http.client.HTTPConnection
+    if parsed.scheme == "https":
+        conn = _PinnedHTTPSConnection(host, port=port, timeout=timeout, pinned_address=address)
+    elif parsed.scheme == "http":
+        conn = _PinnedHTTPConnection(host, port=port, timeout=timeout, pinned_address=address)
+    else:
+        raise RuntimeError("unsupported URL scheme")
     try:
-        with opener.open(request, timeout=timeout) as response:  # noqa: S310 - URL was SSRF-validated above
-            data = response.read(max_bytes + 1)
-            return {
-                "status_code": int(response.status),
-                "headers": {str(k).lower(): str(v) for k, v in response.headers.items()},
-                "text": data[:max_bytes].decode("utf-8", errors="replace"),
-                "truncated": len(data) > max_bytes,
-            }
-    except urllib.error.HTTPError as exc:
-        data = exc.read(max_bytes + 1) if hasattr(exc, "read") else b""
-        headers_out = {}
-        if getattr(exc, "headers", None) is not None:
-            headers_out = {str(k).lower(): str(v) for k, v in exc.headers.items()}
+        conn.request("GET", path, headers=dict(headers))
+        response = conn.getresponse()
+        data = response.read(max_bytes + 1)
         return {
-            "status_code": int(exc.code),
-            "headers": headers_out,
+            "status_code": int(response.status),
+            "headers": {str(k).lower(): str(v) for k, v in response.getheaders()},
             "text": data[:max_bytes].decode("utf-8", errors="replace"),
             "truncated": len(data) > max_bytes,
         }
-    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+    except (OSError, TimeoutError, http.client.HTTPException, urllib.error.URLError) as exc:
         raise RuntimeError(str(getattr(exc, "reason", exc))[:200]) from exc
+    finally:
+        conn.close()
 
 
 def _fetch_url(
@@ -249,9 +319,16 @@ def _fetch_url(
     headers: Mapping[str, str],
     timeout: int,
     max_bytes: int,
+    pinned_address: str = "",
 ) -> Mapping[str, Any]:
     if fetcher is None:
-        return _default_fetch_url(url=url, headers=headers, timeout=timeout, max_bytes=max_bytes)
+        return _default_fetch_url(
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            pinned_address=pinned_address,
+        )
     try:
         return fetcher(url=url, headers=headers, timeout=timeout, max_bytes=max_bytes)
     except TypeError:
@@ -271,8 +348,9 @@ def _robots_allowed(
         return True, ""
     parsed = urllib.parse.urlsplit(url)
     robots_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/robots.txt", "", ""))
-    allowed, reason = _url_allowed_for_live_crawl(robots_url, env=env, fetcher=fetcher)
-    if not allowed:
+    target = _validated_live_crawl_target(robots_url, env=env, fetcher=fetcher)
+    if not target.get("allowed"):
+        reason = str(target.get("reason") or "")
         return False, f"robots policy blocked: {reason}"
     try:
         response = _fetch_url(
@@ -281,6 +359,7 @@ def _robots_allowed(
             headers={"User-Agent": user_agent, "Accept": "text/plain"},
             timeout=timeout,
             max_bytes=min(max_bytes, 128_000),
+            pinned_address=str(target.get("address") or ""),
         )
     except Exception as exc:  # noqa: BLE001 - fail closed when robots cannot be checked
         return False, f"robots fetch failed: {str(exc)[:160]}"
@@ -289,8 +368,10 @@ def _robots_allowed(
         return False, "robots.txt denied access"
     if 300 <= status < 400:
         return False, "robots.txt redirected; redirect not followed by crawler policy"
-    if status >= 400:
+    if status in {404, 410}:
         return True, ""
+    if status >= 400:
+        return False, f"robots.txt unavailable (http {status})"
     parser = urllib.robotparser.RobotFileParser(robots_url)
     parser.parse(str(response.get("text") or "").splitlines())
     return (parser.can_fetch(user_agent, url), "robots.txt disallows this URL")
@@ -323,8 +404,9 @@ def _crawl_source(
         maximum=2_000_000,
     )
     user_agent = str((env or {}).get("ARCLINK_ACADEMY_CE_CRAWL_USER_AGENT") or ACADEMY_CRAWL_USER_AGENT)
-    allowed, reason = _url_allowed_for_live_crawl(url, env=env, fetcher=fetcher)
-    if not allowed:
+    target = _validated_live_crawl_target(url, env=env, fetcher=fetcher)
+    if not target.get("allowed"):
+        reason = str(target.get("reason") or "")
         return {"status": "blocked", "reason": reason, "observed": {}}
     robots_ok, robots_reason = _robots_allowed(
         url,
@@ -348,7 +430,14 @@ def _crawl_source(
         headers["If-Modified-Since"] = str(crawl_state.get("last_modified"))
     started = time.monotonic()
     try:
-        response = _fetch_url(fetcher, url=url, headers=headers, timeout=timeout, max_bytes=max_bytes)
+        response = _fetch_url(
+            fetcher,
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            pinned_address=str(target.get("address") or ""),
+        )
     except Exception as exc:  # noqa: BLE001 - a fetch failure becomes an observation, not a crash
         return {"status": "failed", "reason": str(exc)[:180], "observed": {}}
     elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -427,8 +516,15 @@ def _crawl_source(
     }
 
 
-def _observation_id(*, source_ref_kind: str, source_ref_id: str, trainee_id: str, observed_at: str) -> str:
-    seed = f"{source_ref_kind}|{source_ref_id}|{trainee_id}|{observed_at}"
+def _observation_id(
+    *,
+    source_ref_kind: str,
+    source_ref_id: str,
+    source_uid: str = "",
+    trainee_id: str,
+    observed_at: str,
+) -> str:
+    seed = f"{source_ref_kind}|{source_ref_id}|{source_uid}|{trainee_id}|{observed_at}"
     return "acrawl_" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:20]
 
 
@@ -457,7 +553,7 @@ def _record_crawl_observation(
     }
     conn.execute(
         """
-        INSERT INTO academy_source_crawl_observations (
+        INSERT OR REPLACE INTO academy_source_crawl_observations (
           observation_id, source_ref_kind, source_ref_id, source_uid, specialist_uid,
           trainee_id, user_id, deployment_id, lane_id, canonical_url, status,
           content_hash, http_status, reason, metadata_json, observed_at
@@ -467,6 +563,7 @@ def _record_crawl_observation(
             _observation_id(
                 source_ref_kind=source_ref_kind,
                 source_ref_id=source_ref_id,
+                source_uid=source_uid,
                 trainee_id=str(trainee.get("trainee_id") or ""),
                 observed_at=observed_at,
             ),
@@ -622,7 +719,7 @@ def _live_crawl_observed_sources(
     fetcher: _CrawlFetcher | None,
     observed_at: str,
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, Any]]:
-    if not _env_bool(env, "ARCLINK_ACADEMY_CE_LIVE_CRAWL", default=True):
+    if not _env_bool(env, "ARCLINK_ACADEMY_CE_LIVE_CRAWL", default=False):
         return {}, {
             "enabled": False,
             "attempted": 0,
@@ -639,7 +736,7 @@ def _live_crawl_observed_sources(
         env,
         "ARCLINK_ACADEMY_CE_CRAWL_LIMIT",
         default=DEFAULT_LIVE_CRAWL_LIMIT,
-        minimum=0,
+        minimum=1,
         maximum=1000,
     )
     per_host_limit = _env_int(
@@ -664,7 +761,7 @@ def _live_crawl_observed_sources(
     observed: dict[str, Mapping[str, Any]] = {}
     by_host: dict[str, int] = {}
     for source in _crawlable_source_rows(conn, trainee, specialist_uid=specialist_uid):
-        if limit and int(summary["attempted"]) >= limit:
+        if int(summary["attempted"]) >= limit:
             summary["skipped"] += 1
             continue
         url = str(source.get("canonical_url") or "").strip()
@@ -689,6 +786,11 @@ def _live_crawl_observed_sources(
             summary["fetched"] += 1
         if status in {"removed", "tombstoned", "changed", "unchanged"} and isinstance(crawl.get("observed"), Mapping):
             observed[str(source.get("source_ref_id") or "")] = dict(crawl.get("observed") or {})
+        elif status in {"blocked", "failed"}:
+            observed[str(source.get("source_ref_id") or "")] = {
+                "crawl_status": status,
+                "reason": str(crawl.get("reason") or "")[:240],
+            }
         _record_crawl_observation(
             conn,
             source_ref_kind=str(source.get("source_ref_kind") or ""),
@@ -865,7 +967,7 @@ def run_academy_forward_maintenance(
     errors: list[dict[str, str]] = []
     notify_targets: list[dict[str, str]] = []
     crawl_totals = {
-        "enabled": _env_bool(clean_env, "ARCLINK_ACADEMY_CE_LIVE_CRAWL", default=True),
+        "enabled": _env_bool(clean_env, "ARCLINK_ACADEMY_CE_LIVE_CRAWL", default=False),
         "attempted": 0,
         "fetched": 0,
         "unchanged": 0,

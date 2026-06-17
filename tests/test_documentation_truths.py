@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import re
 from collections import Counter
 from pathlib import Path
@@ -321,6 +322,40 @@ def test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy() -> N
     print("PASS test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy")
 
 
+def _direct_runner_references(tree: ast.Module) -> set[str]:
+    refs: set[str] = set()
+    entrypoints: list[ast.AST] = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            entrypoints.append(node)
+        elif isinstance(node, ast.If) and "__main__" in ast.dump(node.test):
+            entrypoints.append(node)
+    for entrypoint in entrypoints:
+        for node in ast.walk(entrypoint):
+            if isinstance(node, ast.Name):
+                refs.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                refs.add(node.attr)
+    return refs
+
+
+def test_python_test_files_wire_module_level_tests_into_direct_runners() -> None:
+    missing: list[str] = []
+    for path in sorted((REPO / "tests").glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        test_defs = {
+            node.name: node.lineno
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+        }
+        refs = _direct_runner_references(tree)
+        for name, line in sorted(test_defs.items(), key=lambda item: item[1]):
+            if name not in refs:
+                missing.append(f"{path.relative_to(REPO)}:{line} {name}")
+    expect(not missing, "module-level tests missing from direct runner:\n" + "\n".join(missing))
+    print("PASS test_python_test_files_wire_module_level_tests_into_direct_runners")
+
+
 def main() -> int:
     test_product_matrix_totals_match_rows_and_statuses_are_known()
     test_product_matrix_real_rows_have_source_and_proof_anchors()
@@ -333,7 +368,8 @@ def main() -> int:
     test_foundation_docs_align_with_control_node_boundary()
     test_production_frontend_source_of_truth_is_web_only()
     test_captain_facing_vocabulary_does_not_regress_to_sovereign_pod_copy()
-    print("PASS all 11 documentation truth tests")
+    test_python_test_files_wire_module_level_tests_into_direct_runners()
+    print("PASS all documentation truth tests")
     return 0
 
 

@@ -36,6 +36,19 @@ reject_systemd_unit_value() {
   fi
 }
 
+reject_systemd_unit_raw_value() {
+  local name="$1" value="$2"
+  reject_systemd_unit_value "$name" "$value"
+  if [[ "$value" == *'"'* ]]; then
+    echo "Refusing to render systemd unit with an unescaped quote in $name" >&2
+    exit 1
+  fi
+  if [[ "$value" == *'%'* ]]; then
+    echo "Refusing to render systemd unit with a systemd specifier in $name" >&2
+    exit 1
+  fi
+}
+
 systemd_quote_value() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -48,6 +61,20 @@ systemd_env_line() {
   local key="$1" value="$2"
   reject_systemd_unit_value "$key" "$value"
   printf 'Environment=%s\n' "$(systemd_quote_value "$key=$value")"
+}
+
+validate_common_render_inputs() {
+  reject_systemd_unit_raw_value AGENT_ID "$AGENT_ID"
+  reject_systemd_unit_raw_value SHARED_REPO_DIR "$SHARED_REPO_DIR"
+  reject_systemd_unit_raw_value HERMES_HOME "$HERMES_HOME"
+  reject_systemd_unit_raw_value HERMES_BIN "$HERMES_BIN"
+  if [[ -n "$HERMES_BUNDLED_SKILLS_DIR" ]]; then
+    reject_systemd_unit_raw_value HERMES_BUNDLED_SKILLS "$HERMES_BUNDLED_SKILLS_DIR"
+  fi
+  reject_systemd_unit_value LANG "${ARCLINK_UTF8_LOCALE:-C.UTF-8}"
+  reject_systemd_unit_value LC_ALL "${ARCLINK_UTF8_LOCALE:-C.UTF-8}"
+  reject_systemd_unit_value PYTHONIOENCODING "${PYTHONIOENCODING:-utf-8}"
+  reject_systemd_unit_value ARCLINK_AGENTS_STATE_DIR "$ARCLINK_AGENTS_STATE_DIR"
 }
 
 systemd_utf8_env_lines() {
@@ -96,6 +123,8 @@ HERMES_BUNDLED_SKILLS_DIR=""
 if [[ -n "$HERMES_RUNTIME_DIR" && -d "$HERMES_RUNTIME_DIR/hermes-agent-src/skills" ]]; then
   HERMES_BUNDLED_SKILLS_DIR="$HERMES_RUNTIME_DIR/hermes-agent-src/skills"
 fi
+
+validate_common_render_inputs
 
 if [[ -z "$PYTHON3_BIN" || ! -x "$PYTHON3_BIN" ]]; then
   echo "python3 is required for agent web services." >&2
@@ -273,25 +302,91 @@ enable_access_surfaces="0"
 dashboard_backend_port=""
 dashboard_proxy_port=""
 
-if [[ -f "$ACCESS_STATE_FILE" ]]; then
-  enable_access_surfaces="1"
-  eval "$(
-    python3 - "$ACCESS_STATE_FILE" <<'PY'
+parse_access_state_exports() {
+  "$PYTHON3_BIN" - "$ACCESS_STATE_FILE" <<'PY'
+from __future__ import annotations
+
 import json
 import shlex
 import sys
 from pathlib import Path
 
-state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-values = {
-    "dashboard_backend_port": str(state["dashboard_backend_port"]),
-    "dashboard_proxy_port": str(state["dashboard_proxy_port"]),
-}
+
+def read_port(state: dict[str, object], key: str) -> str:
+    if key not in state:
+        raise ValueError(f"missing {key}")
+    try:
+        port = int(str(state[key]))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer port") from exc
+    if port < 1 or port > 65535:
+        raise ValueError(f"{key} must be between 1 and 65535")
+    return str(port)
+
+
+try:
+    raw_state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    if not isinstance(raw_state, dict):
+        raise ValueError("access state must be a JSON object")
+    values = {
+        "dashboard_backend_port": read_port(raw_state, "dashboard_backend_port"),
+        "dashboard_proxy_port": read_port(raw_state, "dashboard_proxy_port"),
+    }
+except Exception as exc:
+    print(f"Invalid ArcLink dashboard access state: {exc}", file=sys.stderr)
+    sys.exit(1)
+
 for key, value in values.items():
     print(f"{key}={shlex.quote(value)}")
 PY
-  )"
+}
+
+if [[ -f "$ACCESS_STATE_FILE" ]]; then
+  access_state_exports=""
+  if ! access_state_exports="$(parse_access_state_exports)"; then
+    echo "Refusing to render dashboard units from invalid access state: $ACCESS_STATE_FILE" >&2
+    exit 1
+  fi
+  eval "$access_state_exports"
+  enable_access_surfaces="1"
 fi
+
+enable_gateway="$(
+  python3 - "$CHANNELS_JSON" <<'PY'
+import json
+import sys
+
+channels = json.loads(sys.argv[1])
+print("1" if any(channel in {"discord", "telegram"} for channel in channels) else "0")
+PY
+)"
+
+ACTIVATION_TRIGGER_DIR=""
+if [[ -n "$ACTIVATION_TRIGGER_PATH" ]]; then
+  ACTIVATION_TRIGGER_DIR="$(dirname "$ACTIVATION_TRIGGER_PATH")"
+fi
+
+validate_systemd_render_inputs() {
+  reject_systemd_unit_raw_value PYTHON3_BIN "$PYTHON3_BIN"
+  if [[ -n "$ACTIVATION_TRIGGER_PATH" ]]; then
+    reject_systemd_unit_raw_value ACTIVATION_TRIGGER_PATH "$ACTIVATION_TRIGGER_PATH"
+    reject_systemd_unit_raw_value ACTIVATION_TRIGGER_DIR "$ACTIVATION_TRIGGER_DIR"
+  fi
+  if [[ "$enable_access_surfaces" == "1" ]]; then
+    reject_systemd_unit_raw_value ACCESS_STATE_FILE "$ACCESS_STATE_FILE"
+    reject_systemd_unit_raw_value ARCLINK_AGENT_WORKSPACE_DIR "$ARCLINK_AGENT_WORKSPACE_DIR"
+    reject_systemd_unit_raw_value ARCLINK_AGENT_LINKED_DIR "$ARCLINK_AGENT_LINKED_DIR"
+    reject_systemd_unit_raw_value dashboard_backend_port "$dashboard_backend_port"
+    reject_systemd_unit_raw_value dashboard_proxy_port "$dashboard_proxy_port"
+    reject_systemd_unit_value ARCLINK_DASHBOARD_AGENT_LABEL "${ARCLINK_DASHBOARD_AGENT_LABEL:-$AGENT_ID}"
+    reject_systemd_unit_value ARCLINK_DASHBOARD_AGENT_TITLE "${ARCLINK_DASHBOARD_AGENT_TITLE:-}"
+    reject_systemd_unit_value ARCLINK_DASHBOARD_THEME "${ARCLINK_DASHBOARD_THEME:-}"
+    reject_systemd_unit_value ARCLINK_DASHBOARD_THEME_LABEL "${ARCLINK_DASHBOARD_THEME_LABEL:-}"
+    reject_systemd_unit_value ARCLINK_DASHBOARD_ACCENT_HEX "${ARCLINK_DASHBOARD_ACCENT_HEX:-}"
+  fi
+}
+
+validate_systemd_render_inputs
 
 cat >"$TARGET_DIR/arclink-user-agent-refresh.service" <<EOF
 [Unit]
@@ -336,7 +431,6 @@ EOF
 rm -f "$TARGET_DIR/arclink-user-agent-backup.timer"
 
 if [[ -n "$ACTIVATION_TRIGGER_PATH" ]]; then
-  ACTIVATION_TRIGGER_DIR="$(dirname "$ACTIVATION_TRIGGER_PATH")"
   cat >"$TARGET_DIR/arclink-user-agent-activate.path" <<EOF
 [Unit]
 Description=Watch for ArcLink activation events for $AGENT_ID
@@ -354,16 +448,6 @@ EOF
 else
   rm -f "$TARGET_DIR/arclink-user-agent-activate.path"
 fi
-
-enable_gateway="$(
-  python3 - "$CHANNELS_JSON" <<'PY'
-import json
-import sys
-
-channels = json.loads(sys.argv[1])
-print("1" if any(channel in {"discord", "telegram"} for channel in channels) else "0")
-PY
-)"
 
 if [[ "$enable_gateway" == "1" ]]; then
   cat >"$TARGET_DIR/arclink-user-agent-gateway.service" <<EOF

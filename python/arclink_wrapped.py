@@ -44,6 +44,12 @@ WRAPPED_STATUSES = {"pending", "generated", "delivered", "failed"}
 WRAPPED_PUBLIC_DELIVERY_CHANNELS = {"telegram", "discord"}
 _TERMINAL_DEPLOYMENT_STATUSES = {"cancelled", "teardown_complete", "torn_down"}
 _PERSISTENT_FAILURE_THRESHOLD = 3
+_FAILED_RETRY_BACKOFFS = (
+    timedelta(minutes=15),
+    timedelta(hours=1),
+    timedelta(hours=6),
+    timedelta(hours=24),
+)
 
 
 SessionCounter = Callable[..., Mapping[str, Any]]
@@ -78,6 +84,16 @@ def _parse_dt(value: str | datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _float_or_zero(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(parsed):
+        return 0.0
+    return parsed
 
 
 def _iso(dt: datetime) -> str:
@@ -136,6 +152,21 @@ def _failure_report_id(user_id: str, period: str, period_start: str, attempt: in
     safe_user = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(user_id or "").strip())[:48] or "user"
     safe_start = re.sub(r"[^A-Za-z0-9]+", "", str(period_start or ""))[:24] or "period"
     return f"wrap_failed_{safe_user}_{period}_{safe_start}_{max(1, int(attempt))}"
+
+
+def _failed_retry_backoff(failure_count: int) -> timedelta:
+    index = max(1, int(failure_count or 1)) - 1
+    if index >= len(_FAILED_RETRY_BACKOFFS):
+        return _FAILED_RETRY_BACKOFFS[-1]
+    return _FAILED_RETRY_BACKOFFS[index]
+
+
+def _failed_retry_ready(created_at: str, failure_count: int, current: datetime) -> bool:
+    try:
+        failed_at = _parse_dt(created_at)
+    except (TypeError, ValueError):
+        return True
+    return current >= failed_at + _failed_retry_backoff(failure_count)
 
 
 def _redact_text(value: Any) -> str:
@@ -408,6 +439,7 @@ def _has_wrapped_signal(
     deployment_ids: Sequence[str],
     period_start: str,
     period_end: str,
+    session_counter: SessionCounter | None = None,
 ) -> bool:
     if not deployment_ids:
         return False
@@ -418,7 +450,45 @@ def _has_wrapped_signal(
         period_start=period_start,
         period_end=period_end,
     )
-    return any(int(value or 0) > 0 for value in counts.values())
+    if any(int(value or 0) > 0 for value in counts.values()):
+        return True
+    if session_counter is None:
+        return False
+    try:
+        session_counts = _call_session_counter(
+            session_counter,
+            user_id=user_id,
+            deployment_ids=deployment_ids,
+            period_start=period_start,
+            period_end=period_end,
+        )
+    except Exception:  # noqa: BLE001
+        return True
+    return any(int(session_counts.get(key) or 0) > 0 for key in ("session_count", "turn_count"))
+
+
+def _latest_generated_report_for_period(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    period: str,
+    period_start: str,
+    period_end: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT report_id, status, delivery_channel, created_at
+        FROM arclink_wrapped_reports
+        WHERE user_id = ?
+          AND period = ?
+          AND period_start = ?
+          AND period_end = ?
+          AND status IN ('generated', 'delivered')
+        ORDER BY created_at DESC, report_id DESC
+        LIMIT 1
+        """,
+        (user_id, period, period_start, period_end),
+    ).fetchone()
 
 
 def _call_session_counter(
@@ -915,7 +985,7 @@ def enqueue_wrapped_report_notification(
         "period": str(row["period"]),
         "period_start": str(row["period_start"]),
         "period_end": str(row["period_end"]),
-        "novelty_score": float(row["novelty_score"]),
+        "novelty_score": _float_or_zero(row["novelty_score"]),
         "render_kind": "plain_text",
     }
     cursor = conn.execute(
@@ -984,7 +1054,7 @@ def _record_wrapped_failure(
         """,
         (rid, user_id, period, period_start, period_end, _json_dumps(ledger), created_at),
     )
-    if attempt >= _PERSISTENT_FAILURE_THRESHOLD:
+    if attempt == _PERSISTENT_FAILURE_THRESHOLD:
         conn.execute(
             """
             INSERT INTO notification_outbox (
@@ -1022,24 +1092,27 @@ def run_wrapped_scheduler_once(
     vault_delta_reader: VaultDeltaReader | None = None,
 ) -> dict[str, Any]:
     summary = {"due": 0, "generated": 0, "queued": 0, "failed": 0, "operator_notifications": 0}
-    due = list_due_wrapped_captains(conn, now=now)[: max(1, int(limit))]
+    due = list_due_wrapped_captains(conn, now=now, session_counter=session_counter)[: max(1, int(limit))]
     summary["due"] = len(due)
     before_operator = conn.execute(
         "SELECT COUNT(*) AS count FROM notification_outbox WHERE target_kind = 'operator'"
     ).fetchone()["count"]
     for item in due:
         try:
-            report = generate_wrapped_report(
-                conn,
-                item["user_id"],
-                item["frequency"],
-                item["period_start"],
-                item["period_end"],
-                session_counter=session_counter,
-                vault_delta_reader=vault_delta_reader,
-                created_at=_iso(_parse_dt(now or utc_now_iso())),
-            )
-            summary["generated"] += 1
+            if item.get("due_reason") == "delivery_retry" and item.get("report_id"):
+                report = {"report_id": str(item["report_id"])}
+            else:
+                report = generate_wrapped_report(
+                    conn,
+                    item["user_id"],
+                    item["frequency"],
+                    item["period_start"],
+                    item["period_end"],
+                    session_counter=session_counter,
+                    vault_delta_reader=vault_delta_reader,
+                    created_at=_iso(_parse_dt(now or utc_now_iso())),
+                )
+                summary["generated"] += 1
             notification_id = enqueue_wrapped_report_notification(conn, report["report_id"], now=now, quiet_hours=quiet_hours)
             if notification_id > 0:
                 summary["queued"] += 1
@@ -1061,8 +1134,14 @@ def run_wrapped_scheduler_once(
     return summary
 
 
-def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime | None = None) -> list[dict[str, Any]]:
+def list_due_wrapped_captains(
+    conn: sqlite3.Connection,
+    *,
+    now: str | datetime | None = None,
+    session_counter: SessionCounter | None = None,
+) -> list[dict[str, Any]]:
     due: list[dict[str, Any]] = []
+    current = _parse_dt(now or utc_now_iso())
     rows = conn.execute(
         """
         SELECT user_id, wrapped_frequency
@@ -1073,12 +1152,12 @@ def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime |
     ).fetchall()
     for row in rows:
         frequency = normalize_wrapped_frequency(str(row["wrapped_frequency"] or "daily"))
-        period_start, period_end = resolve_wrapped_period(frequency, now=now)
+        period_start, period_end = resolve_wrapped_period(frequency, now=current)
         deployments = _captain_deployment_rows(conn, str(row["user_id"]))
         deployment_ids = [str(item.get("deployment_id") or "") for item in deployments if str(item.get("deployment_id") or "")]
         latest = conn.execute(
             """
-            SELECT status, novelty_score, created_at
+            SELECT report_id, status, novelty_score, delivery_channel, created_at
             FROM arclink_wrapped_reports
             WHERE user_id = ? AND period = ? AND period_start = ? AND period_end = ?
             ORDER BY created_at DESC, report_id DESC
@@ -1086,10 +1165,40 @@ def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime |
             """,
             (row["user_id"], frequency, period_start, period_end),
         ).fetchone()
+        report_id = ""
         if latest is None:
             reason = "missing"
+        elif str(latest["status"]) == "generated" and not str(latest["delivery_channel"] or ""):
+            reason = "delivery_retry"
+            report_id = str(latest["report_id"] or "")
         elif str(latest["status"]) == "failed":
-            reason = "failed_retry"
+            failure_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM arclink_wrapped_reports
+                    WHERE user_id = ? AND period = ? AND period_start = ? AND period_end = ? AND status = 'failed'
+                    """,
+                    (row["user_id"], frequency, period_start, period_end),
+                ).fetchone()["count"]
+                or 0
+            )
+            if not _failed_retry_ready(str(latest["created_at"] or ""), failure_count, current):
+                continue
+            generated = _latest_generated_report_for_period(
+                conn,
+                user_id=str(row["user_id"]),
+                period=frequency,
+                period_start=period_start,
+                period_end=period_end,
+            )
+            if generated is not None and not str(generated["delivery_channel"] or ""):
+                reason = "delivery_retry"
+                report_id = str(generated["report_id"] or "")
+            elif generated is not None:
+                continue
+            else:
+                reason = "failed_retry"
         else:
             continue
         if reason == "missing" and not _has_wrapped_signal(
@@ -1098,6 +1207,7 @@ def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime |
             deployment_ids=deployment_ids,
             period_start=period_start,
             period_end=period_end,
+            session_counter=session_counter,
         ):
             continue
         due.append(
@@ -1107,6 +1217,7 @@ def list_due_wrapped_captains(conn: sqlite3.Connection, *, now: str | datetime |
                 "period_start": period_start,
                 "period_end": period_end,
                 "due_reason": reason,
+                "report_id": report_id,
             }
         )
     return due

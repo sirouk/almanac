@@ -74,7 +74,7 @@ NOTION_SETUP_CALLBACK_PREFIX = "arclink:onboarding:notion:"
 UNIX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
 GITHUB_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SSH_PUBLIC_KEY_PATTERN = re.compile(
-    r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\s+[A-Za-z0-9+/=]+(?:\s+.*)?$"
+    r"^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)[ \t]+[A-Za-z0-9+/=]+(?:[ \t]+[^\r\n]*)?$"
 )
 PLATFORM_ALIASES = {
     "telegram": "telegram",

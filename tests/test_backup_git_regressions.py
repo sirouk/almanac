@@ -46,9 +46,6 @@ def test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts() -> None:
 BACKUP_GIT_REMOTE=git@github.com:acme/arclink-priv.git
 BACKUP_GIT_DEPLOY_KEY_PATH={key_path}
 BACKUP_GIT_KNOWN_HOSTS_FILE={known_hosts_path}
-ssh-keyscan() {{
-  printf '%s\\n' 'github.com ssh-ed25519 AAAATESTKEY'
-}}
 prepare_backup_git_transport
 printf 'GIT_SSH_COMMAND=%s\\n' "$GIT_SSH_COMMAND"
 printf 'KNOWN_HOSTS=%s\\n' "$(cat "$BACKUP_GIT_KNOWN_HOSTS_FILE")"
@@ -61,7 +58,7 @@ printf 'KNOWN_HOSTS=%s\\n' "$(cat "$BACKUP_GIT_KNOWN_HOSTS_FILE")"
             f"expected deploy-key GIT_SSH_COMMAND, got: {result.stdout!r}",
         )
         expect(
-            "KNOWN_HOSTS=github.com ssh-ed25519 AAAATESTKEY" in result.stdout,
+            "KNOWN_HOSTS=github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" in result.stdout,
             f"expected known_hosts entry, got: {result.stdout!r}",
         )
     print("PASS test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts")
@@ -85,6 +82,51 @@ fi
     expect(result.returncode == 0, f"public shared backup refusal failed: stdout={result.stdout!r} stderr={result.stderr!r}")
     expect("Refusing to back up arclink-priv to a public GitHub repository" in result.stderr, result.stderr)
     print("PASS test_shared_backup_refuses_public_github_remote")
+
+
+def test_shared_backup_refuses_untrusted_api_base_without_test_flag() -> None:
+    text = COMMON_SH.read_text()
+    snippet = extract(text, "github_owner_repo_from_remote() {", "backup_git_remote_host() {")
+    script = f"""
+{snippet}
+BACKUP_GIT_GITHUB_API_BASE=https://api.github.invalid
+unset ARCLINK_BACKUP_ALLOW_TEST_GITHUB_API_BASE
+visibility="$(github_repo_visibility acme/arclink-priv)"
+printf 'visibility=%s\\n' "$visibility"
+BACKUP_GIT_REMOTE=git@github.com:acme/arclink-priv.git
+if require_private_github_backup_remote "$BACKUP_GIT_REMOTE"; then
+  echo should-have-failed
+  exit 1
+fi
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"untrusted API base case failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+    expect("visibility=error:untrusted-api-base" in result.stdout, result.stdout)
+    expect("Could not verify GitHub visibility" in result.stderr, result.stderr)
+    print("PASS test_shared_backup_refuses_untrusted_api_base_without_test_flag")
+
+
+def test_shared_backup_refuses_404_without_git_read_access() -> None:
+    text = COMMON_SH.read_text()
+    snippet = extract(text, "github_owner_repo_from_remote() {", "backup_git_remote_host() {")
+    script = f"""
+{snippet}
+github_repo_visibility() {{
+  printf '%s\\n' non-public-or-missing
+}}
+verify_backup_git_remote_read_access() {{
+  return 1
+}}
+BACKUP_GIT_REMOTE=git@github.com:acme/missing-or-unauthorized.git
+if require_private_github_backup_remote "$BACKUP_GIT_REMOTE"; then
+  echo should-have-failed
+  exit 1
+fi
+"""
+    result = bash(script)
+    expect(result.returncode == 0, f"404 shared backup refusal failed: stdout={result.stdout!r} stderr={result.stderr!r}")
+    expect("Could not verify private GitHub backup remote access" in result.stderr, result.stderr)
+    print("PASS test_shared_backup_refuses_404_without_git_read_access")
 
 
 def test_backup_to_github_excludes_repo_local_key_material() -> None:
@@ -425,9 +467,38 @@ def test_restore_smoke_rejects_remote_sources_without_fetching() -> None:
     print("PASS test_restore_smoke_rejects_remote_sources_without_fetching")
 
 
+def test_agent_restore_smoke_rejects_symlink_to_excluded_content() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        source = tmp_path / "agent-backup"
+        restore_dir = tmp_path / "restore"
+        (source / "memories").mkdir(parents=True)
+        (source / "MANIFEST.json").write_text("{}", encoding="utf-8")
+        (source / "SOUL.md").write_text("soul\n", encoding="utf-8")
+        (source / "memories" / "secret-link").symlink_to("../secrets/token")
+
+        result = run(
+            [
+                str(RESTORE_SMOKE_SH),
+                "--kind",
+                "agent-home",
+                "--source",
+                str(source),
+                "--restore-dir",
+                str(restore_dir),
+                "--json",
+            ]
+        )
+        expect(result.returncode != 0, "restore-smoke must reject symlinks to excluded content")
+        expect("symlink targets excluded content" in result.stderr, result.stderr)
+    print("PASS test_agent_restore_smoke_rejects_symlink_to_excluded_content")
+
+
 def main() -> int:
     test_prepare_backup_git_transport_uses_deploy_key_and_known_hosts()
     test_shared_backup_refuses_public_github_remote()
+    test_shared_backup_refuses_untrusted_api_base_without_test_flag()
+    test_shared_backup_refuses_404_without_git_read_access()
     test_backup_to_github_excludes_repo_local_key_material()
     test_backup_to_github_skips_nested_git_checkouts_without_submodule_dirt()
     test_backup_to_github_skips_ignored_state_tree_with_nested_git_checkout()
@@ -435,7 +506,8 @@ def main() -> int:
     test_reconcile_backup_remote_fast_forwards_local_without_follow_up_push()
     test_shared_restore_smoke_restores_local_git_snapshot_without_live_fetch()
     test_restore_smoke_rejects_remote_sources_without_fetching()
-    print("PASS all 9 backup git regression tests")
+    test_agent_restore_smoke_rejects_symlink_to_excluded_content()
+    print("PASS all 12 backup git regression tests")
     return 0
 
 

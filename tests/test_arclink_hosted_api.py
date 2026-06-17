@@ -6493,6 +6493,7 @@ def main() -> int:
     test_user_routes_are_isolated_across_accounts()
     test_user_credentials_are_acknowledged_and_removed_after_storage()
     test_user_share_grants_create_approved_accepted_linked_resources()
+    test_user_share_grant_broker_requires_deployment_scoped_token()
     test_user_share_grants_inbox_requires_session_and_scopes_owner_recipient()
     test_user_share_grant_retry_notification_requires_session_csrf_and_scopes_participants()
     test_user_share_grant_retry_notification_queues_after_public_channel_link()

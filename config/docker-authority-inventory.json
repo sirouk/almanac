@@ -154,7 +154,7 @@
     "selected_service": "operator-upgrade-broker",
     "control_type": "split queued operator upgrades out of the dashboard agent-supervisor broker",
     "reason": "agent-supervisor-broker only needs Docker authority for dashboard network/proxy sidecars. Queued Docker-mode operator upgrades need a writable private-state queue into the host checkout, so those requests now use a dedicated operator-upgrade-broker and the dashboard broker no longer mounts the host repo or accepts upgrade operation kinds.",
-    "remaining_gate": "This reduces mixed broker authority but does not make operator-upgrade-broker tenant-safe. GAP-019 remains open for the operator-upgrade, deployment, gateway, and dashboard broker socket residual risks, root helper residual risks, and operator risk acceptance."
+    "remaining_gate": "This reduces mixed broker authority but does not make operator-upgrade-broker tenant-safe. GAP-019 remains open for the operator-upgrade writable-checkout/private-state queue residual risk, deployment/gateway/dashboard broker socket residual risks, root helper residual risks, and operator risk acceptance."
   },
   "gap_019_v_summary": {
     "review_status": "local_authority_removed",
@@ -202,7 +202,7 @@
     "control_type": "minimal service env, no broad canonical private mounts, and child-process env allowlist for the operator upgrade broker",
     "removed_authority": "removed broad *arclink-env inheritance, removed broad canonical private config/state/secrets mounts, and replaced child-process os.environ.copy inheritance with an explicit allowlist",
     "reason": "operator-upgrade-broker validates only allowlisted Docker-mode upgrade request kinds from tokened requests. It needs broker token/listener env, host repo/private path metadata, and the writable host repo bind for the host-runner queue; production upgrade execution happens in the host-side operator upgrade runner rather than in the broker container.",
-    "remaining_gate": "This narrows the operator broker's ambient secret and private-data exposure. GAP-019 remains open for the broker's writeable Docker socket authority, writable host checkout/private-state reachability through that checkout, live alert integration, stronger isolation, or operator residual-risk acceptance."
+    "remaining_gate": "This narrows the operator broker's ambient secret and private-data exposure. GAP-019 remains open for the broker's trusted root identity plus writable host checkout/private-state queue reachability, live alert integration, stronger isolation, or operator residual-risk acceptance."
   },
   "gap_019_ac_summary": {
     "review_status": "local_service_boundary_narrowed",
@@ -313,7 +313,7 @@
     ],
     "control_type": "scoped internal Compose networks for tokened broker/helper request lanes",
     "removed_authority": "removed default network reachability for the tokened Docker socket brokers and root helpers",
-    "reason": "After the broker/helper splits, the high-authority services still listened on the shared default Compose network. They now attach only to narrow internal request networks with their legitimate callers; agent-process-helper and operator-upgrade-broker also receive single-service outbound egress networks for runtime gateway/provider and upgrade fetch work without exposing their helper APIs to the default network.",
+    "reason": "After the broker/helper splits, the high-authority services still listened on the shared default Compose network. They now attach only to narrow internal request networks with their legitimate callers; agent-process-helper also receives a single-service outbound egress network for runtime gateway/provider work without exposing helper APIs to the default network.",
     "remaining_gate": "This reduces in-stack request reachability only. GAP-019 remains open for writeable Docker socket authority, root helper authority, live alert integration, stronger isolation, or operator residual-risk acceptance."
   },
   "gap_019_al_summary": {
@@ -2266,7 +2266,7 @@
           "tests/test_arclink_docker.py:test_trusted_host_acceptance_gate_blocks_brokers_and_helpers_before_work",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "This records the operator acknowledgement boundary and does not close GAP-019; writeable Docker socket plus writable host checkout authority remains trusted-host residual risk until stronger isolation or accepted residual risk replaces it."
+        "remaining_gate": "This records the operator acknowledgement boundary and does not close GAP-019; trusted root identity plus writable host checkout/private-state queue access remains trusted-host residual risk until stronger isolation or accepted residual risk replaces it."
       },
       "gap_019_ap_controls": {
         "local_repair_status": "direct_run_listener_defaults_loopback",
@@ -2303,7 +2303,7 @@
         ],
         "root_split_review": {
           "required": true,
-          "decision": "Runs as the explicit trusted root broker with DAC_OVERRIDE because live checkouts may be hosted under /root, Docker Compose bind paths must resolve to host-visible paths, and operator action logs are service-user-owned under private state. no-new-privileges remains set, but the writeable Docker socket plus writable host checkout stay host-root-equivalent."
+          "decision": "Runs as the explicit trusted root broker with DAC_OVERRIDE because live checkouts may be hosted under /root, Docker Compose bind paths must resolve to host-visible paths, and operator action logs are service-user-owned under private state. no-new-privileges remains set, but root identity plus writable host checkout/private-state queue access stay host-root-equivalent."
         },
         "monitoring_controls": [
           "operator-upgrade-broker healthcheck",
@@ -2416,7 +2416,7 @@
           "tests/test_arclink_docker.py:test_operator_upgrade_broker_runs_allowlisted_operator_upgrade",
           "tests/test_arclink_docker.py:test_docker_authority_inventory_matches_compose_boundary"
         ],
-        "remaining_gate": "The operator broker still owns a writeable Docker socket and a writable host repo bind that can reach the nested private state needed for real upgrades. GAP-019 remains open for stronger isolation, live alert integration, or operator residual-risk acceptance."
+        "remaining_gate": "The operator broker still owns trusted root identity and a writable host repo bind that can reach the nested private state needed for real upgrades. GAP-019 remains open for stronger isolation, live alert integration, or operator residual-risk acceptance."
       },
       "gap_019_ai_controls": {
         "local_repair_status": "operator_upgrade_broker_docker_cli_preflight_added",

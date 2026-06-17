@@ -265,6 +265,67 @@ def test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag() -
         print("PASS test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag")
 
 
+def test_backup_agent_home_refuses_404_without_git_read_access() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hermes_home = root / "hermes-home"
+        (hermes_home / "state").mkdir(parents=True, exist_ok=True)
+        (hermes_home / "SOUL.md").write_text("soul\n", encoding="utf-8")
+        key_path = root / ".ssh" / "agent-backup"
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_text("private", encoding="utf-8")
+        (root / ".ssh" / "agent-backup.pub").write_text("public", encoding="utf-8")
+        known_hosts = root / ".ssh" / "known_hosts"
+        known_hosts.write_text("github.com ssh-ed25519 AAAATEST\n", encoding="utf-8")
+        state_file = hermes_home / "state" / "arclink-agent-backup.env"
+        state_file.write_text(
+            "\n".join(
+                [
+                    "AGENT_BACKUP_REMOTE='git@github.com:example/private-repo.git'",
+                    "AGENT_BACKUP_BRANCH='main'",
+                    "AGENT_BACKUP_INCLUDE_SESSIONS='0'",
+                    f"AGENT_BACKUP_KEY_PATH='{key_path}'",
+                    f"AGENT_BACKUP_KNOWN_HOSTS_FILE='{known_hosts}'",
+                    f"AGENT_BACKUP_REPO_DIR='{root / 'local-backup'}'",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        git_global = root / "gitconfig"
+        git_global.write_text(
+            f'[url "{root / "missing.git"}"]\n\tinsteadOf = git@github.com:example/private-repo.git\n',
+            encoding="utf-8",
+        )
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        (fakebin / "python3").write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"${1:-}\" == '-' ]]; then\n"
+            "  printf '%s\\n' non-public-or-missing\n"
+            "  exit 0\n"
+            "fi\n"
+            "exec /usr/bin/python3 \"$@\"\n",
+            encoding="utf-8",
+        )
+        (fakebin / "python3").chmod(0o755)
+        result = run(
+            [str(BACKUP_SCRIPT), str(hermes_home)],
+            env={
+                **os.environ,
+                "HOME": str(root),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "AGENT_BACKUP_GITHUB_API_BASE": "https://api.github.invalid",
+                "ARCLINK_AGENT_BACKUP_ALLOW_TEST_GITHUB_API_BASE": "1",
+                "GIT_CONFIG_GLOBAL": str(git_global),
+            },
+        )
+        expect(result.returncode != 0, "expected inaccessible 404 backup remote to be refused")
+        expect("Could not verify private GitHub backup remote access" in result.stderr, result.stderr)
+        expect(not (root / "local-backup").exists(), "backup should fail before staging local content")
+        print("PASS test_backup_agent_home_refuses_404_without_git_read_access")
+
+
 def test_backup_agent_home_restore_smoke_pushes_curated_snapshot_to_private_repo() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -362,6 +423,7 @@ def test_backup_agent_home_restore_smoke_pushes_curated_snapshot_to_private_repo
         expect(payload["kind"] == "agent-home", str(payload))
         expect("agent_manifest_json" in payload["checks"], str(payload))
         expect("agent_secret_exclusion" in payload["checks"], str(payload))
+        expect("agent_symlink_targets" in payload["checks"], str(payload))
         expect((restore_dir / "SOUL.md").read_text(encoding="utf-8") == "soul\n", "expected restored SOUL.md")
         expect(not (restore_dir / "secrets").exists(), "restore-smoke must not restore secrets")
         expect(not (restore_dir / "logs").exists(), "restore-smoke must not restore logs")
@@ -375,8 +437,9 @@ def main() -> int:
     test_install_agent_cron_jobs_schedules_backup_and_records_status()
     test_configure_agent_backup_refuses_when_visibility_check_errors()
     test_configure_agent_backup_refuses_untrusted_api_base_without_test_flag()
+    test_backup_agent_home_refuses_404_without_git_read_access()
     test_backup_agent_home_restore_smoke_pushes_curated_snapshot_to_private_repo()
-    print("PASS all 7 agent backup regression tests")
+    print("PASS all 8 agent backup regression tests")
     return 0
 
 

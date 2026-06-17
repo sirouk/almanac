@@ -5,6 +5,7 @@ import importlib.util
 import asyncio
 import json
 import os
+import stat
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -1802,6 +1803,69 @@ def test_gateway_exec_broker_records_redacted_rejection_incident_before_subproce
             os.environ.update(old_env)
 
 
+def test_rejection_incident_helpers_redact_and_refuse_unsafe_paths() -> None:
+    incidents = load_module(PYTHON_DIR / "arclink_rejection_incidents.py", "arclink_rejection_incidents_direct_test")
+    old_env = os.environ.copy()
+    try:
+        os.environ["ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED"] = "accepted"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "state"
+            root.mkdir()
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = str(root)
+            broker_path = incidents.state_root_rejection_path("gateway-exec-broker")
+            helper_path = incidents.state_root_rejection_path("agent-process-helper", helper=True)
+            expect(broker_path == root / "_broker-incidents" / "gateway-exec-broker" / "rejections.jsonl", str(broker_path))
+            expect(helper_path == root / "_helper-incidents" / "agent-process-helper" / "rejections.jsonl", str(helper_path))
+            expect(broker_path.parent.is_dir() and helper_path.parent.is_dir(), "incident path helpers must create safe parents")
+
+            incidents.record_rejection_incident(
+                broker_path,
+                service="gateway-exec-broker",
+                event="rejected_request",
+                reason="invalid_payload",
+                message="blocked before subprocess",
+                error_class="ValueError",
+                metadata={
+                    "request_id": "req_123",
+                    "attempt": 2,
+                    "safe": True,
+                    "bad key": "ignored",
+                    "raw_body": '{"bot_token":"123:SECRET"}',
+                },
+            )
+            raw = broker_path.read_text(encoding="utf-8")
+            row = json.loads(raw)
+            expect(row["trusted_host_acknowledged"] is True, str(row))
+            expect(row["request_id"] == "req_123" and row["attempt"] == 2 and row["safe"] is True, str(row))
+            expect("bad key" not in row and "raw_body" not in row and "SECRET" not in raw, raw)
+            expect(stat.S_IMODE(broker_path.stat().st_mode) & 0o077 == 0, oct(stat.S_IMODE(broker_path.stat().st_mode)))
+
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = "relative-state"
+            expect(incidents.state_root_rejection_path("gateway-exec-broker") is None, "relative roots must be rejected")
+            symlink_root = Path(tmp) / "state-link"
+            symlink_root.symlink_to(root, target_is_directory=True)
+            os.environ["ARCLINK_STATE_ROOT_BASE"] = str(symlink_root)
+            expect(incidents.state_root_rejection_path("gateway-exec-broker") is None, "symlink roots must be rejected")
+
+            target = Path(tmp) / "target.jsonl"
+            target.write_text("unchanged\n", encoding="utf-8")
+            link = Path(tmp) / "link.jsonl"
+            link.symlink_to(target)
+            incidents.record_rejection_incident(
+                link,
+                service="gateway-exec-broker",
+                event="rejected_request",
+                reason="invalid_payload",
+                message="blocked before subprocess",
+                error_class="ValueError",
+            )
+            expect(target.read_text(encoding="utf-8") == "unchanged\n", "symlink leaf must not be followed")
+    finally:
+        os.environ.clear()
+        os.environ.update(old_env)
+    print("PASS test_rejection_incident_helpers_redact_and_refuse_unsafe_paths")
+
+
 def test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -2418,6 +2482,7 @@ def main() -> int:
     test_public_agent_gateway_turn_uses_gateway_exec_broker_when_configured()
     test_public_agent_bridge_worker_uses_gateway_exec_broker_request_jobs()
     test_gateway_exec_broker_records_redacted_rejection_incident_before_subprocess()
+    test_rejection_incident_helpers_redact_and_refuse_unsafe_paths()
     test_gateway_exec_broker_rejects_raw_commands_and_builds_vetted_exec()
     test_gateway_exec_broker_rejects_symlinked_compose_fallback_config_before_docker()
     test_gateway_exec_broker_sanitizes_subprocess_failure_tail()

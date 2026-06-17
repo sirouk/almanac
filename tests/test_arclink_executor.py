@@ -106,6 +106,34 @@ def test_executor_mutating_operations_fail_closed_without_live_flag() -> None:
     print("PASS test_executor_mutating_operations_fail_closed_without_live_flag")
 
 
+def test_live_unimplemented_executor_surfaces_fail_closed() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_unimplemented_live_test")
+    executor = mod.ArcLinkExecutor(config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"))
+    intent = sample_intent()
+    try:
+        executor.cloudflare_access_apply(
+            mod.CloudflareAccessApplyRequest(deployment_id="dep_1", access=intent["access"], idempotency_key="access-live-1")
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("not implemented" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected live Cloudflare Access apply to fail closed")
+
+    try:
+        executor.rollback_apply(
+            mod.RollbackApplyRequest(
+                deployment_id="dep_1",
+                plan={"actions": ("stop_rendered_services", "preserve_state_roots")},
+                idempotency_key="rollback-live-1",
+            )
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("not implemented" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected live rollback apply to fail closed")
+    print("PASS test_live_unimplemented_executor_surfaces_fail_closed")
+
+
 def test_runner_stdout_preserves_compose_ps_json() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_runner_stdout_test")
     json_lines = "\n".join(json.dumps({"Service": f"svc_{idx}", "State": "running"}) for idx in range(300))
@@ -153,6 +181,45 @@ def test_secret_resolvers_validate_refs_and_hide_material() -> None:
             tmp,
         )
     print("PASS test_secret_resolvers_validate_refs_and_hide_material")
+
+
+def test_live_docker_compose_rejects_duplicate_secret_targets_before_materializing() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_duplicate_secret_target_test")
+    intent = json.loads(json.dumps(sample_intent()))
+    intent["compose"]["secrets"]["duplicate_db_password"] = {
+        "secret_ref": "secret://arclink/nextcloud/dep_1/db-password-copy",
+        "target": "/run/secrets/nextcloud_db_password",
+    }
+
+    class RecordingRunner:
+        runs = 0
+
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            del args, deployment_id, project_name, env_file, compose_file
+            self.runs += 1
+            return {"status": "ok"}
+
+    runner = RecordingRunner()
+    executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local"),
+        secret_resolver=mod.FakeSecretResolver(
+            {
+                "secret://arclink/nextcloud/dep_1/db-password": "secret-a",
+                "secret://arclink/nextcloud/dep_1/db-password-copy": "secret-b",
+            }
+        ),
+        docker_runner=runner,
+    )
+    try:
+        executor.docker_compose_apply(
+            mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="duplicate-secret-target")
+        )
+    except mod.ArcLinkSecretResolutionError as exc:
+        expect("duplicate" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected duplicate compose secret targets to fail closed")
+    expect(runner.runs == 0, f"runner must not run after duplicate secret target: {runner.runs}")
+    print("PASS test_live_docker_compose_rejects_duplicate_secret_targets_before_materializing")
 
 
 def test_fake_executor_consumes_rendered_intent_without_secret_leakage() -> None:
@@ -640,6 +707,69 @@ def test_live_chutes_client_missing_fails_closed() -> None:
     print("PASS test_live_chutes_client_missing_fails_closed")
 
 
+def test_live_provider_clients_require_operation_idempotency_db() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_live_provider_db_required_test")
+
+    class ChutesClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        def create_key(self, **kwargs):
+            del kwargs
+            self.called = True
+            return {"id": "ck_unexpected"}
+
+    class StripeClient:
+        def __init__(self) -> None:
+            self.called = False
+
+        def refund(self, **kwargs):
+            del kwargs
+            self.called = True
+            return {"refund_id": "re_unexpected"}
+
+    chutes = ChutesClient()
+    chutes_executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+        chutes_client=chutes,
+    )
+    try:
+        chutes_executor.chutes_key_apply(
+            mod.ChutesKeyApplyRequest(
+                deployment_id="dep_1",
+                action="create",
+                secret_ref="secret://arclink/chutes/dep_1",
+                idempotency_key="chutes-no-db",
+            )
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("idempotency DB" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected live Chutes client without operation DB to fail closed")
+    expect(chutes.called is False, "Chutes client must not be called without operation DB")
+
+    stripe = StripeClient()
+    stripe_executor = mod.ArcLinkExecutor(
+        config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="live"),
+        stripe_client=stripe,
+    )
+    try:
+        stripe_executor.stripe_action_apply(
+            mod.StripeActionApplyRequest(
+                deployment_id="dep_1",
+                action="refund",
+                customer_ref="secret://arclink/stripe/customer/dep_1",
+                idempotency_key="stripe-no-db",
+            )
+        )
+    except mod.ArcLinkExecutorError as exc:
+        expect("idempotency DB" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected live Stripe client without operation DB to fail closed")
+    expect(stripe.called is False, "Stripe client must not be called without operation DB")
+    print("PASS test_live_provider_clients_require_operation_idempotency_db")
+
+
 def test_live_stripe_client_receives_idempotency_key_and_replays_result() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_live_stripe_client_test")
     control = load_module("arclink_control.py", "arclink_control_live_stripe_client_test")
@@ -770,6 +900,55 @@ def test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy() ->
         os.environ.clear()
         os.environ.update(old_env)
     print("PASS test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy")
+
+
+def test_live_cloudflare_dns_upsert_uses_record_lock() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_cloudflare_lock_test")
+    calls: list[tuple[str, str]] = []
+    original_find = mod._cloudflare_find_dns_record
+    original_request = mod._cloudflare_request
+    old_env = dict(os.environ)
+
+    def fake_find(*, zone_id, token, record):
+        calls.append(("find", f"{zone_id}:{token}:{record['hostname']}"))
+        return {}
+
+    def fake_request(method, path, *, token, body=None):
+        del token, body
+        calls.append((method, path))
+        return {"success": True, "result": {"id": "cf_locked"}}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        lock_root = Path(tmpdir) / "locks"
+        try:
+            mod._cloudflare_find_dns_record = fake_find
+            mod._cloudflare_request = fake_request
+            os.environ.clear()
+            os.environ.update({"CLOUDFLARE_API_TOKEN": "cf_test_token"})
+            provider_ids = mod._cloudflare_upsert_dns_records(
+                records=(
+                    {
+                        "role": "dashboard",
+                        "hostname": "locked.example.test",
+                        "record_type": "CNAME",
+                        "target": "edge.example.test",
+                        "proxied": True,
+                    },
+                ),
+                zone_id="zone_lock",
+                lock_root=lock_root,
+            )
+        finally:
+            mod._cloudflare_find_dns_record = original_find
+            mod._cloudflare_request = original_request
+            os.environ.clear()
+            os.environ.update(old_env)
+        locks = list(lock_root.glob("*.lock"))
+        expect(provider_ids == ("cf_locked",), str(provider_ids))
+        expect(calls[0][0] == "find" and calls[1][0] == "POST", str(calls))
+        expect(len(locks) == 1, str(locks))
+        expect(stat.S_IMODE(locks[0].stat().st_mode) == 0o600, oct(locks[0].stat().st_mode))
+    print("PASS test_live_cloudflare_dns_upsert_uses_record_lock")
 
 
 def test_live_cloudflare_dns_teardown_reports_only_deleted_records() -> None:
@@ -1129,6 +1308,25 @@ def test_local_executor_uses_deployment_exec_broker_when_configured() -> None:
     print("PASS test_local_executor_uses_deployment_exec_broker_when_configured")
 
 
+def test_fleet_host_executor_helper_wires_operation_idempotency_db() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_factory_operation_conn_test")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "arclink-control.sqlite3"
+        executor = mod.executor_for_fleet_host(
+            adapter="local",
+            env={"ARCLINK_DB_PATH": str(db_path)},
+            host={},
+            secret_resolver=mod.FakeSecretResolver({}),
+        )
+        expect(executor.operation_conn is not None, "operation_conn should be injected when ARCLINK_DB_PATH is set")
+        row = executor.operation_conn.execute(  # type: ignore[union-attr]
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'arclink_operation_idempotency'"
+        ).fetchone()
+        expect(row is not None, "operation idempotency table should exist")
+        executor.operation_conn.close()  # type: ignore[union-attr]
+    print("PASS test_fleet_host_executor_helper_wires_operation_idempotency_db")
+
+
 def test_deployment_exec_broker_validates_operation_and_paths() -> None:
     broker = load_module("arclink_deployment_exec_broker.py", "arclink_deployment_exec_broker_test")
     records: list[dict[str, object]] = []
@@ -1409,6 +1607,62 @@ def test_docker_ps_port_parser_reports_bound_host_ports() -> None:
     print("PASS test_docker_ps_port_parser_reports_bound_host_ports")
 
 
+def test_local_docker_compose_apply_materializes_only_deployment_volume_roots_atomically() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_local_volume_roots_test")
+    intent = json.loads(json.dumps(sample_intent()))
+    secret_ref = intent["compose"]["secrets"]["nextcloud_db_password"]["secret_ref"]
+
+    class RecordingRunner:
+        def __init__(self) -> None:
+            self.runs: list[tuple[str, ...]] = []
+
+        def run(self, args, *, deployment_id: str, project_name: str, env_file: str, compose_file: str):
+            del deployment_id, project_name, env_file, compose_file
+            self.runs.append(tuple(args))
+            return {"status": "ok"}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir) / "dep_1"
+        inside = root / "state" / "inside"
+        outside = Path(tmpdir) / "outside" / "bind"
+        intent["state_roots"] = {"root": str(root), "config": str(root / "config")}
+        intent["environment"] = {"ARCLINK_DOCKER_IMAGE": "registry.example/arclink/app:test"}
+        intent["compose"]["services"]["dashboard"]["volumes"] = [
+            {"source": str(inside), "target": "/srv/inside", "remote_prepare": "directory"},
+            {"source": str(outside), "target": "/srv/outside", "remote_prepare": "directory"},
+        ]
+        intent["compose"]["services"]["nextcloud-db"]["volumes"] = [
+            {"source": str(root / "nextcloud" / "db"), "target": "/var/lib/postgresql/data"}
+        ]
+
+        runner = RecordingRunner()
+        executor = mod.ArcLinkExecutor(
+            config=mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="local", state_root_base=tmpdir),
+            secret_resolver=mod.FileMaterializingSecretResolver(
+                value_provider=lambda ref: "sk_test_secret" if ref == secret_ref else "",
+                materialization_root=root / "materialized",
+            ),
+            docker_runner=runner,
+        )
+        result = executor.docker_compose_apply(
+            mod.DockerComposeApplyRequest(deployment_id="dep_1", intent=intent, idempotency_key="local-volume-roots-1")
+        )
+        config_root = Path(result.compose_file).parent
+        remote_prepare = json.loads((config_root / "remote-prepare.json").read_text(encoding="utf-8"))
+        prepare_paths = {item["path"] for item in remote_prepare["paths"]}
+        expect(inside.is_dir(), f"deployment-scoped volume should be created: {inside}")
+        expect((root / "nextcloud" / "db").is_dir(), "deployment-scoped service volume should be created")
+        expect(not outside.exists(), f"outside bind source must not be created: {outside}")
+        expect(str(inside) in prepare_paths, str(remote_prepare))
+        expect(str(outside) not in prepare_paths, str(remote_prepare))
+        for name in ("arclink.env", "compose.yaml", "remote-prepare.json"):
+            lock = config_root / f".{name}.lock"
+            expect(lock.is_file(), f"expected atomic render lock file: {lock}")
+            expect(stat.S_IMODE(lock.stat().st_mode) == 0o600, oct(lock.stat().st_mode))
+        expect(runner.runs == [("up", "-d", "--remove-orphans")], str(runner.runs))
+    print("PASS test_local_docker_compose_apply_materializes_only_deployment_volume_roots_atomically")
+
+
 def test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_ssh_volume_roots_test")
     intent = sample_intent()
@@ -1594,8 +1848,8 @@ def test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback() -> None:
 
 
 def test_ssh_docker_runner_read_without_allowed_root_raises_on_failure() -> None:
-    # Regression for the misindented final raise (ac98f8d): a failed cat with no
-    # allowed_root must raise, not silently fall through and return None.
+    # Remote file helpers are arbitrary read/write primitives unless every
+    # caller supplies the intended root. Omitted roots must fail before SSH.
     mod = load_module("arclink_executor.py", "arclink_executor_ssh_read_no_root_test")
 
     class Proc:
@@ -1605,9 +1859,11 @@ def test_ssh_docker_runner_read_without_allowed_root_raises_on_failure() -> None
             self.stderr = stderr
 
     original_run = mod.subprocess.run
+    calls: list[object] = []
 
     def fake_run(cmd, **kwargs):
-        del cmd, kwargs
+        del kwargs
+        calls.append(cmd)
         return Proc(1, stderr="cat: Permission denied\n")
 
     raised = False
@@ -1620,13 +1876,44 @@ def test_ssh_docker_runner_read_without_allowed_root_raises_on_failure() -> None
         )
         try:
             runner.read_text_file("/etc/hostname")
-        except mod.ArcLinkExecutorError:
+        except mod.ArcLinkExecutorError as exc:
+            expect("allowed root" in str(exc), str(exc))
             raised = True
     finally:
         mod.subprocess.run = original_run
 
-    expect(raised, "read_text_file without allowed_root must raise on cat failure, not return None")
+    expect(raised, "read_text_file without allowed_root must raise")
+    expect(calls == [], f"read_text_file without allowed_root must not SSH: {calls}")
     print("PASS test_ssh_docker_runner_read_without_allowed_root_raises_on_failure")
+
+
+def test_ssh_docker_runner_write_without_allowed_root_fails_before_ssh() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_ssh_write_no_root_test")
+    calls: list[object] = []
+    original_run = mod.subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        raise AssertionError("write_text_file without allowed_root must not SSH")
+
+    try:
+        mod.subprocess.run = fake_run
+        runner = mod.SshDockerComposeRunner(
+            host="worker.example.test",
+            user="arclink",
+            allowed_hosts=("worker.example.test",),
+        )
+        try:
+            runner.write_text_file("/etc/arclink-web-access.json", "{}")
+        except mod.ArcLinkExecutorError as exc:
+            expect("allowed root" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected write_text_file without allowed_root to fail closed")
+    finally:
+        mod.subprocess.run = original_run
+    expect(calls == [], f"write_text_file without allowed_root must not SSH: {calls}")
+    print("PASS test_ssh_docker_runner_write_without_allowed_root_fails_before_ssh")
 
 
 def test_ssh_docker_runner_write_text_file_shell_quotes_remote_command() -> None:
@@ -1756,6 +2043,23 @@ def test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_f
         expect(not (secrets_root / "nextcloud_db_password").exists(), f"materialized secret should be cleaned: {secrets_root}")
         expect(not any(secrets_root.glob(".nextcloud_db_password.*")), f"temporary secret files should be cleaned: {list(secrets_root.iterdir()) if secrets_root.exists() else []}")
     print("PASS test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure")
+
+
+def test_secret_root_cleanup_unlinks_symlink_root_without_touching_target() -> None:
+    mod = load_module("arclink_executor.py", "arclink_executor_secret_cleanup_symlink_root_test")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = Path(tmpdir) / "target"
+        target.mkdir()
+        target_file = target / "outside-secret"
+        target_file.write_text("keep", encoding="utf-8")
+        link_parent = Path(tmpdir) / "config"
+        link_parent.mkdir()
+        link = link_parent / "secrets"
+        link.symlink_to(target, target_is_directory=True)
+        mod._cleanup_materialized_secret_root(link)
+        expect(not link.exists() and not link.is_symlink(), f"secret-root symlink should be removed: {link}")
+        expect(target_file.read_text(encoding="utf-8") == "keep", "cleanup must not iterate symlink target")
+    print("PASS test_secret_root_cleanup_unlinks_symlink_root_without_touching_target")
 
 
 def test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure() -> None:
@@ -2140,18 +2444,22 @@ def test_fake_docker_compose_lifecycle_operations() -> None:
 def test_live_docker_compose_lifecycle_invokes_runner() -> None:
     mod = load_module("arclink_executor.py", "arclink_executor_live_lifecycle_test")
     runner = mod.FakeDockerRunner()
-    executor = mod.ArcLinkExecutor(
-        config=mod.ArcLinkExecutorConfig(adapter_name="live", live_enabled=True),
-        docker_runner=runner,
-    )
-    result = executor.docker_compose_lifecycle(
-        mod.DockerComposeLifecycleRequest(deployment_id="dep_live", action="teardown", remove_volumes=True)
-    )
-    expect(result.live is True and result.status == "completed", str(result))
-    expect(len(runner.runs) == 1, str(runner.runs))
-    expect(runner.runs[0]["args"] == ("down", "--remove-orphans", "--volumes"), str(runner.runs[0]))
-    expect(runner.runs[0]["project_name"] == "arclink-dep_live", str(runner.runs[0]))
-    expect(runner.runs[0]["compose_file"].endswith("/arcdata/deployments/dep_live/config/compose.yaml"), str(runner.runs[0]))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        executor = mod.ArcLinkExecutor(
+            config=mod.ArcLinkExecutorConfig(adapter_name="live", live_enabled=True, state_root_base=tmpdir),
+            docker_runner=runner,
+        )
+        result = executor.docker_compose_lifecycle(
+            mod.DockerComposeLifecycleRequest(deployment_id="dep_live", action="teardown", remove_volumes=True)
+        )
+        expect(result.live is True and result.status == "completed", str(result))
+        expect(len(runner.runs) == 1, str(runner.runs))
+        expect(runner.runs[0]["args"] == ("down", "--remove-orphans", "--volumes"), str(runner.runs[0]))
+        expect(runner.runs[0]["project_name"] == "arclink-dep_live", str(runner.runs[0]))
+        expect(
+            runner.runs[0]["compose_file"].endswith("/dep_live/config/compose.yaml"),
+            str(runner.runs[0]),
+        )
     print("PASS test_live_docker_compose_lifecycle_invokes_runner")
 
 
@@ -2180,8 +2488,10 @@ def test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded() -> 
 
 def main() -> int:
     test_executor_mutating_operations_fail_closed_without_live_flag()
+    test_live_unimplemented_executor_surfaces_fail_closed()
     test_runner_stdout_preserves_compose_ps_json()
     test_secret_resolvers_validate_refs_and_hide_material()
+    test_live_docker_compose_rejects_duplicate_secret_targets_before_materializing()
     test_fake_executor_consumes_rendered_intent_without_secret_leakage()
     test_fake_docker_compose_adapter_plans_paths_and_resumes_partial_apply()
     test_fake_docker_compose_rejects_explicit_key_reuse_after_applied_intent_changes()
@@ -2194,10 +2504,12 @@ def main() -> int:
     test_fake_chutes_replay_is_bound_to_action_and_secret_ref()
     test_live_chutes_client_receives_idempotency_key_and_replays_result()
     test_live_chutes_client_missing_fails_closed()
+    test_live_provider_clients_require_operation_idempotency_db()
     test_live_stripe_client_receives_idempotency_key_and_replays_result()
     test_live_stripe_client_missing_fails_closed()
     test_cloudflare_dns_apply_rejects_unsupported_record_types()
     test_live_cloudflare_dns_apply_accepts_secret_ref_token_and_cleans_copy()
+    test_live_cloudflare_dns_upsert_uses_record_lock()
     test_live_cloudflare_dns_teardown_reports_only_deleted_records()
     test_fake_rollback_executor_is_idempotent_and_preserves_state_roots()
     test_fake_rollback_rejects_idempotency_key_reuse_with_changed_plan()
@@ -2206,17 +2518,23 @@ def main() -> int:
     test_injectable_docker_runner_receives_commands()
     test_live_docker_compose_apply_rejects_unconfined_values_before_runner()
     test_local_executor_uses_deployment_exec_broker_when_configured()
+    test_fleet_host_executor_helper_wires_operation_idempotency_db()
     test_deployment_exec_broker_validates_operation_and_paths()
     test_deployment_exec_broker_rejects_symlinked_compose_config_files_before_docker()
     test_live_docker_compose_lifecycle_rejects_unconfined_values_before_runner()
     test_live_docker_compose_lifecycle_project_override_requires_config_flag()
     test_live_docker_compose_file_preserves_service_ports()
     test_docker_ps_port_parser_reports_bound_host_ports()
+    test_local_docker_compose_apply_materializes_only_deployment_volume_roots_atomically()
     test_ssh_docker_compose_apply_does_not_materialize_worker_volume_roots()
     test_ssh_docker_runner_prepares_app_binds_before_compose_up()
     test_ssh_docker_runner_reads_app_owned_file_with_docker_fallback()
+    test_ssh_docker_runner_read_without_allowed_root_raises_on_failure()
+    test_ssh_docker_runner_write_without_allowed_root_fails_before_ssh()
+    test_ssh_docker_runner_write_text_file_shell_quotes_remote_command()
     test_live_docker_compose_apply_keeps_file_backed_secrets_for_container_restart()
     test_live_docker_compose_apply_cleans_materialized_secret_copies_on_runner_failure()
+    test_secret_root_cleanup_unlinks_symlink_root_without_touching_target()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_failure()
     test_ssh_docker_runner_cleans_remote_secrets_after_compose_run()
     test_ssh_docker_runner_prepares_compose_secret_files_without_manifest()
@@ -2229,7 +2547,7 @@ def main() -> int:
     test_fake_docker_compose_lifecycle_operations()
     test_live_docker_compose_lifecycle_invokes_runner()
     test_live_docker_compose_lifecycle_transport_failure_is_not_downgraded()
-    print("PASS all 42 ArcLink executor tests")
+    print("PASS all ArcLink executor tests")
     return 0
 
 

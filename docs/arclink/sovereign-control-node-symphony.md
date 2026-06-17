@@ -55,8 +55,8 @@ close. The highest-signal open product gaps are:
   backticks), but live browser/chat/workspace proof is still required before the
   experience is product-real.
 - `GAP-034`: Academy scaffolding is substantial, including sticky mode, the
-  **live LLM Trainer enabled by default** (fail-closed to deterministic), governed
-  source review, weekly crawl observations, real `academy_apply` SOUL/vault/
+  opt-in live LLM Trainer (fail-closed to deterministic), governed source
+  review, weekly crawl observations, real `academy_apply` SOUL/vault/
   memory-seed/approved-skill writes, and authorized apply handoff, but live
   per-lane acquisition/provider synthesis and downstream qmd/memory/skill refresh
   execution proof remain.
@@ -663,9 +663,10 @@ defines the no-network Academy schemas, default governed source-lane registry,
 fake acquisition reports, deterministic quality scoring, curriculum/evaluation
 records, no-write application plans, a no-write `academy_apply_preview`
 action-worker boundary, and weekly Continuing Education review/gate persistence.
-The shipped weekly scheduler now performs bounded autonomous live crawling for
-approved public source URLs. It rotates the agent responsible for each shared
-specialist with durable state, honors HTTPS/robots/rate-limit/SSRF rails,
+The shipped weekly scheduler can perform bounded autonomous live crawling for
+approved public source URLs when `ARCLINK_ACADEMY_CE_LIVE_CRAWL=1`. It rotates
+the agent responsible for each shared specialist with durable state, honors
+HTTPS/robots/rate-limit/SSRF rails,
 records digest-only crawl observations in `academy_source_crawl_observations`,
 feeds changed/removed/tombstoned observations into the weekly review gate,
 refreshes central capsules from already-approved public-lane sources, and
@@ -698,14 +699,14 @@ Academy Mode. The Agent uses the `arclink-academy` skill to search approved
 rails and submit compressed resources or reviewed discontinuation requests
 through `academy.propose-resource`; the
 Captain closes the mode to queue the Academy Trainer deep dive. The live LLM
-Trainer is now **enabled by default in the control stack**
-(`ARCLINK_ACADEMY_TRAINER_LIVE=1`): with a scoped router key present,
-`run_academy_trainer_review` and the weekly scheduler route the deep dive through
-the central `control-llm-router` (same inference model) with secret-redacted
-derived notes, and fail closed to the deterministic engine on any missing key,
-router error, or authorization gap. The weekly review also preserves the
-Trainer's engine/live/summary enrichment when a capsule body changes (it
-recomposes the capsule first, then writes the Trainer enrichment). Canonical
+Trainer is opt-in (`ARCLINK_ACADEMY_TRAINER_LIVE=1`): with a scoped router key
+present, `run_academy_trainer_review` and the weekly scheduler route the deep
+dive through the central `control-llm-router` (same inference model) with
+secret-redacted derived notes, and fail closed to the deterministic engine on
+any missing key, router error, or authorization gap. The weekly review also
+preserves the Trainer's engine/live/summary enrichment when a capsule body
+changes (it recomposes the capsule first, then writes the Trainer enrichment).
+Canonical
 application to the Agent is split: the marker-bounded SOUL overlay apply, the
 apply receipt, governed `Vault/Academy/<role>/` markdown, memory seeds, and
 approved-skill records are all implemented behind the PG-HERMES action gate, while

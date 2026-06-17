@@ -780,12 +780,13 @@ def main() -> int:
     test_chutes_boundary_fails_closed_without_scoped_secret_or_budget()
     test_chutes_boundary_publishes_defined_credential_lifecycle()
     test_chutes_boundary_warns_and_blocks_at_budget_limit()
+    test_chutes_boundary_operator_observe_only_unlimited_is_metered_but_never_blocked()
     test_chutes_boundary_suspends_provider_for_noncurrent_billing()
     test_chutes_boundary_prefers_user_account_oauth_when_key_metering_unavailable()
     test_fake_inference_enforces_chutes_boundary()
     test_chutes_usage_ingestion_updates_budget_boundary_without_secrets()
     test_chutes_usage_ingestion_blocks_after_hard_limit()
-    print("PASS all 24 ArcLink Chutes/adapter tests")
+    print("PASS all ArcLink Chutes/adapter tests")
     return 0
 
 

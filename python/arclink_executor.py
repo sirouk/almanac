@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import fcntl
 import json
@@ -76,6 +77,21 @@ def validate_ssh_key_path(key_path: str) -> None:
         raise ArcLinkExecutorError("ArcLink SSH executor key file must not be group/world accessible")
 
 
+def _operation_conn_from_env(env: Mapping[str, str]) -> sqlite3.Connection | None:
+    db_path = str(env.get("ARCLINK_DB_PATH") or "").strip()
+    if not db_path:
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        from arclink_control import ensure_schema
+
+        ensure_schema(conn)
+        return conn
+    except (OSError, sqlite3.Error) as exc:
+        raise ArcLinkExecutorError("ArcLink executor operation idempotency DB is not available") from exc
+
+
 def executor_for_fleet_host(
     *,
     adapter: str,
@@ -139,7 +155,12 @@ def executor_for_fleet_host(
             ssh_options=tuple(ssh_options),
             allowed_hosts=tuple(allowed_hosts),
         )
-    return ArcLinkExecutor(config=config, secret_resolver=secret_resolver, docker_runner=runner)
+    return ArcLinkExecutor(
+        config=config,
+        secret_resolver=secret_resolver,
+        docker_runner=runner,
+        operation_conn=_operation_conn_from_env(env),
+    )
 
 
 def _require_secret_ref(secret_ref: str) -> str:
@@ -665,7 +686,9 @@ class SshDockerComposeRunner:
         if not clean_path:
             raise ArcLinkExecutorError("ArcLink SSH file read path is invalid")
         clean_allowed_root = _normalized_remote_prepare_path(allowed_root) if allowed_root else ""
-        if clean_allowed_root and not _remote_path_within(clean_path, clean_allowed_root):
+        if not clean_allowed_root:
+            raise ArcLinkExecutorError("ArcLink SSH file read requires an allowed root")
+        if not _remote_path_within(clean_path, clean_allowed_root):
             raise ArcLinkExecutorError("ArcLink SSH file read path is outside the allowed root")
         target = self._target()
         command = f"cat -- {_shell_quote(clean_path)}"
@@ -677,34 +700,34 @@ class SshDockerComposeRunner:
         )
         if read.returncode == 0:
             return read.stdout
-        if clean_allowed_root:
-            fallback = subprocess.run(
-                (
-                    self.ssh_binary,
-                    *self.ssh_options,
-                    target,
-                    _remote_read_text_file_command(
-                        docker_binary=self.docker_binary,
-                        image=image or "arclink/app:local",
-                        path=clean_path,
-                        allowed_root=clean_allowed_root,
-                    ),
+        fallback = subprocess.run(
+            (
+                self.ssh_binary,
+                *self.ssh_options,
+                target,
+                _remote_read_text_file_command(
+                    docker_binary=self.docker_binary,
+                    image=image or "arclink/app:local",
+                    path=clean_path,
+                    allowed_root=clean_allowed_root,
                 ),
-                check=False,
-                text=True,
-                capture_output=True,
-            )
-            if fallback.returncode == 0:
-                return fallback.stdout
-            raise ArcLinkExecutorError(_safe_command_error("ssh read file", fallback.stderr or fallback.stdout))
-        raise ArcLinkExecutorError(_safe_command_error("ssh read file", read.stderr or read.stdout))
+            ),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        if fallback.returncode == 0:
+            return fallback.stdout
+        raise ArcLinkExecutorError(_safe_command_error("ssh read file", fallback.stderr or fallback.stdout))
 
     def write_text_file(self, path: str, content: str, *, allowed_root: str = "", mode: str = "0600") -> Mapping[str, Any]:
         clean_path = _normalized_remote_prepare_path(path)
         if not clean_path:
             raise ArcLinkExecutorError("ArcLink SSH file write path is invalid")
         clean_allowed_root = _normalized_remote_prepare_path(allowed_root) if allowed_root else ""
-        if clean_allowed_root and not _remote_path_within(clean_path, clean_allowed_root):
+        if not clean_allowed_root:
+            raise ArcLinkExecutorError("ArcLink SSH file write requires an allowed root")
+        if not _remote_path_within(clean_path, clean_allowed_root):
             raise ArcLinkExecutorError("ArcLink SSH file write path is outside the allowed root")
         clean_mode = str(mode or "0600").strip()
         if not re.fullmatch(r"0?[0-7]{3}", clean_mode):
@@ -1160,6 +1183,7 @@ class ArcLinkExecutor:
             records=records,
             zone_id=request.zone_id,
             secret_resolver=self.secret_resolver,
+            lock_root=_cloudflare_dns_lock_root(),
         )
         return CloudflareDnsApplyResult(
             deployment_id=request.deployment_id,
@@ -1180,18 +1204,7 @@ class ArcLinkExecutor:
         plan = _plan_cloudflare_access(request.access)
         if self.config.adapter_name == "fake":
             return self._fake_cloudflare_access_apply(request=request, plan=plan)
-        return CloudflareAccessApplyResult(
-            deployment_id=request.deployment_id,
-            live=True,
-            status="applied",
-            applications=tuple(plan["applications"]),
-            metadata={
-                "adapter": self.config.adapter_name,
-                "idempotency_key": request.idempotency_key,
-                "ssh_strategy": plan["ssh_strategy"],
-                "ssh_hostname": plan["ssh_hostname"],
-            },
-        )
+        raise ArcLinkExecutorError("ArcLink live Cloudflare Access execution is not implemented")
 
     def chutes_key_apply(self, request: ChutesKeyApplyRequest) -> ChutesKeyApplyResult:
         self._require_live_enabled("chutes_key_apply")
@@ -1203,6 +1216,8 @@ class ArcLinkExecutor:
             return self._fake_chutes_key_apply(request=request, action=action, secret_ref=secret_ref)
         if self.chutes_client is None:
             raise ArcLinkExecutorError("ArcLink live Chutes key execution requires an injectable ChutesKeyClient")
+        if self.operation_conn is None:
+            raise ArcLinkExecutorError("ArcLink live Chutes key execution requires an operation idempotency DB")
         operation = "chutes_key_apply"
         operation_inputs = {"action": action, "label": request.label, "secret_ref": secret_ref}
         operation_digest = _operation_digest(operation, request.deployment_id, operation_inputs)
@@ -1326,6 +1341,8 @@ class ArcLinkExecutor:
             )
         if self.stripe_client is None:
             raise ArcLinkExecutorError("ArcLink live Stripe action execution requires an injectable StripeActionClient")
+        if self.operation_conn is None:
+            raise ArcLinkExecutorError("ArcLink live Stripe action execution requires an operation idempotency DB")
         operation_inputs = {"action": action, "customer_ref": metadata.get("customer_ref", ""), "metadata": metadata}
         operation_digest = _operation_digest(operation, request.deployment_id, operation_inputs)
         key = request.idempotency_key or _stable_execution_key(operation, request.deployment_id, operation_inputs)
@@ -1428,19 +1445,7 @@ class ArcLinkExecutor:
         plan = _plan_rollback_apply(request.plan)
         if self.config.adapter_name == "fake":
             return self._fake_rollback_apply(request=request, plan=plan)
-        return RollbackApplyResult(
-            deployment_id=request.deployment_id,
-            live=True,
-            status="applied",
-            actions=tuple(plan["actions"]),
-            preserve_state_roots=True,
-            metadata={
-                "adapter": self.config.adapter_name,
-                "idempotency_key": request.idempotency_key,
-                "protected_state_roots": tuple(plan["protected_state_roots"]),
-                "secret_refs_for_review": tuple(plan["secret_refs_for_review"]),
-            },
-        )
+        raise ArcLinkExecutorError("ArcLink live rollback execution is not implemented")
 
     def _fake_cloudflare_dns_apply(
         self,
@@ -1756,11 +1761,18 @@ class ArcLinkExecutor:
         if compose_secrets and self.secret_resolver is None:
             raise ArcLinkSecretResolutionError("ArcLink Docker Compose execution requires a secret resolver")
         resolved: dict[str, ResolvedSecretFile] = {}
+        seen_targets: dict[str, str] = {}
         for name, spec in compose_secrets.items():
             if not isinstance(spec, Mapping):
                 raise ArcLinkSecretResolutionError(f"invalid ArcLink compose secret spec: {name}")
             secret_ref = _require_secret_ref(str(spec.get("secret_ref") or ""))
             target = _require_run_secret_path(str(spec.get("target") or ""))
+            prior_name = seen_targets.get(target)
+            if prior_name is not None:
+                raise ArcLinkSecretResolutionError(
+                    f"duplicate ArcLink compose secret target {target!r} for {prior_name!r} and {name!r}"
+                )
+            seen_targets[target] = str(name)
             resolved[str(name)] = self.secret_resolver.materialize(secret_ref, target)  # type: ignore[union-attr]
         return resolved
 
@@ -1988,8 +2000,10 @@ def _materialize_docker_compose_files(
         for k, v in (intent.get("environment") or {}).items()
         if str(k).strip()
     } if isinstance(intent.get("environment"), Mapping) else {}
-    env_file.write_text("".join(f"{key}={_env_quote(value)}\n" for key, value in sorted(env.items())), encoding="utf-8")
-    env_file.chmod(0o600)
+    _write_private_file_atomic(
+        env_file,
+        "".join(f"{key}={_env_quote(value)}\n" for key, value in sorted(env.items())),
+    )
 
     compose_services = {
         str(name): _compose_service_for_file(dict(service))
@@ -2003,8 +2017,7 @@ def _materialize_docker_compose_files(
         compose_doc["networks"] = compose_networks
     if compose_secrets:
         compose_doc["secrets"] = compose_secrets
-    compose_file.write_text(json.dumps(compose_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    compose_file.chmod(0o600)
+    _write_private_file_atomic(compose_file, json.dumps(compose_doc, indent=2, sort_keys=True) + "\n")
     remote_prepare_doc = _compose_remote_prepare_doc(
         services,
         deployment_root=root,
@@ -2012,8 +2025,7 @@ def _materialize_docker_compose_files(
     )
     remote_prepare_file = config_root / _REMOTE_PREPARE_FILE
     if remote_prepare_doc["paths"]:
-        remote_prepare_file.write_text(json.dumps(remote_prepare_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        remote_prepare_file.chmod(0o600)
+        _write_private_file_atomic(remote_prepare_file, json.dumps(remote_prepare_doc, indent=2, sort_keys=True) + "\n")
     elif remote_prepare_file.exists():
         remote_prepare_file.unlink()
 
@@ -2129,10 +2141,23 @@ def _cleanup_materialized_secret_files(resolved: Any) -> None:
 
 
 def _cleanup_materialized_secret_root(root: Path) -> None:
+    raw_root = Path(root)
+    if str(raw_root).strip() in {"", "/", "/run/secrets"}:
+        raise ArcLinkSecretResolutionError(f"refusing unsafe ArcLink secret cleanup path: {raw_root}")
     try:
-        clean_root = root.resolve()
+        root_is_symlink = raw_root.is_symlink()
     except OSError:
-        clean_root = root
+        root_is_symlink = False
+    if root_is_symlink:
+        try:
+            raw_root.unlink()
+            return
+        except OSError as exc:
+            raise ArcLinkSecretResolutionError(f"failed to clean materialized ArcLink secret root: {raw_root}") from exc
+    try:
+        clean_root = raw_root.resolve()
+    except OSError:
+        clean_root = raw_root
     if not str(clean_root).strip() or str(clean_root) in {"/", "/run/secrets"}:
         raise ArcLinkSecretResolutionError(f"refusing unsafe ArcLink secret cleanup path: {clean_root}")
     if not clean_root.exists():
@@ -2162,7 +2187,7 @@ def _require_allowed_ssh_host(host: str, allowed_hosts: tuple[str, ...]) -> None
 def _compose_volume_root_mode(*, adapter_name: str, docker_runner: DockerRunner) -> str:
     if str(adapter_name or "").strip().lower() == "ssh" or isinstance(docker_runner, SshDockerComposeRunner):
         return "none"
-    return "all"
+    return "deployment"
 
 
 def _ensure_volume_roots(services: Mapping[str, Any], *, allowed_root: Path | None = None) -> None:
@@ -2540,6 +2565,7 @@ def _cloudflare_upsert_dns_records(
     records: tuple[dict[str, Any], ...],
     zone_id: str,
     secret_resolver: SecretResolver | None = None,
+    lock_root: Path | None = None,
 ) -> tuple[str, ...]:
     clean_zone = str(zone_id or os.environ.get("CLOUDFLARE_ZONE_ID") or "").strip()
     token = _cloudflare_api_token(secret_resolver=secret_resolver, action="apply")
@@ -2547,26 +2573,62 @@ def _cloudflare_upsert_dns_records(
         raise ArcLinkExecutorError("ArcLink Cloudflare DNS apply requires CLOUDFLARE_ZONE_ID")
     provider_ids: list[str] = []
     for record in records:
-        existing = _cloudflare_find_dns_record(zone_id=clean_zone, token=token, record=record)
-        body = {
-            "type": str(record["record_type"]).upper(),
-            "name": str(record["hostname"]).lower(),
-            "content": str(record["target"]),
-            "proxied": bool(record.get("proxied", True)),
-            "ttl": 1,
-        }
-        if existing:
-            result = _cloudflare_request(
-                "PUT",
-                f"/zones/{clean_zone}/dns_records/{existing['id']}",
-                token=token,
-                body=body,
-            )
-        else:
-            result = _cloudflare_request("POST", f"/zones/{clean_zone}/dns_records", token=token, body=body)
-        result_id = str((result.get("result") or {}).get("id") or "")
-        provider_ids.append(result_id or str(existing.get("id") or ""))
+        with _cloudflare_dns_record_lock(zone_id=clean_zone, record=record, lock_root=lock_root):
+            existing = _cloudflare_find_dns_record(zone_id=clean_zone, token=token, record=record)
+            body = {
+                "type": str(record["record_type"]).upper(),
+                "name": str(record["hostname"]).lower(),
+                "content": str(record["target"]),
+                "proxied": bool(record.get("proxied", True)),
+                "ttl": 1,
+            }
+            if existing:
+                result = _cloudflare_request(
+                    "PUT",
+                    f"/zones/{clean_zone}/dns_records/{existing['id']}",
+                    token=token,
+                    body=body,
+                )
+            else:
+                result = _cloudflare_request("POST", f"/zones/{clean_zone}/dns_records", token=token, body=body)
+            result_id = str((result.get("result") or {}).get("id") or "")
+            provider_ids.append(result_id or str(existing.get("id") or ""))
     return tuple(provider_ids)
+
+
+def _cloudflare_dns_lock_root() -> Path:
+    return Path(tempfile.gettempdir()) / "arclink-executor-cloudflare-dns"
+
+
+@contextlib.contextmanager
+def _cloudflare_dns_record_lock(
+    *,
+    zone_id: str,
+    record: Mapping[str, Any],
+    lock_root: Path | None,
+):
+    if lock_root is None:
+        yield
+        return
+    lock_root.mkdir(parents=True, exist_ok=True)
+    lock_root.chmod(0o700)
+    lock_key = json.dumps(
+        {
+            "zone_id": zone_id,
+            "record_type": str(record.get("record_type") or "").upper(),
+            "hostname": str(record.get("hostname") or "").lower(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    lock_name = hashlib.sha256(lock_key.encode("utf-8")).hexdigest()[:32] + ".lock"
+    lock_fd = os.open(lock_root / lock_name, os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(lock_fd, "w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _cloudflare_delete_dns_records(

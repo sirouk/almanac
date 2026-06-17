@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 from arclink_test_helpers import expect, load_module, memory_db
 
@@ -139,6 +140,132 @@ def test_inventory_registration_rejects_unsafe_host_identity_values() -> None:
     print("PASS test_inventory_registration_rejects_unsafe_host_identity_values")
 
 
+def test_inventory_registration_secret_rejection_does_not_commit_fleet_host() -> None:
+    control = load_module("arclink_control.py", "arclink_control_inventory_atomic_register")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_atomic_register")
+    conn = memory_db(control)
+
+    try:
+        inventory.register_inventory_machine(
+            conn,
+            provider="manual",
+            hostname="worker-secret.example.test",
+            ssh_host="10.0.0.10",
+            ssh_user="arclink",
+            region="iad",
+            status="pending",
+            capacity_slots=4,
+            metadata={"note": "AKIAIOSFODNN7EXAMPLE"},
+        )
+    except inventory.ArcLinkInventoryError:
+        pass
+    else:
+        raise AssertionError("secret-shaped metadata should fail closed")
+
+    machines = conn.execute("SELECT COUNT(*) AS count FROM arclink_inventory_machines").fetchone()
+    hosts = conn.execute("SELECT COUNT(*) AS count FROM arclink_fleet_hosts").fetchone()
+    expect(machines["count"] == 0, str(dict(machines)))
+    expect(hosts["count"] == 0, str(dict(hosts)))
+    print("PASS test_inventory_registration_secret_rejection_does_not_commit_fleet_host")
+
+
+def test_parse_probe_output_reads_real_df_device_rows() -> None:
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_parse_probe")
+    stdout = """4
+MemTotal:       16384000 kB
+MemFree:         1024000 kB
+MemAvailable:    2048000 kB
+Filesystem     1G-blocks  Used Available Use% Mounted on
+/dev/sda1            160G   20G      140G  13% /
+overlay              200G   50G      150G  25% /var/lib/docker
+Docker version 27.0.0, build test
+Docker Compose version v2.27.0
+"""
+    parsed = inventory.parse_probe_output(stdout)
+    expect(parsed["vcpu_cores"] == 4, str(parsed))
+    expect(parsed["disk_gib"] == 200, str(parsed))
+    expect(parsed["docker_version"].startswith("Docker version"), str(parsed))
+
+    wrapped = """2
+MemTotal:        8388608 kB
+Filesystem     1G-blocks  Used Available Use% Mounted on
+/dev/mapper/very-long-volume-name
+                    160G   20G      140G  13% /
+Docker version 27.0.0, build test
+"""
+    wrapped_parsed = inventory.parse_probe_output(wrapped)
+    expect(wrapped_parsed["disk_gib"] == 160, str(wrapped_parsed))
+    print("PASS test_parse_probe_output_reads_real_df_device_rows")
+
+
+def test_probe_success_with_bad_parse_marks_machine_degraded() -> None:
+    control = load_module("arclink_control.py", "arclink_control_inventory_probe_bad_parse")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_probe_bad_parse")
+    conn = memory_db(control)
+    machine = inventory.register_inventory_machine(
+        conn,
+        provider="manual",
+        hostname="worker-bad-parse.example.test",
+        ssh_host="10.0.0.10",
+        ssh_user="arclink",
+        status="ready",
+        asu_capacity=4,
+    )
+
+    def runner(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, stdout="4\nDocker version 27.0.0\n", stderr="")
+
+    try:
+        inventory.probe_inventory_machine(conn, key=machine["machine_id"], runner=runner)
+    except inventory.ArcLinkInventoryError as exc:
+        expect("MemTotal" in str(exc), str(exc))
+    else:
+        raise AssertionError("bad successful probe output should fail closed")
+
+    refreshed = inventory.get_inventory_machine(conn, machine["machine_id"])
+    expect(refreshed["status"] == "degraded", str(refreshed))
+    connectivity = json.loads(refreshed["connectivity_summary_json"])
+    expect(connectivity["ok"] is False and "MemTotal" in connectivity["error"], str(connectivity))
+    print("PASS test_probe_success_with_bad_parse_marks_machine_degraded")
+
+
+def test_probe_ceil_fractional_consumed_for_fleet_observed_load() -> None:
+    control = load_module("arclink_control.py", "arclink_control_inventory_probe_fractional_load")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_probe_fractional_load")
+    fleet = load_module("arclink_fleet.py", "arclink_fleet_inventory_probe_fractional_load")
+    conn = memory_db(control)
+    host = fleet.register_fleet_host(conn, hostname="worker-fractional.example.test", capacity_slots=4)
+    machine = inventory.register_inventory_machine(
+        conn,
+        provider="manual",
+        hostname="worker-fractional.example.test",
+        ssh_host="10.0.0.10",
+        ssh_user="arclink",
+        status="ready",
+        machine_host_link=host["host_id"],
+    )
+    stdout = """4
+MemTotal:       16384000 kB
+Filesystem     1G-blocks  Used Available Use% Mounted on
+/dev/sda1            160G   20G      140G  13% /
+Docker version 27.0.0, build test
+"""
+
+    def runner(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, stdout=stdout, stderr="")
+
+    original_current_load = inventory.current_load
+    inventory.current_load = lambda machine_id, conn: 1.2
+    try:
+        inventory.probe_inventory_machine(conn, key=machine["machine_id"], runner=runner)
+    finally:
+        inventory.current_load = original_current_load
+
+    refreshed_host = fleet.get_fleet_host(conn, host_id=host["host_id"])
+    expect(int(refreshed_host["observed_load"]) == 2, str(refreshed_host))
+    print("PASS test_probe_ceil_fractional_consumed_for_fleet_observed_load")
+
+
 def test_cloud_inventory_lifecycle_contract_is_provider_parity() -> None:
     control = load_module("arclink_control.py", "arclink_control_inventory_lifecycle_parity")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_lifecycle_parity")
@@ -230,8 +357,65 @@ def test_cloud_inventory_lifecycle_contract_is_provider_parity() -> None:
     print("PASS test_cloud_inventory_lifecycle_contract_is_provider_parity")
 
 
+def test_cloud_create_cleans_up_post_provision_registration_failure() -> None:
+    control = load_module("arclink_control.py", "arclink_control_inventory_create_cleanup")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_create_cleanup")
+    conn = memory_db(control)
+    client = _FakeCloudClient("hetzner")
+
+    kwargs = {
+        "provider": "hetzner",
+        "client": client,
+        "hostname": "hetzner-secret.example.test",
+        "server_type": "cx22",
+        "image": "ubuntu-24.04",
+        "region": "fsn1",
+        "capacity_slots": 4,
+        "tags": {"bad": "AKIAIOSFODNN7EXAMPLE"},
+        "idempotency_key": "hetzner-cleanup-create",
+    }
+    try:
+        inventory.create_cloud_inventory_machine(conn, **kwargs)
+    except inventory.ArcLinkInventoryError:
+        pass
+    else:
+        raise AssertionError("post-provision registration failure should be surfaced")
+
+    expect(client.created == 1, str(client.created))
+    expect(client.removed == [("h-1", True)], str(client.removed))
+    machines = conn.execute("SELECT COUNT(*) AS count FROM arclink_inventory_machines").fetchone()
+    hosts = conn.execute("SELECT COUNT(*) AS count FROM arclink_fleet_hosts").fetchone()
+    expect(machines["count"] == 0, str(dict(machines)))
+    expect(hosts["count"] == 0, str(dict(hosts)))
+    row = conn.execute(
+        """
+        SELECT status, provider_refs_json, result_json
+        FROM arclink_operation_idempotency
+        WHERE operation_kind = 'inventory_hetzner_create' AND idempotency_key = 'hetzner-cleanup-create'
+        """
+    ).fetchone()
+    result = json.loads(row["result_json"])
+    expect(row["status"] == "failed", str(dict(row)))
+    expect(json.loads(row["provider_refs_json"])["provider_resource_id"] == "h-1", str(dict(row)))
+    expect(result["status"] == "failed" and result["cleanup"]["removed"] is True, str(result))
+
+    try:
+        inventory.create_cloud_inventory_machine(conn, **kwargs)
+    except inventory.ArcLinkInventoryError as exc:
+        expect("previous cloud inventory operation failed" in str(exc), str(exc))
+    else:
+        raise AssertionError("failed idempotency replay should not look like success")
+    expect(client.created == 1, "failed replay should not provision another server")
+    print("PASS test_cloud_create_cleans_up_post_provision_registration_failure")
+
+
 if __name__ == "__main__":
     test_inventory_list_filters_are_scriptable()
     test_inventory_list_includes_live_fleet_hosts()
     test_inventory_registration_rejects_unsafe_host_identity_values()
+    test_inventory_registration_secret_rejection_does_not_commit_fleet_host()
+    test_parse_probe_output_reads_real_df_device_rows()
+    test_probe_success_with_bad_parse_marks_machine_degraded()
+    test_probe_ceil_fractional_consumed_for_fleet_observed_load()
     test_cloud_inventory_lifecycle_contract_is_provider_parity()
+    test_cloud_create_cleans_up_post_provision_registration_failure()

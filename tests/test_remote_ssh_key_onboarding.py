@@ -151,6 +151,18 @@ def test_completed_onboarding_user_can_queue_remote_ssh_key_install() -> None:
             os.environ.update(old_env)
 
 
+def test_remote_ssh_key_validator_rejects_multiline_public_key() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    onboarding = load_module(ONBOARDING_PY, "arclink_onboarding_remote_ssh_key_multiline_test")
+    pubkey = (
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRemoteHermesKey\n"
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIInjected unrestricted@test"
+    )
+    expect(not onboarding.SSH_PUBLIC_KEY_PATTERN.fullmatch(pubkey), "multiline SSH public key should be rejected")
+    print("PASS test_remote_ssh_key_validator_rejects_multiline_public_key")
+
+
 def test_remote_ssh_key_install_requires_completed_sender_lane() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -473,12 +485,13 @@ def test_root_maintenance_install_ssh_key_uses_discovered_config_file() -> None:
 
 def main() -> int:
     test_completed_onboarding_user_can_queue_remote_ssh_key_install()
+    test_remote_ssh_key_validator_rejects_multiline_public_key()
     test_remote_ssh_key_install_requires_completed_sender_lane()
     test_completed_onboarding_user_can_queue_agent_backup_setup()
     test_root_maintenance_prepares_agent_backup_and_prompts_for_deploy_key()
     test_root_maintenance_reclaims_stale_remote_ssh_key_action_and_notifies_user()
     test_root_maintenance_install_ssh_key_uses_discovered_config_file()
-    print("PASS all 6 remote SSH key onboarding tests")
+    print("PASS all 7 remote SSH key onboarding tests")
     return 0
 
 

@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import pwd
+import re
 import secrets
 import shlex
 import sqlite3
@@ -97,6 +98,10 @@ from arclink_onboarding_provider_auth import (
 )
 
 OPERATOR_UPGRADE_BROKER_TOKEN_HEADER = "X-ArcLink-Operator-Upgrade-Broker-Token"
+OPERATOR_UPGRADE_BROKER_RESULT_GRACE_SECONDS = 30
+OPERATOR_UPGRADE_BROKER_HTTP_GRACE_SECONDS = 5
+SAFE_PIN_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
+ALLOWED_PIN_COMPONENTS = {"hermes-agent", "qmd", "nextcloud", "postgres", "redis", "nvm", "node"}
 
 
 _DEFAULT_USER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -307,8 +312,14 @@ def _operator_upgrade_broker_request(
             "Docker-mode operator upgrades require ARCLINK_OPERATOR_UPGRADE_BROKER_URL "
             "and ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"
         )
+    try:
+        requested_timeout_seconds = int(timeout_seconds)
+    except (TypeError, ValueError):
+        requested_timeout_seconds = 7200
+    operator_timeout_seconds = max(30, min(21600, requested_timeout_seconds))
     body = dict(payload)
     body["operation"] = operation
+    body.setdefault("timeout_seconds", operator_timeout_seconds)
     body_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
     timestamp = str(int(time.time()))
     nonce = secrets.token_urlsafe(18)
@@ -330,16 +341,19 @@ def _operator_upgrade_broker_request(
         },
         method="POST",
     )
+    broker_wait_seconds = max(30, min(21630, operator_timeout_seconds + OPERATOR_UPGRADE_BROKER_RESULT_GRACE_SECONDS))
+    http_timeout_seconds = broker_wait_seconds + OPERATOR_UPGRADE_BROKER_HTTP_GRACE_SECONDS
     try:
-        with urllib.request.urlopen(request, timeout=max(30, int(timeout_seconds))) as response:  # noqa: S310 - internal broker URL
+        with urllib.request.urlopen(request, timeout=http_timeout_seconds) as response:  # noqa: S310 - internal broker URL
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         try:
             data = json.loads(exc.read().decode("utf-8"))
         except Exception:
             data = {"error": str(exc)}
-        raise RuntimeError(str(data.get("error") or data)) from None
-    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        message = data.get("error") if isinstance(data, dict) else data
+        raise RuntimeError(str(message or data)) from None
+    except (OSError, TimeoutError, urllib.error.URLError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"operator upgrade broker request failed: {str(exc)[:220]}") from None
     if not isinstance(data, dict) or data.get("ok") is not True:
         raise RuntimeError(str(data.get("error") if isinstance(data, dict) else data))
@@ -432,6 +446,8 @@ def _pin_upgrade_command_args(
     flag = _pin_upgrade_apply_flag(kind)
     if not component:
         raise ValueError("pin upgrade action item is missing component")
+    if not SAFE_PIN_COMPONENT_RE.fullmatch(component) or component not in ALLOWED_PIN_COMPONENTS:
+        raise ValueError(f"pin upgrade action component is not allowlisted: {component}")
     if not target:
         raise ValueError(f"pin upgrade action for {component} is missing target")
     if not flag:

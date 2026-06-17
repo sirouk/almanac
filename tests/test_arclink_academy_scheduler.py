@@ -133,6 +133,28 @@ def test_forward_maintenance_reviews_graduates_without_writes() -> None:
         cleanup(tmp, old_env)
 
 
+def test_forward_maintenance_live_crawl_defaults_off() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        _graduate_with_public_source(programs, conn, "research_analyst", "capt-default-off", "dep-default-off")
+
+        def fail_fetcher(*, url, headers, timeout, max_bytes):
+            raise AssertionError(f"default-off live crawl should not fetch: {url}")
+
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
+            fetcher=fail_fetcher,
+            created_at="2026-06-02T00:00:00Z",
+        )
+        expect(result["live_crawl"]["enabled"] is False, str(result))
+        expect(result["live_crawl"]["attempted"] == 0, str(result))
+        print("PASS test_forward_maintenance_live_crawl_defaults_off")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_forward_maintenance_caps_and_reports_overflow() -> None:
     tmp, old_env, conn, _control, programs, scheduler = with_db()
     try:
@@ -320,7 +342,7 @@ def test_forward_maintenance_live_crawls_public_sources_digest_only() -> None:
 
         result = scheduler.run_academy_forward_maintenance(
             conn,
-            env={"ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "1", "ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
             fetcher=fake_fetcher,
             created_at="2026-06-02T00:00:00Z",
         )
@@ -347,6 +369,117 @@ def test_forward_maintenance_live_crawls_public_sources_digest_only() -> None:
         cleanup(tmp, old_env)
 
 
+def test_forward_maintenance_live_crawl_pins_validated_dns_address() -> None:
+    tmp, old_env, _conn, _control, _programs, scheduler = with_db()
+    old_getaddrinfo = scheduler.socket.getaddrinfo
+    old_default_fetch = scheduler._default_fetch_url
+    calls: list[tuple[str, str]] = []
+
+    def fake_getaddrinfo(host, port=None, proto=0):
+        return [(scheduler.socket.AF_INET, scheduler.socket.SOCK_STREAM, proto, "", ("93.184.216.34", 443))]
+
+    def fake_default_fetch(*, url, headers, timeout, max_bytes, pinned_address=""):
+        calls.append((url, pinned_address))
+        if url.endswith("/robots.txt"):
+            return {"status_code": 404, "headers": {}, "text": ""}
+        return {
+            "status_code": 200,
+            "headers": {},
+            "text": "A" * 120,
+        }
+
+    try:
+        scheduler.socket.getaddrinfo = fake_getaddrinfo
+        scheduler._default_fetch_url = fake_default_fetch
+        crawl = scheduler._crawl_source(
+            url="https://academy.example.com/source",
+            accepted_hash="old",
+            enrichment={},
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "1"},
+            fetcher=None,
+        )
+        expect(crawl["status"] == "changed", str(crawl))
+        expect(calls and all(address == "93.184.216.34" for _url, address in calls), str(calls))
+        print("PASS test_forward_maintenance_live_crawl_pins_validated_dns_address")
+    finally:
+        scheduler.socket.getaddrinfo = old_getaddrinfo
+        scheduler._default_fetch_url = old_default_fetch
+        cleanup(tmp, old_env)
+
+
+def test_forward_maintenance_live_crawl_blocks_unavailable_robots() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        _graduate_with_public_source(programs, conn, "research_analyst", "capt-robots", "dep-robots")
+
+        def fake_fetcher(*, url, headers, timeout, max_bytes):
+            if url.endswith("/robots.txt"):
+                return {"status_code": 500, "headers": {}, "text": "server error"}
+            raise AssertionError(f"source fetch should be blocked when robots is unavailable: {url}")
+
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "1", "ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
+            fetcher=fake_fetcher,
+            created_at="2026-06-02T00:00:00Z",
+        )
+        expect(result["live_crawl"]["blocked"] >= 1, str(result))
+        rows = [dict(row) for row in conn.execute("SELECT status, reason FROM academy_source_crawl_observations")]
+        expect(rows and rows[0]["status"] == "blocked" and "robots.txt unavailable" in rows[0]["reason"], str(rows))
+        print("PASS test_forward_maintenance_live_crawl_blocks_unavailable_robots")
+    finally:
+        cleanup(tmp, old_env)
+
+
+def test_forward_maintenance_live_crawl_limit_zero_remains_bounded() -> None:
+    tmp, old_env, conn, _control, programs, scheduler = with_db()
+    try:
+        programs.seed_default_academy_programs(conn)
+        t = programs.enroll_academy_trainee(conn, program_id="research_analyst", user_id="capt-limit", deployment_id="dep-limit")
+        s = programs.open_academy_mode(conn, trainee_id=t["trainee_id"], opened_by="capt-limit")
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-limit",
+            lane_id="web_article",
+            title="First limited source",
+            origin_url="https://one.test/weekly",
+            summary="Compressed first source notes.",
+            proposed_by="agent-limit",
+        )
+        programs.record_academy_resource_proposal(
+            conn,
+            deployment_id="dep-limit",
+            lane_id="web_article",
+            title="Second limited source",
+            origin_url="https://two.test/weekly",
+            summary="Compressed second source notes.",
+            proposed_by="agent-limit",
+        )
+        programs.end_academy_mode(conn, session_id=s["session"]["session_id"], actor="capt-limit", graduate=True)
+
+        def fake_fetcher(*, url, headers, timeout, max_bytes):
+            if url.endswith("/robots.txt"):
+                return {"status_code": 404, "headers": {}, "text": ""}
+            return {"status_code": 200, "headers": {}, "text": "B" * 120}
+
+        result = scheduler.run_academy_forward_maintenance(
+            conn,
+            env={
+                "ARCLINK_ACADEMY_CE_LIVE_CRAWL": "1",
+                "ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1",
+                "ARCLINK_ACADEMY_CE_CRAWL_LIMIT": "0",
+            },
+            fetcher=fake_fetcher,
+            created_at="2026-06-02T00:00:00Z",
+        )
+        expect(result["live_crawl"]["attempted"] == 1, str(result))
+        expect(result["live_crawl"]["skipped"] >= 1, str(result))
+        print("PASS test_forward_maintenance_live_crawl_limit_zero_remains_bounded")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching() -> None:
     tmp, old_env, conn, _control, programs, scheduler = with_db()
     try:
@@ -369,11 +502,12 @@ def test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching() -> 
 
         result = scheduler.run_academy_forward_maintenance(
             conn,
-            env={"ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
+            env={"ARCLINK_ACADEMY_CE_LIVE_CRAWL": "1", "ARCLINK_ACADEMY_CE_ALLOW_TEST_URLS": "1"},
             fetcher=fail_fetcher,
             created_at="2026-06-02T00:00:00Z",
         )
         expect(result["live_crawl"]["blocked"] >= 1, str(result))
+        expect(result["reviews"][0]["blocked_source_count"] >= 1, str(result))
         rows = [dict(row) for row in conn.execute("SELECT status, reason FROM academy_source_crawl_observations")]
         expect(rows and rows[0]["status"] == "blocked", str(rows))
         expect(
@@ -387,11 +521,15 @@ def test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching() -> 
 
 if __name__ == "__main__":
     test_forward_maintenance_reviews_graduates_without_writes()
+    test_forward_maintenance_live_crawl_defaults_off()
     test_forward_maintenance_caps_and_reports_overflow()
     test_forward_maintenance_limit_zero_processes_all()
     test_forward_maintenance_notifies_captain_and_refreshes_capsule_idempotently()
     test_forward_maintenance_rotates_shared_specialist_subscribers()
     test_forward_maintenance_can_run_live_trainer_review_without_agent_writes()
     test_forward_maintenance_live_crawls_public_sources_digest_only()
+    test_forward_maintenance_live_crawl_pins_validated_dns_address()
+    test_forward_maintenance_live_crawl_blocks_unavailable_robots()
+    test_forward_maintenance_live_crawl_limit_zero_remains_bounded()
     test_forward_maintenance_live_crawl_blocks_unsafe_url_without_fetching()
     print("PASS all academy scheduler tests")

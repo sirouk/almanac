@@ -9723,6 +9723,10 @@ def dismiss_pin_upgrade_action(conn: sqlite3.Connection, token: str) -> dict[str
         )
         if cursor.rowcount:
             silenced.append(item["component"])
+    conn.execute(
+        "DELETE FROM settings WHERE key = ?",
+        (f"{_PIN_UPGRADE_ACTION_SETTING_PREFIX}{payload['token']}",),
+    )
     conn.commit()
     return {
         "token": payload["token"],

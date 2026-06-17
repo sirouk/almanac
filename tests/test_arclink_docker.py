@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -2845,6 +2846,171 @@ def test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip(
     print("PASS test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip")
 
 
+def test_operator_upgrade_host_runner_quarantines_bad_pending_files_and_expires_stale_requests() -> None:
+    runner = load_python_module(
+        PYTHON_DIR / "arclink_operator_upgrade_host_runner.py",
+        "arclink_operator_upgrade_host_runner_bad_pending_test",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        priv = root / "arclink-priv"
+        queue = priv / "state" / "operator-upgrade-host-runner"
+        marker = root / "deploy-marker.txt"
+        (repo / "bin").mkdir(parents=True)
+        (priv / "state" / "operator-actions").mkdir(parents=True)
+        (priv / "config").mkdir(parents=True)
+        (queue / "pending").mkdir(parents=True)
+        (repo / "deploy.sh").write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f"printf 'deploy %s\\n' \"$1\" >> {shlex.quote(str(marker))}\n",
+            encoding="utf-8",
+        )
+        (repo / "bin" / "component-upgrade.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        (repo / "deploy.sh").chmod(0o755)
+        (repo / "bin" / "component-upgrade.sh").chmod(0o755)
+
+        stale_id = "op-stale-0001"
+        bad_schema_id = "op-badschema-0001"
+        bad_container_priv_id = "op-badcontainer-0001"
+        good_id = "op-good-0001"
+        (queue / "pending" / "op-badlink-0001.json").symlink_to(root / "missing-request.json")
+        (queue / "pending" / f"{stale_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "request_id": stale_id,
+                    "created_at": int(time.time()) - 120,
+                    "operation": "run_operator_upgrade",
+                    "repo_dir": str(repo),
+                    "priv_dir": str(priv),
+                    "log_path": str(priv / "state" / "operator-actions" / "stale.log"),
+                    "timeout_seconds": 30,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (queue / "pending" / f"{bad_schema_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": True,
+                    "request_id": bad_schema_id,
+                    "created_at": int(time.time()),
+                    "operation": "run_operator_upgrade",
+                    "repo_dir": str(repo),
+                    "priv_dir": str(priv),
+                    "log_path": str(priv / "state" / "operator-actions" / "bad-schema.log"),
+                    "timeout_seconds": 30,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (queue / "pending" / f"{bad_container_priv_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "request_id": bad_container_priv_id,
+                    "created_at": int(time.time()),
+                    "operation": "run_operator_upgrade",
+                    "repo_dir": str(repo),
+                    "priv_dir": str(priv),
+                    "container_priv_dir": "/tmp/not-private",
+                    "log_path": str(priv / "state" / "operator-actions" / "bad-container.log"),
+                    "timeout_seconds": 30,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (queue / "pending" / f"{good_id}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "request_id": good_id,
+                    "created_at": int(time.time()),
+                    "operation": "run_operator_upgrade",
+                    "repo_dir": str(repo),
+                    "priv_dir": str(priv),
+                    "log_path": str(priv / "state" / "operator-actions" / "good.log"),
+                    "timeout_seconds": 30,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        old_processed = queue / "processed" / "op-old-processed.json"
+        old_result = queue / "results" / "op-old-result.json"
+        old_processed.parent.mkdir(parents=True)
+        old_result.parent.mkdir(parents=True)
+        old_processed.write_text("{}\n", encoding="utf-8")
+        old_result.write_text("{}\n", encoding="utf-8")
+        old_mtime = time.time() - runner.QUEUE_RETENTION_SECONDS - 10
+        os.utime(old_processed, (old_mtime, old_mtime))
+        os.utime(old_result, (old_mtime, old_mtime))
+
+        old_env = os.environ.copy()
+        try:
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_REPO_DIR"] = str(repo)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_PRIV_DIR"] = str(priv)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR"] = str(queue)
+            result = runner.process_once()
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+        expect(result == 0, str(result))
+        expect(marker.read_text(encoding="utf-8").splitlines() == ["deploy upgrade"], marker.read_text(encoding="utf-8"))
+        bad_result = json.loads((queue / "results" / "op-badlink-0001.json").read_text(encoding="utf-8"))
+        stale_result = json.loads((queue / "results" / f"{stale_id}.json").read_text(encoding="utf-8"))
+        bad_schema_result = json.loads((queue / "results" / f"{bad_schema_id}.json").read_text(encoding="utf-8"))
+        bad_container_result = json.loads((queue / "results" / f"{bad_container_priv_id}.json").read_text(encoding="utf-8"))
+        good_result = json.loads((queue / "results" / f"{good_id}.json").read_text(encoding="utf-8"))
+        expect(bad_result.get("ok") is False and "non-regular" in str(bad_result.get("error") or ""), str(bad_result))
+        expect(stale_result.get("ok") is False and "expired" in str(stale_result.get("error") or ""), str(stale_result))
+        expect(
+            bad_schema_result.get("ok") is False and "schema" in str(bad_schema_result.get("error") or ""),
+            str(bad_schema_result),
+        )
+        expect(
+            bad_container_result.get("ok") is False and "container_priv_dir" in str(bad_container_result.get("error") or ""),
+            str(bad_container_result),
+        )
+        expect(good_result.get("ok") is True and good_result.get("returncode") == 0, str(good_result))
+        expect(not (queue / "pending" / "op-badlink-0001.json").is_symlink(), "bad symlink should leave pending")
+        expect((queue / "processed" / "op-badlink-0001.json").is_symlink(), "bad symlink should be quarantined")
+        expect(not old_processed.exists() and not old_result.exists(), "old queue artifacts should be pruned")
+        overflow_dir = queue / "overflow"
+        overflow_dir.mkdir()
+        for index in range(3):
+            item = overflow_dir / f"op-overflow-{index}.json"
+            item.write_text("{}\n", encoding="utf-8")
+            item_mtime = time.time() + index
+            os.utime(item, (item_mtime, item_mtime))
+        runner._prune_queue_dir(overflow_dir, max_age_seconds=runner.QUEUE_RETENTION_SECONDS, max_files=2)
+        expect(
+            sorted(path.name for path in overflow_dir.glob("*.json")) == ["op-overflow-1.json", "op-overflow-2.json"],
+            sorted(path.name for path in overflow_dir.glob("*.json")),
+        )
+
+        old_env = os.environ.copy()
+        try:
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR"] = str(root / "outside-queue")
+            try:
+                runner._queue_root(priv)
+            except ValueError as exc:
+                expect("private state" in str(exc), str(exc))
+            else:
+                raise AssertionError("queue root outside private state should be rejected")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_operator_upgrade_host_runner_quarantines_bad_pending_files_and_expires_stale_requests")
+
+
 def test_operator_upgrade_broker_signature_replay_cache_is_bounded() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -2895,6 +3061,108 @@ def test_operator_upgrade_broker_signature_replay_cache_is_bounded() -> None:
         os.environ.clear()
         os.environ.update(old_env)
     print("PASS test_operator_upgrade_broker_signature_replay_cache_is_bounded")
+
+
+def test_operator_upgrade_broker_persists_nonce_replay_cache_and_tolerates_bad_poll_env() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    broker = load_python_module(
+        PYTHON_DIR / "arclink_operator_upgrade_broker.py",
+        "arclink_operator_upgrade_broker_persistent_nonce_test",
+    )
+    import hashlib
+    import hmac
+
+    body = b'{"operation":"run_operator_upgrade","log_path":"/priv/state/operator-actions/upgrade.log"}'
+
+    def signed_headers(nonce: str) -> dict[str, str]:
+        timestamp = int(broker.time.time())
+        body_hash = hashlib.sha256(body).hexdigest()
+        signature = hmac.new(
+            b"test-operator-upgrade-token",
+            f"{timestamp}\n{nonce}\n{body_hash}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return {
+            broker.OPERATOR_UPGRADE_BROKER_TOKEN_HEADER: "test-operator-upgrade-token",
+            broker.OPERATOR_UPGRADE_BROKER_TIMESTAMP_HEADER: str(timestamp),
+            broker.OPERATOR_UPGRADE_BROKER_NONCE_HEADER: nonce,
+            broker.OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER: signature,
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo = root / "repo"
+        priv = root / "arclink-priv"
+        container_priv = root / "container" / "arclink-priv"
+        queue = priv / "state" / "operator-upgrade-host-runner"
+        (repo / "bin").mkdir(parents=True)
+        (priv / "state" / "operator-actions").mkdir(parents=True)
+        (priv / "config").mkdir(parents=True)
+        old_env = os.environ.copy()
+        old_atomic = broker._atomic_write_json
+        old_request_id = broker._host_runner_request_id
+        try:
+            os.environ["ARCLINK_OPERATOR_UPGRADE_BROKER_TOKEN"] = "test-operator-upgrade-token"
+            os.environ["ARCLINK_DOCKER_HOST_REPO_DIR"] = str(repo)
+            os.environ["ARCLINK_DOCKER_HOST_PRIV_DIR"] = str(priv)
+            os.environ["ARCLINK_DOCKER_CONTAINER_PRIV_DIR"] = str(container_priv)
+            broker._SEEN_SIGNATURE_NONCES.clear()
+            broker._SEEN_SIGNATURE_NONCES_LOADED_FROM = ""
+
+            nonce = "nonce-persisted-0001"
+            expect(broker._is_authorized(signed_headers(nonce), body) is True, "valid signed request rejected")
+            nonce_store = priv / "state" / "docker" / "operator-upgrade-broker" / "signature-nonces.json"
+            expect(nonce_store.is_file() and nonce in nonce_store.read_text(encoding="utf-8"), "nonce was not persisted")
+            broker._SEEN_SIGNATURE_NONCES.clear()
+            broker._SEEN_SIGNATURE_NONCES_LOADED_FROM = ""
+            expect(broker._is_authorized(signed_headers(nonce), body) is False, "persisted nonce replay accepted after restart simulation")
+
+            captured: list[dict[str, object]] = []
+
+            def fake_atomic(path: Path, payload: dict[str, object]) -> None:
+                old_atomic(path, payload)
+                if path.parent.name == "pending":
+                    captured.append(dict(payload))
+                    old_atomic(queue / "results" / f"{payload['request_id']}.json", {"ok": True, "request_id": payload["request_id"], "returncode": 0})
+
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_QUEUE_DIR"] = str(queue)
+            os.environ["ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_POLL_SECONDS"] = "not-a-float"
+            broker._atomic_write_json = fake_atomic
+            broker._host_runner_request_id = lambda: "op-badpoll-0001"
+            ok, payload = broker.run_operator_upgrade_request(
+                {
+                    "operation": "run_operator_upgrade",
+                    "log_path": str(container_priv / "state" / "operator-actions" / "upgrade.log"),
+                }
+            )
+            expect(ok is True and isinstance(payload, dict) and payload.get("returncode") == 0, str(payload))
+            expect(captured and captured[0]["request_id"] == "op-badpoll-0001", str(captured))
+            expect(not (queue / "results" / "op-badpoll-0001.json").exists(), "consumed host-runner result should be removed")
+
+            def fake_string_returncode(path: Path, payload: dict[str, object]) -> None:
+                old_atomic(path, payload)
+                if path.parent.name == "pending":
+                    old_atomic(queue / "results" / f"{payload['request_id']}.json", {"ok": True, "request_id": payload["request_id"], "returncode": "0"})
+
+            broker._atomic_write_json = fake_string_returncode
+            broker._host_runner_request_id = lambda: "op-badreturn-0001"
+            ok, payload = broker.run_operator_upgrade_request(
+                {
+                    "operation": "run_operator_upgrade",
+                    "log_path": str(container_priv / "state" / "operator-actions" / "upgrade-2.log"),
+                }
+            )
+            expect(ok is False and "integer returncode" in str(payload), str(payload))
+            expect(not (queue / "results" / "op-badreturn-0001.json").exists(), "invalid consumed host-runner result should be removed")
+        finally:
+            broker._atomic_write_json = old_atomic
+            broker._host_runner_request_id = old_request_id
+            broker._SEEN_SIGNATURE_NONCES.clear()
+            broker._SEEN_SIGNATURE_NONCES_LOADED_FROM = ""
+            os.environ.clear()
+            os.environ.update(old_env)
+    print("PASS test_operator_upgrade_broker_persists_nonce_replay_cache_and_tolerates_bad_poll_env")
 
 
 def test_operator_upgrade_broker_rejects_raw_or_unsafe_requests() -> None:
@@ -7965,8 +8233,11 @@ def main() -> int:
     test_operator_upgrade_broker_queues_host_runner_by_default()
     test_operator_upgrade_broker_skips_deploy_when_pin_upgrade_noops()
     test_operator_upgrade_host_runner_executes_full_host_path_and_noop_pin_skip()
+    test_operator_upgrade_host_runner_quarantines_bad_pending_files_and_expires_stale_requests()
     test_operator_upgrade_broker_signature_replay_cache_is_bounded()
+    test_operator_upgrade_broker_persists_nonce_replay_cache_and_tolerates_bad_poll_env()
     test_operator_upgrade_broker_rejects_raw_or_unsafe_requests()
+    test_operator_upgrade_broker_rejects_symlinked_or_non_executable_repo_scripts_before_subprocess()
     test_operator_upgrade_broker_rejects_unscoped_upstream_deploy_key_paths_before_log_or_subprocess()
     test_operator_upgrade_broker_rejects_unsafe_docker_binary_before_subprocess()
     test_docker_agent_supervisor_rejects_unsafe_metadata_before_root_ops()
@@ -7980,6 +8251,7 @@ def main() -> int:
     test_agent_process_helper_rejects_symlinked_or_missing_repo_command_targets_before_subprocess()
     test_docker_agent_supervisor_requires_user_helper_before_root_user_ops()
     test_agent_process_helper_rejects_raw_commands_and_runs_allowlisted_agent_ops()
+    test_agent_process_helper_records_redacted_rejection_incident_before_subprocess()
     test_remaining_high_authority_services_record_redacted_rejection_incidents()
     test_agent_process_helper_rejects_unapproved_agent_env_keys_before_subprocess()
     test_agent_process_helper_rejects_unsafe_dashboard_backend_host_before_subprocess()
@@ -8015,7 +8287,7 @@ def main() -> int:
     test_readme_distinguishes_control_shared_host_and_docker_paths()
     test_sovereign_ingress_docs_cover_domain_and_tailscale_modes()
     test_docker_compose_config_validates_when_docker_is_available()
-    print("PASS all 61 ArcLink Docker regression tests")
+    print("PASS all ArcLink Docker regression tests")
     return 0
 
 

@@ -13,6 +13,7 @@ PYTHON_DIR = REPO / "python"
 CONTROL_PY = PYTHON_DIR / "arclink_control.py"
 FLEET_PY = PYTHON_DIR / "arclink_fleet.py"
 OPERATOR_RAVEN_PY = PYTHON_DIR / "arclink_operator_raven.py"
+UPGRADE_POLICY_PY = PYTHON_DIR / "arclink_upgrade_policy.py"
 CURATOR_TELEGRAM_PY = PYTHON_DIR / "arclink_curator_onboarding.py"
 CURATOR_DISCORD_PY = PYTHON_DIR / "arclink_curator_discord_onboarding.py"
 
@@ -316,6 +317,39 @@ def test_operator_raven_upgrade_policy_is_read_only_and_component_specific() -> 
         print("PASS test_operator_raven_upgrade_policy_is_read_only_and_component_specific")
     finally:
         cleanup_db(tmp, old_env)
+
+
+def test_upgrade_policy_catalog_is_sorted_grouped_and_read_only() -> None:
+    policy = load_module(UPGRADE_POLICY_PY, "arclink_upgrade_policy_direct_test")
+    catalog = policy.upgrade_policy_catalog()
+    components = [item["component"] for item in catalog]
+    rollout_order = [item["rollout_order"] for item in catalog]
+    expect(components[0] == "arclink-control", str(components))
+    expect(rollout_order == sorted(rollout_order), str(rollout_order))
+    expect(set(policy.PIN_UPGRADE_COMPONENTS).issubset(set(components)), str(components))
+    expect(policy.STATEFUL_PIN_UPGRADE_COMPONENTS == {"nextcloud", "postgres", "redis"}, str(policy.STATEFUL_PIN_UPGRADE_COMPONENTS))
+
+    summary = policy.upgrade_policy_summary()
+    expect(summary["mode"] == "catalog" and summary["mutation_performed"] is False, str(summary))
+    expect(summary["default_sequence"] == components, str(summary))
+    grouped = dict(policy.policy_components_by_scope(summary))
+    expect("hermes" in grouped["arcpod-runtime"], str(grouped))
+    expect("postgres" in grouped["stateful-infra"], str(grouped))
+
+    hermes = policy.upgrade_policy_summary("hermes")
+    expect(hermes["mode"] == "component" and hermes["mutation_performed"] is False, str(hermes))
+    expect(hermes["policy"]["component"] == "hermes", str(hermes))
+    expect("PG-HERMES" in hermes["policy"]["proof_gates"], str(hermes))
+    expect(policy.upgrade_policy_for("plugins")["component"] == "dashboard-plugins", "plugins alias must normalize")
+    expect(policy.upgrade_policy_for("wg")["component"] == "wireguard", "wg alias must normalize")
+
+    try:
+        policy.upgrade_policy_for("imaginary")
+    except ValueError as exc:
+        expect("unknown ArcLink upgrade component" in str(exc) and "hermes" in str(exc), str(exc))
+    else:
+        raise AssertionError("unknown components must fail closed")
+    print("PASS test_upgrade_policy_catalog_is_sorted_grouped_and_read_only")
 
 
 def test_operator_raven_fleet_drain_and_resume_are_gated_and_audited() -> None:
@@ -1084,6 +1118,7 @@ if __name__ == "__main__":
     test_operator_raven_agents_reports_arclink_arcpods_not_hermes_tasks()
     test_operator_raven_fleet_and_worker_probe_are_dry_run_only()
     test_operator_raven_upgrade_policy_is_read_only_and_component_specific()
+    test_upgrade_policy_catalog_is_sorted_grouped_and_read_only()
     test_operator_raven_fleet_drain_and_resume_are_gated_and_audited()
     test_operator_raven_user_lookup_and_pod_repair_do_not_expose_or_queue_secrets()
     test_operator_raven_billing_backup_and_workspace_statuses_are_read_only()
@@ -1099,4 +1134,4 @@ if __name__ == "__main__":
     test_operator_raven_mutation_helpers_and_approval_code()
     test_operator_raven_chat_adapters_preserve_authorization_boundaries()
     test_operator_telegram_gate_unified_across_transports()
-    print("PASS all 18 Operator Raven tests")
+    print("PASS all Operator Raven tests")

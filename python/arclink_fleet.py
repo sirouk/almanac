@@ -164,6 +164,7 @@ def register_fleet_host(
     capacity_slots: int = 10,
     host_id: str = "",
     metadata: Mapping[str, Any] | None = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     clean_hostname = str(hostname or "").strip().lower()
     if not clean_hostname:
@@ -226,7 +227,8 @@ def register_fleet_host(
             params.append(utc_now_iso())
             params.append(str(existing["host_id"]))
             conn.execute(f"UPDATE arclink_fleet_hosts SET {', '.join(sets)} WHERE host_id = ?", params)
-            conn.commit()
+            if commit:
+                conn.commit()
             existing = conn.execute(
                 "SELECT * FROM arclink_fleet_hosts WHERE host_id = ?",
                 (str(existing["host_id"]),),
@@ -244,7 +246,8 @@ def register_fleet_host(
         """,
         (clean_id, clean_hostname, clean_region, tags_json or "{}", capacity_slots, metadata_json or "{}", now, now),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return dict(conn.execute("SELECT * FROM arclink_fleet_hosts WHERE host_id = ?", (clean_id,)).fetchone())
 
 

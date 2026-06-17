@@ -1208,6 +1208,14 @@ def build_continuing_education_plan(
             status = "removed"
             reason = "source disappeared; preserve only policy-allowed archived/derived material"
             blocked.append(source_id)
+        elif str(observed.get("crawl_status") or "").strip() == "blocked":
+            status = "blocked"
+            reason = "source crawl was blocked by crawler policy; preserve current Agent state pending review"
+            blocked.append(source_id)
+        elif str(observed.get("crawl_status") or "").strip() == "failed":
+            status = "crawl_failed"
+            reason = "source crawl failed; refresh/review before Agent update"
+            review_required.append(source_id)
         elif str(observed.get("superseded_by") or "").strip():
             status = "superseded"
             reason = f"source superseded by {redact_secret_material(observed.get('superseded_by'))}"
@@ -1228,8 +1236,8 @@ def build_continuing_education_plan(
                 "lane_id": str(source.get("lane_id") or ""),
                 "status": status,
                 "reason": reason,
-                "agent_update_blocked": status in {"removed", "tombstoned"},
-                "review_required": status in {"changed", "stale", "superseded"},
+                "agent_update_blocked": status in {"removed", "tombstoned", "blocked", "crawl_failed"},
+                "review_required": status in {"changed", "stale", "superseded", "crawl_failed"},
             }
         )
 

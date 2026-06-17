@@ -177,10 +177,83 @@ def test_install_user_services_skips_nextcloud_when_no_runtime() -> None:
     print("PASS test_install_user_services_skips_nextcloud_when_no_runtime")
 
 
+def test_install_user_services_collects_systemctl_failures_before_exit() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fakebin = root / "fakebin"
+        fakebin.mkdir(parents=True, exist_ok=True)
+        log_path = root / "systemctl.log"
+        (fakebin / "systemctl").write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n"
+            "if [[ \"$*\" == *\"enable arclink-ssot-batcher.timer\"* ]]; then\n"
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (fakebin / "systemctl").chmod(0o755)
+        (fakebin / "rsync").write_text(
+            "#!/usr/bin/env bash\n"
+            "target=\"${@: -1}\"\n"
+            "mkdir -p \"$target\"\n",
+            encoding="utf-8",
+        )
+        (fakebin / "rsync").chmod(0o755)
+
+        home = root / "home"
+        config_path = root / "arclink-priv" / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "arclink-priv"),
+                "STATE_DIR": str(root / "arclink-priv" / "state"),
+                "RUNTIME_DIR": str(root / "arclink-priv" / "state" / "runtime"),
+                "VAULT_DIR": str(root / "arclink-priv" / "vault"),
+                "ARCLINK_DB_PATH": str(root / "arclink-priv" / "state" / "arclink-control.sqlite3"),
+                "ENABLE_NEXTCLOUD": "0",
+                "ENABLE_QUARTO": "0",
+                "PDF_INGEST_ENABLED": "0",
+                "ARCLINK_HERMES_DOCS_SYNC_ENABLED": "0",
+                "ARCLINK_CURATOR_CHANNELS": "tui-only",
+                "ARCLINK_CURATOR_DISCORD_ONBOARDING_ENABLED": "0",
+                "ARCLINK_CURATOR_TELEGRAM_ONBOARDING_ENABLED": "0",
+            },
+        )
+
+        result = subprocess.run(
+            [str(SCRIPT)],
+            env={
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fakebin}:{os.environ.get('PATH', '')}",
+                "ARCLINK_CONFIG_FILE": str(config_path),
+                "XDG_RUNTIME_DIR": str(root / "run-user"),
+                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={root / 'run-user' / 'bus'}",
+                "SYSTEMCTL_LOG": str(log_path),
+            },
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        log = log_path.read_text(encoding="utf-8")
+        expect(result.returncode != 0, "systemctl failure should make installer fail after reconciliation")
+        expect("systemctl --user enable arclink-ssot-batcher.timer failed" in result.stderr, result.stderr)
+        expect("One or more systemd user unit operations failed." in result.stderr, result.stderr)
+        expect("--user enable arclink-github-backup.timer" in log, log)
+        expect("--user restart arclink-mcp.service" in log, log)
+        print("PASS test_install_user_services_collects_systemctl_failures_before_exit")
+
+
 def main() -> int:
     test_install_user_services_enables_and_starts_core_and_curator_units()
     test_install_user_services_skips_nextcloud_when_no_runtime()
-    print("PASS all 2 install-user-services regression tests")
+    test_install_user_services_collects_systemctl_failures_before_exit()
+    print("PASS all 3 install-user-services regression tests")
     return 0
 
 

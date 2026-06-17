@@ -36,6 +36,7 @@ from arclink_rejection_incidents import private_state_rejection_path, record_rej
 MAX_REQUEST_BYTES = 16384
 REQUEST_SIGNATURE_TTL_SECONDS = 300
 MAX_SEEN_SIGNATURE_NONCES = 4096
+HOST_RUNNER_RESULT_GRACE_SECONDS = 30
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8917
 OPERATOR_UPGRADE_BROKER_TOKEN_HEADER = "X-ArcLink-Operator-Upgrade-Broker-Token"
@@ -44,6 +45,7 @@ OPERATOR_UPGRADE_BROKER_NONCE_HEADER = "X-ArcLink-Operator-Upgrade-Nonce"
 OPERATOR_UPGRADE_BROKER_SIGNATURE_HEADER = "X-ArcLink-Operator-Upgrade-Signature"
 _SEEN_SIGNATURE_NONCES: dict[str, float] = {}
 _SEEN_SIGNATURE_NONCES_LOCK = threading.Lock()
+_SEEN_SIGNATURE_NONCES_LOADED_FROM = ""
 SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
 ALLOWED_PIN_COMPONENTS = {"hermes-agent", "qmd", "nextcloud", "postgres", "redis", "nvm", "node"}
 PIN_UPGRADE_FLAGS = {
@@ -299,6 +301,15 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _host_runner_poll_interval() -> float:
+    raw = str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_POLL_SECONDS") or "1").strip()
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 1.0
+    return max(0.05, min(5.0, value))
+
+
 def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> dict[str, Any]:
     _reject_raw_commands(request_body)
     repo_dir = _host_repo_dir()
@@ -313,6 +324,8 @@ def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> di
     pending_dir = queue_root / "pending"
     results_dir = queue_root / "results"
     result_path = results_dir / f"{request_id}.json"
+    poll_interval = _host_runner_poll_interval()
+    wait_seconds = max(30, min(21630, timeout_seconds + HOST_RUNNER_RESULT_GRACE_SECONDS))
     payload: dict[str, Any] = {
         "schema_version": HOST_RUNNER_SCHEMA_VERSION,
         "request_id": request_id,
@@ -337,9 +350,6 @@ def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> di
         payload["install_items"] = normalized_items
     request_path = pending_dir / f"{request_id}.json"
     _atomic_write_json(request_path, payload)
-    wait_seconds = max(30, min(21630, timeout_seconds + 30))
-    poll_interval = float(str(os.environ.get("ARCLINK_OPERATOR_UPGRADE_HOST_RUNNER_POLL_SECONDS") or "1"))
-    poll_interval = max(0.05, min(5.0, poll_interval))
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         if result_path.exists():
@@ -349,13 +359,16 @@ def _run_host_runner_request(operation: str, request_body: dict[str, Any]) -> di
                 raise RuntimeError(f"operator upgrade host runner returned an unreadable result: {exc}") from None
             if not isinstance(result, dict):
                 raise RuntimeError("operator upgrade host runner returned an invalid result")
+            try:
+                result_path.unlink(missing_ok=True)
+            except OSError:
+                pass
             if result.get("ok") is not True:
                 raise RuntimeError(
                     str(result.get("error") or result.get("message") or "operator upgrade host runner failed")
                 )
-            try:
-                returncode = int(result.get("returncode"))
-            except (TypeError, ValueError):
+            returncode = result.get("returncode")
+            if type(returncode) is not int:
                 raise RuntimeError("operator upgrade host runner result did not include an integer returncode") from None
             return {"returncode": returncode, "host_runner": True, "request_id": request_id}
         time.sleep(poll_interval)
@@ -662,25 +675,78 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[s
     handler.wfile.write(body)
 
 
-def _nonce_seen(nonce: str, now: float) -> bool:
-    cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
-    with _SEEN_SIGNATURE_NONCES_LOCK:
-        for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
-            if observed < cutoff:
-                _SEEN_SIGNATURE_NONCES.pop(key, None)
-        return nonce in _SEEN_SIGNATURE_NONCES
+def _nonce_store_path() -> Path | None:
+    try:
+        host_priv = Path(_host_priv_dir()).resolve(strict=False)
+    except ValueError:
+        return None
+    return host_priv / "state" / "docker" / SERVICE_NAME / "signature-nonces.json"
 
 
-def _record_nonce(nonce: str, now: float) -> None:
+def _prune_seen_nonces_locked(cutoff: float) -> None:
+    for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
+        if observed < cutoff:
+            _SEEN_SIGNATURE_NONCES.pop(key, None)
+
+
+def _load_persisted_nonces_locked(path: Path | None, now: float) -> bool:
+    global _SEEN_SIGNATURE_NONCES_LOADED_FROM
+    if path is None:
+        return True
+    path_key = str(path)
+    if _SEEN_SIGNATURE_NONCES_LOADED_FROM == path_key:
+        return True
+    cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        data = {}
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    for key, observed in data.items():
+        nonce = str(key or "")
+        try:
+            observed_at = float(observed)
+        except (TypeError, ValueError):
+            continue
+        if observed_at >= cutoff and re.fullmatch(r"[A-Za-z0-9_.~+/=-]{16,160}", nonce):
+            _SEEN_SIGNATURE_NONCES[nonce] = observed_at
+    _SEEN_SIGNATURE_NONCES_LOADED_FROM = path_key
+    return True
+
+
+def _persist_seen_nonces_locked(path: Path | None) -> bool:
+    if path is None:
+        return True
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(_SEEN_SIGNATURE_NONCES, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
+def _record_nonce_if_unseen(nonce: str, now: float) -> bool:
     cutoff = now - REQUEST_SIGNATURE_TTL_SECONDS
     with _SEEN_SIGNATURE_NONCES_LOCK:
-        for key, observed in list(_SEEN_SIGNATURE_NONCES.items()):
-            if observed < cutoff:
-                _SEEN_SIGNATURE_NONCES.pop(key, None)
+        path = _nonce_store_path()
+        if not _load_persisted_nonces_locked(path, now):
+            return False
+        _prune_seen_nonces_locked(cutoff)
+        if nonce in _SEEN_SIGNATURE_NONCES:
+            return False
         while len(_SEEN_SIGNATURE_NONCES) >= MAX_SEEN_SIGNATURE_NONCES:
             oldest = min(_SEEN_SIGNATURE_NONCES, key=_SEEN_SIGNATURE_NONCES.get)
             _SEEN_SIGNATURE_NONCES.pop(oldest, None)
         _SEEN_SIGNATURE_NONCES[nonce] = now
+        if not _persist_seen_nonces_locked(path):
+            _SEEN_SIGNATURE_NONCES.pop(nonce, None)
+            return False
+        return True
 
 
 def _is_authorized(headers: Any, raw_body: bytes) -> bool:
@@ -702,8 +768,6 @@ def _is_authorized(headers: Any, raw_body: bytes) -> bool:
         return False
     if not re.fullmatch(r"[A-Za-z0-9_.~+/=-]{16,160}", nonce):
         return False
-    if _nonce_seen(nonce, now):
-        return False
     body_hash = hashlib.sha256(raw_body).hexdigest()
     expected_signature = hmac.new(
         expected.encode("utf-8"),
@@ -712,8 +776,7 @@ def _is_authorized(headers: Any, raw_body: bytes) -> bool:
     ).hexdigest()
     if not hmac.compare_digest(expected_signature, supplied_signature):
         return False
-    _record_nonce(nonce, now)
-    return True
+    return _record_nonce_if_unseen(nonce, now)
 
 
 class OperatorUpgradeBrokerHandler(BaseHTTPRequestHandler):

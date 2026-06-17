@@ -1,0 +1,11 @@
+<<<CODEX-DECISIONS-START CANON-15>>>
+## CANON-15 — Codex (GPT-5.5 xhigh) decision recommendations (symphony-anchored)
+
+### DECISION 1: No deferred operator decision remains for CANON-15
+- RECOMMENDATION: Make no runtime/schema/contract/threat-model change for CANON-15. Close this piece as `0 needs-decision`; the repair report explicitly says `NEEDS-DECISION - NONE` and the reconciled status says `14 fixed / 3 skipped / 0 needs-decision`. Keep the three skipped items as standing risk-accepted/out-of-scope notes, not deferred operator calls: GAP-019 trusted-host/root-equivalence, broker `0.0.0.0` binding inside an `internal:true` compose network, and non-load-bearing `upgrade_policy` `hermes`/`hermes-agent` naming drift. Current code already moved the pipeline toward fail-closed local contracts: queue root confinement, invalid-file quarantine, request expiry, persistent nonce replay defense, signed timeout alignment, poll parsing before queue write, consumed-result cleanup, non-Docker allowlist, and structured `pins.json` failure.
+- SYMPHONY ANCHOR: North Star: “Operators own the universe: hosts, secrets, fleet, policy, upgrades, backups, live proof...” and Whole-System Traversal: “Upgrades... preserve state by default and leave redacted evidence of what happened.”
+- RATIONALE: The operator-owned policy questions are already classified: accepted boundary risk or benign drift. Reopening them here would create churn without improving the installed release truth. The code now preserves state by default, fails closed on malformed/expired/replayed upgrade requests, and keeps mutation inside source-owned broker/runner/provisioner contracts.
+- TRADEOFFS & ALTERNATIVES: I weighed re-litigating trusted-host authority, changing broker bind semantics, or renaming the policy `hermes` label to `hermes-agent`. Rejected: those are either already accepted by the canon boundary, contained by compose isolation, or cosmetic/non-load-bearing and could introduce cross-surface contract drift. Residual risk remains the accepted trusted-host/root-equivalence model, which belongs to the broader GAP-019 track, not CANON-15.
+- EFFORT / BLAST-RADIUS: low. No code change required; only the canon/decision ledger would be touched if an explicit closeout artifact is needed. Runtime surfaces affected: none.
+
+<<<CODEX-DECISIONS-END CANON-15>>>

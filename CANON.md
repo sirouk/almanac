@@ -1001,12 +1001,11 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
 | Commit | Pieces | Repaired HIGHs (sample) | Fixes/Skips/ND | Tests |
 |---|---|---|---|---|
 | `31e7d39` | CANON-09 | DNS bulk-status clobber | 7 / 1 / 4 | 56 re-run green |
-| `c5cec97` | CANON-04/05/07/12/13/30 | `/credentials` private-gate (re-leveled→MED); webhook atomicity; token-injection break; migration non-verify; bot-token-to-disk | 45 / 21 / 14 | 14/14 suites green |
-| `bf7e201` | CANON-10/11/15/17/22/26/29 | df-parse→ASU=0 (fail-closed); **upgrade-pipeline H1 drain wedge + nonce replay** (full DISSECT set); academy SSRF; backup auto-push-to-prod; systemd fail-open; 10 orphaned CI tests | 62 / 22 / 8 | 23/23 suites green |
-| active workspace | CANON-01/02/03 | config/env hardening; hosted API transport footguns; web URL/body hardening | 22 / 4 / 4 | reports green; CANON-03 web build blocked only by restricted Google Font fetch |
-| _in progress_ | CANON-06/08 → 14/16/18/19/20 → 21/23/24/25/27/28/31/32 | — | — | — |
+| `c5cec97` | CANON-04/05/07/12/13/30 | `/credentials` private-gate (re-leveled→MED); webhook atomicity; token-injection break; migration non-verify; bot-token-to-disk | 45 / 21 / 15 | 14/14 suites green |
+| `bf7e201` | CANON-10/11/15/17/22/26/29 | df-parse→ASU=0 (fail-closed); **upgrade-pipeline H1 drain wedge + nonce replay** (full DISSECT set); academy SSRF; backup auto-push-to-prod; systemd fail-open; 10 orphaned CI tests | 62 / 22 / 11 | 23/23 suites green |
+| `f23d709` | CANON-01/02/03/06/08 | secret-reject on events/notifications + config-truncation (ALLOWED_CIDRS) fix; transport body/UTF-8 footguns; web URL allowlist; curator dead-write; **fleet audit-chain re-forge closed** | 35 / 11 / 9 | 15/15 suites green |
+| _Batch 4 running_ | CANON-14/16/18/19/20 → 21/23/24/25/27/28/31/32 | — | — | — |
 
-**Progress: 14 / 32 pieces committed; 17 / 32 pieces have completed repair reports.**
-No risk-accepted design altered; every committed piece passed an independent reviewer test
-re-run. Active-workspace reports are folded into the per-piece reconciled records, but remain
-uncommitted until reviewer commit.
+**Progress: 19 / 32 pieces committed.** No risk-accepted design altered; every committed piece
+passed an independent reviewer test re-run. (The root `CANON.md`/`DISSECT.md` are spec — only the
+reviewer updates this ledger; the Codex fix prompt is now guarded against editing them.)

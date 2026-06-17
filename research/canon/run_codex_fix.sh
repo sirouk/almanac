@@ -42,7 +42,8 @@ THE SPEC (read these — they are the adjudicated, code-cited truth; do NOT re-l
   - Your earlier ratification:            research/canon/codex/${id}-${slug}.codex.md
 Also read the ${id} rows in /root/arclink/CANON.md Section 3 (risk register, incl. the
 "Federation-added (Codex-found, code-confirmed)" subsection). The canon files under
-research/canon/ are the SPEC — do NOT modify them.
+research/canon/ AND the root CANON.md / DISSECT.md are the immutable SPEC — read them, but do
+NOT modify any of them (the human reviewer maintains CANON.md, incl. its repair ledger).
 
 BINDING METHOD: prove, do not guess. Before changing code, re-open the cited path:line and
 confirm the defect is real in the CURRENT tree. Fix the CAUSE, not the symptom.

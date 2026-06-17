@@ -1006,11 +1006,18 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
 | `f23d709` | CANON-01/02/03/06/08 | secret-reject on events/notifications + config-truncation (ALLOWED_CIDRS) fix; transport body/UTF-8 footguns; web URL allowlist; curator dead-write; **fleet audit-chain re-forge closed** | 35 / 11 / 9 | 15/15 suites green |
 | `04ac989` | (regression follow-up) | CANON-01's secret filter over-matched `pin_upgrade_action_token` (content hash, not a credential) — exempt `_action_token` paths; value-based secret check retained. Slipped Batch-3 gate. | 1 / 0 / 0 | pin 12/12, secrets 3/3 |
 | `6fb7400` | CANON-14/16/18/19/20 (+ CANON-17 academy-gate test fix) | llm-router egress allowlist; recover-stale retry cap; auth-proxy/scale-snapshot; fleet hub/URL/asu-guard; **+ fixed pre-existing CANON-17 academy PG-PROVIDER gate test** (gate intentional; test now establishes live review) | 36 / 11 / 12 | 14/14 broad gate green |
-| _Batch 5 running_ | CANON-21/23/24/25/27/28/31/32 | — | — | — |
+| `7cf2565` | CANON-21/23/24/25/27/28/31/32 (+ 4 recovered regressions) | org-profile mirror; evidence DB + unified redaction; deploy breadcrumb; compose egress posture; pins SoT precedence + `pins_set` fail-open; CI gate honesty; ops serve/teardown + non-atomic-rewrite; docs stale-count truthing. **+ re-applied pin exemption (CANON-23 had reverted it); defined `ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES` (CANON-04 late-cancel); wired 4 orphaned tests; hygiene allowlist** | 65 / 25 / 15 | broad gate green (sole red = non-hermetic `/arcdata`) |
 
-**Progress: 24 / 32 pieces committed** (+ pin-filter & academy-gate regression fixes). No
-risk-accepted design altered; every committed piece passed an independent **broad** reviewer
-test re-run (widened after the pin/academy regressions slipped earlier narrow gates). Recovery
-note: Batch 4 required 3 launch attempts (an `&`-orphan + a double-launch) — resolved via the
+**Progress: 32 / 32 pieces committed — REPAIR CAMPAIGN COMPLETE.** No risk-accepted design
+altered; every committed piece passed an independent **broad** reviewer test re-run (widened
+after the pin/academy regressions slipped earlier narrow gates). The campaign also caught
+**3 latent pre-existing/Batch-introduced regressions** (pin-filter over-match, academy
+PG-PROVIDER gate, onboarding cancel-immutable constant) and a class of **orphaned CI tests**,
+all fixed. Consolidated operator decisions: [`research/canon/NEEDS_DECISION.md`](research/canon/NEEDS_DECISION.md).
+Recovery note: Batches 4–5 hit launch/stash turbulence (an `&`-orphan, a double-launch, an
+unkillable namespace-isolated orphan, a baseline-bisect stash that orphaned ancestry) — all
+resolved via the harness's TaskStop + careful `--mixed` re-basing; **no commit or content was
+ever lost** (verified: all batch commits in HEAD ancestry, all per-piece content present).
+Earlier recovery: Batch 4 required 3 launch attempts (an `&`-orphan + a double-launch) — resolved via the
 harness's TaskStop, not `pkill`; no commits were ever lost. (Root `CANON.md`/`DISSECT.md` are
 spec — only the reviewer updates this ledger; the Codex fix prompt is guarded against editing them.)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+os.environ.setdefault("ARCLINK_SESSION_HASH_PEPPER", "public-bots-test-pepper")
 
 
 def expect(condition: bool, message: str) -> None:

@@ -4,18 +4,39 @@ from __future__ import annotations
 import io
 import importlib.util
 import json
+import os
 import sqlite3
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+os.environ.setdefault("ARCLINK_SESSION_HASH_PEPPER", "product-surface-test-pepper")
 
 
 def expect(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+@contextmanager
+def temp_env(values: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in values}
+    try:
+        for key, value in values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def load_module(filename: str, name: str):
@@ -99,12 +120,13 @@ def test_product_surface_user_and_admin_dashboards_are_secret_free_and_queue_onl
         email="admin-surface@example.test",
         role="ops",
     )
-    admin_session = api_auth.create_arclink_admin_session(
-        conn,
-        admin_id="admin_surface",
-        session_id="asess_surface",
-        mfa_verified=True,
-    )
+    with temp_env({"ARCLINK_SESSION_HASH_PEPPER": "product-surface-test-pepper"}):
+        admin_session = api_auth.create_arclink_admin_session(
+            conn,
+            admin_id="admin_surface",
+            session_id="asess_surface",
+            mfa_verified=True,
+        )
 
     user = surface.handle_arclink_product_surface_request(conn, method="GET", path=f"/user?user_id={prepared['user_id']}")
     expect(user.status == 200, user.body)

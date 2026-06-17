@@ -1129,8 +1129,9 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
     conn = memory_db(control)
     prepared = seed_dashboard(control, onboarding, conn)
     api.upsert_arclink_admin(conn, admin_id="admin_sessions", email="sessions-admin@example.test", role="ops")
-    api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_active")
-    api.create_arclink_admin_session(conn, admin_id="admin_sessions", session_id="asess_active")
+    with temp_env({"ARCLINK_SESSION_HASH_PEPPER": "dashboard-session-count-test-pepper"}):
+        api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_active")
+        api.create_arclink_admin_session(conn, admin_id="admin_sessions", session_id="asess_active")
     now = control.utc_now_iso()
 
     conn.execute(

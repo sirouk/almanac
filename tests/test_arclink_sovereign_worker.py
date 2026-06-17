@@ -6,10 +6,14 @@ import sys
 import tempfile
 import json
 import hashlib
+import os
 import stat
 from pathlib import Path
 
 from arclink_test_helpers import expect, load_module
+
+
+os.environ.setdefault("ARCLINK_SESSION_HASH_PEPPER", "sovereign-worker-test-pepper")
 
 
 def memory_db(control):

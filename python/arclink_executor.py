@@ -1033,7 +1033,7 @@ class ArcLinkExecutor:
         records = tuple(_clean_cloudflare_teardown_record(record) for record in request.records)
         if self.config.adapter_name == "fake":
             return self._fake_cloudflare_dns_teardown(request=request, records=records)
-        provider_records = _cloudflare_delete_dns_records(
+        removed_records = _cloudflare_delete_dns_records(
             records=records,
             zone_id=request.zone_id,
             secret_resolver=self.secret_resolver,
@@ -1042,12 +1042,12 @@ class ArcLinkExecutor:
             deployment_id=request.deployment_id,
             live=True,
             status="applied",
-            records=tuple(record["hostname"] for record in records),
+            records=tuple(record["hostname"] for record in removed_records),
             metadata={
                 "adapter": self.config.adapter_name,
                 "zone_id": request.zone_id,
                 "idempotency_key": request.idempotency_key,
-                "provider_record_ids": tuple(provider_records),
+                "provider_record_ids": tuple(record["provider_record_id"] for record in removed_records),
             },
         )
 
@@ -2574,12 +2574,12 @@ def _cloudflare_delete_dns_records(
     records: tuple[dict[str, Any], ...],
     zone_id: str,
     secret_resolver: SecretResolver | None = None,
-) -> tuple[str, ...]:
+) -> tuple[dict[str, str], ...]:
     clean_zone = str(zone_id or os.environ.get("CLOUDFLARE_ZONE_ID") or "").strip()
     token = _cloudflare_api_token(secret_resolver=secret_resolver, action="teardown")
     if not clean_zone:
         raise ArcLinkExecutorError("ArcLink Cloudflare DNS teardown requires CLOUDFLARE_ZONE_ID")
-    removed: list[str] = []
+    removed: list[dict[str, str]] = []
     for record in records:
         provider_id = str(record.get("provider_record_id") or "").strip()
         if not provider_id:
@@ -2588,7 +2588,7 @@ def _cloudflare_delete_dns_records(
         if not provider_id:
             continue
         _cloudflare_request("DELETE", f"/zones/{clean_zone}/dns_records/{provider_id}", token=token)
-        removed.append(provider_id)
+        removed.append({"hostname": str(record["hostname"]), "provider_record_id": provider_id})
     return tuple(removed)
 
 

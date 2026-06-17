@@ -236,7 +236,65 @@ def test_dns_repair_through_fake_executor() -> None:
     executor = _fake_executor(executor_mod)
     result = worker.process_next_arclink_action(conn, executor=executor)
     expect(result["status"] == "succeeded", "dns repair succeeded")
+    row = conn.execute(
+        """
+        SELECT hostname, record_type, target, status
+        FROM arclink_dns_records
+        WHERE deployment_id = 'dep_1'
+        """
+    ).fetchone()
+    expect(row is not None, "explicit DNS repair should persist control-plane DNS tracking")
+    expect(row["hostname"] == "test.arclink.online", str(dict(row)))
+    expect(row["status"] == "provisioned", str(dict(row)))
     print("PASS test_dns_repair_through_fake_executor")
+
+
+def test_dns_repair_backfills_provider_record_ids_after_apply() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_dns_provider_id")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_dns_provider_id")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_dns_provider_id")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_dns_provider_id")
+    conn = memory_db(control)
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_dns_provider",
+        user_id="user_dns_provider",
+        prefix="dns-provider",
+        base_domain="example.test",
+        status="provisioning_ready",
+    )
+    dns_metadata = {
+        "dns": {
+            "dashboard": {
+                "hostname": "u-dns-provider.example.test",
+                "record_type": "CNAME",
+                "target": "edge.example.test",
+            }
+        }
+    }
+    _queue_action(dashboard, conn, action_type="dns_repair", target_id="dep_dns_provider", metadata=dns_metadata)
+
+    class ProviderIdExecutor:
+        def __init__(self):
+            self.config = executor_mod.ArcLinkExecutorConfig(live_enabled=True, adapter_name="fake")
+
+        def cloudflare_dns_apply(self, request):
+            return executor_mod.CloudflareDnsApplyResult(
+                deployment_id=request.deployment_id,
+                live=True,
+                status="applied",
+                records=("u-dns-provider.example.test",),
+                metadata={"provider_record_ids": ("cf_record_1",)},
+            )
+
+    result = worker.process_next_arclink_action(conn, executor=ProviderIdExecutor())
+    expect(result["status"] == "succeeded", str(result))
+    row = conn.execute(
+        "SELECT status, provider_record_id FROM arclink_dns_records WHERE deployment_id = 'dep_dns_provider'"
+    ).fetchone()
+    expect(row["status"] == "provisioned", str(dict(row)))
+    expect(row["provider_record_id"] == "cf_record_1", str(dict(row)))
+    print("PASS test_dns_repair_backfills_provider_record_ids_after_apply")
 
 
 def test_action_worker_links_admin_action_to_executor_operation() -> None:
@@ -360,6 +418,16 @@ def test_dns_repair_derives_records_from_control_rows() -> None:
     records = set(result["result"]["records"])
     expect("u-dns-derive.example.test" in records, str(records))
     expect("hermes-dns-derive.example.test" in records, str(records))
+    statuses = {
+        row["hostname"]: row["status"]
+        for row in conn.execute(
+            "SELECT hostname, status FROM arclink_dns_records WHERE deployment_id = 'dep_dns_derive'"
+        ).fetchall()
+    }
+    expect(statuses == {
+        "u-dns-derive.example.test": "provisioned",
+        "hermes-dns-derive.example.test": "provisioned",
+    }, str(statuses))
     print("PASS test_dns_repair_derives_records_from_control_rows")
 
 
@@ -416,6 +484,8 @@ def test_dns_repair_validation_error_redacts_secret_material() -> None:
     expect(result["status"] == "failed", str(result))
     expect("unsupported ArcLink DNS record type" in result["error"], str(result))
     expect("sk_test_secretvalue123" not in result["error"], str(result))
+    rows = conn.execute("SELECT * FROM arclink_dns_records WHERE deployment_id = 'dep_dns_secret'").fetchall()
+    expect(len(rows) == 0, str([dict(row) for row in rows]))
     print("PASS test_dns_repair_validation_error_redacts_secret_material")
 
 
@@ -439,6 +509,14 @@ def test_dns_repair_derives_records_from_deployment_when_rows_empty() -> None:
     expect(result["status"] == "succeeded", str(result))
     records = set(result["result"]["records"])
     expect("u-dns-dep.example.test" in records, str(records))
+    rows = conn.execute(
+        "SELECT hostname, status FROM arclink_dns_records WHERE deployment_id = 'dep_dns_dep'"
+    ).fetchall()
+    statuses = {row["hostname"]: row["status"] for row in rows}
+    expect(statuses == {
+        "u-dns-dep.example.test": "provisioned",
+        "hermes-dns-dep.example.test": "provisioned",
+    }, str(statuses))
     print("PASS test_dns_repair_derives_records_from_deployment_when_rows_empty")
 
 
@@ -2023,6 +2101,7 @@ def test_consume_academy_refresh_queue_markers_transitions_on_lane_evidence() ->
 if __name__ == "__main__":
     test_restart_action_through_fake_executor()
     test_dns_repair_through_fake_executor()
+    test_dns_repair_backfills_provider_record_ids_after_apply()
     test_action_worker_links_admin_action_to_executor_operation()
     test_restart_action_rejects_lifecycle_path_overrides_by_default()
     test_restart_action_lifecycle_path_overrides_require_explicit_operator_flag()
@@ -2069,4 +2148,4 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 45 action worker tests passed.")
+    print(f"\nAll 46 action worker tests passed.")

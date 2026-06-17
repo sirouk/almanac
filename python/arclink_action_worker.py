@@ -28,7 +28,8 @@ from arclink_control import (
 )
 from arclink_boundary import json_dumps_safe, json_loads_safe, reject_secret_material, rowdict
 from arclink_secrets_regex import contains_secret_material, redact_then_truncate
-from arclink_ingress import desired_arclink_ingress_records
+from arclink_adapters import DnsRecord
+from arclink_ingress import desired_arclink_ingress_records, mark_arclink_dns_provisioned, persist_arclink_dns_records
 from arclink_executor import (
     ArcLinkExecutor,
     ArcLinkExecutorConfig,
@@ -67,6 +68,7 @@ _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
 _ActionExecutorCache = dict[tuple[str, str, str], ArcLinkExecutor]
 _ACTION_EXECUTOR_CACHE: _ActionExecutorCache = {}
 _LIFECYCLE_PATH_OVERRIDE_KEYS = ("project_name", "env_file", "compose_file")
+_DNS_REPAIR_RECORD_TYPES = frozenset({"A", "AAAA", "CNAME", "TXT"})
 
 
 def _worker_id(prefix: str) -> str:
@@ -229,6 +231,28 @@ def _resolve_dns_repair(
     if not dns:
         raise ArcLinkActionWorkerError("ArcLink DNS repair found no domain DNS records for deployment")
     return deployment_id, dns, str(metadata.get("zone_id") or deployment_meta.get("cloudflare_zone_id") or "")
+
+
+def _dns_repair_records_for_persist(dns: Mapping[str, Mapping[str, Any]]) -> dict[str, DnsRecord]:
+    records: dict[str, DnsRecord] = {}
+    for role, record in dns.items():
+        if not isinstance(record, Mapping):
+            raise ArcLinkActionWorkerError(f"invalid ArcLink DNS record: {role}")
+        hostname = str(record.get("hostname") or "").strip().lower()
+        record_type = str(record.get("record_type") or "CNAME").strip().upper()
+        target = str(record.get("target") or "").strip()
+        if not hostname or not target:
+            raise ArcLinkActionWorkerError(f"ArcLink DNS record requires hostname and target: {role}")
+        if record_type not in _DNS_REPAIR_RECORD_TYPES:
+            allowed = ", ".join(sorted(_DNS_REPAIR_RECORD_TYPES))
+            raise ArcLinkActionWorkerError(f"unsupported ArcLink DNS record type; allowed types: {allowed}")
+        records[str(role)] = DnsRecord(
+            hostname=hostname,
+            record_type=record_type,
+            target=target,
+            proxied=bool(record.get("proxied", True)),
+        )
+    return records
 
 
 def _latest_subscription_for_user(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row | None:
@@ -862,6 +886,11 @@ def _dispatch_action(
             target_id=target_id,
             metadata=metadata,
         )
+        persist_arclink_dns_records(
+            conn,
+            deployment_id=deployment_id,
+            records=_dns_repair_records_for_persist(dns),
+        )
         operation_key = str(metadata.get("idempotency_key") or idempotency_key)
         _link_action_operation(
             conn,
@@ -877,6 +906,15 @@ def _dispatch_action(
             zone_id=zone_id,
             idempotency_key=operation_key,
         ))
+        raw_provider_ids = result.metadata.get("provider_record_ids") if isinstance(result.metadata, Mapping) else ()
+        provider_ids = tuple(str(item or "").strip() for item in raw_provider_ids) if isinstance(raw_provider_ids, (list, tuple)) else ()
+        mark_arclink_dns_provisioned(
+            conn,
+            deployment_id=deployment_id,
+            provisioned=tuple(result.records),
+            provider_record_ids=provider_ids,
+            metadata={"action_id": action_id, "status": result.status},
+        )
         return {"live": result.live, "status": result.status, "deployment_id": deployment_id, "records": list(result.records), "operation_kind": "cloudflare_dns_apply", "operation_idempotency_key": operation_key}
 
     if action_type == "rotate_chutes_key":

@@ -372,6 +372,38 @@ def test_proxy_treats_malformed_cookie_header_as_unauthorized() -> None:
             stop_proxy(backend, backend_thread, proxy, proxy_thread)
 
 
+def test_proxy_fails_closed_when_session_secret_is_missing() -> None:
+    proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_missing_session_secret_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        access_file = Path(tmp) / "arclink-web-access.json"
+        access_file.write_text(
+            json.dumps({"username": "alex", "password": "test-password"}),
+            encoding="utf-8",
+        )
+
+        backend, backend_thread, proxy, proxy_thread = start_proxy(proxy_mod, access_file)
+        try:
+            status, headers, body = request(
+                proxy.server_port,
+                "/__arclink/login",
+                method="POST",
+                body=urlencode({"username": "alex", "password": "test-password", "next": "/"}),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            expect(status == 503, f"expected missing session secret to fail closed, saw {status} {headers} {body!r}")
+            expect("Set-Cookie" not in headers, f"misconfigured login must not set a session cookie: {headers}")
+
+            status, headers, body = request(
+                proxy.server_port,
+                "/",
+                headers={"Cookie": "arclink_dash_session=legacy-fallback-token"},
+            )
+            expect(status == 401, f"expected unsigned fallback cookie rejection, saw {status} {headers} {body!r}")
+            print("PASS test_proxy_fails_closed_when_session_secret_is_missing")
+        finally:
+            stop_proxy(backend, backend_thread, proxy, proxy_thread)
+
+
 def test_proxy_bounds_public_login_body_and_streams_large_backend_responses() -> None:
     proxy_mod = load_module(PROXY_PY, "arclink_dashboard_auth_proxy_streaming_body_limit_test")
     with tempfile.TemporaryDirectory() as tmp:
@@ -1021,6 +1053,7 @@ def main() -> int:
     test_proxy_allows_hermes_bearer_api_calls_after_session_login()
     test_proxy_bridges_arclink_session_to_backend_hermes_api_token()
     test_proxy_treats_malformed_cookie_header_as_unauthorized()
+    test_proxy_fails_closed_when_session_secret_is_missing()
     test_proxy_bounds_public_login_body_and_streams_large_backend_responses()
     test_proxy_login_normalizes_email_username_and_copied_password_whitespace()
     test_proxy_login_throttles_repeated_dashboard_failures()
@@ -1034,7 +1067,7 @@ def main() -> int:
     test_proxy_login_is_safe_behind_stripped_mount_prefix()
     test_proxy_mount_rewrites_root_absolute_dashboard_assets()
     test_proxy_hides_arc_managed_lifecycle_controls_and_blocks_mutations()
-    print("PASS all 15 dashboard-auth-proxy regression tests")
+    print("PASS all dashboard-auth-proxy regression tests")
     return 0
 
 

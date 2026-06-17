@@ -2355,12 +2355,15 @@ def _run_pending_operator_actions(conn, cfg: Config) -> None:
     requested_by = str(action.get("requested_by") or "operator").strip() or "operator"
     requested_target = str(action.get("requested_target") or "").strip()
     log_path = _operator_action_log_dir(cfg) / f"upgrade-{action_id}.log"
-    mark_operator_action_running(
+    claimed = mark_operator_action_running(
         conn,
         action_id=action_id,
         note=f"starting upgrade requested by {requested_by}",
         log_path=str(log_path),
     )
+    if not claimed:
+        _run_pending_pin_upgrade_actions(conn, cfg)
+        return
     note_refresh_job(
         conn,
         job_name="operator-upgrade",
@@ -2487,12 +2490,14 @@ def _run_pending_pin_upgrade_actions(conn, cfg: Config) -> None:
 
     summary = _pin_upgrade_summary(payload)
     log_path = _operator_action_log_dir(cfg) / f"pin-upgrade-{action_id}.log"
-    mark_operator_action_running(
+    claimed = mark_operator_action_running(
         conn,
         action_id=action_id,
         note=f"starting pinned-component upgrade requested by {requested_by}: {summary}",
         log_path=str(log_path),
     )
+    if not claimed:
+        return
     note_refresh_job(
         conn,
         job_name="operator-pin-upgrade",
@@ -2699,11 +2704,14 @@ def _run_pending_discord_agent_dm_actions(conn, cfg: Config) -> None:
             _queue_operator_message(conn, cfg, f"Discord agent DM handoff request {action_id} failed before execution: {exc}")
             continue
 
-        mark_operator_action_running(
+        claimed = mark_operator_action_running(
             conn,
             action_id=action_id,
             note=f"send Discord agent DM for {session_id} requested by {requested_by}",
+            reclaim_stale_running_seconds=300,
         )
+        if not claimed:
+            continue
         note_refresh_job(
             conn,
             job_name="operator-send-discord-agent-dm",
@@ -2820,12 +2828,15 @@ def _run_pending_remote_ssh_key_actions(conn, cfg: Config) -> None:
             continue
 
         log_path = _operator_action_log_dir(cfg) / f"install-agent-ssh-key-{action_id}.log"
-        mark_operator_action_running(
+        claimed = mark_operator_action_running(
             conn,
             action_id=action_id,
             note=f"installing remote SSH key for {unix_user} requested by {requested_by}",
             log_path=str(log_path),
+            reclaim_stale_running_seconds=300,
         )
+        if not claimed:
+            continue
         note_refresh_job(
             conn,
             job_name="operator-install-agent-ssh-key",
@@ -2958,12 +2969,15 @@ def _run_pending_agent_backup_actions(conn, cfg: Config) -> None:
             continue
 
         log_path = _operator_action_log_dir(cfg) / f"configure-agent-backup-{phase}-{action_id}.log"
-        mark_operator_action_running(
+        claimed = mark_operator_action_running(
             conn,
             action_id=action_id,
             note=f"{phase} private agent backup for {unix_user} requested by {requested_by}",
             log_path=str(log_path),
+            reclaim_stale_running_seconds=300,
         )
+        if not claimed:
+            continue
         note_refresh_job(
             conn,
             job_name="operator-configure-agent-backup",

@@ -105,7 +105,7 @@ class ChutesDeploymentBoundary:
                 "usage_percent": self.usage_percent,
                 "warning_threshold_percent": self.warning_threshold_percent,
                 "hard_limit_percent": self.hard_limit_percent,
-                "limit_enforced": True,
+                "limit_enforced": self.budget_status != "unlimited",
             },
             "billing_lifecycle": dict(self.billing_lifecycle),
         }
@@ -913,31 +913,72 @@ def record_chutes_usage_event(
     if model_id:
         chutes_meta["last_usage_model_id"] = model_id
     metadata["chutes"] = chutes_meta
-    conn.execute(
-        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
-        (_json_dumps_object(metadata), clean_deployment_id),
-    )
-    conn.execute(
-        """
-        INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
-        VALUES (?, 'deployment', ?, 'chutes_usage_ingested', ?, ?)
-        """,
-        (
-            event_id,
-            clean_deployment_id,
-            _json_dumps_object(
-                _usage_event_metadata(
-                    event=event,
-                    public_usage_event_id=public_usage_event_id,
-                    delta_cents=delta_cents,
-                    used_cents_before=used_cents_before,
-                    used_cents_after=used_cents_after,
-                    now=now,
-                )
+    conn.execute("SAVEPOINT chutes_usage_ingest")
+    try:
+        conn.execute(
+            "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+            (_json_dumps_object(metadata), clean_deployment_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO arclink_events (event_id, subject_kind, subject_id, event_type, metadata_json, created_at)
+            VALUES (?, 'deployment', ?, 'chutes_usage_ingested', ?, ?)
+            """,
+            (
+                event_id,
+                clean_deployment_id,
+                _json_dumps_object(
+                    _usage_event_metadata(
+                        event=event,
+                        public_usage_event_id=public_usage_event_id,
+                        delta_cents=delta_cents,
+                        used_cents_before=used_cents_before,
+                        used_cents_after=used_cents_after,
+                        now=now,
+                    )
+                ),
+                now,
             ),
-            now,
-        ),
-    )
+        )
+        conn.execute("RELEASE SAVEPOINT chutes_usage_ingest")
+    except sqlite3.IntegrityError:
+        conn.execute("ROLLBACK TO SAVEPOINT chutes_usage_ingest")
+        conn.execute("RELEASE SAVEPOINT chutes_usage_ingest")
+        existing_after = conn.execute("SELECT 1 FROM arclink_events WHERE event_id = ?", (event_id,)).fetchone()
+        if existing_after is None:
+            raise
+        latest_row = conn.execute(
+            "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+            (clean_deployment_id,),
+        ).fetchone()
+        latest_metadata = _json_loads_object(latest_row["metadata_json"] if latest_row is not None else row["metadata_json"])
+        latest_chutes_meta = dict(_as_mapping(latest_metadata.get("chutes")))
+        used_cents_current = _clean_int(
+            _first_text(
+                latest_chutes_meta.get("used_cents"),
+                latest_chutes_meta.get("spent_cents"),
+                latest_metadata.get("chutes_used_cents"),
+            )
+        )
+        boundary = evaluate_chutes_deployment_boundary(
+            clean_deployment_id,
+            clean_user_id,
+            latest_metadata,
+            env=env,
+            billing_state=billing_state,
+        )
+        if commit:
+            conn.commit()
+        return ChutesUsageIngestionResult(
+            deployment_id=clean_deployment_id,
+            user_id=clean_user_id,
+            usage_event_id=public_usage_event_id,
+            recorded=False,
+            delta_cents=0,
+            used_cents_before=used_cents_before,
+            used_cents_after=used_cents_current,
+            boundary=boundary,
+        )
     if commit:
         conn.commit()
     boundary = evaluate_chutes_deployment_boundary(

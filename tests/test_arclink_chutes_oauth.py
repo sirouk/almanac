@@ -144,19 +144,23 @@ def test_chutes_oauth_callback_validates_state_csrf_and_user_scope() -> None:
         expect("CSRF" in str(exc), str(exc))
     else:
         raise AssertionError("expected CSRF mismatch to fail")
-    connection = mod.complete_chutes_oauth_callback(
-        user_id="user-1",
-        session_id="sess-1",
-        state=plan.state,
-        csrf_token=plan.csrf_token,
-        code="code-1",
-        config=config,
-        state_store=state_store,
-        token_store=token_store,
-        exchanger=exchanger,
-        now=1001,
-    )
-    expect(connection.user_id == "user-1", str(connection))
+    try:
+        mod.complete_chutes_oauth_callback(
+            user_id="user-1",
+            session_id="sess-1",
+            state=plan.state,
+            csrf_token=plan.csrf_token,
+            code="code-1",
+            config=config,
+            state_store=state_store,
+            token_store=token_store,
+            exchanger=exchanger,
+            now=1001,
+        )
+    except mod.ChutesOAuthError as exc:
+        expect("state mismatch" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected CSRF mismatch to consume OAuth state")
     print("PASS test_chutes_oauth_callback_validates_state_csrf_and_user_scope")
 
 

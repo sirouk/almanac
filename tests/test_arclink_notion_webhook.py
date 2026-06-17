@@ -162,6 +162,61 @@ def test_handle_verification_token_post_refuses_handshake_after_reset_without_re
             os.environ.update(old_env)
 
 
+def test_handle_verification_token_post_serializes_concurrent_first_store() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notion_webhook_concurrent_store_test")
+    webhook = load_module(WEBHOOK_PY, "arclink_notion_webhook_concurrent_store_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        _write_config(config_path, _config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                armed = webhook.arm_verification_token_install(conn, ttl_seconds=600, actor="operator")
+                expect(armed["armed"] is True, str(armed))
+
+            barrier = threading.Barrier(2)
+            results: list[tuple[str, int, dict]] = []
+            errors: list[str] = []
+
+            def worker(token: str) -> None:
+                try:
+                    barrier.wait(timeout=5)
+                    with control.connect_db(cfg) as worker_conn:
+                        status, body = webhook.handle_verification_token_post(worker_conn, token)
+                    results.append((token, int(status), body))
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(repr(exc))
+
+            threads = [
+                threading.Thread(target=worker, args=("tok_concurrent_a",)),
+                threading.Thread(target=worker, args=("tok_concurrent_b",)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+            expect(not errors, f"concurrent token install raised errors: {errors}")
+            expect(len(results) == 2, f"expected two concurrent results, got {results}")
+            ok_results = [result for result in results if result[1] == HTTPStatus.OK]
+            conflict_results = [result for result in results if result[1] == HTTPStatus.CONFLICT]
+            expect(len(ok_results) == 1, f"expected exactly one successful store, got {results}")
+            expect(len(conflict_results) == 1, f"expected exactly one conflict, got {results}")
+            with control.connect_db(cfg) as conn:
+                stored = control.get_setting(conn, webhook.NOTION_WEBHOOK_VERIFICATION_TOKEN_KEY, "")
+            expect(stored == ok_results[0][0], f"stored token {stored!r} did not match winning request {ok_results}")
+            print("PASS test_handle_verification_token_post_serializes_concurrent_first_store")
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_webhook_module_exposes_setting_key_constant() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -275,9 +330,10 @@ def main() -> int:
     test_webhook_rejects_oversized_body_before_reading_payload()
     test_handle_verification_token_post_refuses_overwrite_until_reset()
     test_handle_verification_token_post_refuses_handshake_after_reset_without_rearm()
+    test_handle_verification_token_post_serializes_concurrent_first_store()
     test_signed_verification_token_post_is_accepted()
     test_kick_ssot_batcher_debounces_bursts_and_invokes_systemctl()
-    print("PASS all 6 ArcLink notion webhook regression tests")
+    print("PASS all 7 ArcLink notion webhook regression tests")
     return 0
 
 

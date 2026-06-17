@@ -329,14 +329,18 @@ def _file_content_hash(path: Path) -> str:
         max_hash_bytes = _int_env(
             "ARCLINK_MEMORY_SYNTH_MAX_CONTENT_HASH_BYTES",
             DEFAULT_MAX_CONTENT_HASH_BYTES,
-            minimum=0,
+            minimum=1,
             maximum=256 * 1024 * 1024,
         )
-        if max_hash_bytes and stat.st_size > max_hash_bytes:
+        if stat.st_size > max_hash_bytes:
             return ""
         digest = hashlib.sha256()
+        total = 0
         with path.open("rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                total += len(chunk)
+                if total > max_hash_bytes:
+                    return ""
                 digest.update(chunk)
         return digest.hexdigest()
     except OSError:

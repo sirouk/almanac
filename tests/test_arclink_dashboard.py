@@ -240,6 +240,35 @@ def test_user_dashboard_read_model_projects_safe_operational_summary() -> None:
     print("PASS test_user_dashboard_read_model_projects_safe_operational_summary")
 
 
+def test_user_dashboard_uses_deployment_provider_metadata_for_model_card() -> None:
+    control = load_module("arclink_control.py", "arclink_control_dashboard_provider_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_provider_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_provider_test")
+    conn = memory_db(control)
+    prepared = seed_dashboard(control, onboarding, conn)
+    row = conn.execute(
+        "SELECT metadata_json FROM arclink_deployments WHERE deployment_id = ?",
+        (prepared["deployment_id"],),
+    ).fetchone()
+    metadata = json.loads(row["metadata_json"])
+    metadata["provider_id"] = "anthropic"
+    metadata["selected_model_id"] = "claude-opus-4-7"
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (json.dumps(metadata, sort_keys=True), prepared["deployment_id"]),
+    )
+    conn.commit()
+
+    with temp_env({"ARCLINK_PRIMARY_PROVIDER": "chutes"}):
+        view = dashboard.read_arclink_user_dashboard(conn, user_id=prepared["user_id"])
+    model = view["deployments"][0]["model"]
+    expect(model["provider"] == "anthropic", str(model))
+    expect(model["model_id"] == "model-default", str(model))
+    expect(model["credential_state"] == "secret_ref_pending", str(model))
+    expect("allow_inference" not in model and "budget" not in model, str(model))
+    print("PASS test_user_dashboard_uses_deployment_provider_metadata_for_model_card")
+
+
 def test_user_dashboard_projects_staged_academy_review_status() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_academy_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_academy_test")
@@ -729,6 +758,29 @@ def test_operator_evidence_template_state_is_computed_from_template_file() -> No
     print("PASS test_operator_evidence_template_state_is_computed_from_template_file")
 
 
+def test_operator_snapshot_honors_live_journey_env_alternates() -> None:
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_operator_env_alternates_test")
+    journey = load_module("arclink_live_journey.py", "arclink_live_journey_operator_env_alternates_test")
+    env: dict[str, str] = {}
+    for step in journey.build_journey():
+        for key in step.required_env:
+            env[key] = "present"
+    env.pop("CLOUDFLARE_API_TOKEN", None)
+    env["CLOUDFLARE_API_TOKEN_REF"] = "secret://arclink/cloudflare/token"
+
+    snapshot = dashboard.build_operator_snapshot(
+        env=env,
+        docker_binary="arclink-test-missing-docker-binary",
+    )
+    missing = [
+        name
+        for blocker in snapshot["live_journey"]["blockers"]
+        for name in blocker["missing_env"]
+    ]
+    expect("CLOUDFLARE_API_TOKEN" not in missing, str(snapshot["live_journey"]))
+    print("PASS test_operator_snapshot_honors_live_journey_env_alternates")
+
+
 def test_user_dashboard_canonicalizes_tailnet_path_app_urls() -> None:
     control = load_module("arclink_control.py", "arclink_control_dashboard_tailnet_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_dashboard_tailnet_test")
@@ -1003,6 +1055,17 @@ def test_scale_operations_snapshot_exposes_rollout_dry_run_plan() -> None:
     expect(conn.execute("SELECT COUNT(*) AS n FROM arclink_action_intents").fetchone()["n"] == before_actions, "no actions queued")
     expect("secret://" not in json.dumps(plan, sort_keys=True), str(plan))
 
+    env_snapshot = dashboard.build_scale_operations_snapshot(
+        conn,
+        env={
+            "ARCLINK_ROLLOUT_TARGET_VERSION": "v3.0.0",
+            "ARCLINK_FLEET_PLACEMENT_STRATEGY": "spread",
+            "ARCLINK_CONTROL_PROVISIONER_ENABLED": "1",
+        },
+    )
+    expect(env_snapshot["inventory"]["strategy"] == "spread", str(env_snapshot["inventory"]))
+    expect(env_snapshot["rollout_dry_run_plan"]["target_version"] == "v3.0.0", str(env_snapshot["rollout_dry_run_plan"]))
+
     job = rollout.materialize_arcpod_update_rollout_job(
         conn,
         plan=plan,
@@ -1092,6 +1155,7 @@ def test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions() -> No
 
 def main() -> int:
     test_user_dashboard_read_model_projects_safe_operational_summary()
+    test_user_dashboard_uses_deployment_provider_metadata_for_model_card()
     test_user_dashboard_projects_staged_academy_review_status()
     test_dashboard_exposes_academy_weekly_and_graduation_status()
     test_user_dashboard_share_inbox_counts_pending_owner_and_recipient_grants()
@@ -1100,13 +1164,14 @@ def main() -> int:
     test_user_dashboard_backup_deploy_key_request_exposes_public_key_without_activation()
     test_backup_verification_state_records_failed_closed_without_activation()
     test_operator_evidence_template_state_is_computed_from_template_file()
+    test_operator_snapshot_honors_live_journey_env_alternates()
     test_user_dashboard_canonicalizes_tailnet_path_app_urls()
     test_user_dashboard_withholds_unpublished_tailnet_app_urls()
     test_user_dashboard_withholds_tailnet_urls_until_publication_record_exists()
     test_admin_dashboard_filters_funnel_health_jobs_drift_and_failures()
     test_scale_operations_snapshot_exposes_rollout_dry_run_plan()
     test_admin_dashboard_counts_only_unrevoked_unexpired_active_sessions()
-    print("PASS all 15 ArcLink dashboard tests")
+    print("PASS all ArcLink dashboard tests")
     return 0
 
 

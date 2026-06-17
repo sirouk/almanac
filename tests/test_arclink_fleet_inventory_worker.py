@@ -150,6 +150,39 @@ def test_capacity_probe_caps_untrusted_worker_reported_slots() -> None:
     print("PASS test_capacity_probe_caps_untrusted_worker_reported_slots")
 
 
+def test_invalid_hardware_summary_does_not_abort_probe_pass() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_invalid_hardware_test")
+    inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_invalid_hardware_test")
+    worker = load_module("arclink_fleet_inventory_worker.py", "arclink_fleet_inventory_worker_invalid_hardware_test")
+    conn = memory_db(control)
+    machine, host = _seed_machine(control, inventory, conn)
+
+    def runner(host_row, kind):
+        payload = {"ok": True, "kind": kind}
+        if kind in {"capacity", "inventory"}:
+            payload["hardware_summary"] = {"vcpu_cores": 0, "ram_gib": 16, "disk_gib": 100}
+        return worker.ProbeResult(ok=True, payload=payload, latency_ms=7)
+
+    result = worker.process_due_hosts(
+        conn,
+        runner=runner,
+        now_iso="2026-05-16T12:00:00+00:00",
+        force=True,
+        notify=False,
+    )
+    expect(result["probe_count"] == 3, str(result))
+    probe_count = conn.execute("SELECT COUNT(*) AS count FROM arclink_fleet_host_probes WHERE host_id = ?", (host["host_id"],)).fetchone()["count"]
+    expect(probe_count == 3, f"expected all probes to be recorded, got {probe_count}")
+    machine_row = conn.execute(
+        "SELECT status, connectivity_summary_json FROM arclink_inventory_machines WHERE machine_id = ?",
+        (machine["machine_id"],),
+    ).fetchone()
+    summary = json.loads(machine_row["connectivity_summary_json"])
+    expect(machine_row["status"] == "degraded", str(dict(machine_row)))
+    expect(summary["ok"] is False and "invalid hardware summary" in summary["error"], str(summary))
+    print("PASS test_invalid_hardware_summary_does_not_abort_probe_pass")
+
+
 def test_legacy_probe_schema_is_migrated_for_worker() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_inventory_worker_legacy_probe_test")
     inventory = load_module("arclink_inventory.py", "arclink_inventory_fleet_inventory_worker_legacy_probe_test")
@@ -365,44 +398,56 @@ def test_liveness_thresholds_degrade_unreachable_and_recover() -> None:
     conn = memory_db(control)
     _, host = _seed_machine(control, inventory, conn)
     host_id = host["host_id"]
+    notification_commits: list[bool] = []
+    real_queue_notification = worker.queue_notification
 
-    for index in range(1, 4):
+    def spy_queue_notification(*args, **kwargs):
+        notification_commits.append(bool(kwargs.get("commit", True)))
+        return real_queue_notification(*args, **kwargs)
+
+    worker.queue_notification = spy_queue_notification
+
+    try:
+        for index in range(1, 4):
+            worker.record_host_probe(
+                conn,
+                host=_host(conn, host_id),
+                kind="liveness",
+                result=worker.ProbeResult(ok=False, error="ssh timeout"),
+                now_iso=f"2026-05-16T12:00:{index:02d}+00:00",
+                notify=True,
+            )
+        degraded = _host(conn, host_id)
+        expect(degraded["status"] == "degraded", str(degraded))
+        expect(degraded["last_health_state"] == "degraded", str(degraded))
+
+        for index in range(4, 11):
+            worker.record_host_probe(
+                conn,
+                host=_host(conn, host_id),
+                kind="liveness",
+                result=worker.ProbeResult(ok=False, error="ssh timeout"),
+                now_iso=f"2026-05-16T12:00:{index:02d}+00:00",
+                notify=True,
+            )
+        unreachable = _host(conn, host_id)
+        expect(unreachable["status"] == "offline", str(unreachable))
+        expect(unreachable["last_health_state"] == "unreachable", str(unreachable))
+
         worker.record_host_probe(
             conn,
             host=_host(conn, host_id),
             kind="liveness",
-            result=worker.ProbeResult(ok=False, error="ssh timeout"),
-            now_iso=f"2026-05-16T12:00:{index:02d}+00:00",
+            result=worker.ProbeResult(ok=True, payload={"ok": True}),
+            now_iso="2026-05-16T12:01:00+00:00",
             notify=True,
         )
-    degraded = _host(conn, host_id)
-    expect(degraded["status"] == "degraded", str(degraded))
-    expect(degraded["last_health_state"] == "degraded", str(degraded))
-
-    for index in range(4, 11):
-        worker.record_host_probe(
-            conn,
-            host=_host(conn, host_id),
-            kind="liveness",
-            result=worker.ProbeResult(ok=False, error="ssh timeout"),
-            now_iso=f"2026-05-16T12:00:{index:02d}+00:00",
-            notify=True,
-        )
-    unreachable = _host(conn, host_id)
-    expect(unreachable["status"] == "offline", str(unreachable))
-    expect(unreachable["last_health_state"] == "unreachable", str(unreachable))
-
-    worker.record_host_probe(
-        conn,
-        host=_host(conn, host_id),
-        kind="liveness",
-        result=worker.ProbeResult(ok=True, payload={"ok": True}),
-        now_iso="2026-05-16T12:01:00+00:00",
-        notify=True,
-    )
+    finally:
+        worker.queue_notification = real_queue_notification
     recovered = _host(conn, host_id)
     expect(recovered["status"] == "active", str(recovered))
     expect(recovered["last_health_state"] == "active", str(recovered))
+    expect(notification_commits and all(commit is False for commit in notification_commits), str(notification_commits))
     messages = [
         str(row["message"])
         for row in conn.execute("SELECT message FROM notification_outbox WHERE target_kind = 'operator' ORDER BY id").fetchall()
@@ -452,6 +497,7 @@ if __name__ == "__main__":
     test_due_worker_records_probe_rows_and_updates_capacity()
     test_liveness_probe_activates_pending_enrollment_before_placement()
     test_capacity_probe_caps_untrusted_worker_reported_slots()
+    test_invalid_hardware_summary_does_not_abort_probe_pass()
     test_legacy_probe_schema_is_migrated_for_worker()
     test_worker_uses_fleet_host_metadata_ssh_endpoint_without_inventory_machine()
     test_worker_prefers_private_mesh_endpoint_over_legacy_inventory_ssh_host()

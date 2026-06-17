@@ -8070,6 +8070,14 @@ def test_docker_health_script_checks_container_runtime() -> None:
     print("PASS test_docker_health_script_checks_container_runtime")
 
 
+def test_docker_control_health_requires_fleet_workers_running() -> None:
+    body = read("bin/arclink-docker.sh")
+    required = extract(body, "DOCKER_REQUIRED_RUNNING_SERVICES=(", ")\nDOCKER_PORT_MANIFEST")
+    expect("fleet-inventory-worker" in required, required)
+    expect("fleet-share-reconcile" in required, required)
+    print("PASS test_docker_control_health_requires_fleet_workers_running")
+
+
 def test_dockerignore_excludes_sensitive_and_generated_context() -> None:
     body = read(".dockerignore")
     for pattern in (
@@ -8281,6 +8289,7 @@ def main() -> int:
     test_docker_entrypoint_generates_fresh_secrets()
     test_docker_entrypoint_runtime_env_config_preserves_pod_paths_without_secret_spill()
     test_docker_health_script_checks_container_runtime()
+    test_docker_control_health_requires_fleet_workers_running()
     test_dockerignore_excludes_sensitive_and_generated_context()
     test_docker_docs_cover_socket_and_private_state_boundaries()
     test_readme_keeps_canonical_host_layout_root()

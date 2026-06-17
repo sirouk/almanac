@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -23,6 +25,23 @@ UPSTREAM_SOUL_FALLBACK = (
     "being genuinely useful over being verbose unless otherwise directed below. "
     "Be targeted and efficient in your exploration and investigations."
 )
+
+
+def _config_yaml_lock_path(hermes_home: Path | None = None) -> Path:
+    home = Path(hermes_home or os.environ.get("HERMES_HOME") or Path.home() / ".hermes").expanduser()
+    return home / ".arclink-config.yaml.lock"
+
+
+@contextmanager
+def _config_yaml_lock(hermes_home: Path | None = None):
+    lock_path = _config_yaml_lock_path(hermes_home)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _load_provider_spec(raw_json: str) -> dict[str, Any]:
@@ -81,13 +100,14 @@ def _write_reasoning_effort(spec: dict[str, Any]) -> None:
     effort = _normalized_reasoning_effort(spec)
     if not effort:
         return
-    config = load_config()
-    agent_cfg = config.get("agent")
-    if not isinstance(agent_cfg, dict):
-        agent_cfg = {}
-    agent_cfg["reasoning_effort"] = effort
-    config["agent"] = agent_cfg
-    save_config(config)
+    with _config_yaml_lock():
+        config = load_config()
+        agent_cfg = config.get("agent")
+        if not isinstance(agent_cfg, dict):
+            agent_cfg = {}
+        agent_cfg["reasoning_effort"] = effort
+        config["agent"] = agent_cfg
+        save_config(config)
 
 
 def _path_key(path_value: str) -> str:
@@ -205,11 +225,12 @@ def _seed_openai_codex(spec: dict[str, Any], secret_path: str) -> None:
     if not tokens["access_token"] or not tokens["refresh_token"]:
         raise SystemExit("codex secret payload is missing tokens")
     _save_codex_tokens(tokens, last_refresh=str(payload.get("last_refresh") or "") or None)
-    _update_config_for_provider(
-        "openai-codex",
-        str(payload.get("base_url") or spec.get("base_url") or ""),
-        default_model=str(spec.get("model_id") or provider_default_model("codex") or "gpt-5.5"),
-    )
+    with _config_yaml_lock():
+        _update_config_for_provider(
+            "openai-codex",
+            str(payload.get("base_url") or spec.get("base_url") or ""),
+            default_model=str(spec.get("model_id") or provider_default_model("codex") or "gpt-5.5"),
+        )
 
 
 def _seed_anthropic(spec: dict[str, Any], secret_path: str) -> None:
@@ -251,19 +272,20 @@ def _seed_anthropic(spec: dict[str, Any], secret_path: str) -> None:
     else:
         save_anthropic_oauth_token(secret)
 
-    config = load_config()
-    model_cfg = config.get("model")
-    if isinstance(model_cfg, dict):
-        payload = dict(model_cfg)
-    elif isinstance(model_cfg, str) and model_cfg.strip():
-        payload = {"default": model_cfg.strip()}
-    else:
-        payload = {}
-    payload["provider"] = "anthropic"
-    payload["default"] = str(spec.get("model_id") or provider_default_model("opus") or "claude-opus-4-7")
-    payload.pop("base_url", None)
-    config["model"] = payload
-    save_config(config)
+    with _config_yaml_lock():
+        config = load_config()
+        model_cfg = config.get("model")
+        if isinstance(model_cfg, dict):
+            payload = dict(model_cfg)
+        elif isinstance(model_cfg, str) and model_cfg.strip():
+            payload = {"default": model_cfg.strip()}
+        else:
+            payload = {}
+        payload["provider"] = "anthropic"
+        payload["default"] = str(spec.get("model_id") or provider_default_model("opus") or "claude-opus-4-7")
+        payload.pop("base_url", None)
+        config["model"] = payload
+        save_config(config)
 
 
 def _seed_custom_provider(spec: dict[str, Any], secret_path: str) -> None:
@@ -279,25 +301,26 @@ def _seed_custom_provider(spec: dict[str, Any], secret_path: str) -> None:
         raise SystemExit("custom provider spec is incomplete")
 
     save_env_value(key_env, _read_secret(secret_path))
-    config = _ensure_model_config(model_id)
-    providers = config.get("providers")
-    if not isinstance(providers, dict):
-        providers = {}
-    providers[provider_id] = {
-        "name": display_name,
-        "base_url": base_url,
-        "key_env": key_env,
-        "default_model": model_id,
-        "api_mode": api_mode,
-    }
-    config["providers"] = providers
-    model_cfg = dict(config.get("model") or {})
-    model_cfg["provider"] = provider_id
-    model_cfg["default"] = model_id
-    model_cfg["base_url"] = base_url
-    model_cfg["api_mode"] = api_mode
-    config["model"] = model_cfg
-    save_config(config)
+    with _config_yaml_lock():
+        config = _ensure_model_config(model_id)
+        providers = config.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+        providers[provider_id] = {
+            "name": display_name,
+            "base_url": base_url,
+            "key_env": key_env,
+            "default_model": model_id,
+            "api_mode": api_mode,
+        }
+        config["providers"] = providers
+        model_cfg = dict(config.get("model") or {})
+        model_cfg["provider"] = provider_id
+        model_cfg["default"] = model_id
+        model_cfg["base_url"] = base_url
+        model_cfg["api_mode"] = api_mode
+        config["model"] = model_cfg
+        save_config(config)
 
 
 def _seed_api_key_provider(spec: dict[str, Any], secret_path: str) -> None:
@@ -311,11 +334,12 @@ def _seed_api_key_provider(spec: dict[str, Any], secret_path: str) -> None:
         raise SystemExit("api-key provider spec is incomplete")
 
     save_env_value(key_env, _read_secret(secret_path))
-    _update_config_for_provider(
-        provider_id,
-        str(spec.get("base_url") or ""),
-        default_model=model_id,
-    )
+    with _config_yaml_lock():
+        _update_config_for_provider(
+            provider_id,
+            str(spec.get("base_url") or ""),
+            default_model=model_id,
+        )
 
 
 def _config_value(name: str, default: str = "") -> str:
@@ -562,41 +586,42 @@ def _seed_arclink_identity(bot_name: str, unix_user: str, user_name: str = "", a
     ]
     _atomic_write_text(prefill_path, json.dumps(prefill_messages, indent=2) + "\n")
 
-    config = load_config()
-    skills_cfg = config.setdefault("skills", {})
-    if not isinstance(skills_cfg, dict):
-        skills_cfg = {}
-        config["skills"] = skills_cfg
-    disabled = [name for name in skills_cfg.get("disabled", []) if name not in arclink_skill_names]
-    skills_cfg["disabled"] = disabled
-    _ensure_org_skill_external_dirs(skills_cfg, hermes_home)
-    platform_disabled = skills_cfg.get("platform_disabled")
-    if isinstance(platform_disabled, dict):
-        cleaned_platform_disabled: dict[str, list[str]] = {}
-        for platform, names in platform_disabled.items():
-            if isinstance(names, list):
-                kept = [name for name in names if name not in arclink_skill_names]
-                if kept:
-                    cleaned_platform_disabled[str(platform)] = kept
-        if cleaned_platform_disabled:
-            skills_cfg["platform_disabled"] = cleaned_platform_disabled
+    with _config_yaml_lock(hermes_home):
+        config = load_config()
+        skills_cfg = config.setdefault("skills", {})
+        if not isinstance(skills_cfg, dict):
+            skills_cfg = {}
+            config["skills"] = skills_cfg
+        disabled = [name for name in skills_cfg.get("disabled", []) if name not in arclink_skill_names]
+        skills_cfg["disabled"] = disabled
+        _ensure_org_skill_external_dirs(skills_cfg, hermes_home)
+        platform_disabled = skills_cfg.get("platform_disabled")
+        if isinstance(platform_disabled, dict):
+            cleaned_platform_disabled: dict[str, list[str]] = {}
+            for platform, names in platform_disabled.items():
+                if isinstance(names, list):
+                    kept = [name for name in names if name not in arclink_skill_names]
+                    if kept:
+                        cleaned_platform_disabled[str(platform)] = kept
+            if cleaned_platform_disabled:
+                skills_cfg["platform_disabled"] = cleaned_platform_disabled
+            else:
+                skills_cfg.pop("platform_disabled", None)
+
+        plugins_cfg = config.setdefault("plugins", {})
+        disabled_plugins = plugins_cfg.get("disabled", [])
+        if isinstance(disabled_plugins, list):
+            plugins_cfg["disabled"] = [name for name in disabled_plugins if name not in arclink_plugin_names]
         else:
-            skills_cfg.pop("platform_disabled", None)
+            plugins_cfg["disabled"] = []
 
-    plugins_cfg = config.setdefault("plugins", {})
-    disabled_plugins = plugins_cfg.get("disabled", [])
-    if isinstance(disabled_plugins, list):
-        plugins_cfg["disabled"] = [name for name in disabled_plugins if name not in arclink_plugin_names]
-    else:
-        plugins_cfg["disabled"] = []
-
-    config["prefill_messages_file"] = str(prefill_path)
-    agent_cfg = config.get("agent")
-    if not isinstance(agent_cfg, dict):
-        agent_cfg = {}
-    agent_cfg["prefill_messages_file"] = str(prefill_path)
-    config["agent"] = agent_cfg
-    save_config(config)
+        config["prefill_messages_file"] = str(prefill_path)
+        agent_cfg = config.get("agent")
+        if not isinstance(agent_cfg, dict):
+            agent_cfg = {}
+        agent_cfg["prefill_messages_file"] = str(prefill_path)
+        config["agent"] = agent_cfg
+        save_config(config)
     return {
         "identity_state_file": str(identity_state_path),
         "prefill_messages_file": str(prefill_path),

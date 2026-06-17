@@ -116,6 +116,58 @@ def test_admin_action_idempotency_reuses_intent_without_duplicate_audit() -> Non
     print("PASS test_admin_action_idempotency_reuses_intent_without_duplicate_audit")
 
 
+class _NoRowCursor:
+    def fetchone(self):
+        return None
+
+
+class _RacingIdempotencyConnection:
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+        self.hidden_first_lookup = False
+
+    def execute(self, sql: str, params=()):
+        normalized = " ".join(str(sql or "").split())
+        if (
+            normalized.startswith("SELECT * FROM arclink_action_intents WHERE idempotency_key = ?")
+            and not self.hidden_first_lookup
+        ):
+            self.hidden_first_lookup = True
+            return _NoRowCursor()
+        return self.conn.execute(sql, params)
+
+    def commit(self) -> None:
+        self.conn.commit()
+
+
+def test_admin_action_idempotency_race_returns_existing_intent_after_unique_collision() -> None:
+    control = load_module("arclink_control.py", "arclink_control_admin_action_race_test")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_race_test")
+    conn = memory_db(control)
+    first = dashboard.queue_arclink_admin_action(
+        conn,
+        admin_id="admin_1",
+        action_type="restart",
+        target_kind="deployment",
+        target_id="dep_1",
+        reason="restart once",
+        idempotency_key="restart-race-1",
+    )
+    raced = dashboard.queue_arclink_admin_action(
+        _RacingIdempotencyConnection(conn),
+        admin_id="admin_1",
+        action_type="restart",
+        target_kind="deployment",
+        target_id="dep_1",
+        reason="restart once",
+        idempotency_key="restart-race-1",
+    )
+    expect(raced["action_id"] == first["action_id"], str((first, raced)))
+    audit_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_audit_log").fetchone()["n"]
+    expect(audit_count == 1, str(audit_count))
+    print("PASS test_admin_action_idempotency_race_returns_existing_intent_after_unique_collision")
+
+
 def test_admin_action_rejects_unwired_action_types() -> None:
     control = load_module("arclink_control.py", "arclink_control_admin_action_unwired_test")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_admin_action_unwired_test")
@@ -496,6 +548,7 @@ def test_control_node_provisioning_readiness_surfaces_worker_capacity_without_li
 def main() -> int:
     test_admin_action_requires_reason_and_queues_audited_intent()
     test_admin_action_idempotency_reuses_intent_without_duplicate_audit()
+    test_admin_action_idempotency_race_returns_existing_intent_after_unique_collision()
     test_admin_action_rejects_unwired_action_types()
     test_admin_action_accepts_reprovision_as_executable()
     test_admin_action_metadata_rejects_plaintext_secrets_and_has_no_live_side_effects()
@@ -505,7 +558,7 @@ def main() -> int:
     test_admin_action_matrix_marks_academy_apply_preview_queueable_but_pg_hermes_gated()
     test_admin_action_queue_enforces_per_action_target_kinds()
     test_control_node_provisioning_readiness_surfaces_worker_capacity_without_live_probe()
-    print("PASS all 10 ArcLink admin action tests")
+    print("PASS all 12 ArcLink admin action tests")
     return 0
 
 

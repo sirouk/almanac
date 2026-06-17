@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -44,6 +45,7 @@ DEFAULT_AUTHOR_EMAIL = "fleet@arclink.local"
 DEFAULT_HUB_ROOT = "/arcdata/captains"
 _GIT_TIMEOUT_SECONDS = 120
 _SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_GIT_REMOTE_HELPER_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*::")
 FLEET_LAYOUT_READMES = {
     "Projects": "Shared project workspaces for the Captain's fleet. Prefer one folder per collaborative project.\n",
     "Research": "Fleet-wide research notes, source maps, and durable findings that multiple agents can reuse.\n",
@@ -133,6 +135,8 @@ def _assert_safe_git_arg(value: str, *, label: str) -> str:
         raise ArcLinkFleetShareError(f"fleet share {label} cannot start with '-'")
     if "\x00" in text or "\n" in text or "\r" in text:
         raise ArcLinkFleetShareError(f"fleet share {label} contains invalid characters")
+    if _GIT_REMOTE_HELPER_RE.match(text):
+        raise ArcLinkFleetShareError(f"fleet share {label} cannot use git remote-helper syntax")
     return text
 
 
@@ -150,6 +154,39 @@ def _quarantine_corrupt_working_copy(work: Path) -> Path:
         counter += 1
     work.rename(candidate)
     return candidate
+
+
+def _copy_path_preserving_symlink(source: Path, target: Path) -> None:
+    if source.is_symlink():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists() and not target.is_symlink():
+            target.symlink_to(os.readlink(source))
+        return
+    if source.is_dir():
+        shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        shutil.copy2(source, target)
+
+
+def _restore_quarantined_working_files(quarantine: Path, work: Path) -> int:
+    restored = 0
+    if not quarantine.exists():
+        return restored
+    recovery_root = work / "ArcLink_Corrupt_Recovery" / quarantine.name
+    for child in quarantine.iterdir():
+        if child.name == ".git":
+            continue
+        target = work / child.name
+        if not target.exists() and not target.is_symlink():
+            _copy_path_preserving_symlink(child, target)
+            restored += 1
+        recovery_target = recovery_root / child.name
+        if not recovery_target.exists() and not recovery_target.is_symlink():
+            _copy_path_preserving_symlink(child, recovery_target)
+            restored += 1
+    return restored
 
 
 @dataclass
@@ -186,10 +223,10 @@ def default_hub_ref(owner_user_id: str) -> str:
 
 
 def ensure_hub_repo(runner: Any, hub_ref: str) -> bool:
-    """Create the bare hub repo for a local hub path. No-op for remote URLs.
+    """Create the bare hub repo for a local hub path. Verify remote URLs.
 
     Returns True if a local bare repo now exists (or the ref is a remote URL we
-    trust the operator to have provisioned).
+    can reach).
     """
     ref = str(hub_ref or "").strip()
     if not ref:
@@ -197,6 +234,11 @@ def ensure_hub_repo(runner: Any, hub_ref: str) -> bool:
     _assert_safe_git_arg(ref, label="hub reference")
     if "://" in ref or "@" in ref.split("/", 1)[0]:
         # Remote transport (ssh://, https://, user@host:path) — provisioned out of band.
+        reachable = _git(runner, ["ls-remote", ref])
+        if not reachable.ok:
+            raise ArcLinkFleetShareError(
+                f"fleet share remote hub is not reachable: {reachable.stderr.strip() or reachable.stdout.strip()}"
+            )
         return True
     hub_path = Path(ref).expanduser()
     if (hub_path / "HEAD").exists() or (hub_path / "objects").exists():
@@ -235,6 +277,7 @@ def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, 
     ref = _assert_safe_git_arg(hub_ref, label="hub reference")
     _assert_safe_git_arg(working_path, label="working path")
     work = Path(working_path).expanduser()
+    quarantine: Path | None = None
     git_dir = work / ".git"
     if git_dir.exists():
         if _is_valid_git_repo(runner, work):
@@ -248,11 +291,13 @@ def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, 
             return
         # A partially-corrupt .git (e.g. files deleted via the writable Fleet root)
         # would otherwise wedge forever. Preserve the user's files and re-clone.
-        _quarantine_corrupt_working_copy(work)
+        quarantine = _quarantine_corrupt_working_copy(work)
     work.mkdir(parents=True, exist_ok=True)
     clone = _git(runner, ["-c", f"init.defaultBranch={branch}", "clone", ref, str(work)])
     if clone.ok:
         ensure_default_fleet_layout(work)
+        if quarantine is not None:
+            _restore_quarantined_working_files(quarantine, work)
         return
     # Hub unreachable as a clone source (e.g. brand-new empty local bare repo on
     # some git versions): fall back to init + remote add so the first sync seeds it.
@@ -261,6 +306,8 @@ def ensure_member_working_copy(runner: Any, *, hub_ref: str, working_path: str, 
         raise ArcLinkFleetShareError(f"failed to initialize fleet share working copy: {init.stderr.strip() or clone.stderr.strip()}")
     _git(runner, ["remote", "add", "origin", ref], cwd=str(work))
     ensure_default_fleet_layout(work)
+    if quarantine is not None:
+        _restore_quarantined_working_files(quarantine, work)
 
 
 def sync_member(
@@ -368,6 +415,64 @@ def _head_commit(runner: Any, work: Path) -> str:
     return result.stdout.strip() if result.ok else ""
 
 
+def _path_is_under(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_local_fleet_roots() -> list[Path]:
+    roots = [Path("/fleet-shared"), Path("/arcdata/deployments"), Path("/tmp")]
+    state_root = str(os.environ.get("ARCLINK_STATE_ROOT_BASE") or "").strip()
+    if state_root:
+        roots.append(Path(state_root).expanduser())
+    extra = str(os.environ.get("ARCLINK_FLEET_SHARED_ROOT_ALLOWED_BASES") or "").strip()
+    for item in extra.split(os.pathsep):
+        clean = item.strip()
+        if clean:
+            roots.append(Path(clean).expanduser())
+    resolved: list[Path] = []
+    for root in roots:
+        try:
+            resolved.append(root.resolve(strict=False))
+        except OSError:
+            resolved.append(root.absolute())
+    return resolved
+
+
+def _assert_safe_local_working_path(value: str) -> str:
+    text = _assert_safe_git_arg(value, label="working path")
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise ArcLinkFleetShareError("ARCLINK_FLEET_SHARED_ROOT must be an absolute path")
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        resolved = path.absolute()
+    if resolved == Path("/fleet-shared"):
+        return text
+    disallowed_exact = {
+        Path("/"),
+        Path("/arcdata"),
+        Path("/arcdata/deployments"),
+        Path("/etc"),
+        Path("/home"),
+        Path("/root"),
+        Path("/tmp"),
+        Path("/usr"),
+        Path("/var"),
+    }
+    if resolved in disallowed_exact:
+        raise ArcLinkFleetShareError(f"ARCLINK_FLEET_SHARED_ROOT is too broad: {resolved}")
+    if not any(_path_is_under(resolved, base) for base in _safe_local_fleet_roots()):
+        raise ArcLinkFleetShareError(
+            "ARCLINK_FLEET_SHARED_ROOT must be /fleet-shared or under an allowed fleet state root"
+        )
+    return text
+
+
 # ---------------------------------------------------------------------------
 # control-plane CRUD
 # ---------------------------------------------------------------------------
@@ -411,14 +516,30 @@ def ensure_fleet_share(
             conn.commit()
         return get_fleet_share_for_user(conn, owner)
     share_id = _fleet_share_id()
-    conn.execute(
-        """
-        INSERT INTO arclink_fleet_shares (
-          share_id, owner_user_id, hub_ref, folder_label, access_mode, status, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'active', '{}', ?, ?)
-        """,
-        (share_id, owner, resolved_hub, str(folder_label or DEFAULT_FOLDER_LABEL), str(access_mode or DEFAULT_ACCESS_MODE), now, now),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_shares (
+              share_id, owner_user_id, hub_ref, folder_label, access_mode, status, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'active', '{}', ?, ?)
+            """,
+            (share_id, owner, resolved_hub, str(folder_label or DEFAULT_FOLDER_LABEL), str(access_mode or DEFAULT_ACCESS_MODE), now, now),
+        )
+    except sqlite3.IntegrityError:
+        raced = get_fleet_share_for_user(conn, owner)
+        if not raced:
+            raise
+        conn.execute(
+            """
+            UPDATE arclink_fleet_shares
+            SET hub_ref = ?, status = CASE WHEN status = 'removed' THEN 'active' ELSE status END, updated_at = ?
+            WHERE share_id = ?
+            """,
+            (resolved_hub, now, raced["share_id"]),
+        )
+        if commit:
+            conn.commit()
+        return get_fleet_share_for_user(conn, owner)
     append_arclink_audit(
         conn,
         action="fleet_share_created",
@@ -494,15 +615,35 @@ def add_fleet_share_member(
             conn.commit()
         return rowdict(conn.execute("SELECT * FROM arclink_fleet_share_members WHERE member_id = ?", (existing["member_id"],)).fetchone())
     member_id = _fleet_share_member_id()
-    conn.execute(
-        """
-        INSERT INTO arclink_fleet_share_members (
-          member_id, share_id, owner_user_id, deployment_id, working_path, role, status,
-          joined_at, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, '{}', ?, ?)
-        """,
-        (member_id, share_id, owner, deployment, str(working_path or ""), str(role or "member"), now, now, now),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_fleet_share_members (
+              member_id, share_id, owner_user_id, deployment_id, working_path, role, status,
+              joined_at, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, '{}', ?, ?)
+            """,
+            (member_id, share_id, owner, deployment, str(working_path or ""), str(role or "member"), now, now, now),
+        )
+    except sqlite3.IntegrityError:
+        raced = conn.execute(
+            "SELECT * FROM arclink_fleet_share_members WHERE share_id = ? AND deployment_id = ?",
+            (share_id, deployment),
+        ).fetchone()
+        if raced is None:
+            raise
+        conn.execute(
+            """
+            UPDATE arclink_fleet_share_members
+            SET status = 'active', working_path = ?, role = ?, removed_at = '', updated_at = ?,
+                joined_at = CASE WHEN joined_at = '' THEN ? ELSE joined_at END
+            WHERE member_id = ?
+            """,
+            (str(working_path or ""), str(role or "member"), now, now, raced["member_id"]),
+        )
+        if commit:
+            conn.commit()
+        return rowdict(conn.execute("SELECT * FROM arclink_fleet_share_members WHERE member_id = ?", (raced["member_id"],)).fetchone())
     append_arclink_event(
         conn,
         subject_kind="fleet_share",
@@ -530,7 +671,7 @@ def remove_fleet_share_member(
     """
     deployment = str(deployment_id or "").strip()
     if not deployment:
-        return 0
+        raise ArcLinkFleetShareError("fleet share member removal requires a deployment")
     now = utc_now_iso()
     params: list[Any] = [now, now, deployment]
     extra = ""
@@ -736,6 +877,7 @@ def sync_local_working_copy(
     """
     git_runner = runner or SubprocessGitRunner()
     ref = str(hub_ref or os.environ.get("ARCLINK_FLEET_SHARE_HUB_URL") or "").strip()
+    work_from_env = not str(working_path or "").strip()
     work = str(working_path or os.environ.get("ARCLINK_FLEET_SHARED_ROOT") or "").strip()
     dep = str(
         deployment_id
@@ -752,6 +894,8 @@ def sync_local_working_copy(
         raise ArcLinkFleetShareError(
             "ARCLINK_FLEET_SHARE_HUB_URL must be the resolved per-Captain hub, not a {user} template"
         )
+    if work_from_env:
+        work = _assert_safe_local_working_path(work)
     ensure_member_working_copy(git_runner, hub_ref=ref, working_path=work, branch=branch)
     return sync_member(
         git_runner,

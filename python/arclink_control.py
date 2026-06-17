@@ -8334,18 +8334,34 @@ def get_active_operator_action(
     conn: sqlite3.Connection,
     *,
     action_kind: str,
+    request_source: str = "",
 ) -> dict[str, Any] | None:
-    row = conn.execute(
-        """
-        SELECT *
-        FROM operator_actions
-        WHERE action_kind = ?
-          AND status IN ('pending', 'running')
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (str(action_kind or "").strip(),),
-    ).fetchone()
+    normalized_source = str(request_source or "").strip()
+    if normalized_source:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM operator_actions
+            WHERE action_kind = ?
+              AND request_source = ?
+              AND status IN ('pending', 'running')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(action_kind or "").strip(), normalized_source),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM operator_actions
+            WHERE action_kind = ?
+              AND status IN ('pending', 'running')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (str(action_kind or "").strip(),),
+        ).fetchone()
     return _operator_action_row_to_dict(row)
 
 
@@ -8403,42 +8419,54 @@ def request_operator_action(
     if not normalized_kind:
         raise ValueError("action_kind is required")
     requested_target_value = str(requested_target or "").strip()
-    if dedupe_by_target:
-        row = conn.execute(
+    normalized_source = str(request_source or "").strip()
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        if dedupe_by_target:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM operator_actions
+                WHERE action_kind = ?
+                  AND requested_target = ?
+                  AND status IN ('pending', 'running')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (normalized_kind, requested_target_value),
+            ).fetchone()
+            active = _operator_action_row_to_dict(row)
+        else:
+            active = get_active_operator_action(conn, action_kind=normalized_kind, request_source=normalized_source)
+        if active is not None:
+            if own_txn:
+                conn.commit()
+            return active, False
+        now_iso = utc_now_iso()
+        cursor = conn.execute(
             """
-            SELECT *
-            FROM operator_actions
-            WHERE action_kind = ?
-              AND requested_target = ?
-              AND status IN ('pending', 'running')
-            ORDER BY id DESC
-            LIMIT 1
+            INSERT INTO operator_actions (
+              action_kind, requested_target, requested_by, request_source, status, note, created_at
+            ) VALUES (?, ?, ?, ?, 'pending', '', ?)
             """,
-            (normalized_kind, requested_target_value),
-        ).fetchone()
-        active = _operator_action_row_to_dict(row)
-    else:
-        active = get_active_operator_action(conn, action_kind=normalized_kind)
-    if active is not None:
-        return active, False
-    now_iso = utc_now_iso()
-    cursor = conn.execute(
-        """
-        INSERT INTO operator_actions (
-          action_kind, requested_target, requested_by, request_source, status, note, created_at
-        ) VALUES (?, ?, ?, ?, 'pending', '', ?)
-        """,
-        (
-            normalized_kind,
-            requested_target_value,
-            str(requested_by or "").strip() or "operator",
-            str(request_source or "").strip(),
-            now_iso,
-        ),
-    )
-    conn.commit()
-    row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
-    return _operator_action_row_to_dict(row) or {}, True
+            (
+                normalized_kind,
+                requested_target_value,
+                str(requested_by or "").strip() or "operator",
+                normalized_source,
+                now_iso,
+            ),
+        )
+        row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(cursor.lastrowid),)).fetchone()
+        if own_txn:
+            conn.commit()
+        return _operator_action_row_to_dict(row) or {}, True
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _contact_match_key(value: str) -> str:
@@ -8709,20 +8737,41 @@ def mark_operator_action_running(
     action_id: int,
     note: str = "",
     log_path: str = "",
+    reclaim_stale_running_seconds: int = 0,
 ) -> dict[str, Any]:
     now_iso = utc_now_iso()
-    conn.execute(
-        """
-        UPDATE operator_actions
-        SET status = 'running',
-            started_at = ?,
-            note = ?,
-            log_path = ?
-        WHERE id = ?
-        """,
-        (now_iso, str(note or ""), str(log_path or ""), int(action_id)),
-    )
-    conn.commit()
+    stale_before = auto_provision_stale_before_iso(int(reclaim_stale_running_seconds or 0)) if int(reclaim_stale_running_seconds or 0) > 0 else ""
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE operator_actions
+            SET status = 'running',
+                started_at = ?,
+                note = ?,
+                log_path = ?
+            WHERE id = ?
+              AND (
+                status = 'pending'
+                OR (
+                  ? != ''
+                  AND status = 'running'
+                  AND COALESCE(started_at, created_at, '') < ?
+                )
+              )
+            """,
+            (now_iso, str(note or ""), str(log_path or ""), int(action_id), stale_before, stale_before),
+        )
+        if own_txn:
+            conn.commit()
+        if cursor.rowcount != 1:
+            return {}
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
     row = conn.execute("SELECT * FROM operator_actions WHERE id = ?", (int(action_id),)).fetchone()
     return _operator_action_row_to_dict(row) or {}
 
@@ -9732,6 +9781,7 @@ def _active_pin_upgrade_targets(conn: sqlite3.Connection) -> set[tuple[str, str]
         SELECT component, target_value
         FROM pin_upgrade_notifications
         WHERE applied_at IS NULL
+          AND COALESCE(silenced, 0) = 0
         """
     ).fetchall()
     return {
@@ -15005,6 +15055,60 @@ def _notion_index_full_sweep_due(conn: sqlite3.Connection) -> bool:
     return last_run <= utc_now() - dt.timedelta(seconds=_notion_index_full_sweep_interval_seconds())
 
 
+NOTION_REINDEX_CONSUMER_LEASE_KEY = "notion_reindex_consumer_lease"
+NOTION_REINDEX_CONSUMER_LEASE_SECONDS = 600
+
+
+def _try_acquire_notion_reindex_consumer_lease(conn: sqlite3.Connection) -> tuple[str, str]:
+    claim_id = f"notion_reindex_{secrets.token_hex(8)}"
+    expires_at = utc_after_seconds_iso(NOTION_REINDEX_CONSUMER_LEASE_SECONDS)
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        raw = str(get_setting(conn, NOTION_REINDEX_CONSUMER_LEASE_KEY, "") or "").strip()
+        payload = json_loads(raw, {}) if raw else {}
+        if isinstance(payload, dict):
+            active_until = parse_utc_iso(str(payload.get("expires_at") or ""))
+            active_claim = str(payload.get("claim_id") or "").strip()
+            if active_claim and active_until is not None and active_until > utc_now():
+                conn.commit()
+                return "", active_until.replace(microsecond=0).isoformat()
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (
+                NOTION_REINDEX_CONSUMER_LEASE_KEY,
+                json_dumps({"claim_id": claim_id, "expires_at": expires_at}),
+                utc_now_iso(),
+            ),
+        )
+        conn.commit()
+        return claim_id, expires_at
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def _release_notion_reindex_consumer_lease(conn: sqlite3.Connection, claim_id: str) -> None:
+    normalized_claim = str(claim_id or "").strip()
+    if not normalized_claim:
+        return
+    raw = str(get_setting(conn, NOTION_REINDEX_CONSUMER_LEASE_KEY, "") or "").strip()
+    payload = json_loads(raw, {}) if raw else {}
+    if not isinstance(payload, dict) or str(payload.get("claim_id") or "").strip() != normalized_claim:
+        return
+    conn.execute(
+        "UPDATE settings SET value = '', updated_at = ? WHERE key = ? AND value = ?",
+        (utc_now_iso(), NOTION_REINDEX_CONSUMER_LEASE_KEY, raw),
+    )
+    conn.commit()
+
+
 def consume_notion_reindex_queue(
     conn: sqlite3.Connection,
     cfg: Config,
@@ -15012,151 +15116,165 @@ def consume_notion_reindex_queue(
     limit: int = 50,
     actor: str = "curator-refresh",
 ) -> dict[str, Any]:
-    rows = conn.execute(
-        """
-        SELECT id, target_id, message, extra_json, next_attempt_at, attempt_count
-        FROM notification_outbox
-        WHERE delivered_at IS NULL
-          AND target_kind = 'curator'
-          AND channel_kind = 'notion-reindex'
-        ORDER BY id ASC
-        LIMIT ?
-        """,
-        (max(1, int(limit)),),
-    ).fetchall()
-    due_rows = [row for row in rows if _notification_due_now(str(row["next_attempt_at"] or ""))]
-    run_full = _notion_index_full_sweep_due(conn)
-    page_ids: list[str] = []
-    database_ids: list[str] = []
-    delivered_ids: list[int] = []
-    reindex_targets_by_id: dict[int, tuple[str, str, int]] = {}
-    for row in due_rows:
-        notification_id = int(row["id"])
-        delivered_ids.append(notification_id)
-        target_id = str(row["target_id"] or "").strip()
-        extra = json_loads(str(row["extra_json"] or "{}"), {})
-        source_kind = str((extra or {}).get("source_kind") or "page").strip()
-        reindex_targets_by_id[notification_id] = (
-            target_id,
-            source_kind,
-            int(row["attempt_count"] or 0),
-        )
-        if target_id == "full":
-            run_full = True
-            continue
-        if source_kind == "database":
-            database_ids.append(target_id)
-        else:
-            page_ids.append(target_id)
-    if not run_full and not page_ids and not database_ids:
+    lease_claim_id, lease_until = _try_acquire_notion_reindex_consumer_lease(conn)
+    if not lease_claim_id:
         return {
             "ok": True,
-            "status": "idle",
+            "status": "busy",
             "full": False,
             "processed_notifications": 0,
             "page_ids": [],
             "database_ids": [],
+            "lease_until": lease_until,
         }
     try:
-        result = sync_shared_notion_index(
-            conn,
-            cfg,
-            full=run_full,
-            page_ids=page_ids,
-            database_ids=database_ids,
-            actor=actor,
-        )
-    except Exception as exc:
-        if delivered_ids:
-            _record_notion_reindex_retry(conn, cfg, notification_ids=delivered_ids, error_message=str(exc))
-        note_refresh_job(
-            conn,
-            job_name="notion-index-sync" if run_full else "notion-index-sync-incremental",
-            job_kind="notion-index-sync",
-            target_id="notion",
-            schedule="webhook + 1h full sweep" if run_full else "webhook event",
-            status="fail",
-            note=f"notion reindex failed (full={run_full}): {exc}",
-        )
-        return {
-            "ok": False,
-            "status": "fail",
-            "error": str(exc),
-            "processed_notifications": len(delivered_ids),
-            "page_ids": sorted({*page_ids}),
-            "database_ids": sorted({*database_ids}),
-            "full": run_full,
-        }
-    retry_ids: list[int] = []
-    dropped_ids: list[int] = []
-    if not run_full and delivered_ids:
-        unresolved_pages = {
-            extract_notion_space_id(str(page_id or ""))
-            for page_id in (result.get("unresolved_pages") or [])
-            if str(page_id or "").strip()
-        }
-        unresolved_databases = {
-            extract_notion_space_id(str(database_id or ""))
-            for database_id in (result.get("unresolved_databases") or [])
-            if str(database_id or "").strip()
-        }
-        max_unresolved_attempts = _notion_reindex_unresolved_max_attempts()
-        for notification_id in delivered_ids:
-            target_id, source_kind, previous_attempts = reindex_targets_by_id.get(notification_id, ("", "page", 0))
-            normalized_target = extract_notion_space_id(target_id)
-            unresolved = (
-                source_kind == "database" and normalized_target in unresolved_databases
-            ) or (
-                source_kind != "database" and normalized_target in unresolved_pages
+        rows = conn.execute(
+            """
+            SELECT id, target_id, message, extra_json, next_attempt_at, attempt_count
+            FROM notification_outbox
+            WHERE delivered_at IS NULL
+              AND target_kind = 'curator'
+              AND channel_kind = 'notion-reindex'
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        due_rows = [row for row in rows if _notification_due_now(str(row["next_attempt_at"] or ""))]
+        run_full = _notion_index_full_sweep_due(conn)
+        page_ids: list[str] = []
+        database_ids: list[str] = []
+        delivered_ids: list[int] = []
+        reindex_targets_by_id: dict[int, tuple[str, str, int]] = {}
+        for row in due_rows:
+            notification_id = int(row["id"])
+            delivered_ids.append(notification_id)
+            target_id = str(row["target_id"] or "").strip()
+            extra = json_loads(str(row["extra_json"] or "{}"), {})
+            source_kind = str((extra or {}).get("source_kind") or "page").strip()
+            reindex_targets_by_id[notification_id] = (
+                target_id,
+                source_kind,
+                int(row["attempt_count"] or 0),
             )
-            if not unresolved:
+            if target_id == "full":
+                run_full = True
                 continue
-            if previous_attempts + 1 >= max_unresolved_attempts:
-                dropped_ids.append(notification_id)
+            if source_kind == "database":
+                database_ids.append(target_id)
             else:
-                retry_ids.append(notification_id)
-        if retry_ids:
-            _record_notion_reindex_retry(
+                page_ids.append(target_id)
+        if not run_full and not page_ids and not database_ids:
+            return {
+                "ok": True,
+                "status": "idle",
+                "full": False,
+                "processed_notifications": 0,
+                "page_ids": [],
+                "database_ids": [],
+            }
+        try:
+            result = sync_shared_notion_index(
                 conn,
                 cfg,
-                notification_ids=retry_ids,
-                error_message=(
-                    "Notion entity is not reachable under configured index roots yet; "
-                    "retrying so eventual-consistency and transient access races do not drop recall."
-                ),
+                full=run_full,
+                page_ids=page_ids,
+                database_ids=database_ids,
+                actor=actor,
             )
-        for notification_id in dropped_ids:
-            conn.execute(
-                """
-                UPDATE notification_outbox
-                SET attempt_count = attempt_count + 1,
-                    last_attempt_at = ?,
-                    delivered_at = ?,
-                    delivery_error = ?
-                WHERE id = ?
-                """,
-                (
-                    utc_now_iso(),
-                    utc_now_iso(),
-                    "Notion entity stayed unresolved after retry budget; full sweep remains the backstop.",
-                    notification_id,
-                ),
+        except Exception as exc:
+            if delivered_ids:
+                _record_notion_reindex_retry(conn, cfg, notification_ids=delivered_ids, error_message=str(exc))
+            note_refresh_job(
+                conn,
+                job_name="notion-index-sync" if run_full else "notion-index-sync-incremental",
+                job_kind="notion-index-sync",
+                target_id="notion",
+                schedule="webhook + 1h full sweep" if run_full else "webhook event",
+                status="fail",
+                note=f"notion reindex failed (full={run_full}): {exc}",
             )
-            conn.commit()
+            return {
+                "ok": False,
+                "status": "fail",
+                "error": str(exc),
+                "processed_notifications": len(delivered_ids),
+                "page_ids": sorted({*page_ids}),
+                "database_ids": sorted({*database_ids}),
+                "full": run_full,
+            }
+        retry_ids: list[int] = []
+        dropped_ids: list[int] = []
+        if not run_full and delivered_ids:
+            unresolved_pages = {
+                extract_notion_space_id(str(page_id or ""))
+                for page_id in (result.get("unresolved_pages") or [])
+                if str(page_id or "").strip()
+            }
+            unresolved_databases = {
+                extract_notion_space_id(str(database_id or ""))
+                for database_id in (result.get("unresolved_databases") or [])
+                if str(database_id or "").strip()
+            }
+            max_unresolved_attempts = _notion_reindex_unresolved_max_attempts()
+            for notification_id in delivered_ids:
+                target_id, source_kind, previous_attempts = reindex_targets_by_id.get(notification_id, ("", "page", 0))
+                normalized_target = extract_notion_space_id(target_id)
+                unresolved = (
+                    source_kind == "database" and normalized_target in unresolved_databases
+                ) or (
+                    source_kind != "database" and normalized_target in unresolved_pages
+                )
+                if not unresolved:
+                    continue
+                if previous_attempts + 1 >= max_unresolved_attempts:
+                    dropped_ids.append(notification_id)
+                else:
+                    retry_ids.append(notification_id)
+            if retry_ids:
+                _record_notion_reindex_retry(
+                    conn,
+                    cfg,
+                    notification_ids=retry_ids,
+                    error_message=(
+                        "Notion entity is not reachable under configured index roots yet; "
+                        "retrying so eventual-consistency and transient access races do not drop recall."
+                    ),
+                )
+            for notification_id in dropped_ids:
+                conn.execute(
+                    """
+                    UPDATE notification_outbox
+                    SET attempt_count = attempt_count + 1,
+                        last_attempt_at = ?,
+                        delivered_at = ?,
+                        delivery_error = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        utc_now_iso(),
+                        utc_now_iso(),
+                        "Notion entity stayed unresolved after retry budget; full sweep remains the backstop.",
+                        notification_id,
+                    ),
+                )
+                conn.commit()
 
-    retry_or_drop = set(retry_ids) | set(dropped_ids)
-    for notification_id in delivered_ids:
-        if notification_id in retry_or_drop:
-            continue
-        mark_notification_delivered(conn, notification_id)
-    return {
-        **result,
-        "processed_notifications": len(delivered_ids),
-        "retry_notifications": len(retry_ids),
-        "dropped_unresolved_notifications": len(dropped_ids),
-        "page_ids": sorted({*page_ids}),
-        "database_ids": sorted({*database_ids}),
-    }
+        retry_or_drop = set(retry_ids) | set(dropped_ids)
+        for notification_id in delivered_ids:
+            if notification_id in retry_or_drop:
+                continue
+            mark_notification_delivered(conn, notification_id)
+        return {
+            **result,
+            "processed_notifications": len(delivered_ids),
+            "retry_notifications": len(retry_ids),
+            "dropped_unresolved_notifications": len(dropped_ids),
+            "page_ids": sorted({*page_ids}),
+            "database_ids": sorted({*database_ids}),
+        }
+    finally:
+        _release_notion_reindex_consumer_lease(conn, lease_claim_id)
 
 
 def _cached_shared_notion_digest(

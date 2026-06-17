@@ -1127,9 +1127,16 @@ async def main() -> None:
             # Raven dispatch gate as typed commands.
             if not await _ensure_operator_channel(interaction):
                 return
+            raven_command = custom_id[len("arclink:"):].strip()
+            if operator_raven_command_is_mutating(raven_command):
+                await interaction.response.send_message(
+                    "Use the typed operator command with the approval code for this action.",
+                    ephemeral=True,
+                )
+                return
             actor = _format_actor_label(interaction.user)
             result = _operator_raven_result(
-                custom_id[len("arclink:"):].strip(),
+                raven_command,
                 actor_id=actor,
                 message_id=str(getattr(interaction, "id", "") or ""),
             )

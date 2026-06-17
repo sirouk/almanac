@@ -828,6 +828,14 @@ def _handle_operator_callback(
         # /upgrade_apply <single-use nonce>). They route through the same
         # Operator Raven dispatch gate as typed commands; the nonce is the
         # structured confirmation, so no extra typing is required.
+        if operator_raven_command_is_mutating(raw_command):
+            telegram_answer_callback_query(
+                bot_token=bot_token,
+                callback_query_id=callback_query_id,
+                text="Use the typed operator command with the approval code for this action.",
+                show_alert=True,
+            )
+            return
         actor = _format_actor_label({"from": sender})
         result: dict[str, Any] | None = None
         try:

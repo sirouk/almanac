@@ -32,6 +32,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
+from arclink_secrets_regex import redact_secret_material
 from arclink_upgrade_policy import PIN_UPGRADE_COMPONENTS, STATEFUL_PIN_UPGRADE_COMPONENTS
 
 
@@ -1371,28 +1372,51 @@ def mint_operator_button_nonce(conn: sqlite3.Connection, *, command: str) -> str
 
 def consume_operator_button_nonce(conn: sqlite3.Connection, raw_nonce: str) -> str:
     """Validate and burn a button nonce; returns the mapped command or ''."""
-    from arclink_control import parse_utc_iso, upsert_setting, utc_now, utc_now_iso
+    from arclink_control import parse_utc_iso, utc_now, utc_now_iso
 
     clean = str(raw_nonce or "").strip()
     if not clean:
         return ""
     digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()
     key = _OPERATOR_BUTTON_NONCE_PREFIX + digest
-    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-    if row is None:
-        return ""
+    own_txn = not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN IMMEDIATE")
     try:
-        payload = json.loads(str(row["value"] or "{}"))
-    except ValueError:
-        return ""
-    if str(payload.get("used_at") or "").strip():
-        return ""
-    expires = parse_utc_iso(str(payload.get("expires_at") or ""))
-    if expires is None or expires.timestamp() <= utc_now().timestamp():
-        return ""
-    payload["used_at"] = utc_now_iso()
-    upsert_setting(conn, key, json.dumps(payload, sort_keys=True))
-    return str(payload.get("command") or "").strip()
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            if own_txn:
+                conn.commit()
+            return ""
+        original_value = str(row["value"] or "{}")
+        try:
+            payload = json.loads(original_value)
+        except ValueError:
+            if own_txn:
+                conn.commit()
+            return ""
+        if str(payload.get("used_at") or "").strip():
+            if own_txn:
+                conn.commit()
+            return ""
+        expires = parse_utc_iso(str(payload.get("expires_at") or ""))
+        if expires is None or expires.timestamp() <= utc_now().timestamp():
+            if own_txn:
+                conn.commit()
+            return ""
+        command = str(payload.get("command") or "").strip()
+        payload["used_at"] = utc_now_iso()
+        cursor = conn.execute(
+            "UPDATE settings SET value = ?, updated_at = ? WHERE key = ? AND value = ?",
+            (json.dumps(payload, sort_keys=True), payload["used_at"], key, original_value),
+        )
+        if own_txn:
+            conn.commit()
+        return command if cursor.rowcount == 1 else ""
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _upgrade_one_tap_button(
@@ -2415,7 +2439,10 @@ def _find_deployment(conn: sqlite3.Connection, deployment_id: str) -> dict[str, 
 def _redact_text(text: str) -> str:
     lines = []
     for line in str(text or "").splitlines():
-        if _SECRETISH_RE.search(line) and "=" in line:
+        redacted = redact_secret_material(line)
+        if redacted != line:
+            lines.append(redacted)
+        elif _SECRETISH_RE.search(line) and "=" in line:
             key, _, _value = line.partition("=")
             lines.append(f"{key}=<redacted>")
         else:

@@ -320,6 +320,7 @@ def test_reasoning_effort_is_written_to_hermes_agent_config() -> None:
             for name in ["hermes_cli", "hermes_cli.config"]
             if name in sys.modules
         }
+        os.environ["HERMES_HOME"] = str(root / "hermes-home")
         os.environ["FAKE_HERMES_CONFIG_PATH"] = str(hermes_config)
         sys.path.insert(0, str(fake_pkg_root))
         try:
@@ -401,6 +402,7 @@ def test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_toke
             for name in ["hermes_cli", "hermes_cli.config", "agent", "agent.anthropic_adapter"]
             if name in sys.modules
         }
+        os.environ["HERMES_HOME"] = str(root / "hermes-home")
         os.environ["FAKE_HERMES_CONFIG_PATH"] = str(hermes_config)
         os.environ["FAKE_HERMES_ENV_PATH"] = str(hermes_env)
         os.environ["FAKE_CLAUDE_CREDENTIALS_PATH"] = str(claude_credentials)
@@ -435,12 +437,25 @@ def test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_toke
     print("PASS test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_tokens")
 
 
+def test_headless_and_skill_enablement_share_config_yaml_lock_path() -> None:
+    headless = load_module(SCRIPT, "arclink_headless_setup_config_lock_test")
+    skill_enablement = load_module(REPO / "python" / "arclink_skill_enablement.py", "arclink_skill_enablement_config_lock_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        hermes_home = Path(tmp) / "hermes-home"
+        expect(
+            headless._config_yaml_lock_path(hermes_home) == skill_enablement._config_yaml_lock_path(hermes_home),
+            "headless setup and skill enablement must honor the same config.yaml lock",
+        )
+    print("PASS test_headless_and_skill_enablement_share_config_yaml_lock_path")
+
+
 def main() -> int:
     test_identity_only_writes_soul_and_dual_surface_prefill_config()
     test_render_soul_fails_loudly_on_unknown_placeholder()
     test_reasoning_effort_is_written_to_hermes_agent_config()
     test_anthropic_oauth_seed_writes_claude_code_credentials_and_clears_env_tokens()
-    print("PASS all 4 headless Hermes setup tests")
+    test_headless_and_skill_enablement_share_config_yaml_lock_path()
+    print("PASS all 5 headless Hermes setup tests")
     return 0
 
 

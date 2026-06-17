@@ -29,6 +29,8 @@ Hermes precedence rules are honored by construction:
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 import re
@@ -43,6 +45,22 @@ RECEIPT_STATE_NAME = "arclink-skill-enablement-applied.json"
 _TOP_LEVEL_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*\s*:")
 _CHILD_KEY_RE = re.compile(r"^(\s+)([A-Za-z0-9_][A-Za-z0-9_-]*)\s*:")
 _SKILLS_KEY_RE = re.compile(r"^skills\s*:\s*(?:#.*)?$")
+
+
+def _config_yaml_lock_path(hermes_home: Path) -> Path:
+    return Path(hermes_home).expanduser() / ".arclink-config.yaml.lock"
+
+
+@contextmanager
+def _config_yaml_lock(hermes_home: Path):
+    lock_path = _config_yaml_lock_path(hermes_home)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _utc_now_iso() -> str:
@@ -237,36 +255,37 @@ def apply_skill_enablement(hermes_home: Path) -> dict[str, Any]:
         receipt["status"] = "no_intents" if not problems else "invalid_intents"
         return receipt
 
-    try:
-        config_text = config_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        config_text = ""
-    except OSError as exc:
-        receipt["status"] = "config_unreadable"
-        receipt["problems"].append(f"unreadable config.yaml: {exc}")
-        return receipt
-    skills_cfg = parse_skills_config(config_text)
-    disabled = set(skills_cfg["disabled"])
-    external_dirs = skills_cfg["external_dirs"]
+    with _config_yaml_lock(hermes_home):
+        try:
+            config_text = config_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            config_text = ""
+        except OSError as exc:
+            receipt["status"] = "config_unreadable"
+            receipt["problems"].append(f"unreadable config.yaml: {exc}")
+            return receipt
+        skills_cfg = parse_skills_config(config_text)
+        disabled = set(skills_cfg["disabled"])
+        external_dirs = skills_cfg["external_dirs"]
 
-    to_remove: set[str] = set()
-    for skill_id in skill_ids:
-        location = _skill_available(skill_id, hermes_home=hermes_home, external_dirs=external_dirs)
-        if not location:
-            receipt["skills"].append({"skill_id": skill_id, "status": "missing"})
-            continue
-        if skill_id in disabled:
-            to_remove.add(skill_id)
-            receipt["skills"].append({"skill_id": skill_id, "status": "enabled", "location": location})
-        else:
-            receipt["skills"].append({"skill_id": skill_id, "status": "already_enabled", "location": location})
+        to_remove: set[str] = set()
+        for skill_id in skill_ids:
+            location = _skill_available(skill_id, hermes_home=hermes_home, external_dirs=external_dirs)
+            if not location:
+                receipt["skills"].append({"skill_id": skill_id, "status": "missing"})
+                continue
+            if skill_id in disabled:
+                to_remove.add(skill_id)
+                receipt["skills"].append({"skill_id": skill_id, "status": "enabled", "location": location})
+            else:
+                receipt["skills"].append({"skill_id": skill_id, "status": "already_enabled", "location": location})
 
-    if to_remove and config_text:
-        new_text, removed = remove_skills_from_disabled(config_text, to_remove)
-        if removed:
-            _atomic_write_text(config_path, new_text)
-            receipt["config_changed"] = True
-            receipt["removed_from_disabled"] = sorted(removed)
+        if to_remove and config_text:
+            new_text, removed = remove_skills_from_disabled(config_text, to_remove)
+            if removed:
+                _atomic_write_text(config_path, new_text)
+                receipt["config_changed"] = True
+                receipt["removed_from_disabled"] = sorted(removed)
     statuses = {entry["status"] for entry in receipt["skills"]}
     receipt["status"] = "applied" if statuses <= {"enabled", "already_enabled"} else "partial"
     return receipt

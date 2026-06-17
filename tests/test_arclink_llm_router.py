@@ -184,6 +184,32 @@ def test_router_metadata_json_rejects_plaintext_secret_material() -> None:
     print("PASS test_router_metadata_json_rejects_plaintext_secret_material")
 
 
+def test_read_json_body_rejects_chunked_body_before_buffering_past_limit() -> None:
+    import asyncio
+
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_body_limit_test")
+
+    class ChunkedRequest:
+        headers: dict[str, str] = {}
+
+        async def stream(self):
+            yield b'{"model"'
+            yield b':"model-a"}'
+
+    config = router.load_router_config(
+        {
+            "ARCLINK_DB_PATH": "/tmp/unused-arclink-router-body-limit.sqlite3",
+            "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            "ARCLINK_LLM_ROUTER_MAX_BODY_BYTES": "8",
+        }
+    )
+    payload, error, body = asyncio.run(router._read_json_body(config, ChunkedRequest()))
+    expect(payload is None, str(payload))
+    expect(error is not None and error.status_code == 413, str(error))
+    expect(len(body) <= 8, f"oversized body should not be fully buffered: {len(body)}")
+    print("PASS test_read_json_body_rejects_chunked_body_before_buffering_past_limit")
+
+
 class _BufferedStream:
     def __init__(self, response: Any) -> None:
         self.response = response
@@ -570,6 +596,71 @@ def test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage() -> Non
     print("PASS test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage")
 
 
+def test_router_usage_settlement_error_releases_reserved_row() -> None:
+    router = load_module("arclink_llm_router.py", "arclink_llm_router_settlement_release_test")
+    control = load_module("arclink_control.py", "arclink_control_llm_router_settlement_release_test")
+    tmp, db_path = temp_router_db()
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            control.ensure_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO arclink_llm_budget_reservations (
+                  reservation_id, request_id, deployment_id, user_id, reserved_cents, status, created_at
+                ) VALUES ('llmres_orphan', 'llmreq_orphan', 'dep_missing', 'user_missing', 3, 'reserved', '2026-05-16T00:00:00+00:00')
+                """
+            )
+            conn.commit()
+            config = router.load_router_config(
+                {
+                    "ARCLINK_DB_PATH": db_path,
+                    "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                    "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                    "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+                }
+            )
+            router._record_router_usage(
+                conn,
+                config,
+                reservation={
+                    "reservation_id": "llmres_orphan",
+                    "request_id": "llmreq_orphan",
+                    "deployment_id": "dep_missing",
+                    "user_id": "user_missing",
+                    "reserved_cents": 3,
+                    "requested_model": "model-a",
+                    "upstream_model": "model-a",
+                },
+                auth_record={"deployment_id": "dep_missing", "user_id": "user_missing", "key_id": "llmk_missing"},
+                model="model-a",
+                stream=False,
+                status="succeeded",
+                input_tokens=10,
+                output_tokens=5,
+                total_tokens=15,
+                source_kind="provider_usage",
+            )
+            reservation = conn.execute(
+                "SELECT status, settled_cents, metadata_json FROM arclink_llm_budget_reservations WHERE reservation_id = 'llmres_orphan'"
+            ).fetchone()
+            open_reservations = conn.execute(
+                "SELECT COUNT(*) AS count FROM arclink_llm_budget_reservations WHERE status = 'reserved'"
+            ).fetchone()["count"]
+            usage = conn.execute("SELECT status FROM arclink_llm_usage_events WHERE request_id = 'llmreq_orphan'").fetchone()
+        finally:
+            conn.close()
+        reservation_meta = json.loads(reservation["metadata_json"])
+        expect(open_reservations == 0, str(open_reservations))
+        expect(reservation["status"] == "settled" and int(reservation["settled_cents"]) >= 0, dict(reservation))
+        expect(reservation_meta["chutes_usage_recorded"] is False, str(reservation_meta))
+        expect(usage["status"] == "succeeded", dict(usage))
+    finally:
+        tmp.cleanup()
+    print("PASS test_router_usage_settlement_error_releases_reserved_row")
+
+
 def test_chat_usage_queues_raven_low_fuel_notice_once() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -744,7 +835,7 @@ def test_low_fuel_notice_without_channel_does_not_poison_dedupe() -> None:
 def test_chat_uses_catalog_pricing_and_promotes_deprecated_models() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE"])
+        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE", "moonshotai/Kimi-K2.7-TEE"])
         _seed_model_catalog(db_path)
         upstream = fake_upstream_transport()
         client = _client_for(
@@ -781,7 +872,7 @@ def test_chat_uses_catalog_pricing_and_promotes_deprecated_models() -> None:
 def test_catalog_refreshes_and_promotes_newer_family_model() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE"])
+        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE", "moonshotai/Kimi-K2.7-TEE"])
         router = load_module("arclink_llm_router.py", "arclink_llm_router_startup_catalog_test")
         catalog_http = FixtureCatalogHttpClient(
             {
@@ -855,7 +946,7 @@ def test_catalog_refreshes_and_promotes_newer_family_model() -> None:
 def test_chat_promotes_missing_requested_model_to_latest_same_family() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE"])
+        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE", "moonshotai/Kimi-K2.7-TEE"])
         control = load_module("arclink_control.py", "arclink_control_llm_router_latest_only_catalog_test")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -897,6 +988,84 @@ def test_chat_promotes_missing_requested_model_to_latest_same_family() -> None:
     finally:
         tmp.cleanup()
     print("PASS test_chat_promotes_missing_requested_model_to_latest_same_family")
+
+
+def test_key_allowlist_blocks_global_default_replacement_and_fallback_escape() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MODEL": "model-default",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+            },
+            upstream_transport=upstream,
+        )
+        default_escape = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-default", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(default_escape.status_code == 403, default_escape.text)
+        expect(default_escape.json()["error"]["code"] == "model_not_allowed", default_escape.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["moonshotai/Kimi-K2.6-TEE"])
+        _seed_model_catalog(db_path)
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "100000",
+            },
+            upstream_transport=upstream,
+        )
+        replacement_escape = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "moonshotai/Kimi-K2.6-TEE", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(replacement_escape.status_code == 403, replacement_escape.text)
+        expect(replacement_escape.json()["error"]["code"] == "model_not_allowed", replacement_escape.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+                "ARCLINK_LLM_ROUTER_DEFAULT_MONTHLY_BUDGET_CENTS": "1000",
+                "ARCLINK_LLM_ROUTER_FALLBACK_MODELS": "model-b",
+            },
+            upstream_transport=upstream,
+        )
+        fallback_escape = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hello"}]},
+        )
+        expect(fallback_escape.status_code == 403, fallback_escape.text)
+        expect(fallback_escape.json()["error"]["code"] == "model_not_allowed", fallback_escape.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+    finally:
+        tmp.cleanup()
+    print("PASS test_key_allowlist_blocks_global_default_replacement_and_fallback_escape")
 
 
 def test_chat_preflight_rejects_invalid_model_and_size_limits() -> None:
@@ -1293,7 +1462,7 @@ def test_chat_upstream_errors_are_redacted_and_do_not_leak_reservations() -> Non
 def test_chat_retries_configured_fallback_model_after_retryable_upstream_error() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a", "model-b"])
         upstream = fake_sequence_upstream_transport(
             [
                 {"status_code": 429, "content": "rate limited token=sk-proj-abcdefghijklmnopqrstuvwxyz"},
@@ -1357,7 +1526,7 @@ def test_chat_retries_configured_fallback_model_after_retryable_upstream_error()
 def test_chat_fallback_uses_final_model_pricing_and_sanitized_attempt_audit() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a", "model-b"])
         control = load_module("arclink_control.py", "arclink_control_llm_router_fallback_pricing_test")
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
@@ -1450,7 +1619,7 @@ def test_chat_fallback_uses_final_model_pricing_and_sanitized_attempt_audit() ->
 def test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["model-a", "model-b"])
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a,model-b"])
         upstream = fake_upstream_transport(
             {
                 "id": "chatcmpl_provider_side_fallback",
@@ -1486,7 +1655,7 @@ def test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_str
 def test_chat_streaming_retries_pre_stream_fallback_and_records_metadata() -> None:
     tmp, db_path = temp_router_db()
     try:
-        raw_key = _seed_router_key(db_path, allowed_models=["model-a"])
+        raw_key = _seed_router_key(db_path, allowed_models=["model-a", "model-b"])
         marks: list[str] = []
         chunks = [
             b'data: {"id":"chunk_fallback","choices":[{"delta":{"content":"hel"}}]}\n\n',
@@ -1606,16 +1775,19 @@ def test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage() 
 
 def main() -> int:
     test_router_metadata_json_rejects_plaintext_secret_material()
+    test_read_json_body_rejects_chunked_body_before_buffering_past_limit()
     test_health_reports_unhealthy_without_central_chutes_key()
     test_health_and_models_report_configured_state_without_exposing_key()
     test_upstream_pool_config_is_public_and_secret_safe()
     test_chat_reuses_upstream_client_pool_within_event_loop()
     test_chat_non_streaming_forwards_to_fake_upstream_and_records_usage()
+    test_router_usage_settlement_error_releases_reserved_row()
     test_chat_usage_queues_raven_low_fuel_notice_once()
     test_low_fuel_notice_without_channel_does_not_poison_dedupe()
     test_chat_uses_catalog_pricing_and_promotes_deprecated_models()
     test_catalog_refreshes_and_promotes_newer_family_model()
     test_chat_promotes_missing_requested_model_to_latest_same_family()
+    test_key_allowlist_blocks_global_default_replacement_and_fallback_escape()
     test_chat_preflight_rejects_invalid_model_and_size_limits()
     test_chat_preflight_enforces_budget_and_billing_fail_closed()
     test_chat_preflight_enforces_rate_limit_and_concurrency()
@@ -1628,7 +1800,7 @@ def main() -> int:
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 23 ArcLink LLM router tests")
+    print("PASS all 26 ArcLink LLM router tests")
     return 0
 
 

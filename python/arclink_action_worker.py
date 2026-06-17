@@ -65,6 +65,7 @@ _EXECUTOR_ACTIONS = frozenset({
 })
 
 _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
+_STALE_RECOVERY_MAX_ATTEMPTS = 3
 _ActionExecutorCache = dict[tuple[str, str, str], ArcLinkExecutor]
 _ACTION_EXECUTOR_CACHE: _ActionExecutorCache = {}
 _LIFECYCLE_PATH_OVERRIDE_KEYS = ("project_name", "env_file", "compose_file")
@@ -81,8 +82,11 @@ def _reject_secrets(value: Any, *, path: str = "$") -> None:
 
 def _safe_error_message(exc: Exception) -> str:
     msg = redact_then_truncate(str(exc), limit=500)
+    fallback = "executor error contained secret material and was redacted"
+    if contains_secret_material(msg, allow_safe_refs=False):
+        return fallback
     if contains_secret_material(str(exc)):
-        return msg or "executor error contained secret material and was redacted"
+        return msg or fallback
     return msg
 
 
@@ -715,14 +719,44 @@ def _execute_action(
     target_id = str(intent["target_id"])
     metadata = json_loads_safe(intent.get("metadata_json", "{}"))
     worker_env = dict(env or os.environ)
-    selected_executor, routing = _select_action_executor(
-        conn,
-        intent=intent,
-        metadata=metadata,
-        fallback_executor=executor,
-        env=worker_env,
-        cache=executor_cache if executor_cache is not None else _ACTION_EXECUTOR_CACHE,
-    )
+    try:
+        selected_executor, routing = _select_action_executor(
+            conn,
+            intent=intent,
+            metadata=metadata,
+            fallback_executor=executor,
+            env=worker_env,
+            cache=executor_cache if executor_cache is not None else _ACTION_EXECUTOR_CACHE,
+        )
+    except Exception as exc:
+        error_msg = _safe_error_message(exc)
+        error_code = _safe_error_code(exc)
+        adapter_name = str(getattr(getattr(executor, "config", None), "adapter_name", "") or "")
+        attempt_id = _record_attempt(conn, action_id=action_id, status="failed", adapter=adapter_name, error=error_msg)
+        _update_intent_status(conn, action_id=action_id, status="failed")
+        append_arclink_event(
+            conn,
+            subject_kind=target_kind,
+            subject_id=target_id,
+            event_type=f"action_failed:{action_type}",
+            metadata={
+                "action_id": action_id,
+                "attempt_id": attempt_id,
+                "error_code": error_code,
+                "error": error_msg,
+                "phase": "executor_selection",
+            },
+            commit=False,
+        )
+        conn.commit()
+        return {
+            "action_id": action_id,
+            "attempt_id": attempt_id,
+            "status": "failed",
+            "action_type": action_type,
+            "error_code": error_code,
+            "error": error_msg,
+        }
 
     attempt_id = _record_attempt(
         conn, action_id=action_id, adapter=selected_executor.config.adapter_name,
@@ -2281,6 +2315,7 @@ def recover_stale_actions(
     conn: sqlite3.Connection,
     *,
     stale_threshold_seconds: int = _STALE_THRESHOLD_SECONDS,
+    max_attempts: int = _STALE_RECOVERY_MAX_ATTEMPTS,
 ) -> list[dict[str, Any]]:
     """Return running actions older than threshold to queued or failed."""
     from arclink_control import parse_utc_iso, utc_now
@@ -2297,26 +2332,55 @@ def recover_stale_actions(
         if elapsed < stale_threshold_seconds:
             continue
         action_id = str(row["action_id"])
-        _update_intent_status(conn, action_id=action_id, status="queued")
+        attempts_row = conn.execute(
+            "SELECT COUNT(*) AS n FROM arclink_action_attempts WHERE action_id = ?",
+            (action_id,),
+        ).fetchone()
+        attempt_count = int(attempts_row["n"] if attempts_row is not None else 0)
+        terminal = int(max_attempts or 0) > 0 and attempt_count >= int(max_attempts or 0)
+        new_status = "failed" if terminal else "queued"
+        if terminal:
+            error = f"stale running action exceeded {int(max_attempts)} attempt(s)"
+            conn.execute(
+                """
+                UPDATE arclink_action_attempts
+                SET status = 'failed',
+                    error = CASE WHEN error = '' THEN ? ELSE error END,
+                    finished_at = CASE WHEN finished_at = '' THEN ? ELSE finished_at END
+                WHERE action_id = ?
+                  AND status = 'running'
+                """,
+                (error, utc_now_iso(), action_id),
+            )
+        _update_intent_status(conn, action_id=action_id, status=new_status)
         append_arclink_event(
             conn,
             subject_kind=row["target_kind"],
             subject_id=row["target_id"],
-            event_type="action_stale_recovered",
-            metadata={"action_id": action_id, "elapsed_seconds": int(elapsed)},
+            event_type="action_stale_failed" if terminal else "action_stale_recovered",
+            metadata={"action_id": action_id, "elapsed_seconds": int(elapsed), "attempt_count": attempt_count},
             commit=False,
         )
         append_arclink_audit(
             conn,
-            action="stale_action_recovery",
+            action="stale_action_failed" if terminal else "stale_action_recovery",
             actor_id="system:action_worker",
             target_kind=row["target_kind"],
             target_id=row["target_id"],
-            reason=f"stale running action returned to queued after {int(elapsed)}s",
-            metadata={"action_id": action_id},
+            reason=(
+                f"stale running action failed after {attempt_count} attempt(s) and {int(elapsed)}s"
+                if terminal
+                else f"stale running action returned to queued after {int(elapsed)}s"
+            ),
+            metadata={"action_id": action_id, "attempt_count": attempt_count},
             commit=False,
         )
-        recovered.append({"action_id": action_id, "elapsed_seconds": int(elapsed), "new_status": "queued"})
+        recovered.append({
+            "action_id": action_id,
+            "elapsed_seconds": int(elapsed),
+            "attempt_count": attempt_count,
+            "new_status": new_status,
+        })
     conn.commit()
     return recovered
 

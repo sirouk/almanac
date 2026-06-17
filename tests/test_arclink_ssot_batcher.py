@@ -156,10 +156,100 @@ def test_notion_event_batcher_claims_rows_before_processing() -> None:
             os.environ.update(old_env)
 
 
+def test_notion_reindex_consumer_lease_blocks_overlapping_sync() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_ssot_batcher_reindex_lease_test")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        _write_config(config_path, _config_values(root))
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        conn1 = None
+        conn2 = None
+        real_sync = control.sync_shared_notion_index
+        try:
+            cfg = control.Config.from_env()
+            conn1 = control.connect_db(cfg)
+            conn2 = control.connect_db(cfg)
+            now = control.utc_now_iso()
+            control.note_refresh_job(
+                conn1,
+                job_name="notion-index-sync",
+                job_kind="notion-index-sync",
+                target_id="notion",
+                schedule="test",
+                status="ok",
+                note="recent full sweep",
+            )
+            conn1.execute(
+                """
+                INSERT INTO notification_outbox (
+                  target_kind, target_id, channel_kind, message, extra_json, created_at,
+                  attempt_count, last_attempt_at, next_attempt_at, delivered_at, delivery_error
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, NULL)
+                """,
+                (
+                    "curator",
+                    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "notion-reindex",
+                    "page changed",
+                    json.dumps({"source_kind": "page"}),
+                    now,
+                    now,
+                ),
+            )
+            conn1.commit()
+
+            calls: list[dict[str, object]] = []
+            nested_results: list[dict[str, object]] = []
+
+            def fake_sync(conn, cfg, *, full, page_ids, database_ids, actor):
+                calls.append(
+                    {
+                        "full": full,
+                        "page_ids": list(page_ids),
+                        "database_ids": list(database_ids),
+                        "actor": actor,
+                    }
+                )
+                nested_results.append(control.consume_notion_reindex_queue(conn2, cfg, actor="nested"))
+                return {
+                    "ok": True,
+                    "status": "ok",
+                    "full": full,
+                    "unresolved_pages": [],
+                    "unresolved_databases": [],
+                }
+
+            control.sync_shared_notion_index = fake_sync
+            result = control.consume_notion_reindex_queue(conn1, cfg, actor="outer")
+            expect(result["ok"] is True and result["processed_notifications"] == 1, str(result))
+            expect(len(calls) == 1, str(calls))
+            expect(nested_results and nested_results[0]["status"] == "busy", str(nested_results))
+            delivered = conn1.execute(
+                "SELECT delivered_at FROM notification_outbox WHERE channel_kind = 'notion-reindex'"
+            ).fetchone()
+            expect(bool(str(delivered["delivered_at"] or "")), str(dict(delivered)))
+            lease_value = control.get_setting(conn1, control.NOTION_REINDEX_CONSUMER_LEASE_KEY, "")
+            expect(lease_value == "", f"expected reindex lease to be released, got {lease_value!r}")
+            print("PASS test_notion_reindex_consumer_lease_blocks_overlapping_sync")
+        finally:
+            control.sync_shared_notion_index = real_sync
+            if conn1 is not None:
+                conn1.close()
+            if conn2 is not None:
+                conn2.close()
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def main() -> int:
     test_ssot_batcher_processes_events_and_reindex_queue()
     test_notion_event_batcher_claims_rows_before_processing()
-    print("PASS all 2 ssot batcher regression tests")
+    test_notion_reindex_consumer_lease_blocks_overlapping_sync()
+    print("PASS all 3 ssot batcher regression tests")
     return 0
 
 

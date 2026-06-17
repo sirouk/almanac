@@ -937,6 +937,28 @@ def test_academy_apply_action_materializes_local_hermes_home_when_authorized() -
             proposed_by="agent-live",
         )
         programs.end_academy_mode(conn, session_id=session["session"]["session_id"], actor=user_id, graduate=True)
+
+        # Fail-closed Trainer gate (arclink_academy_programs.py:2941-3029): a live
+        # apply only materializes a capsule whose specialist has a completed
+        # PG-PROVIDER live review (live_enrichment_status == "live_reviewed").
+        # Establish that review here so "authorized" means fully authorized.
+        class _ApplyLiveTrainer:
+            live = True
+
+            def review(self, *, role_title, topic, sources):
+                return {
+                    "engine": "apply-live-router",
+                    "live": True,
+                    "summary": f"Provider reviewed {role_title}",
+                    "verdicts": [{"source_uid": s["source_uid"], "verdict": "keep"} for s in sources],
+                }
+
+        spec_uid, _ = programs.specialist_uid_for_program(
+            programs.get_academy_program(conn, "systems_practice_engineer")
+        )
+        programs.run_academy_trainer_review(
+            conn, specialist_uid=spec_uid, client=_ApplyLiveTrainer(), live_authorized=True
+        )
         action = _queue_action(
             dashboard,
             conn,
@@ -1410,6 +1432,39 @@ def test_attempt_audit_is_persisted_before_side_effect() -> None:
     print("PASS test_attempt_audit_is_persisted_before_side_effect")
 
 
+def test_executor_selection_failure_records_failed_attempt() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_select_fail")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_select_fail")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_select_fail")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_select_fail")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    original_select = worker._select_action_executor
+
+    def fail_select(*_args, **_kwargs):
+        raise RuntimeError("selection failed token=sk-proj-aaaaaaaaaaaaaaaaaaaaaaaa")
+
+    try:
+        worker._select_action_executor = fail_select
+        result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod), worker_id="worker_select")
+    finally:
+        worker._select_action_executor = original_select
+
+    expect(result is not None and result["status"] == "failed", str(result))
+    expect(result["attempt_id"], str(result))
+    expect("sk-proj-" not in result["error"], str(result))
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (intent["action_id"],)).fetchone()
+    expect(row["status"] == "failed", dict(row))
+    attempts = worker.list_action_attempts(conn, action_id=intent["action_id"])
+    expect(len(attempts) == 1 and attempts[0]["status"] == "failed", str(attempts))
+    event = conn.execute(
+        "SELECT metadata_json FROM arclink_events WHERE event_type = 'action_failed:restart' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    metadata = json.loads(event["metadata_json"])
+    expect(metadata.get("phase") == "executor_selection", str(metadata))
+    print("PASS test_executor_selection_failure_records_failed_attempt")
+
+
 def test_stale_action_recovery() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_stale")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stale")
@@ -1428,6 +1483,40 @@ def test_stale_action_recovery() -> None:
     row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (intent["action_id"],)).fetchone()
     expect(row["status"] == "queued", "intent status returned to queued")
     print("PASS test_stale_action_recovery")
+
+
+def test_stale_action_recovery_fails_after_attempt_cap() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_stale_cap")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stale_cap")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_stale_cap")
+    conn = memory_db(control)
+    intent = _queue_action(dashboard, conn, action_type="restart")
+    conn.execute(
+        "UPDATE arclink_action_intents SET status = 'running', updated_at = '2020-01-01T00:00:00+00:00' WHERE action_id = ?",
+        (intent["action_id"],),
+    )
+    for index, status in enumerate(("failed", "failed", "running"), start=1):
+        conn.execute(
+            """
+            INSERT INTO arclink_action_attempts (
+              attempt_id, action_id, status, executor_adapter, result_json, error, started_at, finished_at
+            ) VALUES (?, ?, ?, 'fake', '{}', '', '2020-01-01T00:00:00+00:00', ?)
+            """,
+            (f"att_stale_{index}", intent["action_id"], status, "2020-01-01T00:00:00+00:00" if status != "running" else ""),
+        )
+    conn.commit()
+    recovered = worker.recover_stale_actions(conn, stale_threshold_seconds=60, max_attempts=3)
+    expect(len(recovered) == 1 and recovered[0]["new_status"] == "failed", str(recovered))
+    row = conn.execute("SELECT status FROM arclink_action_intents WHERE action_id = ?", (intent["action_id"],)).fetchone()
+    expect(row["status"] == "failed", dict(row))
+    running = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_action_attempts WHERE action_id = ? AND status = 'running'",
+        (intent["action_id"],),
+    ).fetchone()
+    expect(int(running["n"]) == 0, dict(running))
+    event = conn.execute("SELECT event_type FROM arclink_events ORDER BY created_at DESC LIMIT 1").fetchone()
+    expect(event["event_type"] == "action_stale_failed", dict(event))
+    print("PASS test_stale_action_recovery_fails_after_attempt_cap")
 
 
 def test_idempotent_retry() -> None:
@@ -2139,7 +2228,9 @@ if __name__ == "__main__":
     test_action_attempt_recorded()
     test_concurrent_workers_claim_action_once()
     test_attempt_audit_is_persisted_before_side_effect()
+    test_executor_selection_failure_records_failed_attempt()
     test_stale_action_recovery()
+    test_stale_action_recovery_fails_after_attempt_cap()
     test_idempotent_retry()
     test_executor_error_secret_material_is_redacted()
     test_action_worker_returns_safe_error_code_for_executor_errors()
@@ -2154,4 +2245,4 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 46 action worker tests passed.")
+    print(f"\nAll 48 action worker tests passed.")

@@ -36,6 +36,8 @@ DOCKER_REQUIRED_RUNNING_SERVICES=(
   control-provisioner
   control-action-worker
   vault-watch
+  fleet-inventory-worker
+  fleet-share-reconcile
   agent-supervisor
   control-operator-qmd-mcp
   control-operator-hermes-gateway

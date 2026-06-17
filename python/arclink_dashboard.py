@@ -523,6 +523,16 @@ class ArcLinkDashboardError(ValueError):
     pass
 
 
+def _env_present_with_alternates(
+    env: Mapping[str, str],
+    key: str,
+    alternates: Mapping[str, tuple[str, ...] | list[str]],
+) -> bool:
+    if str(env.get(key, "")).strip():
+        return True
+    return any(str(env.get(alt, "")).strip() for alt in alternates.get(key, ()))
+
+
 def build_operator_snapshot(
     *,
     env: dict[str, str] | None = None,
@@ -536,7 +546,7 @@ def build_operator_snapshot(
     """
     from arclink_host_readiness import run_readiness
     from arclink_diagnostics import run_diagnostics
-    from arclink_live_journey import build_journey
+    from arclink_live_journey import _ENV_ALTERNATES, build_journey
 
     readiness = run_readiness(env=env, skip_ports=skip_ports, docker_binary=docker_binary)
     diagnostics = run_diagnostics(env=env, docker_binary=docker_binary)
@@ -545,7 +555,11 @@ def build_operator_snapshot(
     journey_steps = build_journey()
     journey_blockers: list[dict[str, Any]] = []
     for step in journey_steps:
-        missing = [key for key in step.required_env if not str(env_source.get(key, "")).strip()]
+        missing = [
+            key
+            for key in step.required_env
+            if not _env_present_with_alternates(env_source, key, _ENV_ALTERNATES)
+        ]
         if missing:
             journey_blockers.append({"step": step.name, "missing_env": missing})
 
@@ -594,12 +608,14 @@ def build_scale_operations_snapshot(
     stale_action_threshold_seconds: int = 3600,
     rollout_target_version: str = "",
     rollout_batch_size: int | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build operator-visible scale operations read model."""
     from arclink_fleet import fleet_capacity_summary
     from arclink_inventory import list_inventory_machines
     from arclink_rollout import ArcLinkRolloutError, plan_arcpod_update_rollout
 
+    env_source = env if env is not None else os.environ
     capacity = fleet_capacity_summary(conn)
     inventory = [
         {
@@ -698,12 +714,12 @@ def build_scale_operations_snapshot(
             }
         )
 
-    action_readiness = admin_action_execution_readiness()
-    provisioning_readiness = control_node_provisioning_readiness(conn)
+    action_readiness = admin_action_execution_readiness(env=env_source)
+    provisioning_readiness = control_node_provisioning_readiness(conn, env=env_source)
     clean_rollout_target = str(
         rollout_target_version
-        or os.environ.get("ARCLINK_ROLLOUT_TARGET_VERSION")
-        or os.environ.get("ARCLINK_UPGRADE_TARGET_VERSION")
+        or env_source.get("ARCLINK_ROLLOUT_TARGET_VERSION")
+        or env_source.get("ARCLINK_UPGRADE_TARGET_VERSION")
         or ""
     ).strip()
     if clean_rollout_target:
@@ -712,7 +728,7 @@ def build_scale_operations_snapshot(
                 conn,
                 target_version=clean_rollout_target,
                 batch_size=rollout_batch_size,
-                env=os.environ,
+                env=env_source,
             )
         except ArcLinkRolloutError as exc:
             rollout_dry_run_plan = {
@@ -745,7 +761,7 @@ def build_scale_operations_snapshot(
         "fleet_surface": "internal_read_only",
         "inventory": {
             "machines": inventory,
-            "strategy": os.environ.get("ARCLINK_FLEET_PLACEMENT_STRATEGY", "headroom").strip() or "headroom",
+            "strategy": env_source.get("ARCLINK_FLEET_PLACEMENT_STRATEGY", "headroom").strip() or "headroom",
         },
         "placements": placements,
         "stale_actions": stale_actions,
@@ -1567,7 +1583,7 @@ def _deployment_events(conn: sqlite3.Connection, deployment_id: str, *, limit: i
 def _deployment_onboarding(conn: sqlite3.Connection, deployment_id: str) -> dict[str, Any]:
     session = conn.execute(
         """
-        SELECT session_id, channel, channel_identity, status, checkout_state, selected_model_id, updated_at
+        SELECT session_id, channel, channel_identity, status, checkout_state, selected_model_id, metadata_json, updated_at
         FROM arclink_onboarding_sessions
         WHERE deployment_id = ?
         ORDER BY updated_at DESC, created_at DESC
@@ -1591,16 +1607,50 @@ def _deployment_onboarding(conn: sqlite3.Connection, deployment_id: str) -> dict
             (str(session["session_id"] or ""),),
         ).fetchall()
     }
+    session_metadata = _json_loads(str(session["metadata_json"] or "{}"))
+    provider_setup = session_metadata.get("provider_setup")
+    provider_id = ""
+    if isinstance(provider_setup, Mapping):
+        provider_id = str(provider_setup.get("provider_id") or "").strip().lower()
     return {
         "session_id": str(session["session_id"] or ""),
         "channel": str(session["channel"] or ""),
         "status": str(session["status"] or ""),
         "checkout_state": str(session["checkout_state"] or ""),
         "selected_model_id": str(session["selected_model_id"] or ""),
+        "provider_id": provider_id,
         "first_contacted": "first_agent_contact" in events or str(session["status"] or "") in {"first_contacted", "completed"},
         "handoff_recorded": "channel_handoff" in events,
         "updated_at": str(session["updated_at"] or ""),
     }
+
+
+def _deployment_model_provider(metadata: Mapping[str, Any], onboarding: Mapping[str, Any]) -> str:
+    provider_setup = metadata.get("provider_setup")
+    model_payload = metadata.get("model")
+    candidates: list[Any] = []
+    if isinstance(provider_setup, Mapping):
+        candidates.append(provider_setup.get("provider_id"))
+    if isinstance(model_payload, Mapping):
+        candidates.append(model_payload.get("provider"))
+        candidates.append(model_payload.get("provider_id"))
+    candidates.extend(
+        [
+            metadata.get("provider_id"),
+            metadata.get("model_provider"),
+            metadata.get("primary_provider"),
+            metadata.get("provider"),
+            onboarding.get("provider_id"),
+        ]
+    )
+    for raw in candidates:
+        provider = str(raw or "").strip().lower()
+        if not provider:
+            continue
+        if ":" in provider:
+            provider = provider.split(":", 1)[0].strip()
+        return provider
+    return primary_provider(os.environ)
 
 
 def _deployment_agent_label(
@@ -1734,7 +1784,7 @@ def read_arclink_user_dashboard(
             "subscriptions": subscriptions,
             "renewal_lifecycle": renewal_lifecycle_for_billing_state(str(user["entitlement_state"] or "")),
         }
-        provider = primary_provider({})
+        provider = _deployment_model_provider(metadata, onboarding)
         model = {
             "provider": provider,
             "model_id": str(model_id or ""),
@@ -2373,26 +2423,43 @@ def queue_arclink_admin_action(
 
     clean_action_id = action_id.strip() if action_id else _stable_action_id(clean_key)
     now = utc_now_iso()
-    conn.execute(
-        """
-        INSERT INTO arclink_action_intents (
-          action_id, admin_id, action_type, target_kind, target_id, status,
-          idempotency_key, reason, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
-        """,
-        (
-            clean_action_id,
-            clean_admin,
-            clean_action,
-            clean_target_kind,
-            clean_target_id,
-            clean_key,
-            clean_reason,
-            metadata_json,
-            now,
-            now,
-        ),
-    )
+    try:
+        conn.execute(
+            """
+            INSERT INTO arclink_action_intents (
+              action_id, admin_id, action_type, target_kind, target_id, status,
+              idempotency_key, reason, metadata_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+            """,
+            (
+                clean_action_id,
+                clean_admin,
+                clean_action,
+                clean_target_kind,
+                clean_target_id,
+                clean_key,
+                clean_reason,
+                metadata_json,
+                now,
+                now,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        raced = conn.execute(
+            "SELECT * FROM arclink_action_intents WHERE idempotency_key = ?",
+            (clean_key,),
+        ).fetchone()
+        if raced is not None:
+            row = dict(raced)
+            if (
+                row["admin_id"] == clean_admin
+                and row["action_type"] == clean_action
+                and row["target_kind"] == clean_target_kind
+                and row["target_id"] == clean_target_id
+            ):
+                return row
+            raise ArcLinkDashboardError("ArcLink admin action idempotency key is already bound to another request") from exc
+        raise ArcLinkDashboardError("ArcLink admin action could not be queued because its idempotency key collided") from exc
     audit_id = append_arclink_audit(
         conn,
         action=f"admin_action:{clean_action}",

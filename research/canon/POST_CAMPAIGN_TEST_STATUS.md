@@ -8,23 +8,27 @@ The first post-campaign sweep was **121 / 128 green. 7 reds**. A Phase 0
 follow-up then fixed the 4 real cumulative cross-piece reds and re-ran the same
 128-file sweep:
 
-**125 / 128 green. 3 reds remain**, all in the previously documented
-pre-existing / stale-fixture / environment bucket. The 4 integration regressions
-that blocked the repair campaign are now green.
+Phase 0 fixed the 4 cross-piece reds (→ 125/128); a Phase 0 follow-up then cleared
+the 2 test-only residuals that were in scope (→ **127/128**):
 
-## Pre-existing (NOT introduced by this campaign)
+**127 / 128 green. 1 red remains** — the single genuinely pre-existing failure that
+predates this branch. The 4 integration regressions that blocked the repair campaign,
+plus both in-scope test-residuals, are now green.
+
+## Pre-existing (NOT introduced by this campaign) — still red, out of scope
 - **`test_deploy_regressions.py`** — fails at the pre-campaign baseline `63a42c8`
   (Discord `interaction.response.send_message` ephemeral assertion). Predates the
-  branch entirely.
+  branch entirely; not a CANON finding or a campaign regression. Left for a separate
+  pre-existing-bug task.
 
-## Likely pre-existing / environment (needs confirmation)
-- **`test_hermes_runtime_pin_regressions.py`** — "unexpected hermes-agent pin:
-  042c1d6bb054…". `config/pins.json` matches the committed pin (bumped in the
-  pre-campaign commit `7ac94d3`); the test appears to hardcode a stale expected pin.
-- **`test_arclink_user_agent_refresh.py`** — shell `bin/user-agent-refresh.sh`
-  exits rc=1. The current failure is a temp-repo test harness import miss
-  (`arclink_control.py` imports `arclink_boundary`, which the fixture copy lacks),
-  not one of the Phase 0 production regressions.
+## Resolved in the Phase 0 follow-up
+- **`test_arclink_user_agent_refresh.py`** — was a CAMPAIGN-introduced harness break:
+  CANON-01's refactor added `from arclink_boundary import …` to `arclink_control.py`,
+  but the test's temp-repo copy list never got `arclink_boundary.py` (or its
+  `arclink_secrets_regex` dep). FIXED: copy list updated (all 3 fixture blocks).
+- **`test_hermes_runtime_pin_regressions.py`** — stale since pre-campaign `7ac94d3`
+  bumped the hermes-agent pin `3c231eb…`→`042c1d6…` without updating the test's
+  hardcoded `PINNED_REF`. FIXED: `PINNED_REF` updated to the committed pin.
 
 ## Cumulative cross-piece regressions — RESOLVED in Phase 0
 These were correctness/security regressions from cumulative fixes; each was green at

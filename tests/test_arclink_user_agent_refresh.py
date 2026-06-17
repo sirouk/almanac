@@ -15,6 +15,10 @@ MODEL_PROVIDERS_PY = REPO / "python" / "arclink_model_providers.py"
 NOTION_SSOT_PY = REPO / "python" / "arclink_notion_ssot.py"
 ORG_PROFILE_PY = REPO / "python" / "arclink_org_profile.py"
 RESOURCE_MAP_PY = REPO / "python" / "arclink_resource_map.py"
+# arclink_control now imports the shared boundary helpers (CANON-01 refactor);
+# the temp-repo copy must include arclink_boundary + its arclink_secrets_regex dep.
+BOUNDARY_PY = REPO / "python" / "arclink_boundary.py"
+SECRETS_REGEX_PY = REPO / "python" / "arclink_secrets_regex.py"
 
 
 def expect(condition: bool, message: str) -> None:
@@ -115,6 +119,8 @@ def test_user_agent_refresh_materializes_managed_stubs_and_recent_events() -> No
         shutil.copy2(NOTION_SSOT_PY, python_dir / "arclink_notion_ssot.py")
         shutil.copy2(ORG_PROFILE_PY, python_dir / "arclink_org_profile.py")
         shutil.copy2(RESOURCE_MAP_PY, python_dir / "arclink_resource_map.py")
+        shutil.copy2(BOUNDARY_PY, python_dir / "arclink_boundary.py")
+        shutil.copy2(SECRETS_REGEX_PY, python_dir / "arclink_secrets_regex.py")
         write_fake_rpc_client(python_dir / "arclink_rpc_client.py")
 
         agents_state_dir = root / "agents-state" / "agent-guide"
@@ -258,6 +264,8 @@ def test_user_agent_refresh_falls_back_to_live_managed_memory_when_central_paylo
         shutil.copy2(NOTION_SSOT_PY, python_dir / "arclink_notion_ssot.py")
         shutil.copy2(ORG_PROFILE_PY, python_dir / "arclink_org_profile.py")
         shutil.copy2(RESOURCE_MAP_PY, python_dir / "arclink_resource_map.py")
+        shutil.copy2(BOUNDARY_PY, python_dir / "arclink_boundary.py")
+        shutil.copy2(SECRETS_REGEX_PY, python_dir / "arclink_secrets_regex.py")
         write_fake_rpc_client(python_dir / "arclink_rpc_client.py")
 
         agents_state_dir = root / "agents-state" / "agent-guide"
@@ -319,6 +327,8 @@ def test_user_agent_refresh_rejects_wrong_agent_central_payload() -> None:
         shutil.copy2(NOTION_SSOT_PY, python_dir / "arclink_notion_ssot.py")
         shutil.copy2(ORG_PROFILE_PY, python_dir / "arclink_org_profile.py")
         shutil.copy2(RESOURCE_MAP_PY, python_dir / "arclink_resource_map.py")
+        shutil.copy2(BOUNDARY_PY, python_dir / "arclink_boundary.py")
+        shutil.copy2(SECRETS_REGEX_PY, python_dir / "arclink_secrets_regex.py")
         write_fake_rpc_client(python_dir / "arclink_rpc_client.py")
 
         agents_state_dir = root / "agents-state" / "agent-guide"

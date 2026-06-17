@@ -819,6 +819,22 @@ def _public_bot_checkout_token_valid(session: Mapping[str, Any], *, plan: str, t
     return bool(expected and supplied_digest and hmac.compare_digest(expected, supplied_digest))
 
 
+def _public_bot_checkout_token_consumed_for_open_checkout(
+    session: Mapping[str, Any],
+    *,
+    plan: str,
+    token: str,
+) -> bool:
+    metadata = json_loads_safe(str(session.get("metadata_json") or "{}"))
+    raw_hashes = metadata.get("public_bot_checkout_consumed_verifiers")
+    if not isinstance(raw_hashes, Mapping):
+        return False
+    expected = str(raw_hashes.get(plan) or "").strip()
+    supplied = str(token or "").strip()
+    supplied_digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
+    return bool(expected and supplied_digest and hmac.compare_digest(expected, supplied_digest))
+
+
 def _consume_public_bot_checkout_token(
     conn: sqlite3.Connection,
     session: Mapping[str, Any],
@@ -844,6 +860,13 @@ def _consume_public_bot_checkout_token(
     consumed = dict(metadata.get("public_bot_checkout_consumed_at") or {}) if isinstance(metadata.get("public_bot_checkout_consumed_at"), Mapping) else {}
     consumed[plan] = utc_now_iso()
     metadata["public_bot_checkout_consumed_at"] = consumed
+    consumed_verifiers = (
+        dict(metadata.get("public_bot_checkout_consumed_verifiers") or {})
+        if isinstance(metadata.get("public_bot_checkout_consumed_verifiers"), Mapping)
+        else {}
+    )
+    consumed_verifiers[plan] = expected
+    metadata["public_bot_checkout_consumed_verifiers"] = consumed_verifiers
     cursor = conn.execute(
         """
         UPDATE arclink_onboarding_sessions
@@ -883,15 +906,16 @@ def _handle_public_bot_onboarding_checkout_redirect(
     if row is None:
         return _json_response(404, {"error": "onboarding_session_not_found", "request_id": request_id}, request_id=request_id)
     session = dict(row)
-    if not _public_bot_checkout_token_valid(session, plan=plan, token=token):
-        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+    token_is_active = _public_bot_checkout_token_valid(session, plan=plan, token=token)
 
     existing_url = str(session.get("checkout_url") or "").strip()
     existing_plan = str(session.get("selected_plan_id") or "").strip().lower()
     checkout_state = str(session.get("checkout_state") or "").strip().lower()
     if existing_url and checkout_state in {"open", "paid"}:
         if existing_plan == plan:
-            if not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
+            if token_is_active and not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
+                return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
+            if not token_is_active and not _public_bot_checkout_token_consumed_for_open_checkout(session, plan=plan, token=token):
                 return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
             proof_cookie = _issue_onboarding_claim_cookie(conn, session_id=session_id, config=config)
             return _json_response(
@@ -905,6 +929,8 @@ def _handle_public_bot_onboarding_checkout_redirect(
     price_id = config.founders_price_id if plan == "founders" else config.scale_price_id
     if not price_id:
         return _json_response(503, {"error": "stripe_price_not_configured", "request_id": request_id}, request_id=request_id)
+    if not token_is_active:
+        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
     if not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
         return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
 

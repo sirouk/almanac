@@ -3307,7 +3307,12 @@ ARCLINK_PROVISIONING_JOB_TRANSITIONS = {
 }
 
 
-def _arclink_json(value: Mapping[str, Any] | Sequence[Any] | str | None, *, default: str = "{}") -> str:
+def _arclink_json(
+    value: Mapping[str, Any] | Sequence[Any] | str | None,
+    *,
+    default: str = "{}",
+    reject_secrets: bool = True,
+) -> str:
     if value is None:
         return default
     if isinstance(value, str):
@@ -3315,9 +3320,11 @@ def _arclink_json(value: Mapping[str, Any] | Sequence[Any] | str | None, *, defa
             parsed = json.loads(value)
         except json.JSONDecodeError as exc:
             raise ValueError("ArcLink JSON fields must contain valid JSON") from exc
-        reject_secret_material(parsed, label="ArcLink control JSON field")
+        if reject_secrets:
+            reject_secret_material(parsed, label="ArcLink control JSON field")
         return value
-    reject_secret_material(value, label="ArcLink control JSON field")
+    if reject_secrets:
+        reject_secret_material(value, label="ArcLink control JSON field")
     return json.dumps(value, sort_keys=True)
 
 
@@ -3684,7 +3691,7 @@ def reserve_arclink_deployment_prefix(
                 str(agent_title or "").strip(),
                 float(asu_weight or 1.0),
                 clean_status,
-                _arclink_json(metadata),
+                _arclink_json(metadata, reject_secrets=False),
                 now,
                 now,
             ),

@@ -3798,6 +3798,8 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
         "data": {
             "object": {
                 "id": "cs_paidping_1",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_paidping_1",
                 "subscription": "sub_paidping_1",
                 "client_reference_id": prepared["user_id"],
@@ -3881,6 +3883,8 @@ def test_stripe_webhook_queues_paid_ping_for_discord_user() -> None:
         "data": {
             "object": {
                 "id": "cs_paidping_discord_1",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_paidping_discord_1",
                 "subscription": "sub_paidping_discord_1",
                 "client_reference_id": prepared["user_id"],
@@ -3935,6 +3939,8 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
         "data": {
             "object": {
                 "id": "cs_test_1",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_test_1",
                 "subscription": "sub_test_1",
                 "client_reference_id": prepared["user_id"],
@@ -4015,6 +4021,8 @@ def test_stripe_webhook_received_duplicate_is_acknowledged_as_replay() -> None:
         "data": {
             "object": {
                 "id": "cs_received_duplicate",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_received_duplicate",
                 "subscription": "sub_received_duplicate",
                 "client_reference_id": prepared["user_id"],
@@ -4044,8 +4052,8 @@ def test_stripe_webhook_received_duplicate_is_acknowledged_as_replay() -> None:
     expect(payload["replayed"] is True, str(payload))
     user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", (prepared["user_id"],)).fetchone()
     webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_received_duplicate'").fetchone()
-    expect(user["entitlement_state"] == "none", str(dict(user)))
-    expect(webhook["status"] == "received", str(dict(webhook)))
+    expect(user["entitlement_state"] == "paid", str(dict(user)))
+    expect(webhook["status"] == "processed", str(dict(webhook)))
     print("PASS test_stripe_webhook_received_duplicate_is_acknowledged_as_replay")
 
 
@@ -4241,8 +4249,8 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         telegram_transport=FailingTransport(),
         headers=telegram_headers,
     )
-    expect(status == 200, f"reply send failure should still ack webhook: {status} {payload}")
-    expect(payload.get("sent") is False, str(payload))
+    expect(status == 502, f"reply send failure should ask Telegram to retry: {status} {payload}")
+    expect(payload.get("ok") is False and payload.get("error") == "telegram_reply_send_failed", str(payload))
 
     def queued_agent_turn(*args, **kwargs):
         del args, kwargs

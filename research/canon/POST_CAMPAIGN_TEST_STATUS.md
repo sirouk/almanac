@@ -4,12 +4,13 @@ After all 32 pieces were repaired and committed, a **full 128-file suite scan**
 (`for f in tests/test_*.py; do python3 $f; done`, `TERMINAL_DISABLE_TMUX=1`,
 `ARCLINK_FLEET_WORKER_CONFIG=/tmp/none`) was run as the final CI-style gate.
 
-**121 / 128 green. 7 reds**, categorized below. These slipped the *per-batch* broad
-gates because those gates ran a curated subset, not the whole suite — so
-**cumulative, cross-piece** interactions (250+ fixes applied across 32 pieces) only
-surface at full-integration level. They are documented here for merge review and a
-focused follow-up; none invalidate the per-piece repairs, but the branch is **not
-fully green** and should not be merged until these are resolved or accepted.
+The first post-campaign sweep was **121 / 128 green. 7 reds**. A Phase 0
+follow-up then fixed the 4 real cumulative cross-piece reds and re-ran the same
+128-file sweep:
+
+**125 / 128 green. 3 reds remain**, all in the previously documented
+pre-existing / stale-fixture / environment bucket. The 4 integration regressions
+that blocked the repair campaign are now green.
 
 ## Pre-existing (NOT introduced by this campaign)
 - **`test_deploy_regressions.py`** — fails at the pre-campaign baseline `63a42c8`
@@ -21,11 +22,13 @@ fully green** and should not be merged until these are resolved or accepted.
   042c1d6bb054…". `config/pins.json` matches the committed pin (bumped in the
   pre-campaign commit `7ac94d3`); the test appears to hardcode a stale expected pin.
 - **`test_arclink_user_agent_refresh.py`** — shell `bin/user-agent-refresh.sh`
-  exits rc=1; likely host/env-dependent (not reproduced as a code defect yet).
+  exits rc=1. The current failure is a temp-repo test harness import miss
+  (`arclink_control.py` imports `arclink_boundary`, which the fixture copy lacks),
+  not one of the Phase 0 production regressions.
 
-## Cumulative cross-piece regressions — REAL, need a follow-up fix pass
-These are correctness/security regressions from cumulative fixes; each was green at
-its own piece's batch commit but broke at integration:
+## Cumulative cross-piece regressions — RESOLVED in Phase 0
+These were correctness/security regressions from cumulative fixes; each was green at
+its own piece's batch commit but broke at integration. They now pass:
 1. **`test_arclink_entitlements.py::test_checkout_onboarding_sync_does_not_commit_before_webhook_processed`**
    — the CANON-07 webhook atomicity is violated at integration: a forced webhook
    failure leaves `entitlement_state='paid'` (committed) instead of rolling back.
@@ -44,7 +47,8 @@ its own piece's batch commit but broke at integration:
 The per-batch gates were intentionally narrow (curated affected tests) to keep the
 campaign moving; the trade-off is that integration-level regressions from interacting
 fixes (esp. the shared `arclink_control.py` secret-rejection + commit helpers, touched
-by CANON-01 and CANON-23) were not caught until this full-suite scan. The correct
-follow-up is a single integration pass that runs the full suite and resolves the 4
-cross-piece reds at their shared root (control.py secret/commit helpers + the
-api_auth/onboarding cancel refactor), then re-runs the whole suite to green.
+by CANON-01 and CANON-23) were not caught until the full-suite scan. Phase 0 fixed
+the shared roots: webhook transaction leakage from onboarding expiry cleanup,
+onboarding modern secret/step validation, provisioning job-level secret failure
+handling, and hosted public-bot checkout replay idempotence. The full sweep now
+has only the 3 residual non-Phase0 reds listed above.

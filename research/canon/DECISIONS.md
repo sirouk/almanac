@@ -8,7 +8,7 @@
 - **40 deferred decisions** across 32 pieces (several pieces resolved to *no operator decision*: CANON-01, 05, 14, 17, 32 are ratify-only; 06, 21, 23, 24, 29 are single-decision).
 - **Verdicts:** ~15 *agree-codex* (ratify Codex as-is), ~25 *refine* (converge with code-grounded refinement), **0 unresolved model-vs-model disagreements**.
 - **Genuine product forks the operator must pick: 6** (CANON-02, CANON-04 ×2 tuning, CANON-11, CANON-12, CANON-19 ×2). Marked **[FORK]** below.
-- **Branch is NOT fully green:** 7 reds in `POST_CAMPAIGN_TEST_STATUS.md` (1 pre-existing, 2 env-suspect, **4 real cumulative cross-piece regressions**) gate the merge.
+- **Branch is NOT fully green:** Phase 0 resolved the 4 real cumulative cross-piece regressions; the latest full sweep is 125/128 with 3 residual pre-existing / stale-fixture / environment reds in `POST_CAMPAIGN_TEST_STATUS.md`.
 
 ---
 
@@ -257,9 +257,9 @@ These are genuine both-options policy/upgrade tradeoffs, not code-correctness qu
 
 ## 4. Suggested execution order
 
-The Symphony's fail-closed priority is: **close the live security holes first, then the silent fail-opens, then evidence/contract hygiene, then hardening.** Two hard constraints frame the order: (a) the **4 real cumulative cross-piece reds** in `POST_CAMPAIGN_TEST_STATUS.md` must go green before merge; (b) several decisions share the same root files (`arclink_control.py` secret/commit helpers; `_remote_ip_from_headers`), so land them together.
+The Symphony's fail-closed priority is: **close the live security holes first, then the silent fail-opens, then evidence/contract hygiene, then hardening.** Two hard constraints frame the order: (a) the **4 real cumulative cross-piece reds** in `POST_CAMPAIGN_TEST_STATUS.md` have been resolved by Phase 0; (b) several remaining decisions share the same root files (`arclink_control.py` secret/commit helpers; `_remote_ip_from_headers`), so land them together.
 
-**Phase 0 — Unblock the merge (must-do, integration reds).** Single integration pass resolving the 4 reds at their shared root, then re-run the full 128-file suite to green:
+**Phase 0 — COMPLETE (integration reds).** Single integration pass resolved the 4 reds at their shared root, then re-ran the full 128-file suite:
 1. CANON-07 webhook atomicity red (`test_checkout_onboarding_sync_does_not_commit_before_webhook_processed`) — a mid-webhook `conn.commit()` reintroduced by a later batch.
 2. CANON-04 hint secret-scan red (`sk-ant-api…` display_name_hint not rejected at integration).
 3. CANON-08/provisioning uncaught `ValueError` on plaintext `llm_router_api_key_ref` (should fail the job gracefully).

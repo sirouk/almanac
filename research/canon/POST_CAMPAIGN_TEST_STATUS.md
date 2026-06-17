@@ -9,17 +9,17 @@ follow-up then fixed the 4 real cumulative cross-piece reds and re-ran the same
 128-file sweep:
 
 Phase 0 fixed the 4 cross-piece reds (→ 125/128); a Phase 0 follow-up then cleared
-the 2 test-only residuals that were in scope (→ **127/128**):
+all 3 remaining residuals (→ **128/128**):
 
-**127 / 128 green. 1 red remains** — the single genuinely pre-existing failure that
-predates this branch. The 4 integration regressions that blocked the repair campaign,
-plus both in-scope test-residuals, are now green.
+**128 / 128 green.** The 4 integration regressions that blocked the repair campaign,
+plus all 3 pre-existing/test-residual reds, are now green. Full suite clean.
 
-## Pre-existing (NOT introduced by this campaign) — still red, out of scope
-- **`test_deploy_regressions.py`** — fails at the pre-campaign baseline `63a42c8`
-  (Discord `interaction.response.send_message` ephemeral assertion). Predates the
-  branch entirely; not a CANON finding or a campaign regression. Left for a separate
-  pre-existing-bug task.
+## Pre-existing reds — resolved (all were stale tests, not production defects)
+- **`test_deploy_regressions.py`** — pre-existing since `63a42c8`. The dedup FEATURE
+  was present (`_claim_discord_message_once`, seen-message store, INSERT OR IGNORE);
+  the test was pinned to a *pre-refactor inline* call-site string. The code had since
+  been refactored to extract `message_id` first (cleaner, identical behavior). FIXED:
+  the assertion now matches the real two-line guard, preserving its intent.
 
 ## Resolved in the Phase 0 follow-up
 - **`test_arclink_user_agent_refresh.py`** — was a CAMPAIGN-introduced harness break:

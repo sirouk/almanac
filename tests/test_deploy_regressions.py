@@ -887,7 +887,8 @@ def test_discord_onboarding_dedupes_message_ids_before_state_transitions() -> No
     expect("_claim_discord_message_once" in body, body)
     expect("curator_discord_onboarding_seen_message:" in body, body)
     expect("INSERT OR IGNORE INTO settings" in body, body)
-    expect('if not _claim_discord_message_once(str(getattr(message, "id", "") or "")):' in body, body)
+    expect('message_id = str(getattr(message, "id", "") or "")' in body, body)
+    expect("if not _claim_discord_message_once(message_id):" in body, body)
     expect("await _handle_operator_channel_message(message, content)" in body, body)
     print("PASS test_discord_onboarding_dedupes_message_ids_before_state_transitions")
 

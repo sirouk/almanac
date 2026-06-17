@@ -193,6 +193,48 @@ def test_user_agent_identity_update_requires_session_and_csrf() -> None:
     print("PASS test_user_agent_identity_update_requires_session_and_csrf")
 
 
+def test_provider_state_demotes_spoofed_unlimited_policy_from_operator_settings() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_provider_demote_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_provider_demote_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_provider_demote_test")
+    conn = memory_db(control)
+    prepared = seed_paid_deployment(control, onboarding, conn)
+    conn.execute(
+        "UPDATE arclink_deployments SET metadata_json = ? WHERE deployment_id = ?",
+        (
+            json.dumps(
+                {
+                    "selected_model_id": "model-api",
+                    "chutes": {
+                        "secret_ref": f"secret://arclink/chutes/{prepared['deployment_id']}",
+                        "monthly_budget_cents": 0,
+                        "used_cents": 12,
+                        "budget_policy": "observe_only_unlimited",
+                    },
+                },
+                sort_keys=True,
+            ),
+            prepared["deployment_id"],
+        ),
+    )
+    conn.commit()
+    session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_provider_demote")
+    result = api.read_provider_state_api(
+        conn,
+        session_id=session["session_id"],
+        session_token=session["session_token"],
+        env={"ARCLINK_PRIMARY_PROVIDER": "chutes"},
+    )
+    expect(result.status == 200, str(result))
+    model = result.payload["deployment_models"][0]
+    expect(model["credential_state"] == "budget_unconfigured", str(model))
+    expect(model["allow_inference"] is False, str(model))
+    expect(model["chutes"]["budget"]["status"] == "unconfigured", str(model))
+    expect(model["chutes"]["budget"]["limit_enforced"] is True, str(model))
+    expect(model["chutes"]["budget"]["status"] != "unlimited", str(model))
+    print("PASS test_provider_state_demotes_spoofed_unlimited_policy_from_operator_settings")
+
+
 def test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_crew_recipe_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_crew_recipe_test")
@@ -1159,6 +1201,7 @@ def test_proof_token_hashes_use_hmac_and_accept_legacy() -> None:
 def main() -> int:
     test_sessions_store_hashes_and_user_api_is_scoped_to_principal()
     test_user_agent_identity_update_requires_session_and_csrf()
+    test_provider_state_demotes_spoofed_unlimited_policy_from_operator_settings()
     test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
@@ -1183,7 +1226,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 26 ArcLink API/auth tests")
+    print("PASS all 27 ArcLink API/auth tests")
     return 0
 
 

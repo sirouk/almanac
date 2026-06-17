@@ -15,7 +15,13 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from arclink_chutes import ChutesCatalogClient, ChutesCatalogError, evaluate_chutes_deployment_boundary, record_chutes_usage_event
+from arclink_chutes import (
+    ChutesCatalogClient,
+    ChutesCatalogError,
+    evaluate_chutes_deployment_boundary,
+    record_chutes_budget_policy_demotion,
+    record_chutes_usage_event,
+)
 from arclink_boundary import json_dumps_safe
 from arclink_control import (
     ensure_schema,
@@ -26,6 +32,7 @@ from arclink_control import (
     upsert_model_catalog,
     verify_llm_router_key,
 )
+from arclink_operator_agent import observe_unlimited_authorized
 from arclink_secrets_regex import REDACTION_TEXT, contains_secret_material, redact_then_truncate
 
 
@@ -1146,28 +1153,43 @@ def _preflight_chat_request(
         conn.execute("BEGIN IMMEDIATE")
         transaction_started = True
         metadata, billing_state = _load_deployment_context(conn, auth_record)
+        deployment_id = str(auth_record.get("deployment_id") or "")
+        user_id = str(auth_record.get("user_id") or "")
+        boundary_metadata = _router_boundary_metadata(metadata, auth_record)
+        observe_authorized = observe_unlimited_authorized(conn, deployment_id, user_id)
         boundary = evaluate_chutes_deployment_boundary(
-            str(auth_record.get("deployment_id") or ""),
-            str(auth_record.get("user_id") or ""),
-            _router_boundary_metadata(metadata, auth_record),
+            deployment_id,
+            user_id,
+            boundary_metadata,
             env={
                 "ARCLINK_CHUTES_DEFAULT_MONTHLY_BUDGET_CENTS": str(config.default_monthly_budget_cents),
                 "ARCLINK_CHUTES_WARNING_THRESHOLD_PERCENT": "80",
                 "ARCLINK_CHUTES_HARD_LIMIT_PERCENT": "100",
             },
             billing_state=billing_state,
+            observe_unlimited_authorized=observe_authorized,
+        )
+        demotion_recorded = record_chutes_budget_policy_demotion(
+            conn,
+            deployment_id=deployment_id,
+            metadata=boundary_metadata,
+            observe_unlimited_authorized=observe_authorized,
+            source="llm_router_preflight",
+            commit=False,
         )
         if not boundary.allow_inference:
             status_code = 402 if boundary.credential_state in {"billing_suspended", "budget_unconfigured", "budget_exhausted"} else 403
             if boundary.credential_state == "budget_exhausted":
                 _queue_arc_pod_fuel_notice(
                     conn,
-                    deployment_id=str(auth_record.get("deployment_id") or ""),
-                    user_id=str(auth_record.get("user_id") or ""),
+                    deployment_id=deployment_id,
+                    user_id=user_id,
                     boundary=boundary,
                     severity="empty",
                     commit=False,
                 )
+                conn.commit()
+            elif demotion_recorded:
                 conn.commit()
             else:
                 conn.rollback()
@@ -1185,7 +1207,6 @@ def _preflight_chat_request(
                 transaction_started = False
                 return None, error
 
-        deployment_id = str(auth_record.get("deployment_id") or "")
         if _open_reserved_count(conn, deployment_id) >= config.deployment_concurrency_limit:
             conn.rollback()
             transaction_started = False

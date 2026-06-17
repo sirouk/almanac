@@ -184,6 +184,43 @@ def operator_agent_deployment(conn: sqlite3.Connection) -> dict[str, Any] | None
     return _deployment_row(conn, deployment_id)
 
 
+def observe_unlimited_authorized(conn: sqlite3.Connection, deployment_id: str, user_id: str) -> bool:
+    """True only for the server-configured Operator agent identity.
+
+    The unlimited-observed Chutes budget lane is an Operator privilege. Request
+    metadata can ask for the policy, but this helper is the server-side source
+    that decides whether that claim is honored.
+    """
+    clean_deployment = str(deployment_id or "").strip()
+    clean_user = str(user_id or "").strip()
+    if not clean_deployment or not clean_user:
+        return False
+
+    from arclink_boundary import json_loads_safe
+    from arclink_control import get_setting
+
+    try:
+        configured_deployment = str(get_setting(conn, OPERATOR_AGENT_DEPLOYMENT_SETTING, "")).strip()
+        configured_user = str(get_setting(conn, OPERATOR_AGENT_USER_SETTING, "")).strip()
+    except sqlite3.Error:
+        return False
+    if not configured_deployment or not configured_user:
+        return False
+    if clean_deployment != configured_deployment or clean_user != configured_user:
+        return False
+    try:
+        if assert_single_operator_agent(conn) > 1:
+            return False
+    except OperatorAgentError:
+        return False
+    row = _deployment_row(conn, configured_deployment)
+    if row is None or str(row.get("user_id") or "").strip() != clean_user:
+        return False
+    raw_metadata = row.get("metadata_json")
+    metadata = json_loads_safe(raw_metadata) if isinstance(raw_metadata, str) else raw_metadata
+    return isinstance(metadata, Mapping) and metadata.get("operator_agent") is True
+
+
 def operator_agent_is_ready(deployment: Mapping[str, Any] | None) -> bool:
     if not deployment:
         return False

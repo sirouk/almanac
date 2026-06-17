@@ -340,6 +340,46 @@ def _seed_router_key(
     return raw_key
 
 
+def _seed_operator_router_key(
+    db_path: str,
+    *,
+    deployment_id: str = "ops-dep",
+    user_id: str = "ops-user",
+    used_cents: int = 5_000_000,
+) -> str:
+    control = load_module("arclink_control.py", "arclink_control_llm_router_operator_key_test")
+    operator_agent = load_module("arclink_operator_agent.py", "arclink_operator_agent_llm_router_test")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    control.ensure_schema(conn)
+    operator_agent.ensure_operator_agent_user(conn, user_id=user_id, email="ops@example.test")
+    operator_agent.ensure_operator_agent_deployment(
+        conn,
+        user_id=user_id,
+        deployment_id=deployment_id,
+        prefix="ops-helm",
+        base_domain="example.test",
+        status="active",
+        metadata={
+            "chutes": {
+                "secret_ref": f"secret://arclink/chutes/{deployment_id}",
+                "used_cents": used_cents,
+            }
+        },
+    )
+    raw_key = control.generate_llm_router_raw_key()
+    control.ensure_llm_router_key(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        secret_ref=f"secret://arclink/llm-router/{deployment_id}/api-key",
+        raw_key=raw_key,
+        allowed_models=["model-a", "model-b"],
+    )
+    conn.close()
+    return raw_key
+
+
 def _seed_model_catalog(db_path: str) -> None:
     control = load_module("arclink_control.py", "arclink_control_llm_router_model_catalog_test")
     conn = sqlite3.connect(db_path)
@@ -1214,6 +1254,112 @@ def test_chat_preflight_enforces_budget_and_billing_fail_closed() -> None:
     print("PASS test_chat_preflight_enforces_budget_and_billing_fail_closed")
 
 
+def test_chat_operator_observe_unlimited_is_server_authorized_and_metered() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_operator_router_key(db_path, used_cents=5_000_000)
+        upstream = fake_upstream_transport(
+            {
+                "id": "chatcmpl_operator",
+                "object": "chat.completion",
+                "model": "model-a",
+                "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+            }
+        )
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            },
+            upstream_transport=upstream,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "operator repair check"}]},
+        )
+        expect(response.status_code == 200, response.text)
+        expect(len(upstream.requests) == 1, str(upstream.requests))  # type: ignore[attr-defined]
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute("SELECT metadata_json FROM arclink_deployments WHERE deployment_id = 'ops-dep'").fetchone()
+            metadata = json.loads(row["metadata_json"])
+            demotions = conn.execute(
+                "SELECT COUNT(*) AS count FROM arclink_events WHERE event_type = 'llm_router:budget_policy_demoted'"
+            ).fetchone()["count"]
+        finally:
+            conn.close()
+        expect(metadata["chutes"]["budget_policy"] == "observe_only_unlimited", str(metadata))
+        expect(metadata["chutes"]["used_cents"] >= 5_000_000, str(metadata))
+        expect(demotions == 0, str(demotions))
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_operator_observe_unlimited_is_server_authorized_and_metered")
+
+
+def test_chat_spoofed_observe_unlimited_demotes_to_capped_lane_and_records_evidence() -> None:
+    tmp, db_path = temp_router_db()
+    try:
+        raw_key = _seed_router_key(
+            db_path,
+            deployment_metadata={
+                "chutes": {
+                    "secret_ref": "secret://arclink/chutes/dep_1",
+                    "monthly_budget_cents": 0,
+                    "used_cents": 0,
+                    "budget_policy": "observe_only_unlimited",
+                }
+            },
+        )
+        upstream = fake_upstream_transport()
+        client = _client_for(
+            {
+                "ARCLINK_DB_PATH": db_path,
+                "ARCLINK_LLM_ROUTER_ENABLED": "1",
+                "ARCLINK_LLM_ROUTER_CHUTES_API_KEY": "cpk_test_router_secret_123",
+            },
+            upstream_transport=upstream,
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {raw_key}"},
+            json={"model": "model-a", "messages": [{"role": "user", "content": "hello spoof"}]},
+        )
+        expect(response.status_code == 402, response.text)
+        expect(response.json()["error"]["code"] == "budget_unconfigured", response.text)
+        expect(len(upstream.requests) == 0, str(upstream.requests))  # type: ignore[attr-defined]
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            event = conn.execute(
+                """
+                SELECT subject_kind, subject_id, event_type, metadata_json
+                FROM arclink_events
+                WHERE event_type = 'llm_router:budget_policy_demoted'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            reservations = conn.execute("SELECT COUNT(*) AS count FROM arclink_llm_budget_reservations").fetchone()["count"]
+            usage = conn.execute("SELECT COUNT(*) AS count FROM arclink_llm_usage_events").fetchone()["count"]
+        finally:
+            conn.close()
+        expect(event is not None, "expected a budget policy demotion event")
+        event_meta = json.loads(event["metadata_json"])
+        expect(event["subject_kind"] == "deployment" and event["subject_id"] == "dep_1", str(dict(event)))
+        expect(event_meta["authorized"] is False, str(event_meta))
+        expect(event_meta["budget_policy"] == "observe_only_unlimited", str(event_meta))
+        event_text = json.dumps(event_meta, sort_keys=True)
+        expect("secret://" not in event_text and "hello spoof" not in event_text, event_text)
+        expect(reservations == 0 and usage == 0, f"unexpected router side effects: reservations={reservations} usage={usage}")
+    finally:
+        tmp.cleanup()
+    print("PASS test_chat_spoofed_observe_unlimited_demotes_to_capped_lane_and_records_evidence")
+
+
 def test_chat_preflight_enforces_rate_limit_and_concurrency() -> None:
     tmp, db_path = temp_router_db()
     try:
@@ -1790,6 +1936,8 @@ def main() -> int:
     test_key_allowlist_blocks_global_default_replacement_and_fallback_escape()
     test_chat_preflight_rejects_invalid_model_and_size_limits()
     test_chat_preflight_enforces_budget_and_billing_fail_closed()
+    test_chat_operator_observe_unlimited_is_server_authorized_and_metered()
+    test_chat_spoofed_observe_unlimited_demotes_to_capped_lane_and_records_evidence()
     test_chat_preflight_enforces_rate_limit_and_concurrency()
     test_router_keys_verify_fail_closed_and_do_not_store_raw_material()
     test_router_auth_rejects_missing_invalid_and_suspended_keys()
@@ -1800,7 +1948,7 @@ def main() -> int:
     test_provider_side_fallback_csv_default_model_is_allowed_as_single_model_string()
     test_chat_streaming_retries_pre_stream_fallback_and_records_metadata()
     test_chat_partial_stream_failure_settles_without_prompt_or_secret_storage()
-    print("PASS all 26 ArcLink LLM router tests")
+    print("PASS all 28 ArcLink LLM router tests")
     return 0
 
 

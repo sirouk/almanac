@@ -55,6 +55,7 @@ from arclink_chutes import (
     evaluate_chutes_deployment_boundary,
     renewal_lifecycle_for_billing_state,
 )
+from arclink_operator_agent import observe_unlimited_authorized
 from arclink_crew_recipes import (
     apply_crew_recipe,
     crew_academy_status,
@@ -4810,12 +4811,15 @@ def read_provider_state_api(
         model_id = str(meta.get("selected_model_id") or meta.get("model_id") or default_model)
         item = {"deployment_id": row["deployment_id"], "user_id": row["user_id"], "model_id": model_id}
         if provider == "chutes":
+            deployment_id = str(row["deployment_id"] or "")
+            user_id_for_boundary = str(row["user_id"] or "")
             boundary = evaluate_chutes_deployment_boundary(
-                str(row["deployment_id"] or ""),
-                str(row["user_id"] or ""),
+                deployment_id,
+                user_id_for_boundary,
                 meta,
                 env=env_source,
                 billing_state=str(row["entitlement_state"] or "none"),
+                observe_unlimited_authorized=observe_unlimited_authorized(conn, deployment_id, user_id_for_boundary),
             )
             public_boundary = boundary.to_public(include_user_id=session_kind == "admin", include_admin_fields=session_kind == "admin")
             item["credential_state"] = boundary.credential_state

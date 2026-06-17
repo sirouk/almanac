@@ -152,6 +152,53 @@ def test_operator_agent_default_is_control_stack_active_not_arcpod_ready() -> No
         cleanup(tmp, old_env)
 
 
+def test_observe_unlimited_authorization_uses_operator_settings_and_fails_closed() -> None:
+    tmp, old_env, conn, control, oa = with_db()
+    try:
+        expect(
+            oa.observe_unlimited_authorized(conn, "operator", "operator") is False,
+            "empty operator-agent settings must fail closed",
+        )
+        oa.ensure_operator_agent_user(conn, user_id="ops-user")
+        oa.ensure_operator_agent_deployment(
+            conn,
+            user_id="ops-user",
+            deployment_id="ops-dep",
+            prefix="ops-helm",
+            status="active",
+        )
+        expect(
+            oa.observe_unlimited_authorized(conn, "ops-dep", "ops-user") is True,
+            "configured non-default operator identity should authorize",
+        )
+        expect(
+            oa.observe_unlimited_authorized(conn, "operator", "operator") is False,
+            "authorization must not hard-code the default operator ids",
+        )
+        control.upsert_arclink_user(conn, user_id="captain-user", email="captain@example.test", entitlement_state="paid")
+        control.reserve_arclink_deployment_prefix(
+            conn,
+            deployment_id="captain-dep",
+            user_id="captain-user",
+            prefix="captain-one",
+            base_domain="example.test",
+            status="active",
+            metadata={"chutes": {"budget_policy": "observe_only_unlimited"}},
+        )
+        expect(
+            oa.observe_unlimited_authorized(conn, "captain-dep", "captain-user") is False,
+            "Captain metadata must not authorize the operator unlimited lane",
+        )
+        control.upsert_setting(conn, oa.OPERATOR_AGENT_DEPLOYMENT_SETTING, "")
+        expect(
+            oa.observe_unlimited_authorized(conn, "ops-dep", "ops-user") is False,
+            "blank operator-agent setting must fail closed",
+        )
+        print("PASS test_observe_unlimited_authorization_uses_operator_settings_and_fails_closed")
+    finally:
+        cleanup(tmp, old_env)
+
+
 def test_operator_agent_enabled_defaults_on_with_explicit_opt_out() -> None:
     tmp, old_env, conn, _, oa = with_db()
     try:
@@ -311,6 +358,7 @@ def test_telegram_operator_native_callback_routes_to_hermes_bridge() -> None:
 if __name__ == "__main__":
     test_operator_agent_lifecycle_and_single_invariant()
     test_operator_agent_default_is_control_stack_active_not_arcpod_ready()
+    test_observe_unlimited_authorization_uses_operator_settings_and_fails_closed()
     test_operator_agent_enabled_defaults_on_with_explicit_opt_out()
     test_operator_agent_turn_enqueues_only_when_ready()
     test_telegram_operator_free_form_routes_to_agent_or_intro()

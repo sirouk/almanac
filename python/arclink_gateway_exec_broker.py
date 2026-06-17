@@ -321,7 +321,9 @@ def run_gateway_exec_request(request_body: dict[str, Any]) -> tuple[bool, str]:
     if result.get("delivered") is True:
         return True, ""
     if result.get("ok") is True:
-        return False, delivery._public_agent_bridge_unconfirmed_error(result)
+        if delivery._public_agent_bridge_should_hold_for_reconciliation(result):
+            return False, delivery._public_agent_bridge_unconfirmed_error(result)
+        return False, delivery._public_agent_bridge_delivery_error(result, label="Hermes public gateway bridge")
     return False, str(result.get("error") or "Hermes public gateway bridge completed without an ok response")
 
 

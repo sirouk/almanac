@@ -1448,6 +1448,126 @@ def test_public_agent_bridge_worker_holds_unconfirmed_bridge_success() -> None:
             os.environ.update(old_env)
 
 
+def test_public_agent_bridge_hold_policy_distinguishes_unknown_from_failed_no_id() -> None:
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_hold_policy_test")
+    unknown = delivery.public_agent_bridge_delivery_result(
+        {"ok": True, "delivered": False, "delivery_status": "unknown", "message_ids": []}
+    )
+    failed_without_ids = delivery.public_agent_bridge_delivery_result(
+        {
+            "ok": True,
+            "delivered": False,
+            "delivery_status": "failed",
+            "delivery_error": "telegram 403",
+            "message_ids": [],
+        }
+    )
+    failed_with_ids = delivery.public_agent_bridge_delivery_result(
+        {
+            "ok": True,
+            "delivered": False,
+            "delivery_status": "failed",
+            "delivery_error": "final edit failed",
+            "message_ids": ["tg-placeholder-1"],
+        }
+    )
+    expect(delivery._public_agent_bridge_should_hold_for_reconciliation(unknown) is True, str(unknown))
+    expect(delivery._public_agent_bridge_should_hold_for_reconciliation(failed_without_ids) is False, str(failed_without_ids))
+    expect(delivery._public_agent_bridge_should_hold_for_reconciliation(failed_with_ids) is True, str(failed_with_ids))
+    print("PASS test_public_agent_bridge_hold_policy_distinguishes_unknown_from_failed_no_id")
+
+
+def test_public_agent_bridge_worker_retries_failed_send_without_message_ids() -> None:
+    if str(PYTHON_DIR) not in sys.path:
+        sys.path.insert(0, str(PYTHON_DIR))
+    control = load_module(CONTROL_PY, "arclink_control_notification_delivery_bridge_failed_control_test")
+    delivery = load_module(DELIVERY_PY, "arclink_notification_delivery_bridge_failed_test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        config_path = root / "config" / "arclink.env"
+        write_config(
+            config_path,
+            {
+                "ARCLINK_USER": "arclink",
+                "ARCLINK_HOME": str(root / "home-arclink"),
+                "ARCLINK_REPO_DIR": str(REPO),
+                "ARCLINK_PRIV_DIR": str(root / "priv"),
+                "STATE_DIR": str(root / "state"),
+                "RUNTIME_DIR": str(root / "state" / "runtime"),
+                "VAULT_DIR": str(root / "vault"),
+                "ARCLINK_DB_PATH": str(root / "state" / "arclink-control.sqlite3"),
+                "ARCLINK_AGENTS_STATE_DIR": str(root / "state" / "agents"),
+                "ARCLINK_CURATOR_DIR": str(root / "state" / "curator"),
+                "ARCLINK_CURATOR_MANIFEST": str(root / "state" / "curator" / "manifest.json"),
+                "ARCLINK_CURATOR_HERMES_HOME": str(root / "state" / "curator" / "hermes-home"),
+                "ARCLINK_ARCHIVED_AGENTS_DIR": str(root / "state" / "archived-agents"),
+                "ARCLINK_RELEASE_STATE_FILE": str(root / "state" / "arclink-release.json"),
+                "ARCLINK_QMD_URL": "http://127.0.0.1:8181/mcp",
+                "TELEGRAM_BOT_TOKEN": "telegram-public-token",
+            },
+        )
+        old_env = os.environ.copy()
+        os.environ["ARCLINK_CONFIG_FILE"] = str(config_path)
+        try:
+            cfg = control.Config.from_env()
+            with control.connect_db(cfg) as conn:
+                notification_id = control.queue_notification(
+                    conn,
+                    target_kind="public-agent-turn",
+                    target_id="tg:123",
+                    channel_kind="telegram",
+                    message="finish later",
+                    extra={"deployment_id": "arcdep_test"},
+                )
+
+            class Proc:
+                returncode = 0
+                stdout = (
+                    '{"delivered": false, "delivery_status": "failed", '
+                    '"delivery_error": "telegram 403", "message_ids": [], "ok": true}\n'
+                )
+                stderr = ""
+
+            def fake_run(cmd, input="", check=False, text=True, capture_output=True, timeout=None):
+                del cmd, input, check, text, capture_output, timeout
+                return Proc()
+
+            original_run = delivery.subprocess.run
+            delivery.subprocess.run = fake_run
+            try:
+                job_path = delivery._write_public_agent_bridge_job(
+                    notification_id=notification_id,
+                    cmd=[
+                        "docker",
+                        "exec",
+                        "-i",
+                        "arclink-arcdep_test-hermes-gateway-1",
+                        "/opt/arclink/runtime/hermes-venv/bin/python3",
+                        "/home/arclink/arclink/python/arclink_public_agent_bridge.py",
+                    ],
+                    payload={"platform": "telegram", "bot_token": "detached-command-secret", "text": "finish later"},
+                    project_name="arclink-arcdep_test",
+                )
+                result = delivery._run_public_agent_bridge_worker(job_path)
+                expect(result == 1, str(result))
+                with control.connect_db(cfg) as conn:
+                    row = conn.execute(
+                        "SELECT delivered_at, delivery_error, next_attempt_at FROM notification_outbox WHERE id = ?",
+                        (notification_id,),
+                    ).fetchone()
+                expect(not row["delivered_at"], dict(row))
+                expect(str(row["delivery_error"] or "").startswith("Hermes public gateway bridge failed: telegram 403"), dict(row))
+                expect(not str(row["delivery_error"] or "").startswith(delivery.PUBLIC_AGENT_BRIDGE_UNCONFIRMED), dict(row))
+                expect(control.parse_utc_iso(str(row["next_attempt_at"] or "")) > control.utc_now(), dict(row))
+                print("PASS test_public_agent_bridge_worker_retries_failed_send_without_message_ids")
+            finally:
+                delivery.subprocess.run = original_run
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+
 def test_public_agent_bridge_orphan_reaper_rearms_dead_worker_lease() -> None:
     if str(PYTHON_DIR) not in sys.path:
         sys.path.insert(0, str(PYTHON_DIR))
@@ -2770,6 +2890,8 @@ def main() -> int:
     test_public_agent_gateway_bridge_unlinks_job_when_worker_spawn_fails()
     test_public_agent_bridge_worker_marks_delivery_after_bridge_success()
     test_public_agent_bridge_worker_holds_unconfirmed_bridge_success()
+    test_public_agent_bridge_hold_policy_distinguishes_unknown_from_failed_no_id()
+    test_public_agent_bridge_worker_retries_failed_send_without_message_ids()
     test_public_agent_bridge_orphan_reaper_rearms_dead_worker_lease()
     test_public_agent_bridge_worker_rejects_unallowlisted_commands()
     test_public_agent_bridge_command_validator_confines_compose_paths()

@@ -459,6 +459,23 @@ def _public_agent_bridge_unconfirmed_error(result: Mapping[str, Any]) -> str:
     return f"{PUBLIC_AGENT_BRIDGE_UNCONFIRMED}: {suffix}"[:500]
 
 
+def _public_agent_bridge_should_hold_for_reconciliation(result: Mapping[str, Any]) -> bool:
+    status = str(result.get("delivery_status") or "").strip().lower()
+    if status == "unknown":
+        return True
+    return status == "failed" and bool(_bridge_message_ids(result.get("message_ids")))
+
+
+def _public_agent_bridge_delivery_error(result: Mapping[str, Any], *, label: str) -> str:
+    status = str(result.get("delivery_status") or "").strip().lower()
+    error = str(result.get("error") or "").strip()
+    if error:
+        return error[:500]
+    if status:
+        return f"{label} ended with delivery_status={status}"[:500]
+    return f"{label} completed without confirmed platform delivery"[:500]
+
+
 def _is_public_agent_bridge_unconfirmed(error: Any) -> bool:
     return str(error or "").startswith(PUBLIC_AGENT_BRIDGE_UNCONFIRMED)
 
@@ -503,7 +520,9 @@ def _run_gateway_exec_broker_request(request_body: dict[str, Any]) -> tuple[bool
         result = public_agent_bridge_delivery_result(parsed)
         if result.get("delivered") is True:
             return True, ""
-        return False, _public_agent_bridge_unconfirmed_error(result)
+        if _public_agent_bridge_should_hold_for_reconciliation(result):
+            return False, _public_agent_bridge_unconfirmed_error(result)
+        return False, _public_agent_bridge_delivery_error(result, label="Hermes public gateway bridge")
     if isinstance(parsed, dict):
         error = str(parsed.get("error") or "").strip()
         if error:
@@ -818,7 +837,9 @@ def _bridge_delivery_tuple(payload_out: Any, *, label: str) -> tuple[bool, str]:
     if result.get("delivered") is True:
         return True, ""
     if result.get("ok") is True:
-        return False, _public_agent_bridge_unconfirmed_error(result)
+        if _public_agent_bridge_should_hold_for_reconciliation(result):
+            return False, _public_agent_bridge_unconfirmed_error(result)
+        return False, _public_agent_bridge_delivery_error(result, label=label)
     return False, str(result.get("error") or f"{label} completed without an ok response")[:500]
 
 
@@ -1521,7 +1542,7 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 )
             )
             return 0
-        if result.get("ok") is True:
+        if result.get("ok") is True and _public_agent_bridge_should_hold_for_reconciliation(result):
             reason = _public_agent_bridge_unconfirmed_error(result)
             with connect_db(cfg) as conn:
                 _mark_public_agent_bridge_unconfirmed(conn, notification_id, reason)
@@ -1536,6 +1557,21 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
                 )
             )
             return 0
+        if result.get("ok") is True:
+            error = _public_agent_bridge_delivery_error(result, label="Hermes public gateway bridge")
+            with connect_db(cfg) as conn:
+                mark_notification_error(conn, notification_id, f"Hermes public gateway bridge failed: {error}")
+            _append_public_agent_bridge_log(
+                json.dumps(
+                    {
+                        "event": "public_agent_bridge_delivery_failed",
+                        "notification_id": notification_id,
+                        "delivery_status": result.get("delivery_status"),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
         with connect_db(cfg) as conn:
             mark_notification_error(
                 conn,

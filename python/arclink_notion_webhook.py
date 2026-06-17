@@ -375,6 +375,13 @@ class Handler(BaseHTTPRequestHandler):
             if not notion_verify_signature(raw_body, signature, stored_token):
                 self._send_json({"error": "signature verification failed"}, status=HTTPStatus.FORBIDDEN)
                 return
+            verified_at = str(get_setting(conn, NOTION_WEBHOOK_VERIFIED_AT_KEY, "") or "").strip()
+            if not verified_at:
+                self._send_json(
+                    {"error": "webhook not operator-confirmed; run arclink-ctl notion webhook-confirm-verified"},
+                    status=HTTPStatus.PRECONDITION_FAILED,
+                )
+                return
 
             event_id = str(payload.get("id") or payload.get("event_id") or payload.get("entity", {}).get("id") or "")
             event_type = str(payload.get("type") or "unknown")

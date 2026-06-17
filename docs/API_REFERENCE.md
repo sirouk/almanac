@@ -19,8 +19,10 @@ cookie is readable by the browser so the web client can echo it in
 
 Session and CSRF token hashes use HMAC-SHA256. Production deployments should
 set `ARCLINK_SESSION_HASH_PEPPER` and
-`ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`; development falls back to a fixed
-dev pepper when the required flag is not set.
+`ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1`. The fixed dev pepper fallback is
+available only when `ARCLINK_BASE_DOMAIN` is explicitly local/test
+(`localhost`, `127.0.0.1`, `::1`, `example.test`, or `*.test`) and the required
+flag is not set; an unset or blank base domain fails closed.
 
 Browser routes use cookie credentials. Header credentials remain available for
 API clients but are not preferred for browser CSRF routes. The internal
@@ -212,7 +214,7 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_COOKIE_SECURE` | auto | Set Secure flag on cookies; defaults off only for plain HTTP localhost origins |
 | `ARCLINK_COOKIE_SAMESITE` | `Strict` | Session and CSRF cookie SameSite value |
 | `ARCLINK_BACKUP_KEY_STAGING_DIR` | (none) | Server-side private directory for per-deployment backup deploy-key staging; required before `/user/backup-deploy-key` can mint a key |
-| `ARCLINK_SESSION_HASH_PEPPER` | dev fallback | HMAC pepper for session and CSRF token hashes |
+| `ARCLINK_SESSION_HASH_PEPPER` | explicit local/test dev fallback only | HMAC pepper for session and CSRF token hashes; unset/blank base domains fail closed |
 | `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `1` | Require a configured pepper before issuing sessions |
 | `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
 | `ARCLINK_FLEET_ENROLLMENT_SECRET` | (none) | HMAC root for single-use fleet enrollment token minting and callback verification |

@@ -12,6 +12,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PYTHON_DIR = REPO / "python"
+SESSION_HASH_ENV_KEYS = (
+    "ARCLINK_CONFIG_FILE",
+    "ARCLINK_BASE_DOMAIN",
+    "ARCLINK_SESSION_HASH_PEPPER",
+    "ARCLINK_SESSION_HASH_PEPPER_REQUIRED",
+)
 
 
 def expect(condition: bool, message: str) -> None:
@@ -33,10 +39,30 @@ def load_module(filename: str, name: str):
 
 
 def memory_db(control):
+    use_explicit_local_session_hash_env()
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     control.ensure_schema(conn)
     return conn
+
+
+def save_session_hash_env() -> dict[str, str | None]:
+    return {key: os.environ.get(key) for key in SESSION_HASH_ENV_KEYS}
+
+
+def restore_env(saved: dict[str, str | None]) -> None:
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def use_explicit_local_session_hash_env() -> None:
+    os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+    os.environ["ARCLINK_BASE_DOMAIN"] = "localhost"
+    os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+    os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
 
 
 def seed_paid_deployment(control, onboarding, conn):
@@ -851,17 +877,67 @@ def test_session_auth_failures_use_generic_error_detail() -> None:
     print("PASS test_session_auth_failures_use_generic_error_detail")
 
 
+def test_session_hash_pepper_fails_closed_when_base_domain_unset_or_blank() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_pepper_blank_domain_test")
+    saved = save_session_hash_env()
+    try:
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+        os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+        os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
+        for label, value in (("unset", None), ("blank", "")):
+            if value is None:
+                os.environ.pop("ARCLINK_BASE_DOMAIN", None)
+            else:
+                os.environ["ARCLINK_BASE_DOMAIN"] = value
+            try:
+                api._session_hash_pepper()
+            except api.ArcLinkApiAuthError as exc:
+                expect("pepper" in str(exc), f"{label}: {exc}")
+            else:
+                raise AssertionError(f"expected {label} base domain without pepper to fail closed")
+    finally:
+        restore_env(saved)
+    print("PASS test_session_hash_pepper_fails_closed_when_base_domain_unset_or_blank")
+
+
+def test_session_hash_pepper_dev_fallback_requires_explicit_local_domain() -> None:
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_pepper_local_domain_test")
+    saved = save_session_hash_env()
+    try:
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
+        os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+        os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
+        for domain in ("localhost", "127.0.0.1", "::1", "example.test", "pod.example.test"):
+            os.environ["ARCLINK_BASE_DOMAIN"] = domain
+            expect(
+                api._session_hash_pepper() == "arclink-dev-session-hash-pepper",
+                f"expected explicit local/test domain {domain} to use dev pepper",
+            )
+        os.environ["ARCLINK_SESSION_HASH_PEPPER_REQUIRED"] = "1"
+        os.environ["ARCLINK_BASE_DOMAIN"] = "localhost"
+        try:
+            api._session_hash_pepper()
+        except api.ArcLinkApiAuthError as exc:
+            expect("pepper" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected required flag to reject dev pepper fallback")
+    finally:
+        restore_env(saved)
+    print("PASS test_session_hash_pepper_dev_fallback_requires_explicit_local_domain")
+
+
 def test_production_session_creation_requires_pepper() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_pepper_required_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_pepper_required_test")
     api = load_module("arclink_api_auth.py", "arclink_api_auth_pepper_required_test")
     conn = memory_db(control)
     prepared = seed_paid_deployment(control, onboarding, conn)
-    old_domain = os.environ.get("ARCLINK_BASE_DOMAIN")
-    old_pepper = os.environ.get("ARCLINK_SESSION_HASH_PEPPER")
+    saved = save_session_hash_env()
     try:
+        os.environ["ARCLINK_CONFIG_FILE"] = os.devnull
         os.environ["ARCLINK_BASE_DOMAIN"] = "arclink.online"
         os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
+        os.environ.pop("ARCLINK_SESSION_HASH_PEPPER_REQUIRED", None)
         try:
             api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_no_pepper")
         except api.ArcLinkApiAuthError as exc:
@@ -872,14 +948,7 @@ def test_production_session_creation_requires_pepper() -> None:
         session = api.create_arclink_user_session(conn, user_id=prepared["user_id"], session_id="usess_with_pepper")
         expect(session["session_id"] == "usess_with_pepper", str(session))
     finally:
-        if old_domain is None:
-            os.environ.pop("ARCLINK_BASE_DOMAIN", None)
-        else:
-            os.environ["ARCLINK_BASE_DOMAIN"] = old_domain
-        if old_pepper is None:
-            os.environ.pop("ARCLINK_SESSION_HASH_PEPPER", None)
-        else:
-            os.environ["ARCLINK_SESSION_HASH_PEPPER"] = old_pepper
+        restore_env(saved)
     print("PASS test_production_session_creation_requires_pepper")
 
 
@@ -1105,6 +1174,8 @@ def main() -> int:
     test_session_hashes_upgrade_legacy_sha256_after_successful_verification()
     test_session_kind_prefixes_are_enforced()
     test_session_auth_failures_use_generic_error_detail()
+    test_session_hash_pepper_fails_closed_when_base_domain_unset_or_blank()
+    test_session_hash_pepper_dev_fallback_requires_explicit_local_domain()
     test_production_session_creation_requires_pepper()
     test_session_hash_pepper_reads_generated_config_file()
     test_revoke_session_rejects_invalid_kind_before_update_or_audit()
@@ -1112,7 +1183,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 23 ArcLink API/auth tests")
+    print("PASS all 26 ArcLink API/auth tests")
     return 0
 
 

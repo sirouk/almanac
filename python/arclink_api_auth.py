@@ -110,6 +110,7 @@ ARCLINK_ADMIN_PASSWORD_ALGORITHM = ARCLINK_PASSWORD_ALGORITHM
 ARCLINK_ADMIN_PASSWORD_ITERATIONS = ARCLINK_PASSWORD_ITERATIONS
 ARCLINK_SESSION_HASH_ALGORITHM = "hmac_sha256_v1"
 ARCLINK_LEGACY_SESSION_HASH_ALGORITHM = "sha256_legacy"
+LOCAL_DEV_DOMAINS = {"localhost", "127.0.0.1", "::1", "example.test"}
 ARCLINK_ONBOARDING_CLAIM_REPLAY_SECONDS = 10 * 60
 
 
@@ -277,12 +278,10 @@ def _session_hash_pepper() -> str:
     if pepper:
         return pepper
     base_domain = str(config_env_value("ARCLINK_BASE_DOMAIN", "") or "").strip().lower()
-    production_domain = bool(
-        base_domain
-        and base_domain not in {"localhost", "127.0.0.1", "example.test"}
-        and not base_domain.endswith(".test")
+    is_local_dev = bool(
+        base_domain and (base_domain in LOCAL_DEV_DOMAINS or base_domain.endswith(".test"))
     )
-    if _truthy_env("ARCLINK_SESSION_HASH_PEPPER_REQUIRED") or production_domain:
+    if _truthy_env("ARCLINK_SESSION_HASH_PEPPER_REQUIRED") or not is_local_dev:
         raise ArcLinkApiAuthError("ArcLink session hash pepper is not configured")
     return "arclink-dev-session-hash-pepper"
 

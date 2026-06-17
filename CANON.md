@@ -983,3 +983,24 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
   is preserved, not averaged: each ⚠ piece carries its unresolved point inline (Disagreement
   Register §D + the Federation sign-off section), and every reconciliation that overturned a
   Claude-half claim carries the **code-grounded finding forward** with the loser flagged.
+
+---
+
+## Repair ledger (live — branch `arclink-canon-fixes`)
+
+> The findings above are the *spec*; this tracks the **repair campaign** that fixes them.
+> Codex (GPT-5.5 xhigh) edits per piece; a Claude reviewer re-runs the affected tests
+> independently and commits. Each row = one committed batch (per-piece message bodies hold
+> the detail). Risk-accepted designs are **not** "fixed" — they are documented-and-skipped;
+> genuinely ambiguous schema/contract/threat-model calls are flagged **NEEDS-DECISION** and
+> left for the operator (a consolidated ledger of these ships at campaign end).
+
+| Commit | Pieces | Repaired HIGHs (sample) | Fixes/Skips/ND | Tests |
+|---|---|---|---|---|
+| `31e7d39` | CANON-09 | DNS bulk-status clobber | 7 / 1 / 4 | 56 re-run green |
+| `c5cec97` | CANON-04/05/07/12/13/30 | `/credentials` private-gate (re-leveled→MED); webhook atomicity; token-injection break; migration non-verify; bot-token-to-disk | 45 / 19 / 15 | 14/14 suites green |
+| `bf7e201` | CANON-10/11/15/17/22/26/29 | df-parse→ASU=0 (fail-closed); **upgrade-pipeline H1 drain wedge + nonce replay** (full DISSECT set); academy SSRF; backup auto-push-to-prod; systemd fail-open; 10 orphaned CI tests | 62 / 22 / 10 | 23/23 suites green |
+| _in progress_ | CANON-01/02/03/06/08 → 14/16/18/19/20 → 21/23/24/25/27/28/31/32 | — | — | — |
+
+**Progress: 14 / 32 pieces committed.** No risk-accepted design altered; every committed
+piece passed an independent reviewer test re-run.

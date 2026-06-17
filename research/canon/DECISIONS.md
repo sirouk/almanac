@@ -241,6 +241,17 @@ Each piece links its `.decided.md` (Claude's converged plan) and `.codex.md` (Co
 
 These are genuine both-options policy/upgrade tradeoffs, not code-correctness questions. Each fails closed either way; the operator owns the call.
 
+> **RESOLVED — operator decisions (2026-06-17): all seven → Option A.**
+> - **F1 → A** — unset `ARCLINK_TRUSTED_PROXY_CIDRS` fails closed (trust no proxy, ignore XFF); canonical lanes auto-render the bridge range. *No migration shim.*
+> - **F2 → A** — auto-mint a reveal-on-demand credential handoff at completion (revealed in the private DM, wiped on confirm); prefix-hold TTL reuses the 24h session TTL.
+> - **F3 → A** — Stripe cancel defaults to **period-end** (preserve paid-through access); immediate stays available behind explicit confirmation.
+> - **F4 → A** — legacy unscoped cross-Captain `pod_comms` grants honored as `legacy_captain_pair` with re-scope advisory; new grants scoped now; hard-disarm only behind `ARCLINK_POD_COMMS_REQUIRE_SCOPED_GRANTS=1`.
+> - **F5 → A** — backup keeps **two distinct key lanes** (staged storage key vs `$HOME/.ssh/arclink-agent-backup-ed25519` write key); independent rotation. PG-BACKUP verifies both lanes.
+> - **F6 → A** — reconfiguring an existing deployment requires an **explicit one-time** `captain_account|disabled` SSO choice (fail-closed, operator-owned).
+> - **F7 → A** — installer uses **pinned + preflighted `ruamel.yaml`** for host-lane YAML editing (real round-trip parser, comment-preserving).
+>
+> Net: every fork resolved to the fail-closed / preserve-state / operator-owned / robust option. The Phase 1–4 plan below can now proceed with no standing operator blockers.
+
 | # | Piece · decision | Option A (recommended) | Option B | Symphony tradeoff |
 |---|---|---|---|---|
 | **F1** | **CANON-02 D2** — unset `ARCLINK_TRUSTED_PROXY_CIDRS` | Fail-closed: trust no proxy, ignore all XFF; canonical lanes auto-render the bridge range so blessed paths self-heal | One-release migration shim: keep treating `BACKEND_ALLOWED_CIDRS` as the proxy set with a loud deprecation, require explicit var next release | Upgrade smoothness vs carrying the known MEDIUM proxy-without-XFF bypass one more release |

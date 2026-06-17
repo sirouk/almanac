@@ -3562,12 +3562,14 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
     expect(checkout_session["success_url"] == "https://example.test/checkout/success?session=" + package.session_id, str(checkout_session))
 
     row = conn.execute(
-        "SELECT user_id, selected_plan_id, selected_model_id, checkout_state FROM arclink_onboarding_sessions WHERE session_id = ?",
+        "SELECT user_id, selected_plan_id, selected_model_id, checkout_state, metadata_json FROM arclink_onboarding_sessions WHERE session_id = ?",
         (package.session_id,),
     ).fetchone()
     expect(row["selected_plan_id"] == "scale", str(dict(row)))
     expect(row["selected_model_id"], str(dict(row)))
     expect(row["checkout_state"] == "open", str(dict(row)))
+    metadata_after_redirect = json.loads(str(row["metadata_json"] or "{}"))
+    expect("scale" not in metadata_after_redirect.get("public_bot_checkout_verifiers", {}), str(metadata_after_redirect))
     deployments = conn.execute(
         "SELECT COUNT(*) AS n FROM arclink_deployments WHERE user_id = ?",
         (row["user_id"],),
@@ -3612,9 +3614,9 @@ def test_public_bot_checkout_button_redirects_to_stripe() -> None:
         config=config,
         stripe_client=stripe,
     )
-    expect(status2 == 303, f"expected replay redirect got {status2}: {payload2}")
-    expect(dict(headers2).get("Location") == location, str(headers2))
-    expect(any(value.startswith("arclink_onboarding_claim_token=") for key, value in headers2 if key.lower() == "set-cookie"), str(headers2))
+    expect(status2 == 403, f"expected consumed token to reject replay got {status2}: {payload2}")
+    expect(dict(headers2).get("Location", "") == "", str(headers2))
+    expect(not any(value.startswith("arclink_onboarding_claim_token=") for key, value in headers2 if key.lower() == "set-cookie"), str(headers2))
     expect(len(stripe.checkout_sessions) == 1, str(stripe.checkout_sessions))
     print("PASS test_public_bot_checkout_button_redirects_to_stripe")
 
@@ -3798,6 +3800,8 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
         "data": {
             "object": {
                 "id": "cs_paidping_1",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_paidping_1",
                 "subscription": "sub_paidping_1",
                 "client_reference_id": prepared["user_id"],
@@ -3845,6 +3849,89 @@ def test_stripe_webhook_queues_paid_ping_for_telegram_user() -> None:
     print("PASS test_stripe_webhook_queues_paid_ping_for_telegram_user")
 
 
+def test_stripe_webhook_successful_failed_retry_queues_paid_ping() -> None:
+    import time as _time
+    control = load_module("arclink_control.py", "arclink_control_hosted_failed_retry_ping_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_failed_retry_ping_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_failed_retry_ping_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_failed_retry_ping_test")
+    conn = memory_db(control)
+    secret = "whsec_test_failed_retry_ping"
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "STRIPE_WEBHOOK_SECRET": secret,
+    })
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="telegram",
+        channel_identity="123456789",
+        session_id="onb_failed_retry_ping",
+        display_name_hint="Retry Buyer",
+        selected_plan_id="sovereign",
+        selected_model_id="model-test",
+    )
+    prepared = onboarding.prepare_arclink_onboarding_deployment(
+        conn,
+        session_id=session["session_id"],
+        base_domain="example.test",
+        prefix="retryping-1a",
+    )
+    event_payload = json.dumps({
+        "id": "evt_failed_retry_ping",
+        "type": "checkout.session.completed",
+        "data": {
+            "object": {
+                "id": "cs_failed_retry_ping",
+                "payment_status": "paid",
+                "amount_total": 1000,
+                "customer": "cus_failed_retry_ping",
+                "subscription": "sub_failed_retry_ping",
+                "client_reference_id": prepared["user_id"],
+                "metadata": {"arclink_onboarding_session_id": session["session_id"]},
+            }
+        },
+    })
+    conn.execute(
+        """
+        INSERT INTO arclink_webhook_events (
+          provider, event_id, event_type, received_at, processed_at, status, payload_json
+        ) VALUES (
+          'stripe', 'evt_failed_retry_ping', 'checkout.session.completed',
+          '2026-05-11T00:00:00+00:00', '2026-05-11T00:00:00+00:00', 'failed', ?
+        )
+        """,
+        (event_payload,),
+    )
+    conn.commit()
+    signature = adapters.sign_stripe_webhook(event_payload, secret, timestamp=int(_time.time()))
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/webhooks/stripe",
+        headers={"Stripe-Signature": signature},
+        body=event_payload,
+        config=config,
+    )
+
+    expect(status == 200, f"expected 200 got {status}: {payload}")
+    expect(payload["replayed"] is True, str(payload))
+    notification = conn.execute(
+        """
+        SELECT message
+        FROM notification_outbox
+        WHERE target_kind = 'public-bot-user'
+          AND channel_kind = 'telegram'
+          AND target_id = '123456789'
+        """
+    ).fetchone()
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_failed_retry_ping'").fetchone()
+    expect(notification is not None, "expected paid ping on first successful failed-row retry")
+    expect("payment cleared" in str(notification["message"]).lower(), str(dict(notification)))
+    expect(webhook["status"] == "processed", str(dict(webhook)))
+    print("PASS test_stripe_webhook_successful_failed_retry_queues_paid_ping")
+
+
 def test_stripe_webhook_queues_paid_ping_for_discord_user() -> None:
     """Discord users get the same paid-ping surface; notification delivery opens
     the DM later, but the webhook must enqueue the platform-specific row.
@@ -3881,6 +3968,8 @@ def test_stripe_webhook_queues_paid_ping_for_discord_user() -> None:
         "data": {
             "object": {
                 "id": "cs_paidping_discord_1",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_paidping_discord_1",
                 "subscription": "sub_paidping_discord_1",
                 "client_reference_id": prepared["user_id"],
@@ -3935,6 +4024,8 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
         "data": {
             "object": {
                 "id": "cs_test_1",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_test_1",
                 "subscription": "sub_test_1",
                 "client_reference_id": prepared["user_id"],
@@ -3995,7 +4086,7 @@ def test_stripe_webhook_processes_entitlement_transition() -> None:
     print("PASS test_stripe_webhook_processes_entitlement_transition")
 
 
-def test_stripe_webhook_received_duplicate_is_acknowledged_as_replay() -> None:
+def test_stripe_webhook_received_duplicate_is_reprocessed() -> None:
     import time as _time
     control = load_module("arclink_control.py", "arclink_control_hosted_whreceived_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_hosted_whreceived_test")
@@ -4015,6 +4106,8 @@ def test_stripe_webhook_received_duplicate_is_acknowledged_as_replay() -> None:
         "data": {
             "object": {
                 "id": "cs_received_duplicate",
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_received_duplicate",
                 "subscription": "sub_received_duplicate",
                 "client_reference_id": prepared["user_id"],
@@ -4044,9 +4137,9 @@ def test_stripe_webhook_received_duplicate_is_acknowledged_as_replay() -> None:
     expect(payload["replayed"] is True, str(payload))
     user = conn.execute("SELECT entitlement_state FROM arclink_users WHERE user_id = ?", (prepared["user_id"],)).fetchone()
     webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_received_duplicate'").fetchone()
-    expect(user["entitlement_state"] == "none", str(dict(user)))
-    expect(webhook["status"] == "received", str(dict(webhook)))
-    print("PASS test_stripe_webhook_received_duplicate_is_acknowledged_as_replay")
+    expect(user["entitlement_state"] == "paid", str(dict(user)))
+    expect(webhook["status"] == "processed", str(dict(webhook)))
+    print("PASS test_stripe_webhook_received_duplicate_is_reprocessed")
 
 
 def test_telegram_webhook_route() -> None:
@@ -4241,8 +4334,8 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
         telegram_transport=FailingTransport(),
         headers=telegram_headers,
     )
-    expect(status == 200, f"reply send failure should still ack webhook: {status} {payload}")
-    expect(payload.get("sent") is False, str(payload))
+    expect(status == 502, f"reply send failure should force Telegram retry: {status} {payload}")
+    expect(payload.get("error") == "telegram_reply_send_failed", str(payload))
 
     def queued_agent_turn(*args, **kwargs):
         del args, kwargs
@@ -4324,6 +4417,87 @@ def test_telegram_webhook_sends_reply_when_transport_is_available() -> None:
     expect(quiet_transport.chat_actions == [{"chat_id": "12345", "action": "typing"}], str(quiet_transport.chat_actions))
     expect(live_trigger_calls == [{"channel_kind": "telegram", "target_id": "tg:67890"}], str(live_trigger_calls))
     print("PASS test_telegram_webhook_sends_reply_when_transport_is_available")
+
+
+def test_telegram_credential_reveal_send_failure_keeps_handoff_revealable() -> None:
+    control = load_module("arclink_control.py", "arclink_control_hosted_tg_credential_send_failure_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_tg_credential_send_failure_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_hosted_tg_credential_send_failure_test")
+    conn = memory_db(control)
+    now = control.utc_now_iso()
+    user_id = "arcusr_tg_credential_failure"
+    deployment_id = "arcdep_tg_credential_failure"
+    session_id = "onb_tg_credential_failure"
+    control.upsert_arclink_user(conn, user_id=user_id, email="tg-credential@example.test", entitlement_state="paid")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id=deployment_id,
+        user_id=user_id,
+        prefix="arc-tg-credential-failure",
+        base_domain="example.test",
+        status="active",
+        metadata={"selected_plan_id": "sovereign"},
+    )
+    conn.execute(
+        """
+        INSERT INTO arclink_onboarding_sessions (
+          session_id, channel, channel_identity, status, current_step,
+          email_hint, display_name_hint, selected_plan_id, selected_model_id,
+          user_id, deployment_id, checkout_state, metadata_json, created_at, updated_at
+        ) VALUES (?, 'telegram', 'tg:67890', 'first_contacted', 'first_agent_contact',
+          'tg-credential@example.test', 'Telegram Buyer', 'sovereign', 'model', ?, ?, 'paid', '{}', ?, ?)
+        """,
+        (session_id, user_id, deployment_id, now, now),
+    )
+    conn.commit()
+    secret_ref = f"secret://arclink/dashboard/users/{user_id}/password"
+    old_secret_store = os.environ.get("ARCLINK_SECRET_STORE_DIR")
+
+    class FailingTransport:
+        def send_message(self, chat_id: str, text: str, reply_markup=None, entities=None):
+            raise RuntimeError("telegram api unavailable")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ["ARCLINK_SECRET_STORE_DIR"] = tmp
+        secret_dir = Path(tmp) / "users"
+        secret_dir.mkdir(parents=True)
+        secret_path = secret_dir / f"{hashlib.sha256(secret_ref.encode('utf-8')).hexdigest()}.secret"
+        secret_path.write_text("arc_tg_send_failure_password\n", encoding="utf-8")
+        try:
+            status, payload, _ = hosted._handle_telegram_webhook(
+                conn,
+                {
+                    "update_id": 55,
+                    "message": {
+                        "message_id": 5,
+                        "chat": {"id": 12345, "type": "private"},
+                        "from": {"id": 67890},
+                        "text": "/credentials",
+                    },
+                },
+                "req_tg_credential_send_failure",
+                hosted.HostedApiConfig(env={"ARCLINK_BASE_DOMAIN": "example.test", "TELEGRAM_WEBHOOK_SECRET": "tg_secret"}),
+                adapters.FakeStripeClient(),
+                telegram_transport=FailingTransport(),
+                headers={"X-Telegram-Bot-Api-Secret-Token": "tg_secret"},
+            )
+        finally:
+            if old_secret_store is None:
+                os.environ.pop("ARCLINK_SECRET_STORE_DIR", None)
+            else:
+                os.environ["ARCLINK_SECRET_STORE_DIR"] = old_secret_store
+    expect(status == 502 and payload.get("error") == "telegram_reply_send_failed", str((status, payload)))
+    row = conn.execute(
+        """
+        SELECT status, revealed_at, removed_at
+        FROM arclink_credential_handoffs
+        WHERE deployment_id = ?
+          AND credential_kind = 'dashboard_password'
+        """,
+        (deployment_id,),
+    ).fetchone()
+    expect(row["status"] == "available" and not row["revealed_at"] and not row["removed_at"], str(dict(row)))
+    print("PASS test_telegram_credential_reveal_send_failure_keeps_handoff_revealable")
 
 
 def test_academy_mode_actions_trigger_public_agent_live_delivery() -> None:
@@ -6339,13 +6513,15 @@ def main() -> int:
     test_admin_dns_drift_route()
     test_admin_logout_clears_cookies_and_revokes_session()
     test_stripe_webhook_processes_entitlement_transition()
-    test_stripe_webhook_received_duplicate_is_acknowledged_as_replay()
+    test_stripe_webhook_received_duplicate_is_reprocessed()
     test_stripe_webhook_queues_paid_ping_for_telegram_user()
+    test_stripe_webhook_successful_failed_retry_queues_paid_ping()
     test_stripe_webhook_queues_paid_ping_for_discord_user()
     test_telegram_webhook_route()
     test_telegram_operator_route_reads_generated_config_file()
     test_telegram_webhook_secret_boundary()
     test_telegram_webhook_sends_reply_when_transport_is_available()
+    test_telegram_credential_reveal_send_failure_keeps_handoff_revealable()
     test_academy_mode_actions_trigger_public_agent_live_delivery()
     test_public_agent_live_trigger_backpressure_defers_to_delivery_worker()
     test_telegram_fast_ack_backpressure_is_cosmetic()

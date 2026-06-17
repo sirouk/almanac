@@ -16,6 +16,25 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def write_fake_hermes_runtime(root: Path) -> tuple[Path, Path]:
+    runtime_dir = root / "runtime"
+    hermes_bin = runtime_dir / "hermes-venv" / "bin" / "hermes"
+    hermes_bin.parent.mkdir(parents=True, exist_ok=True)
+    hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    hermes_bin.chmod(0o755)
+    skills_dir = runtime_dir / "hermes-agent-src" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    sync_script = runtime_dir / "hermes-agent-src" / "tools" / "skills_sync.py"
+    sync_script.parent.mkdir(parents=True, exist_ok=True)
+    sync_script.write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "Path(os.environ['HERMES_HOME'], 'skills').mkdir(parents=True, exist_ok=True)\n",
+        encoding="utf-8",
+    )
+    return runtime_dir, hermes_bin
+
+
 def test_generated_activate_path_watches_trigger_file_and_parent_directory() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -28,9 +47,7 @@ def test_generated_activate_path_watches_trigger_file_and_parent_directory() -> 
         )
         (fakebin / "systemctl").chmod(0o755)
 
-        hermes_bin = root / "hermes"
-        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        hermes_bin.chmod(0o755)
+        _, hermes_bin = write_fake_hermes_runtime(root)
 
         home = root / "home"
         home.mkdir(parents=True, exist_ok=True)
@@ -230,9 +247,7 @@ def test_generated_backup_cron_job_follows_backup_state_file() -> None:
         )
         (fakebin / "systemctl").chmod(0o755)
 
-        hermes_bin = root / "hermes"
-        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        hermes_bin.chmod(0o755)
+        _, hermes_bin = write_fake_hermes_runtime(root)
 
         home = root / "home"
         hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"
@@ -315,9 +330,7 @@ def test_missing_native_hermes_gateway_units_do_not_abort_install() -> None:
         )
         (fakebin / "systemctl").chmod(0o755)
 
-        hermes_bin = root / "hermes"
-        hermes_bin.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-        hermes_bin.chmod(0o755)
+        _, hermes_bin = write_fake_hermes_runtime(root)
 
         home = root / "home"
         hermes_home = home / ".local" / "share" / "arclink-agent" / "hermes-home"

@@ -38,6 +38,7 @@ from arclink_dashboard import (
     request_arclink_backup_write_check,
 )
 from arclink_onboarding import (
+    ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES,
     answer_arclink_onboarding_question,
     cancel_arclink_onboarding_session,
     create_or_resume_arclink_onboarding_session,
@@ -404,31 +405,42 @@ def check_arclink_rate_limit(
     clean_subject = str(subject or "").strip().lower()
     if clean_scope == "arclink:" or not clean_subject:
         raise ArcLinkApiAuthError("ArcLink rate limit scope and subject are required")
+    started_transaction = False
+    if commit and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+        started_transaction = True
     cutoff = (utc_now() - dt.timedelta(seconds=max(1, int(window_seconds or 1)))).replace(microsecond=0).isoformat()
-    count = conn.execute(
-        """
-        SELECT COUNT(*) AS n
-        FROM rate_limits
-        WHERE scope = ? AND subject = ? AND observed_at >= ?
-        """,
-        (clean_scope, clean_subject, cutoff),
-    ).fetchone()["n"]
-    effective_limit = max(1, int(limit or 1))
-    current_count = int(count)
-    if current_count >= effective_limit:
-        raise ArcLinkRateLimitError(
-            "ArcLink rate limit exceeded",
-            limit=effective_limit,
-            remaining=0,
-            reset_seconds=max(1, int(window_seconds or 1)),
+    try:
+        count = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM rate_limits
+            WHERE scope = ? AND subject = ? AND observed_at >= ?
+            """,
+            (clean_scope, clean_subject, cutoff),
+        ).fetchone()["n"]
+        effective_limit = max(1, int(limit or 1))
+        current_count = int(count)
+        if current_count >= effective_limit:
+            if started_transaction:
+                conn.rollback()
+            raise ArcLinkRateLimitError(
+                "ArcLink rate limit exceeded",
+                limit=effective_limit,
+                remaining=0,
+                reset_seconds=max(1, int(window_seconds or 1)),
+            )
+        conn.execute(
+            "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
+            (clean_scope, clean_subject, utc_now_iso()),
         )
-    conn.execute(
-        "INSERT INTO rate_limits (scope, subject, observed_at) VALUES (?, ?, ?)",
-        (clean_scope, clean_subject, utc_now_iso()),
-    )
-    if commit:
-        conn.commit()
-    return {"scope": clean_scope, "subject": clean_subject, "remaining": max(0, int(limit) - int(count) - 1)}
+        if commit:
+            conn.commit()
+        return {"scope": clean_scope, "subject": clean_subject, "remaining": max(0, int(limit) - int(count) - 1)}
+    except Exception:
+        if started_transaction and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _login_audit_subject(login_subject: str, clean_email: str) -> str:
@@ -5036,7 +5048,7 @@ def cancel_onboarding_session_api(
     if row is None:
         return ArcLinkApiResponse(status=404, payload={"error": "session_not_found"})
     current_status = str(row["status"] or "").strip()
-    if current_status in {"completed", "payment_cancelled", "payment_expired", "payment_failed", "abandoned", "expired"}:
+    if current_status in ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES:
         return ArcLinkApiResponse(status=200, payload={
             "session_id": clean_id,
             "status": current_status,

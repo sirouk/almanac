@@ -256,6 +256,75 @@ def test_telegram_operator_identity_uses_operator_raven_before_public_onboarding
     print("PASS test_telegram_operator_identity_uses_operator_raven_before_public_onboarding")
 
 
+def test_telegram_operator_path_uses_identity_rate_limit() -> None:
+    control = load_module("arclink_control.py", "arclink_control_tg_operator_rate_test")
+    tg = load_module("arclink_telegram.py", "arclink_telegram_operator_rate_test")
+    conn = memory_db(control)
+    env = {
+        "ARCLINK_CURATOR_CHANNELS": "telegram,discord",
+        "OPERATOR_NOTIFY_CHANNEL_PLATFORM": "discord",
+        "OPERATOR_NOTIFY_CHANNEL_ID": "1234567890",
+        "ARCLINK_OPERATOR_TELEGRAM_USER_IDS": "99",
+    }
+    for index in range(20):
+        result = tg.handle_telegram_update(
+            conn,
+            {
+                "update_id": 1000 + index,
+                "message": {
+                    "message_id": 100 + index,
+                    "chat": {"id": 99, "type": "private"},
+                    "from": {"id": 99},
+                    "text": "/operator_status",
+                },
+            },
+            env=env,
+        )
+        expect(result is not None and result["action"] == "operator_raven_status", str(result))
+    try:
+        tg.handle_telegram_update(
+            conn,
+            {
+                "update_id": 2000,
+                "message": {
+                    "message_id": 200,
+                    "chat": {"id": 99, "type": "private"},
+                    "from": {"id": 99},
+                    "text": "/operator_status",
+                },
+            },
+            env=env,
+        )
+    except Exception as exc:  # noqa: BLE001
+        expect("rate limit" in str(exc).lower(), str(exc))
+    else:
+        raise AssertionError("expected operator identity rate limit")
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM rate_limits WHERE scope = 'arclink:operator:telegram' AND subject = 'telegram:99'"
+    ).fetchone()
+    expect(rows["n"] == 20, str(dict(rows)))
+    print("PASS test_telegram_operator_path_uses_identity_rate_limit")
+
+
+def test_telegram_send_message_clamps_entities_after_truncation() -> None:
+    tg = load_module("arclink_telegram.py", "arclink_telegram_entity_clamp_test")
+    calls: list[dict[str, object]] = []
+    tg._request_json = lambda url, *, method="GET", payload=None, timeout=30: calls.append(payload or {}) or {"message_id": 1}
+    tg.telegram_send_message(
+        bot_token="123:abc",
+        chat_id="42",
+        text="a" * 4005,
+        entities=(
+            {"type": "code", "offset": 3998, "length": 10},
+            {"type": "code", "offset": 4001, "length": 5},
+        ),
+    )
+    payload = calls[0]
+    expect(len(str(payload["text"])) == 4000, str(payload))
+    expect(payload["entities"] == [{"type": "code", "offset": 3998, "length": 2}], str(payload))
+    print("PASS test_telegram_send_message_clamps_entities_after_truncation")
+
+
 def test_telegram_fake_transport_polling() -> None:
     control = load_module("arclink_control.py", "arclink_control_tg_poll_test")
     tg = load_module("arclink_telegram.py", "arclink_telegram_poll_test")
@@ -668,6 +737,8 @@ def main() -> int:
     test_telegram_parse_update()
     test_telegram_handle_update_through_bot_contract()
     test_telegram_operator_identity_uses_operator_raven_before_public_onboarding()
+    test_telegram_operator_path_uses_identity_rate_limit()
+    test_telegram_send_message_clamps_entities_after_truncation()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
     test_telegram_registers_operator_command_scope()
@@ -680,7 +751,7 @@ def main() -> int:
     test_telegram_refuses_live_without_token()
     test_live_transport_requires_token()
     test_telegram_validate_live_readiness()
-    print("PASS all 16 ArcLink Telegram adapter tests")
+    print("PASS all 18 ArcLink Telegram adapter tests")
     return 0
 
 

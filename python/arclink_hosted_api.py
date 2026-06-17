@@ -807,6 +807,51 @@ def _public_bot_checkout_token_valid(session: Mapping[str, Any], *, plan: str, t
     return bool(expected and supplied_digest and hmac.compare_digest(expected, supplied_digest))
 
 
+def _consume_public_bot_checkout_token(
+    conn: sqlite3.Connection,
+    session: Mapping[str, Any],
+    *,
+    plan: str,
+    token: str,
+) -> bool:
+    original_metadata_json = str(session.get("metadata_json") or "{}")
+    metadata = json_loads_safe(original_metadata_json)
+    raw_hashes = metadata.get("public_bot_checkout_verifiers")
+    if not isinstance(raw_hashes, Mapping):
+        return False
+    expected = str(raw_hashes.get(plan) or "").strip()
+    supplied = str(token or "").strip()
+    supplied_digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest() if supplied else ""
+    if not (expected and supplied_digest and hmac.compare_digest(expected, supplied_digest)):
+        return False
+    next_hashes = {str(key): str(value) for key, value in dict(raw_hashes).items() if str(key) != plan and str(value)}
+    if next_hashes:
+        metadata["public_bot_checkout_verifiers"] = next_hashes
+    else:
+        metadata.pop("public_bot_checkout_verifiers", None)
+    consumed = dict(metadata.get("public_bot_checkout_consumed_at") or {}) if isinstance(metadata.get("public_bot_checkout_consumed_at"), Mapping) else {}
+    consumed[plan] = utc_now_iso()
+    metadata["public_bot_checkout_consumed_at"] = consumed
+    cursor = conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+           SET metadata_json = ?, updated_at = ?
+         WHERE session_id = ? AND metadata_json = ?
+        """,
+        (
+            json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+            utc_now_iso(),
+            str(session.get("session_id") or ""),
+            original_metadata_json,
+        ),
+    )
+    if cursor.rowcount != 1:
+        conn.rollback()
+        return False
+    conn.commit()
+    return True
+
+
 def _handle_public_bot_onboarding_checkout_redirect(
     conn: sqlite3.Connection,
     query: Mapping[str, str],
@@ -834,6 +879,8 @@ def _handle_public_bot_onboarding_checkout_redirect(
     checkout_state = str(session.get("checkout_state") or "").strip().lower()
     if existing_url and checkout_state in {"open", "paid"}:
         if existing_plan == plan:
+            if not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
+                return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
             proof_cookie = _issue_onboarding_claim_cookie(conn, session_id=session_id, config=config)
             return _json_response(
                 303,
@@ -846,6 +893,8 @@ def _handle_public_bot_onboarding_checkout_redirect(
     price_id = config.founders_price_id if plan == "founders" else config.scale_price_id
     if not price_id:
         return _json_response(503, {"error": "stripe_price_not_configured", "request_id": request_id}, request_id=request_id)
+    if not _consume_public_bot_checkout_token(conn, session, plan=plan, token=token):
+        return _json_response(403, {"error": "invalid_public_bot_checkout_token", "request_id": request_id}, request_id=request_id)
 
     answer = answer_public_onboarding_api(
         conn,
@@ -913,12 +962,12 @@ def _handle_stripe_webhook(
 
     # Raven speaks before silence: queue a "payment cleared" ping back to the
     # user's originating channel the first time entitlement transitions to paid.
-    if not result.replayed and result.entitlement_state == "paid" and result.user_id:
+    if result.entitlement_state == "paid" and result.user_id:
         try:
             _queue_paid_ping(conn, user_id=result.user_id, request_id=request_id)
         except Exception:  # noqa: BLE001 - never fail the webhook over a ping
             logger.exception("paid_ping_failed user_id=%s request_id=%s", result.user_id, request_id)
-    elif not result.replayed and result.entitlement_state != "paid" and result.user_id:
+    elif result.entitlement_state in {"past_due", "cancelled"} and result.user_id:
         try:
             _queue_billing_noncurrent_ping(
                 conn,
@@ -2950,6 +2999,46 @@ def _handle_telegram_webhook(
             )
             return False
 
+    def _rollback_credential_reveal_after_send_failure() -> None:
+        if str(result.get("action") or "") != "credentials_revealed":
+            return
+        session_id = str(result.get("session_id") or "").strip()
+        channel_identity = str(result.get("channel_identity") or "").strip()
+        row = None
+        if session_id:
+            row = conn.execute(
+                "SELECT deployment_id FROM arclink_onboarding_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None and channel_identity:
+            row = conn.execute(
+                """
+                SELECT deployment_id
+                FROM arclink_onboarding_sessions
+                WHERE channel_identity = ?
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (channel_identity,),
+            ).fetchone()
+        deployment_id = str((dict(row) if row is not None else {}).get("deployment_id") or "").strip()
+        if not deployment_id:
+            return
+        conn.execute(
+            """
+            UPDATE arclink_credential_handoffs
+               SET revealed_at = '', updated_at = ?
+             WHERE deployment_id = ?
+               AND credential_kind = 'dashboard_password'
+               AND status = 'available'
+               AND acknowledged_at = ''
+               AND removed_at = ''
+            """,
+            (utc_now_iso(), deployment_id),
+        )
+        conn.commit()
+
+    send_error = ""
     if telegram_transport is not None:
         if callback_query_id and hasattr(telegram_transport, "answer_callback_query"):
             try:
@@ -2963,7 +3052,9 @@ def _handle_telegram_webhook(
             try:
                 telegram_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"), entities=result.get("entities") or None)
                 sent = True
-            except Exception as exc:  # noqa: BLE001 - webhook must not retry forever on reply transport failure
+            except Exception as exc:  # noqa: BLE001 - surface reply failure so Telegram retries the update
+                send_error = _log_error_text(exc, limit=160)
+                _rollback_credential_reveal_after_send_failure()
                 logger.warning("telegram_reply_send_failed transport=injected action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
     else:
         if telegram_config.is_live:
@@ -2980,8 +3071,16 @@ def _handle_telegram_webhook(
                 try:
                     live_transport.send_message(result["chat_id"], result["text"], reply_markup=result.get("reply_markup"), entities=result.get("entities") or None)
                     sent = True
-                except Exception as exc:  # noqa: BLE001 - acknowledge Telegram update even if the reply API errors
+                except Exception as exc:  # noqa: BLE001 - surface reply failure so Telegram retries the update
+                    send_error = _log_error_text(exc, limit=160)
+                    _rollback_credential_reveal_after_send_failure()
                     logger.warning("telegram_reply_send_failed transport=live action=%s error=%s", result.get("action", ""), _log_error_text(exc, limit=160))
+    if send_error:
+        return _json_response(
+            502,
+            {"ok": False, "error": "telegram_reply_send_failed", "action": result.get("action", "reply")},
+            request_id=request_id,
+        )
     live_triggered = False
     if str(result.get("action") or "") in PUBLIC_AGENT_LIVE_TRIGGER_ACTIONS:
         fast_acknowledged = _kick_telegram_fast_agent_ack(

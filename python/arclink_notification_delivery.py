@@ -957,6 +957,50 @@ def _public_agent_bridge_job_dir() -> Path:
     return _public_agent_bridge_log_path().parent / "public-agent-bridge-jobs"
 
 
+def _strip_public_agent_bridge_payload_secrets(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    clean = dict(payload)
+    if "bot_token" not in clean:
+        return clean, False
+    clean.pop("bot_token", None)
+    return clean, True
+
+
+def _hydrate_public_agent_bridge_payload_secret(payload: dict[str, Any], *, required: bool) -> dict[str, Any]:
+    clean = dict(payload)
+    if not required or str(clean.get("bot_token") or "").strip():
+        return clean
+    platform = str(clean.get("platform") or "").strip().lower()
+    env_name = {
+        "telegram": "TELEGRAM_BOT_TOKEN",
+        "discord": "DISCORD_BOT_TOKEN",
+    }.get(platform)
+    if not env_name:
+        raise RuntimeError("public Agent bridge job cannot resolve the bot token for this platform")
+    token = config_env_value(env_name, "").strip()
+    if not token:
+        raise RuntimeError(f"{env_name} is not configured for Hermes public gateway bridge")
+    clean["bot_token"] = token
+    return clean
+
+
+def _strip_gateway_exec_request_secrets(request_body: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    clean = dict(request_body)
+    payload = clean.get("payload")
+    if not isinstance(payload, dict):
+        return clean, False
+    clean_payload, requires_runtime_secret = _strip_public_agent_bridge_payload_secrets(payload)
+    clean["payload"] = clean_payload
+    return clean, requires_runtime_secret
+
+
+def _hydrate_gateway_exec_request_secret(request_body: dict[str, Any], *, required: bool) -> dict[str, Any]:
+    clean = dict(request_body)
+    payload = clean.get("payload")
+    if isinstance(payload, dict):
+        clean["payload"] = _hydrate_public_agent_bridge_payload_secret(payload, required=required)
+    return clean
+
+
 def _write_public_agent_bridge_job(
     *,
     notification_id: int,
@@ -970,10 +1014,12 @@ def _write_public_agent_bridge_job(
         if not isinstance(gateway_exec_request, dict):
             raise ValueError("gateway exec broker request must be a JSON object")
         command_kind = "gateway-exec-broker-request"
+        clean_request, requires_runtime_secret = _strip_gateway_exec_request_secrets(gateway_exec_request)
         body = {
             "notification_id": int(notification_id),
             "command_kind": command_kind,
-            "gateway_exec_request": gateway_exec_request,
+            "gateway_exec_request": clean_request,
+            "gateway_exec_request_requires_runtime_secret": requires_runtime_secret,
             "timeout_seconds": _public_agent_bridge_max_seconds(),
         }
     else:
@@ -981,12 +1027,14 @@ def _write_public_agent_bridge_job(
         valid, command_kind, reason = _validate_public_agent_bridge_cmd(clean_cmd, project_name=project_name)
         if not valid:
             raise ValueError(reason)
+        clean_payload, requires_runtime_secret = _strip_public_agent_bridge_payload_secrets(payload or {})
         body = {
             "notification_id": int(notification_id),
             "cmd": clean_cmd,
             "command_kind": command_kind,
             "project_name": str(project_name or "").strip(),
-            "payload": payload or {},
+            "payload": clean_payload,
+            "payload_requires_runtime_secret": requires_runtime_secret,
             "timeout_seconds": _public_agent_bridge_max_seconds(),
         }
     job_dir = _public_agent_bridge_job_dir()
@@ -1033,7 +1081,16 @@ def _run_public_agent_bridge_worker(job_path: Path) -> int:
         cmd = [str(part) for part in job.get("cmd") or []]
         project_name = str(job.get("project_name") or "").strip()
         payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        payload = _hydrate_public_agent_bridge_payload_secret(
+            payload,
+            required=job.get("payload_requires_runtime_secret") is True,
+        )
         gateway_exec_request = job.get("gateway_exec_request") if isinstance(job.get("gateway_exec_request"), dict) else None
+        if gateway_exec_request is not None:
+            gateway_exec_request = _hydrate_gateway_exec_request_secret(
+                gateway_exec_request,
+                required=job.get("gateway_exec_request_requires_runtime_secret") is True,
+            )
         timeout_seconds = int(job.get("timeout_seconds") or _public_agent_bridge_max_seconds())
         if notification_id <= 0:
             raise RuntimeError("public Agent bridge job is missing notification_id")

@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -279,6 +280,28 @@ def _inline_content_disposition(filename: str) -> str:
 
 def _clean_text(value: Any, limit: int = 160) -> str:
     text = " ".join(str(value or "").split())
+    return text[:limit]
+
+
+def _redact_text(value: Any, limit: int = 600, extra_paths: tuple[Any, ...] = ()) -> str:
+    text = str(value or "")
+    replacements: list[tuple[str, str]] = []
+    for item in extra_paths:
+        raw = str(item or "")
+        if raw:
+            replacements.append((str(Path(raw).expanduser().resolve(strict=False)), "[repo]"))
+            replacements.append((raw, "[repo]"))
+    replacements.extend(
+        [
+            (str(_workspace_root()), "[workspace]"),
+            (str(_hermes_home()), "[hermes-home]"),
+            (str(Path.home().expanduser()), "[home]"),
+        ]
+    )
+    for needle, replacement in replacements:
+        if needle and needle != "/":
+            text = text.replace(needle, replacement)
+    text = re.sub(r"(?i)(token|password|secret|key)=\S+", r"\1=[redacted]", text)
     return text[:limit]
 
 
@@ -1125,7 +1148,7 @@ def _run_git(repo: Path, args: list[str], *, check: bool = True) -> str:
         raise HTTPException(status_code=504, detail="git command timed out") from exc
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout or "git command failed").strip()
-        raise HTTPException(status_code=400, detail=detail[:500])
+        raise HTTPException(status_code=400, detail=_redact_text(detail, 500, extra_paths=(repo,)))
     return result.stdout
 
 

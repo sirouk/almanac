@@ -59,7 +59,12 @@ def _stripe_subscription_mirror_status(
         candidate = str(obj.get("status") or entitlement_state).strip().lower()
     else:
         candidate = str(entitlement_state or "").strip().lower()
-    return candidate if candidate in SUBSCRIPTION_MIRROR_STATUSES else entitlement_state
+    if candidate in SUBSCRIPTION_MIRROR_STATUSES:
+        return candidate
+    fallback = str(entitlement_state or "").strip().lower()
+    if fallback in SUBSCRIPTION_MIRROR_STATUSES:
+        return fallback
+    return "incomplete"
 
 
 def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[ReconciliationDrift]:
@@ -74,7 +79,7 @@ def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[Reconci
           AND NOT EXISTS (
             SELECT 1 FROM arclink_deployments d
             WHERE d.user_id = s.user_id
-              AND d.status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+              AND d.status IN ('provisioning_ready', 'provisioning', 'active')
           )
         """
     ).fetchall()
@@ -89,7 +94,7 @@ def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[Reconci
         """
         SELECT d.user_id, d.deployment_id
         FROM arclink_deployments d
-        WHERE d.status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+        WHERE d.status IN ('provisioning_ready', 'provisioning', 'active')
           AND NOT EXISTS (
             SELECT 1 FROM arclink_subscriptions s
             WHERE s.user_id = d.user_id
@@ -113,7 +118,7 @@ def detect_stripe_reconciliation_drift(conn: sqlite3.Connection) -> list[Reconci
         SELECT d.user_id, d.deployment_id, s.stripe_subscription_id, s.status
         FROM arclink_deployments d
         JOIN arclink_subscriptions s ON s.user_id = d.user_id
-        WHERE d.status NOT IN ('entitlement_required', 'teardown_complete', 'cancelled')
+        WHERE d.status IN ('provisioning_ready', 'provisioning', 'active')
           AND s.status IN ('past_due', 'unpaid')
           AND NOT EXISTS (
             SELECT 1 FROM arclink_subscriptions active_s
@@ -396,6 +401,84 @@ def _stripe_customer_email(obj: Mapping[str, Any]) -> str:
     ))
 
 
+def _stripe_object_int(obj: Mapping[str, Any], *keys: str) -> int | None:
+    for key in keys:
+        raw = obj.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            return int(str(raw).strip())
+        except ValueError:
+            continue
+    return None
+
+
+def _require_paid_checkout_session(
+    obj: Mapping[str, Any],
+    *,
+    purchase_kind: str,
+    minimum_amount_cents: int = 0,
+) -> None:
+    payment_status = str(obj.get("payment_status") or "").strip().lower()
+    if payment_status != "paid":
+        raise ArcLinkEntitlementError(f"Stripe {purchase_kind} checkout is not paid")
+    if minimum_amount_cents > 0:
+        amount_cents = _stripe_object_int(obj, "amount_total", "amount_paid", "amount_received")
+        if amount_cents is None:
+            raise ArcLinkEntitlementError(f"Stripe {purchase_kind} checkout did not include a paid amount")
+        if amount_cents < minimum_amount_cents:
+            raise ArcLinkEntitlementError(f"Stripe {purchase_kind} checkout paid amount is below the expected total")
+
+
+def _assert_entitlement_account(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    subscription_id: str,
+    stripe_customer_id: str,
+    client_reference_id: str,
+    allowed_user_ids: set[str],
+) -> None:
+    clean_user = str(user_id or "").strip()
+    allowed = {value for value in allowed_user_ids if value}
+    allowed.add(clean_user)
+    clean_reference = str(client_reference_id or "").strip()
+    if clean_reference and clean_reference not in allowed:
+        raise ArcLinkEntitlementError("Stripe checkout client reference does not match ArcLink account")
+    clean_customer = str(stripe_customer_id or "").strip()
+    if clean_customer:
+        allowed_placeholders = ",".join("?" for _ in allowed)
+        row = conn.execute(
+            f"""
+            SELECT user_id
+            FROM arclink_users
+            WHERE stripe_customer_id = ?
+              AND user_id NOT IN ({allowed_placeholders})
+            LIMIT 1
+            """,
+            (clean_customer, *sorted(allowed)),
+        ).fetchone()
+        if row is not None:
+            raise ArcLinkEntitlementError("Stripe customer is already bound to another ArcLink account")
+    clean_subscription = str(subscription_id or "").strip()
+    if clean_subscription:
+        allowed_placeholders = ",".join("?" for _ in allowed)
+        row = conn.execute(
+            f"""
+            SELECT user_id
+            FROM arclink_subscriptions
+            WHERE (stripe_subscription_id = ?
+               OR subscription_id = ?)
+              AND user_id NOT IN ({allowed_placeholders})
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (clean_subscription, f"stripe:{clean_subscription}", *sorted(allowed)),
+        ).fetchone()
+        if row is not None:
+            raise ArcLinkEntitlementError("Stripe subscription is already bound to another ArcLink account")
+
+
 def _entitlement_for_stripe_event(event_type: str, obj: Mapping[str, Any]) -> str:
     stripe_status = str(obj.get("status") or "").strip().lower()
     if event_type == "checkout.session.completed":
@@ -541,15 +624,6 @@ def process_stripe_webhook(
                     entitlement_state="",
                     replayed=True,
                 )
-            if recorded_status == "received":
-                conn.rollback()
-                return StripeWebhookResult(
-                    event_id=event_id,
-                    event_type=event_type,
-                    user_id="",
-                    entitlement_state="",
-                    replayed=True,
-                )
             if recorded_status not in {"failed", "received"}:
                 conn.rollback()
                 raise ArcLinkEntitlementError(
@@ -569,7 +643,8 @@ def process_stripe_webhook(
             )
 
         obj = _event_object(event)
-        if event_type == "checkout.session.completed" and _stripe_purchase_kind(obj) == "inference_refuel":
+        purchase_kind = _stripe_purchase_kind(obj)
+        if event_type == "checkout.session.completed" and purchase_kind == "inference_refuel":
             user_id = _stripe_user_id(obj)
             deployment_id = _stripe_deployment_id(obj)
             credit_cents = _stripe_metadata_positive_int(obj, "credit_cents", "provider_credit_cents")
@@ -578,6 +653,13 @@ def process_stripe_webhook(
                 raise ArcLinkEntitlementError("Stripe refuel checkout did not include an ArcLink deployment id")
             if credit_cents <= 0:
                 raise ArcLinkEntitlementError("Stripe refuel checkout did not include positive credit cents")
+            if retail_cents <= 0:
+                raise ArcLinkEntitlementError("Stripe refuel checkout did not include positive retail cents")
+            _require_paid_checkout_session(
+                obj,
+                purchase_kind="refuel",
+                minimum_amount_cents=retail_cents,
+            )
             stripe_customer_id = str(obj.get("customer") or "").strip()
             stripe_customer_email = _stripe_customer_email(obj)
             _assert_refuel_checkout_account(
@@ -661,6 +743,8 @@ def process_stripe_webhook(
         ))
         if not user_id:
             raise ArcLinkEntitlementError("Stripe webhook did not include an ArcLink user id")
+        if event_type == "checkout.session.completed":
+            _require_paid_checkout_session(obj, purchase_kind="subscription")
         entitlement_state = _entitlement_for_stripe_event(event_type, obj)
 
         # Email-driven user merge: a single human can show up under multiple
@@ -669,6 +753,7 @@ def process_stripe_webhook(
         # carries the canonical email, so the control plane deterministically
         # picks the canonical row and repoints owned rows before user upsert.
         stripe_customer_email = _stripe_customer_email(obj)
+        allowed_user_ids = {user_id}
         if stripe_customer_email:
             merge_candidate_user_id = user_id
             merged = merge_arclink_user_identity_by_email(
@@ -687,6 +772,8 @@ def process_stripe_webhook(
             )
             user_id = str(merged["user_id"] or user_id)
             merged_ids = list(merged.get("merged_user_ids") or [])
+            allowed_user_ids.update(str(value or "").strip() for value in merged_ids)
+            allowed_user_ids.add(merge_candidate_user_id)
             if merged_ids:
                 append_arclink_event(
                     conn,
@@ -703,6 +790,15 @@ def process_stripe_webhook(
                     },
                     commit=False,
                 )
+
+        _assert_entitlement_account(
+            conn,
+            user_id=user_id,
+            subscription_id=subscription_id,
+            stripe_customer_id=stripe_customer_id,
+            client_reference_id=str(obj.get("client_reference_id") or ""),
+            allowed_user_ids=allowed_user_ids,
+        )
 
         if subscription_id:
             mirror_status = _stripe_subscription_mirror_status(
@@ -741,13 +837,28 @@ def process_stripe_webhook(
         advanced = tuple(advance_arclink_entitlement_gates_for_user(conn, user_id=user_id, commit=False))
         onboarding_session_id = _stripe_onboarding_session_id(obj)
         if event_type == "checkout.session.completed" and onboarding_session_id:
-            sync_arclink_onboarding_after_entitlement(
+            onboarding_synced = sync_arclink_onboarding_after_entitlement(
                 conn,
                 session_id=onboarding_session_id,
                 checkout_session_id=str(obj.get("id") or ""),
                 stripe_customer_id=stripe_customer_id,
                 commit=False,
             )
+            if not onboarding_synced:
+                append_arclink_event(
+                    conn,
+                    subject_kind="onboarding_session",
+                    subject_id=onboarding_session_id,
+                    event_type="stripe_onboarding_sync_skipped",
+                    metadata={
+                        "stripe_event_id": event_id,
+                        "stripe_checkout_session_id": str(obj.get("id") or ""),
+                        "stripe_customer_id": stripe_customer_id,
+                        "user_id": user_id,
+                        "reason": "missing_or_unprovisionable_onboarding_deployment",
+                    },
+                    commit=False,
+                )
         inference_allowance: dict[str, Any] = {}
         if event_type in {"invoice.payment_succeeded", "invoice.paid"} and entitlement_state == "paid":
             inference_allowance = apply_subscription_inference_allowance(

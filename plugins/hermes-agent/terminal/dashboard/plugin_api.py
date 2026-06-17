@@ -59,7 +59,6 @@ _DEFAULT_SCROLLBACK_BYTES = 8_000_000
 _DEFAULT_SCROLLBACK_LINES = 50_000
 _DEFAULT_REATTACH_SCROLLBACK_LINES = 4_000
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
-_SSH_TARGET_RE = re.compile(r"^[A-Za-z0-9_.@:-]{1,180}$")
 _ANSI_ESCAPE_RE = re.compile(
     r"(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P^_].*?\x1b\\|\x1b[@-Z\\-_])",
     re.DOTALL,
@@ -454,13 +453,6 @@ def _clean_folder(value: Any) -> str:
 def _clean_session_mode(value: Any) -> str:
     mode = str(value or "shell").strip().lower()
     return mode if mode in {"shell", "ssh", "tui"} else "shell"
-
-
-def _clean_ssh_target(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text or not _SSH_TARGET_RE.match(text):
-        raise HTTPException(status_code=400, detail="A safe SSH target like user@host is required")
-    return text
 
 
 def _clean_relative_path(raw_path: Any) -> str:

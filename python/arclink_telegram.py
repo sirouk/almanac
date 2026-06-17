@@ -31,6 +31,7 @@ from arclink_public_bots import (
     handle_arclink_public_bot_turn,
     telegram_markdown_to_entities,
 )
+from arclink_api_auth import check_arclink_rate_limit
 from arclink_operator_raven import (
     dispatch_operator_raven_command,
     operator_approval_code,
@@ -48,6 +49,9 @@ ARCLINK_TELEGRAM_COMMAND_LIMIT = 100
 _TELEGRAM_COMMAND_RE = re.compile(r"[^a-z0-9_]")
 _TELEGRAM_MULTI_UNDERSCORE_RE = re.compile(r"_{2,}")
 _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE: set[tuple[str, str]] = set()
+_TELEGRAM_CHAT_COMMAND_SCOPE_CACHE_LIMIT = 4096
+ARCLINK_OPERATOR_TELEGRAM_TURN_LIMIT = 20
+ARCLINK_OPERATOR_TELEGRAM_RATE_WINDOW_SECONDS = 900
 
 ARCLINK_TELEGRAM_AGENT_FALLBACK_COMMANDS: tuple[tuple[str, str], ...] = (
     ("new", "Agent: start a fresh session"),
@@ -209,6 +213,37 @@ def _request_json(
     return result if isinstance(result, dict) else {"result": result}
 
 
+def _telegram_utf16_units(text: str) -> int:
+    return len(str(text or "").encode("utf-16-le")) // 2
+
+
+def _telegram_entities_within_text(
+    entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    text: str,
+) -> list[dict[str, Any]]:
+    if not entities:
+        return []
+    text_units = _telegram_utf16_units(text)
+    safe: list[dict[str, Any]] = []
+    for entity in entities:
+        item = dict(entity)
+        try:
+            offset = int(item.get("offset") or 0)
+            length = int(item.get("length") or 0)
+        except (TypeError, ValueError):
+            continue
+        if offset < 0 or length <= 0 or offset >= text_units:
+            continue
+        if offset + length > text_units:
+            length = text_units - offset
+        if length <= 0:
+            continue
+        item["offset"] = offset
+        item["length"] = length
+        safe.append(item)
+    return safe
+
+
 def telegram_send_message(
     *,
     bot_token: str,
@@ -219,9 +254,10 @@ def telegram_send_message(
     parse_mode: str = "",
     entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> dict[str, Any]:
+    outgoing_text = text if len(text) <= 4000 else text[:3997] + "..."
     payload: dict[str, Any] = {
         "chat_id": chat_id,
-        "text": text if len(text) <= 4000 else text[:3997] + "...",
+        "text": outgoing_text,
     }
     if reply_to_message_id is not None:
         payload["reply_to_message_id"] = int(reply_to_message_id)
@@ -230,7 +266,9 @@ def telegram_send_message(
     if parse_mode:
         payload["parse_mode"] = parse_mode
     elif entities:
-        payload["entities"] = list(entities)
+        safe_entities = _telegram_entities_within_text(entities, outgoing_text)
+        if safe_entities:
+            payload["entities"] = safe_entities
     return _request_json(
         _telegram_url(bot_token, "sendMessage"),
         method="POST",
@@ -773,6 +811,8 @@ def refresh_arclink_public_telegram_chat_commands(
         }
     scope = _telegram_chat_scope(clean_chat_id)
     telegram_set_my_commands(bot_token=clean_token, commands=commands, scope=scope)
+    if len(_TELEGRAM_CHAT_COMMAND_SCOPE_CACHE) >= _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE_LIMIT:
+        _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE.clear()
     _TELEGRAM_CHAT_COMMAND_SCOPE_CACHE.add(cache_key)
     return {
         "registered": [item["command"] for item in commands],
@@ -1292,6 +1332,14 @@ def _handle_operator_telegram_update(
 ) -> dict[str, Any] | None:
     if not _operator_telegram_sender_allowed(parsed, env):
         return None
+    actor_subject = f"telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}"
+    check_arclink_rate_limit(
+        conn,
+        scope="operator:telegram",
+        subject=actor_subject,
+        limit=ARCLINK_OPERATOR_TELEGRAM_TURN_LIMIT,
+        window_seconds=ARCLINK_OPERATOR_TELEGRAM_RATE_WINDOW_SECONDS,
+    )
     text = str(parsed.get("text") or "").strip()
     first = text.split(maxsplit=1)[0] if text else ""
     command = _telegram_command_token(first)
@@ -1300,7 +1348,7 @@ def _handle_operator_telegram_update(
     if command in {"/upgrade_hermes", "/hermes_upgrade"}:
         dispatch_text = "/upgrade_check"
     if operator_raven_command_requested(dispatch_text):
-        actor_id = f"telegram:{parsed.get('user_id') or parsed.get('chat_id') or ''}"
+        actor_id = actor_subject
         message_id = str(parsed.get("message_id") or parsed.get("telegram_message_id") or "").strip()
         if operator_raven_command_is_mutating(dispatch_text):
             approval_code = operator_approval_code(env)
@@ -1474,6 +1522,7 @@ def handle_telegram_update(
     channel_identity = f"tg:{parsed['user_id']}" if parsed["user_id"] else f"tg:{parsed['chat_id']}"
     turn_metadata: dict[str, Any] = {
         "telegram_message_id": parsed.get("message_id", "") or parsed.get("telegram_message_id", ""),
+        "telegram_chat_type": parsed.get("chat_type", ""),
         "telegram_update_kind": parsed.get("telegram_update_kind", ""),
         "telegram_update_json": parsed.get("telegram_update_json", ""),
     }

@@ -50,6 +50,14 @@ cleanup_legacy_plugins() {
   done
 }
 
+backup_config_file_once() {
+  local config_file="$HERMES_HOME/config.yaml"
+
+  if [[ -f "$config_file" ]]; then
+    cp -p "$config_file" "$config_file.arclink-pre-plugin-install.bak"
+  fi
+}
+
 sync_plugin_config() {
   local config_file="$HERMES_HOME/config.yaml"
 
@@ -649,6 +657,7 @@ if [[ -n "${ARCLINK_DASHBOARD_THEME:-}" ]]; then
   dashboard_theme="$ARCLINK_DASHBOARD_THEME"
 fi
 
+backup_config_file_once
 sync_plugin_config "${normalized_plugins[@]}"
 sync_dashboard_theme_config "$dashboard_theme"
 sync_dashboard_visible_plugins_config "$HERMES_HOME/config.yaml" "${visible_dashboard_plugins[@]}"

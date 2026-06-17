@@ -305,9 +305,7 @@ def run_gateway_exec_request(request_body: dict[str, Any]) -> tuple[bool, str]:
     except OSError as exc:
         return False, f"could not start Hermes public gateway bridge: {str(exc)[:180]}"
     if proc.returncode != 0:
-        detail = delivery.ANSI_RE.sub("", (proc.stderr or proc.stdout or "")).strip().splitlines()
-        tail = detail[-1][:220] if detail else f"exit status {proc.returncode}"
-        return False, f"Hermes public gateway bridge failed: {tail}"
+        return False, f"Hermes public gateway bridge failed with exit status {proc.returncode}"
     try:
         payload_out = json.loads(str(proc.stdout or "{}").strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):

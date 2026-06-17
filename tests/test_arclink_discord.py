@@ -370,6 +370,94 @@ def test_discord_webhook_handler() -> None:
     print("PASS test_discord_webhook_handler")
 
 
+def test_discord_failed_interaction_can_retry() -> None:
+    import json
+    from nacl.signing import SigningKey
+
+    control = load_module("arclink_control.py", "arclink_control_dc_retry_test")
+    dc = load_module("arclink_discord.py", "arclink_discord_retry_test")
+    conn = memory_db(control)
+    signing_key = SigningKey.generate()
+    config = dc.DiscordConfig(bot_token="tok", app_id="app1", public_key=signing_key.verify_key.encode().hex(), guild_id="g1")
+    timestamp = str(int(time.time()))
+    body = json.dumps({
+        "id": "int_retry_after_failure",
+        "type": 2,
+        "channel_id": "ch_retry",
+        "member": {"user": {"id": "u_retry"}},
+        "data": {"name": "arclink", "options": [{"name": "message", "value": "/start"}]},
+    })
+
+    def sign(payload: str) -> str:
+        return signing_key.sign(f"{timestamp}{payload}".encode()).signature.hex()
+
+    old_handler = dc.handle_discord_interaction
+    calls = 0
+
+    def flaky_handler(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("transient turn failure")
+        return old_handler(*args, **kwargs)
+
+    dc.handle_discord_interaction = flaky_handler
+    try:
+        try:
+            dc.handle_discord_webhook_request(conn, body=body, signature=sign(body), timestamp=timestamp, config=config)
+        except RuntimeError as exc:
+            expect("transient" in str(exc), str(exc))
+        else:
+            raise AssertionError("expected first Discord attempt to fail")
+        result = dc.handle_discord_webhook_request(conn, body=body, signature=sign(body), timestamp=timestamp, config=config)
+    finally:
+        dc.handle_discord_interaction = old_handler
+    expect(result["type"] == 4 and "Raven" in result["data"]["content"], str(result))
+    row = conn.execute(
+        "SELECT status FROM arclink_webhook_events WHERE provider = 'discord' AND event_id = 'int_retry_after_failure'"
+    ).fetchone()
+    expect(row["status"] == "processed", str(dict(row)))
+    print("PASS test_discord_failed_interaction_can_retry")
+
+
+def test_discord_credentials_reveal_is_ephemeral_in_guild_interactions() -> None:
+    from types import SimpleNamespace
+
+    control = load_module("arclink_control.py", "arclink_control_dc_ephemeral_credentials_test")
+    dc = load_module("arclink_discord.py", "arclink_discord_ephemeral_credentials_test")
+    conn = memory_db(control)
+    metadata_seen: list[dict[str, object]] = []
+    old_turn = dc.handle_arclink_public_bot_turn
+
+    def fake_turn(*args, **kwargs):
+        metadata_seen.append(dict(kwargs.get("metadata") or {}))
+        return SimpleNamespace(
+            reply="Dashboard credential handoff.\n\nPassword: `secret`",
+            action="credentials_revealed",
+            session_id="onb_ephemeral",
+            buttons=(),
+        )
+
+    dc.handle_arclink_public_bot_turn = fake_turn
+    try:
+        result = dc.handle_discord_interaction(
+            conn,
+            {
+                "id": "int_ephemeral_credential",
+                "type": 2,
+                "guild_id": "guild_1",
+                "channel_id": "ch_1",
+                "member": {"user": {"id": "u_1"}},
+                "data": {"name": "credentials"},
+            },
+        )
+    finally:
+        dc.handle_arclink_public_bot_turn = old_turn
+    expect(result["data"].get("flags") == 64, str(result))
+    expect(metadata_seen and metadata_seen[0].get("discord_ephemeral_supported") is True, str(metadata_seen))
+    print("PASS test_discord_credentials_reveal_is_ephemeral_in_guild_interactions")
+
+
 def test_discord_live_transport_requires_config() -> None:
     dc = load_module("arclink_discord.py", "arclink_discord_live_test")
     cfg = dc.DiscordConfig(bot_token="", app_id="", public_key="", guild_id="")
@@ -485,11 +573,13 @@ def main() -> int:
     test_discord_full_onboarding_flow()
     test_discord_verify_signature_test_mode()
     test_discord_webhook_handler()
+    test_discord_failed_interaction_can_retry()
+    test_discord_credentials_reveal_is_ephemeral_in_guild_interactions()
     test_discord_live_transport_requires_config()
     test_discord_validate_live_readiness()
     test_discord_registers_public_bot_actions()
     test_discord_credential_ack_updates_original_component_message()
-    print("PASS all 13 ArcLink Discord adapter tests")
+    print("PASS all 15 ArcLink Discord adapter tests")
     return 0
 
 

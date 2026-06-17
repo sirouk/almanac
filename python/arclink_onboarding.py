@@ -61,6 +61,10 @@ ARCLINK_ONBOARDING_EVENT_TYPES = frozenset(
 ARCLINK_ONBOARDING_SESSION_TTL_SECONDS = 24 * 60 * 60
 ARCLINK_AGENT_NAME_MAX_CHARS = 40
 ARCLINK_AGENT_TITLE_MAX_CHARS = 80
+ARCLINK_ONBOARDING_STEP_MAX_CHARS = 120
+ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES = ARCLINK_ONBOARDING_TERMINAL_STATUSES | frozenset(
+    {"payment_pending", "paid", "provisioning_ready", "first_contacted"}
+)
 ARCLINK_DEFAULT_AGENT_PROFILES: tuple[dict[str, str], ...] = (
     {
         "name": "Atlas",
@@ -116,6 +120,10 @@ _SECRET_KEY_RE = re.compile(r"(secret|token|api[_-]?key|password|credential|webh
 _PLAINTEXT_SECRET_RE = re.compile(
     r"(?i)("
     r"sk_(live|test)_[a-z0-9]|"
+    r"\bsk-ant-[a-z0-9_-]{16,}\b|"
+    r"\bsk-(proj-)?[a-z0-9_-]{16,}\b|"
+    r"\bcpk_[a-z0-9_-]{16,}\b|"
+    r"\b(?:akia|asia)[a-z0-9]{16}\b|"
     r"whsec_[a-z0-9]|"
     r"gh[pousr]_[a-z0-9]|"
     r"xox[baprs]-|"
@@ -187,6 +195,17 @@ def clean_arclink_agent_title(value: str, *, required: bool = False) -> str:
         max_chars=ARCLINK_AGENT_TITLE_MAX_CHARS,
         required=required,
     )
+
+
+def clean_arclink_onboarding_step(value: str, *, field: str = "current_step", required: bool = False) -> str:
+    clean = str(value or "").strip()
+    if required and not clean:
+        raise ArcLinkOnboardingError(f"{field} is required")
+    if clean:
+        _reject_secret_material(clean, path=f"$.{field}")
+    if len(clean) > ARCLINK_ONBOARDING_STEP_MAX_CHARS:
+        raise ArcLinkOnboardingError(f"{field} must be {ARCLINK_ONBOARDING_STEP_MAX_CHARS} characters or fewer")
+    return clean
 
 
 def _clean_channel(channel: str) -> str:
@@ -334,7 +353,7 @@ def _session_row(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row:
 
 
 def _active_session_or_error(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row:
-    expire_stale_arclink_onboarding_sessions(conn)
+    expire_stale_arclink_onboarding_sessions(conn, commit=not conn.in_transaction)
     row = _session_row(conn, session_id)
     if str(row["status"] or "") in ARCLINK_ONBOARDING_TERMINAL_STATUSES:
         raise ArcLinkOnboardingError(f"ArcLink onboarding session is terminal: {row['status']}")
@@ -370,6 +389,22 @@ def _update_session(
     updates = {key: value for key, value in fields.items() if key in allowed}
     if "status" in updates and updates["status"] not in ARCLINK_ONBOARDING_STATUSES:
         raise ArcLinkOnboardingError(f"unsupported ArcLink onboarding status: {updates['status']}")
+    for key in (
+        "current_step",
+        "email_hint",
+        "display_name_hint",
+        "agent_name",
+        "agent_title",
+        "selected_plan_id",
+        "selected_model_id",
+    ):
+        if key in updates:
+            if key == "current_step":
+                updates[key] = clean_arclink_onboarding_step(updates[key])
+            else:
+                _reject_secret_material(updates[key], path=f"$.{key}")
+    if "metadata_json" in updates:
+        _reject_secret_material(_json_loads(str(updates["metadata_json"] or "{}")), path="$.metadata_json")
     if not updates:
         return dict(_session_row(conn, session_id))
     updates["updated_at"] = utc_now_iso()
@@ -474,6 +509,7 @@ def create_or_resume_arclink_onboarding_session(
     now = utc_now_iso()
     expires_at = utc_after_seconds_iso(ARCLINK_ONBOARDING_SESSION_TTL_SECONDS)
     clean_session_id = session_id.strip() or _stable_id("onb", clean_channel, clean_identity, secrets.token_hex(8))
+    clean_current_step = clean_arclink_onboarding_step(current_step)
     conn.execute(
         """
         INSERT INTO arclink_onboarding_sessions (
@@ -486,7 +522,7 @@ def create_or_resume_arclink_onboarding_session(
             clean_session_id,
             clean_channel,
             clean_identity,
-            current_step,
+            clean_current_step,
             str(email_hint or "").strip(),
             str(display_name_hint or "").strip(),
             clean_agent_name,
@@ -524,7 +560,8 @@ def answer_arclink_onboarding_question(
     selected_model_id: str = "",
 ) -> dict[str, Any]:
     _active_session_or_error(conn, session_id)
-    updates: dict[str, str] = {"status": "collecting", "current_step": str(question_key or "").strip()}
+    clean_question_key = clean_arclink_onboarding_step(question_key, field="question_key", required=True)
+    updates: dict[str, str] = {"status": "collecting", "current_step": clean_question_key}
     for key, value in (
         ("email_hint", email_hint),
         ("display_name_hint", display_name_hint),
@@ -547,7 +584,7 @@ def answer_arclink_onboarding_question(
         conn,
         session_id=session_id,
         event_type="question_answered",
-        metadata={"question_key": question_key, "answer_summary": answer_summary},
+        metadata={"question_key": clean_question_key, "answer_summary": answer_summary},
         commit=False,
     )
     conn.commit()
@@ -747,7 +784,7 @@ def cancel_arclink_onboarding_session(
 ) -> dict[str, Any]:
     session = _session_row(conn, session_id)
     status = str(session["status"] or "")
-    if status in ARCLINK_ONBOARDING_TERMINAL_STATUSES:
+    if status in ARCLINK_ONBOARDING_CANCEL_IMMUTABLE_STATUSES:
         return dict(session)
     if str(session["checkout_state"] or "") == "open":
         return mark_arclink_onboarding_checkout_cancelled(conn, session_id=session_id, reason=reason or "user cancelled")
@@ -804,16 +841,20 @@ def sync_arclink_onboarding_after_entitlement(
     stripe_customer_id: str = "",
     commit: bool = True,
 ) -> bool:
-    session = dict(_active_session_or_error(conn, session_id))
+    try:
+        session = dict(_session_row(conn, session_id))
+    except KeyError:
+        return False
     deployment_id = str(session.get("deployment_id") or "")
     if not deployment_id or not arclink_deployment_can_provision(conn, deployment_id=deployment_id):
         return False
-    advance_arclink_entitlement_gate(conn, deployment_id=deployment_id, commit=commit)
+    advance_arclink_entitlement_gate(conn, deployment_id=deployment_id, commit=False)
+    status = str(session.get("status") or "")
     _update_session(
         conn,
         session_id=session_id,
-        status="provisioning_ready",
-        current_step="provisioning_requested",
+        status="first_contacted" if status == "first_contacted" else "provisioning_ready",
+        current_step="first_agent_contact" if status == "first_contacted" else "provisioning_requested",
         checkout_session_id=checkout_session_id or str(session.get("checkout_session_id") or ""),
         checkout_state="paid",
         stripe_customer_id=stripe_customer_id or str(session.get("stripe_customer_id") or ""),
@@ -884,6 +925,7 @@ def record_arclink_onboarding_first_agent_contact(
     channel: str,
     channel_identity: str,
 ) -> dict[str, Any]:
+    _active_session_or_error(conn, session_id)
     session = _update_session(
         conn,
         session_id=session_id,

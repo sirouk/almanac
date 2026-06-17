@@ -314,6 +314,68 @@ def test_public_onboarding_api_rejects_invalid_channel_before_rate_limit() -> No
     print("PASS test_public_onboarding_api_rejects_invalid_channel_before_rate_limit")
 
 
+def test_public_onboarding_cancel_does_not_regress_paid_session() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_onboarding_cancel_paid_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_onboarding_cancel_paid_test")
+    conn = memory_db(control)
+
+    started = api.start_public_onboarding_api(
+        conn,
+        channel="web",
+        channel_identity="paid-cancel@example.test",
+        email_hint="paid-cancel@example.test",
+        selected_plan_id="starter",
+    )
+    session_id = started.payload["session"]["session_id"]
+    cancel_token = started.payload["browser_cancel_token"]
+    conn.execute(
+        """
+        UPDATE arclink_onboarding_sessions
+        SET status = 'provisioning_ready', current_step = 'provisioning_requested', checkout_state = 'paid'
+        WHERE session_id = ?
+        """,
+        (session_id,),
+    )
+    conn.commit()
+
+    cancelled = api.cancel_onboarding_session_api(
+        conn,
+        onboarding_session_id=session_id,
+        browser_cancel_token=cancel_token,
+    )
+
+    row = conn.execute("SELECT status, current_step, checkout_state FROM arclink_onboarding_sessions WHERE session_id = ?", (session_id,)).fetchone()
+    event_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_onboarding_events WHERE session_id = ? AND event_type IN ('abandoned', 'payment_cancelled')",
+        (session_id,),
+    ).fetchone()["n"]
+    expect(cancelled.status == 200, str(cancelled))
+    expect(cancelled.payload["changed"] is False, str(cancelled.payload))
+    expect(row["status"] == "provisioning_ready", str(dict(row)))
+    expect(row["current_step"] == "provisioning_requested", str(dict(row)))
+    expect(row["checkout_state"] == "paid", str(dict(row)))
+    expect(event_count == 0, str(event_count))
+    print("PASS test_public_onboarding_cancel_does_not_regress_paid_session")
+
+
+def test_rate_limit_exceeded_rolls_back_internal_lock_transaction() -> None:
+    control = load_module("arclink_control.py", "arclink_control_api_auth_rate_tx_test")
+    api = load_module("arclink_api_auth.py", "arclink_api_auth_rate_tx_test")
+    conn = memory_db(control)
+
+    api.check_arclink_rate_limit(conn, scope="test", subject="actor", limit=1, window_seconds=900)
+    try:
+        api.check_arclink_rate_limit(conn, scope="test", subject="actor", limit=1, window_seconds=900)
+    except api.ArcLinkRateLimitError:
+        pass
+    else:
+        raise AssertionError("expected rate limit")
+    expect(not conn.in_transaction, "rate-limit failure left the connection inside a transaction")
+    rows = conn.execute("SELECT COUNT(*) AS n FROM rate_limits WHERE scope = 'arclink:test' AND subject = 'actor'").fetchone()
+    expect(rows["n"] == 1, str(dict(rows)))
+    print("PASS test_rate_limit_exceeded_rolls_back_internal_lock_transaction")
+
+
 def test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema() -> None:
     control = load_module("arclink_control.py", "arclink_control_api_auth_admin_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_api_auth_admin_test")
@@ -967,6 +1029,8 @@ def main() -> int:
     test_user_crew_recipe_api_applies_overlay_and_admin_on_behalf_is_audited()
     test_public_onboarding_api_rate_limits_and_reuses_shared_contract()
     test_public_onboarding_api_rejects_invalid_channel_before_rate_limit()
+    test_public_onboarding_cancel_does_not_regress_paid_session()
+    test_rate_limit_exceeded_rolls_back_internal_lock_transaction()
     test_admin_api_requires_csrf_reason_idempotency_and_mfa_ready_schema()
     test_admin_action_api_rate_limits_by_admin_and_target()
     test_admin_passwords_are_hashed_and_required_for_login()
@@ -982,7 +1046,7 @@ def main() -> int:
     test_staged_revoke_requires_explicit_transaction()
     test_single_operator_policy_rejects_second_active_owner()
     test_proof_token_hashes_use_hmac_and_accept_legacy()
-    print("PASS all 19 ArcLink API/auth tests")
+    print("PASS all 21 ArcLink API/auth tests")
     return 0
 
 

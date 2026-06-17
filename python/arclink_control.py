@@ -4432,6 +4432,24 @@ def grant_arclink_refuel_credit(
     cents = int(credit_cents if credit_cents is not None else refuel_credit_sku_config()["credit_cents"])
     if cents <= 0:
         raise ValueError("ArcLink refuel credit cents must be positive")
+    clean_source_kind = str(source_kind or "").strip() or "manual"
+    clean_source_id = str(source_id or "").strip()
+    if clean_source_id:
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM arclink_refuel_credits
+            WHERE user_id = ?
+              AND deployment_id = ?
+              AND source_kind = ?
+              AND source_id = ?
+            ORDER BY created_at ASC, credit_id ASC
+            LIMIT 1
+            """,
+            (clean_user, clean_deployment, clean_source_kind, clean_source_id),
+        ).fetchone()
+        if existing is not None:
+            return dict(existing)
     now = utc_now_iso()
     credit_id = _arclink_id("refuel")
     conn.execute(
@@ -4445,8 +4463,8 @@ def grant_arclink_refuel_credit(
             credit_id,
             clean_user,
             clean_deployment,
-            str(source_kind or "").strip() or "manual",
-            str(source_id or "").strip(),
+            clean_source_kind,
+            clean_source_id,
             cents,
             cents,
             _arclink_json(metadata),
@@ -8060,6 +8078,7 @@ def queue_notification(
     channel_kind: str,
     message: str,
     extra: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> int:
     cursor = conn.execute(
         """
@@ -8068,7 +8087,8 @@ def queue_notification(
         """,
         (target_kind, target_id, channel_kind, message, json_dumps(extra or {}), utc_now_iso()),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return int(cursor.lastrowid)
 
 
@@ -9870,7 +9890,7 @@ def consume_agent_notifications(
     """
     rows = conn.execute(
         """
-        SELECT id, target_kind, target_id, channel_kind, message, created_at
+        SELECT id, target_kind, target_id, channel_kind, message, extra_json, created_at
         FROM notification_outbox
         WHERE delivered_at IS NULL
           AND target_kind = 'user-agent'
@@ -9886,8 +9906,58 @@ def consume_agent_notifications(
             "UPDATE notification_outbox SET delivered_at = ? WHERE id = ?",
             [(now, int(r["id"])) for r in rows],
         )
+        for row in rows:
+            if str(row["channel_kind"] or "") != "pod-message":
+                continue
+            extra = json_loads(str(row["extra_json"] or "{}"), {})
+            message_id = str(extra.get("message_id") or "").strip()
+            if not message_id:
+                continue
+            cursor = conn.execute(
+                """
+                UPDATE arclink_pod_messages
+                SET status = 'delivered', delivered_at = ?
+                WHERE message_id = ?
+                  AND status = 'queued'
+                """,
+                (now, message_id),
+            )
+            if cursor.rowcount <= 0:
+                continue
+            message = conn.execute(
+                "SELECT sender_deployment_id, recipient_deployment_id FROM arclink_pod_messages WHERE message_id = ?",
+                (message_id,),
+            ).fetchone()
+            append_arclink_audit(
+                conn,
+                action="pod_message_delivered",
+                actor_id=f"agent-ack:{agent_id}",
+                target_kind="pod_message",
+                target_id=message_id,
+                reason="Pod Comms message delivered",
+                metadata={
+                    "sender_deployment_id": str(message["sender_deployment_id"] or "") if message else "",
+                    "recipient_deployment_id": str(message["recipient_deployment_id"] or "") if message else "",
+                },
+                commit=False,
+            )
+            append_arclink_event(
+                conn,
+                subject_kind="pod_message",
+                subject_id=message_id,
+                event_type="pod_message_delivered",
+                metadata={
+                    "recipient_deployment_id": str(message["recipient_deployment_id"] or "") if message else "",
+                },
+                commit=False,
+            )
         conn.commit()
-    return [dict(r) for r in rows]
+    notifications: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["extra"] = json_loads(str(item.get("extra_json") or "{}"), {})
+        notifications.append(item)
+    return notifications
 
 
 def list_notifications(

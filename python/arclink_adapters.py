@@ -156,19 +156,24 @@ def sign_stripe_webhook(payload: str, secret: str, *, timestamp: int | None = No
 def verify_stripe_webhook(payload: str, signature: str, secret: str, *, tolerance_seconds: int = 300) -> dict[str, Any]:
     if not str(secret or "").strip():
         raise StripeWebhookError("Stripe webhook secret must be non-blank")
-    parts: dict[str, str] = {}
+    timestamp_value = ""
+    v1_signatures: list[str] = []
     for item in signature.split(","):
         key, _, value = item.partition("=")
-        if key and value:
-            parts[key] = value
+        key = key.strip()
+        value = value.strip()
+        if key == "t" and value:
+            timestamp_value = value
+        elif key == "v1" and value:
+            v1_signatures.append(value)
     try:
-        timestamp = int(parts["t"])
-    except (KeyError, ValueError) as exc:
+        timestamp = int(timestamp_value)
+    except ValueError as exc:
         raise StripeWebhookError("missing Stripe webhook timestamp") from exc
     if abs(int(time.time()) - timestamp) > tolerance_seconds:
         raise StripeWebhookError("Stripe webhook timestamp is outside tolerance")
     expected = sign_stripe_webhook(payload, secret, timestamp=timestamp).split("v1=", 1)[1]
-    if not hmac.compare_digest(parts.get("v1", ""), expected):
+    if not any(hmac.compare_digest(candidate, expected) for candidate in v1_signatures):
         raise StripeWebhookError("Stripe webhook signature mismatch")
     parsed = json.loads(payload)
     if not isinstance(parsed, dict):

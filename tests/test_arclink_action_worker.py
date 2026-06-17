@@ -1101,6 +1101,12 @@ def test_reprovision_dispatches_pod_migration() -> None:
             """,
             (now,),
         )
+        conn.execute(
+            """
+            INSERT INTO arclink_service_health (deployment_id, service_name, status, checked_at, detail_json)
+            VALUES ('dep_reprovision', 'gateway', 'healthy', '2999-01-01T00:00:00+00:00', '{}')
+            """
+        )
         conn.commit()
         action = _queue_action(
             dashboard,

@@ -114,6 +114,73 @@ def test_same_captain_send_enqueues_notification_and_audit() -> None:
     print("PASS test_same_captain_send_enqueues_notification_and_audit")
 
 
+def test_pod_message_enqueue_is_atomic_with_notification() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_comms_atomic")
+    comms = load_module("arclink_pod_comms.py", "arclink_pod_comms_atomic")
+    conn = memory_db(control)
+    seed_pods(control, conn)
+
+    original_queue_notification = comms.queue_notification
+
+    def fail_queue_notification(*args, **kwargs):
+        expect(kwargs.get("commit") is False, str(kwargs))
+        raise RuntimeError("notification queue unavailable")
+
+    comms.queue_notification = fail_queue_notification
+    try:
+        try:
+            comms.send_pod_message(
+                conn,
+                sender_deployment_id="arcdep_alpha_1",
+                recipient_deployment_id="arcdep_alpha_2",
+                body="This should roll back with the notification failure.",
+            )
+        except RuntimeError as exc:
+            expect("notification queue unavailable" in str(exc), str(exc))
+        else:
+            raise AssertionError("notification enqueue failure should abort the pod message send")
+    finally:
+        comms.queue_notification = original_queue_notification
+    conn.rollback()
+
+    for table in ("arclink_pod_messages", "notification_outbox", "arclink_audit_log", "arclink_events", "rate_limits"):
+        count = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"]
+        expect(count == 0, f"{table} retained rows after enqueue failure")
+    print("PASS test_pod_message_enqueue_is_atomic_with_notification")
+
+
+def test_agent_notification_consumption_preserves_pod_message_metadata_and_status() -> None:
+    control = load_module("arclink_control.py", "arclink_control_pod_comms_consume")
+    comms = load_module("arclink_pod_comms.py", "arclink_pod_comms_consume")
+    conn = memory_db(control)
+    seed_pods(control, conn)
+
+    result = comms.send_pod_message(
+        conn,
+        sender_deployment_id="arcdep_alpha_1",
+        recipient_deployment_id="arcdep_alpha_2",
+        body="Metadata should reach the agent.",
+        attachments=[],
+    )
+    message_id = result["message"]["message_id"]
+    notifications = control.consume_agent_notifications(conn, agent_id="agent-alpha-2")
+
+    expect(len(notifications) == 1, str(notifications))
+    notification = notifications[0]
+    expect(notification["channel_kind"] == "pod-message", str(notification))
+    expect(notification["extra"]["message_id"] == message_id, str(notification))
+    expect(notification["extra"]["sender_deployment_id"] == "arcdep_alpha_1", str(notification))
+    expect(json.loads(notification["extra_json"])["message_id"] == message_id, str(notification))
+    stored = conn.execute(
+        "SELECT status, delivered_at FROM arclink_pod_messages WHERE message_id = ?",
+        (message_id,),
+    ).fetchone()
+    expect(stored["status"] == "delivered" and stored["delivered_at"], dict(stored))
+    actions = [row["action"] for row in conn.execute("SELECT action FROM arclink_audit_log").fetchall()]
+    expect(actions.count("pod_message_delivered") == 1, str(actions))
+    print("PASS test_agent_notification_consumption_preserves_pod_message_metadata_and_status")
+
+
 def test_cross_captain_send_requires_active_pod_comms_grant() -> None:
     control = load_module("arclink_control.py", "arclink_control_pod_comms_grant")
     comms = load_module("arclink_pod_comms.py", "arclink_pod_comms_grant")
@@ -313,11 +380,13 @@ def test_mcp_pod_comms_tools_scope_to_authenticated_agent() -> None:
 
 def main() -> int:
     test_same_captain_send_enqueues_notification_and_audit()
+    test_pod_message_enqueue_is_atomic_with_notification()
+    test_agent_notification_consumption_preserves_pod_message_metadata_and_status()
     test_cross_captain_send_requires_active_pod_comms_grant()
     test_rate_limit_list_delivery_and_redaction()
     test_hosted_comms_routes_scope_user_and_redact_admin_body()
     test_mcp_pod_comms_tools_scope_to_authenticated_agent()
-    print("PASS all 5 ArcLink Pod Comms tests")
+    print("PASS all 7 ArcLink Pod Comms tests")
     return 0
 
 

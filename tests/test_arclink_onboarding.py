@@ -11,6 +11,8 @@ from arclink_test_helpers import expect, load_module, memory_db, sign_stripe
 def checkout_completed_payload(session: dict[str, str], *, event_id: str = "evt_checkout_done") -> str:
     obj = {
         "id": session["checkout_session_id"],
+        "payment_status": "paid",
+        "amount_total": 1000,
         "customer": "cus_onboarding",
         "subscription": "sub_onboarding",
         "client_reference_id": session["user_id"],
@@ -387,6 +389,52 @@ def test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens() -
     print("PASS test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens")
 
 
+def test_public_onboarding_rejects_modern_provider_keys_and_unbounded_steps() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_secret_shapes_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_secret_shapes_test")
+    conn = memory_db(control)
+    secret_shapes = (
+        "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890",
+        "sk-proj-abcdefghijklmnopqrstuvwxyz1234567890",
+        "sk-abcdefghijklmnopqrstuvwxyz1234567890",
+        "cpk_abcdefghijklmnopqrstuvwxyz1234567890",
+        "AKIAIOSFODNN7EXAMPLE",
+    )
+    for idx, secret in enumerate(secret_shapes):
+        try:
+            onboarding.create_or_resume_arclink_onboarding_session(
+                conn,
+                channel="web",
+                channel_identity=f"secret-{idx}@example.test",
+                display_name_hint=secret,
+            )
+        except onboarding.ArcLinkOnboardingError as exc:
+            expect("secret material" in str(exc), str(exc))
+        else:
+            raise AssertionError(f"expected provider key shape to be rejected: {secret}")
+
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="step-secret@example.test",
+        session_id="onb_step_secret",
+    )
+    for question_key in ("sk-proj-abcdefghijklmnopqrstuvwxyz1234567890", "x" * 121):
+        try:
+            onboarding.answer_arclink_onboarding_question(
+                conn,
+                session_id=session["session_id"],
+                question_key=question_key,
+            )
+        except onboarding.ArcLinkOnboardingError:
+            pass
+        else:
+            raise AssertionError(f"expected question_key to be rejected: {question_key[:32]}")
+    row = conn.execute("SELECT current_step FROM arclink_onboarding_sessions WHERE session_id = 'onb_step_secret'").fetchone()
+    expect(row["current_step"] == "started", str(dict(row)))
+    print("PASS test_public_onboarding_rejects_modern_provider_keys_and_unbounded_steps")
+
+
 def test_prepare_onboarding_preserves_existing_entitlement() -> None:
     control = load_module("arclink_control.py", "arclink_control_onboarding_entitlement_preserve_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_preserve_test")
@@ -503,6 +551,88 @@ def test_stale_onboarding_session_expires_and_allows_reentry() -> None:
     print("PASS test_stale_onboarding_session_expires_and_allows_reentry")
 
 
+def test_expired_checkout_session_can_sync_after_stripe_payment() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_expired_paid_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_onboarding_expired_paid_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_onboarding_expired_paid_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_expired_paid_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="expired-paid@example.test",
+        session_id="onb_expired_paid",
+        email_hint="expired-paid@example.test",
+        selected_plan_id="starter",
+    )
+    opened = onboarding.open_arclink_onboarding_checkout(
+        conn,
+        session_id=session["session_id"],
+        stripe_client=stripe,
+        price_id="price_starter",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        base_domain="example.test",
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET expires_at = '2026-01-01T00:00:00+00:00' WHERE session_id = ?",
+        (opened["session_id"],),
+    )
+    conn.commit()
+
+    payload = checkout_completed_payload(opened, event_id="evt_expired_checkout_paid")
+    result = entitlements.process_stripe_webhook(conn, payload=payload, signature=sign_stripe(adapters, payload), secret="whsec_test")
+
+    expect(result.entitlement_state == "paid", str(result))
+    ready_session = conn.execute(
+        "SELECT status, current_step, checkout_state FROM arclink_onboarding_sessions WHERE session_id = 'onb_expired_paid'"
+    ).fetchone()
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_expired_checkout_paid'").fetchone()
+    expect(ready_session["status"] == "provisioning_ready", str(dict(ready_session)))
+    expect(ready_session["current_step"] == "provisioning_requested", str(dict(ready_session)))
+    expect(ready_session["checkout_state"] == "paid", str(dict(ready_session)))
+    expect(webhook["status"] == "processed", str(dict(webhook)))
+    print("PASS test_expired_checkout_session_can_sync_after_stripe_payment")
+
+
+def test_first_agent_contact_refuses_terminal_onboarding_session() -> None:
+    control = load_module("arclink_control.py", "arclink_control_onboarding_terminal_contact_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_terminal_contact_test")
+    conn = memory_db(control)
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="telegram",
+        channel_identity="tg:terminal-contact",
+        session_id="onb_terminal_contact",
+    )
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET status = 'expired', current_step = 'expired' WHERE session_id = ?",
+        (session["session_id"],),
+    )
+    conn.commit()
+
+    try:
+        onboarding.record_arclink_onboarding_first_agent_contact(
+            conn,
+            session_id=session["session_id"],
+            channel="telegram",
+            channel_identity="tg:terminal-contact",
+        )
+    except onboarding.ArcLinkOnboardingError as exc:
+        expect("terminal" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected first contact to reject terminal onboarding session")
+    row = conn.execute("SELECT status, current_step FROM arclink_onboarding_sessions WHERE session_id = ?", (session["session_id"],)).fetchone()
+    event_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM arclink_onboarding_events WHERE session_id = ? AND event_type = 'first_agent_contact'",
+        (session["session_id"],),
+    ).fetchone()["n"]
+    expect(row["status"] == "expired" and row["current_step"] == "expired", str(dict(row)))
+    expect(event_count == 0, str(event_count))
+    print("PASS test_first_agent_contact_refuses_terminal_onboarding_session")
+
+
 def test_duplicate_active_web_onboarding_by_email_reuses_session() -> None:
     control = load_module("arclink_control.py", "arclink_control_onboarding_duplicate_email_test")
     onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_duplicate_email_test")
@@ -588,12 +718,15 @@ def main() -> int:
     test_fake_checkout_is_deterministic_and_cancel_expire_keep_provisioning_blocked()
     test_successful_checkout_uses_entitlement_gate_before_provisioning_ready()
     test_channel_handoff_keeps_public_state_separate_from_private_bot_tokens()
+    test_public_onboarding_rejects_modern_provider_keys_and_unbounded_steps()
     test_prepare_onboarding_preserves_existing_entitlement()
     test_prepare_onboarding_reuses_existing_user_by_email()
     test_stale_onboarding_session_expires_and_allows_reentry()
+    test_expired_checkout_session_can_sync_after_stripe_payment()
+    test_first_agent_contact_refuses_terminal_onboarding_session()
     test_duplicate_active_web_onboarding_by_email_reuses_session()
     test_web_telegram_discord_onboarding_parity()
-    print("PASS all 12 ArcLink onboarding tests")
+    print("PASS all 15 ArcLink onboarding tests")
     return 0
 
 

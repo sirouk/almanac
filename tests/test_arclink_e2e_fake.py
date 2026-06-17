@@ -118,6 +118,8 @@ def test_full_fake_journey():
         "data": {
             "object": {
                 "id": checkout_session_id,
+                "payment_status": "paid",
+                "amount_total": 1000,
                 "customer": "cus_e2e_test",
                 "subscription": "sub_e2e_test",
                 "client_reference_id": user_id,

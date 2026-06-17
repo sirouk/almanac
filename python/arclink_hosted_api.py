@@ -212,8 +212,9 @@ class HostedApiConfig:
             minimum=1,
             maximum=32 * 1024 * 1024,
         )
-        self.backend_allowed_cidrs: str = str(e.get("ARCLINK_BACKEND_ALLOWED_CIDRS", "")).strip()
         self.trusted_proxy_cidrs: str = str(e.get("ARCLINK_TRUSTED_PROXY_CIDRS", "")).strip()
+        self.admin_allowed_cidrs: str = str(e.get("ARCLINK_ADMIN_ALLOWED_CIDRS", "")).strip()
+        self.backend_allowed_cidrs: str = str(e.get("ARCLINK_BACKEND_ALLOWED_CIDRS", "")).strip()
         self.fleet_enrollment_secret: str = str(e.get("ARCLINK_FLEET_ENROLLMENT_SECRET", "")).strip()
         self.webhook_rate_limit_window_seconds: int = _bounded_env_int(
             e,
@@ -683,6 +684,13 @@ def _backend_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
     if is_loopback_ip(normalized):
         return True
     return is_ip_in_cidrs(normalized, config.backend_allowed_cidrs)
+
+
+def _admin_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
+    normalized = str(remote_ip or "").strip()
+    if is_loopback_ip(normalized):
+        return True
+    return is_ip_in_cidrs(normalized, config.admin_allowed_cidrs)
 
 
 def _webhook_provider_for_route(route_key: str) -> str:
@@ -4143,7 +4151,7 @@ def route_arclink_hosted_api(
 
     if route_key in _CIDR_PROTECTED_ROUTES:
         client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
-        if not _backend_client_allowed(cfg, client_ip):
+        if not _admin_client_allowed(cfg, client_ip):
             logger.warning(
                 "api_cidr_denied method=%s path=%s route=%s remote_ip=%s request_id=%s",
                 clean_method, route_path, route_key, client_ip, request_id,
@@ -4199,7 +4207,7 @@ def route_arclink_hosted_api(
                 parsed_body,
                 request_id,
                 cfg,
-                allow_admin=_backend_client_allowed(cfg, login_client_ip),
+                allow_admin=_admin_client_allowed(cfg, login_client_ip),
                 client_ip=login_client_ip,
             )
         elif route_key == "admin_login":

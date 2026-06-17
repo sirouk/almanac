@@ -1002,6 +1002,40 @@ def test_compose_defaults_academy_live_paths_off() -> None:
     print("PASS test_compose_defaults_academy_live_paths_off")
 
 
+def test_control_cidr_config_renders_trusted_proxy_and_admin_split() -> None:
+    compose = (REPO / "compose.yaml").read_text(encoding="utf-8")
+    entrypoint = (REPO / "bin" / "docker-entrypoint.sh").read_text(encoding="utf-8")
+    deploy = DEPLOY_SH.read_text(encoding="utf-8")
+
+    expect(
+        "ARCLINK_TRUSTED_PROXY_CIDRS: ${ARCLINK_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}" in compose,
+        "compose must auto-render the Docker bridge as trusted proxy CIDRs for the canonical ingress path",
+    )
+    expect(
+        "ARCLINK_ADMIN_ALLOWED_CIDRS: ${ARCLINK_ADMIN_ALLOWED_CIDRS:-}" in compose,
+        "compose must keep the admin allowlist distinct and loopback-only by default",
+    )
+    expect(
+        'local trusted_proxy_cidrs="${ARCLINK_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"' in entrypoint
+        and "ARCLINK_TRUSTED_PROXY_CIDRS=$q_trusted_proxy_cidrs" in entrypoint,
+        "docker entrypoint must render trusted proxy CIDRs independently of admin/backend CIDRs",
+    )
+    expect(
+        'local admin_allowed_cidrs="${ARCLINK_ADMIN_ALLOWED_CIDRS:-}"' in entrypoint
+        and "ARCLINK_ADMIN_ALLOWED_CIDRS=$q_admin_allowed_cidrs" in entrypoint,
+        "docker entrypoint must render the admin allowlist as its own policy value",
+    )
+    expect(
+        'write_kv ARCLINK_TRUSTED_PROXY_CIDRS "${ARCLINK_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"' in deploy,
+        "deploy.sh must self-heal canonical proxied deployments by rendering trusted proxy CIDRs",
+    )
+    expect(
+        'write_kv ARCLINK_ADMIN_ALLOWED_CIDRS "${ARCLINK_ADMIN_ALLOWED_CIDRS:-}"' in deploy,
+        "deploy.sh must render admin CIDRs separately from proxy trust",
+    )
+    print("PASS test_control_cidr_config_renders_trusted_proxy_and_admin_split")
+
+
 def test_emit_runtime_config_persists_org_interview_fields() -> None:
     config = render_runtime_config(
         "tui-only",
@@ -4729,6 +4763,7 @@ def main() -> int:
         test_ci_install_smoke_removes_synthetic_control_plane_agents_before_final_health,
         test_ci_install_smoke_treats_qmd_embedding_backlog_as_retryable_after_search_proof,
         test_compose_defaults_academy_live_paths_off,
+        test_control_cidr_config_renders_trusted_proxy_and_admin_split,
         test_health_checks_failed_systemd_units_and_stale_podman_transients,
         test_bootstrap_system_supports_optional_podman_and_tailscale_install,
         test_bootstrap_userland_avoids_legacy_remote_qmd_skill_fetch,

@@ -87,15 +87,18 @@ return `413` with `body_too_large`. Malformed JSON returns `400` with
 
 ## Network Boundary
 
-Admin and backend-control routes are protected by
-`ARCLINK_BACKEND_ALLOWED_CIDRS`. Control Node Compose defaults this to the
-Docker private range, and operators should narrow it to the actual reverse
-proxy or tailnet source ranges for production. Public onboarding, webhooks,
-health, and OpenAPI routes remain outside this CIDR gate.
+Admin routes and the admin branch of unified login are protected by
+`ARCLINK_ADMIN_ALLOWED_CIDRS`; when it is unset, only loopback callers on the
+API host are allowed. `ARCLINK_BACKEND_ALLOWED_CIDRS` is reserved for internal
+backend-control peers and does not authorize admin access. Public onboarding,
+webhooks, health, and OpenAPI routes remain outside the admin CIDR gate.
 Forwarded client IP headers are trusted only from direct peers listed in
 `ARCLINK_TRUSTED_PROXY_CIDRS`; when unset, the hosted API ignores
-`X-Forwarded-For` and `X-Real-IP`. A trusted reverse proxy must sanitize
-incoming forwarded headers before passing requests to ArcLink.
+`X-Forwarded-For` and `X-Real-IP`. Control Node Compose renders the Docker
+bridge range into `ARCLINK_TRUSTED_PROXY_CIDRS` for the blessed Traefik path,
+but that proxy-trust range is separate from the admin allowlist. A trusted
+reverse proxy must sanitize incoming forwarded headers before passing requests
+to ArcLink.
 
 ## Routes
 
@@ -220,8 +223,9 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_BACKUP_KEY_STAGING_DIR` | (none) | Server-side private directory for per-deployment backup deploy-key staging; required before `/user/backup-deploy-key` can mint a key |
 | `ARCLINK_SESSION_HASH_PEPPER` | explicit local/test dev fallback only | HMAC pepper for session and CSRF token hashes; unset/blank base domains fail closed |
 | `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `1` | Require a configured pepper before issuing sessions |
-| `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
+| `ARCLINK_ADMIN_ALLOWED_CIDRS` | (none) | CIDR allow-list for Operator admin routes; unset means loopback-only |
 | `ARCLINK_TRUSTED_PROXY_CIDRS` | (none) | CIDR allow-list for direct reverse-proxy peers whose forwarded client IP headers are trusted |
+| `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for internal backend-control peers; not used for admin authorization |
 | `ARCLINK_FLEET_ENROLLMENT_SECRET` | (none) | HMAC root for single-use fleet enrollment token minting and callback verification |
 | `ARCLINK_HOSTED_API_MAX_BODY_BYTES` | `1048576` | General request body cap |
 | `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES` | `2097152` | Webhook request body cap |

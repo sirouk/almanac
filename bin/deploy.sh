@@ -8485,6 +8485,8 @@ write_docker_runtime_config() {
   mkdir -p "$(dirname "$target")"
   {
     emit_runtime_config
+    write_kv ARCLINK_TRUSTED_PROXY_CIDRS "${ARCLINK_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}"
+    write_kv ARCLINK_ADMIN_ALLOWED_CIDRS "${ARCLINK_ADMIN_ALLOWED_CIDRS:-}"
     write_kv ARCLINK_BACKEND_ALLOWED_CIDRS "${ARCLINK_BACKEND_ALLOWED_CIDRS:-172.16.0.0/12}"
     write_kv ARCLINK_MCP_URL "http://arclink-mcp:8282/mcp"
     write_kv ARCLINK_BOOTSTRAP_URL "http://arclink-mcp:8282/mcp"

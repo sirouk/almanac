@@ -5269,10 +5269,17 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
     config = hosted.HostedApiConfig(env={
         "ARCLINK_BASE_DOMAIN": "example.test",
         "ARCLINK_CORS_ORIGIN": "https://app.arclink.online",
-        "ARCLINK_BACKEND_ALLOWED_CIDRS": "203.0.113.0/24,172.16.0.0/12",
+        "ARCLINK_ADMIN_ALLOWED_CIDRS": "203.0.113.0/24",
+        "ARCLINK_BACKEND_ALLOWED_CIDRS": "172.16.0.0/12",
         "ARCLINK_TRUSTED_PROXY_CIDRS": "127.0.0.0/8,172.16.0.0/12",
     })
-    api.upsert_arclink_admin(conn, admin_id="admin_cidr", email="cidr@example.test", role="ops")
+    api.upsert_arclink_admin(
+        conn,
+        admin_id="admin_cidr",
+        email="cidr@example.test",
+        role="ops",
+        password="cidr-admin-password",
+    )
     session = api.create_arclink_admin_session(conn, admin_id="admin_cidr", session_id="asess_cidr")
 
     status, payload, headers = hosted.route_arclink_hosted_api(
@@ -5319,10 +5326,40 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
         status == 200,
         f"expected trusted proxy forwarded allowed remote 200 got {status}: {payload}",
     )
+    expect(hosted._trusted_proxy_allowed(config, "172.18.0.10"), "proxy range should be trusted for forwarded headers")
+    expect(hosted._backend_client_allowed(config, "172.18.0.10"), "backend range should remain available to backend-peer checks")
+    expect(not hosted._admin_client_allowed(config, "172.18.0.10"), "trusted/backend proxy range must not authorize admin")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers=auth_headers(session),
+        config=config,
+        remote_addr="172.18.0.10",
+    )
+    expect(status == 403, f"trusted proxy without XFF must not borrow proxy/backend CIDR for admin got {status}: {payload}")
+
+    resolved = hosted._remote_ip_from_headers(
+        config,
+        {"X-Forwarded-For": "198.51.100.9"},
+        "203.0.113.9",
+    )
+    expect(resolved == "203.0.113.9", f"admin-allowed peers must not become trusted proxies: {resolved}")
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers={**auth_headers(session), "X-Forwarded-For": "198.51.100.9"},
+        config=config,
+        remote_addr="203.0.113.9",
+    )
+    expect(status == 200, f"admin-allowed direct peer should ignore spoofed XFF and pass on direct IP got {status}: {payload}")
 
     no_trusted_proxy_config = hosted.HostedApiConfig(env={
         "ARCLINK_BASE_DOMAIN": "example.test",
-        "ARCLINK_BACKEND_ALLOWED_CIDRS": "203.0.113.0/24,172.16.0.0/12",
+        "ARCLINK_ADMIN_ALLOWED_CIDRS": "203.0.113.0/24",
+        "ARCLINK_BACKEND_ALLOWED_CIDRS": "172.16.0.0/12",
     })
     resolved = hosted._remote_ip_from_headers(
         no_trusted_proxy_config,
@@ -5336,10 +5373,53 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
         method="GET",
         path="/api/v1/admin/dashboard",
         headers={**auth_headers(session), "X-Forwarded-For": "203.0.113.8"},
+        config=no_trusted_proxy_config,
+        remote_addr="172.18.0.10",
+    )
+    expect(status == 403, f"unset trusted-proxy CIDRs must fail closed for proxied admin XFF got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="GET",
+        path="/api/v1/admin/dashboard",
+        headers={**auth_headers(session), "X-Forwarded-For": "203.0.113.8"},
         config=config,
         remote_addr="198.51.100.9",
     )
     expect(status == 403, f"expected untrusted direct spoofed forwarded remote 403 got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/login",
+        headers={},
+        body=json.dumps({"email": "cidr@example.test", "password": "cidr-admin-password"}),
+        config=config,
+        remote_addr="172.18.0.10",
+    )
+    expect(status == 401, f"unified admin login must not use proxy/backend CIDR without client IP got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/login",
+        headers={"X-Forwarded-For": "203.0.113.8"},
+        body=json.dumps({"email": "cidr@example.test", "password": "cidr-admin-password"}),
+        config=config,
+        remote_addr="172.18.0.10",
+    )
+    expect(status == 201 and payload.get("session_kind") == "admin", f"trusted proxy plus allowed admin XFF expected admin login got {status}: {payload}")
+
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/auth/login",
+        headers={"X-Forwarded-For": "203.0.113.8"},
+        body=json.dumps({"email": "cidr@example.test", "password": "cidr-admin-password"}),
+        config=no_trusted_proxy_config,
+        remote_addr="172.18.0.10",
+    )
+    expect(status == 401, f"unset trusted-proxy CIDRs must not mint admin session from XFF got {status}: {payload}")
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,

@@ -296,9 +296,12 @@ are present in `arclink-priv/config/docker.env`:
 - `ARCLINK_SESSION_HASH_PEPPER` with
   `ARCLINK_SESSION_HASH_PEPPER_REQUIRED=1` for production session and CSRF
   token hashes.
-- `ARCLINK_BACKEND_ALLOWED_CIDRS`, narrowed to the reverse-proxy, Docker
-  private network, or tailnet source ranges that should reach admin/control
-  API routes.
+- `ARCLINK_TRUSTED_PROXY_CIDRS`, narrowed to direct reverse-proxy peers whose
+  forwarded client IP headers the hosted API should trust.
+- `ARCLINK_ADMIN_ALLOWED_CIDRS`, widened only for Operator admin source ranges;
+  unset keeps admin access loopback-only on the API host.
+- `ARCLINK_BACKEND_ALLOWED_CIDRS`, reserved for internal backend-control peers
+  and not used to authorize admin routes.
 - `ARCLINK_CONTROL_PROVISIONER_ENABLED=1`
 - `ARCLINK_DOCKER_TRUSTED_HOST_RISK_ACCEPTED=accepted`, written only after the
   operator accepts the `GAP-019` trusted-host prompt for this private Control

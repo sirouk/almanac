@@ -1004,8 +1004,13 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
 | `c5cec97` | CANON-04/05/07/12/13/30 | `/credentials` private-gate (re-leveled→MED); webhook atomicity; token-injection break; migration non-verify; bot-token-to-disk | 45 / 21 / 15 | 14/14 suites green |
 | `bf7e201` | CANON-10/11/15/17/22/26/29 | df-parse→ASU=0 (fail-closed); **upgrade-pipeline H1 drain wedge + nonce replay** (full DISSECT set); academy SSRF; backup auto-push-to-prod; systemd fail-open; 10 orphaned CI tests | 62 / 22 / 11 | 23/23 suites green |
 | `f23d709` | CANON-01/02/03/06/08 | secret-reject on events/notifications + config-truncation (ALLOWED_CIDRS) fix; transport body/UTF-8 footguns; web URL allowlist; curator dead-write; **fleet audit-chain re-forge closed** | 35 / 11 / 9 | 15/15 suites green |
-| _Batch 4 running_ | CANON-14/16/18/19/20 → 21/23/24/25/27/28/31/32 | — | — | — |
+| `04ac989` | (regression follow-up) | CANON-01's secret filter over-matched `pin_upgrade_action_token` (content hash, not a credential) — exempt `_action_token` paths; value-based secret check retained. Slipped Batch-3 gate. | 1 / 0 / 0 | pin 12/12, secrets 3/3 |
+| `6fb7400` | CANON-14/16/18/19/20 (+ CANON-17 academy-gate test fix) | llm-router egress allowlist; recover-stale retry cap; auth-proxy/scale-snapshot; fleet hub/URL/asu-guard; **+ fixed pre-existing CANON-17 academy PG-PROVIDER gate test** (gate intentional; test now establishes live review) | 36 / 11 / 12 | 14/14 broad gate green |
+| _Batch 5 running_ | CANON-21/23/24/25/27/28/31/32 | — | — | — |
 
-**Progress: 19 / 32 pieces committed.** No risk-accepted design altered; every committed piece
-passed an independent reviewer test re-run. (The root `CANON.md`/`DISSECT.md` are spec — only the
-reviewer updates this ledger; the Codex fix prompt is now guarded against editing them.)
+**Progress: 24 / 32 pieces committed** (+ pin-filter & academy-gate regression fixes). No
+risk-accepted design altered; every committed piece passed an independent **broad** reviewer
+test re-run (widened after the pin/academy regressions slipped earlier narrow gates). Recovery
+note: Batch 4 required 3 launch attempts (an `&`-orphan + a double-launch) — resolved via the
+harness's TaskStop, not `pkill`; no commits were ever lost. (Root `CANON.md`/`DISSECT.md` are
+spec — only the reviewer updates this ledger; the Codex fix prompt is guarded against editing them.)

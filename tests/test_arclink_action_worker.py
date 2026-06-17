@@ -681,6 +681,83 @@ def test_comp_replay_does_not_duplicate_audit() -> None:
     print("PASS test_comp_replay_does_not_duplicate_audit")
 
 
+def test_stripe_entitlement_recovery_action_dry_run_and_apply() -> None:
+    control = load_module("arclink_control.py", "arclink_control_aw_stripe_recovery")
+    dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_stripe_recovery")
+    executor_mod = load_module("arclink_executor.py", "arclink_executor_aw_stripe_recovery")
+    worker = load_module("arclink_action_worker.py", "arclink_action_worker_stripe_recovery")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="user_stripe_recovery", entitlement_state="none")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="dep_stripe_recovery",
+        user_id="user_stripe_recovery",
+        prefix="recover-aw",
+        base_domain="example.test",
+        status="entitlement_required",
+    )
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="stripe_entitlement_recovery",
+        target_kind="user",
+        target_id="user_stripe_recovery",
+        key="stripe-recovery-dry-run",
+        metadata={
+            "dry_run": True,
+            "actor_id": "operator:admin_1",
+            "stripe_customer_id": "cus_action_recovery_full",
+            "stripe_subscription_id": "sub_action_recovery_full",
+        },
+    )
+    dry_result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'user_stripe_recovery'").fetchone()
+    dry_audit = conn.execute(
+        "SELECT metadata_json FROM arclink_audit_log WHERE action = 'stripe_entitlement_recovery_dry_run' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    expect(dry_result["status"] == "succeeded", str(dry_result))
+    expect(dry_result["result"]["status"] == "planned" and dry_result["result"]["dry_run"] is True, str(dry_result))
+    expect(user["entitlement_state"] == "none" and user["stripe_customer_id"] == "", str(dict(user)))
+    expect(dry_audit is not None, "expected dry-run recovery audit")
+    expect("cus_action_recovery_full" not in dry_audit["metadata_json"], dry_audit["metadata_json"])
+    expect("sub_action_recovery_full" not in dry_audit["metadata_json"], dry_audit["metadata_json"])
+
+    _queue_action(
+        dashboard,
+        conn,
+        action_type="stripe_entitlement_recovery",
+        target_kind="user",
+        target_id="user_stripe_recovery",
+        key="stripe-recovery-apply",
+        metadata={
+            "actor_id": "operator:admin_1",
+            "reason": "verified Stripe recovery import",
+            "stripe_customer_id": "cus_action_recovery_full",
+            "stripe_subscription_id": "sub_action_recovery_full",
+        },
+    )
+    applied_result = worker.process_next_arclink_action(conn, executor=_fake_executor(executor_mod))
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'user_stripe_recovery'").fetchone()
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'dep_stripe_recovery'").fetchone()
+    sub = conn.execute("SELECT status, user_id FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_action_recovery_full'").fetchone()
+    applied_audit = conn.execute(
+        "SELECT reason, metadata_json FROM arclink_audit_log WHERE action = 'stripe_entitlement_recovery_applied' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    link = conn.execute(
+        "SELECT operation_kind FROM arclink_action_operation_links WHERE idempotency_key = 'stripe-recovery-apply'"
+    ).fetchone()
+    expect(applied_result["status"] == "succeeded", str(applied_result))
+    expect(applied_result["result"]["status"] == "applied", str(applied_result))
+    expect(user["entitlement_state"] == "paid" and user["stripe_customer_id"] == "cus_action_recovery_full", str(dict(user)))
+    expect(dep["status"] == "provisioning_ready", str(dict(dep)))
+    expect(sub["status"] == "active" and sub["user_id"] == "user_stripe_recovery", str(dict(sub)))
+    expect(applied_audit["reason"] == "verified Stripe recovery import", str(dict(applied_audit)))
+    expect("cus_action_recovery_full" not in applied_audit["metadata_json"], applied_audit["metadata_json"])
+    expect("sub_action_recovery_full" not in applied_audit["metadata_json"], applied_audit["metadata_json"])
+    expect(link["operation_kind"] == "control_db_stripe_entitlement_recovery", str(dict(link)))
+    print("PASS test_stripe_entitlement_recovery_action_dry_run_and_apply")
+
+
 def test_backup_write_check_fails_closed_without_authorized_runner() -> None:
     control = load_module("arclink_control.py", "arclink_control_aw_backup_verify")
     dashboard = load_module("arclink_dashboard.py", "arclink_dashboard_aw_backup_verify")
@@ -2211,6 +2288,7 @@ if __name__ == "__main__":
     test_cancel_missing_subscription_fails_closed()
     test_comp_applies_entitlement_gate()
     test_comp_replay_does_not_duplicate_audit()
+    test_stripe_entitlement_recovery_action_dry_run_and_apply()
     test_backup_write_check_fails_closed_without_authorized_runner()
     test_academy_apply_preview_action_records_no_write_result_without_executor()
     test_academy_apply_preview_action_fails_closed_on_workspace_write_request()
@@ -2245,4 +2323,4 @@ if __name__ == "__main__":
     test_action_worker_ssh_executor_requires_machine_mode_and_allowlist()
     test_action_worker_local_docker_mode_requires_deployment_exec_broker()
     test_action_worker_main_reuses_single_db_connection_for_once_batch()
-    print(f"\nAll 48 action worker tests passed.")
+    print(f"\nAll 49 action worker tests passed.")

@@ -61,7 +61,7 @@ AcademyPostApplyRunner = Callable[[Mapping[str, Any]], Mapping[str, Any] | None]
 
 # Action types that map to implemented executor or local control-plane calls.
 _EXECUTOR_ACTIONS = frozenset({
-    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check",
+    "restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "stripe_entitlement_recovery", "backup_write_check",
 })
 
 _STALE_THRESHOLD_SECONDS = 3600  # 1 hour
@@ -801,6 +801,8 @@ def _execute_action(
             target_id=target_id,
             metadata=metadata,
             idempotency_key=str(intent.get("idempotency_key") or ""),
+            requested_by=str(intent.get("admin_id") or ""),
+            action_reason=str(intent.get("reason") or ""),
             env=worker_env,
         )
         _reject_secrets(result, path="$.result")
@@ -888,6 +890,8 @@ def _dispatch_action(
     target_id: str,
     metadata: dict[str, Any],
     idempotency_key: str = "",
+    requested_by: str = "",
+    action_reason: str = "",
     env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Route action type to executor call. Returns redacted result metadata."""
@@ -1022,6 +1026,39 @@ def _dispatch_action(
             reason=str(metadata.get("reason") or "operator queued comp action"),
         )
         return {"status": "applied", "action": "comp", "user_id": user_id, "operation_kind": "control_db_comp", "operation_idempotency_key": operation_key}
+
+    if action_type == "stripe_entitlement_recovery":
+        if target_kind != "user":
+            raise ArcLinkActionWorkerError("stripe_entitlement_recovery action requires a user target")
+        operation_key = str(metadata.get("idempotency_key") or idempotency_key)
+        _link_action_operation(
+            conn,
+            action_id=action_id,
+            operation_kind="control_db_stripe_entitlement_recovery",
+            idempotency_key=operation_key,
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        from arclink_entitlements import apply_stripe_entitlement_recovery
+
+        recovery = apply_stripe_entitlement_recovery(
+            conn,
+            user_id=target_id,
+            actor_id=str(metadata.get("actor_id") or requested_by or "operator:action_worker"),
+            reason=str(metadata.get("reason") or action_reason or "operator queued Stripe entitlement recovery"),
+            stripe_customer_id=str(metadata.get("stripe_customer_id") or ""),
+            stripe_subscription_id=str(metadata.get("stripe_subscription_id") or metadata.get("subscription_id") or ""),
+            entitlement_state=str(metadata.get("entitlement_state") or "paid"),
+            subscription_status=str(metadata.get("subscription_status") or "active"),
+            current_period_end=str(metadata.get("current_period_end") or ""),
+            dry_run=_truthy(metadata.get("dry_run")),
+        )
+        return {
+            **recovery,
+            "action": "stripe_entitlement_recovery",
+            "operation_kind": "control_db_stripe_entitlement_recovery",
+            "operation_idempotency_key": operation_key,
+        }
 
     if action_type == "backup_write_check":
         if target_kind != "deployment":

@@ -106,7 +106,7 @@ def test_paid_webhook_is_idempotent_and_lifts_entitlement_gate() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_paid_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_paid_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
@@ -135,12 +135,12 @@ def test_failed_webhook_row_can_be_replayed_after_payload_fix() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_replay_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_replay_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     bad_payload = json.dumps(
         {
             "id": "evt_replay_failed",
             "type": "customer.subscription.updated",
-            "data": {"object": {"id": "sub_test", "customer": "cus_test", "status": "active", "metadata": {}}},
+            "data": {"object": {"id": "sub_test", "customer": "cus_replay_missing", "status": "active", "metadata": {}}},
         },
         sort_keys=True,
     )
@@ -179,7 +179,7 @@ def test_received_webhook_row_is_reprocessed_instead_of_silently_acknowledged() 
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_received_replay_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_received_replay_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_received", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_received", stripe_customer_id="cus_received", entitlement_state="none")
     payload = stripe_payload(
         event_id="evt_received_replay",
         event_type="customer.subscription.updated",
@@ -217,7 +217,7 @@ def test_failed_payment_keeps_gate_blocked_and_audits_reason() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_failed_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_failed_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
@@ -243,7 +243,7 @@ def test_supported_webhook_failure_rolls_back_entitlement_side_effects() -> None
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_atomicity_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_atomicity_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
@@ -350,7 +350,7 @@ def test_invoice_success_sets_paid_and_lifts_entitlement_gate() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_invoice_success_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_invoice_success_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
@@ -394,7 +394,7 @@ def test_invoice_success_reads_nested_parent_subscription_details() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_nested_invoice_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_nested_invoice_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_nested", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_nested", stripe_customer_id="cus_nested", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_nested",
@@ -490,7 +490,7 @@ def test_unsupported_signed_event_does_not_mutate_paid_entitlement() -> None:
 def test_manual_comp_requires_reason_and_lifts_gate() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_comp_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
@@ -590,7 +590,7 @@ def test_new_user_without_explicit_entitlement_defaults_to_none() -> None:
 def test_targeted_comp_advances_only_named_deployment_without_global_comp() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_targeted_comp_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn,
         deployment_id="dep_1",
@@ -1257,6 +1257,283 @@ def test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding() -> 
     print("PASS test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding")
 
 
+def test_unbound_subscription_metadata_cannot_first_bind_or_create_user() -> None:
+    control = load_module("arclink_control.py", "arclink_control_entitlement_unbound_metadata_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_unbound_metadata_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_unbound_metadata_test")
+    conn = memory_db(control)
+    payload = stripe_payload(
+        event_id="evt_unbound_metadata",
+        event_type="customer.subscription.created",
+        user_id="arcusr_forged_metadata",
+        subscription_id="sub_unbound_metadata",
+        customer_id="cus_unbound_metadata",
+        status="active",
+    )
+
+    try:
+        entitlements.process_stripe_webhook(
+            conn,
+            payload=payload,
+            signature=sign(adapters, payload),
+            secret="whsec_test",
+        )
+    except entitlements.ArcLinkEntitlementError as exc:
+        expect("local ArcLink user id" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected unbound metadata-only subscription to fail closed")
+
+    user_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_users WHERE user_id = 'arcusr_forged_metadata'").fetchone()["n"]
+    sub_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_unbound_metadata'").fetchone()["n"]
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_unbound_metadata'").fetchone()
+    expect(user_count == 0, str(user_count))
+    expect(sub_count == 0, str(sub_count))
+    expect(webhook["status"] == "failed", str(dict(webhook)))
+    print("PASS test_unbound_subscription_metadata_cannot_first_bind_or_create_user")
+
+
+def test_checkout_session_completed_binds_by_local_checkout_session_id_without_metadata() -> None:
+    control = load_module("arclink_control.py", "arclink_control_entitlement_checkout_id_owner_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_checkout_id_owner_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_checkout_id_owner_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_checkout_id_owner_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="checkout-id-owner@example.test",
+        session_id="onb_checkout_id_owner",
+        email_hint="checkout-id-owner@example.test",
+        selected_plan_id="starter",
+    )
+    opened = onboarding.open_arclink_onboarding_checkout(
+        conn,
+        session_id=session["session_id"],
+        stripe_client=stripe,
+        price_id="price_starter",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        base_domain="example.test",
+    )
+    payload = json.dumps({
+        "id": "evt_checkout_id_owner",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": opened["checkout_session_id"],
+            "status": "complete",
+            "payment_status": "paid",
+            "amount_total": 1000,
+            "customer": "cus_checkout_id_owner",
+            "subscription": "sub_checkout_id_owner",
+            "client_reference_id": opened["user_id"],
+            "customer_details": {"email": "checkout-id-owner@example.test"},
+            "metadata": {},
+        }},
+    }, sort_keys=True)
+
+    result = entitlements.process_stripe_webhook(
+        conn,
+        payload=payload,
+        signature=sign(adapters, payload),
+        secret="whsec_test",
+    )
+
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = ?", (opened["user_id"],)).fetchone()
+    onb = conn.execute("SELECT status, checkout_state, stripe_customer_id FROM arclink_onboarding_sessions WHERE session_id = ?", (opened["session_id"],)).fetchone()
+    expect(result.user_id == opened["user_id"] and result.entitlement_state == "paid", str(result))
+    expect(user["entitlement_state"] == "paid" and user["stripe_customer_id"] == "cus_checkout_id_owner", str(dict(user)))
+    expect(onb["status"] == "provisioning_ready" and onb["checkout_state"] == "paid", str(dict(onb)))
+    expect(onb["stripe_customer_id"] == "cus_checkout_id_owner", str(dict(onb)))
+    print("PASS test_checkout_session_completed_binds_by_local_checkout_session_id_without_metadata")
+
+
+def test_out_of_order_subscription_replays_after_checkout_binds_subscription() -> None:
+    control = load_module("arclink_control.py", "arclink_control_entitlement_out_of_order_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_out_of_order_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_out_of_order_test")
+    onboarding = load_module("arclink_onboarding.py", "arclink_onboarding_entitlement_out_of_order_test")
+    conn = memory_db(control)
+    stripe = adapters.FakeStripeClient()
+    session = onboarding.create_or_resume_arclink_onboarding_session(
+        conn,
+        channel="web",
+        channel_identity="out-of-order@example.test",
+        session_id="onb_out_of_order",
+        email_hint="out-of-order@example.test",
+        selected_plan_id="starter",
+    )
+    opened = onboarding.open_arclink_onboarding_checkout(
+        conn,
+        session_id=session["session_id"],
+        stripe_client=stripe,
+        price_id="price_starter",
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        base_domain="example.test",
+    )
+    subscription_payload = json.dumps({
+        "id": "evt_out_of_order_subscription",
+        "type": "customer.subscription.created",
+        "data": {"object": {
+            "id": "sub_out_of_order",
+            "customer": "cus_out_of_order",
+            "status": "active",
+            "metadata": {"arclink_onboarding_session_id": opened["session_id"]},
+        }},
+    }, sort_keys=True)
+
+    try:
+        entitlements.process_stripe_webhook(
+            conn,
+            payload=subscription_payload,
+            signature=sign(adapters, subscription_payload),
+            secret="whsec_test",
+        )
+    except entitlements.ArcLinkEntitlementError as exc:
+        expect("local ArcLink user id" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected out-of-order subscription to fail before checkout binds")
+    failed = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_out_of_order_subscription'").fetchone()
+    expect(failed["status"] == "failed", str(dict(failed)))
+
+    checkout_payload = json.dumps({
+        "id": "evt_out_of_order_checkout",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": opened["checkout_session_id"],
+            "status": "complete",
+            "payment_status": "paid",
+            "amount_total": 1000,
+            "customer": "cus_out_of_order",
+            "subscription": "sub_out_of_order",
+            "client_reference_id": opened["user_id"],
+            "metadata": {"arclink_onboarding_session_id": opened["session_id"]},
+        }},
+    }, sort_keys=True)
+    checkout_result = entitlements.process_stripe_webhook(
+        conn,
+        payload=checkout_payload,
+        signature=sign(adapters, checkout_payload),
+        secret="whsec_test",
+    )
+    expect(checkout_result.entitlement_state == "paid", str(checkout_result))
+
+    replay = entitlements.process_stripe_webhook(
+        conn,
+        payload=subscription_payload,
+        signature=sign(adapters, subscription_payload),
+        secret="whsec_test",
+    )
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_out_of_order_subscription'").fetchone()
+    sub = conn.execute("SELECT user_id, status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_out_of_order'").fetchone()
+    expect(replay.replayed and replay.user_id == opened["user_id"], str(replay))
+    expect(webhook["status"] == "processed", str(dict(webhook)))
+    expect(sub["user_id"] == opened["user_id"] and sub["status"] == "active", str(dict(sub)))
+    print("PASS test_out_of_order_subscription_replays_after_checkout_binds_subscription")
+
+
+def test_metadata_only_checkout_does_not_auto_create_paid_user() -> None:
+    control = load_module("arclink_control.py", "arclink_control_entitlement_metadata_auto_create_test")
+    adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_metadata_auto_create_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_metadata_auto_create_test")
+    conn = memory_db(control)
+    payload = json.dumps({
+        "id": "evt_metadata_auto_create",
+        "type": "checkout.session.completed",
+        "data": {"object": {
+            "id": "cs_metadata_auto_create",
+            "status": "complete",
+            "payment_status": "paid",
+            "amount_total": 1000,
+            "customer": "cus_metadata_auto_create",
+            "subscription": "sub_metadata_auto_create",
+            "metadata": {"arclink_user_id": "arcusr_metadata_auto_create"},
+        }},
+    }, sort_keys=True)
+
+    try:
+        entitlements.process_stripe_webhook(
+            conn,
+            payload=payload,
+            signature=sign(adapters, payload),
+            secret="whsec_test",
+        )
+    except entitlements.ArcLinkEntitlementError as exc:
+        expect("local ArcLink user id" in str(exc), str(exc))
+    else:
+        raise AssertionError("expected metadata-only checkout to fail closed")
+
+    user_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_users WHERE user_id = 'arcusr_metadata_auto_create'").fetchone()["n"]
+    paid_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_users WHERE entitlement_state = 'paid'").fetchone()["n"]
+    sub_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_subscriptions").fetchone()["n"]
+    webhook = conn.execute("SELECT status FROM arclink_webhook_events WHERE event_id = 'evt_metadata_auto_create'").fetchone()
+    expect(user_count == 0, str(user_count))
+    expect(paid_count == 0, str(paid_count))
+    expect(sub_count == 0, str(sub_count))
+    expect(webhook["status"] == "failed", str(dict(webhook)))
+    print("PASS test_metadata_only_checkout_does_not_auto_create_paid_user")
+
+
+def test_operator_stripe_entitlement_recovery_dry_run_and_apply_audit() -> None:
+    control = load_module("arclink_control.py", "arclink_control_entitlement_recovery_action_test")
+    entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_recovery_action_test")
+    conn = memory_db(control)
+    control.upsert_arclink_user(conn, user_id="arcusr_recovery", entitlement_state="none")
+    control.reserve_arclink_deployment_prefix(
+        conn,
+        deployment_id="arcdep_recovery",
+        user_id="arcusr_recovery",
+        prefix="recover",
+        status="entitlement_required",
+    )
+
+    dry_run = entitlements.apply_stripe_entitlement_recovery(
+        conn,
+        user_id="arcusr_recovery",
+        actor_id="operator:alice",
+        reason="verified Stripe import evidence",
+        stripe_customer_id="cus_recovery_full",
+        stripe_subscription_id="sub_recovery_full",
+        dry_run=True,
+    )
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'arcusr_recovery'").fetchone()
+    sub_count = conn.execute("SELECT COUNT(*) AS n FROM arclink_subscriptions").fetchone()["n"]
+    dry_audit = conn.execute(
+        "SELECT metadata_json FROM arclink_audit_log WHERE action = 'stripe_entitlement_recovery_dry_run' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    expect(dry_run["status"] == "planned" and dry_run["dry_run"] is True, str(dry_run))
+    expect(user["entitlement_state"] == "none" and user["stripe_customer_id"] == "", str(dict(user)))
+    expect(sub_count == 0, str(sub_count))
+    expect(dry_audit is not None, "expected dry-run recovery audit")
+    expect("cus_recovery_full" not in dry_audit["metadata_json"], dry_audit["metadata_json"])
+    expect("sub_recovery_full" not in dry_audit["metadata_json"], dry_audit["metadata_json"])
+
+    applied = entitlements.apply_stripe_entitlement_recovery(
+        conn,
+        user_id="arcusr_recovery",
+        actor_id="operator:alice",
+        reason="verified Stripe import evidence",
+        stripe_customer_id="cus_recovery_full",
+        stripe_subscription_id="sub_recovery_full",
+        dry_run=False,
+    )
+    user = conn.execute("SELECT entitlement_state, stripe_customer_id FROM arclink_users WHERE user_id = 'arcusr_recovery'").fetchone()
+    dep = conn.execute("SELECT status FROM arclink_deployments WHERE deployment_id = 'arcdep_recovery'").fetchone()
+    sub = conn.execute("SELECT user_id, status FROM arclink_subscriptions WHERE stripe_subscription_id = 'sub_recovery_full'").fetchone()
+    applied_audit = conn.execute(
+        "SELECT reason, metadata_json FROM arclink_audit_log WHERE action = 'stripe_entitlement_recovery_applied' ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    expect(applied["status"] == "applied" and applied["advanced_deployments"] == ("arcdep_recovery",), str(applied))
+    expect(user["entitlement_state"] == "paid" and user["stripe_customer_id"] == "cus_recovery_full", str(dict(user)))
+    expect(dep["status"] == "provisioning_ready", str(dict(dep)))
+    expect(sub["user_id"] == "arcusr_recovery" and sub["status"] == "active", str(dict(sub)))
+    expect(applied_audit["reason"] == "verified Stripe import evidence", str(dict(applied_audit)))
+    expect("cus_recovery_full" not in applied_audit["metadata_json"], applied_audit["metadata_json"])
+    expect("sub_recovery_full" not in applied_audit["metadata_json"], applied_audit["metadata_json"])
+    print("PASS test_operator_stripe_entitlement_recovery_dry_run_and_apply_audit")
+
+
 def test_checkout_onboarding_sync_does_not_commit_before_webhook_processed() -> None:
     control = load_module("arclink_control.py", "arclink_control_entitlement_onboarding_atomic_test")
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_onboarding_atomic_test")
@@ -1285,7 +1562,7 @@ def test_checkout_onboarding_sync_does_not_commit_before_webhook_processed() -> 
         "id": "evt_onboarding_atomicity",
         "type": "checkout.session.completed",
         "data": {"object": {
-            "id": "cs_onboarding_atomicity",
+            "id": opened["checkout_session_id"],
             "status": "complete",
             "payment_status": "paid",
             "amount_total": 1000,
@@ -1346,6 +1623,12 @@ def test_checkout_onboarding_sync_skip_is_observable() -> None:
         session_id="onb_sync_skip",
         email_hint="sync-skip@example.test",
     )
+    control.upsert_arclink_user(conn, user_id="arcusr_sync_skip", entitlement_state="none")
+    conn.execute(
+        "UPDATE arclink_onboarding_sessions SET user_id = ? WHERE session_id = ?",
+        ("arcusr_sync_skip", session["session_id"]),
+    )
+    conn.commit()
     payload = json.dumps({
         "id": "evt_onboarding_sync_skip",
         "type": "checkout.session.completed",
@@ -1393,7 +1676,7 @@ def test_subscription_created_sets_paid_and_mirrors_subscription() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_created_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_created_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="none")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="none")
     control.reserve_arclink_deployment_prefix(
         conn, deployment_id="dep_1", user_id="user_1",
         prefix="sub-created", status="entitlement_required",
@@ -1419,7 +1702,7 @@ def test_unknown_subscription_status_mirrors_as_incomplete_without_crashing() ->
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_unknown_status_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_unknown_status_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_unknown_status", entitlement_state="paid")
+    control.upsert_arclink_user(conn, user_id="user_unknown_status", stripe_customer_id="cus_unknown_status", entitlement_state="paid")
     payload = stripe_payload(
         event_id="evt_sub_unknown_status",
         event_type="customer.subscription.updated",
@@ -1453,7 +1736,7 @@ def test_subscription_deleted_cancels_entitlement_and_audits() -> None:
     adapters = load_module("arclink_adapters.py", "arclink_adapters_entitlement_sub_deleted_test")
     entitlements = load_module("arclink_entitlements.py", "arclink_entitlements_sub_deleted_test")
     conn = memory_db(control)
-    control.upsert_arclink_user(conn, user_id="user_1", entitlement_state="paid")
+    control.upsert_arclink_user(conn, user_id="user_1", stripe_customer_id="cus_test", entitlement_state="paid")
     control.reserve_arclink_deployment_prefix(
         conn, deployment_id="dep_1", user_id="user_1",
         prefix="sub-deleted", status="provisioning_ready",
@@ -1723,6 +2006,11 @@ def main() -> int:
     test_invoice_payment_tops_up_subscription_inference_allowance_once()
     test_checkout_session_completed_rejects_unpaid_subscription_checkout()
     test_checkout_session_completed_lifts_entitlement_and_syncs_onboarding()
+    test_unbound_subscription_metadata_cannot_first_bind_or_create_user()
+    test_checkout_session_completed_binds_by_local_checkout_session_id_without_metadata()
+    test_out_of_order_subscription_replays_after_checkout_binds_subscription()
+    test_metadata_only_checkout_does_not_auto_create_paid_user()
+    test_operator_stripe_entitlement_recovery_dry_run_and_apply_audit()
     test_checkout_onboarding_sync_does_not_commit_before_webhook_processed()
     test_checkout_onboarding_sync_skip_is_observable()
     test_subscription_created_sets_paid_and_mirrors_subscription()
@@ -1731,7 +2019,7 @@ def main() -> int:
     test_reconciliation_drift_detects_subscription_without_deployment_and_vice_versa()
     test_stripe_webhook_merges_users_when_email_matches_existing_account()
     test_entitlement_webhook_rejects_customer_bound_to_another_account()
-    print("PASS all 34 ArcLink entitlement tests")
+    print("PASS all 39 ArcLink entitlement tests")
     return 0
 
 

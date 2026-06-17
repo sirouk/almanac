@@ -32,6 +32,7 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
         "refund",
         "comp",
         "cancel",
+        "stripe_entitlement_recovery",
         "backup_write_check",
         "rollout",
         "academy_apply_preview",
@@ -39,7 +40,7 @@ ARCLINK_ADMIN_ACTION_TYPES = frozenset(
     }
 )
 ARCLINK_ADMIN_TARGET_KINDS = frozenset({"deployment", "user", "subscription", "dns_record", "system"})
-ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "backup_write_check", "rollout", "academy_apply_preview", "academy_apply"})
+ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES = frozenset({"restart", "reprovision", "dns_repair", "rotate_chutes_key", "refund", "cancel", "comp", "stripe_entitlement_recovery", "backup_write_check", "rollout", "academy_apply_preview", "academy_apply"})
 ARCLINK_PENDING_ADMIN_ACTION_TYPES = ARCLINK_ADMIN_ACTION_TYPES - ARCLINK_EXECUTABLE_ADMIN_ACTION_TYPES
 ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
     "restart": {
@@ -104,6 +105,15 @@ ARCLINK_ADMIN_ACTION_SUPPORT: dict[str, dict[str, Any]] = {
         "required_adapter": "action worker with control DB access; no external provider adapter",
         "live_proof_gate": "LOCAL-CONTROL-DB",
         "local_contract": "applies an audited local entitlement comp through the control DB, not an external provider mutation",
+    },
+    "stripe_entitlement_recovery": {
+        "label": "Stripe entitlement recovery",
+        "worker_support": "wired",
+        "operation_kind": "control_db_stripe_entitlement_recovery",
+        "target_kinds": ("user",),
+        "required_adapter": "action worker with control DB access; no external provider adapter",
+        "live_proof_gate": "LOCAL-CONTROL-DB/PG-STRIPE",
+        "local_contract": "queues an operator-only audited local Stripe entitlement import or dry-run; it never trusts webhook metadata to originate ownership",
     },
     "backup_write_check": {
         "label": "Backup write check",

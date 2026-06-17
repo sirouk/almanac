@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from arclink_control import (
+    ARCLINK_ENTITLEMENT_STATES,
     advance_arclink_entitlement_gates_for_user,
     apply_arclink_refuel_credit_to_chutes_budget,
     apply_subscription_inference_allowance,
@@ -167,6 +168,14 @@ class StripeWebhookResult:
     advanced_deployments: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class StripeEntitlementOwner:
+    user_id: str
+    source: str
+    onboarding_session_id: str = ""
+    metadata_user_id: str = ""
+
+
 def _metadata(value: Mapping[str, Any]) -> Mapping[str, Any]:
     raw = value.get("metadata")
     return raw if isinstance(raw, Mapping) else {}
@@ -233,6 +242,18 @@ def _stripe_user_id_or_empty(obj: Mapping[str, Any]) -> str:
         return ""
 
 
+def _stripe_metadata_user_id_or_empty(obj: Mapping[str, Any]) -> str:
+    meta, sub_meta, parent_meta = _all_metadata_sources(obj)
+    return _first_nonempty((
+        meta.get("arclink_user_id"),
+        meta.get("user_id"),
+        sub_meta.get("arclink_user_id"),
+        sub_meta.get("user_id"),
+        parent_meta.get("arclink_user_id"),
+        parent_meta.get("user_id"),
+    ))
+
+
 def _stripe_user_id_from_local_state(
     conn: sqlite3.Connection,
     *,
@@ -269,6 +290,14 @@ def _stripe_user_id_from_local_state(
         if row is not None:
             return str(row["user_id"] or "").strip()
     return ""
+
+
+def _arclink_user_exists(conn: sqlite3.Connection, user_id: str) -> bool:
+    clean_user = str(user_id or "").strip()
+    if not clean_user:
+        return False
+    row = conn.execute("SELECT 1 FROM arclink_users WHERE user_id = ? LIMIT 1", (clean_user,)).fetchone()
+    return row is not None
 
 
 def _stripe_subscription_id(obj: Mapping[str, Any]) -> str:
@@ -322,6 +351,137 @@ def _stripe_purchase_kind(obj: Mapping[str, Any]) -> str:
         parent_meta.get("arclink_purchase_kind"),
         parent_meta.get("purchase_kind"),
     )).strip().lower()
+
+
+def _onboarding_session_for_checkout_owner(
+    conn: sqlite3.Connection,
+    *,
+    checkout_session_id: str,
+    onboarding_session_id: str,
+) -> sqlite3.Row | None:
+    rows: list[sqlite3.Row] = []
+    clean_checkout = str(checkout_session_id or "").strip()
+    if clean_checkout:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM arclink_onboarding_sessions
+            WHERE checkout_session_id = ?
+            LIMIT 1
+            """,
+            (clean_checkout,),
+        ).fetchone()
+        if row is not None:
+            rows.append(row)
+    clean_session = str(onboarding_session_id or "").strip()
+    if clean_session:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM arclink_onboarding_sessions
+            WHERE session_id = ?
+            LIMIT 1
+            """,
+            (clean_session,),
+        ).fetchone()
+        if row is not None:
+            rows.append(row)
+    if not rows:
+        return None
+    session_ids = {str(row["session_id"] or "").strip() for row in rows}
+    if len(session_ids) > 1:
+        raise ArcLinkEntitlementError("Stripe checkout maps to conflicting ArcLink onboarding sessions")
+    return rows[0]
+
+
+def _validate_onboarding_checkout_owner(
+    *,
+    obj: Mapping[str, Any],
+    session: sqlite3.Row,
+) -> StripeEntitlementOwner:
+    local_user = str(session["user_id"] or "").strip()
+    if not local_user:
+        raise ArcLinkEntitlementError("Stripe checkout onboarding session has no ArcLink user id")
+    metadata_user = _stripe_metadata_user_id_or_empty(obj)
+    if metadata_user and metadata_user != local_user:
+        raise ArcLinkEntitlementError("Stripe checkout metadata user does not match ArcLink onboarding owner")
+    client_reference = str(obj.get("client_reference_id") or "").strip()
+    if client_reference and client_reference != local_user:
+        raise ArcLinkEntitlementError("Stripe checkout client reference does not match ArcLink onboarding owner")
+    checkout_id = str(obj.get("id") or "").strip()
+    local_checkout = str(session["checkout_session_id"] or "").strip()
+    if checkout_id and local_checkout and checkout_id != local_checkout:
+        raise ArcLinkEntitlementError("Stripe checkout session id does not match ArcLink onboarding session")
+    deployment_id = _stripe_deployment_id(obj)
+    local_deployment = str(session["deployment_id"] or "").strip()
+    if deployment_id and local_deployment and deployment_id != local_deployment:
+        raise ArcLinkEntitlementError("Stripe checkout deployment does not match ArcLink onboarding session")
+    return StripeEntitlementOwner(
+        user_id=local_user,
+        source="local_onboarding_checkout",
+        onboarding_session_id=str(session["session_id"] or "").strip(),
+        metadata_user_id=metadata_user,
+    )
+
+
+def _stripe_user_id_from_local_onboarding_checkout(
+    conn: sqlite3.Connection,
+    *,
+    obj: Mapping[str, Any],
+) -> StripeEntitlementOwner | None:
+    session = _onboarding_session_for_checkout_owner(
+        conn,
+        checkout_session_id=str(obj.get("id") or ""),
+        onboarding_session_id=_stripe_onboarding_session_id(obj),
+    )
+    if session is None:
+        return None
+    return _validate_onboarding_checkout_owner(obj=obj, session=session)
+
+
+def _resolve_stripe_entitlement_owner(
+    conn: sqlite3.Connection,
+    *,
+    event_type: str,
+    obj: Mapping[str, Any],
+    subscription_id: str,
+    stripe_customer_id: str,
+) -> StripeEntitlementOwner:
+    metadata_user = _stripe_metadata_user_id_or_empty(obj)
+    local_owner = _stripe_user_id_from_local_state(
+        conn,
+        subscription_id=subscription_id,
+        stripe_customer_id=stripe_customer_id,
+    )
+    checkout_owner: StripeEntitlementOwner | None = None
+    if event_type == "checkout.session.completed":
+        checkout_owner = _stripe_user_id_from_local_onboarding_checkout(conn, obj=obj)
+    if local_owner:
+        if metadata_user and metadata_user != local_owner:
+            if stripe_customer_id:
+                raise ArcLinkEntitlementError("Stripe customer is already bound to another ArcLink account")
+            if subscription_id:
+                raise ArcLinkEntitlementError("Stripe subscription is already bound to another ArcLink account")
+            raise ArcLinkEntitlementError("Stripe webhook metadata user does not match local ArcLink account")
+        if checkout_owner is not None and checkout_owner.user_id != local_owner:
+            raise ArcLinkEntitlementError("Stripe checkout onboarding owner does not match local ArcLink account")
+        return StripeEntitlementOwner(
+            user_id=local_owner,
+            source="local_stripe_binding",
+            onboarding_session_id=checkout_owner.onboarding_session_id if checkout_owner is not None else "",
+            metadata_user_id=metadata_user,
+        )
+    if checkout_owner is not None:
+        return checkout_owner
+    if metadata_user and _arclink_user_exists(conn, metadata_user):
+        if event_type != "checkout.session.completed":
+            raise ArcLinkEntitlementError("Stripe webhook did not resolve a local ArcLink user id")
+        return StripeEntitlementOwner(
+            user_id=metadata_user,
+            source="local_existing_user",
+            metadata_user_id=metadata_user,
+        )
+    raise ArcLinkEntitlementError("Stripe webhook did not resolve a local ArcLink user id")
 
 
 def _stripe_metadata_positive_int(obj: Mapping[str, Any], *keys: str) -> int:
@@ -494,6 +654,150 @@ def _entitlement_for_stripe_event(event_type: str, obj: Mapping[str, Any]) -> st
     if stripe_status in {"canceled", "cancelled", "incomplete_expired"}:
         return "cancelled"
     return "none"
+
+
+def _redact_stripe_identifier(value: str) -> str:
+    clean = str(value or "").strip()
+    if not clean:
+        return ""
+    if len(clean) <= 8:
+        return "present"
+    return f"{clean[:4]}...{clean[-4:]}"
+
+
+def apply_stripe_entitlement_recovery(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    actor_id: str,
+    reason: str,
+    stripe_customer_id: str = "",
+    stripe_subscription_id: str = "",
+    entitlement_state: str = "paid",
+    subscription_status: str = "active",
+    current_period_end: str = "",
+    dry_run: bool = False,
+    commit: bool = True,
+) -> dict[str, Any]:
+    clean_user = str(user_id or "").strip()
+    clean_actor = str(actor_id or "").strip()
+    clean_reason = str(reason or "").strip()
+    clean_customer = str(stripe_customer_id or "").strip()
+    clean_subscription = str(stripe_subscription_id or "").strip()
+    clean_state = str(entitlement_state or "").strip().lower()
+    clean_subscription_status = str(subscription_status or "").strip().lower()
+    if not clean_user:
+        raise ArcLinkEntitlementError("Stripe entitlement recovery requires a local ArcLink user id")
+    if not clean_actor or clean_actor == "stripe":
+        raise ArcLinkEntitlementError("Stripe entitlement recovery requires an operator actor")
+    if not clean_reason:
+        raise ArcLinkEntitlementError("Stripe entitlement recovery requires an operator reason")
+    if clean_state not in (ARCLINK_ENTITLEMENT_STATES - {"comp"}):
+        raise ArcLinkEntitlementError("Stripe entitlement recovery requested an unsupported entitlement state")
+    if not clean_customer and not clean_subscription:
+        raise ArcLinkEntitlementError("Stripe entitlement recovery requires a Stripe customer or subscription id")
+    user = conn.execute("SELECT * FROM arclink_users WHERE user_id = ? LIMIT 1", (clean_user,)).fetchone()
+    if user is None:
+        raise ArcLinkEntitlementError("Stripe entitlement recovery target user does not exist locally")
+    _assert_entitlement_account(
+        conn,
+        user_id=clean_user,
+        subscription_id=clean_subscription,
+        stripe_customer_id=clean_customer,
+        client_reference_id="",
+        allowed_user_ids={clean_user},
+    )
+    if clean_subscription_status not in SUBSCRIPTION_MIRROR_STATUSES:
+        clean_subscription_status = _stripe_subscription_mirror_status(
+            event_type="customer.subscription.updated",
+            obj={"status": clean_subscription_status},
+            entitlement_state=clean_state,
+        )
+    metadata = {
+        "dry_run": bool(dry_run),
+        "entitlement_state": clean_state,
+        "subscription_status": clean_subscription_status,
+        "has_stripe_customer_id": bool(clean_customer),
+        "has_stripe_subscription_id": bool(clean_subscription),
+        "stripe_customer_id": _redact_stripe_identifier(clean_customer),
+        "stripe_subscription_id": _redact_stripe_identifier(clean_subscription),
+    }
+    own_txn = commit and not conn.in_transaction
+    if own_txn:
+        conn.execute("BEGIN")
+    try:
+        if dry_run:
+            append_arclink_audit(
+                conn,
+                action="stripe_entitlement_recovery_dry_run",
+                actor_id=clean_actor,
+                target_kind="user",
+                target_id=clean_user,
+                reason=clean_reason,
+                metadata=metadata,
+                commit=False,
+            )
+            if own_txn:
+                conn.commit()
+            return {
+                "status": "planned",
+                "dry_run": True,
+                "user_id": clean_user,
+                "entitlement_state": clean_state,
+                "subscription_status": clean_subscription_status,
+            }
+        if clean_subscription:
+            upsert_arclink_subscription_mirror(
+                conn,
+                subscription_id=f"stripe:{clean_subscription}",
+                user_id=clean_user,
+                stripe_customer_id=clean_customer,
+                stripe_subscription_id=clean_subscription,
+                status=clean_subscription_status,
+                current_period_end=str(current_period_end or ""),
+                raw={"source": "operator_recovery"},
+                commit=False,
+            )
+        set_arclink_user_entitlement(
+            conn,
+            user_id=clean_user,
+            entitlement_state=clean_state,
+            stripe_customer_id=clean_customer,
+            commit=False,
+        )
+        advanced = tuple(advance_arclink_entitlement_gates_for_user(conn, user_id=clean_user, commit=False))
+        append_arclink_audit(
+            conn,
+            action="stripe_entitlement_recovery_applied",
+            actor_id=clean_actor,
+            target_kind="user",
+            target_id=clean_user,
+            reason=clean_reason,
+            metadata={**metadata, "advanced_deployments": list(advanced)},
+            commit=False,
+        )
+        append_arclink_event(
+            conn,
+            subject_kind="user",
+            subject_id=clean_user,
+            event_type="stripe_entitlement_recovery_applied",
+            metadata={**metadata, "advanced_deployments": list(advanced)},
+            commit=False,
+        )
+        if own_txn:
+            conn.commit()
+        return {
+            "status": "applied",
+            "dry_run": False,
+            "user_id": clean_user,
+            "entitlement_state": clean_state,
+            "subscription_status": clean_subscription_status,
+            "advanced_deployments": advanced,
+        }
+    except Exception:
+        if own_txn and conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def _record_webhook_event(
@@ -733,16 +1037,14 @@ def process_stripe_webhook(
 
         subscription_id = _stripe_subscription_id(obj)
         stripe_customer_id = str(obj.get("customer") or "").strip()
-        user_id = _first_nonempty((
-            _stripe_user_id_or_empty(obj),
-            _stripe_user_id_from_local_state(
-                conn,
-                subscription_id=subscription_id,
-                stripe_customer_id=stripe_customer_id,
-            ),
-        ))
-        if not user_id:
-            raise ArcLinkEntitlementError("Stripe webhook did not include an ArcLink user id")
+        owner = _resolve_stripe_entitlement_owner(
+            conn,
+            event_type=event_type,
+            obj=obj,
+            subscription_id=subscription_id,
+            stripe_customer_id=stripe_customer_id,
+        )
+        user_id = owner.user_id
         if event_type == "checkout.session.completed":
             _require_paid_checkout_session(obj, purchase_kind="subscription")
         entitlement_state = _entitlement_for_stripe_event(event_type, obj)
@@ -835,7 +1137,7 @@ def process_stripe_webhook(
                 commit=False,
             )
         advanced = tuple(advance_arclink_entitlement_gates_for_user(conn, user_id=user_id, commit=False))
-        onboarding_session_id = _stripe_onboarding_session_id(obj)
+        onboarding_session_id = owner.onboarding_session_id
         if event_type == "checkout.session.completed" and onboarding_session_id:
             onboarding_synced = sync_arclink_onboarding_after_entitlement(
                 conn,

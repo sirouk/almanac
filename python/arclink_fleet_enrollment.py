@@ -530,6 +530,7 @@ def consume_fleet_enrollment(
     secret: str = "",
     actor: str = "worker-bootstrap",
     source_ip: str = "",
+    source_ip_trust: str = "",
 ) -> dict[str, Any]:
     enrollment = _require_pending_enrollment(conn, token=token, secret=secret)
     body = dict(payload or {})
@@ -631,6 +632,9 @@ def consume_fleet_enrollment(
         }
     if source_ip:
         metadata["source_ip"] = source_ip
+    clean_source_ip_trust = str(source_ip_trust or "").strip()
+    if clean_source_ip_trust:
+        metadata["source_ip_trust"] = clean_source_ip_trust
 
     existing = conn.execute(
         """

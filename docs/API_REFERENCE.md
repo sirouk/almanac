@@ -92,6 +92,10 @@ Admin and backend-control routes are protected by
 Docker private range, and operators should narrow it to the actual reverse
 proxy or tailnet source ranges for production. Public onboarding, webhooks,
 health, and OpenAPI routes remain outside this CIDR gate.
+Forwarded client IP headers are trusted only from direct peers listed in
+`ARCLINK_TRUSTED_PROXY_CIDRS`; when unset, the hosted API ignores
+`X-Forwarded-For` and `X-Real-IP`. A trusted reverse proxy must sanitize
+incoming forwarded headers before passing requests to ArcLink.
 
 ## Routes
 
@@ -217,6 +221,7 @@ All errors return JSON with `error` and `request_id` fields:
 | `ARCLINK_SESSION_HASH_PEPPER` | explicit local/test dev fallback only | HMAC pepper for session and CSRF token hashes; unset/blank base domains fail closed |
 | `ARCLINK_SESSION_HASH_PEPPER_REQUIRED` | `1` | Require a configured pepper before issuing sessions |
 | `ARCLINK_BACKEND_ALLOWED_CIDRS` | (none) | CIDR allow-list for admin/control routes |
+| `ARCLINK_TRUSTED_PROXY_CIDRS` | (none) | CIDR allow-list for direct reverse-proxy peers whose forwarded client IP headers are trusted |
 | `ARCLINK_FLEET_ENROLLMENT_SECRET` | (none) | HMAC root for single-use fleet enrollment token minting and callback verification |
 | `ARCLINK_HOSTED_API_MAX_BODY_BYTES` | `1048576` | General request body cap |
 | `ARCLINK_HOSTED_API_WEBHOOK_MAX_BODY_BYTES` | `2097152` | Webhook request body cap |

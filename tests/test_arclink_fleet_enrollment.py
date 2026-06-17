@@ -26,6 +26,40 @@ def _attestation_payload(hostname: str = "worker-1.example.test") -> dict:
     }
 
 
+def _consume_callback_and_machine_metadata(
+    enrollment,
+    hosted,
+    conn,
+    config,
+    *,
+    enrollment_id: str,
+    hostname: str,
+    headers: dict[str, str],
+    remote_addr: str,
+) -> dict:
+    minted = enrollment.mint_fleet_enrollment(
+        conn,
+        created_by_user_id="operator-1",
+        secret=SECRET,
+        enrollment_id=enrollment_id,
+    )
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/fleet/enrollment/callback",
+        headers={"Authorization": f"Bearer {minted['token']}", **headers},
+        body=json.dumps(_attestation_payload(hostname)),
+        config=config,
+        remote_addr=remote_addr,
+    )
+    expect(status == 201, f"{enrollment_id} expected callback 201 got {status}: {payload}")
+    machine = conn.execute(
+        "SELECT metadata_json FROM arclink_inventory_machines WHERE machine_id = ?",
+        (payload["worker"]["machine_id"],),
+    ).fetchone()
+    return json.loads(machine["metadata_json"])
+
+
 def test_mint_stores_only_hmac_hash_and_lists_without_token() -> None:
     control = load_module("arclink_control.py", "arclink_control_fleet_enrollment_mint_test")
     enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_enrollment_mint_test")
@@ -195,6 +229,134 @@ def test_callback_attests_worker_links_inventory_and_verifies_chain() -> None:
     verified = enrollment.verify_fleet_audit_chain(conn, secret=SECRET)
     expect(verified["ok"] is True and verified["checked_entries"] == 2, str(verified))
     print("PASS test_callback_attests_worker_links_inventory_and_verifies_chain")
+
+
+def test_callback_source_ip_ignores_spoofed_headers_from_untrusted_peer() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_source_untrusted_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_source_untrusted_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_fleet_source_untrusted_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_FLEET_ENROLLMENT_SECRET": SECRET,
+    })
+    metadata = _consume_callback_and_machine_metadata(
+        enrollment,
+        hosted,
+        conn,
+        config,
+        enrollment_id="flenr_source_untrusted",
+        hostname="worker-source-untrusted.example.test",
+        headers={
+            "X-Forwarded-For": "203.0.113.66",
+            "X-Real-IP": "203.0.113.77",
+        },
+        remote_addr="198.51.100.10",
+    )
+    expect(metadata["source_ip"] == "198.51.100.10", str(metadata))
+    expect(metadata["source_ip_trust"] == "direct-peer", str(metadata))
+    expect("203.0.113.66" not in json.dumps(metadata, sort_keys=True), str(metadata))
+    print("PASS test_callback_source_ip_ignores_spoofed_headers_from_untrusted_peer")
+
+
+def test_callback_source_ip_uses_forwarded_ip_only_from_trusted_proxy() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_source_trusted_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_source_trusted_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_fleet_source_trusted_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_FLEET_ENROLLMENT_SECRET": SECRET,
+        "ARCLINK_TRUSTED_PROXY_CIDRS": "172.16.0.0/12",
+    })
+    metadata = _consume_callback_and_machine_metadata(
+        enrollment,
+        hosted,
+        conn,
+        config,
+        enrollment_id="flenr_source_trusted",
+        hostname="worker-source-trusted.example.test",
+        headers={"X-Forwarded-For": "203.0.113.88, 198.51.100.99"},
+        remote_addr="172.18.0.10",
+    )
+    expect(metadata["source_ip"] == "203.0.113.88", str(metadata))
+    expect(metadata["source_ip_trust"] == "trusted-proxy-forwarded", str(metadata))
+    print("PASS test_callback_source_ip_uses_forwarded_ip_only_from_trusted_proxy")
+
+
+def test_callback_source_ip_is_unverified_without_remote_addr() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_source_unverified_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_source_unverified_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_fleet_source_unverified_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_FLEET_ENROLLMENT_SECRET": SECRET,
+        "ARCLINK_TRUSTED_PROXY_CIDRS": "172.16.0.0/12",
+    })
+    metadata = _consume_callback_and_machine_metadata(
+        enrollment,
+        hosted,
+        conn,
+        config,
+        enrollment_id="flenr_source_unverified",
+        hostname="worker-source-unverified.example.test",
+        headers={"X-Forwarded-For": "203.0.113.123", "X-Real-IP": "203.0.113.124"},
+        remote_addr="",
+    )
+    expect(metadata["source_ip"] == "unverified", str(metadata))
+    expect(metadata["source_ip_trust"] == "unverified", str(metadata))
+    expect("203.0.113.123" not in json.dumps(metadata, sort_keys=True), str(metadata))
+    print("PASS test_callback_source_ip_is_unverified_without_remote_addr")
+
+
+def test_callback_authorization_stays_bearer_token_based_not_source_ip_based() -> None:
+    control = load_module("arclink_control.py", "arclink_control_fleet_source_auth_test")
+    enrollment = load_module("arclink_fleet_enrollment.py", "arclink_fleet_source_auth_test")
+    hosted = load_module("arclink_hosted_api.py", "arclink_hosted_api_fleet_source_auth_test")
+    conn = memory_db(control)
+    config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_FLEET_ENROLLMENT_SECRET": SECRET,
+        "ARCLINK_TRUSTED_PROXY_CIDRS": "172.16.0.0/12",
+    })
+
+    accepted = _consume_callback_and_machine_metadata(
+        enrollment,
+        hosted,
+        conn,
+        config,
+        enrollment_id="flenr_source_auth_valid",
+        hostname="worker-source-auth-valid.example.test",
+        headers={},
+        remote_addr="198.51.100.44",
+    )
+    expect(accepted["source_ip"] == "198.51.100.44", str(accepted))
+
+    minted = enrollment.mint_fleet_enrollment(
+        conn,
+        created_by_user_id="operator-1",
+        secret=SECRET,
+        enrollment_id="flenr_source_auth_invalid",
+    )
+    status, payload, _ = hosted.route_arclink_hosted_api(
+        conn,
+        method="POST",
+        path="/api/v1/fleet/enrollment/callback",
+        headers={
+            "Authorization": f"Bearer {minted['token']}x",
+            "X-Forwarded-For": "203.0.113.200",
+        },
+        body=json.dumps(_attestation_payload("worker-source-auth-invalid.example.test")),
+        config=config,
+        remote_addr="172.18.0.10",
+    )
+    expect(status == 401, f"invalid bearer should fail even through trusted proxy: {status} {payload}")
+    row = conn.execute(
+        "SELECT status, redeemed_by_inventory_id FROM arclink_fleet_enrollments WHERE enrollment_id = 'flenr_source_auth_invalid'"
+    ).fetchone()
+    expect(row["status"] == "pending" and not str(row["redeemed_by_inventory_id"] or ""), str(dict(row)))
+    print("PASS test_callback_authorization_stays_bearer_token_based_not_source_ip_based")
 
 
 def test_attestation_capacity_is_capped_until_control_probe() -> None:
@@ -613,6 +775,10 @@ def main() -> int:
     test_mint_stores_only_hmac_hash_and_lists_without_token()
     test_tokens_fail_closed_when_malformed_wrong_revoked_expired_or_reused()
     test_callback_attests_worker_links_inventory_and_verifies_chain()
+    test_callback_source_ip_ignores_spoofed_headers_from_untrusted_peer()
+    test_callback_source_ip_uses_forwarded_ip_only_from_trusted_proxy()
+    test_callback_source_ip_is_unverified_without_remote_addr()
+    test_callback_authorization_stays_bearer_token_based_not_source_ip_based()
     test_attestation_capacity_is_capped_until_control_probe()
     test_attestation_rejects_unsafe_network_identity_values()
     test_attestation_accepts_valid_ipv6_wireguard_defaults()
@@ -624,7 +790,7 @@ def main() -> int:
     test_hmac_root_rotation_revokes_pending_tokens_without_rendering_secret()
     test_inventory_health_verifies_chain_and_notifies_expired_enrollments()
     test_explicit_reattest_updates_fingerprint_without_rendering_it()
-    print("PASS all 14 ArcLink fleet enrollment tests")
+    print("PASS all 18 ArcLink fleet enrollment tests")
     return 0
 
 

@@ -213,6 +213,7 @@ class HostedApiConfig:
             maximum=32 * 1024 * 1024,
         )
         self.backend_allowed_cidrs: str = str(e.get("ARCLINK_BACKEND_ALLOWED_CIDRS", "")).strip()
+        self.trusted_proxy_cidrs: str = str(e.get("ARCLINK_TRUSTED_PROXY_CIDRS", "")).strip()
         self.fleet_enrollment_secret: str = str(e.get("ARCLINK_FLEET_ENROLLMENT_SECRET", "")).strip()
         self.webhook_rate_limit_window_seconds: int = _bounded_env_int(
             e,
@@ -637,20 +638,44 @@ def _remote_ip_from_headers(
 ) -> str:
     """Resolve the client IP used for CIDR decisions.
 
-    Forwarded headers are trusted only when the direct peer is already a
-    local/trusted backend peer. This preserves reverse-proxy behavior without
-    letting an arbitrary public client spoof an allowed source.
+    Forwarded headers are trusted only when the direct peer is explicitly
+    listed in ARCLINK_TRUSTED_PROXY_CIDRS. When unset, forwarded headers are
+    ignored and the direct peer is the only origin evidence.
     """
     direct = str(remote_addr or "").strip()
     if not direct:
         return ""
-    forwarded = _api_header(headers, "x-forwarded-for")
-    real_ip = _api_header(headers, "x-real-ip")
-    if _backend_client_allowed(config, direct):
-        candidate = (forwarded.split(",", 1)[0].strip() if forwarded else "") or real_ip
+    if _trusted_proxy_allowed(config, direct):
+        candidate = _forwarded_ip_candidate(headers)
         if candidate:
             return candidate
     return direct
+
+
+def _forwarded_ip_candidate(headers: Mapping[str, Any]) -> str:
+    forwarded = _api_header(headers, "x-forwarded-for")
+    real_ip = _api_header(headers, "x-real-ip")
+    return (forwarded.split(",", 1)[0].strip() if forwarded else "") or real_ip
+
+
+def _trusted_proxy_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
+    normalized = str(remote_ip or "").strip()
+    if not normalized:
+        return False
+    return is_ip_in_cidrs(normalized, config.trusted_proxy_cidrs)
+
+
+def _remote_ip_trust_from_headers(
+    config: HostedApiConfig,
+    headers: Mapping[str, Any],
+    remote_addr: str = "",
+) -> str:
+    direct = str(remote_addr or "").strip()
+    if not direct:
+        return "unverified"
+    if _trusted_proxy_allowed(config, direct) and _forwarded_ip_candidate(headers):
+        return "trusted-proxy-forwarded"
+    return "direct-peer"
 
 
 def _backend_client_allowed(config: HostedApiConfig, remote_ip: str) -> bool:
@@ -2118,11 +2143,13 @@ def _handle_fleet_enrollment_callback(
     headers: Mapping[str, Any],
     request_id: str,
     config: HostedApiConfig,
+    remote_addr: str,
 ) -> tuple[int, dict[str, Any], list[tuple[str, str]]]:
     auth = _api_header(headers, "authorization")
     scheme, _, token = auth.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
         return _json_response(401, {"error": "unauthorized", "request_id": request_id}, request_id=request_id)
+    resolved_source_ip = _remote_ip_from_headers(config, headers, remote_addr)
     try:
         result = consume_fleet_enrollment(
             conn,
@@ -2130,7 +2157,8 @@ def _handle_fleet_enrollment_callback(
             payload=body,
             secret=config.fleet_enrollment_secret,
             actor="worker-bootstrap",
-            source_ip=_api_header(headers, "x-real-ip") or _api_header(headers, "x-forwarded-for"),
+            source_ip=resolved_source_ip or "unverified",
+            source_ip_trust=_remote_ip_trust_from_headers(config, headers, remote_addr),
         )
     except ArcLinkFleetEnrollmentError:
         return _json_response(401, {"error": "unauthorized", "request_id": request_id}, request_id=request_id)
@@ -4163,7 +4191,7 @@ def route_arclink_hosted_api(
         elif route_key == "discord_webhook":
             result = _handle_discord_webhook(conn, body, headers, request_id, cfg, None, stripe)
         elif route_key == "fleet_enrollment_callback":
-            result = _handle_fleet_enrollment_callback(conn, parsed_body, headers, request_id, cfg)
+            result = _handle_fleet_enrollment_callback(conn, parsed_body, headers, request_id, cfg, remote_addr)
         elif route_key == "login":
             login_client_ip = _remote_ip_from_headers(cfg, headers, remote_addr)
             result = _handle_login(

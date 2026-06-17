@@ -5270,6 +5270,7 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
         "ARCLINK_BASE_DOMAIN": "example.test",
         "ARCLINK_CORS_ORIGIN": "https://app.arclink.online",
         "ARCLINK_BACKEND_ALLOWED_CIDRS": "203.0.113.0/24,172.16.0.0/12",
+        "ARCLINK_TRUSTED_PROXY_CIDRS": "127.0.0.0/8,172.16.0.0/12",
     })
     api.upsert_arclink_admin(conn, admin_id="admin_cidr", email="cidr@example.test", role="ops")
     session = api.create_arclink_admin_session(conn, admin_id="admin_cidr", session_id="asess_cidr")
@@ -5318,6 +5319,17 @@ def test_admin_cidr_boundary_uses_remote_ip_and_preserves_public_routes() -> Non
         status == 200,
         f"expected trusted proxy forwarded allowed remote 200 got {status}: {payload}",
     )
+
+    no_trusted_proxy_config = hosted.HostedApiConfig(env={
+        "ARCLINK_BASE_DOMAIN": "example.test",
+        "ARCLINK_BACKEND_ALLOWED_CIDRS": "203.0.113.0/24,172.16.0.0/12",
+    })
+    resolved = hosted._remote_ip_from_headers(
+        no_trusted_proxy_config,
+        {"X-Forwarded-For": "203.0.113.8"},
+        "172.18.0.10",
+    )
+    expect(resolved == "172.18.0.10", f"unset ARCLINK_TRUSTED_PROXY_CIDRS must ignore XFF: {resolved}")
 
     status, payload, _ = hosted.route_arclink_hosted_api(
         conn,

@@ -55,8 +55,8 @@ arclink_model_providers.py  Provider preset helpers
 
 ```text
 arclink_public_bots.py             Raven turn engine (handle_arclink_public_bot_turn): commands, routing law, onboarding/checkout copy, channel pairing, selected-agent bridge, Crew Training, Academy Mode, share approvals/claims, credentials, retire-agent, refuel
-arclink_telegram.py                Telegram transport + webhook + per-chat command scope + operator interception
-arclink_discord.py                 Discord interaction handler, Ed25519 verify, dedupe, slash/component parsing
+arclink_telegram.py                Telegram transport + webhook + per-chat command scope + operator interception, native callback metadata, outbound long-text split batching
+arclink_discord.py                 Discord interaction/Gateway message handler, Ed25519 verify, dedupe, slash/component parsing, safe component/embed/attachment sends
 arclink_public_bot_commands.py     Deploy-time command registration + webhook ensure + scope refresh
 arclink_onboarding.py              NEW ArcLink public-bot onboarding state machine (arclink_onboarding_sessions/_events)
 arclink_onboarding_flow.py         OLD Curator/"Almanac" intake flow (Unix-user provisioning) — present and active
@@ -94,6 +94,7 @@ arclink_crew_recipes.py      Crew Recipes + SOUL overlay + Academy-status overla
 arclink_dashboard_auth_proxy.py  Signed-session reverse proxy in front of the Hermes dashboard (HS256 JWT-shaped cookie, NOT Basic Auth; mount-prefix rewriting; managed-lifecycle 409 intercept)
 arclink_nextcloud_access.py      Provisioning-side occ user sync (gated by ENABLE_NEXTCLOUD)
 arclink_headless_hermes_setup.py Headless Hermes home setup helper
+arclink_skill_enablement.py      Per-Agent approved-skill enablement, guarded fleet-shared skill discovery, /reload_skills receipt rail
 ```
 
 ### Public Agent gateway / exec-broker / pod-comms / supervisor family
@@ -287,9 +288,13 @@ The control plane uses **45** `arclink_*` tables plus **10** non-prefixed
 `academy_source_provenance`, `academy_specialist_subscriptions`, and
 `academy_source_crawl_observations`. The
 remaining live-schema tables are legacy/substrate (e.g. `rate_limits`,
-`notification_outbox`, `operator_actions`). `arclink_evidence_runs` exists and is tested but is
-**unwired** — the live runner writes only `evidence/<run_id>.json`; nothing reads
-the table, so there is no operator-visible evidence/incident state.
+`notification_outbox`, `operator_actions`). `arclink_evidence_runs` is now
+written by the live runner when `ARCLINK_DB_PATH` is configured, and the operator
+snapshot reads both the latest run and an evidence-governance rollup across the
+required `hosted`, `workspace`, `external`, and `router` journeys. This is
+source/local-real governance, not live production proof; `GAP-001` remains open
+until the required credentialed journeys pass and their redacted evidence is
+stored.
 
 ## Hosted API Boundary
 
@@ -412,9 +417,13 @@ operator-gated.
   turn engine (`handle_arclink_public_bot_turn`) covering commands, routing law,
   onboarding/checkout, channel pairing, the selected-agent bridge, Crew Training,
   Academy Mode, share approve/deny/accept/claim, credentials, retire-agent, and
-  refuel. The Telegram/Discord transports run in fake mode without tokens; ALL
-  live delivery (webhooks, command menus, buttons, the selected-agent bridge) is
-  proof-gated behind PG-BOTS (and PG-HERMES for per-agent scope).
+  refuel. Telegram preserves native update JSON plus callback family metadata and
+  splits outbound long text into bounded batches. Discord supports interaction
+  webhooks, a local Gateway free-text handler, components, embeds, and attachment
+  metadata with default-deny mentions. The Telegram/Discord transports run in
+  fake mode without tokens; ALL live delivery (webhooks, command menus, buttons,
+  Gateway free text, media/components, the selected-agent bridge) is proof-gated
+  behind PG-BOTS (and PG-HERMES for per-agent scope).
 
 All provider interactions use fake adapters by default. Live adapters require
 explicit `live_enabled=True` and injected credentials, and remain proof-gated
@@ -436,8 +445,10 @@ the turn into the Agent's own Hermes gateway pipeline:
 - `arclink_public_agent_bridge.py` is a short-lived boundary process run INSIDE a
   Hermes gateway container. It replays a public Telegram raw update through
   Hermes' own native gateway handlers (Discord goes through REST shims, not native
-  parity), maintains a durable `ea:` exec-approval mapping on disk, and streams
-  by default. Selected-agent bridge delivery is async; streaming is opt-in via
+  parity), maintains a durable `ea:` exec-approval mapping on disk, carries
+  callback-family metadata for `ea`/`mp`/`sc`/`cl`, supports Discord
+  component/embed/attachment metadata on outbound sends, and streams by default.
+  Selected-agent bridge delivery is async; streaming is opt-in via
   `ARCLINK_PUBLIC_AGENT_BRIDGE_STREAMING=1` (GAP-023).
 - The per-turn `docker exec` into the gateway container is mediated by the
   `gateway-exec-broker` (see Trusted-Host Brokers below) — Raven never holds
@@ -447,9 +458,10 @@ Real bridge delivery requires a live gateway container, a bot token, and a Herme
 runtime, and is proof-gated behind PG-BOTS / PG-HERMES.
 
 The full bridge/broker design (per-turn invocation, native-handler replay, the
-durable `ea:` exec-approval mapping, and the complete service/port/header/socket
-table) lives in `docs/arclink/public-agent-gateway.md`; the sections below are a
-summary that cross-links to it rather than duplicating it.
+durable `ea:` exec-approval mapping, callback-family replay proof boundary, and
+the complete service/port/header/socket table) lives in
+`docs/arclink/public-agent-gateway.md`; the sections below are a summary that
+cross-links to it rather than duplicating it.
 
 ### Trusted-Host Brokers & Helpers
 
@@ -561,8 +573,9 @@ live-gated behavior.
   execution as a controlled runbook step until live host orchestration lands.
 - Public bots are a full Raven turn engine, not a skeleton. The Telegram/Discord
   transports run in fake mode without tokens; live HTTP transport, webhooks,
-  command menus, buttons, and the selected-agent bridge are proof-gated behind
-  PG-BOTS (and PG-HERMES for per-agent command scope).
+  command menus, buttons, Gateway free text, Discord media/components, Telegram
+  long-text batching, callback replay, and the selected-agent bridge are
+  proof-gated behind PG-BOTS (and PG-HERMES for per-agent command scope).
 - Drive and Code are functional first-generation Hermes plugins, but
   not yet broad Google Drive or VS Code replacements. Terminal has a
   managed-pty persistent-session backend with same-origin SSE output streaming
@@ -582,6 +595,7 @@ live-gated behavior.
   identity-gated, approval-code-gated mutations (`pod_repair`, `rollout`,
   `host_upgrade`, `pin_upgrade`) alongside a broad read surface, with live
   effect still gated by `ARCLINK_EXECUTOR_ADAPTER` and the relevant `PG-*` gate.
-- `arclink_evidence_runs` is implemented and tested but UNWIRED — evidence is
-  file-only (`evidence/<run_id>.json`); there is no operator-visible
-  evidence/incident read model today.
+- `arclink_evidence_runs` is implemented, tested, written by the live runner when
+  `ARCLINK_DB_PATH` is configured, and read by the operator snapshot for latest
+  run plus governance status. This improves reconciliation discipline but does
+  not by itself close PG-PROD or prove any live journey.

@@ -348,6 +348,7 @@ def test_telegram_operator_native_callback_routes_to_hermes_bridge() -> None:
         expect(extra.get("telegram_reply_to_message_id") == "808", str(extra))
         expect(extra.get("telegram_update_kind") == "callback_query", str(extra))
         expect(extra.get("telegram_native_callback") is True, str(extra))
+        expect(extra.get("telegram_callback_family") == "ea", str(extra))
         raw_update = json.loads(str(extra.get("telegram_update_json") or "{}"))
         expect(raw_update.get("callback_query", {}).get("data") == "ea:always:1", str(raw_update))
         print("PASS test_telegram_operator_native_callback_routes_to_hermes_bridge")

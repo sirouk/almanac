@@ -4573,6 +4573,7 @@ def test_operator_telegram_callback_preserves_native_update_and_triggers_bridge(
     extra = json.loads(str(row["extra_json"] or "{}"))
     expect(extra.get("operator_turn") is True, str(extra))
     expect(extra.get("telegram_native_callback") is True, str(extra))
+    expect(extra.get("telegram_callback_family") == "ea", str(extra))
     raw_update = json.loads(str(extra.get("telegram_update_json") or "{}"))
     expect(raw_update.get("callback_query", {}).get("data") == "ea:always:1", str(raw_update))
     print("PASS test_operator_telegram_callback_preserves_native_update_and_triggers_bridge")

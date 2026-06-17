@@ -151,19 +151,50 @@ def test_discord_message_event_through_bot_contract() -> None:
     start = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="/start")
     dc.handle_discord_interaction(conn, start)
 
-    result = dc.handle_discord_interaction(conn, msg)
+    result = dc.handle_discord_gateway_message(conn, msg)
     expect(result is not None, "should have result")
     expect(result["type"] == 4, str(result["type"]))
     expect("Captain Test Buyer" in result["data"]["content"], result["data"]["content"])
     expect("Founders Offer" in result["data"]["content"], result["data"]["content"])
     identity = transport.make_message(user_id="discord_user_2", channel_id="ch_2", content="/agent-identity Atlas, the right hand")
-    result = dc.handle_discord_interaction(conn, identity)
+    result = dc.handle_discord_gateway_message(conn, identity)
     expect(result["action"] == "prompt_package", str(result))
     expect("Captain Test Buyer" in result["data"]["content"], result["data"]["content"])
     expect("Founders Offer $149/mo" in str(result["data"].get("components", [])), str(result["data"]))
     expect("3X Scale Plan $275/mo" in str(result["data"].get("components", [])), str(result["data"]))
     expect("/api/v1/onboarding/public-bot-checkout" in str(result["data"].get("components", [])), str(result["data"]))
+    ignored = dc.handle_discord_gateway_message(
+        conn,
+        transport.make_message(user_id="bot_user", channel_id="ch_2", content="bot says hello") | {"author": {"id": "bot_user", "bot": True}},
+    )
+    expect(ignored is None, str(ignored))
     print("PASS test_discord_message_event_through_bot_contract")
+
+
+def test_discord_send_message_supports_media_components_with_safe_mentions() -> None:
+    dc = load_module("arclink_discord.py", "arclink_discord_media_send_test")
+    calls: list[dict[str, object]] = []
+
+    def fake_request(path, *, bot_token, method="GET", payload=None, timeout=30):
+        calls.append({"path": path, "bot_token": bot_token, "method": method, "payload": payload, "timeout": timeout})
+        return {"id": "msg-1"}
+
+    dc._request_json = fake_request
+    result = dc.discord_send_message(
+        bot_token="discord-token",
+        channel_id="123",
+        text="@everyone look",
+        components=[{"type": 1, "components": [{"type": 2, "style": 1, "label": "Open", "custom_id": "arclink:/status"}]}],
+        embeds=[{"title": "Proof", "image": {"url": "https://example.test/proof.png"}}],
+        attachments=[{"id": "0", "filename": "proof.png"}],
+    )
+    expect(result["id"] == "msg-1", str(result))
+    payload = calls[0]["payload"]
+    expect(payload["allowed_mentions"] == {"parse": ["users"], "replied_user": True}, str(payload))
+    expect(payload["embeds"][0]["title"] == "Proof", str(payload))
+    expect(payload["attachments"][0]["filename"] == "proof.png", str(payload))
+    expect(payload["components"][0]["components"][0]["custom_id"] == "arclink:/status", str(payload))
+    print("PASS test_discord_send_message_supports_media_components_with_safe_mentions")
 
 
 def test_discord_status_reports_selected_agent_label() -> None:
@@ -569,6 +600,7 @@ def main() -> int:
     test_discord_slash_command_through_bot_contract()
     test_discord_registered_action_command_options_parse_to_bot_contract()
     test_discord_message_event_through_bot_contract()
+    test_discord_send_message_supports_media_components_with_safe_mentions()
     test_discord_status_reports_selected_agent_label()
     test_discord_full_onboarding_flow()
     test_discord_verify_signature_test_mode()
@@ -579,7 +611,7 @@ def main() -> int:
     test_discord_validate_live_readiness()
     test_discord_registers_public_bot_actions()
     test_discord_credential_ack_updates_original_component_message()
-    print("PASS all 15 ArcLink Discord adapter tests")
+    print("PASS all 16 ArcLink Discord adapter tests")
     return 0
 
 

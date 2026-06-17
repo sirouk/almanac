@@ -62,6 +62,7 @@ def test_telegram_parse_update() -> None:
     })
     expect(native_callback is not None, "should parse native callback")
     expect(native_callback["telegram_native_callback"] is True, str(native_callback))
+    expect(native_callback["telegram_callback_family"] == "mp", str(native_callback))
     expect(native_callback["callback_message_id"] == "8", str(native_callback))
     expect("telegram_update_json" in native_callback, str(native_callback))
     media = tg.parse_telegram_update({
@@ -306,23 +307,29 @@ def test_telegram_operator_path_uses_identity_rate_limit() -> None:
     print("PASS test_telegram_operator_path_uses_identity_rate_limit")
 
 
-def test_telegram_send_message_clamps_entities_after_truncation() -> None:
+def test_telegram_send_message_splits_long_text_and_clamps_entities_per_chunk() -> None:
     tg = load_module("arclink_telegram.py", "arclink_telegram_entity_clamp_test")
     calls: list[dict[str, object]] = []
-    tg._request_json = lambda url, *, method="GET", payload=None, timeout=30: calls.append(payload or {}) or {"message_id": 1}
+    tg._request_json = lambda url, *, method="GET", payload=None, timeout=30: calls.append(payload or {}) or {"message_id": len(calls)}
     tg.telegram_send_message(
         bot_token="123:abc",
         chat_id="42",
         text="a" * 4005,
+        reply_markup={"inline_keyboard": [[{"text": "Open", "url": "https://example.test"}]]},
         entities=(
             {"type": "code", "offset": 3998, "length": 10},
             {"type": "code", "offset": 4001, "length": 5},
         ),
     )
-    payload = calls[0]
-    expect(len(str(payload["text"])) == 4000, str(payload))
-    expect(payload["entities"] == [{"type": "code", "offset": 3998, "length": 2}], str(payload))
-    print("PASS test_telegram_send_message_clamps_entities_after_truncation")
+    expect(len(calls) == 2, str(calls))
+    first, second = calls
+    expect(len(str(first["text"])) == 4000, str(first))
+    expect(str(second["text"]) == "a" * 5, str(second))
+    expect("reply_markup" not in first, str(first))
+    expect("reply_markup" in second, str(second))
+    expect(first["entities"] == [{"type": "code", "offset": 3998, "length": 2}], str(first))
+    expect(second["entities"] == [{"type": "code", "offset": 0, "length": 5}, {"type": "code", "offset": 1, "length": 4}], str(second))
+    print("PASS test_telegram_send_message_splits_long_text_and_clamps_entities_per_chunk")
 
 
 def test_telegram_fake_transport_polling() -> None:
@@ -738,7 +745,7 @@ def main() -> int:
     test_telegram_handle_update_through_bot_contract()
     test_telegram_operator_identity_uses_operator_raven_before_public_onboarding()
     test_telegram_operator_path_uses_identity_rate_limit()
-    test_telegram_send_message_clamps_entities_after_truncation()
+    test_telegram_send_message_splits_long_text_and_clamps_entities_per_chunk()
     test_telegram_fake_transport_polling()
     test_telegram_registers_public_bot_actions()
     test_telegram_registers_operator_command_scope()

@@ -217,6 +217,10 @@ def _telegram_utf16_units(text: str) -> int:
     return len(str(text or "").encode("utf-16-le")) // 2
 
 
+TELEGRAM_MESSAGE_TEXT_LIMIT = 4000
+_DURABLE_NATIVE_CALLBACK_FAMILIES = {"ea", "mp", "sc", "cl"}
+
+
 def _telegram_entities_within_text(
     entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
     text: str,
@@ -244,6 +248,125 @@ def _telegram_entities_within_text(
     return safe
 
 
+def _telegram_text_chunk_ranges(text: str, limit: int = TELEGRAM_MESSAGE_TEXT_LIMIT) -> list[tuple[str, int]]:
+    """Split Telegram text into bounded chunks while preserving source offsets."""
+    value = str(text or "")
+    if len(value) <= limit:
+        return [(value, 0)]
+    chunks: list[tuple[str, int]] = []
+    start = 0
+    total = len(value)
+    min_soft_split = max(1, int(limit * 0.65))
+    while total - start > limit:
+        window = value[start : start + limit + 1]
+        split_at = 0
+        for marker in ("\n\n", "\n", " "):
+            candidate = window.rfind(marker, 0, limit + 1)
+            if candidate >= min_soft_split:
+                split_at = candidate
+                break
+        if split_at <= 0:
+            split_at = limit
+        end = start + split_at
+        chunk = value[start:end].rstrip("\n ")
+        if not chunk:
+            end = start + limit
+            chunk = value[start:end]
+        chunks.append((chunk, start))
+        start = end
+        while start < total and value[start] in "\n ":
+            start += 1
+    if start < total:
+        chunks.append((value[start:], start))
+    return chunks
+
+
+def _telegram_entities_for_chunk(
+    entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    *,
+    original_text: str,
+    chunk_text: str,
+    chunk_start_index: int,
+) -> list[dict[str, Any]]:
+    if not entities:
+        return []
+    chunk_start_units = _telegram_utf16_units(original_text[:chunk_start_index])
+    chunk_units = _telegram_utf16_units(chunk_text)
+    chunk_end_units = chunk_start_units + chunk_units
+    safe: list[dict[str, Any]] = []
+    for entity in entities:
+        item = dict(entity)
+        try:
+            offset = int(item.get("offset") or 0)
+            length = int(item.get("length") or 0)
+        except (TypeError, ValueError):
+            continue
+        if offset < 0 or length <= 0:
+            continue
+        entity_end = offset + length
+        overlap_start = max(offset, chunk_start_units)
+        overlap_end = min(entity_end, chunk_end_units)
+        if overlap_end <= overlap_start:
+            continue
+        item["offset"] = overlap_start - chunk_start_units
+        item["length"] = overlap_end - overlap_start
+        safe.append(item)
+    return safe
+
+
+def _telegram_send_message_payloads(
+    *,
+    chat_id: str,
+    text: str,
+    reply_to_message_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
+    parse_mode: str = "",
+    entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+) -> list[dict[str, Any]]:
+    original_text = str(text or "")
+    ranges = _telegram_text_chunk_ranges(original_text)
+    payloads: list[dict[str, Any]] = []
+    for index, (chunk, start_index) in enumerate(ranges):
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": chunk}
+        if reply_to_message_id is not None and index == 0:
+            payload["reply_to_message_id"] = int(reply_to_message_id)
+        if reply_markup is not None and index == len(ranges) - 1:
+            payload["reply_markup"] = reply_markup
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        elif entities:
+            safe_entities = _telegram_entities_for_chunk(
+                entities,
+                original_text=original_text,
+                chunk_text=chunk,
+                chunk_start_index=start_index,
+            )
+            if safe_entities:
+                payload["entities"] = safe_entities
+        payloads.append(payload)
+    return payloads
+
+
+def _telegram_split_send_result(results: list[dict[str, Any]]) -> dict[str, Any]:
+    if not results:
+        return {}
+    if len(results) == 1:
+        return results[0]
+    summary = dict(results[-1])
+    summary["split_message_count"] = len(results)
+    summary["message_ids"] = [
+        str(result.get("message_id") or "")
+        for result in results
+        if str(result.get("message_id") or "").strip()
+    ]
+    return summary
+
+
+def _telegram_native_callback_family(data: str) -> str:
+    token = str(data or "").split(":", 1)[0].strip().lower()
+    return token if token in _DURABLE_NATIVE_CALLBACK_FAMILIES else ""
+
+
 def telegram_send_message(
     *,
     bot_token: str,
@@ -254,27 +377,24 @@ def telegram_send_message(
     parse_mode: str = "",
     entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> dict[str, Any]:
-    outgoing_text = text if len(text) <= 4000 else text[:3997] + "..."
-    payload: dict[str, Any] = {
-        "chat_id": chat_id,
-        "text": outgoing_text,
-    }
-    if reply_to_message_id is not None:
-        payload["reply_to_message_id"] = int(reply_to_message_id)
-    if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
-    if parse_mode:
-        payload["parse_mode"] = parse_mode
-    elif entities:
-        safe_entities = _telegram_entities_within_text(entities, outgoing_text)
-        if safe_entities:
-            payload["entities"] = safe_entities
-    return _request_json(
-        _telegram_url(bot_token, "sendMessage"),
-        method="POST",
-        payload=payload,
-        timeout=20,
-    )
+    results: list[dict[str, Any]] = []
+    for payload in _telegram_send_message_payloads(
+        chat_id=chat_id,
+        text=text,
+        reply_to_message_id=reply_to_message_id,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        entities=entities,
+    ):
+        results.append(
+            _request_json(
+                _telegram_url(bot_token, "sendMessage"),
+                method="POST",
+                payload=payload,
+                timeout=20,
+            )
+        )
+    return _telegram_split_send_result(results)
 
 
 def telegram_answer_callback_query(
@@ -1109,6 +1229,7 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
     if callback:
         data = str(callback.get("data") or "").strip()
         native_callback = not data.startswith("arclink:")
+        callback_family = _telegram_native_callback_family(data) if native_callback else ""
         if data.startswith("arclink:"):
             data = data[len("arclink:"):].strip()
         msg = callback.get("message") or {}
@@ -1128,6 +1249,7 @@ def parse_telegram_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
                 "telegram_message_id": str(msg.get("message_id") or ""),
                 "telegram_update_kind": "callback_query",
                 "telegram_native_callback": native_callback,
+                "telegram_callback_family": callback_family,
                 "telegram_update_json": _telegram_update_json(update),
             }
     msg = update.get("message") or update.get("edited_message") or {}
@@ -1444,6 +1566,7 @@ def _route_operator_free_form_to_agent(
                 "telegram_update_kind": parsed.get("telegram_update_kind", ""),
                 "telegram_update_json": parsed.get("telegram_update_json", ""),
                 "telegram_native_callback": parsed.get("telegram_native_callback"),
+                "telegram_callback_family": parsed.get("telegram_callback_family", ""),
             },
         )
         if queued is None:
@@ -1528,6 +1651,8 @@ def handle_telegram_update(
     }
     if parsed.get("telegram_native_callback"):
         turn_metadata["telegram_native_callback"] = True
+    if parsed.get("telegram_callback_family"):
+        turn_metadata["telegram_callback_family"] = parsed.get("telegram_callback_family")
     if str(parsed.get("text") or "").strip().startswith("/"):
         active_plan = arclink_public_bot_telegram_active_command_plan()
         turn_metadata["active_agent_command_names"] = list(active_plan.get("agent_command_names") or [])
@@ -1617,13 +1742,16 @@ class LiveTelegramTransport:
         reply_markup: dict[str, Any] | None = None,
         entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-        if reply_markup is not None:
-            payload["reply_markup"] = reply_markup
-        if entities:
-            payload["entities"] = list(entities)
-        result = self._call("sendMessage", payload)
-        return result.get("result", {})
+        results: list[dict[str, Any]] = []
+        for payload in _telegram_send_message_payloads(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            entities=entities,
+        ):
+            result = self._call("sendMessage", payload)
+            results.append(result.get("result", {}))
+        return _telegram_split_send_result(results)
 
     def answer_callback_query(self, callback_query_id: str, text: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {"callback_query_id": callback_query_id}
@@ -1690,13 +1818,18 @@ class FakeTelegramTransport:
         reply_markup: dict[str, Any] | None = None,
         entities: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     ) -> dict[str, Any]:
-        msg = {"chat_id": chat_id, "text": text, "message_id": len(self.sent_messages) + 1}
-        if reply_markup is not None:
-            msg["reply_markup"] = reply_markup
-        if entities:
-            msg["entities"] = list(entities)
-        self.sent_messages.append(msg)
-        return msg
+        results: list[dict[str, Any]] = []
+        for payload in _telegram_send_message_payloads(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            entities=entities,
+        ):
+            msg = dict(payload)
+            msg["message_id"] = len(self.sent_messages) + 1
+            self.sent_messages.append(msg)
+            results.append(msg)
+        return _telegram_split_send_result(results)
 
     def answer_callback_query(self, callback_query_id: str, text: str = "") -> dict[str, Any]:
         return {"callback_query_id": callback_query_id, "text": text}

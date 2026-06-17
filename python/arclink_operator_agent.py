@@ -290,7 +290,7 @@ def enqueue_operator_agent_turn(
     if display_name:
         extra["display_name"] = display_name
     if platform_metadata:
-        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback"):
+        for key in ("telegram_update_kind", "telegram_update_json", "telegram_native_callback", "telegram_callback_family"):
             value = platform_metadata.get(key)
             if value not in (None, ""):
                 extra[key] = value

@@ -804,6 +804,10 @@ def test_operator_snapshot_reads_latest_evidence_status_from_db() -> None:
     latest = snapshot["evidence"]["latest_run"]
     expect(latest["status"] == "passed", str(latest))
     expect(latest["run_id"] == "run_operator_snapshot", str(latest))
+    governance = snapshot["evidence"]["governance"]
+    expect(governance["production_ready"] is False, str(governance))
+    expect("workspace" in governance["missing_journeys"], str(governance))
+    expect(governance["journeys"]["hosted"]["status"] == "passed", str(governance))
     print("PASS test_operator_snapshot_reads_latest_evidence_status_from_db")
 
 

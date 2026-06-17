@@ -327,15 +327,19 @@ def list_evidence_runs(
     conn: sqlite3.Connection,
     *,
     deployment_id: str = "",
+    journey: str = "",
     status: str = "",
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """List evidence runs, optionally filtered by deployment and status."""
+    """List evidence runs, optionally filtered by deployment, journey, and status."""
     conditions: list[str] = []
     params: list[Any] = []
     if deployment_id:
         conditions.append("deployment_id = ?")
         params.append(deployment_id)
+    if journey:
+        conditions.append("journey = ?")
+        params.append(journey)
     if status:
         conditions.append("status = ?")
         params.append(status)
@@ -346,6 +350,42 @@ def list_evidence_runs(
         params,
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+REQUIRED_PRODUCTION_EVIDENCE_JOURNEYS = ("hosted", "workspace", "external", "router")
+
+
+def evidence_governance_status(
+    conn: sqlite3.Connection,
+    *,
+    deployment_id: str = "",
+    required_journeys: tuple[str, ...] = REQUIRED_PRODUCTION_EVIDENCE_JOURNEYS,
+) -> dict[str, Any]:
+    """Summarize proof coverage discipline for operator dashboards and ledgers."""
+    latest_by_journey: dict[str, dict[str, Any]] = {}
+    for row in list_evidence_runs(conn, deployment_id=deployment_id, limit=200):
+        clean_journey = str(row.get("journey") or "").strip()
+        if clean_journey and clean_journey not in latest_by_journey:
+            latest_by_journey[clean_journey] = {
+                "status": str(row.get("status") or ""),
+                "run_id": str(row.get("run_id") or ""),
+                "commit_hash": str(row.get("commit_hash") or ""),
+                "created_at": str(row.get("created_at") or ""),
+            }
+    missing = [journey for journey in required_journeys if journey not in latest_by_journey]
+    incomplete = [
+        journey
+        for journey in required_journeys
+        if journey in latest_by_journey and latest_by_journey[journey].get("status") != "passed"
+    ]
+    return {
+        "version": 1,
+        "required_journeys": list(required_journeys),
+        "journeys": latest_by_journey,
+        "missing_journeys": missing,
+        "incomplete_journeys": incomplete,
+        "production_ready": not missing and not incomplete,
+    }
 
 
 def latest_evidence_status(

@@ -1525,8 +1525,9 @@ bridge, then closed the highest-impact gaps:
   backed). Tapping a button dispatches the server-minted
   `/upgrade_apply <nonce>` through the same `dispatch_operator_raven_command`
   gate as typed commands — actor required, nonce is the structured
-  confirmation, replay fails closed, queue rows still carry
-  `request_source=operator-raven`. Works on the Telegram webhook, the Telegram
+	  confirmation, replay fails closed, and the later Phase-1 hardening replaced
+	  re-assertable request-source trust with a server-minted operator-action HMAC
+	  envelope. Works on the Telegram webhook, the Telegram
   long-poll, and Discord (components + `arclink:/` custom-id dispatch). The
   legacy detector-notification Install buttons now queue for real when no
   approval code is configured, and answer with a fresh nonce menu when one is
@@ -1620,34 +1621,53 @@ bridge, then closed the highest-impact gaps:
   `hermes_cli.commands` helpers the menu derivation imports, so a hermes-agent
   pin bump that renames them fails loudly instead of silently degrading turns.
 
-**Forward plan (named owner + approach; not yet landed).**
+**Landed 2026-06-17 (post-repair reconciliation; source-real + focused
+regression-tested, live proof still gated).**
 
-- *Terminal tmux service live proof* — the dedicated `terminal-tmux` service
-  is rendered and health-tracked locally; surviving a real dashboard-container
-  restart with an attached session needs live workspace proof (`PG-HERMES`).
+This pass was deliberately about reconciliation discipline after the CANON
+repair campaign: every follow-up seam now has an owner, proof gate, focused
+tests, live-proof status, and severity in `GAPS.md` (`GAP-035`). The buildout
+also added machine-readable evidence governance so the operator snapshot can
+say which proof journeys are missing instead of relying on memory.
+
+- *Terminal tmux service proof named, not overclaimed* — the dedicated
+  `terminal-tmux` service remains local/source-real; the live matrix now names
+  `terminal_tmux_dashboard_restart_proof` under `PG-HERMES`. A real dashboard or
+  container restart survival proof is still required before product-real
+  durability claims.
 - *Gateway `/reload_skills` after enablement + fleet-shared skill scanning* —
-  deferred pending an auth-posture review (the enablement receipt records
-  `effective_at=next_session` honestly); fleet-sourced skills should pass a
-  skills_guard-style scan before enablement.
-- *Discord outbound media/components from the Agent* (`GAP-033` adjacent) — the
-  bridge's Discord REST rebind sends text only; native Hermes can send files,
-  embeds, views (exec-approval buttons), and voice messages. Plan: extend
-  `_DiscordRest`/`_send` in `arclink_public_agent_bridge.py` with multipart
-  uploads mirroring Hermes's `_standalone_send` precedent, and map
-  `discord.ui.View` components to raw component payloads with `arclink:`-safe
-  custom ids; exec approvals need the durable-state pattern below first.
-- *Durable state for `sc:`/`cl:`/model-picker callbacks* — only `ea:` exec
-  approvals survive across bridge processes today. Plan: generalize the
-  `_write_approval_mapping` on-disk pattern in `arclink_public_agent_bridge.py`
-  to slash-confirm and clarify prompts.
-- *Discord free-text ingress for Captains* — public Discord is
-  interaction-webhook only; channel messages never reach the Agent without
-  `/agent message:`. Plan requires a design decision (per-Pod gateway client vs
-  control-node listener) recorded before code.
-- *Telegram text-split batching* — >4096-char messages still arrive as separate
-  turns (albums are fixed; text splits lack a correlation id). Plan: reuse the
-  album leader-election pattern keyed on (chat, ~4096-char boundary, arrival
-  window) once a correlation heuristic is validated against real traffic.
+  per-Agent skill enablement now discovers fleet-shared
+  `Agents_Skills/*/skills` roots, but only when the library contains guarded
+  skill directories with `SKILL.md` and no obvious symlink escape. Receipts name
+  `/reload_skills` and `effective_at=reload_skills_or_next_session` when config
+  changes. The live usability proof is `reload_skills_after_enablement_proof`.
+- *Discord outbound media/components from the Agent* — direct Discord sends,
+  notification delivery, and the public Agent bridge now accept components,
+  embeds, and attachment metadata with default-deny mentions. This intentionally
+  stops short of new executable action callbacks until durable callback replay
+  is proven.
+- *Durable state for callback families* — Telegram ingress now carries explicit
+  durable family metadata for `ea`, `mp`, `sc`, and `cl` through the notification
+  outbox and bridge payload. Full durable resolution is still only implemented
+  for `ea:` exec approvals; `durable_callback_replay_proof` remains the gate
+  before richer action components are considered production-real.
+- *Discord free-text ingress for Captains* — a named Gateway `MESSAGE_CREATE`
+  handler routes free text through the selected-agent bot contract locally.
+  Production still needs the control-node Gateway listener/live proof row
+  (`discord_free_text_ingress_proof`); per-Pod Discord clients are not worth the
+  token/session/intent sprawl unless a future proof shows the control-node
+  listener cannot meet the product need.
+- *Telegram text-split batching* — outbound long Telegram messages now split
+  into bounded `sendMessage` batches, keep reply threading on the first chunk,
+  keep inline buttons on the final chunk, and clip entities per chunk. Inbound
+  heuristic merging of user-sent 4096-character split messages remains
+  intentionally unbuilt; broad correlation without a provider-supplied ID is not
+  worth default-enabling until false positives are proven low.
+- *Evidence/governance ambition* — `arclink_evidence.evidence_governance_status`
+  summarizes required journeys (`hosted`, `workspace`, `external`, `router`) and
+  the operator snapshot exposes missing/incomplete journeys. `CANON.md` and
+  `research/canon/COVERAGE_MATRIX.md` were refreshed so canon/decision/fix
+  artifacts sit under CANON-32.
 
 ## Governance And Proof
 

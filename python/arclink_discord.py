@@ -119,6 +119,8 @@ def discord_send_message(
     channel_id: str,
     text: str,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "content": text if len(text) <= 1900 else text[:1897] + "...",
@@ -128,6 +130,10 @@ def discord_send_message(
     }
     if components is not None:
         payload["components"] = components
+    if embeds is not None:
+        payload["embeds"] = embeds[:10]
+    if attachments is not None:
+        payload["attachments"] = attachments[:10]
     return _request_json(
         f"/channels/{channel_id}/messages",
         bot_token=bot_token,
@@ -144,12 +150,18 @@ def discord_edit_message(
     message_id: str,
     text: str | None = None,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     if text is not None:
         payload["content"] = text if len(text) <= 1900 else text[:1897] + "..."
     if components is not None:
         payload["components"] = components
+    if embeds is not None:
+        payload["embeds"] = embeds[:10]
+    if attachments is not None:
+        payload["attachments"] = attachments[:10]
     return _request_json(
         f"/channels/{channel_id}/messages/{message_id}",
         bot_token=bot_token,
@@ -436,6 +448,39 @@ def parse_discord_interaction(interaction: Mapping[str, Any]) -> dict[str, str] 
         }
 
     return None
+
+
+def handle_discord_gateway_message(
+    conn: sqlite3.Connection,
+    message: Mapping[str, Any],
+    *,
+    stripe_client: Any | None = None,
+    price_id: str = "price_arclink_sovereign",
+    founders_price_id: str = "price_arclink_founders",
+    scale_price_id: str = "",
+    additional_agent_price_id: str = "",
+    sovereign_agent_expansion_price_id: str = "",
+    scale_agent_expansion_price_id: str = "",
+    base_domain: str = "",
+) -> dict[str, Any] | None:
+    """Route a Discord Gateway MESSAGE_CREATE payload through the bot contract."""
+    author = message.get("author") or {}
+    if isinstance(author, Mapping) and author.get("bot"):
+        return None
+    event = dict(message)
+    event.setdefault("type", 0)
+    return handle_discord_interaction(
+        conn,
+        event,
+        stripe_client=stripe_client,
+        price_id=price_id,
+        founders_price_id=founders_price_id,
+        scale_price_id=scale_price_id,
+        additional_agent_price_id=additional_agent_price_id,
+        sovereign_agent_expansion_price_id=sovereign_agent_expansion_price_id,
+        scale_agent_expansion_price_id=scale_agent_expansion_price_id,
+        base_domain=base_domain,
+    )
 
 
 def handle_discord_interaction(

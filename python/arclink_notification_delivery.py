@@ -78,6 +78,8 @@ def deliver_discord_channel(
     bot_token: str,
     channel_id: str,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> str | None:
     if not bot_token:
         return "DISCORD_BOT_TOKEN is not configured"
@@ -86,7 +88,17 @@ def deliver_discord_channel(
     if not channel_id.isdigit():
         return f"discord channel_id must be numeric, got {channel_id[:60]!r}"
     try:
-        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
+        kwargs: dict[str, Any] = {
+            "bot_token": bot_token,
+            "channel_id": channel_id,
+            "text": message,
+            "components": components,
+        }
+        if embeds is not None:
+            kwargs["embeds"] = embeds
+        if attachments is not None:
+            kwargs["attachments"] = attachments
+        discord_send_message(**kwargs)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown discord delivery error"
     return None
@@ -98,6 +110,8 @@ def deliver_discord_user(
     bot_token: str,
     user_id: str,
     components: list[dict[str, Any]] | None = None,
+    embeds: list[dict[str, Any]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> str | None:
     if not bot_token:
         return "DISCORD_BOT_TOKEN is not configured"
@@ -110,10 +124,31 @@ def deliver_discord_user(
         channel_id = str(dm.get("id") or "").strip()
         if not channel_id:
             return "discord DM channel response did not include an id"
-        discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=components)
+        kwargs = {
+            "bot_token": bot_token,
+            "channel_id": channel_id,
+            "text": message,
+            "components": components,
+        }
+        if embeds is not None:
+            kwargs["embeds"] = embeds
+        if attachments is not None:
+            kwargs["attachments"] = attachments
+        discord_send_message(**kwargs)
     except Exception as exc:  # noqa: BLE001
         return str(exc).strip() or "unknown discord user delivery error"
     return None
+
+
+def _discord_payload_list(extra: dict[str, Any], key: str) -> list[dict[str, Any]] | None:
+    value = extra.get(key)
+    if not isinstance(value, list):
+        return None
+    safe: list[dict[str, Any]] = []
+    for item in value[:10]:
+        if isinstance(item, dict):
+            safe.append(dict(item))
+    return safe or None
 
 
 def deliver_telegram(
@@ -701,6 +736,7 @@ def _public_agent_gateway_payload(
             "telegram_update_json",
             "telegram_update_json_list",
             "telegram_native_callback",
+            "telegram_callback_family",
         ):
             value = extra.get(key)
             if value not in (None, ""):
@@ -1426,6 +1462,8 @@ def _deliver_public_bot_user(
         discord_components = extra.get("discord_components")
         if not isinstance(discord_components, list):
             discord_components = None
+        discord_embeds = _discord_payload_list(extra, "discord_embeds")
+        discord_attachments = _discord_payload_list(extra, "discord_attachments")
         ref: dict[str, str] = {}
         if session_id and conn is not None:
             ref = _provisioning_message_ref(conn, session_id=session_id, channel="discord")
@@ -1439,6 +1477,8 @@ def _deliver_public_bot_user(
                     message_id=edit_message_id,
                     text=message,
                     components=discord_components,
+                    embeds=discord_embeds,
+                    attachments=discord_attachments,
                 )
                 return None
             except Exception as exc:  # noqa: BLE001 - fall back to a fresh ready hub.
@@ -1449,7 +1489,17 @@ def _deliver_public_bot_user(
             channel_id = str(dm.get("id") or "").strip()
             if not channel_id:
                 return "discord DM channel response did not include an id"
-            sent = discord_send_message(bot_token=bot_token, channel_id=channel_id, text=message, components=discord_components)
+            send_kwargs: dict[str, Any] = {
+                "bot_token": bot_token,
+                "channel_id": channel_id,
+                "text": message,
+                "components": discord_components,
+            }
+            if discord_embeds is not None:
+                send_kwargs["embeds"] = discord_embeds
+            if discord_attachments is not None:
+                send_kwargs["attachments"] = discord_attachments
+            sent = discord_send_message(**send_kwargs)
             if capture and session_id and conn is not None:
                 _store_provisioning_message_ref(
                     conn,
@@ -1827,6 +1877,8 @@ def deliver_row(cfg: Config, row: dict[str, Any], conn: Any | None = None) -> st
             discord_components = extra.get("discord_components")
             if not isinstance(discord_components, list):
                 discord_components = None
+            discord_embeds = _discord_payload_list(extra, "discord_embeds")
+            discord_attachments = _discord_payload_list(extra, "discord_attachments")
             if target_kind == "webhook":
                 return deliver_discord(row["message"], webhook_url=target_value)
             if target_kind == "channel":
@@ -1835,6 +1887,8 @@ def deliver_row(cfg: Config, row: dict[str, Any], conn: Any | None = None) -> st
                     bot_token=_resolve_curator_discord_bot_token(cfg),
                     channel_id=target_value,
                     components=discord_components,
+                    embeds=discord_embeds,
+                    attachments=discord_attachments,
                 )
             return "discord target is not configured"
         if platform == "telegram":

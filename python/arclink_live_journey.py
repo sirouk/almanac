@@ -236,6 +236,41 @@ _EXTERNAL_PROOF_STEPS: list[dict[str, Any]] = [
         "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_HERMES_DASHBOARD", "ARCLINK_HERMES_DASHBOARD_URL", "ARCLINK_HERMES_DASHBOARD_AUTH"],
     },
     {
+        "name": "terminal_tmux_dashboard_restart_proof",
+        "description": "Opt-in Terminal tmux persistence proof across dashboard/container restart boundaries",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_TERMINAL_TMUX", "ARCLINK_WORKSPACE_PROOF_TLS_URL", "ARCLINK_WORKSPACE_PROOF_AUTH"],
+    },
+    {
+        "name": "reload_skills_after_enablement_proof",
+        "description": "Opt-in Hermes /reload_skills proof after ArcLink skill enablement removes an approved skill from disabled",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_HERMES_RELOAD_SKILLS", "ARCLINK_HERMES_DASHBOARD_URL", "ARCLINK_HERMES_DASHBOARD_AUTH"],
+    },
+    {
+        "name": "fleet_shared_skill_guard_proof",
+        "description": "Opt-in fleet-shared skill discovery proof requiring guarded SKILL.md-backed libraries",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_FLEET_SKILLS"],
+    },
+    {
+        "name": "durable_callback_replay_proof",
+        "description": "Opt-in native callback replay proof for approval/model/skill/context callback families after bridge restart",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_CALLBACK_STATE", "TELEGRAM_BOT_TOKEN"],
+    },
+    {
+        "name": "discord_agent_media_components_proof",
+        "description": "Opt-in Discord Agent bridge proof for media embeds, attachment metadata, and default-deny components",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_DISCORD_MEDIA", "DISCORD_BOT_TOKEN", "DISCORD_APP_ID"],
+    },
+    {
+        "name": "discord_free_text_ingress_proof",
+        "description": "Opt-in Discord Gateway MESSAGE_CREATE proof for selected-agent free-text ingress",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_DISCORD_FREE_TEXT", "DISCORD_BOT_TOKEN", "DISCORD_APP_ID"],
+    },
+    {
+        "name": "telegram_text_split_batch_proof",
+        "description": "Opt-in Telegram long-text split delivery proof with reply/thread and inline-keyboard correlation",
+        "required_env": ["ARCLINK_E2E_LIVE", "ARCLINK_PROOF_TELEGRAM_TEXT_SPLIT", "TELEGRAM_BOT_TOKEN"],
+    },
+    {
         "name": "chutes_oauth_connect_proof",
         "description": "Opt-in Chutes OAuth connect, callback, token storage, and revoke-readiness proof",
         "required_env": [

@@ -105,19 +105,19 @@ verified at both ends), not asserted.
 
 ## 1. Coverage proof (file → piece)
 
-**Headline: 766 / 766 current workspace corpus files assigned (100%).** The refreshed corpus
+**Headline: 859 / 859 current workspace corpus files assigned (100%).** The refreshed corpus
 is the union of tracked files (`git ls-files`) and active untracked, non-ignored files
 (`git ls-files --others --exclude-standard`). Every row is mapped to exactly one of the 32
 pieces. Full mapping:
-[`research/canon/COVERAGE_MATRIX.md`](research/canon/COVERAGE_MATRIX.md) (762 tracked rows +
-4 active untracked rows, zero duplicate rows, zero unassigned rows; per-piece counts sum to
-766).
+[`research/canon/COVERAGE_MATRIX.md`](research/canon/COVERAGE_MATRIX.md) (859 tracked rows +
+0 active untracked rows, zero duplicate rows, zero unassigned rows; per-piece counts sum to
+859).
 
 > **Refresh note.** The original CANON baseline matrix covered 614 tracked product/repo files.
 > After CANON itself landed, the repository gained tracked canon, DISSECT, overlay,
-> verification, reconciliation, and repair artifacts. Those artifacts are now explicitly
-> assigned to **CANON-32** instead of sitting outside the map. Active untracked repair outputs
-> are included so this matrix reflects the current repair workspace, not only the last commit.
+> verification, reconciliation, repair, decision, and Phase-1 artifacts. Those artifacts are now
+> explicitly assigned to **CANON-32** instead of sitting outside the map. There are no active
+> untracked rows in this refresh.
 
 **Orphans (1).** `bin/arclink-dashboard-placeholder.sh` matches no explicit rule list; it was
 swept into CANON-31 by the `bin/` "everything-else → CANON-31" default. Flagged for Codex —
@@ -869,7 +869,7 @@ skills not in default install (CANON-30/31). GTB date 2026-05-30 < code date (CA
 |---|---|---|---|---|---|---|---|
 | 01 Control Plane & Schema | [§](research/canon/sections/CANON-01-control-plane-schema.md) | [✓](research/canon/verify/CANON-01-control-plane-schema.verify.md) | 2 | 0/4/4 | Provably the sole schema authority; secret-bypass + config-truncation are the real holes. | Confirm nothing else writes the control DB schema / `user_version`. | ✓ both · Codex OBJECT(5) |
 | 02 Hosted API & Transport | [§](research/canon/sections/CANON-02-hosted-api-transport.md) | [✓](research/canon/verify/CANON-02-hosted-api-transport.verify.md) | 5 | 0/3/5 | Layered fail-closed auth; CIDR/pepper deployment footguns + legacy broker SHA. | Open CIDR predicate bodies for IPv6/malformed safety. | ✓ both · Codex OBJECT(3) |
-| 03 Web App & Product Surface | [§](research/canon/sections/CANON-03-web-product-surface.md) | [✓](research/canon/verify/CANON-03-web-product-surface.verify.md) | 49 | 0/4/3 | Thin single-funnel client; prototype confirmed; non-UTF-8 catch-all escape. | Does the Next proxy forward XFF (admin CIDR depends on it)? | ✓ both · Codex OBJECT(4) |
+| 03 Web App & Product Surface | [§](research/canon/sections/CANON-03-web-product-surface.md) | [✓](research/canon/verify/CANON-03-web-product-surface.verify.md) | 50 | 0/4/3 | Thin single-funnel client; prototype confirmed; non-UTF-8 catch-all escape. | Does the Next proxy forward XFF (admin CIDR depends on it)? | ✓ both · Codex OBJECT(4) |
 | 04 Onboarding & Provider Auth | [§](research/canon/sections/CANON-04-onboarding-provider-auth.md) | [✓](research/canon/verify/CANON-04-onboarding-provider-auth.verify.md) | 4 | 1/6/3 | Clean NEW state machine; HIGH terminal-session webhook wedge; secret filter leaks via hints. | Is a 'completed' transition intended (appears missing)? | ✓ both · Codex OBJECT(4) |
 | 05 Public Bots | [§](research/canon/sections/CANON-05-public-bots.md) | [✓](research/canon/verify/CANON-05-public-bots.verify.md) | 4 | 0/3/5 | Complete channel-neutral turn engine; Discord post-reservation failure drops messages. | Any per-identity rate limit on the operator Telegram path? | ✓ both · Codex OBJECT(3) |
 | 06 Curator Onboarding | [§](research/canon/sections/CANON-06-curator-onboarding.md) | [✓](research/canon/verify/CANON-06-curator-onboarding.verify.md) | 7 | 0/2/5 | Transport+gating shell; dead `dismissed_sha` write; unbounded seen-message rows. | Token interlock: can gateway + onboarding both hold the bot token (409)? | ✓ both · Codex OBJECT(3) |
@@ -893,14 +893,14 @@ skills not in default install (CANON-30/31). GTB date 2026-05-30 < code date (CA
 | 24 Deployment & Install Lane | [§](research/canon/sections/CANON-24-deploy-install-lane.md) | [✓](research/canon/verify/CANON-24-deploy-install-lane.verify.md) | 19 | 0/4/4 | Live lane works (Dockerized control flow); **AGENTS.md mis-documents upgrade**; breadcrumb dead. | Is `UPSTREAM_DEPLOY_KEY` load-bearing on control-upgrade or inert? | ✓ both · Codex OBJECT(6) |
 | 25 Container Topology | [§](research/canon/sections/CANON-25-compose-containers.md) | [✓](research/canon/verify/CANON-25-compose-containers.verify.md) | 8 | 0/6/4 | Topology trustworthy; **two security strengths overstated** (redaction fail-open; egress-net). | Does any layer set the trusted-host gate so brokers boot? | ✓ both · Codex OBJECT(2) |
 | 26 Systemd Services & Timers | [§](research/canon/sections/CANON-26-systemd-units.md) | [✓](research/canon/verify/CANON-26-systemd-units.verify.md) | 34 | 1/0/2 | Unit map accurate; **fail-OPEN access-state + unit injection** (record under-rated). | Which producer writes `arclink-web-access.json`? | ⚠ standing · Codex OBJECT(3) |
-| 27 Config & Environment | [§](research/canon/sections/CANON-27-config-environment.md) | [✓](research/canon/verify/CANON-27-config-environment.verify.md) | 11 | 0/2/7 | Pins SoT sound; **`pins_set` fail-open clobber** (worse than any listed risk); env-ref risk inverted. | Confirm no `resolve_env` site resurrects the alias contract. | ✓ both · Codex OBJECT(5) |
+| 27 Config & Environment | [§](research/canon/sections/CANON-27-config-environment.md) | [✓](research/canon/verify/CANON-27-config-environment.verify.md) | 12 | 0/2/7 | Pins SoT sound; **`pins_set` fail-open clobber** (worse than any listed risk); env-ref risk inverted. | Confirm no `resolve_env` site resurrects the alias contract. | ✓ both · Codex OBJECT(5) |
 | 28 CI, Smoke & Quality Gates | [§](research/canon/sections/CANON-28-ci-smoke-gates.md) | [✓](research/canon/verify/CANON-28-ci-smoke-gates.verify.md) | 10 | 0/3/4 | Gates exactly 3 things; name oversells (no Python lint; restore-smoke transitive). | Run coverage.py over the real CI loop. | ✓ both · Codex OBJECT(6) |
 | 29 Test Corpus | [§](research/canon/sections/CANON-29-test-corpus.md) | [✓](research/canon/verify/CANON-29-test-corpus.verify.md) | 130 | 1/1/1 | Broad no-live-secret suite; **10 orphans (not 3)** + non-hermetic suites refute key claims. | AST-enumerate all orphaned tests; confirm none hide in runner files. | ⚠ standing · Codex OBJECT(5) |
 | 30 Hermes Plugins & Bridges | [§](research/canon/sections/CANON-30-hermes-plugins.md) | [✓](research/canon/verify/CANON-30-hermes-plugins.verify.md) | 45 | 1/0/4 | Six consistent plugins; **token-injection seam REFUTED** (live MCP break) + 15s≠30s. | Is `_TOKEN_TOOL_NAMES` a complete superset (it is not)? | ✓ both · Codex OBJECT(3) |
 | 31 Ops Scripts, Skills & Templates | [§](research/canon/sections/CANON-31-ops-scripts-skills-templates.md) | [✓](research/canon/verify/CANON-31-ops-scripts-skills-templates.verify.md) | 74 | 0/3/4 | Glue proven; serve→teardown contradiction + non-atomic CONFIG rewrite + silent forwarder death. | Is `tailscale-nextcloud-serve.sh` intended pure teardown? | ✓ both · Codex OBJECT(6) |
-| 32 Documentation Corpus & Provenance | [§](research/canon/sections/CANON-32-docs-corpus-provenance.md) | [✓](research/canon/verify/CANON-32-docs-corpus-provenance.verify.md) | 128 | 0/2/4 | Drift conclusions sound; **test-coverage narrative rests on a misread test** (totals ARE guarded). | Do not trust the record's test-coverage narrative; trust the drift table. | ✓ both · Codex OBJECT(4) |
+| 32 Documentation Corpus & Provenance | [§](research/canon/sections/CANON-32-docs-corpus-provenance.md) | [✓](research/canon/verify/CANON-32-docs-corpus-provenance.verify.md) | 371 | 0/2/4 | Drift conclusions sound; canon/decision/fix artifacts now live under CANON-32; **test-coverage narrative rests on a misread test** (totals ARE guarded). | Keep coverage matrix regenerated after repair campaigns. | ✓ both · Codex OBJECT(4) |
 
-> **Note on `#files`:** counts are the cartography per-piece totals (e.g. CANON-29 = 130 tracked
+> **Note on `#files`:** counts are the refreshed cartography per-piece totals (e.g. CANON-29 = 130 tracked
 > rows incl. fixtures/web; the prose says "128 `test_*.py`"). CANON-15's LOW count is large
 > ("+"); see its record for the full LOW/INFO ledger.
 
@@ -986,6 +986,12 @@ ground truth wherever a piece is ✓ both; the ⚠ pieces carry their exact unre
   is preserved, not averaged: each ⚠ piece carries its unresolved point inline (Disagreement
   Register §D + the Federation sign-off section), and every reconciliation that overturned a
   Claude-half claim carries the **code-grounded finding forward** with the loser flagged.
+- **2026-06-17** — **POST-REPAIR REFRESH.** Coverage matrix regenerated at 859/859 tracked
+  corpus rows; no active untracked rows. Phase 1 live-security hardening is source/test-real
+  (session pepper, trusted proxy source IP, entitlement first binding, server-side unlimited
+  budget lane, Notion signed-event 412 gate, admin/proxy CIDR split, operator-action HMAC
+  envelope), and a later W3 adversarial bypass was closed. This does **not** close `GAP-001`:
+  the full paid production Control Node journey still needs authorized live proof.
 
 ---
 
@@ -1021,3 +1027,10 @@ ever lost** (verified: all batch commits in HEAD ancestry, all per-piece content
 Earlier recovery: Batch 4 required 3 launch attempts (an `&`-orphan + a double-launch) — resolved via the
 harness's TaskStop, not `pkill`; no commits were ever lost. (Root `CANON.md`/`DISSECT.md` are
 spec — only the reviewer updates this ledger; the Codex fix prompt is guarded against editing them.)
+
+## Post-repair reconciliation ledger (live-proof still gated)
+
+| Date | Surfaces | Source-real changes | Proof gate | Status |
+|---|---|---|---|---|
+| 2026-06-17 | CANON-23/CANON-32 | Evidence DB is now read by the operator snapshot and summarized by `evidence_governance_status()` across required journeys (`hosted`, `workspace`, `external`, `router`). Coverage matrix regenerated: 859/859 rows, CANON-32 owns canon/decision/fix artifacts. | `PG-PROD` | Source/test-real; full production proof still open (`GAP-001`). |
+| 2026-06-17 | CANON-05/CANON-12/CANON-19/CANON-23/CANON-30 | Reconciliation buildout: Telegram long-text split delivery; native callback family metadata for `ea`/`mp`/`sc`/`cl`; Discord Gateway free-text handler; Discord embeds/attachment metadata/components with default-deny mentions; fleet-shared skill discovery requiring guarded `SKILL.md`; `/reload_skills` receipt rail; named external proof rows for terminal tmux, reload-skills, fleet skills, callback replay, Discord media/free-text, and Telegram split batching. | `PG-BOTS`, `PG-HERMES`, `PG-FLEET` | Local focused tests green; live proof rows are named but not executed. |

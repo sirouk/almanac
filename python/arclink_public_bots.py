@@ -3962,6 +3962,7 @@ def _queue_public_agent_turn(
             "telegram_update_kind",
             "telegram_update_json",
             "telegram_native_callback",
+            "telegram_callback_family",
         ):
             value = turn_metadata.get(key)
             if value not in (None, ""):
